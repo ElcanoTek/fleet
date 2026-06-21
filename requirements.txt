@@ -1,0 +1,34 @@
+# Python dependencies for MCP servers
+fastmcp
+httpx
+boto3
+aioboto3
+aiofiles
+sendgrid
+
+# Spec-correct HTML5 parsing for the shared email validator
+# (mcp/email_lint.py — kept byte-identical with chat's server/mcp/email_lint.py).
+# Pure-Python, no native deps. Used by sendgrid_server.py's send_email
+# validation pipeline; tests in mcp/test_sendgrid_html_structure.py import
+# it via email_lint. Pin matches chat/server/requirements.txt.
+html5lib>=1.1
+
+# IPython / Data Analysis Stack
+jupyter_client
+ipykernel
+pandas
+numpy
+openpyxl
+pyyaml
+matplotlib
+scikit-learn
+requests
+beautifulsoup4
+pytz
+
+# Development dependencies
+pytest
+pytest-asyncio
+pytest-cov
+respx
+ruff

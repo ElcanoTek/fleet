@@ -1,0 +1,85 @@
+<!--
+Reproduction of the TWC Campaign Health Scan email that triggered
+EP001 (commit 33e4468, 2026-05-21).
+
+The bug: Victoria emitted <td class="status-pad"> containing an inner
+badge <table> with one row of badges, closed the inner <tr>, but
+forgot </table></td></tr>. Every subsequent body row — Executive
+Summary, Top Priorities, campaign rows, callouts, the WoW table —
+ended up nested inside the 2-column badge table, squeezing the
+entire email through a tiny cell.
+
+The structure is HTML5-valid (a nested <tr> in <table> is fine), so
+foster-parent / unclosed-tag detection doesn't catch it. The smoking-
+gun signal is `*-pad` <td> nested inside another `*-pad` <td>, which
+is what EP001 flags.
+
+This file is a high-fidelity reproduction: pad-class wiring + the
+forgotten </table></td></tr> match the original. Body text is
+neutered (no real campaign names, no real spend numbers).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<body style="margin:0;padding:0;background:#0a0a0a;">
+<table class="email-container" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:680px;margin:0 auto;background:#ffffff;">
+<tr><td class="header-pad" style="background:#0a0a0a;color:#ffffff;padding:20px 28px;">
+  <h1 style="margin:0;font-size:18px;font-weight:600;letter-spacing:0.5px;">CAMPAIGN HEALTH SCAN</h1>
+  <div style="margin-top:4px;font-size:12px;opacity:0.7;">Client: TWC · Week of 2026-05-15</div>
+</td></tr>
+
+<tr><td class="status-pad" style="padding:14px 28px;background:#f5f5f5;border-bottom:1px solid #e0e0e0;">
+  <table cellspacing="0" cellpadding="0" border="0" style="width:100%;">
+    <tr>
+      <td style="font-weight:600;font-size:13px;">HEALTH SCAN</td>
+      <td style="text-align:right;font-size:13px;color:#666;">Status: Production Risk · Last 7 days</td>
+    </tr>
+    <!-- FORGOTTEN: </table></td></tr> here -->
+
+<tr><td class="body-pad" style="padding:24px 28px 0 28px;">
+  <h2 style="margin:0 0 12px 0;font-size:15px;">Executive Summary</h2>
+  <p style="margin:0 0 16px 0;font-size:14px;line-height:1.5;">
+    Spend pacing fell behind plan this week; underperformance concentrated
+    in two of the three active line items. Recommended actions below.
+  </p>
+</td></tr>
+
+<tr><td class="body-pad" style="padding:0 28px 0 28px;">
+  <h2 style="margin:0 0 12px 0;font-size:15px;">Top Priorities</h2>
+  <ol style="margin:0 0 16px 18px;padding:0;font-size:14px;line-height:1.5;">
+    <li>Lift bid floors on Line Item A — pacing -34% vs plan</li>
+    <li>Pause underperforming creative on Line Item B</li>
+    <li>Confirm budget reallocation for next sprint</li>
+  </ol>
+</td></tr>
+
+<tr><td class="body-pad" style="padding:0 28px 0 28px;">
+  <h2 style="margin:0 0 12px 0;font-size:15px;">WoW Analysis Window</h2>
+  <p style="margin:0 0 12px 0;font-size:14px;line-height:1.5;">
+    Comparing 2026-05-08 → 2026-05-14 against the prior week.
+  </p>
+</td></tr>
+
+<tr><td class="table-pad" style="padding:0 28px 16px 28px;">
+  <table cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
+    <thead>
+      <tr style="background:#f5f5f5;">
+        <th style="padding:8px;text-align:left;font-size:12px;">Line Item</th>
+        <th style="padding:8px;text-align:right;font-size:12px;">Spend</th>
+        <th style="padding:8px;text-align:right;font-size:12px;">WoW</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td style="padding:8px;font-size:13px;">Line Item A</td><td style="padding:8px;text-align:right;font-size:13px;">$XXX</td><td style="padding:8px;text-align:right;font-size:13px;color:#c00;">-34%</td></tr>
+      <tr><td style="padding:8px;font-size:13px;">Line Item B</td><td style="padding:8px;text-align:right;font-size:13px;">$YYY</td><td style="padding:8px;text-align:right;font-size:13px;color:#c00;">-12%</td></tr>
+      <tr><td style="padding:8px;font-size:13px;">Line Item C</td><td style="padding:8px;text-align:right;font-size:13px;">$ZZZ</td><td style="padding:8px;text-align:right;font-size:13px;color:#080;">+4%</td></tr>
+    </tbody>
+  </table>
+</td></tr>
+
+<tr><td class="footer-pad" style="padding:16px 28px;background:#f5f5f5;color:#888;font-size:11px;">
+  Reply to this email with questions, or schedule a call.
+</td></tr>
+
+</table>
+</body>
+</html>

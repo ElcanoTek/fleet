@@ -1,0 +1,49 @@
+# Ruff configuration for Python linting
+
+# Target Python 3.11
+target-version = "py311"
+
+# Line length
+line-length = 120
+
+# Include all Python files
+include = ["mcp/**/*.py"]
+
+[lint]
+# Enable recommended rules
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+]
+
+# Ignore some rules for flexibility
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "B008",   # Do not perform function calls in argument defaults
+    "C901",   # Too complex
+    "ARG001", # Unused function argument (common in MCP handlers)
+]
+
+# Allow fix for all enabled rules
+fixable = ["ALL"]
+unfixable = []
+
+[format]
+# Use double quotes for strings
+quote-style = "double"
+
+# Indent with spaces
+indent-style = "space"
+
+# Respect magic trailing commas
+skip-magic-trailing-comma = false
+
+# Unix line endings
+line-ending = "auto"
