@@ -1,0 +1,197 @@
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3v12"></path>
+    <path d="M7 10l5 5 5-5"></path>
+    <path d="M4 20h16"></path>
+  </symbol>
+
+  <symbol id="trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 6h18"></path>
+    <path d="M8 6V4h8v2"></path>
+    <path d="M6 6l1 14h10l1-14"></path>
+    <path d="M10 11v6"></path>
+    <path d="M14 11v6"></path>
+  </symbol>
+
+  <symbol id="logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+    <path d="M16 17l5-5-5-5"></path>
+    <path d="M21 12H9"></path>
+  </symbol>
+
+  <symbol id="paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21.4 11.1l-8.5 8.5a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 1 1 5.7 5.7l-9.2 9.2a2 2 0 1 1-2.8-2.8l8.5-8.5"></path>
+  </symbol>
+
+  <symbol id="calendar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="5" width="18" height="16" rx="2"></rect>
+    <path d="M16 3v4M8 3v4M3 10h18"></path>
+  </symbol>
+
+  <symbol id="clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"></circle>
+    <path d="M12 7v6l4 2"></path>
+  </symbol>
+
+  <symbol id="search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="11" cy="11" r="7"></circle>
+    <path d="M20 20l-3.5-3.5"></path>
+  </symbol>
+
+  <symbol id="filter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 5h18"></path>
+    <path d="M6 12h12"></path>
+    <path d="M10 19h4"></path>
+  </symbol>
+
+  <symbol id="plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 5v14M5 12h14"></path>
+  </symbol>
+
+  <symbol id="close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M18 6L6 18M6 6l12 12"></path>
+  </symbol>
+
+  <symbol id="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 9l6 6 6-6"></path>
+  </symbol>
+
+  <symbol id="info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"></circle>
+    <path d="M12 11v5"></path>
+    <path d="M12 8h.01"></path>
+  </symbol>
+
+  <symbol id="brain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 4.8a4 4 0 0 0-4 4 4.1 4.1 0 0 0 .6 2.1A4 4 0 0 0 8.8 18H10a2 2 0 0 0 2-2V7.2a2.4 2.4 0 0 0-3-2.4Z"></path>
+    <path d="M15 4.8a4 4 0 0 1 4 4 4.1 4.1 0 0 1-.6 2.1A4 4 0 0 1 15.2 18H14a2 2 0 0 1-2-2V7.2a2.4 2.4 0 0 1 3-2.4Z"></path>
+    <path d="M8.2 10.2h2.1"></path>
+    <path d="M13.7 10.2h2.1"></path>
+    <path d="M8.6 14.1H11"></path>
+    <path d="M13 14.1h2.4"></path>
+  </symbol>
+
+  <!-- Pairs with `info` on the details-toggle button. Sparkles read as
+       "polished / AI output" in this product's vocabulary; info reads as
+       "under the hood." Two glyphs (a four-point burst + a smaller
+       satellite) to feel intentional rather than a bare star. -->
+  <symbol id="sparkles" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11 4 L12.6 9 L17.5 10.5 L12.6 12 L11 17 L9.4 12 L4.5 10.5 L9.4 9 Z"></path>
+    <path d="M18.5 15 L19.2 16.8 L21 17.5 L19.2 18.2 L18.5 20 L17.8 18.2 L16 17.5 L17.8 16.8 Z"></path>
+  </symbol>
+
+  <symbol id="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="4"></circle>
+    <path d="M12 2.5v2.5"></path>
+    <path d="M12 19v2.5"></path>
+    <path d="M2.5 12H5"></path>
+    <path d="M19 12h2.5"></path>
+    <path d="M5.6 5.6l1.8 1.8"></path>
+    <path d="M16.6 16.6l1.8 1.8"></path>
+    <path d="M5.6 18.4l1.8-1.8"></path>
+    <path d="M16.6 7.4l1.8-1.8"></path>
+  </symbol>
+
+  <symbol id="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 14.2A8.5 8.5 0 1 1 9.8 4a7 7 0 0 0 10.2 10.2z"></path>
+  </symbol>
+
+  <symbol id="wrench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+  </symbol>
+
+  <symbol id="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="4" y="11" width="16" height="10" rx="2"></rect>
+    <path d="M8 11V7a4 4 0 0 1 8 0v4"></path>
+  </symbol>
+
+  <symbol id="summarize" viewBox="0 0 512 512" fill="currentColor">
+    <path d="M420.248,422.389c-9.409,0-18.527,2.957-26.109,8.401H330.27c-1.246-4.829-5.616-8.401-10.834-8.401h-2.8V377.02l27.869-1.798c5.894-0.381,10.48-5.273,10.48-11.178v-67.208c0-6.187-5.015-11.201-11.201-11.201h-27.148v-89.609h7.654c6.187,0,11.201-5.015,11.201-11.201s-5.015-11.201-11.201-11.201h-18.855h-50.406h-18.855c-6.186,0-11.201,5.015-11.201,11.201s5.015,11.201,11.201,11.201h7.654v89.609h-50.038c-6.851,0-12.425-5.574-12.425-12.425V113.237c0-6.851,5.574-12.425,12.425-12.425h149.995c6.187,0,11.201-5.015,11.201-11.201c0-37.544-28.078-69.479-65.314-74.283L171.595,0.092C171.119,0.03,170.641,0,170.162,0h-25.758C90.666,0,46.947,43.719,46.947,97.458V288.99c0,53.739,43.719,97.458,97.457,97.458h25.758c0.241,0,0.482-0.008,0.721-0.023l72.943-4.706v40.671h-2.8c-5.218,0-9.589,3.572-10.834,8.401h-63.868c-7.583-5.444-16.7-8.401-26.11-8.401c-24.706,0-44.805,20.1-44.805,44.805S115.508,512,140.214,512c9.41,0,18.527-2.957,26.11-8.401h63.868c1.246,4.829,5.616,8.401,10.834,8.401h78.41c5.218,0,9.589-3.572,10.834-8.401h63.869c7.583,5.444,16.7,8.401,26.109,8.401c24.706,0,44.805-20.1,44.805-44.805S444.954,422.389,420.248,422.389z M229.823,481.196h-67.395c-2.729,0-5.364,0.996-7.41,2.801c-4.093,3.611-9.352,5.6-14.805,5.6c-12.353,0-22.403-10.05-22.403-22.403s10.05-22.403,22.403-22.403c5.454,0,10.712,1.988,14.805,5.6c2.046,1.806,4.681,2.801,7.41,2.801h67.395V481.196z M266.229,196.026h28.003v89.609h-28.003V196.026z M169.801,364.044h-25.397c-41.386,0-75.055-33.669-75.055-75.055V97.458c0-41.386,33.669-75.055,75.055-75.055h25.038l117.361,15.144c22.297,2.877,39.909,19.633,44.567,40.863H193.788c-19.205,0-34.827,15.624-34.827,34.827V273.21c0,19.204,15.624,34.827,34.827,34.827h138.794v45.506L169.801,364.044z M294.233,378.466v43.923h-28.003v-42.116L294.233,378.466z M308.234,489.597h-56.007v-44.805h56.007V489.597z M420.248,489.597c-5.454,0-10.712-1.988-14.805-5.601c-2.047-1.805-4.681-2.8-7.41-2.8h-67.395v-28.003h67.395c2.729,0,5.363-0.996,7.41-2.8c4.094-3.611,9.352-5.601,14.805-5.601c12.353,0,22.403,10.05,22.403,22.403S432.6,489.597,420.248,489.597z"></path>
+    <path d="M116.504,116.592c-6.187,0-11.201,5.015-11.201,11.201v95.116c0,6.187,5.015,11.201,11.201,11.201s11.201-5.015,11.201-11.201v-95.116C127.705,121.607,122.69,116.592,116.504,116.592z"></path>
+    <path d="M116.504,263.508c-6.187,0-11.201,5.015-11.201,11.201v1.12c0,6.187,5.015,11.201,11.201,11.201s11.201-5.015,11.201-11.201v-1.12C127.705,268.523,122.69,263.508,116.504,263.508z"></path>
+  </symbol>
+
+  <symbol id="refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12a9 9 0 1 1-3.5-7.1"></path>
+    <path d="M21 4v5h-5"></path>
+  </symbol>
+
+  <!-- Collapsed-state glyph for the composer persona button. Universal
+       head + shoulders silhouette so the small circle reads as "the
+       agent / who's responding." -->
+  <symbol id="persona" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="8.5" r="3.8"></circle>
+    <path d="M4.5 20a7.5 7.5 0 0 1 15 0"></path>
+  </symbol>
+
+  <!-- Collapsed-state glyph for the composer model button. CPU/chip
+       silhouette (square die + pin legs) reads as "the model under the
+       hood" without colliding with `brain` (memory manager) or
+       `sparkles` (details toggle). -->
+  <symbol id="model" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="6" y="6" width="12" height="12" rx="1.6"></rect>
+    <rect x="9.5" y="9.5" width="5" height="5" rx="0.6"></rect>
+    <path d="M9 3v3M12 3v3M15 3v3"></path>
+    <path d="M9 18v3M12 18v3M15 18v3"></path>
+    <path d="M3 9h3M3 12h3M3 15h3"></path>
+    <path d="M18 9h3M18 12h3M18 15h3"></path>
+  </symbol>
+
+  <!-- bug: from Lucide (https://lucide.dev/icons/bug, ISC license).
+       Stroke width nudged from 2 → 1.9 to match the rest of this set. -->
+  <symbol id="bug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 20v-9" />
+    <path d="M14 7a4 4 0 0 1 4 4v3a6 6 0 0 1-12 0v-3a4 4 0 0 1 4-4z" />
+    <path d="M14.12 3.88 16 2" />
+    <path d="M21 21a4 4 0 0 0-3.81-4" />
+    <path d="M21 5a4 4 0 0 1-3.55 3.97" />
+    <path d="M22 13h-4" />
+    <path d="M3 21a4 4 0 0 1 3.81-4" />
+    <path d="M3 5a4 4 0 0 0 3.55 3.97" />
+    <path d="M6 13H2" />
+    <path d="m8 2 1.88 1.88" />
+    <path d="M9 7.13V6a3 3 0 1 1 6 0v1.13" />
+  </symbol>
+
+  <!-- Pencil glyph for the "Edit message" affordance under a user
+       bubble. Lucide-style single-line pencil with a small base
+       underline so the action reads as "rewrite this" at any size. -->
+  <symbol id="edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 20h9"/>
+    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+  </symbol>
+
+  <!-- Empty-state protocol-pill glyphs. Lucide-style strokes matching the
+       set above; added for the "What can I help with?" workflow cards. -->
+  <symbol id="bar-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 3v18h18"/>
+    <path d="M18 17V9"/>
+    <path d="M13 17V5"/>
+    <path d="M8 17v-3"/>
+  </symbol>
+
+  <symbol id="activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+  </symbol>
+
+  <symbol id="layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/>
+    <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/>
+    <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>
+  </symbol>
+
+  <symbol id="target" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="10"/>
+    <circle cx="12" cy="12" r="6"/>
+    <circle cx="12" cy="12" r="2"/>
+  </symbol>
+
+  <symbol id="arrow-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 12h14"/>
+    <path d="m12 5 7 7-7 7"/>
+  </symbol>
+
+  <symbol id="chevron-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m9 18 6-6-6-6"/>
+  </symbol>
+</svg>
