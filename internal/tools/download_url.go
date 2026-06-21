@@ -19,6 +19,14 @@ import (
 	"charm.land/fantasy"
 )
 
+// downloadURLDialContext is the dial function download_url's HTTP client
+// uses. Production keeps the SSRF guard (shared with web_fetch via
+// newSSRFGuardedDialer) so this tool can't fetch cloud metadata
+// (169.254.169.254) or internal services and persist the result to disk.
+// Tests exercising the tool against local httptest servers (loopback)
+// substitute a plain dialer.
+var downloadURLDialContext = newSSRFGuardedDialer().DialContext
+
 // downloadURLDescription is the prompt-facing description of the
 // download_url tool. The wording is deliberately namespace-neutral
 // ("generic URL → workspace") so the agent reaches for this instead of
@@ -132,6 +140,12 @@ func runDownloadURL(ctx context.Context, params DownloadURLParams) downloadURLRe
 	var chain []string
 	client := &http.Client{
 		Timeout: timeout,
+		// Same SSRF guard as web_fetch: without it this tool could fetch
+		// cloud metadata (169.254.169.254) or internal services and
+		// persist the result to disk.
+		Transport: &http.Transport{
+			DialContext: downloadURLDialContext,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			chain = append(chain, req.URL.String())
 			if len(via) >= 10 {

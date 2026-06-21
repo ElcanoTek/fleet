@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -112,12 +114,50 @@ type WebFetchParams struct {
 	URL string `json:"url" description:"The URL to fetch content from."`
 }
 
+// isPrivateIP reports whether ip is an address the network tools must
+// refuse to connect to: private (RFC1918), loopback, link-local
+// (incl. the 169.254.169.254 cloud-metadata endpoint), and the
+// unspecified address.
+func isPrivateIP(ip net.IP) bool {
+	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// newSSRFGuardedDialer returns a dialer that refuses connections to
+// private, loopback, link-local, and unspecified addresses. The Control
+// hook runs AFTER DNS resolution, so a hostname that resolves (or
+// DNS-rebinds) to an internal IP is blocked too. Shared by web_fetch and
+// download_url so the network tools enforce one consistent SSRF policy
+// (cloud metadata endpoints, internal services).
+func newSSRFGuardedDialer() *net.Dialer {
+	return &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			ip := net.ParseIP(host)
+			if ip == nil {
+				return errors.New("failed to parse IP")
+			}
+			if isPrivateIP(ip) {
+				return errors.New("access to private IP denied for security reasons")
+			}
+			return nil
+		},
+	}
+}
+
 // NewWebFetchTool creates a fantasy.AgentTool for fetching web content.
 func NewWebFetchTool() fantasy.AgentTool {
+	dialer := newSSRFGuardedDialer()
+
 	t := &webFetchTool{
 		client: &http.Client{
 			Timeout: DefaultTimeout,
 			Transport: &http.Transport{
+				DialContext:         dialer.DialContext,
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 10,
 				IdleConnTimeout:     90 * time.Second,

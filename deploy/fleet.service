@@ -1,0 +1,59 @@
+# deploy/fleet.service — systemd unit for the single `fleet` Mega Box binary.
+#
+# ONE process boots, on one box: the chat HTTP/SSE server (default
+# 127.0.0.1:8080), the orchestrator HTTP server (default :8000), the scheduler
+# ticker, and the capped in-process worker pool. See cmd/fleet/main.go.
+#
+# Install:
+#   install -D -m 0755 fleet            /opt/fleet/fleet
+#   cp -r personas protocols system_prompts /opt/fleet/   # resolveRootDir reads these from WorkingDirectory
+#   install -D -m 0644 deploy/fleet.service /etc/systemd/system/fleet.service
+#   install -D -m 0600 /dev/null        /etc/fleet/fleet.env   # then fill it in (see below)
+#   systemctl daemon-reload && systemctl enable --now fleet
+#
+# The EnvironmentFile is the SAME 0600 credential file scripts/bootstrap.sh
+# ensures (FLEET_ENV_FILE). cmd/fleet *also* parses FLEET_ENV_FILE itself via
+# config.Load; pointing systemd at the same file keeps process-env and
+# config-loaded values in sync. Minimum keys it should contain:
+#
+#   OPENROUTER_API_KEY=...
+#   FLEET_CHAT_DATABASE_URL=postgres://chat:...@127.0.0.1:5432/chat?sslmode=disable
+#   FLEET_SCHED_DATABASE_URL=postgres://sched:...@127.0.0.1:5432/sched?sslmode=disable
+#   FLEET_ENV_FILE=/etc/fleet/fleet.env          # so config.Load reads the same file
+#   # optional:
+#   # FLEET_SERVER_ADDR=127.0.0.1:8080           # chat listener  (default 127.0.0.1:8080)
+#   # FLEET_ORCHESTRATOR_ADDR=127.0.0.1:8000     # orchestrator listener (default :8000)
+#   # FLEET_SERVER_TOKEN=...                      # shared chat token (web sets CHAT_SERVER_TOKEN to match)
+#   # ADMIN_API_KEY=... / REGISTRATION_TOKEN=...  # orchestrator admin/registration
+#   # FLEET_TIMEZONE=UTC / FLEET_DATA_DIR=/var/lib/fleet
+
+[Unit]
+Description=fleet Mega Box (chat + orchestrator + scheduler + worker pool)
+Documentation=https://github.com/ElcanoTek/fleet
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# personas/ protocols/ system_prompts/ are resolved relative to WorkingDirectory.
+WorkingDirectory=/opt/fleet
+EnvironmentFile=/etc/fleet/fleet.env
+ExecStart=/opt/fleet/fleet
+Restart=always
+RestartSec=5s
+# Graceful shutdown: cmd/fleet drains the worker pool on SIGTERM (30s budget).
+KillSignal=SIGTERM
+TimeoutStopSec=45s
+
+# Hardening — the box only needs to bind its ports, reach Postgres, and write
+# its data dir. Loosen DATA_DIR / ReadWritePaths if you relocate the data dir.
+DynamicUser=yes
+StateDirectory=fleet
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/fleet/data /var/lib/fleet
+
+[Install]
+WantedBy=multi-user.target

@@ -69,13 +69,9 @@ func clearEnvVars() {
 		"NO_QUOTES",
 		"SPACED_KEY",
 		"TEST_VAR",
-		"CUTLASS_CAPTAINS_LOG_ROOT",
 		"CUTLASS_TASK_MODEL",
 		"CUTLASS_TASK_FALLBACK_MODEL",
 		"CUTLASS_TASK_MAX_ITERATIONS",
-		"CUTLASS_CAPTAINS_LOG_BRANCH",
-		"CUTLASS_INSTRUCTION_REPO_ROOT",
-		"CUTLASS_INSTRUCTION_REPO_BASE_BRANCH",
 		"CUTLASS_ALLOWED_DIRS",
 		"GH_TOKEN",
 		"FAST_IO_MCP_TOKEN",
@@ -513,81 +509,6 @@ SENDGRID_API_KEY=sendgrid-key
 	}
 	if server, ok := cfg.MCPServers["sendgrid"]; !ok || !server.Enabled {
 		t.Error("Expected SendGrid MCP server to be enabled")
-	}
-}
-
-func TestLoadInstructionRepoConfig(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	tmpfile, err := os.CreateTemp("", "test-map.env")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	content := `
-CUTLASS_INSTRUCTION_REPO_ROOT=/root/instructions
-CUTLASS_INSTRUCTION_REPO_BASE_BRANCH=main
-GH_TOKEN=test-token
-`
-	if _, err := tmpfile.Write([]byte(content)); err != nil {
-		t.Fatal(err)
-	}
-	tmpfile.Close()
-
-	cfg, err := Load(tmpfile.Name())
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	if cfg.InstructionRepoRoot != "/root/instructions" {
-		t.Fatalf("expected InstructionRepoRoot=/root/instructions, got %q", cfg.InstructionRepoRoot)
-	}
-	if cfg.InstructionRepoBaseBranch != "main" {
-		t.Fatalf("expected InstructionRepoBaseBranch=main, got %q", cfg.InstructionRepoBaseBranch)
-	}
-	if got := os.Getenv("GH_TOKEN"); got != "test-token" {
-		t.Fatalf("expected GH_TOKEN to be loaded into environment, got %q", got)
-	}
-}
-
-func TestLoadCaptainsLogConfig(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	tmpfile, err := os.CreateTemp("", "test-captains-log.env")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	content := `
-CUTLASS_CAPTAINS_LOG_ROOT=/root/captains-log
-CUTLASS_CAPTAINS_LOG_URL=git@github.com:ElcanoTek/captains-log.git
-CUTLASS_CAPTAINS_LOG_BRANCH=dev
-`
-	if _, err := tmpfile.Write([]byte(content)); err != nil {
-		t.Fatal(err)
-	}
-	tmpfile.Close()
-
-	cfg, err := Load(tmpfile.Name())
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	if !cfg.CaptainsLogEnabled {
-		t.Fatal("expected CaptainsLogEnabled to be true")
-	}
-	if cfg.InstructionRepoRoot != "/root/captains-log" {
-		t.Fatalf("expected InstructionRepoRoot=/root/captains-log, got %q", cfg.InstructionRepoRoot)
-	}
-	if cfg.InstructionRepoBaseBranch != "dev" {
-		t.Fatalf("expected InstructionRepoBaseBranch=dev, got %q", cfg.InstructionRepoBaseBranch)
-	}
-	if cfg.CaptainsLogURL != "git@github.com:ElcanoTek/captains-log.git" {
-		t.Fatalf("expected CaptainsLogURL to be loaded, got %q", cfg.CaptainsLogURL)
 	}
 }
 
