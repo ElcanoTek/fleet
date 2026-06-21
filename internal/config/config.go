@@ -124,20 +124,13 @@ var allowedEnvVars = map[string]bool{
 	"OPENROUTER_X_TITLE":      true,
 
 	// ── cutlass task input (set by runner) ──
-	"CUTLASS_TASK_MODEL":                   true,
-	"CUTLASS_TASK_FALLBACK_MODEL":          true,
-	"CUTLASS_TASK_MAX_ITERATIONS":          true,
-	"CUTLASS_INPUT_DIR":                    true,
-	"CUTLASS_INPUT_FILES":                  true,
-	"CUTLASS_ALLOWED_DIRS":                 true,
-	"CUTLASS_CAPTAINS_LOG_ROOT":            true,
-	"CUTLASS_CAPTAINS_LOG_URL":             true,
-	"CUTLASS_CAPTAINS_LOG_BRANCH":          true,
-	"CUTLASS_INSTRUCTION_REPO_ROOT":        true,
-	"CUTLASS_INSTRUCTION_REPO_BASE_BRANCH": true,
-	"CUTLASS_GIT_AUTHOR_NAME":              true,
-	"CUTLASS_GIT_AUTHOR_EMAIL":             true,
-	"GH_TOKEN":                             true,
+	"CUTLASS_TASK_MODEL":          true,
+	"CUTLASS_TASK_FALLBACK_MODEL": true,
+	"CUTLASS_TASK_MAX_ITERATIONS": true,
+	"CUTLASS_INPUT_DIR":           true,
+	"CUTLASS_INPUT_FILES":         true,
+	"CUTLASS_ALLOWED_DIRS":        true,
+	"GH_TOKEN":                    true,
 
 	// ── logging / debug (cutlass) ──
 	"LOG_LEVEL": true,
@@ -352,14 +345,8 @@ type Config struct {
 	SystemPrompt      string
 	Persona           string
 
-	InputDir                  string
-	InputFiles                []string
-	CaptainsLogEnabled        bool
-	CaptainsLogURL            string
-	InstructionRepoRoot       string
-	InstructionRepoBaseBranch string
-	CaptainsLogGitAuthorName  string
-	CaptainsLogGitAuthorEmail string
+	InputDir   string
+	InputFiles []string
 
 	// MCPServers is the scheduled-mode credential-gated server catalog
 	// (cutlass). configureMCPServers populates it from the loaded credentials.
@@ -704,17 +691,11 @@ func Load(envFile string) (*Config, error) {
 		cfg.Persona += ".yaml"
 	}
 
-	// ── captain's log / instruction repo (cutlass) ──
+	// ── scheduled-mode input files (cutlass) ──
 	cfg.InputDir = stripQuotes(os.Getenv("CUTLASS_INPUT_DIR"))
 	if inputFiles := stripQuotes(os.Getenv("CUTLASS_INPUT_FILES")); inputFiles != "" {
 		cfg.InputFiles = strings.Split(inputFiles, ",")
 	}
-	cfg.CaptainsLogEnabled = strings.TrimSpace(os.Getenv("CUTLASS_CAPTAINS_LOG_ROOT")) != ""
-	cfg.CaptainsLogURL = firstNonEmptyEnv("CUTLASS_CAPTAINS_LOG_URL")
-	cfg.InstructionRepoRoot = firstNonEmptyEnv("CUTLASS_CAPTAINS_LOG_ROOT", "CUTLASS_INSTRUCTION_REPO_ROOT")
-	cfg.InstructionRepoBaseBranch = firstNonEmptyEnvDefault("main", "CUTLASS_CAPTAINS_LOG_BRANCH", "CUTLASS_INSTRUCTION_REPO_BASE_BRANCH")
-	cfg.CaptainsLogGitAuthorName = firstNonEmptyEnv("CUTLASS_GIT_AUTHOR_NAME")
-	cfg.CaptainsLogGitAuthorEmail = firstNonEmptyEnv("CUTLASS_GIT_AUTHOR_EMAIL")
 
 	// Scheduled-mode credential-gated MCP server catalog.
 	cfg.configureMCPServers()
@@ -1066,22 +1047,6 @@ func getenvBool(key string, def bool) bool {
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return stripQuotes(value)
-	}
-	return defaultValue
-}
-
-func firstNonEmptyEnv(keys ...string) string {
-	for _, key := range keys {
-		if value := stripQuotes(os.Getenv(key)); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func firstNonEmptyEnvDefault(defaultValue string, keys ...string) string {
-	if value := firstNonEmptyEnv(keys...); value != "" {
-		return value
 	}
 	return defaultValue
 }
