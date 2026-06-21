@@ -56,12 +56,18 @@ var modelContextWindows = []struct {
 }
 
 // contextWindowForModel returns the upstream context window (tokens) for a slug.
-// Resolution order: OpenRouter-reported value (self-correcting cache, populated
-// from provider context-too-large errors via recordContextMax) → static prefix
-// table → default. The live /api/v1/models fetch is a P3 concern; here the cache
-// is seeded only from observed provider errors so it never needs the network.
+// Resolution order:
+//  1. observed cache (recordContextMax write-backs from provider
+//     context-too-large errors) — per-request ground truth;
+//  2. live OpenRouter /api/v1/models cache (openrouter_models.go) — refreshed
+//     every 24h, the authoritative source for any slug OpenRouter knows;
+//  3. static prefix table (below) — cold-start / offline fallback;
+//  4. defaultModelContextWindow.
 func contextWindowForModel(slug string) int {
 	if n := contextLengthFromOpenRouter(slug); n > 0 {
+		return n
+	}
+	if n := contextLengthFromOpenRouterLive(slug); n > 0 {
 		return n
 	}
 	m := strings.ToLower(strings.TrimSpace(slug))
