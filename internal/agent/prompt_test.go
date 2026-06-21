@@ -7,8 +7,64 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 )
+
+// TestBuildSystemPrompt_AgentNotesInjection verifies the admin-curated notes
+// section renders after the User Memories block, and that the Note Proposal
+// Tool block is always present. This is the prompt-assembly seam the notes
+// feature shares across both modes.
+func TestBuildSystemPrompt_AgentNotesInjection(t *testing.T) {
+	m := fixtureManager(t)
+
+	notes := []agentcore.Note{
+		{Slug: "xandr-limits", Title: "Xandr Limits", Body: "Max 5 deals/min."},
+	}
+
+	withBoth, err := m.buildSystemPrompt("victoria", "c", []string{"Prefers concise answers."}, notes, nil)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	memIdx := strings.Index(withBoth, "## User Memories")
+	notesIdx := strings.Index(withBoth, "## Agent Notes (Admin-Maintained Knowledge Base)")
+	if memIdx < 0 {
+		t.Fatal("expected ## User Memories section")
+	}
+	if notesIdx < 0 {
+		t.Fatal("expected ## Agent Notes section")
+	}
+	if notesIdx < memIdx {
+		t.Error("Agent Notes must render AFTER User Memories")
+	}
+	for _, want := range []string{"Xandr Limits", "xandr-limits", "Max 5 deals/min.", "## Note Proposal Tool", "propose_note"} {
+		if !strings.Contains(withBoth, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+
+	notesOnly, err := m.buildSystemPrompt("victoria", "c", nil, notes, nil)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt notes-only: %v", err)
+	}
+	if strings.Contains(notesOnly, "## User Memories") {
+		t.Error("notes-only prompt must NOT contain a User Memories section")
+	}
+	if !strings.Contains(notesOnly, "## Agent Notes (Admin-Maintained Knowledge Base)") {
+		t.Error("notes-only prompt must contain the Agent Notes section")
+	}
+
+	none, err := m.buildSystemPrompt("victoria", "c", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt none: %v", err)
+	}
+	if strings.Contains(none, "## Agent Notes (Admin-Maintained Knowledge Base)") {
+		t.Error("empty notes must omit the Agent Notes section")
+	}
+	if !strings.Contains(none, "## Note Proposal Tool") {
+		t.Error("Note Proposal Tool block should always be present")
+	}
+}
 
 // writeFile creates path with content, making parent dirs as needed.
 func writeFile(t *testing.T, path, content string) {
@@ -64,7 +120,7 @@ func TestListPersonas_AlphaSorted(t *testing.T) {
 func TestBuildSystemPrompt_Layering(t *testing.T) {
 	m := fixtureManager(t)
 
-	prompt, err := m.buildSystemPrompt("victoria", "test-conv", []string{"User prefers concise answers."}, nil)
+	prompt, err := m.buildSystemPrompt("victoria", "test-conv", []string{"User prefers concise answers."}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -104,7 +160,7 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 	writeFile(t, filepath.Join(m.protocolsDir, "fastio-mcp.md"), "# Fast.io Protocol\n")
 
 	// Fast.io OFF — empty tool roster, no fast.io entries.
-	off, err := m.buildSystemPrompt("victoria", "conv-x", nil, nil)
+	off, err := m.buildSystemPrompt("victoria", "conv-x", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt off: %v", err)
 	}
@@ -122,7 +178,7 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 	// Fast.io ON — pretend the fast_io MCP server is wired up by
 	// inserting a fast-io-prefixed tool into the frozen roster.
 	m.mcpToolRoster = []string{"mcp_fast_io_storage", "mcp_fast_io_workspace"}
-	on, err := m.buildSystemPrompt("victoria", "conv-x", nil, nil)
+	on, err := m.buildSystemPrompt("victoria", "conv-x", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt on: %v", err)
 	}
@@ -142,7 +198,7 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 func TestBuildSystemPrompt_UnknownPersona(t *testing.T) {
 	m := fixtureManager(t)
 
-	_, err := m.buildSystemPrompt("nope-does-not-exist", "test-conv", nil, nil)
+	_, err := m.buildSystemPrompt("nope-does-not-exist", "test-conv", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for unknown persona")
 	}
@@ -154,7 +210,7 @@ func TestBuildSystemPrompt_PathTraversalRejected(t *testing.T) {
 	// Load code uses filepath.Base to strip any traversal, so feeding
 	// "../../../etc/passwd" should attempt to read ".persona.yaml"
 	// (base=etc, ext=passwd) which doesn't exist → error, not a breach.
-	_, err := m.buildSystemPrompt("../../../etc/passwd", "test-conv", nil, nil)
+	_, err := m.buildSystemPrompt("../../../etc/passwd", "test-conv", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error (file not found after path-sanitize)")
 	}

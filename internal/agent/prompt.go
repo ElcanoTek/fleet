@@ -8,10 +8,42 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
+
+// appendAgentNotes concatenates the admin-curated knowledge base after the
+// (interactive-only) User Memories block. Identical text in both modes. A nil /
+// empty slice renders nothing (back-compat for runs with no notes).
+func appendAgentNotes(sb *strings.Builder, notes []agentcore.Note) {
+	if len(notes) == 0 {
+		return
+	}
+	sb.WriteString("## Agent Notes (Admin-Maintained Knowledge Base)\n\n")
+	sb.WriteString("These notes are curated by administrators and apply across ALL agents and " +
+		"conversations. Treat them as authoritative shared reference. If you discover information " +
+		"that contradicts or extends a note, use the `propose_note` tool — do NOT assume your change " +
+		"is live.\n\n")
+	for _, n := range notes {
+		fmt.Fprintf(sb, "### %s (`%s`)\n\n%s\n\n", n.Title, n.Slug, strings.TrimSpace(n.Body))
+	}
+}
+
+// appendNoteProposalTool describes the propose_note tool, written symmetric to
+// the ## Memory Proposal Tool block. Registered in both modes.
+func appendNoteProposalTool(sb *strings.Builder) {
+	sb.WriteString("## Note Proposal Tool\n\n")
+	sb.WriteString("You have a `propose_note` tool for the shared, admin-curated knowledge base above. " +
+		"Use it when you discover durable, cross-agent information (a corrected rate limit, a new API " +
+		"quirk, a reusable playbook step) that should help every future run.\n\n")
+	sb.WriteString("- An existing slug proposes an EDIT to that note; a new slug proposes a NEW note.\n")
+	sb.WriteString("- Provide the FULL proposed markdown body, not a diff.\n")
+	sb.WriteString("- Do NOT put secrets, credentials, or transient/per-conversation details in a note.\n\n")
+	sb.WriteString("Your proposal is reviewed by an admin before it goes live; it does NOT take effect " +
+		"immediately. After proposing, continue your task — do NOT retry the tool or assume the note is published.\n\n")
+}
 
 // Manager owns the shared state reused across every chat turn: the MCP client
 // connections, the optional-server gating sets, and the persona/protocol/
@@ -228,7 +260,7 @@ func (m *Manager) ListPersonas() ([]string, error) {
 //     referenced by name.
 //  5. The per-conversation workspace path, so the agent can hand it to
 //     MCP tools whose cwd is not per-conversation.
-func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, enabledOptionalMCPServers []string) (string, error) {
+func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, notes []agentcore.Note, enabledOptionalMCPServers []string) (string, error) {
 	var sb strings.Builder
 
 	fastIOOn := m.fastIOEnabledForTurn(enabledOptionalMCPServers)
@@ -283,6 +315,11 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 		}
 		sb.WriteString("\n")
 	}
+
+	// 3b. Agent notes (admin-curated knowledge base) — injected directly after
+	// the user-memories block, identical text in both modes.
+	appendAgentNotes(&sb, notes)
+	appendNoteProposalTool(&sb)
 
 	// 4. Memory proposal tool instructions
 	sb.WriteString("## Memory Proposal Tool\n\n")

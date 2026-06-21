@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"charm.land/fantasy"
@@ -46,6 +47,8 @@ type Agent struct {
 	maxIterations int
 	logSession    *LogSession
 	sb            *sandbox.Sandbox
+	notesProvider agentcore.NotesProvider
+	noteProposer  agentcore.NoteProposer
 
 	// loadedServers is the set of MCP servers whose tools are currently
 	// registered. mcpServersDirty signals the loop to rebuild the tool list
@@ -70,6 +73,13 @@ type AgentOptions struct {
 	MaxIterations int
 	Sandbox       *sandbox.Sandbox
 	LogFile       string
+
+	// NotesProvider supplies the admin-curated knowledge base appended to the
+	// system prompt at run start (both modes inject the same notes). Nil = none.
+	NotesProvider agentcore.NotesProvider
+	// NoteProposer stages agent-proposed note edits (propose_note). Nil leaves
+	// the tool reporting "not wired".
+	NoteProposer agentcore.NoteProposer
 }
 
 // NewAgent builds a scheduled driver from options. The session log is fresh.
@@ -94,10 +104,12 @@ func NewAgent(opts AgentOptions) *Agent {
 		sb:            opts.Sandbox,
 		loadedServers: make(map[string]bool),
 		logFile:       opts.LogFile,
+		notesProvider: opts.NotesProvider,
+		noteProposer:  opts.NoteProposer,
 	}
 }
 
-// LogSession exposes the run's session log (the captain's-log substrate).
+// LogSession exposes the run's session log.
 func (a *Agent) LogSession() *LogSession { return a.logSession }
 
 // scheduledInput is the one-shot InputSource: the task text + persona-derived
@@ -112,7 +124,7 @@ func (s scheduledInput) Prompt(_ context.Context) (string, []fantasy.Message, st
 	return s.systemPrompt, []fantasy.Message{fantasy.NewUserMessage(s.task)}, s.label, nil
 }
 
-// scheduledObserver writes run events into the captain's-log session log. Text
+// scheduledObserver writes run events into the JSON session log. Text
 // deltas accumulate into the assistant message at round end; tool calls/results
 // and enforcement nudges are appended as structured LogMessages.
 type scheduledObserver struct {
@@ -189,8 +201,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 func (p *scheduledPolicy) Unwrap() agentcore.Policy { return p.inner }
 
 // Execute drives one scheduled task to completion through agentcore.Run. The
-// session log is persisted on every exit path; the captain's-log auto-PR fires
-// on success.
+// session log is persisted on every exit path.
 func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	defer writeLogFile(a.logSession, a.logFile)
 	defer func() {
@@ -207,8 +218,24 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 
 	a.logSession.AddMessage(roleUser, task, nil, nil)
 
+	// Inject the admin-curated knowledge base into the system prompt (both modes
+	// inject the same notes; here we append to the scheduled base prompt before
+	// the run). Failure to read notes is non-fatal — the run proceeds without
+	// the notes section rather than aborting.
+	systemPrompt := a.systemPrompt
+	if a.notesProvider != nil {
+		if notes, err := a.notesProvider.PublishedNotes(ctx); err != nil {
+			log.Printf("agent notes unavailable; running without notes section: %v", err)
+		} else {
+			systemPrompt = appendScheduledAgentNotes(systemPrompt, notes)
+		}
+	}
+
 	// Scheduled policy: audit gating + finish enforcement (agentcore) + verifier.
 	inner := agentcore.NewScheduledPolicy(a.logSession, a.maxIterations)
+	if a.noteProposer != nil {
+		inner.SetNoteProposer(a.noteProposer)
+	}
 	policy := &scheduledPolicy{inner: inner, agent: a, task: task}
 
 	// Loader tools (mcp_list_servers / mcp_load_servers) drive the in-loop tool
@@ -227,7 +254,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	allow, optional := a.mcpGates()
 
 	deps := agentcore.Deps{
-		Input:           scheduledInput{systemPrompt: a.systemPrompt, task: task, label: a.logSession.Title},
+		Input:           scheduledInput{systemPrompt: systemPrompt, task: task, label: a.logSession.Title},
 		Observer:        &scheduledObserver{session: a.logSession},
 		Policy:          inner, // inner policy exposes orchestration() for confirm_audit + usage
 		Executor:        NewSandboxExecutor(a.sb),
@@ -310,6 +337,21 @@ func (a *Agent) selection() agentcore.MCPSelection {
 		sel = append(sel, agentcore.MCPChoice{Server: name})
 	}
 	return sel
+}
+
+// appendScheduledAgentNotes appends the admin-notes section + the propose_note
+// tool block to the scheduled base prompt, reusing the SAME helpers the
+// interactive prompt uses (so both modes inject identical text). Notes render
+// after the base prompt; scheduled runs have no user-memories block.
+func appendScheduledAgentNotes(base string, notes []agentcore.Note) string {
+	var sb strings.Builder
+	sb.WriteString(base)
+	if !strings.HasSuffix(base, "\n\n") {
+		sb.WriteString("\n\n")
+	}
+	appendAgentNotes(&sb, notes)
+	appendNoteProposalTool(&sb)
+	return sb.String()
 }
 
 // markServerLoaded records a server as loaded and flags a rebuild.
