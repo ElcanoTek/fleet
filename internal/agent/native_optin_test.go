@@ -115,7 +115,7 @@ func TestBuildSystemPrompt_ImageGenSectionGated(t *testing.T) {
 	m := fixtureManager(t)
 	m.mcpClient = mcp.NewClient()
 
-	off, err := m.buildSystemPrompt("victoria", "conv-x", nil, nil)
+	off, err := m.buildSystemPrompt("victoria", "conv-x", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt off: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestBuildSystemPrompt_ImageGenSectionGated(t *testing.T) {
 		t.Error("generate_image must not appear in prompt when not opted in")
 	}
 
-	on, err := m.buildSystemPrompt("victoria", "conv-x", nil, []string{OptionalNativeImageGenName})
+	on, err := m.buildSystemPrompt("victoria", "conv-x", nil, nil, []string{OptionalNativeImageGenName})
 	if err != nil {
 		t.Fatalf("buildSystemPrompt on: %v", err)
 	}
