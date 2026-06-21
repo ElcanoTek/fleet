@@ -277,7 +277,7 @@ func (s *Store) List(ctx context.Context, userEmail string) ([]Conversation, err
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, optional_mcp_servers_enabled
 		 FROM conversations WHERE user_email = $1
-		 ORDER BY pinned DESC, updated_at DESC`,
+		 ORDER BY pinned DESC, updated_at DESC, id DESC`,
 		userEmail,
 	)
 	if err != nil {
@@ -880,7 +880,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 			`DELETE FROM conversations WHERE id IN (
 			    SELECT id FROM conversations
 			    WHERE user_email = $1 AND pinned = FALSE
-			    ORDER BY updated_at DESC
+			    ORDER BY updated_at DESC, id DESC
 			    OFFSET $2
 			 )`,
 			email, unpinnedCap,

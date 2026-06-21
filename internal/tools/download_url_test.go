@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,11 @@ import (
 // pre-seeding any file.
 func downloadCtx(t *testing.T) (context.Context, string) {
 	t.Helper()
+	// httptest servers listen on loopback, which the production SSRF guard
+	// blocks — substitute an unguarded dialer for the duration of the test.
+	prevDial := downloadURLDialContext
+	downloadURLDialContext = (&net.Dialer{}).DialContext
+	t.Cleanup(func() { downloadURLDialContext = prevDial })
 	root := t.TempDir()
 	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 	const convID = "conv-download-url-test"

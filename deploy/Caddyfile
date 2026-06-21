@@ -1,0 +1,33 @@
+# deploy/Caddyfile — TLS reverse-proxy fronting the fleet web origin.
+#
+# Topology (see web/src/app/lib/{chatServer,mocServer}.ts):
+#
+#   browser ──TLS──▶ Caddy ──▶ Next.js web app (127.0.0.1:3000)
+#                                   │  server-side proxy (loopback):
+#                                   ├─▶ chat-server        127.0.0.1:8080
+#                                   └─▶ orchestrator        127.0.0.1:8000
+#
+# The Next app is the ONLY public entrypoint. The two Go backends bind loopback
+# (cfg.Addr defaults to 127.0.0.1:8080; orchestrator to :8000) and are reached
+# only by Next's own /api/* route handlers — including the SSE streams, which
+# Next proxies through /api/.../stream. So Caddy fronts Next; it does NOT expose
+# :8080 / :8000 to the internet.
+#
+# Run the web app behind this with:  cd web && npm run build && npm run start
+# (next start → 127.0.0.1:3000), wiring CHAT_SERVER_URL / ORCHESTRATOR_SERVER_URL
+# to the loopback backends and CHAT_SERVER_TOKEN to FLEET_SERVER_TOKEN.
+#
+# Replace fleet.example.com with your domain; Caddy auto-provisions the cert.
+
+fleet.example.com {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:3000 {
+		# SSE: stream tokens straight through, no response buffering, and a
+		# generous read timeout so long agent turns don't get cut off.
+		flush_interval -1
+		transport http {
+			read_timeout 30m
+		}
+	}
+}
