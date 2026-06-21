@@ -1,0 +1,15 @@
+name: Elcano
+description: Default Elcano-branded deal sheet. Used when no per-client theme applies.
+
+logo:
+  file: logo.png
+  max_width_px: 360
+  anchor_cell: B1
+
+header:
+  background: "#1A0B1E"
+  text_color: "#CCCCFF"
+
+footer:
+  background: "#1A0B1E"
+  text_color: "#CCCCFF"

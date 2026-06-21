@@ -1,0 +1,3 @@
+theme_id: victoria
+description: Default Elcano/Victoria palette — identity theme (no overrides; canonical_template already uses these colors)
+color_overrides: {}
