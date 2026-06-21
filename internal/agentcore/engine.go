@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openrouter"
@@ -162,12 +161,19 @@ func canSwapFallback(e *engine, activeModel fantasy.LanguageModel, alreadySwappe
 
 // roundState carries the per-round streaming accumulators. Lean compared to
 // cutlass's roundState: the SHARED loop needs text capture + usage accounting;
-// the rich live-log / reasoning rendering is a driver Observer concern.
+// the rich live-log / reasoning rendering flows through the run-wide streamSink
+// (the Observer + history bridge), which is shared across rounds.
 type roundState struct {
-	engine      *engine
-	orch        *orchestrationState
-	maxTokens   int64
-	currentText strings.Builder
+	engine    *engine
+	orch      *orchestrationState
+	maxTokens int64
+
+	// sink forwards this round's streamed events to the Observer and
+	// accumulates the run history. Shared across rounds so a multi-round
+	// scheduled run builds one coherent transcript. nil is tolerated (the
+	// callbacks become no-ops) so the lifted parity tests that build a
+	// roundState directly keep working.
+	sink *streamSink
 
 	// activeModelSlug is the model this round actually streams with (differs
 	// from engine.model after a fallback swap).
@@ -179,7 +185,10 @@ func newRoundState(e *engine, orch *orchestrationState, maxTokens int64) *roundS
 }
 
 // stream drives one fantasy stream call for the round, wiring the resilience
-// retry budget, usage accounting, and prompt-cache prepare step.
+// retry budget, usage accounting, the prompt-cache prepare step, AND the full
+// streaming bridge: text / reasoning / tool-call / tool-result callbacks forward
+// to the run's Observer and accumulate into the run history (the part chat's
+// session.go::RunTurn owned, now shared by both modes through streamSink).
 func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel fantasy.LanguageModel, messages []fantasy.Message) (*fantasy.AgentResult, error) {
 	maxRetries := r.engine.resilience.maxAttempts
 	temp := r.engine.temperature
@@ -188,6 +197,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		modelSlug = activeModel.Model()
 	}
 	r.activeModelSlug = modelSlug
+	sink := r.sink
 	return ag.Stream(ctx, fantasy.AgentStreamCall{
 		Messages:        messages,
 		MaxOutputTokens: &r.maxTokens,
@@ -196,7 +206,40 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		MaxRetries:      &maxRetries,
 		OnRetry:         r.engine.onRetry,
 		OnTextDelta: func(_, text string) error {
-			r.currentText.WriteString(text)
+			if sink != nil {
+				sink.onTextDelta(text)
+			}
+			return nil
+		},
+		OnReasoningStart: func(id string, content fantasy.ReasoningContent) error {
+			if sink != nil {
+				sink.onReasoningStart(id, content.Text)
+			}
+			return nil
+		},
+		OnReasoningDelta: func(id, text string) error {
+			if sink != nil {
+				sink.onReasoningDelta(id, text)
+			}
+			return nil
+		},
+		OnReasoningEnd: func(id string, content fantasy.ReasoningContent) error {
+			if sink != nil {
+				sink.onReasoningEnd(id, content.Text)
+			}
+			return nil
+		},
+		OnToolCall: func(tc fantasy.ToolCallContent) error {
+			if sink != nil {
+				sink.onToolCall(tc.ToolCallID, tc.ToolName, tc.Input)
+			}
+			return nil
+		},
+		OnToolResult: func(tr fantasy.ToolResultContent) error {
+			if sink != nil {
+				text, isErr := toolResultText(tr)
+				sink.onToolResult(tr.ToolCallID, tr.ToolName, text, isErr)
+			}
 			return nil
 		},
 		OnStepFinish: func(step fantasy.StepResult) error {

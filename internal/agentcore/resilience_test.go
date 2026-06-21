@@ -400,7 +400,7 @@ func TestStreamRoundRetriesStreamBlipInPlace(t *testing.T) {
 	messages := []fantasy.Message{fantasy.NewUserMessage("test task")}
 
 	outcome, err := e.streamRoundWithResilience(
-		context.Background(), orch, 1000,
+		context.Background(), orch, nil, 1000,
 		messages, buildAgent(e.model), e.model, false, buildAgent,
 	)
 	if err != nil {
@@ -453,7 +453,7 @@ func TestStreamRoundSwapsOnPersistentStreamBlip(t *testing.T) {
 	messages := []fantasy.Message{fantasy.NewUserMessage("test task")}
 
 	outcome, err := e.streamRoundWithResilience(
-		context.Background(), orch, 1000,
+		context.Background(), orch, nil, 1000,
 		messages, buildAgent(e.model), e.model, false, buildAgent,
 	)
 	if err != nil {
@@ -511,7 +511,7 @@ func TestStreamRoundSwapsToFallbackOnRetryExhaustion(t *testing.T) {
 	messages := []fantasy.Message{fantasy.NewUserMessage("test task")}
 
 	outcome, err := e.streamRoundWithResilience(
-		context.Background(), orch, maxTokens,
+		context.Background(), orch, nil, maxTokens,
 		messages, buildAgent(e.model), e.model, false, buildAgent,
 	)
 	if err != nil {
@@ -564,7 +564,7 @@ func TestStreamRoundFatalPropagates(t *testing.T) {
 	messages := []fantasy.Message{fantasy.NewUserMessage("test")}
 
 	_, err := e.streamRoundWithResilience(
-		context.Background(), orch, 1000,
+		context.Background(), orch, nil, 1000,
 		messages, buildAgent(e.model), e.model, false, buildAgent,
 	)
 	if err == nil {
@@ -608,7 +608,7 @@ func TestStreamRoundCancelledContextShortCircuits(t *testing.T) {
 	messages := []fantasy.Message{fantasy.NewUserMessage("test")}
 
 	_, err := e.streamRoundWithResilience(
-		ctx, orch, 1000, messages, buildAgent(e.model), e.model, false, buildAgent,
+		ctx, orch, nil, 1000, messages, buildAgent(e.model), e.model, false, buildAgent,
 	)
 	if err == nil {
 		t.Fatal("expected cancellation error, got nil")

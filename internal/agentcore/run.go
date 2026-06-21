@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"charm.land/fantasy"
 
@@ -113,6 +114,35 @@ type Result struct {
 	SwappedToFallback bool
 	// Label echoes the InputSource's task label.
 	Label string
+
+	// Entries is the ordered, neutral history of everything the run streamed:
+	// reasoning / text / tool_call / tool_result records, plus any recovered
+	// assistant text the finalize hook produced. The interactive driver maps
+	// these onto agent.HistoryEntry for persistence; scheduled mode (which
+	// persists via the session log) can ignore them.
+	Entries []RunEntry
+
+	// ModelSlug is the OpenRouter slug the run actually finished on (the
+	// fallback slug after a swap).
+	ModelSlug string
+
+	// Cancelled is true when the run ended because the caller's ctx was
+	// cancelled (Stop button, client disconnect, idle timeout). Partial
+	// Entries / FinalText / usage are still returned.
+	Cancelled bool
+
+	// Usage is the accumulated token + cost accounting for the whole run.
+	Usage RunUsage
+}
+
+// RunUsage is the accumulated token + cost accounting for a run.
+type RunUsage struct {
+	PromptTokens        int
+	LastStepInputTokens int
+	CompletionTokens    int
+	CachedTokens        int
+	CacheCreationTokens int
+	CostUSD             float64
 }
 
 // Run drives a single agent run to completion. It is the shared body both modes
@@ -186,11 +216,23 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	agent := buildAgent(activeModel)
 	swappedToFallback := false
 
+	// One run-wide streamSink forwards every round's text / reasoning / tool
+	// events to the Observer and accumulates the run history. Shared across
+	// rounds so a multi-round scheduled run builds one coherent transcript.
+	sink := newStreamSink(deps.Observer)
+	// usageOrch is the orchestration state whose usage counters accumulate
+	// across rounds (the same state the resilience layer mutates per step).
+	usageOrch := policyOrch(deps.Policy)
+
 	var finalResult *fantasy.AgentResult
 
 	for round := 0; round < maxEnforcementRounds; round++ {
 		if ctx.Err() != nil {
-			return Result{}, fmt.Errorf("context cancelled: %w", ctx.Err())
+			// Caller cancelled (Stop / disconnect / timeout): return the partial
+			// transcript + usage rather than erroring, so the driver can persist
+			// what the model produced before the cancel. The interactive driver
+			// uses Cancelled to emit turn.cancelled instead of turn.error.
+			return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
 		}
 
 		// Rebuild on MCP-server dirty (cutlass mcp_load_servers path).
@@ -208,9 +250,15 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 
 		orch := policyOrch(deps.Policy)
 		outcome, serr := eng.streamRoundWithResilience(
-			ctx, orch, maxTokens, messages, agent, activeModel, swappedToFallback, buildAgent,
+			ctx, orch, sink, maxTokens, messages, agent, activeModel, swappedToFallback, buildAgent,
 		)
 		if serr != nil {
+			// A ctx-cancellation surfaced as a stream error is still a clean
+			// cancel: return the partial transcript instead of a hard error so
+			// the interactive Stop path persists partial work.
+			if ctx.Err() != nil {
+				return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
+			}
 			return Result{}, serr
 		}
 		finalResult = outcome.result
@@ -219,15 +267,21 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		activeModel = outcome.activeModel
 		swappedToFallback = outcome.swappedToFallback
 
-		finalText := ""
-		if finalResult != nil && finalResult.Response.Content != nil {
+		// The model's user-visible text for this round comes from the streamed
+		// accumulation (sink), falling back to the final AgentResult content.
+		_, accumulatedText := sink.snapshot()
+		finalText := strings.TrimSpace(accumulatedText)
+		if finalText == "" && finalResult != nil && finalResult.Response.Content != nil {
 			finalText = finalResult.Response.Content.Text()
 		}
 
 		canFinish, enforcementMsgs := deps.Policy.CanFinish(round)
 		if canFinish {
 			// Interactive-only finalize hook (leaked-tool-call / forced summary).
-			// Stubbed unless the driver supplies an impl.
+			// Stubbed unless the driver supplies an impl. The hook streams its
+			// own follow-up text deltas through the Observer; recovered text
+			// replaces the loop's text and is appended as an assistant entry so
+			// it persists.
 			if deps.Finalize != nil {
 				recovered, ferr := deps.Finalize(ctx, FinalizeInput{
 					Mode:         mode,
@@ -242,11 +296,18 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 					finalText = recovered
 				}
 			}
+			entries, _ := sink.snapshot()
+			if finalText != "" {
+				entries = append(entries, RunEntry{Role: roleAssistant, Type: "text", Text: finalText})
+			}
 			return Result{
 				FinalText:         finalText,
 				Rounds:            round + 1,
 				SwappedToFallback: swappedToFallback,
 				Label:             label,
+				Entries:           entries,
+				ModelSlug:         slugOf(activeModel),
+				Usage:             usageSnapshot(usageOrch),
 			}, nil
 		}
 
@@ -261,6 +322,52 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	}
 
 	return Result{Label: label}, fmt.Errorf("max enforcement rounds (%d) exceeded without task completion", maxEnforcementRounds)
+}
+
+// cancelledResult builds the partial Result returned when the run's ctx was
+// cancelled mid-flight. It carries whatever transcript + usage accumulated so
+// the driver can persist the partial work (chat's Stop semantics).
+func cancelledResult(ctx context.Context, sink *streamSink, orch *orchestrationState, label string, activeModel fantasy.LanguageModel, swapped bool, round int) Result {
+	entries, text := sink.snapshot()
+	final := strings.TrimSpace(text)
+	if final != "" {
+		entries = append(entries, RunEntry{Role: roleAssistant, Type: "text", Text: final})
+	}
+	return Result{
+		FinalText:         final,
+		Rounds:            round,
+		SwappedToFallback: swapped,
+		Label:             label,
+		Entries:           entries,
+		ModelSlug:         slugOf(activeModel),
+		Cancelled:         true,
+		Usage:             usageSnapshot(orch),
+	}
+}
+
+// usageSnapshot copies an orchestration state's accumulated usage counters.
+func usageSnapshot(orch *orchestrationState) RunUsage {
+	if orch == nil {
+		return RunUsage{}
+	}
+	orch.mu.Lock()
+	defer orch.mu.Unlock()
+	return RunUsage{
+		PromptTokens:        orch.PromptTokens,
+		LastStepInputTokens: orch.LastStepInputTokens,
+		CompletionTokens:    orch.CompletionTokens,
+		CachedTokens:        orch.CachedTokens,
+		CacheCreationTokens: orch.CacheCreationTokens,
+		CostUSD:             orch.CostUSD,
+	}
+}
+
+// slugOf returns a model's OpenRouter slug, or "" when nil.
+func slugOf(m fantasy.LanguageModel) string {
+	if m == nil {
+		return ""
+	}
+	return m.Model()
 }
 
 // policyOrch extracts the orchestrationState a Policy embeds (so the resilience
