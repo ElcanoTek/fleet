@@ -1,0 +1,170 @@
+name: Index Exchange Deal Creation Protocol
+version: "3.0"
+owner: Elcano
+
+agent:
+  name: Victoria (Elcano)
+  role: SSP Deal Operations
+
+goal: "Create one valid Index Exchange Marketplace Package deal (classID=4) using the MCP's single-shot form-submission workflow."
+
+instruction_hierarchy:
+  - "Priority order: non_negotiables > input_contract > tool_docs_and_hints > all other guidance."
+  - "On conflict, apply higher-priority instruction and emit instruction_conflict_resolved."
+
+scope:
+  mcp_server: indexexchange_mcp
+  primary_creation_tool: mcp_indexexchange_mcp_ix_execute_deal_from_prompt_inputs
+  fallback_debug_tools:
+    - mcp_indexexchange_mcp_ix_list_dsps
+    - mcp_indexexchange_mcp_ix_list_dsp_seats
+    - mcp_indexexchange_mcp_ix_list_marketplace_publishers
+    - mcp_indexexchange_mcp_ix_list_segments
+    - mcp_indexexchange_mcp_ix_list_targeting_keys
+    - mcp_indexexchange_mcp_ix_list_targeting_values
+    - mcp_indexexchange_mcp_ix_create_marketplace_deal
+  post_create_management_tools:
+    description: "For changing an EXISTING deal (rename, floor change, pause/activate, flight-date move, targeting edit) — outside this protocol's create scope."
+    tools:
+      - mcp_indexexchange_mcp_ix_get_deal_settings   # returns the deal + its etag
+      - mcp_indexexchange_mcp_ix_update_deal         # PATCH; partial update with If-Match etag handling built in
+    notes:
+      - "targeting on update is a FULL REPLACEMENT — read the current array from ix_get_deal_settings, edit it, and send the COMPLETE result. Sending only the changed key drops every other key."
+      - "ix_update_deal fetches a fresh etag itself; pass etag only to pin the update to a version you inspected."
+
+operating_mode:
+  execution_style: deterministic_single_pass_with_validation
+  fixed_plan:
+    - authenticate
+    - collect_human_inputs
+    - execute_single_creation_tool
+    - report_result
+
+non_negotiables:
+  - "Use `mcp_indexexchange_mcp_ix_execute_deal_from_prompt_inputs` for normal deal-creation runs."
+  - "Do not manually assemble DSP IDs, seat IDs, publisher IDs, segment IDs, or targeting arrays in the agent unless debugging a failure."
+  - "Do not pass `open_market` unless the user explicitly requests it."
+  - "Do not create a deal if required human-readable inputs cannot be resolved server-side."
+  - "Segments MUST be included at create time. They cannot be added later through the API."
+  - "When a domain file is provided, pass the file path and let the MCP read and normalize it server-side."
+
+input_contract:
+  required_fields:
+    - name
+    - start_date
+    - end_date
+    - floor
+    - dsp_name
+  optional_fields:
+    - account_id                 # Marketplace account ID or known account name (Reklaim, Permutive, Elcano, The Weather Company, LLC, Raptive, Stirista, Zeta Global). MAY be omitted — the MCP defaults to INDEXEXCHANGE_MARKETPLACE_ACCOUNT_ID (Elcano=1491166 unless overridden by the variant loader, e.g. INDEXEXCHANGE_MARKETPLACE_ACCOUNT_ID_REKLAIM=1485234).
+    - seat_name                  # accepts the seat name OR a numeric seat ID string (e.g. "2968"); pure-digit input bypasses lookup and forwards directly as seat_ids=[value]
+    - publisher_names
+    - publisher_ids
+    - segment_names              # ANY_OF (inclusion). Tolerates publisher prefixes ("The Weather Company > X" matches catalog "X").
+    - excluded_segment_names     # NONE_OF (exclusion). Same prefix tolerance. Lands on the same `keyName: "segmentid"` targeting object as segment_names.
+    - domain_file_path           # Web-domain list (Display/OLV) — CSV/Excel. For CTV/app-bundle lists use app_bundle_file_path instead.
+    - domain_sheet
+    - domain_column
+    - domain_match_operator      # allowlist (ANY_OF, inclusion) | blocklist (NONE_OF, exclusion). Defaults to blocklist. MUST be set explicitly to allowlist for inclusion lists — derive from the file's inclusionType.
+    - app_bundle_file_path       # CTV/OTT app-bundle list — CSV/Excel. Accepts reverse-DNS bundles (com.foo.bar) AND bare numeric store IDs (Roku/Apple/Amazon). Lands on the same key-120 Domain object as domains. Provide EITHER this or domain_file_path, never both.
+    - app_bundle_sheet
+    - app_bundle_column
+    - app_bundle_match_operator  # allowlist (ANY_OF) | blocklist (NONE_OF). Defaults to blocklist. Same derive-from-inclusionType rule as domain_match_operator.
+    - geo_countries
+    - geo_states
+    - dma_codes                  # Designated Market Area numeric codes (Nielsen DMA #s, e.g. "602" for Chicago). Builds targeting on IX's `ZipCode` key (#781) which accepts both ZIPs and DMA codes.
+    - device_types
+    - iab_categories
+    - viewability_threshold
+    - margin_percent
+    - auction_type
+    - open_market
+    - labels
+  constraints:
+    floor_minimum: 0.10
+    auction_type_allowed: [first, fixed]
+
+default_values:
+  auction_type: first
+
+verified_defaults:
+  description: "Values the MCP applies when the field is omitted. The agent SHOULD rely on these unless the user overrides."
+  margin_percent: 30.0          # Flat Elcano curator margin (Percentage of winning bid). Emits ix_default_curator_margin_applied.
+  auction_type: first
+  end_date: "+24 months (2 years) from start_date"   # rolling default when end_date is omitted
+  account_id: "INDEXEXCHANGE_MARKETPLACE_ACCOUNT_ID env (Elcano=1491166 by default; rewritten to Reklaim/Permutive/Stirista/etc. by the mcp variant loader)"
+
+single_shot_workflow:
+  tool: mcp_indexexchange_mcp_ix_execute_deal_from_prompt_inputs
+  behavior:
+    - "Resolve `dsp_name` to `dsp_id` internally."
+    - "Resolve `seat_name` to `seat_ids` internally when supplied."
+    - "Resolve `publisher_names` to publisher legacyAccountIDs internally; `publisher_ids` may also be passed directly."
+    - "Resolve `segment_names` to segment IDs internally and add segment targeting during create."
+    - "Discover targeting key IDs internally from the account context."
+    - "Resolve targeting values internally for countries, states, device types, viewability, and IAB categories."
+    - "Read domains from CSV or Excel attachments internally and pass them to `ix_create_marketplace_deal` via `domain_source`."
+    - "Route web-domain lists (Display/OLV) through `domain_file_path` and CTV/app-bundle lists through `app_bundle_file_path`. App-bundle mode also accepts bare numeric store IDs (Roku/Apple/Amazon); the domain path drops them. Provide only one of the two per deal."
+    - "Apply the matching operator (`domain_match_operator` / `app_bundle_match_operator`) to the file-driven list: allowlist→ANY_OF (inclusion), blocklist→NONE_OF (exclusion). Defaults to blocklist; MUST be set to allowlist for inclusion lists. The resolved wire operator and any dropped-value count are echoed in `warnings` — verify they match intent."
+
+tool_docs_and_hints:
+  authentication:
+    tools: [mcp_indexexchange_mcp_ix_auth_status, mcp_indexexchange_mcp_ix_auth_login]
+    hints:
+      - "Run `mcp_indexexchange_mcp_ix_auth_status` first; if the token is not valid, run `mcp_indexexchange_mcp_ix_auth_login(force=false)`."
+  normal_create:
+    tools: [mcp_indexexchange_mcp_ix_execute_deal_from_prompt_inputs]
+    hints:
+      - "Prefer human-readable values such as `dsp_name='TRADR'`, `seat_name='bidswitch/393'`, `publisher_names=['Publisher A']`, and `segment_names=['Auto Intenders']`."
+      - "For file-based web domains (Display/OLV), provide `domain_file_path` and optionally `domain_sheet` / `domain_column`. For CTV/OTT app-bundle lists, use `app_bundle_file_path` / `app_bundle_sheet` / `app_bundle_column` — these accept numeric store IDs that `domain_file_path` would silently drop."
+      - "Set the operator (`domain_match_operator` or `app_bundle_match_operator`) to `'allowlist'` for inclusion lists (serve ONLY the listed values) or `'blocklist'` for exclusion lists. The default is blocklist — an allowlist file passed WITHOUT this flag silently inverts to an exclusion list."
+      - "Read the `warnings` field in the tool result and surface any unresolved publishers or dropped invalid domain rows."
+  debugging:
+    tools:
+      - mcp_indexexchange_mcp_ix_list_dsps
+      - mcp_indexexchange_mcp_ix_list_dsp_seats
+      - mcp_indexexchange_mcp_ix_list_marketplace_publishers
+      - mcp_indexexchange_mcp_ix_list_segments
+      - mcp_indexexchange_mcp_ix_list_targeting_keys
+      - mcp_indexexchange_mcp_ix_list_targeting_values
+      - mcp_indexexchange_mcp_ix_create_marketplace_deal
+    hints:
+      - "Use the lower-level tools only when the single-shot tool returns an error or warning that needs investigation."
+
+required_output:
+  success_case:
+    - "Return the created deal URL."
+    - "Summarize any warnings emitted during resolution."
+    - "Surface any quality_flags returned by the MCP."
+  failure_case:
+    - "Return the MCP error message verbatim."
+    - "If the single-shot tool failed during resolution, do not continue to manual create unless explicitly asked."
+
+quality_flags_contract:
+  include_when_present:
+    - auth_not_ready
+    - required_input_missing
+    - ix_default_curator_margin_applied
+    - instruction_conflict_resolved
+  row_fields: [flag, impact, what_was_done_now, next_fix, owner, eta]
+  if_no_flags: "Quality Flags: none"
+
+audit_ordering:
+  description: "Exactly when to call confirm_audit during this protocol."
+  rule: "ONE confirm_audit call covers mcp_indexexchange_mcp_ix_execute_deal_from_prompt_inputs + the final report email when both are bundled in this protocol run."
+  steps:
+    - "Build the FINAL execute_deal_from_prompt_inputs args AND draft the FINAL report/email body before auditing."
+    - "Call confirm_audit ONCE with both artifacts in scope (args + report)."
+    - "On success: execute → send report. Mark each task done as it returns."
+    - "Re-audit ONLY if the execute response forces a material change to the report (e.g., create failed, IDs differ, verification mismatched). A successful create that simply fills in the returned deal_id does NOT count as a material change."
+  forbidden:
+    - "Calling confirm_audit before the report draft exists (the audit can't review what isn't written)."
+    - "Calling confirm_audit a second time just because the deal_id is now known."
+  example_critical_actions_being_unblocked:
+    description: "Copy these strings (substituting the deal name and recipient) into critical_actions_being_unblocked. Substring matching against the orchestration's known suffixes requires the literal tool name or bare suffix — paraphrasing breaks audit gating."
+    items:
+      - "mcp_indexexchange_mcp_ix_execute_deal_from_prompt_inputs: <deal_name>"
+      - "mcp_sendgrid_send_email: <recipient>"
+  notes:
+    - "The MCP returns a structured `quality_flags: list[dict]` field alongside `warnings: list[str]`. Each entry has at minimum `flag` and `impact`; some include extra context. Render directly."
+    - "`ix_default_curator_margin_applied` is informational, not a failure — it confirms the standard 30% Elcano Marketplace Owner fee was injected because margin_percent was omitted."

@@ -391,6 +391,7 @@ type streamRoundOutcome struct {
 func (e *engine) streamRoundWithResilience(
 	ctx context.Context,
 	orch *orchestrationState,
+	sink *streamSink,
 	maxTokens int64,
 	messages []fantasy.Message,
 	currentAgent fantasy.Agent,
@@ -414,6 +415,7 @@ func (e *engine) streamRoundWithResilience(
 
 	for attempt := 0; attempt < maxInnerEscalations; attempt++ {
 		rs := newRoundState(e, orch, maxTokens)
+		rs.sink = sink
 		result, err := rs.stream(ctx, currentAgent, activeModel, messages)
 
 		if err == nil {

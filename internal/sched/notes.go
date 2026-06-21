@@ -160,11 +160,15 @@ func (s *Store) GetNoteBySlug(ctx context.Context, slug string) (*Note, error) {
 }
 
 // ListNotes returns published notes (and archived too when includeArchived),
-// ordered by updated_at DESC.
+// ordered by updated_at DESC. version DESC then slug ASC are deterministic
+// tiebreaks so two notes updated within the same unix second (the timestamp
+// resolution) still come back in a stable, meaningful order — the more-edited
+// note first, then alphabetical — rather than Postgres heap order.
 func (s *Store) ListNotes(ctx context.Context, includeArchived bool) ([]Note, error) {
-	q := noteSelect + " WHERE status = 'published' ORDER BY updated_at DESC"
+	const order = " ORDER BY updated_at DESC, version DESC, slug ASC"
+	q := noteSelect + " WHERE status = 'published'" + order
 	if includeArchived {
-		q = noteSelect + " ORDER BY updated_at DESC"
+		q = noteSelect + order
 	}
 	rows, err := s.conn.QueryContext(ctx, q)
 	if err != nil {

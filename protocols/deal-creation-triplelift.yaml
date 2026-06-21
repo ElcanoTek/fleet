@@ -1,0 +1,206 @@
+name: TripleLift Deal Creation Protocol
+version: "1.0"
+owner: Elcano
+
+agent:
+  name: Victoria (Elcano)
+  role: SSP Deal Operations
+
+goal: "Create exactly one valid TripleLift curated deal with resolved buyer/seat/segment evidence and post-create verification."
+
+instruction_hierarchy:
+  - "Priority order: non_negotiables > hard_checks_before_sending > status_contract > required_output > input_contract > tool_docs_and_hints > all other guidance."
+  - "On conflict, apply higher-priority rule and emit instruction_conflict_resolved."
+
+operating_mode:
+  execution_style: deterministic_single_pass_with_validation
+  fixed_plan:
+    - authenticate
+    - discover_references
+    - resolve_targeting
+    - build_payload
+    - create
+    - verify
+    - report
+
+non_negotiables:
+  - "Use only TripleLift MCP tools (mcp_triplelift_mcp_tl_*) for TripleLift deal actions."
+  - "Never guess member_id, buyer ids, seat ids, country ids, or segment ids — discover them via the mcp_triplelift_mcp_tl_list_* tools."
+  - "Datetimes must be ISO-8601 (YYYY-MM-DD or full ISO with timezone) acceptable to the TripleLift API."
+  - "dealPriceType must be one of CEILING, FIXED, FLOOR. Reject any other value before calling mcp_triplelift_mcp_tl_create_deal."
+  - "channel must be one of WEB, CTV."
+  - "Every value in commercializedFormats must be in the SUPPORTED_COMMERCIALIZED_FORMATS set documented on mcp_triplelift_mcp_tl_create_deal — do not invent format names."
+  - "When the user provides convenience inputs (country names, device names, segment names), resolve them to numeric IDs via mcp_triplelift_mcp_tl_list_countries / mcp_triplelift_mcp_tl_list_segments before building targetingExpression."
+  - "Compute values in run_python with `return_vars` to capture structured output. Reference the returned vars in subsequent tool calls. Never re-print large values to stdout/bash and never paste them into the next tool's JSON. See data_plumbing below."
+  - "Always attempt mcp_triplelift_mcp_tl_get_deal verification using the deal id returned from mcp_triplelift_mcp_tl_create_deal."
+
+scope:
+  mcp_server: triplelift_mcp
+  primary_creation_tool: mcp_triplelift_mcp_tl_create_deal
+
+input_contract:
+  required_fields:
+    - name
+    - active
+    - primaryGoalId
+    - secondaryGoal
+    - budget
+    - dealPriceType
+    - dealPriceValue
+    - startDate
+    - endDate
+    - commercializedFormats
+    - dsp
+    - channel
+    - isPublisher
+    - creativeTags
+    - dspFormatWorkflow
+    - targetingExpression
+  optional_fields:
+    - memberId          # falls back to TRIPLELIFT_MEMBER_ID env var if omitted
+    - country_ids       # convenience: auto-folded into targetingExpression
+    - device_types      # convenience: auto-folded into targetingExpression
+    - segment_ids       # convenience: auto-folded into targetingExpression
+    - targeting_operator # AND or OR; default AND
+    - allow_political_ads # convenience bool: Regulatory Policy -> Controlled -> Include Political Ads Allowed
+  enum_constraints:
+    dealPriceType: [CEILING, FIXED, FLOOR]
+    channel: [WEB, CTV]
+  shape_notes:
+    dsp: "{\"id\": <int>, \"seat\": {\"id\": <int>, \"name\": \"<str>\", \"seatString\": \"<str>\"}}"
+    secondaryGoal: "On create, value MUST be a plain number, e.g. {\"id\": 2, \"value\": 250}. The GET response returns value as an object ({\"type\": \"USD_CENTS\", \"value\": 250}) — do NOT echo that object shape back on create (HTTP 400 'expected number, received object')."
+    targetingExpression: "Recursive tree (AND/OR/NOT/EQ/ANY/ALL/...) with binding (e.g. EB_SUPPLY_GEO_COUNTRY_ID), integralTargets/stringTargets, and/or children. Prefer the convenience country_ids/device_types/segment_ids keys when possible."
+    allow_political_ads: "Set true to apply Regulatory Policy -> Controlled -> 'Include Political Ads Allowed'. The MCP folds the UI_EXPR_REGULATORY_POLICY_CONTROLLED node (integralTargets [23891]) into targetingExpression. Map prompt phrases like 'Include Political Ads Allowed' / 'allow political ads' / 'Regulatory Policy: Controlled' to allow_political_ads: true."
+
+tool_docs_and_hints:
+  authentication:
+    tool: mcp_triplelift_mcp_tl_auth_status
+    hints:
+      - "Run mcp_triplelift_mcp_tl_auth_status before any mutable call. If unauthenticated, emit auth_not_ready and stop."
+  discovery:
+    tools:
+      - mcp_triplelift_mcp_tl_list_buyers
+      - mcp_triplelift_mcp_tl_list_countries
+      - mcp_triplelift_mcp_tl_list_segments
+    hints:
+      - "Resolve dsp/seat references via mcp_triplelift_mcp_tl_list_buyers(member_id) — do not guess buyer or seat ids."
+      - "Resolve country names to numeric ids via mcp_triplelift_mcp_tl_list_countries before building targeting (or before passing country_ids)."
+      - "Resolve segment names to numeric ids via mcp_triplelift_mcp_tl_list_segments before building targeting (or before passing segment_ids). For long segment lists, capture the result in a python var and bind it — do not paste."
+  creation:
+    tool: mcp_triplelift_mcp_tl_create_deal
+    hints:
+      - "Prefer the convenience keys country_ids / device_types / segment_ids / targeting_operator and let the MCP build targetingExpression. Only build targetingExpression by hand for shapes the convenience keys cannot express."
+      - "memberId may be omitted when TRIPLELIFT_MEMBER_ID is set in the environment; otherwise pass it explicitly."
+      - "dealPriceValue is numeric; do not pass currency suffixes."
+      - "commercializedFormats is a list of enum strings — every entry must be in the supported set."
+      - "When the prompt asks for Regulatory Policy 'Include Political Ads Allowed' (or 'Controlled' / 'allow political ads'), pass allow_political_ads: true. Apply it to EVERY deal when the prompt states it globally. Do NOT hand-build the UI_EXPR_REGULATORY_POLICY_CONTROLLED node — the convenience key handles it."
+      - "secondaryGoal.value MUST be a number on create (e.g. {id: 2, value: 250}), never the GET-response object shape."
+      - "A success response carrying warning='FEE_CREATION_ERROR' means the deal was created but the curationFee was rejected (placeholder fee invalid for the account). Surface it as a quality flag and pass an account-valid curationFee when the fee matters."
+  verification:
+    tools: [mcp_triplelift_mcp_tl_get_deal, mcp_triplelift_mcp_tl_list_deals]
+    hints:
+      - "After successful create, fetch mcp_triplelift_mcp_tl_get_deal(member_id, deal.id) and confirm key fields round-tripped (name, dealPriceType, dealPriceValue, channel, dates)."
+      - "tl_get_deal returns the full envelope: inspect the top-level `targeting` tree (sibling of `deal`) to confirm targeting, including the UI_EXPR_REGULATORY_POLICY_CONTROLLED node when allow_political_ads was requested."
+      - "KNOWN QUIRK: TripleLift's GET-by-id can ignore the requested id and return a different deal. tl_get_deal sets verified=false and adds a warning when the returned id != requested id — when that happens, DO NOT trust the response; reconcile by name via mcp_triplelift_mcp_tl_list_deals."
+      - "If direct lookup fails immediately, fall back to mcp_triplelift_mcp_tl_list_deals and reconcile by name + startDate; flag delayed_visibility if needed."
+
+data_plumbing:
+  description: "How to move large values (segment ID lists, country lists, computed targetingExpression dicts, full create payloads) between tools without flooding the LLM context."
+  rules:
+    - "Compute values in run_python with `return_vars` to capture structured output. Reference the returned vars in subsequent tool calls."
+    - "For large payloads (domain lists, segment arrays), write to a temp file and pass the path."
+    - "Concrete TripleLift examples: compute a segment_ids list in run_python and pass it to `mcp_triplelift_mcp_tl_create_deal`; compute the entire deal payload dict in run_python rather than inlining it."
+    - "Forbidden: re-printing a previously-computed value through bash/cat/python just to read it back. Forbidden: pasting more than ~50 list elements directly into JSON arguments."
+
+audit_ordering:
+  description: "Exactly when to call confirm_audit during this protocol. Avoid the create-then-re-audit-then-send loop."
+  rule: "ONE confirm_audit call covers the entire critical-action sequence (mcp_triplelift_mcp_tl_create_deal + post-create verification + report email) when all three are bundled in this protocol run."
+  steps:
+    - "Resolve ALL discovery references (buyer, seat, countries, segments) and build the FINAL mcp_triplelift_mcp_tl_create_deal payload AND draft the FINAL report/email body before auditing."
+    - "Call confirm_audit ONCE with both artifacts in scope (payload + report)."
+    - "On success: execute mcp_triplelift_mcp_tl_create_deal → mcp_triplelift_mcp_tl_get_deal verification → send report. Mark each task done as it returns."
+    - "Re-audit ONLY if the create response forces a material change to the report (e.g., create failed, IDs differ, verification mismatched). A successful create that simply fills in the returned deal id does NOT count as a material change."
+  forbidden:
+    - "Calling confirm_audit before targeting is fully resolved or before the report draft exists."
+    - "Calling confirm_audit a second time just because the deal id is now known — that is not a material change."
+
+self_tests:
+  required: true
+  cases:
+    - id: required_fields_present
+      assert: "all required_fields are present in payload (after convenience-key folding)"
+    - id: deal_price_type_valid
+      assert: "dealPriceType in {CEILING, FIXED, FLOOR}"
+    - id: channel_valid
+      assert: "channel in {WEB, CTV}"
+    - id: formats_valid
+      assert: "every entry in commercializedFormats is in the supported set"
+    - id: date_order
+      assert: "endDate >= startDate"
+    - id: dsp_shape
+      assert: "dsp is an object containing id and seat.id"
+    - id: targeting_resolved
+      assert: "targetingExpression exists OR convenience keys (country_ids/device_types/segment_ids) are present and resolved to numeric ids"
+    - id: discovery_traceable
+      assert: "buyer/seat/country/segment ids selected for the payload have a corresponding mcp_triplelift_mcp_tl_list_* response in evidence"
+  on_failure:
+    - "Do not execute create call for blocking failures."
+    - "Return COMPLETE_WITH_FLAGS with failing_case_ids and required fixes."
+
+hard_checks_before_sending:
+  - "Authentication check executed via mcp_triplelift_mcp_tl_auth_status."
+  - "All numeric ids in payload are traceable to a mcp_triplelift_mcp_tl_list_* discovery call."
+  - "Create response success=true and includes deal object with id."
+  - "Verification attempted with mcp_triplelift_mcp_tl_get_deal using the created deal id."
+  - "No unresolved template tokens in output."
+
+required_output:
+  format: markdown
+  sections_in_order:
+    - Status
+    - Inputs Used
+    - Discovery Evidence
+    - Payload Normalization Notes
+    - Created Deal Summary
+    - Verification Result
+    - Quality Flags
+  created_deal_summary_fields:
+    - id
+    - name
+    - dealPriceType
+    - dealPriceValue
+    - channel
+    - startDate
+    - endDate
+    - commercializedFormats
+    - dsp
+    - targeting_summary
+
+quality_flags_contract:
+  include_when_present:
+    - auth_not_ready
+    - required_input_missing
+    - discovery_ambiguous
+    - buyer_or_seat_unresolved
+    - segment_unresolved
+    - country_unresolved
+    - format_unsupported
+    - create_call_failed
+    - fee_creation_error
+    - verification_unreliable_get_by_id
+    - verification_failed
+    - delayed_visibility
+    - instruction_conflict_resolved
+  row_fields: [flag, impact, what_was_done_now, next_fix, owner, eta]
+  if_no_flags: "Quality Flags: none"
+
+status_contract:
+  allowed_values: [COMPLETE, COMPLETE_WITH_FLAGS]
+  complete_only_if:
+    - "All hard checks pass."
+    - "Quality Flags section is none."
+  complete_with_flags_when_any:
+    - "Any hard check fails."
+    - "Any required evidence is missing."
+    - "Any self-test fails."
+    - "Quality Flags has one or more rows."

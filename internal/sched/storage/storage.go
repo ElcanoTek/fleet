@@ -492,6 +492,16 @@ func (s *Storage) GetUser(userID uuid.UUID) (*models.User, error) {
 	return s.db.GetUser(context.Background(), userID)
 }
 
+// ListUsers returns all users ordered by username.
+func (s *Storage) ListUsers(ctx context.Context) ([]models.User, error) {
+	return s.db.ListUsers(ctx)
+}
+
+// CountUsers returns the number of provisioned users (0-users guard).
+func (s *Storage) CountUsers(ctx context.Context) (int, error) {
+	return s.db.CountUsers(ctx)
+}
+
 // GetUserByUsername gets a user by username.
 func (s *Storage) GetUserByUsername(username string) (*models.User, error) {
 	return s.db.GetUserByUsername(context.Background(), username)
