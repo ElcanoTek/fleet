@@ -43,7 +43,6 @@ require (
 	github.com/charmbracelet/x/exp/strings v0.1.0 // indirect
 	github.com/charmbracelet/x/json v0.2.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/go-chi/cors v1.2.2 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260520185125-572e7c383686 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

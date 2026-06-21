@@ -1,0 +1,17 @@
+-- Adds tool_call_id to approvals so the post-approval tool_result row
+-- can be threaded back to the chip the agent originally created.
+--
+-- Background: when the agent emits a tool_call (id="tool_xxx"), the
+-- staging path returns "APPROVAL_REQUIRED..." as the tool_result for
+-- that same id, and the chip in the UI shows that stub. After the
+-- user clicks Send, the real tool runs and we synthesize a SECOND
+-- tool_result row. Until now that row used the approval id as its
+-- call id, which doesn't match anything the UI rendered — so the
+-- failure (or success) text is in the database but orphaned in the
+-- chip render. Storing the tool_call_id at stage time lets us reuse
+-- it on resolve, so the chip naturally updates with the real result.
+--
+-- Nullable so existing rows keep working; backfill is unnecessary
+-- because resolved approvals are read for cosmetic purposes only and
+-- the UI tolerates missing call ids.
+ALTER TABLE approvals ADD COLUMN tool_call_id TEXT;
