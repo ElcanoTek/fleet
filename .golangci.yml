@@ -1,0 +1,89 @@
+# golangci-lint v2 configuration
+# https://golangci-lint.run/docs/configuration/
+version: "2"
+
+linters:
+  # Use standard as the base set of linters
+  default: standard
+  enable:
+    # Additional linters beyond standard
+    - bodyclose
+    - dupl
+    - errname
+    - errorlint
+    - exhaustive
+    - goconst
+    - gocritic
+    - gocyclo
+    - goprintffuncname
+    - gosec
+    - misspell
+    - nakedret
+    - nilerr
+    - noctx
+    - prealloc
+    - predeclared
+    - revive
+    - unconvert
+    - unparam
+    - whitespace
+  disable:
+    # Disabled linters (too strict or not needed)
+    - depguard
+    - funlen
+    - gochecknoglobals
+    - gochecknoinits
+    - lll
+    - wsl
+  exclusions:
+    # Use lax mode for generated files (ignores files with code generation comments)
+    generated: lax
+    warn-unused: true
+    # Use preset exclusions for common patterns
+    presets:
+      - comments
+      - std-error-handling
+    # Custom exclusion rules
+    rules:
+      # Exclude some linters from running on tests files
+      - path: _test\.go
+        linters:
+          - dupl
+          - gosec
+          - goconst
+          - errcheck
+      # Exclude shadow checking for err variables (common pattern)
+      - text: 'shadow: declaration of "err"'
+        linters:
+          - govet
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: strict
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 3
+  uniq-by-line: true
+
+output:
+  sort-order:
+    - linter
+    - file
+  show-stats: true
+
+run:
+  timeout: 5m
+  tests: true
+  go: "1.26.4"
+
+severity:
+  default: error
+  rules:
+    - severity: warning
+      linters:
+        - dupl
+        - goconst
