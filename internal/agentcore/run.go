@@ -89,6 +89,12 @@ type Deps struct {
 	// Finalize is the interactive-only finalize hook (leaked-tool-call retry /
 	// forced final summary). Nil in scheduled mode. See finalize.go.
 	Finalize FinalizeHook
+
+	// CompactionSummarizer, when set, produces the summary message inserted in
+	// place of the dropped middle during a context-too-large force-compaction
+	// (the interactive driver wires chat's head/summary/tail compaction here).
+	// Nil falls back to the engine's deterministic placeholder summary.
+	CompactionSummarizer func(ctx context.Context, droppable []fantasy.Message) fantasy.Message
 }
 
 // Result is the run outcome.
@@ -119,13 +125,14 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	}
 
 	eng := &engine{
-		model:         deps.Model,
-		fallbackModel: deps.FallbackModel,
-		resilience:    loadResilienceConfigFor(cfg.EnvPrefix),
-		logSession:    logSession,
-		onRetry:       newRetryLogger(logSession),
-		temperature:   cfg.Temperature,
-		envPrefix:     cfg.EnvPrefix,
+		model:                deps.Model,
+		fallbackModel:        deps.FallbackModel,
+		resilience:           loadResilienceConfigFor(cfg.EnvPrefix),
+		logSession:           logSession,
+		onRetry:              newRetryLogger(logSession),
+		temperature:          cfg.Temperature,
+		envPrefix:            cfg.EnvPrefix,
+		compactionSummarizer: deps.CompactionSummarizer,
 	}
 
 	systemPrompt, messages, label, err := deps.Input.Prompt(ctx)
@@ -251,13 +258,30 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 }
 
 // policyOrch extracts the orchestrationState a Policy embeds (so the resilience
-// layer's usage accounting flows into the same state). Returns a throwaway when
-// the Policy doesn't expose one.
+// layer's usage accounting flows into the same state). A driver may WRAP a
+// built-in Policy (e.g. the scheduled driver layers an end-of-run verifier onto
+// ScheduledPolicy); such a wrapper exposes the inner policy via Unwrap so the
+// orchestration is still found. Returns a throwaway when none is exposed.
 func policyOrch(p Policy) *orchestrationState {
-	if op, ok := p.(interface{ orchestration() *orchestrationState }); ok {
-		if o := op.orchestration(); o != nil {
-			return o
+	for p != nil {
+		if op, ok := p.(interface{ orchestration() *orchestrationState }); ok {
+			if o := op.orchestration(); o != nil {
+				return o
+			}
 		}
+		w, ok := p.(PolicyUnwrapper)
+		if !ok {
+			break
+		}
+		p = w.Unwrap()
 	}
 	return newOrchestrationState(nil, 0)
+}
+
+// PolicyUnwrapper is implemented by a wrapping Policy that delegates to an inner
+// Policy. The loop unwraps to find the orchestration state and the confirm_audit
+// binding, so a driver can layer extra finish gates (the scheduled verifier)
+// onto a built-in Policy without forking the loop.
+type PolicyUnwrapper interface {
+	Unwrap() Policy
 }

@@ -45,6 +45,15 @@ type mcpAllowlist map[string][]string
 // opted in for the run).
 type mcpOptionalSet map[string]bool
 
+// MCPAllowlist / MCPOptionalSet are the exported aliases the DRIVERS use to
+// build a RunConfig (the underlying map types are otherwise unexported).
+type (
+	// MCPAllowlist maps server name → allowed tool names (Gate-2). Empty = all.
+	MCPAllowlist = mcpAllowlist
+	// MCPOptionalSet reports which servers are Optional (Gate-1 opt-in).
+	MCPOptionalSet = mcpOptionalSet
+)
+
 // toolBuildConfig parameterizes the divergences between the two modes' tool sets.
 type toolBuildConfig struct {
 	// includeConfirmAudit appends the scheduled-mode confirm_audit tool.
@@ -124,10 +133,17 @@ func buildFantasyTools(
 // scheduled Policy bundle (P3) embeds an orchestrationState; we type-assert it
 // so the tool can mutate audit state.
 func buildConfirmAuditPolicyTool(policy Policy) fantasy.AgentTool {
-	if op, ok := policy.(interface{ orchestration() *orchestrationState }); ok {
-		if orch := op.orchestration(); orch != nil {
-			return buildConfirmAuditTool(orch)
+	for p := policy; p != nil; {
+		if op, ok := p.(interface{ orchestration() *orchestrationState }); ok {
+			if orch := op.orchestration(); orch != nil {
+				return buildConfirmAuditTool(orch)
+			}
 		}
+		w, ok := p.(PolicyUnwrapper)
+		if !ok {
+			break
+		}
+		p = w.Unwrap()
 	}
 	// Fallback: a confirm_audit that always reports it isn't wired (keeps the
 	// schema present so the model can still call it in test doubles).
