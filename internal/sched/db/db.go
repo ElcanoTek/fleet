@@ -264,6 +264,47 @@ func (db *Database) GetUserByUsername(ctx context.Context, username string) (*mo
 	return db.rowToUser(row)
 }
 
+// ListUsers returns all users ordered by username. Used by the admin CLI.
+func (db *Database) ListUsers(ctx context.Context) ([]models.User, error) {
+	rows, err := db.conn.QueryContext(ctx,
+		"SELECT id, username, password_hash, role, scopes, created_at, last_login, session_token, token_expires_at FROM users ORDER BY username")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]models.User, 0)
+	for rows.Next() {
+		var (
+			id             uuid.UUID
+			username       string
+			passwordHash   string
+			role           string
+			scopes         string
+			createdAt      time.Time
+			lastLogin      sql.NullTime
+			sessionToken   sql.NullString
+			tokenExpiresAt sql.NullTime
+		)
+		if err := rows.Scan(&id, &username, &passwordHash, &role, &scopes, &createdAt, &lastLogin, &sessionToken, &tokenExpiresAt); err != nil {
+			return nil, err
+		}
+		u := models.User{ID: id, Username: username, PasswordHash: passwordHash, Role: role, Scopes: unmarshalStringSlice(scopes), CreatedAt: createdAt}
+		if lastLogin.Valid {
+			u.LastLogin = &lastLogin.Time
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// CountUsers returns the number of provisioned users (the 0-users unprovisioned
+// guard the admin CLI consults).
+func (db *Database) CountUsers(ctx context.Context) (int, error) {
+	var n int
+	err := db.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&n)
+	return n, err
+}
+
 // GetUserByToken gets a user by session token. Returns nil if token is expired.
 func (db *Database) GetUserByToken(ctx context.Context, token string) (*models.User, error) {
 	token = models.HashToken(token)

@@ -8,9 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/fantasy"
+
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -57,6 +60,23 @@ type Manager struct {
 
 	mcpClient *mcp.Client
 	allowlist mcpAllowlist
+
+	// resolver loads + caches OpenRouter models per slug (nil in the
+	// prompt/roster unit tests, which never run a turn). RunTurn / Summarize /
+	// SuggestTitle resolve through it.
+	resolver *agentcore.ModelResolver
+
+	// native is the per-process native-tool template (DefaultTools); each turn
+	// rebuilds a sandbox-bound variant via tools.NewTurnTools.
+	native []fantasy.AgentTool
+
+	// sandboxPool is the per-turn container warm pool. RunTurn Take()s one per
+	// turn; SandboxPool() exposes it for the out-of-band approved-bash path.
+	sandboxPool *sandbox.Pool
+
+	// notesProvider supplies the admin-curated knowledge base injected into the
+	// system prompt every turn (nil = no notes section).
+	notesProvider agentcore.NotesProvider
 
 	// mcpToolRoster is the frozen list of `mcp_<server>_<tool>` names
 	// that survived the initial MCP connection sweep and per-server

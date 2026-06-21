@@ -7,6 +7,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
@@ -44,11 +45,30 @@ type TurnConfig struct {
 	PriorHistory []HistoryEntry
 	TurnHistory  []HistoryEntry
 
+	// NativeTools are the RAW per-turn native tools (tools.NewTurnTools(sb).Tools).
+	// agentcore.Run wraps each in the InteractivePolicy gate; do NOT pre-wrap.
 	NativeTools []fantasy.AgentTool
 	Sandbox     *sandbox.Sandbox
 
+	// MCP wiring: the shared client + the per-conversation opt-in selection +
+	// the catalog gates. agentcore.buildFantasyTools registers the MCP tools
+	// through the SAME InteractivePolicy gate as the native tools, so MCP calls
+	// get cost/repeat/email/approval enforcement in interactive mode too.
+	MCPClient       *mcp.Client
+	Allowlist       agentcore.MCPAllowlist
+	OptionalServers agentcore.MCPOptionalSet
+	Selection       agentcore.MCPSelection
+
 	MaxCostUSD     float64
 	MaxTotalTokens int
+
+	// ApprovalStager / MemoryProposer stage critical tool calls + memory
+	// proposals for user confirmation (interactive). Wired onto the
+	// InteractivePolicy's orchestration so send_email / risky bash /
+	// preview_email / suggest_advanced_model / propose_memory route through the
+	// approvals + memory tables.
+	ApprovalStager agentcore.ApprovalStager
+	MemoryProposer agentcore.MemoryProposer
 
 	// NoteProposer stages agent-proposed admin-notes edits (propose_note),
 	// wired in interactive mode too (the notes wiki is global). The user-memory
@@ -70,8 +90,12 @@ func (m messagesInput) Prompt(_ context.Context) (string, []fantasy.Message, str
 // RunInteractiveTurn drives one live chat turn through the SHARED loop with an
 // InteractivePolicy (CanFinish true at round 0 → single pass), the interactive
 // finalize hook, and chat's compaction summarizer. obs receives the run events.
+//
+// MCP tools are registered by agentcore.buildFantasyTools from tc.MCPClient +
+// the opt-in Selection, wrapped in the SAME InteractivePolicy gate as the native
+// tools, so cost/repeat/email/approval enforcement covers both surfaces.
 func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
-	policy := agentcore.NewInteractivePolicy(tc.MaxCostUSD, tc.MaxTotalTokens, nil, nil)
+	policy := agentcore.NewInteractivePolicy(tc.MaxCostUSD, tc.MaxTotalTokens, tc.ApprovalStager, tc.MemoryProposer)
 	if tc.NoteProposer != nil {
 		policy.SetNoteProposer(tc.NoteProposer)
 	}
@@ -83,6 +107,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		Executor:             NewSandboxExecutor(tc.Sandbox),
 		Model:                tc.Model,
 		FallbackModel:        tc.FallbackModel,
+		MCPClient:            tc.MCPClient,
 		Finalize:             buildInteractiveFinalize(tc),
 		CompactionSummarizer: buildInteractiveCompactionSummarizer(tc),
 	}
@@ -92,6 +117,9 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		Temperature:         tc.Temperature,
 		MaxCompletionTokens: tc.MaxTokens,
 		NativeTools:         tc.NativeTools,
+		Allowlist:           tc.Allowlist,
+		OptionalServers:     tc.OptionalServers,
+		Selection:           tc.Selection,
 		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)

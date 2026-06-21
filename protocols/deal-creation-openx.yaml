@@ -1,0 +1,218 @@
+name: OpenX Deal Creation Protocol
+version: "1.3"
+owner: Elcano
+
+agent:
+  name: Victoria (Elcano)
+  role: SSP Deal Operations
+
+goal: "Create a valid OpenX deal with normalized participants/targeting and verified post-create retrieval, with no schema guesswork."
+
+instruction_hierarchy:
+  - "Priority order: non_negotiables > hard_checks_before_sending > status_contract > required_output > input_contract > tool_docs_and_hints > all other guidance."
+  - "On conflict, apply higher rule and record instruction_conflict_resolved."
+
+operating_mode:
+  execution_style: deterministic_single_pass_with_validation
+  fixed_plan:
+    - parse_prompt_inputs
+    - prepare_from_prompt_and_attachment
+    - create_from_prepared_artifact
+    - verify
+    - report
+
+non_negotiables:
+  - "Use only OpenX MCP tools for OpenX deal actions."
+  - "Never guess demand partner IDs, buyer_ids, fee partner ids, language ids, IAB ids, or audience ids. Resolve them through the MCP's preparation flow."
+  - "Deal price must be numeric input and be sent as a 2-decimal string via tool normalization."
+  - "Use ISO-8601 UTC datetimes for start_date/end_date."
+  - "Primary flow: use mcp_openx_mcp_ox_prepare_deal_from_prompt_inputs, mcp_openx_mcp_ox_prepare_deal_from_brief, or mcp_openx_mcp_ox_execute_deal_from_prompt_inputs before any low-level create call. Do not hand-assemble raw OpenX payloads when a preparation tool can do it for you."
+  - "Use mcp_openx_mcp_ox_introspect_type and mcp_openx_mcp_ox_list_options_by_path only as fallback/debug tools when the high-level preparation flow returns unresolved mapping blockers or when explicit schema evidence is required. Prefer the dedicated OpenX discovery tools first. Do not loop on schema discovery."
+  - "targeting.rendering_context is required by the live OpenX schema; if omitted, the MCP will auto-construct it from channel defaults."
+  - "Pass targeting.channel='display'|'olv'|'ctv'|'ott' so the MCP auto-builds the canonical rendering_context (Format, Distribution, Devices). Explicit channel is the strongest signal — without it the MCP falls back to inference from device_type/ad_placement which is more error-prone."
+  - "OpenX MCP MUST always send targeting.inter_dimension_operator as `AND` so Targeting Criteria uses `Use Unique Targeting Settings`, regardless of prompt input."
+  - "All Decimal fee percentages and caps in third_party_fees_config must be strings before the API call."
+  - "When a domain attachment is provided, prefer mcp_openx_mcp_ox_prepare_deal_from_prompt_inputs so the MCP extracts, deduplicates, and validates domains internally."
+
+scope:
+  mcp_server: openx_mcp
+  primary_preparation_tools: [mcp_openx_mcp_ox_prepare_deal_from_prompt_inputs, mcp_openx_mcp_ox_prepare_deal_from_brief]
+  primary_creation_tool: mcp_openx_mcp_ox_create_prepared_deal
+  single_shot_tool: mcp_openx_mcp_ox_execute_deal_from_prompt_inputs
+  post_create_management_tools:
+    description: "For changing an EXISTING deal (rename, price change, pause/activate, flight-date move, targeting edit) — outside this protocol's create scope."
+    tools:
+      - mcp_openx_mcp_ox_get_deal       # full_targeting=True before any targeting edit
+      - mcp_openx_mcp_ox_update_deal    # dealUpdate; partial at deal/package top level only
+    notes:
+      - "Targeting on update is FULL REPLACEMENT below deal.package: read it via ox_get_deal(deal_id, full_targeting=True), confirm _targeting_selection == 'full', edit, and resubmit the COMPLETE targeting object as package.targeting. If the readback says 'legacy', STOP — a resubmit would null unfetched branches."
+      - "Pause/activate via ox_update_deal(status='Paused'|'Active'); status applies near-realtime, every other change can take 1-2 hours to take effect in delivery."
+      - "deal_id for these tools is the internal numeric id (dealById id), not the public 'OX-...' string — ox_list_deals resolves one to the other."
+      - "Archiving (dealArchive) is DELIBERATELY not available to the agent — it is irreversible (no un-archive exists) and was vetoed as a security decision. If a task asks to archive/delete an OpenX deal, pause it instead and report that archiving requires a human in the OpenX UI."
+
+input_contract:
+  required_fields:
+    - name
+    - currency
+    - deal_price
+    - start_date
+    - package_name
+    - demand_partner
+  optional_fields:
+    - end_date
+    - pmp_deal_type
+    - buyer_ids
+    - targeting
+    - fee
+    - domain_file_path
+    - domain_sheet
+    - domain_column
+    - domain_targeting_option
+  pmp_deal_type_allowed:
+    - "3"
+    - "2"
+    - "1"
+    - PREFERRED_DEAL
+    - PRIVATE_AUCTION
+    - PROGRAMMATIC_GUARANTEED
+
+tool_docs_and_hints:
+  preparation:
+    tools: [mcp_openx_mcp_ox_prepare_deal_from_prompt_inputs, mcp_openx_mcp_ox_prepare_deal_from_brief, mcp_openx_mcp_ox_execute_deal_from_prompt_inputs]
+    hints:
+      - "Preferred flow when the prompt includes an attachment: call mcp_openx_mcp_ox_prepare_deal_from_prompt_inputs with the prompt fields and the absolute path to the attached file."
+      - "Preferred flow when domains are already available as a clean list: call mcp_openx_mcp_ox_prepare_deal_from_brief."
+      - "Lowest-decision flow: use mcp_openx_mcp_ox_execute_deal_from_prompt_inputs to prepare, create, and verify in one call."
+      - "Preparation tools resolve demand partner, buyer_ids, fee partner, language, and IAB categories from live OpenX lookups. Geographic ids resolve via documented optionsByPath geographic paths, with verified OpenX state ids used only for known production-safe US state inputs."
+      - "Preparation tools return ready_to_create, blocking_issues, blockers, warnings, and a prepared_deal_id. Do not call create if ready_to_create is false."
+      - "For state/province geo, supply abbreviations/names like `CA,TX,FL` or `AB,ON` or full names, not pre-resolved numeric ids. The MCP will reject raw numeric state ids in high-level prep."
+      - "For IAB categories, supply OpenX IAB v2 category names or IDs directly. Legacy IAB codes like `IAB2-5` will be rejected; use mcp_openx_mcp_ox_list_iab_categories to discover the correct OpenX category names first."
+      - "channel matrix — DISPLAY→Format=BANNER,Distribution=WEB+APP,Devices=DESKTOP+MOBILE+TABLET; OLV→VIDEO,WEB+APP,DESKTOP+MOBILE+TABLET; CTV→CTV,APP only,TV devices (Connected TV + Set-Top Box); OTT→VIDEO,APP only,DESKTOP+MOBILE+TABLET. CTV's wire shape is enforced — explicit ad_placement=VIDEO or distribution=WEB,APP is overridden when channel resolves to CTV."
+  discovery:
+    tools: [mcp_openx_mcp_ox_list_demand_partners, mcp_openx_mcp_ox_list_fee_partners, mcp_openx_mcp_ox_list_audience_segments, mcp_openx_mcp_ox_list_iab_categories, mcp_openx_mcp_ox_list_states, mcp_openx_mcp_ox_introspect_type, mcp_openx_mcp_ox_list_options_by_path]
+    hints:
+      - "Prefer the dedicated discovery tools for demand partners, fee partners, states, IAB categories, and audience segments before falling back to raw optionsByPath."
+      - "Use mcp_openx_mcp_ox_list_states when state/province targeting is requested; it uses the documented geographic optionsByPath path, supports country-aware filtering such as `country=ca` for Canadian provinces, and falls back to verified ids only for known production-safe US state inputs."
+      - "IMPORTANT: If the prompt contains legacy IAB codes like IAB2-5, you MUST first use mcp_openx_mcp_ox_list_iab_categories to discover the correct OpenX category names, then pass those names to the preparation tool. Do not pass legacy IAB codes directly to preparation tools."
+      - "If using introspection, do it once for the specific blocker and record any unresolved issue as introspection_required."
+  creation:
+    tool: mcp_openx_mcp_ox_create_prepared_deal
+    hints:
+      - "Only create from a prepared_deal_id returned by the preparation tools."
+      - "Do not construct raw deal_participants, targeting, url_targeting, or third_party_fees_config in the prompt layer if the preparation tool can do it."
+  verification:
+    tools: [mcp_openx_mcp_ox_get_deal, mcp_openx_mcp_ox_list_deals]
+    hints:
+      - "Fetch mcp_openx_mcp_ox_get_deal(deal_id) using returned deal.deal_id after create."
+      - "The MCP execute flow now prefers the internal OpenX id for verification and falls back to deal_id when needed."
+      - "Verification should expect package.targeting.rendering_context.device_type to return desktop_devices/mobile_devices/tv_devices, not val."
+      - "If direct lookup fails but create returned success, list recent deals and report reconciliation flag."
+
+data_plumbing:
+  description: "How to move prompt fields and attachment paths into the MCP without forcing the agent to re-plumb large payloads."
+  rules:
+    - "Prefer passing attachment file paths directly to mcp_openx_mcp_ox_prepare_deal_from_prompt_inputs instead of extracting domains in run_python."
+    - "If a clean domain list already exists from a prior tool, pass it to mcp_openx_mcp_ox_prepare_deal_from_brief as a typed list binding."
+    - "Forbidden: manually reprinting hundreds of domains into the next tool call when the MCP can read the attachment itself."
+
+audit_ordering:
+  description: "Exactly when to call confirm_audit during this protocol. Avoid the create-then-re-audit-then-send loop."
+  rule: "ONE confirm_audit call covers the entire critical-action sequence (mcp_openx_mcp_ox_create_prepared_deal + post-create verification + report email) when all three are bundled in this protocol run."
+  steps:
+    - "Run the preparation tool first and capture the FINAL prepared artifact / create_args preview plus the FINAL report/email draft before auditing."
+    - "Call confirm_audit ONCE with both artifacts in scope (prepared create payload + report)."
+    - "On success: execute mcp_openx_mcp_ox_create_prepared_deal → mcp_openx_mcp_ox_get_deal verification → send report. Mark each task done as it returns."
+    - "Re-audit ONLY if the create response forces a material change to the report (e.g., create failed, IDs differ, verification mismatched). A successful create that simply fills in the returned deal_id does NOT count as a material change."
+  forbidden:
+    - "Calling confirm_audit before the report draft exists (the audit can't review what isn't written)."
+    - "Calling confirm_audit a second time just because the deal_id is now known — that is not a material change."
+  example_critical_actions_being_unblocked:
+    description: "Copy these strings (substituting the deal name and recipient) into critical_actions_being_unblocked. Substring matching against the orchestration's known suffixes requires the literal tool name or bare suffix — paraphrasing breaks audit gating."
+    items:
+      - "mcp_openx_mcp_ox_create_prepared_deal: <deal_name>"
+      - "mcp_sendgrid_send_email: <recipient>"
+
+self_tests:
+  required: true
+  cases:
+    - id: prepared_artifact_ready
+      assert: "preparation returned ready_to_create=true before create"
+    - id: participant_presence
+      assert: "prepared artifact contains at least one resolved demand partner"
+    - id: date_order
+      assert: "if end_date exists, end_date >= start_date"
+    - id: domain_quality
+      assert: "all submitted url_targeting domains in the prepared artifact were validated and any invalid values were removed or blocked"
+    - id: fee_shape
+      assert: "if fee exists, the prepared artifact contains partner_id and revenue_method"
+    - id: rendering_context_present
+      assert: "prepared targeting contains rendering_context or enough information for MCP auto-defaulting"
+    - id: fee_decimal_strings
+      assert: "if fee exists, gross_share, gross_cpm_cap, and platform_share are strings when present in the prepared artifact"
+  on_failure:
+    - "Do not execute create call for blocking failures."
+    - "Return COMPLETE_WITH_FLAGS with failing_case_ids and required fixes."
+
+hard_checks_before_sending:
+  - "Preparation was executed and resolved entity IDs are traceable."
+  - "Create response success=true and includes deal object with id/deal_id."
+  - "If create response includes deal_url, include it as a clickable link in Created Deal Summary and the final email."
+  - "Verification attempted with mcp_openx_mcp_ox_get_deal using created deal_id."
+  - "No invalid domains were sent."
+  - "If fees were supplied, Decimal fee fields were stringified in the prepared artifact."
+  - "No unresolved template tokens in output."
+
+required_output:
+  format: markdown
+  sections_in_order:
+    - Status
+    - Inputs Used
+    - Preparation Result
+    - Discovery Evidence
+    - Payload Normalization Notes
+    - Created Deal Summary
+    - Verification Result
+    - Quality Flags
+  created_deal_summary_fields:
+    - id
+    - deal_id
+    - deal_url
+    - name
+    - currency
+    - deal_price
+    - pmp_deal_type
+    - start_date
+    - end_date
+    - demand_partners
+
+quality_flags_contract:
+  include_when_present:
+    - auth_not_ready
+    - required_input_missing
+    - ox_default_curator_fee_applied
+    - ox_demand_partner_unresolved
+    - ox_missing_publisher_file
+    - ox_missing_publisher_ids
+    - ox_missing_domain_file
+    - ox_missing_prompt_input_attachment
+    - ox_create_call_failed
+    - ox_verification_failed
+    - ox_prepared_deal_not_found
+    - introspection_required
+    - instruction_conflict_resolved
+  row_fields: [flag, impact, what_was_done_now, next_fix, owner, eta]
+  if_no_flags: "Quality Flags: none"
+  notes:
+    - "The MCP returns a structured `quality_flags: list[dict]` field alongside `warnings: list[str]`. Each entry has at minimum `flag` and `impact`; many include extra context. Render directly."
+    - "`ox_default_curator_fee_applied` is informational, not a failure."
+
+status_contract:
+  allowed_values: [COMPLETE, COMPLETE_WITH_FLAGS]
+  complete_only_if:
+    - "All hard checks pass."
+    - "Quality Flags section is none."
+  complete_with_flags_when_any:
+    - "Any hard check fails."
+    - "Any required evidence is missing."
+    - "Any self-test fails."
+    - "Quality Flags has one or more rows."

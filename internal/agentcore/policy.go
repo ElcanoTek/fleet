@@ -43,8 +43,10 @@ func (p *InteractivePolicy) orchestration() *orchestrationState { return p.orch 
 func (p *InteractivePolicy) SetNoteProposer(np NoteProposer) { p.orch.setNoteProposer(np) }
 
 // BeforeToolCall runs the interactive gate chain: ceilings → repeat-call guard →
-// email safety (rate-limit/dedup/approval staging) → memory proposal → note
-// proposal.
+// email safety (rate-limit/dedup/approval staging) → risky-bash approval →
+// preview_email staging → suggest_advanced_model staging → memory proposal →
+// note proposal. The bash/preview/suggest gates are inert when no approval sink
+// is wired.
 func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
 	if blocked, msg := p.orch.checkCeilings(); blocked {
 		return true, msg
@@ -53,6 +55,15 @@ func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string
 		return true, msg
 	}
 	if blocked, msg := p.orch.checkEmailSafety(toolName, toolCallID, rawInput); blocked {
+		return true, msg
+	}
+	if blocked, msg := p.orch.checkBashSafety(toolName, toolCallID, rawInput); blocked {
+		return true, msg
+	}
+	if blocked, msg := p.orch.checkPreviewEmailSafety(toolName, toolCallID, rawInput); blocked {
+		return true, msg
+	}
+	if blocked, msg := p.orch.checkSuggestAdvancedSafety(toolName, rawInput); blocked {
 		return true, msg
 	}
 	if blocked, msg := p.orch.checkMemoryProposal(toolName, rawInput); blocked {

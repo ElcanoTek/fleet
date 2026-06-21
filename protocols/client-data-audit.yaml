@@ -1,0 +1,116 @@
+name: Client Data Audit
+description: Exhaustive audit of data availability for a client across Email
+
+objective: |
+  For a given client, perform exhaustive search across:
+  1. Email inbox (body + attachments) for deals, IDs, mappings, confirmations
+  Produce actionable report with confirmed deals, suspected deals, and gaps.
+
+tools:
+  - mcp_email_search_emails / mcp_email_search_emails_fuzzy (start here - fast)
+  - mcp_email_get_email (for full body + attachment list)
+  - mcp_email_download_attachment / mcp_email_download_link_attachment
+
+
+critical_rules:
+  - Be exhaustive - search broadly first, then narrow
+  - Use fuzzy search when exact matches fail
+  - Verify everything - no assumptions
+  - Document access gaps (mailbox permissions)
+  - Read-only - never modify data
+  - Fill all fields; use 'NA' when unknown
+
+deal_naming_convention:
+  format: "{curator}_{SSP}_{DSP}_{Agency}_{Brand}_{DataPartner}_{Segment}_{Channel}_{InventoryType}_Geo_{CampaignID}_{Attribution}"
+  example: "Elcano_OpenX_TTD_Kinnesso_CocaCola_IRX_Millennial Moms_Display_All_US_ELC00001_A1"
+
+data_partner_codes:
+  Gamera: GAM
+  Talon: TAL
+  Comscore: COM
+  InsightsRX: IRX
+  OTS Segments: OTS
+  Reklaim: REK
+  Always On Data: AOD
+  The Weather Company: TWC
+
+workflow:
+  step_1_build_search_terms:
+    description: Create keyword variants for comprehensive search
+    include:
+      - Client name + variants (spacing, abbreviations, common misspellings)
+      - Known brands, agencies, SSPs, DSPs
+      - Deal naming tokens (curator, campaign IDs like 'ELC*', attribution 'A1')
+      - Data partner codes (GAM, TAL, COM, IRX, OTS, REK, AOD, TWC)
+
+  step_2_email_audit:
+    description: Search inbox thoroughly using fuzzy and structured search
+
+    search_strategy:
+      - start: mcp_email_search_emails with subject_contains for client name
+      - broaden: mcp_email_search_emails_fuzzy with multiple keywords (AND/OR modes)
+      - filter: has_payload=true for mapping sheets, deal lists
+      - iterate: Try different term combinations if initial results sparse
+
+    search_terms:
+      - "{client} deal OR PMP OR PG OR programmatic OR curated"
+      - "{client} (OpenX OR Magnite OR PubMatic OR Index)"
+      - "{client} (TTD OR DV360 OR 'Trade Desk')"
+      - "ELC* OR 'Campaign ID' OR attribution"
+      - Data partner codes with client name
+
+    attachment_handling:
+      - Download all CSV, XLSX, PDF attachments from matching emails
+      - Parse deal lists/mapping sheets - capture all rows + headers
+      - Search PDFs for deal IDs and naming convention tokens
+      - Follow download links in email body (many reports delivered this way)
+
+    extract:
+      - Deal IDs, line item IDs, seat IDs
+      - Deal name strings (full or partial)
+      - Mapping sheets linking IDs to client
+      - SOWs, IOs, activation docs with identifiers
+
+  step_3_normalize_findings:
+    description: Create unified table of candidate deals
+
+    required_fields:
+      - client_name
+      - normalized_deal_name (conform to convention, 'NA' for missing parts)
+      - curator, ssp_name, dsp_name, agency_name, brand_name
+      - data_partner, targeting_segment, channel, inventory_type, geo
+      - campaign_id, attribution, deal_id, line_item_id, seat_id
+      - status, first_seen_date, last_seen_date
+      - evidence_email (message subjects/IDs)
+      - evidence_attachments (filenames)
+      - confidence (High/Medium/Low)
+      - notes
+
+    rules:
+      - Every field must have value - use 'NA' when unknown
+      - Multiple values: semicolon-separated list
+      - Confidence must be: High, Medium, or Low
+
+  step_4_produce_report:
+    sections:
+      - Executive Summary
+      - Scope & Data Sources
+      - Email Findings (messages + attachments reviewed)
+      - Confirmed Deals (High confidence)
+      - Suspected Deals (Medium/Low confidence)
+      - Data Gaps & Risks
+      - Recommendations & Next Steps
+      - Appendix (search terms used, queries run)
+
+quality_checklist:
+  - Did you search both email body AND attachments?
+  - Did you try fuzzy search when exact matches were sparse?
+  - Did you include both confirmed and suspected matches with confidence labels?
+  - Did you normalize deal names and fill missing fields with 'NA'?
+  - Did you document access limitations and what's needed to proceed?
+  - Did you continue searching until search space was reasonably exhausted?
+
+final_instruction: |
+  Begin immediately. Proceed with best-effort discovery for missing inputs.
+  Do NOT stop after first matches - continue until search space exhausted.
+  Mark all unknowns as 'NA'. Be thorough.
