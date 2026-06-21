@@ -37,8 +37,14 @@ func NewInteractivePolicy(maxCostUSD float64, maxTotalTokens int, approvalSink A
 
 func (p *InteractivePolicy) orchestration() *orchestrationState { return p.orch }
 
+// SetNoteProposer wires the admin-notes proposer (propose_note) for this run.
+// Available in both modes (the agent-notes wiki is global, unlike user
+// memories which stay interactive-only).
+func (p *InteractivePolicy) SetNoteProposer(np NoteProposer) { p.orch.setNoteProposer(np) }
+
 // BeforeToolCall runs the interactive gate chain: ceilings → repeat-call guard →
-// email safety (rate-limit/dedup/approval staging) → memory proposal.
+// email safety (rate-limit/dedup/approval staging) → memory proposal → note
+// proposal.
 func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
 	if blocked, msg := p.orch.checkCeilings(); blocked {
 		return true, msg
@@ -50,6 +56,9 @@ func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string
 		return true, msg
 	}
 	if blocked, msg := p.orch.checkMemoryProposal(toolName, rawInput); blocked {
+		return true, msg
+	}
+	if blocked, msg := p.orch.checkNoteProposal(toolName, rawInput); blocked {
 		return true, msg
 	}
 	return false, ""
@@ -81,13 +90,19 @@ func NewScheduledPolicy(logSession *LogSession, maxIterations int) *ScheduledPol
 
 func (p *ScheduledPolicy) orchestration() *orchestrationState { return p.orch }
 
+// SetNoteProposer wires the admin-notes proposer (propose_note) for this run.
+func (p *ScheduledPolicy) SetNoteProposer(np NoteProposer) { p.orch.setNoteProposer(np) }
+
 // BeforeToolCall runs the scheduled gate chain: repeat-call guard → critical-tool
-// audit gating + email safety.
+// audit gating → note proposal.
 func (p *ScheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
 	if blocked, msg := p.orch.checkRepeatedCall(toolName, rawInput); blocked {
 		return true, msg
 	}
 	if blocked, msg := p.orch.checkCriticalTool(toolName, toolCallID, rawInput); blocked {
+		return true, msg
+	}
+	if blocked, msg := p.orch.checkNoteProposal(toolName, rawInput); blocked {
 		return true, msg
 	}
 	return false, ""

@@ -76,6 +76,12 @@ type Deps struct {
 	// empty client is used instead).
 	MCPClient *mcp.Client
 
+	// NotesProvider supplies the admin-curated knowledge base injected into the
+	// system prompt for BOTH modes. Nil = no notes section. The DRIVERS read it
+	// at prompt-assembly time (the run loop does not touch it); held here so the
+	// process can hand the same sched-backed provider to both drivers' Deps.
+	NotesProvider NotesProvider
+
 	// LogSession is the structured session log the scheduled Observer writes
 	// (interactive may pass a throwaway). Usage accounting flows into it.
 	LogSession *LogSession

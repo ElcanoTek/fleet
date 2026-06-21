@@ -72,6 +72,11 @@ type orchestrationState struct {
 	approvalSink   ApprovalStager
 	memoryProposer MemoryProposer
 
+	// noteProposer stages agent-proposed admin-notes edits (BOTH modes), unlike
+	// memoryProposer which is interactive-only. Wired by the drivers via
+	// setNoteProposer; nil leaves propose_note reporting "not wired".
+	noteProposer NoteProposer
+
 	// ── task tracker (scheduled finish enforcement) ──
 	taskTrackerUsed   bool
 	latestTaskTracker taskTrackerSnapshot
@@ -168,6 +173,13 @@ func (o *orchestrationState) setMemoryProposer(p MemoryProposer) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.memoryProposer = p
+}
+
+// setNoteProposer wires up the admin-notes proposer for this run (both modes).
+func (o *orchestrationState) setNoteProposer(p NoteProposer) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.noteProposer = p
 }
 
 // checkCeilings returns (blocked, reason). Called at every tool-call boundary so
@@ -288,6 +300,36 @@ func (o *orchestrationState) checkMemoryProposal(toolName, rawInput string) (boo
 		return true, fmt.Sprintf("MEMORY_PROPOSAL_FAILED: could not stage proposal (%v).", err)
 	}
 	return true, fmt.Sprintf("MEMORY_PROPOSED: this memory has been staged for user confirmation (proposal_id=%s). Summarize what you proposed and ask the user whether to save it. Do NOT retry the tool.", id)
+}
+
+// checkNoteProposal intercepts propose_note calls (BOTH modes). Mirrors
+// checkMemoryProposal; routed from the same BeforeToolCall path both Policy
+// bundles use. Returns (blocked, msg) — propose_note never executes a tool, the
+// staging IS the effect.
+func (o *orchestrationState) checkNoteProposal(toolName, rawInput string) (bool, string) {
+	if toolName != "propose_note" {
+		return false, ""
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.noteProposer == nil {
+		return true, "NOTE_PROPOSAL_FAILED: note proposer is not wired. This is a bug."
+	}
+	var args struct {
+		Slug   string `json:"slug"`
+		Title  string `json:"title"`
+		Body   string `json:"body"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
+		return true, fmt.Sprintf("NOTE_PROPOSAL_FAILED: invalid arguments (%v).", err)
+	}
+	id, err := o.noteProposer.Propose(args.Slug, args.Title, args.Body, args.Reason)
+	if err != nil {
+		return true, fmt.Sprintf("NOTE_PROPOSAL_FAILED: could not stage proposal (%v).", err)
+	}
+	return true, fmt.Sprintf("NOTE_PROPOSED: staged for admin review (proposal_id=%s). "+
+		"An admin will publish or reject it; the change is NOT live yet. Do NOT retry the tool.", id)
 }
 
 // hasUnresolvedToolPlaceholder detects ${tool:…} binding tokens the model

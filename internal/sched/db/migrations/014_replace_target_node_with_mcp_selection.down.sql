@@ -1,0 +1,3 @@
+ALTER TABLE tasks DROP COLUMN IF EXISTS mcp_selection;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS target_node_id UUID;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS target_node_name TEXT;

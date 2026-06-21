@@ -49,6 +49,11 @@ type TurnConfig struct {
 
 	MaxCostUSD     float64
 	MaxTotalTokens int
+
+	// NoteProposer stages agent-proposed admin-notes edits (propose_note),
+	// wired in interactive mode too (the notes wiki is global). The user-memory
+	// propose_memory path is unchanged. Nil leaves propose_note "not wired".
+	NoteProposer agentcore.NoteProposer
 }
 
 // messagesInput adapts a pre-built message slice to agentcore.InputSource.
@@ -67,6 +72,9 @@ func (m messagesInput) Prompt(_ context.Context) (string, []fantasy.Message, str
 // finalize hook, and chat's compaction summarizer. obs receives the run events.
 func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
 	policy := agentcore.NewInteractivePolicy(tc.MaxCostUSD, tc.MaxTotalTokens, nil, nil)
+	if tc.NoteProposer != nil {
+		policy.SetNoteProposer(tc.NoteProposer)
+	}
 
 	deps := agentcore.Deps{
 		Input:                messagesInput{system: tc.SystemPrompt, messages: tc.Messages, label: tc.Label},

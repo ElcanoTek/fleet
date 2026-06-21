@@ -84,6 +84,30 @@ type Policy interface {
 	CanFinish(round int) (ok bool, enforcementMsgs []string)
 }
 
+// Note is the minimal injection shape for the admin-curated knowledge base
+// (the full model lives in internal/sched). It carries only what the prompt
+// assembly needs.
+type Note struct {
+	Slug  string
+	Title string
+	Body  string
+}
+
+// NotesProvider supplies the admin-curated knowledge base injected into the
+// system prompt for BOTH modes. A nil provider means no notes section
+// (back-compat). It is a READ seam used at prompt-assembly time.
+type NotesProvider interface {
+	// PublishedNotes returns the curated notes to inject, ordered for display.
+	PublishedNotes(ctx context.Context) ([]Note, error)
+}
+
+// NoteProposer stages an agent-proposed note edit for admin curation (mirrors
+// MemoryProposer). Unlike MemoryProposer it is wired in BOTH modes, and it is
+// staged through orchestrationState (set by the drivers), not a Deps field.
+type NoteProposer interface {
+	Propose(slug, title, body, reason string) (proposalID string, err error)
+}
+
 // Executor runs sandboxed code. The real per-turn / per-exec-burst container
 // backend is P3's sandbox.Pool; here the interface is defined and a test double
 // lives in the _test files. Both modes use the SAME Executor behind this seam.

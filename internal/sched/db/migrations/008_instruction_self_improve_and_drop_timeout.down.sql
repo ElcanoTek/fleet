@@ -1,0 +1,2 @@
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS timeout_seconds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tasks DROP COLUMN IF EXISTS instruction_self_improve;
