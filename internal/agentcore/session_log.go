@@ -39,6 +39,12 @@ func redactSecrets(text string) string {
 	return secretPattern.ReplaceAllString(text, "${1}[REDACTED]")
 }
 
+// RedactSecrets is the exported form the scheduled driver's log writer uses to
+// scrub recoverable secrets before persisting the session log.
+func RedactSecrets(text string) string {
+	return redactSecrets(text)
+}
+
 // LogSession tracks the execution session for logging.
 //
 // Token semantics:
@@ -84,6 +90,20 @@ type LogMessage struct {
 	MessageType *string       `json:"message_type,omitempty"`
 	ToolCalls   []LogToolCall `json:"tool_calls,omitempty"`
 	ToolCallID  *string       `json:"tool_call_id,omitempty"`
+}
+
+// SnapshotMessages returns a copy of the session's messages taken under lock,
+// so callers in other packages (e.g. the scheduled driver's verifier) can scan
+// the log without touching the unexported mutex.
+func (ls *LogSession) SnapshotMessages() []LogMessage {
+	if ls == nil {
+		return nil
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	out := make([]LogMessage, len(ls.Messages))
+	copy(out, ls.Messages)
+	return out
 }
 
 // CumulativeCacheHitRate returns the session-wide cache hit rate as a percentage.

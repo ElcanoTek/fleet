@@ -183,6 +183,13 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 	}
 }
 
+// PromptCachingStep is the exported prompt-caching PrepareStep the DRIVERS
+// attach to their follow-up streams (interactive finalize / compaction calls).
+// It installs the same per-message cache breakpoints the shared loop uses.
+func PromptCachingStep(modelSlug string, opts ...CacheOption) fantasy.PrepareStepFunction {
+	return promptCachingStep(modelSlug, opts...)
+}
+
 // compactionSummaryPrefix is the exact leading substring every compaction
 // summary message starts with. Matches cutlass's buildCompactionSummary.
 const compactionSummaryPrefix = "[context compaction"
