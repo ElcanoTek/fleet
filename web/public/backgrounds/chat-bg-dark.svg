@@ -1,0 +1,25 @@
+<svg width="1600" height="1200" viewBox="0 0 1600 1200" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="base" x1="162.5" y1="46" x2="1391" y2="1138.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F0612"/>
+      <stop offset="0.52" stop-color="#1A0B1E"/>
+      <stop offset="1" stop-color="#090409"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(130 40) rotate(34.8) scale(455.225 319.742)">
+      <stop stop-color="#7272AB" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#7272AB" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1460 70) rotate(145.2) scale(425.54 298.887)">
+      <stop stop-color="#586F7C" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#586F7C" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowC" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1160 980) rotate(180) scale(360 250)">
+      <stop stop-color="#7272AB" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#7272AB" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="1200" fill="url(#base)"/>
+  <ellipse cx="130" cy="40" rx="455" ry="320" fill="url(#glowA)"/>
+  <ellipse cx="1460" cy="70" rx="426" ry="299" fill="url(#glowB)"/>
+  <ellipse cx="1160" cy="980" rx="360" ry="250" fill="url(#glowC)"/>
+</svg>

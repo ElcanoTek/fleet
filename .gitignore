@@ -38,3 +38,10 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 /internal/tools/data/
+
+# Node / Next.js (fleet web)
+node_modules/
+.next/
+*.tsbuildinfo
+web/test-results/
+web/playwright-report/

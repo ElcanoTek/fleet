@@ -1,0 +1,20 @@
+<svg width="1600" height="1200" viewBox="0 0 1600 1200" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="base" x1="160" y1="0" x2="1328" y2="1200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F7F9FF"/>
+      <stop offset="0.52" stop-color="#EAF0FF"/>
+      <stop offset="1" stop-color="#E2E9FB"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(144 -20) rotate(35) scale(540 360)">
+      <stop stop-color="#7272AB" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#7272AB" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1440 0) rotate(145) scale(486 324)">
+      <stop stop-color="#586F7C" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#586F7C" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1600" height="1200" fill="url(#base)"/>
+  <ellipse cx="144" cy="-20" rx="540" ry="360" fill="url(#glowA)"/>
+  <ellipse cx="1440" cy="0" rx="486" ry="324" fill="url(#glowB)"/>
+</svg>
