@@ -1,0 +1,128 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/acpruntime"
+)
+
+// TestBuildMCPDescriptors_NilClient confirms the descriptor builder is nil-safe
+// (no MCP client → no descriptors → the agent advertises no MCP surface, which is
+// exactly the in-process behavior when nothing is connected).
+func TestBuildMCPDescriptors_NilClient(t *testing.T) {
+	if got := buildMCPDescriptors(nil, nil, nil, nil); got != nil {
+		t.Fatalf("buildMCPDescriptors(nil, ...) = %v, want nil", got)
+	}
+}
+
+// recordingApprovalStager / recordingMemoryProposer / recordingNoteProposer are
+// the host stagers the stageBroker forwards to. They mirror the real stagers'
+// signatures so the broker wiring is exercised end-to-end without a DB.
+type recordingApprovalStager struct {
+	staged     []string
+	suggestion string
+}
+
+func (a *recordingApprovalStager) Stage(toolName, _, _ string) (string, error) {
+	a.staged = append(a.staged, toolName)
+	return "appr-1", nil
+}
+func (a *recordingApprovalStager) StageSuggestion(reason string) (string, string, error) {
+	a.suggestion = reason
+	return "sug-1", "SUGGESTION_DISPLAYED", nil
+}
+
+type recordingMemoryProposer struct{ content string }
+
+func (m *recordingMemoryProposer) Propose(content string) (string, error) {
+	m.content = content
+	return "mem-1", nil
+}
+
+type recordingNoteProposer struct{ slug string }
+
+func (n *recordingNoteProposer) Propose(slug, _, _, _ string) (string, error) {
+	n.slug = slug
+	return "note-1", nil
+}
+
+// TestStageBroker_RoutesToHostStagers proves the stageBroker forwards each
+// delegated staging effect to the matching host stager — the seam that keeps the
+// DB write + SSE card host-side while the agent's in-loop policy decides WHEN.
+func TestStageBroker_RoutesToHostStagers(t *testing.T) {
+	appr := &recordingApprovalStager{}
+	mem := &recordingMemoryProposer{}
+	note := &recordingNoteProposer{}
+	b := &stageBroker{approval: appr, memory: mem, note: note}
+
+	if id, err := b.StageApproval("send_email", "c1", `{}`); err != nil || id != "appr-1" {
+		t.Fatalf("StageApproval = (%q, %v), want (appr-1, nil)", id, err)
+	}
+	if len(appr.staged) != 1 || appr.staged[0] != "send_email" {
+		t.Fatalf("approval not forwarded: %v", appr.staged)
+	}
+	if id, msg, err := b.StageSuggestion("be faster"); err != nil || id != "sug-1" || msg == "" {
+		t.Fatalf("StageSuggestion = (%q, %q, %v)", id, msg, err)
+	}
+	if id, err := b.StageMemory("likes blue"); err != nil || id != "mem-1" || mem.content != "likes blue" {
+		t.Fatalf("StageMemory = (%q, %v), content=%q", id, err, mem.content)
+	}
+	if id, err := b.StageNote("s", "T", "B", "R"); err != nil || id != "note-1" || note.slug != "s" {
+		t.Fatalf("StageNote = (%q, %v), slug=%q", id, err, note.slug)
+	}
+}
+
+// TestStageBroker_UnwiredSurfaceFailsClosed proves a delegated request for a
+// surface the host has no stager for returns an error (the agent maps it onto the
+// same "not wired" agent-facing message the in-process gate produces) — never a
+// silent success.
+func TestStageBroker_UnwiredSurfaceFailsClosed(t *testing.T) {
+	b := &stageBroker{} // no stagers wired
+	if _, err := b.StageApproval("send_email", "", ""); !errors.Is(err, errStagerNotWired) {
+		t.Fatalf("StageApproval with no stager = %v, want errStagerNotWired", err)
+	}
+	if _, _, err := b.StageSuggestion("x"); !errors.Is(err, errStagerNotWired) {
+		t.Fatalf("StageSuggestion with no stager = %v, want errStagerNotWired", err)
+	}
+	if _, err := b.StageMemory("x"); !errors.Is(err, errStagerNotWired) {
+		t.Fatalf("StageMemory with no stager = %v, want errStagerNotWired", err)
+	}
+	if _, err := b.StageNote("s", "t", "b", "r"); !errors.Is(err, errStagerNotWired) {
+		t.Fatalf("StageNote with no stager = %v, want errStagerNotWired", err)
+	}
+}
+
+// TestMCPBroker_TypeContract is a light wiring check that mcpBroker satisfies the
+// acpruntime.MCPBroker interface. The full host-side credentialed round-trip
+// (host-side execution + cred isolation) is proved in acpruntime's
+// TestACPGovern_MCPDelegatedHostSide, which drives a real broker over the ACP pipe.
+func TestMCPBroker_TypeContract(_ *testing.T) {
+	var _ acpruntime.MCPBroker = (*mcpBroker)(nil)
+	_ = context.Background()
+}
+
+// TestMCPBroker_FastIOInlineUploadRejectedHostSide proves the host broker applies
+// the SAME fast.io inline-base64 pre-guard the in-process mcpTool applies: an
+// oversized inline upload is rejected BEFORE the wire (the client is never
+// reached, so a nil client is safe here), with the rejection surfaced as a
+// tool-level error — identical to the in-process path.
+func TestMCPBroker_FastIOInlineUploadRejectedHostSide(t *testing.T) {
+	b := &mcpBroker{client: nil} // guard fires before any client call
+	bigPayload := strings.Repeat("A", 64*1024)
+	text, isErr, err := b.CallMCP(context.Background(), "fast_io", "upload", map[string]any{
+		"action":         "stream_upload",
+		"content_base64": bigPayload,
+	})
+	if err != nil {
+		t.Fatalf("CallMCP returned a transport error, want a tool-level reject: %v", err)
+	}
+	if !isErr {
+		t.Fatalf("oversized fast.io inline upload should be rejected (isErr=true)")
+	}
+	if !strings.Contains(text, "Rejected locally") {
+		t.Fatalf("reject hint = %q, want the in-process 'Rejected locally' guard message", text)
+	}
+}

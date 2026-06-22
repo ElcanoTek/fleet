@@ -128,19 +128,20 @@ func (m messagesInput) Prompt(_ context.Context) (string, []fantasy.Message, str
 // tools, so cost/repeat/email/approval enforcement covers both surfaces.
 func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
 	// native-acp routes the SAME loop through a sandboxed ACP agent. The host
-	// keeps governance for the tool-execution surface: bash/python delegate back
-	// to the host sandbox (tc.Sandbox) via the real Executor, and obs receives
-	// the same run events.
+	// keeps governance for EVERY surface: bash/python delegate back to the host
+	// sandbox (tc.Sandbox) via the real Executor; MCP tool calls delegate over
+	// `_fleet/mcp` to the host's per-task credentialed client (creds never enter
+	// the container); approval / memory / note staging delegates over
+	// `_fleet/stage` to the real stagers; usage/cost is reported over
+	// `_fleet/event` and accounted host-side; and a lockdown turn hands the agent
+	// a no-network host sandbox so tool isolation holds. obs receives the same run
+	// events. native-acp now behaves AND governs identically to in-process for all
+	// of these (P-ACP-2b closed the P-ACP-1 fallback reasons).
 	//
-	// HONESTY GATE: the P-ACP-1 interactive ACP path does NOT yet reproduce the
-	// full in-process governance surface — approval staging (send_email / risky
-	// bash / preview_email / suggest_advanced_model), memory/note proposals, MCP
-	// tools + per-task credential brokering, and the lockdown no-network
-	// guarantee for the agent container. Rather than SILENTLY under-govern, fall
-	// back to the fully-governed in-process loop whenever any of those features
-	// is active for this turn. native-acp then runs only when it can behave AND
-	// govern identically (no MCP selection, no approval/memory/note staging, not
-	// lockdown). The remaining surfaces land in P-ACP-2.
+	// HONESTY GATE: acpInteractiveFallback is now empty — there is no governed
+	// feature native-acp cannot faithfully reproduce. It is kept as the single
+	// place to re-introduce a fallback if a future surface is added before its
+	// delegation seam, so the flavor never SILENTLY under-governs.
 	if tc.Runtime == clientconfig.RuntimeNativeACP {
 		if reason := acpInteractiveFallback(tc); reason != "" {
 			log.Printf("native-acp: falling back to in-process for this turn (%s)", reason)
@@ -189,36 +190,57 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)
 }
 
-// acpInteractiveFallback returns a non-empty reason when the turn uses a
-// governed feature the P-ACP-1 interactive ACP path cannot yet reproduce, so
-// the caller falls back to the fully-governed in-process loop instead of
-// silently under-governing. Empty = native-acp may run.
-func acpInteractiveFallback(tc TurnConfig) string {
-	switch {
-	case tc.Lockdown:
-		// The agent container is not yet sealed to no-network for lockdown.
-		return "lockdown conversation"
-	case len(tc.Selection) > 0:
-		// MCP tools + per-task credential brokering are not yet delegated.
-		return "MCP servers enabled"
-	case tc.ApprovalStager != nil:
-		// Critical-tool approval staging (send_email / risky bash / …) is not
-		// yet wired through the ACP permission surface.
-		return "approval staging active"
-	case tc.MemoryProposer != nil || tc.NoteProposer != nil:
-		// Memory / note proposal staging is not yet delegated.
-		return "memory/note proposal staging active"
-	default:
-		return ""
-	}
+// acpInteractiveFallback returns a non-empty reason when the turn uses a governed
+// feature the native-acp path cannot faithfully reproduce, so the caller falls
+// back to the fully-governed in-process loop instead of silently under-governing.
+// Empty = native-acp may run.
+//
+// P-ACP-2b closed every reason the P-ACP-1 gate carried:
+//
+//   - MCP servers selected — MCP tool calls now delegate over `_fleet/mcp` to the
+//     host's per-task credentialed client (host-side credential brokering; creds
+//     never enter the agent container). See buildMCPDescriptors + mcpBroker.
+//   - approval staging — send_email / risky-bash / preview_email /
+//     suggest_advanced_model now delegate their staging over `_fleet/stage` to the
+//     real ApprovalStager. See stageBroker + delegatingStager.
+//   - memory/note proposal staging — propose_memory / propose_note now delegate
+//     over `_fleet/stage` to the real MemoryProposer / NoteProposer.
+//   - lockdown — tool execution is already host-side; a lockdown turn hands the
+//     agent a no-network host sandbox (Executor), so lockdown's TOOL isolation
+//     holds exactly as in-process. The agent container itself legitimately keeps
+//     model-endpoint egress (the LLM call), consistent with the in-process model
+//     where lockdown bounds TOOL execution, not the model call. See
+//     runInteractiveTurnACP's sandbox + the doc note there.
+//
+// The switch is intentionally retained (empty) as the single, auditable place to
+// re-introduce a fallback if a new governed surface lands before its delegation
+// seam — so the flavor can never silently under-govern.
+func acpInteractiveFallback(_ TurnConfig) string {
+	return ""
 }
 
 // runInteractiveTurnACP drives one interactive turn through the native-acp
 // flavor: a sandboxed ACP agent (acpruntime.ClientRuntime) runs the SAME
-// agentcore.Run loop, but its tool execution delegates back to the HOST sandbox
-// (tc.Sandbox, via the real Executor) and its streamed events flow to obs — so
-// the turn is governed identically to the in-process path. The host owns the
-// sandbox; the agent container holds no executor (no Podman-in-Podman).
+// agentcore.Run loop with the SAME InteractivePolicy, but EVERY governed effect
+// stays host-side via the `_fleet/*` delegation seam, so the turn governs
+// identically to the in-process path:
+//
+//   - bash/python execute in the HOST sandbox (tc.Sandbox) via the real Executor;
+//   - MCP tool calls run against the HOST's per-task credentialed mcp.Client
+//     (mcpBroker) — MCP credentials NEVER enter the agent container;
+//   - approval / memory / note staging hits the real stagers (stageBroker);
+//   - usage/cost is reported per step and accounted host-side (res.Usage);
+//   - a lockdown turn's tool execution rides the no-network host sandbox the
+//     caller already selected (tc.Sandbox via takeTurnSandbox(lockdown)).
+//
+// The host owns the sandbox + credentials; the agent container holds no executor
+// and no secrets beyond the model-endpoint key (no Podman-in-Podman).
+//
+// Lockdown note: lockdown bounds TOOL execution, not the model call. Tool
+// execution is host-side in the no-network sandbox, so the isolation holds. The
+// agent container legitimately keeps model-endpoint egress to run the LLM loop —
+// exactly as the in-process model does (the in-process server process also reaches
+// the model endpoint under lockdown; only the per-turn TOOL sandbox is sealed).
 func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
 	if tc.NativeAgentImage == "" {
 		return agentcore.Result{}, fmt.Errorf("native-acp runtime selected but no agent image configured")
@@ -229,6 +251,35 @@ func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Obs
 		return agentcore.Result{}, fmt.Errorf("marshal turn messages: %w", err)
 	}
 
+	// MCP descriptors (no credentials) the agent advertises — filtered by the
+	// SAME Gate-1/Gate-2 the in-process path applies. The host runs each call
+	// against the credentialed client (mcpBroker).
+	mcpDescs := buildMCPDescriptors(tc.MCPClient, tc.Allowlist, tc.OptionalServers, tc.Selection)
+	var mcpBrk acpruntime.MCPBroker
+	if len(mcpDescs) > 0 && tc.MCPClient != nil {
+		mcpBrk = &mcpBroker{client: tc.MCPClient}
+	}
+
+	// Staging broker: routes the agent's delegated staging to the real host
+	// stagers. Wired only when the host actually has a stager (so the agent
+	// reports "not wired" identically to an in-process turn with no stagers).
+	stagingWired := tc.ApprovalStager != nil || tc.MemoryProposer != nil
+	noteWired := tc.NoteProposer != nil
+	var stageBrk acpruntime.StageBroker
+	if stagingWired || noteWired {
+		stageBrk = &stageBroker{
+			approval: tc.ApprovalStager,
+			memory:   tc.MemoryProposer,
+			note:     tc.NoteProposer,
+		}
+	}
+
+	// Lockdown seals the agent container's NETWORK except for the model endpoint?
+	// No — the agent must reach the model endpoint to run the loop, exactly like
+	// the in-process server process. Lockdown's guarantee is TOOL isolation, and
+	// tool execution is host-side in the no-network sandbox the caller selected.
+	// We therefore leave the agent container's egress open (model-only by image
+	// policy) and rely on the host sandbox for the lockdown guarantee.
 	rt := acpruntime.NewClientRuntime(acpruntime.ClientConfig{
 		Image: tc.NativeAgentImage,
 		// Pass ONLY the model-endpoint credentials into the agent container —
@@ -248,12 +299,18 @@ func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Obs
 			Label:               tc.Label,
 			ProviderXTitle:      agentcore.DefaultProviderHeaders.XTitle,
 			ProviderHTTPReferer: agentcore.DefaultProviderHeaders.HTTPReferer,
+			MCPTools:            mcpDescs,
+			StagingWired:        stagingWired,
+			NoteProposerWired:   noteWired,
+			Lockdown:            tc.Lockdown,
 		},
 		latestUserText(tc.Messages),
 		acpruntime.PromptMeta{MessagesJSON: string(messagesJSON)},
 		acpruntime.Deps{
-			Executor: NewSandboxExecutor(tc.Sandbox),
-			Observer: obs,
+			Executor:    NewSandboxExecutor(tc.Sandbox),
+			Observer:    obs,
+			MCPBroker:   mcpBrk,
+			StageBroker: stageBrk,
 		},
 	)
 	if err != nil {
@@ -262,8 +319,8 @@ func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Obs
 
 	// Map the ACP result onto an agentcore.Result. The final reply is persisted
 	// as a single assistant text entry (the streamed text already reached obs →
-	// SSE). Token/cost accounting for the ACP path lands in P-ACP-1's follow-up;
-	// the turn behaves + governs identically here.
+	// SSE). Usage/cost is reconciled from the agent's per-step `_fleet/event`
+	// reports (res.Usage), so the turn accounts identically to in-process.
 	entries := []agentcore.RunEntry{}
 	if res.FinalText != "" {
 		entries = append(entries, agentcore.RunEntry{Role: "assistant", Type: "text", Text: res.FinalText})
@@ -275,6 +332,7 @@ func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Obs
 		Entries:   entries,
 		ModelSlug: slugOf(tc.Model),
 		Cancelled: res.Cancelled,
+		Usage:     res.Usage,
 	}, nil
 }
 

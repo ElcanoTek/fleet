@@ -62,6 +62,10 @@ type toolBuildConfig struct {
 	loaderTools []fantasy.AgentTool
 	// remediationHints configures the fast.io inline-upload guard hint.
 	remediationHints RemediationHints
+	// preGatedTools are already-policy-aware tools registered verbatim (the
+	// native-acp delegating MCP tools). They call BeforeToolCall +
+	// RecordToolResult themselves, so they are NOT wrapped in policyGuardedTool.
+	preGatedTools []fantasy.AgentTool
 }
 
 // buildFantasyTools combines native tools with discovered MCP tools into the
@@ -81,7 +85,7 @@ func buildFantasyTools(
 	cfg toolBuildConfig,
 ) ([]fantasy.AgentTool, error) {
 	mcpServerTools := mcpClient.GetAllTools()
-	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+1)
+	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+len(cfg.preGatedTools)+1)
 
 	for _, t := range nativeTools {
 		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy})
@@ -89,6 +93,11 @@ func buildFantasyTools(
 	for _, t := range cfg.loaderTools {
 		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy})
 	}
+	// Pre-gated tools (native-acp delegating MCP tools) own their policy handling
+	// (BeforeToolCall + RecordToolResult), exactly like the built-in mcpTool, so
+	// they register VERBATIM — wrapping them would double the gate and drop
+	// RecordToolResult.
+	allTools = append(allTools, cfg.preGatedTools...)
 
 	mcpRegistered := 0
 	mcpSkippedOptional := 0
@@ -191,6 +200,13 @@ func sanitizeSchemaProperties(props map[string]any) map[string]any {
 		out[k] = sanitizeSchemaValue(v)
 	}
 	return out
+}
+
+// SanitizeSchemaProperties is the exported form used by the native-acp agent's
+// delegating MCP tools so they sanitize their advertised schema EXACTLY as the
+// in-process mcpTool does (parity: OpenAI rejects `\p{…}` patterns).
+func SanitizeSchemaProperties(props map[string]any) map[string]any {
+	return sanitizeSchemaProperties(props)
 }
 
 const jsonSchemaPatternKey = "pattern"

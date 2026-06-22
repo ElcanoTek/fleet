@@ -40,6 +40,32 @@ type RunSpec struct {
 	// ProviderXTitle / ProviderHTTPReferer identify the run to OpenRouter.
 	ProviderXTitle      string `json:"providerXTitle,omitempty"`
 	ProviderHTTPReferer string `json:"providerHTTPReferer,omitempty"`
+
+	// MCPTools are the MCP tool DESCRIPTORS (no credentials) the agent should
+	// advertise as delegating mcp_<server>_<tool> tools. The host resolves the
+	// per-conversation selection + per-task credential accounts and bound MCP
+	// client; only the descriptors travel here so the agent's tool surface
+	// matches in-process. Every invocation rides `_fleet/mcp` back to the host,
+	// which runs the call against the credentialed client — credentials NEVER
+	// enter the agent container.
+	MCPTools []MCPToolDescriptor `json:"mcpTools,omitempty"`
+
+	// StagingWired tells the agent the host has a staging surface (`_fleet/stage`)
+	// available, so the agent's InteractivePolicy should wire delegating
+	// approval/memory/note stagers. When false the staging gates stay inert
+	// (matching an in-process turn with no stagers wired).
+	StagingWired bool `json:"stagingWired,omitempty"`
+
+	// NoteProposerWired mirrors StagingWired for the admin-notes (propose_note)
+	// path specifically: it is wired in both modes, while memory/approval are
+	// interactive-only. Kept distinct so the agent reports "not wired" identically
+	// to in-process when only one surface is present.
+	NoteProposerWired bool `json:"noteProposerWired,omitempty"`
+
+	// Lockdown mirrors the conversation's lockdown bit. Informational on the agent
+	// side (tool execution is host-side, where lockdown's no-network sandbox is
+	// applied); carried so the agent can stamp it for the audit trail.
+	Lockdown bool `json:"lockdown,omitempty"`
 }
 
 // PromptMeta is the per-prompt payload (the conversation history + the new user
