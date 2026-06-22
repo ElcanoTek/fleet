@@ -94,6 +94,11 @@ tested in this repository:
   the tools and data sources in the deployment's MCP catalog. See
   [`internal/mcp`](internal/mcp).
 
+The orchestrator HTTP API is published as an OpenAPI 3.1 contract at
+[`docs/openapi.yaml`](docs/openapi.yaml); a CI test
+(`cmd/fleet/openapi_drift_test.go`) keeps its routes + auth schemes in lockstep
+with the shipped router (it does not gate body schemas).
+
 ### Roadmap (not yet shipped)
 
 Items here are aspirational and **not** current capabilities — do not rely on
