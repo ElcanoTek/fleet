@@ -422,14 +422,16 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 // container); propose_note staging delegates over `_fleet/stage`; usage/cost is
 // reported over `_fleet/event` and accounted host-side.
 //
+// The END-OF-RUN VERIFIER (the in-process scheduledPolicy.CanFinish →
+// runEndOfRunVerifier re-check layered on top of agentcore's audit/finish
+// enforcement) now runs for native-acp too: the agent's in-loop scheduled policy
+// reaches the host verifier over the `_fleet/verify` seam, which runs the SAME
+// runEndOfRunVerifier on the host fallback model (host-side creds; only the
+// tool-exec summary crosses the seam). So a verifier-reliant task is verified, not
+// silently finished unverified — closing the P0 #35 governance gap.
+//
 // Honest residuals (documented, not silent):
 //
-//   - END-OF-RUN VERIFIER: the in-process scheduled driver layers an extra
-//     host-side LLM re-check (scheduledPolicy.CanFinish → runEndOfRunVerifier) on
-//     top of agentcore's audit/finish enforcement. That verifier wraps
-//     Deps.Policy.CanFinish and has no `_fleet/*` delegation seam, so the agent's
-//     in-loop ScheduledPolicy enforces audit/finish identically but the extra
-//     verifier round does not run for native-acp.
 //   - MCP LOAD-ON-DEMAND: native-acp advertises the MCP tool surface from the
 //     servers bound on the per-task client up-front (the task's mcp_selection); it
 //     does not ship the in-loop mcp_load_servers loader tool. A scheduled task that
@@ -530,6 +532,11 @@ func (a *Agent) runScheduledACP(ctx context.Context, task, systemPrompt string) 
 			MCPTools:            gov.MCPDescriptors,
 			StagingWired:        gov.StagingWired,
 			NoteProposerWired:   gov.NoteProposerWired,
+			// The end-of-run verifier runs only when a fallback model exists — the
+			// EXACT condition the in-process scheduledPolicy.CanFinish gates on. When
+			// set, the agent's scheduled policy reaches the host verifier over
+			// `_fleet/verify` instead of silently finishing unverified (#35).
+			VerifierWired: a.fallbackModel != nil,
 		},
 		task,
 		acpruntime.PromptMeta{MessagesJSON: string(messagesJSON)},
@@ -538,6 +545,10 @@ func (a *Agent) runScheduledACP(ctx context.Context, task, systemPrompt string) 
 			Observer:    &scheduledObserver{session: a.logSession},
 			MCPBroker:   gov.MCPBroker,
 			StageBroker: gov.StageBroker,
+			// The verifier EFFECT (an LLM re-check on the host fallback model, with
+			// host-side creds) runs through the SAME runEndOfRunVerifier the in-process
+			// path uses; only the agent-shipped tool-exec summary crosses the seam.
+			Verifier: &acpVerifyBroker{agent: a, task: task},
 		},
 	)
 
@@ -559,6 +570,25 @@ func (a *Agent) runScheduledACP(ctx context.Context, task, systemPrompt string) 
 		return err
 	}
 	return nil
+}
+
+// acpVerifyBroker adapts the host-side end-of-run verifier to the acpruntime
+// VerifyBroker seam: it maps the agent-shipped tool-exec summary onto the
+// agent package's records and runs the SAME runEndOfRunVerifier the in-process
+// scheduled path runs (host fallback model, host-side creds). The verifier model
+// call therefore never enters the agent container — only the records + round
+// cross the seam, and the missing-actions verdict comes back.
+type acpVerifyBroker struct {
+	agent *Agent
+	task  string
+}
+
+func (b *acpVerifyBroker) Verify(ctx context.Context, _ int, records []acpruntime.ToolExecRecord) ([]string, error) {
+	recs := make([]toolExecRecord, len(records))
+	for i, r := range records {
+		recs[i] = toolExecRecord{Name: r.Name, Succeeded: r.Succeeded}
+	}
+	return b.agent.runEndOfRunVerifier(ctx, b.task, recs)
 }
 
 // acpMCPClient returns the client whose tools the native-acp path advertises, or

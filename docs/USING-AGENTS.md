@@ -279,14 +279,18 @@ default, and **fail-closed** — the exact OPPOSITE of the `native-acp` fallback
 > Keep `allow_ungoverned_scheduled_agents` off unless a specific vendor agent's
 > convenience is worth running it unattended.
 
-**One honest residual** for scheduled `native-acp`: the in-process scheduled
-driver layers an extra **end-of-run verifier** (a host-side LLM re-check) on top
-of the shared audit/finish enforcement. That verifier wraps the host's
-`Policy.CanFinish` and has no `_fleet/*` delegation seam, so it runs only on the
-in-process path. The core governance — per-tool policy, audit, finish
-enforcement, MCP credential brokering, note staging, usage/cost — is at full
-parity; the supplemental verifier round is in-process-only and is the single
-documented gap.
+The **end-of-run verifier** — an extra host-side LLM re-check the scheduled
+driver layers on top of the shared audit/finish enforcement — now runs for
+scheduled `native-acp` too, over the `_fleet/verify` delegation seam: when the
+agent's in-loop scheduled policy clears, it asks the host to verify, shipping the
+tool-exec summary it authoritatively holds; the host runs the **same**
+`runEndOfRunVerifier` on its **own** fallback model (host-side creds — the
+verifier's model call never enters the agent container) and returns any missing
+required actions, which the agent turns into a final enforcement round. A
+host-side verifier error fails **open** (allow finish), exactly as the in-process
+path does. So core governance — per-tool policy, audit, finish enforcement, MCP
+credential brokering, note staging, usage/cost, **and the end-of-run verifier** —
+is at full parity; native-acp never silently finishes a scheduled run unverified.
 
 ---
 

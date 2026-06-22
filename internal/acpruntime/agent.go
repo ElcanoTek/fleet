@@ -166,6 +166,7 @@ func (a *AgentRunner) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prom
 	}
 
 	var policy agentcore.Policy
+	var verifyAcc *toolExecAccumulator
 	includeConfirmAudit := false
 	switch mode {
 	case agentcore.ModeScheduled:
@@ -175,6 +176,20 @@ func (a *AgentRunner) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prom
 		}
 		policy = sp
 		includeConfirmAudit = true
+		// End-of-run verifier seam: when the host wired a verifier, wrap the
+		// scheduled policy so its CanFinish runs the host-side verifier over
+		// `_fleet/verify` once the audit/finish enforcement clears — governing
+		// identically to the in-process scheduled path instead of silently finishing
+		// unverified (#35). The accumulator (fanned the run's events below) feeds the
+		// verifier the agent's authoritative tool-exec summary.
+		if spec.VerifierWired {
+			verifyAcc = newToolExecAccumulator()
+			policy = &verifyingScheduledPolicy{
+				inner:    sp,
+				verifier: &delegatingVerifier{conn: a.conn, sessionID: sid},
+				acc:      verifyAcc,
+			}
+		}
 	default:
 		var approvalSink agentcore.ApprovalStager
 		var memoryProposer agentcore.MemoryProposer
@@ -195,9 +210,17 @@ func (a *AgentRunner) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prom
 	// client. MCP credentials NEVER enter this container.
 	mcpTools := buildDelegatingMCPTools(a.conn, sid, policy, spec.MCPTools)
 
+	// When the verifier is wired, fan the run's events to the accumulator too so it
+	// can build the tool-exec summary the verifier reads. obs still streams every
+	// event to the host unchanged (and remains the UsageReporter sink).
+	var runObs agentcore.Observer = obs
+	if verifyAcc != nil {
+		runObs = observerFanout{a: obs, b: verifyAcc}
+	}
+
 	deps := agentcore.Deps{
 		Input:    promptInput{system: spec.SystemPrompt, messages: messages, label: spec.Label},
-		Observer: obs,
+		Observer: runObs,
 		Policy:   policy,
 		Executor: agentExecutor{sb: sb},
 		Model:    model, FallbackModel: fallback,
