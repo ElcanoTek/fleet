@@ -248,6 +248,31 @@ ensure_sandbox() {
   log "sandbox: probe OK"
 }
 
+# ── 3b. ensure the external ACP example-agent image + drive it end-to-end ──
+# The plan's live external proof: fleet's ExternalRuntime drives the coder-SDK-
+# shaped, credential-free ACP example agent (cmd/acp-example-agent) over real
+# podman-stdio — a turn streams + a permission request is handled (allow +
+# default-deny). This is the GENERIC external path Claude Code / Goose ride. We
+# build the image and run the Go live test (TestExternalPodmanE2E) as part of the
+# live suite so it can never silently rot.
+FLEET_ACP_EXTERNAL_E2E_IMAGE="${FLEET_ACP_EXTERNAL_E2E_IMAGE:-localhost/fleet-acp-example-agent:latest}"
+ensure_acp_example_agent() {
+  command -v podman >/dev/null 2>&1 || die "podman is required for the external ACP e2e"
+  if ! podman image exists "$FLEET_ACP_EXTERNAL_E2E_IMAGE" 2>/dev/null; then
+    log "acp-example-agent: image $FLEET_ACP_EXTERNAL_E2E_IMAGE not present; building locally"
+    podman build -f "$REPO_ROOT/config/default/sandbox/Containerfile.acp-example-agent" \
+      -t "$FLEET_ACP_EXTERNAL_E2E_IMAGE" "$REPO_ROOT" \
+      >>"$LOG_DIR/acp-example-agent-build.log" 2>&1 \
+      || die "acp-example-agent image build failed (see $LOG_DIR/acp-example-agent-build.log)"
+  fi
+  log "acp-example-agent: driving the external ACP path end-to-end (fleet ↔ example agent over podman-stdio)"
+  FLEET_ACP_EXTERNAL_E2E_IMAGE="$FLEET_ACP_EXTERNAL_E2E_IMAGE" \
+    go test ./internal/acpruntime/ -count=1 -run 'TestExternalPodmanE2E' \
+    >>"$LOG_DIR/acp-external-e2e.log" 2>&1 \
+    || die "external ACP e2e FAILED — fleet could not drive the example agent (see $LOG_DIR/acp-external-e2e.log)"
+  log "acp-example-agent: external ACP e2e OK"
+}
+
 # ── 4. start fake-llm (skipped in canary mode) ──
 start_fake_llm() {
   if [[ "$E2E_CANARY" == "1" ]]; then
@@ -360,6 +385,7 @@ main() {
   ensure_postgres
   build_binaries
   ensure_sandbox
+  ensure_acp_example_agent
   start_fake_llm
   start_fleet
   seed_users

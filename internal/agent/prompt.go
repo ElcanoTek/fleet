@@ -128,19 +128,19 @@ func (m *Manager) SetRuntimes(runtimes []clientconfig.Runtime, defaultRuntime, n
 
 // resolveRuntime picks the effective flavor for a requested name: the requested
 // flavor when it exists in the catalog, else the bundle default, else
-// native-inprocess. Returns the flavor name + whether it is the native-acp
-// flavor (so RunTurn can route).
-func (m *Manager) resolveRuntime(requested string) (name string, nativeACP bool) {
+// native-inprocess. Returns the resolved descriptor so RunTurn can route on the
+// type (native-acp / external acp) and read the flavor's image/env/args.
+func (m *Manager) resolveRuntime(requested string) clientconfig.Runtime {
 	want := strings.TrimSpace(requested)
 	if want == "" {
 		want = m.defaultRuntime
 	}
 	for _, rt := range m.runtimes {
 		if rt.Name == want {
-			return rt.Name, rt.Type == clientconfig.RuntimeTypeNativeACP
+			return rt
 		}
 	}
-	return clientconfig.RuntimeNativeInprocess, false
+	return clientconfig.Runtime{Name: clientconfig.RuntimeNativeInprocess, Type: clientconfig.RuntimeTypeNativeInprocess}
 }
 
 // MCPServerSpec describes one MCP server to connect to. Either stdio
