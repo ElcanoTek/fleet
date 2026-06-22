@@ -2,9 +2,7 @@ package acpingress
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -110,15 +108,18 @@ func New(engine TurnEngine, st ConversationStore, approvals ApprovalStore, runne
 func (a *IngressAgent) SetAgentConnection(conn *acp.AgentSideConnection) { a.conn = conn }
 
 // Initialize advertises fleet's agent capabilities. Prompt accepts text and image
-// content blocks (the governed turn supports vision); loadSession stays false
-// (resuming a prior session is a later phase). AgentInfo names us "fleet".
+// content blocks (the governed turn supports vision). loadSession + resume are
+// advertised: the SessionId IS the durable conversation ID, so an editor can
+// reconnect to a prior conversation across `fleet acp` restarts (LoadSession
+// replays the persisted transcript; ResumeSession rebinds without replay).
 func (a *IngressAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp.InitializeResponse, error) {
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{
-			// loadSession intentionally false for now — ingress is single-turn
-			// streaming; resuming a prior session is a later phase.
-			LoadSession: false,
+			// loadSession/resume: the conversation row is the durable binding, so a
+			// reconnect rehydrates from the store (see LoadSession/ResumeSession).
+			LoadSession:         true,
+			SessionCapabilities: acp.SessionCapabilities{Resume: &acp.SessionResumeCapabilities{}},
 			// Image: the editor may attach images; we decode them to the
 			// conversation workspace and feed them to the governed turn as vision
 			// input (see decodeImageBlocks). Audio stays unset (not consumed).
@@ -142,14 +143,41 @@ func (a *IngressAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) 
 		return acp.NewSessionResponse{}, fmt.Errorf("create ingress conversation: %w", err)
 	}
 
-	sid := newSessionID()
+	// The SessionId IS the conversation ID — the one durable, principal-scoped key.
+	// We still record the in-mem session for the live cancel hook; a reconnect after
+	// a restart rehydrates it from the store via getOrLoadSession.
 	a.mu.Lock()
-	a.sessions[sid] = &ingressSession{conversationID: conv.ID, cwd: p.Cwd}
+	a.sessions[conv.ID] = &ingressSession{conversationID: conv.ID, cwd: p.Cwd}
 	a.mu.Unlock()
 
-	log.Printf("acpingress: new session %s → conversation %s (cwd=%s, model=%s, runtime=%q, lockdown=%t, principal=%s)",
-		sid, conv.ID, p.Cwd, a.cfg.Model, a.cfg.Runtime, a.cfg.Lockdown, a.cfg.Principal.Email)
-	return acp.NewSessionResponse{SessionId: acp.SessionId(sid)}, nil
+	log.Printf("acpingress: new session %s (cwd=%s, model=%s, runtime=%q, lockdown=%t, principal=%s)",
+		conv.ID, p.Cwd, a.cfg.Model, a.cfg.Runtime, a.cfg.Lockdown, a.cfg.Principal.Email)
+	return acp.NewSessionResponse{SessionId: acp.SessionId(conv.ID)}, nil
+}
+
+// getOrLoadSession returns the in-memory session for sid, else rehydrates it from
+// the store (the conversation row is the durable binding) — so a Prompt after a
+// `fleet acp` restart finds its conversation instead of cold-starting. Returns an
+// error when no conversation with that id exists for the bound principal.
+func (a *IngressAgent) getOrLoadSession(ctx context.Context, sid string) (*ingressSession, error) {
+	a.mu.Lock()
+	sess, ok := a.sessions[sid]
+	a.mu.Unlock()
+	if ok {
+		return sess, nil
+	}
+	conv, err := a.store.Get(ctx, a.cfg.Principal.Email, sid)
+	if err != nil {
+		return nil, fmt.Errorf("load session %s: %w", sid, err)
+	}
+	if conv == nil {
+		return nil, fmt.Errorf("session %s not found", sid)
+	}
+	sess = &ingressSession{conversationID: conv.ID}
+	a.mu.Lock()
+	a.sessions[conv.ID] = sess
+	a.mu.Unlock()
+	return sess, nil
 }
 
 // Prompt runs ONE governed interactive turn for the session. It loads the
@@ -157,12 +185,9 @@ func (a *IngressAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) 
 // sink + the ingress approval surface), drives the SAME engine the web path
 // drives, persists the new history, and maps the result onto an ACP StopReason.
 func (a *IngressAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResponse, error) {
-	sid := string(p.SessionId)
-	a.mu.Lock()
-	sess, ok := a.sessions[sid]
-	a.mu.Unlock()
-	if !ok {
-		return acp.PromptResponse{}, fmt.Errorf("session %s not found", sid)
+	sess, err := a.getOrLoadSession(ctx, string(p.SessionId))
+	if err != nil {
+		return acp.PromptResponse{}, err
 	}
 
 	// Per-turn cancellable ctx so Cancel can stop this run mid-flight.
@@ -398,10 +423,34 @@ func promptText(blocks []acp.ContentBlock) string {
 	return out
 }
 
-func newSessionID() string {
-	var b [12]byte
-	_, _ = rand.Read(b[:])
-	return "acp-ingress-" + hex.EncodeToString(b[:])
+// LoadSession rebinds an ACP session to its durable fleet conversation (the
+// SessionId IS the conversation ID) and replays the persisted transcript to the
+// editor, so reconnecting after a `fleet acp` restart resumes the same governed
+// conversation with its history rendered. It runs NO turn and executes NO tools —
+// it is a read-only rehydrate + replay against the SAME store the web path uses.
+// The host-advertised mcpServers are IGNORED (as in NewSession): fleet brokers
+// its own catalog host-side; no editor credential path opens here.
+func (a *IngressAgent) LoadSession(ctx context.Context, p acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
+	sess, err := a.getOrLoadSession(ctx, string(p.SessionId))
+	if err != nil {
+		return acp.LoadSessionResponse{}, err
+	}
+	history, err := a.store.LoadHistory(ctx, sess.conversationID)
+	if err != nil {
+		return acp.LoadSessionResponse{}, fmt.Errorf("load history: %w", err)
+	}
+	newIngressSink(a.conn, p.SessionId).replayToEditor(history)
+	return acp.LoadSessionResponse{}, nil
+}
+
+// ResumeSession rebinds the session WITHOUT replaying history (the spec contract:
+// only loadSession replays). A follow-up Prompt then continues the conversation
+// with full persisted context. Same read-only rehydrate as LoadSession.
+func (a *IngressAgent) ResumeSession(ctx context.Context, p acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	if _, err := a.getOrLoadSession(ctx, string(p.SessionId)); err != nil {
+		return acp.ResumeSessionResponse{}, err
+	}
+	return acp.ResumeSessionResponse{}, nil
 }
 
 // --- unsupported acp.Agent methods (ingress is single-turn streaming) ---
@@ -422,10 +471,6 @@ func (a *IngressAgent) CloseSession(_ context.Context, _ acp.CloseSessionRequest
 
 func (a *IngressAgent) ListSessions(_ context.Context, _ acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
 	return acp.ListSessionsResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionList)
-}
-
-func (a *IngressAgent) ResumeSession(_ context.Context, _ acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
-	return acp.ResumeSessionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionResume)
 }
 
 func (a *IngressAgent) SetSessionConfigOption(_ context.Context, _ acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
