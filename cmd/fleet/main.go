@@ -305,7 +305,7 @@ func schedDSN() string {
 	return ""
 }
 
-func timezone(cfg *config.Config) string {
+func timezone(_ *config.Config) string {
 	if v := strings.TrimSpace(os.Getenv("FLEET_TIMEZONE")); v != "" {
 		return v
 	}

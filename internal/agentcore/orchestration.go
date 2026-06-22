@@ -52,9 +52,6 @@ type orchestrationState struct {
 	// loop endlessly under one audit envelope.
 	criticalToolFailureAttempts map[string]int
 
-	// verifierRan records whether the end-of-run verifier pass already fired.
-	verifierRan bool
-
 	// ── repeat-call loop guard (both modes) ──
 	lastCallKey     string
 	lastCallRepeats int
@@ -86,7 +83,6 @@ type orchestrationState struct {
 	maxTotalTokens int
 
 	// ── step / usage tracking ──
-	step       int
 	logSession *LogSession
 
 	// usage counters (chat surfaced these on orch; scheduled mirrors into

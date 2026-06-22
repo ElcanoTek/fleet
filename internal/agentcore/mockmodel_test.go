@@ -66,27 +66,6 @@ type namedMockModel struct {
 
 func (m *namedMockModel) Model() string { return m.name }
 
-// streamWithToolCall builds a stream that emits one tool call then finishes.
-func streamWithToolCall(toolName, toolInput string) func(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
-	return func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
-		return func(yield func(fantasy.StreamPart) bool) {
-			if !yield(fantasy.StreamPart{
-				Type:          fantasy.StreamPartTypeToolCall,
-				ID:            fmt.Sprintf("call_%s", toolName),
-				ToolCallName:  toolName,
-				ToolCallInput: toolInput,
-			}) {
-				return
-			}
-			yield(fantasy.StreamPart{
-				Type:         fantasy.StreamPartTypeFinish,
-				FinishReason: fantasy.FinishReasonToolCalls,
-				Usage:        fantasy.Usage{InputTokens: 50, OutputTokens: 10},
-			})
-		}, nil
-	}
-}
-
 // streamStop builds a stream that finishes immediately with text.
 func streamStop() func(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
 	return func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {

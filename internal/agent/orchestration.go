@@ -200,20 +200,6 @@ func (o *orchestrationState) checkRepeatedCall(toolName, rawInput string) (bool,
 		o.loopGuardTrips, toolName, o.lastCallRepeats, maxConsecutiveIdenticalCalls)
 }
 
-// setApprovalSink wires up the stager for this turn.
-func (o *orchestrationState) setApprovalSink(s ApprovalStager) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.approvalSink = s
-}
-
-// setMemoryProposer wires up the proposer for this turn.
-func (o *orchestrationState) setMemoryProposer(p MemoryProposer) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.memoryProposer = p
-}
-
 const maxSendEmailCallsPerTurn = 3
 
 // isEmailSendTool matches send_email variants. Guard against accidental fan-out.
@@ -449,27 +435,6 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 		o.sendEmailSuccessCount++
 		o.sentEmailFingerprints[hashString(rawInput)] = struct{}{}
 		log.Printf("send_email queued successfully (%d/%d this turn)", o.sendEmailSuccessCount, maxSendEmailCallsPerTurn)
-	}
-}
-
-// updateUsage accumulates token/cost counts from a fantasy step.
-func (o *orchestrationState) updateUsage(usage fantasy.Usage, metadata fantasy.ProviderMetadata) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-
-	o.PromptTokens += int(usage.InputTokens)
-	// Overwrite (not accumulate) so this field reflects the most
-	// recent step's input size, which is the right denominator-input
-	// for "fraction of context window used." See the LastStepInputTokens
-	// doc comment above for the production incident that motivated
-	// separating these two signals.
-	o.LastStepInputTokens = int(usage.InputTokens)
-	o.CompletionTokens += int(usage.OutputTokens)
-	o.CachedTokens += int(usage.CacheReadTokens)
-	o.CacheCreationTokens += int(usage.CacheCreationTokens)
-
-	if cost := openrouterCost(metadata); cost != nil {
-		o.CostUSD += *cost
 	}
 }
 

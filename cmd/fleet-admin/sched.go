@@ -338,7 +338,7 @@ func schedAPIKeyCreate(argv []string) int {
 	return 0
 }
 
-func schedAPIKeyList(argv []string) int {
+func schedAPIKeyList(_ []string) int {
 	mgr, code := openKeyManager()
 	if mgr == nil {
 		return code
@@ -404,13 +404,12 @@ func parseScopes(raw string) []string {
 // splitTwoPositional lifts the first TWO positional args out of argv.
 func splitTwoPositional(argv []string) (positional []string, flagArgs []string) {
 	for _, a := range argv {
-		if len(a) > 0 && a[0] == '-' && len(positional) >= 2 {
+		switch {
+		case len(a) > 0 && a[0] == '-':
 			flagArgs = append(flagArgs, a)
-		} else if len(a) > 0 && a[0] == '-' {
-			flagArgs = append(flagArgs, a)
-		} else if len(positional) < 2 {
+		case len(positional) < 2:
 			positional = append(positional, a)
-		} else {
+		default:
 			flagArgs = append(flagArgs, a)
 		}
 	}

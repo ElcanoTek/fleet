@@ -139,7 +139,7 @@ func (r *scheduledRunner) Run(ctx context.Context, task *models.Task) (*models.L
 	}
 	defer mcpCleanup()
 
-	a := agent.NewAgent(agent.AgentOptions{
+	a := agent.NewAgent(agent.Options{
 		Config:        r.cfg,
 		Model:         model,
 		FallbackModel: fallback,
@@ -227,7 +227,7 @@ func (r *scheduledRunner) mcpBases() map[string]agentcore.MCPServerBase {
 
 // convertLogSession maps the agentcore session log to the sched models log shape
 // the orchestrator persists + renders. Secrets are scrubbed defensively.
-func convertLogSession(task *models.Task, ls *agent.LogSession) *models.LogSession {
+func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession {
 	if ls == nil {
 		return nil
 	}

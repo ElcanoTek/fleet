@@ -1412,7 +1412,7 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListAPIKeys handles GET /keys
-func (h *Handlers) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) ListAPIKeys(w http.ResponseWriter, _ *http.Request) {
 	keys := h.apiKeys.ListKeys()
 	responses := make([]models.APIKeyResponse, len(keys))
 	for i, key := range keys {
@@ -1639,7 +1639,7 @@ func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetDashboardConfig handles GET /api/config
-func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, _ *http.Request) {
 	config := map[string]interface{}{
 		"version":  h.config.Version,
 		"timezone": h.config.Timezone,
@@ -1651,7 +1651,7 @@ func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, r *http.Request) {
 // Health Check
 
 // HealthCheck handles GET /health
-func (h *Handlers) HealthCheck(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) HealthCheck(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, models.HealthResponse{
 		Status:    "healthy",
 		Version:   h.config.Version,

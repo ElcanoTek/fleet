@@ -522,7 +522,9 @@ func (s *reverseLineScanner) scan() ([]byte, error) {
 			chunkSize = s.pos
 		}
 		s.pos -= chunkSize
-		chunk := make([]byte, chunkSize)
+		// Over-allocate capacity so the prepend below (append(chunk, s.buf...))
+		// can reuse chunk's backing array instead of reallocating.
+		chunk := make([]byte, chunkSize, chunkSize+int64(len(s.buf)))
 		if _, err := s.file.ReadAt(chunk, s.pos); err != nil {
 			return nil, err
 		}
