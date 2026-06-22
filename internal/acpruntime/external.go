@@ -264,16 +264,24 @@ func (r *ExternalRuntime) Run(ctx context.Context, promptText string, deps Exter
 		Prompt:    []acp.ContentBlock{acp.TextBlock(promptText)},
 	})
 	if err != nil {
+		// Set Usage on EVERY exit path (mirroring ClientRuntime.Run) so the driver
+		// records whatever the agent self-reported before the error/cancel — never a
+		// misleading $0/zero-token run at the very tier that drives its own endpoint.
 		if ctx.Err() != nil {
-			return Result{FinalText: cl.finalText(), Cancelled: true}, nil
+			return Result{FinalText: cl.finalText(), Cancelled: true, Usage: cl.usageSnapshot()}, nil
 		}
-		return Result{FinalText: cl.finalText()}, fmt.Errorf("prompt (external): %w", err)
+		return Result{FinalText: cl.finalText(), Usage: cl.usageSnapshot()}, fmt.Errorf("prompt (external): %w", err)
 	}
+
+	// Token totals come from the (UNSTABLE) PromptResponse.Usage; cost was folded
+	// in from SessionUsageUpdate notifications during the stream. nil-safe.
+	cl.capturePromptUsage(promptResp.Usage)
 
 	return Result{
 		FinalText:  cl.finalText(),
 		StopReason: string(promptResp.StopReason),
 		Cancelled:  promptResp.StopReason == acp.StopReasonCancelled,
+		Usage:      cl.usageSnapshot(),
 	}, nil
 }
 
@@ -323,6 +331,14 @@ type externalClient struct {
 	mu    sync.Mutex
 	final strings.Builder
 	reqN  int
+	// usage is the external agent's SELF-REPORTED token + cost accounting,
+	// assembled from two UNSTABLE SDK surfaces: token totals from
+	// PromptResponse.Usage (captured in Run) and cumulative cost from
+	// SessionUsageUpdate notifications (captured in SessionUpdate). The agent
+	// drives its OWN model endpoint, so this is its self-report, not something
+	// fleet meters — an unreported field stays zero, which the driver documents
+	// as "unmetered", never a true $0 (see issue #31).
+	usage agentcore.RunUsage
 }
 
 var _ acp.Client = (*externalClient)(nil)
@@ -331,6 +347,36 @@ func (c *externalClient) finalText() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.final.String()
+}
+
+// usageSnapshot returns the self-reported usage accumulated so far. Mirrors the
+// native hostClient.usageSnapshot so ExternalRuntime.Run sets Result.Usage on
+// every exit path exactly as ClientRuntime.Run does.
+func (c *externalClient) usageSnapshot() agentcore.RunUsage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.usage
+}
+
+// capturePromptUsage records the token totals from the agent's PromptResponse.
+// The SDK Usage is cumulative across the session; the cost split is reported
+// separately over SessionUsageUpdate, so this only touches the token fields and
+// leaves any captured CostUSD intact. nil (the agent reported no usage) is a
+// no-op — the tokens stay zero, honestly reflecting "the agent did not report".
+func (c *externalClient) capturePromptUsage(u *acp.Usage) {
+	if u == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.usage.PromptTokens = u.InputTokens
+	c.usage.CompletionTokens = u.OutputTokens
+	if u.CachedReadTokens != nil {
+		c.usage.CachedTokens = *u.CachedReadTokens
+	}
+	if u.CachedWriteTokens != nil {
+		c.usage.CacheCreationTokens = *u.CachedWriteTokens
+	}
 }
 
 // SessionUpdate captures the external agent's self-reported stream. Text chunks
@@ -360,8 +406,35 @@ func (c *externalClient) SessionUpdate(_ context.Context, p acp.SessionNotificat
 		c.obs.Observe("tool.result", map[string]any{
 			"id": string(u.ToolCallUpdate.ToolCallId),
 		})
+	case u.UsageUpdate != nil:
+		// UNSTABLE SDK surface: the external agent self-reports cumulative session
+		// cost here (token totals arrive on PromptResponse.Usage). We record the
+		// cost ONLY when it is USD, because RunUsage.CostUSD is dollars — stamping a
+		// EUR amount as USD would be a worse lie than the honest unmetered zero.
+		c.recordReportedCost(u.UsageUpdate.Cost)
 	}
 	return nil
+}
+
+// recordReportedCost captures the agent's self-reported cumulative cost when it
+// is denominated in USD (or carries no currency). A non-USD cost is observed for
+// the audit trail but NOT folded into CostUSD — see SessionUpdate. nil is a
+// no-op, leaving CostUSD at its honest unmetered zero.
+func (c *externalClient) recordReportedCost(cost *acp.Cost) {
+	if cost == nil {
+		return
+	}
+	if cost.Currency != "" && !strings.EqualFold(cost.Currency, "USD") {
+		c.obs.Observe("usage", map[string]any{
+			"cost_unmetered_currency": cost.Currency,
+			"cost_unmetered_amount":   cost.Amount,
+		})
+		return
+	}
+	c.mu.Lock()
+	c.usage.CostUSD = cost.Amount
+	c.mu.Unlock()
+	c.obs.Observe("usage", map[string]any{"cost_usd": cost.Amount})
 }
 
 // RequestPermission routes the external agent's request to the human (broker),

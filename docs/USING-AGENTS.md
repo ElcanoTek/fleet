@@ -101,6 +101,13 @@ it does not run. So instead of *governing*, fleet **contains**:
   `session/update` stream (its narrated text, thoughts, and tool-call notices)
   as *observed / audited*, **not enforced**. If the agent under-reports what it
   did, fleet cannot know.
+- **Usage/cost is the agent's self-report too.** fleet records the token totals
+  the agent reports on its `PromptResponse` and the cumulative cost it reports
+  over `session/update` usage notifications (USD only — a non-USD figure is
+  logged but not coerced into the dollar field). The external agent drives its
+  **own** model endpoint, so fleet does **not** meter it: an unreported cost is
+  recorded as an honest **unmetered zero**, never a true `$0`, and a
+  containment-tier run is **excluded** from any "cost ceiling satisfied" claim.
 - **Locked sandbox.** The provider's agent runs `--read-only`, `--cap-drop=ALL`,
   `--security-opt=no-new-privileges`, with a **scratch-only** tmpfs workspace
   discarded on teardown.

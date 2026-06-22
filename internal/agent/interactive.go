@@ -369,6 +369,10 @@ func runExternalTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		Entries:   entries,
 		ModelSlug: flavor.Name, // external: the flavor name, not an OpenRouter slug
 		Cancelled: res.Cancelled,
+		// The external agent's SELF-REPORTED usage (tokens from PromptResponse.Usage,
+		// cost from SessionUsageUpdate). Containment tier: fleet does not meter it, so
+		// an unreported cost stays zero (documented unmetered, not a true $0) — #31.
+		Usage: res.Usage,
 	}, nil
 }
 
