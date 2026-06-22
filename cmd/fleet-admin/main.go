@@ -5,13 +5,20 @@
 //
 // Subcommands:
 //
-//	fleet-admin bootstrap [--postgres=local|external] [--dry-run]
+//	fleet-admin bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
+//	fleet-admin update    [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run]
+//	fleet-admin status    [--service <name>] [--no-sandbox]
 //	fleet-admin chat user add|update|del|list
 //	fleet-admin sched user add|update|set-role|rename|del|list
 //	fleet-admin sched apikey create|list|revoke|delete
 //	fleet-admin mcp account set|list|del
 //	fleet-admin notes set|get|list|rm
 //	fleet-admin notes proposal publish|reject
+//
+// The operator lifecycle is bootstrap → update → status: bootstrap provisions a
+// box, update rolls a new version in place, status (a.k.a. doctor) reports
+// health. bootstrap + update are thin wrappers over scripts/bootstrap.sh +
+// scripts/update.sh; status runs in-process read-only checks.
 //
 // Passwords are NEVER taken on argv — pass `--password -` to read from stdin.
 // Email/username normalization, bcrypt.DefaultCost, and the 0-users
@@ -35,6 +42,10 @@ func dispatch(argv []string) int {
 	switch argv[0] {
 	case "bootstrap":
 		return cmdBootstrap(argv[1:])
+	case "update":
+		return cmdUpdate(argv[1:])
+	case "status", "doctor":
+		return cmdStatus(argv[1:])
 	case "chat":
 		return cmdChat(argv[1:])
 	case "sched":
@@ -56,8 +67,12 @@ func dispatch(argv []string) int {
 func usage() {
 	fmt.Fprint(os.Stderr, `fleet-admin — unified Mega Box admin CLI
 
-Usage:
-  fleet-admin bootstrap [--postgres=local|external] [--dry-run]
+Operator lifecycle (bootstrap → update → status):
+  fleet-admin bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
+  fleet-admin update    [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--yes] [--dry-run]
+  fleet-admin status    [--service <name>] [--no-sandbox]    (a.k.a. doctor; non-zero exit if unhealthy)
+
+Users, credentials, notes:
   fleet-admin chat user add <email>    --password -
   fleet-admin chat user update <email> --password -
   fleet-admin chat user del <email>
@@ -86,6 +101,11 @@ Connection:
   Chat DB:  --database-url or FLEET_CHAT_DATABASE_URL / DATABASE_URL
   Sched DB: --database-url or FLEET_SCHED_DATABASE_URL / DATABASE_URL
   Env file: --env-file or FLEET_ENV_FILE (default .env.local) for mcp account
+
+bootstrap + update wrap scripts/bootstrap.sh + scripts/update.sh (found via
+FLEET_ROOT, ./scripts, or the binary's dir). status runs read-only checks
+in-process: both DBs reachable, the sandbox image present + runnable, required
+env vars set, the client bundle loads, and the systemd unit state.
 
 Passwords are read from stdin with --password - (never on argv).
 `)

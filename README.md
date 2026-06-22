@@ -80,10 +80,11 @@ browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet:
    scripts/bootstrap.sh --postgres=local      # or --postgres=external
    ```
 
-   Then fill in `OPENROUTER_API_KEY`, the two `FLEET_*_DATABASE_URL`s,
-   `FLEET_CLIENT_CONFIG_DIR` (the client bundle checkout — see step 3), the
-   bundle's MCP connector credentials, and any MCP account secrets
-   (`fleet-admin mcp account set ...`) in the env file.
+   bootstrap writes the two `FLEET_*_DATABASE_URL`s and `FLEET_CLIENT_CONFIG_DIR`
+   into the env file for you; you then add `OPENROUTER_API_KEY`, the bundle's MCP
+   connector credentials, and any MCP account secrets
+   (`fleet-admin mcp account set ...`). See **Operating fleet** below for the full
+   bootstrap → update → status lifecycle (`fleet-admin bootstrap` wraps this).
 
 2. **Build** the binary, the sandbox image, and the web app:
 
@@ -131,3 +132,112 @@ browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet:
 
 See `deploy/fleet.service` and `deploy/Caddyfile` for the full annotated knob
 list (listener addresses, admin/registration tokens, data dir, timezone).
+
+## Operating fleet
+
+The operator lifecycle is **bootstrap → update → status**, one box. Every verb is
+idempotent and exposed both as a shell script (`scripts/`) and as a `fleet-admin`
+subcommand that wraps it, so a re-run converges on the same state rather than
+double-applying. None of them ever run application migrations — each service
+self-migrates on start (chat's advisory-lock runner; sched's golang-migrate).
+
+```
+fleet-admin bootstrap   →   fleet-admin update   →   fleet-admin status
+  (provision a box)         (roll a new version)      (health / doctor)
+```
+
+### The env file (the one source of credentials)
+
+A single **0600** env file (`FLEET_ENV_FILE`, default `.env.local`; on a box
+typically `/etc/fleet/fleet.env`) carries every secret and connection string.
+`deploy/fleet.service` `EnvironmentFile`s it, `fleet` parses the same file via
+`config.Load`, and `fleet-admin` reads it for MCP account secrets — so process
+env and config-loaded values stay in sync. `bootstrap` writes/refreshes the
+machine-managed keys in place (preserving your hand-edited lines and comments):
+
+```
+FLEET_CHAT_DATABASE_URL=postgres://chat:…@127.0.0.1:5432/chat?sslmode=disable
+FLEET_SCHED_DATABASE_URL=postgres://sched:…@127.0.0.1:5432/sched?sslmode=disable
+FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client      # the client bundle checkout
+FLEET_ENV_FILE=/etc/fleet/fleet.env            # so config.Load reads this same file
+```
+
+You then add `OPENROUTER_API_KEY`, any listener/admin tokens, the client
+bundle's MCP connector credentials, and per-account MCP secrets
+(`fleet-admin mcp account set <server> <account> --secret KEY=-`, value via
+stdin — never on argv).
+
+### The client-config checkout
+
+fleet ships **no** client content; it loads a **client config bundle** from
+`FLEET_CLIENT_CONFIG_DIR` (default `config/default`, the generic bundle). A real
+deployment checks out a client repo and points the variable at it. `bootstrap
+--client-config <git-url|path>` automates this: a **git URL** is cloned to a
+stable location (`/opt/fleet/client`, or `./.fleet-client` when `/opt` is not
+writable) and `update` keeps it fast-forwarded; a **path** is pointed at
+directly. Either way the resolved dir is written to `FLEET_CLIENT_CONFIG_DIR` in
+the env file. The bundle also owns the **sandbox** — see below.
+
+### bootstrap — provision a box
+
+```
+fleet-admin bootstrap --postgres=local                     # dnf+initdb+pg_hba+\gexec, sslmode=disable
+fleet-admin bootstrap --postgres=external                  # validate the DSNs with SELECT 1, sslmode=require
+fleet-admin bootstrap --client-config <git-url|path>       # check out / point at a client bundle
+fleet-admin bootstrap --enable-service                     # systemctl enable --now the fleet unit at the end
+fleet-admin bootstrap --dry-run                            # print the plan; touch nothing
+```
+
+End to end, every run: ensure the 0600 env file → resolve the client bundle
+(`--client-config`) → **build the sandbox image from the bundle** (calls
+`scripts/build-sandbox-image.sh` with `FLEET_CLIENT_CONFIG_DIR`; skipped when the
+manifest pins a prebuilt `sandbox.image`) → provision both `chat`+`sched`
+roles/databases idempotently via `\gexec` (local) or validate the DSNs (external)
+→ write the resolved DSNs + `FLEET_CLIENT_CONFIG_DIR` into the env file →
+optionally `enable --now` the systemd unit. Local-mode role passwords are
+generated when unset; set `CHAT_DB_PASSWORD`/`SCHED_DB_PASSWORD` to pin them.
+
+### update — roll a new version in place
+
+```
+fleet-admin update              # pull → build → conditional sandbox rebuild → restart
+fleet-admin update --no-pull    # rebuild the current checkout(s) only
+fleet-admin update --dry-run    # print the plan
+```
+
+`update` (ported from the `moc`/`gig` pattern) `git pull`s **both** the fleet
+checkout and the client-config checkout, runs `make build` (fleet binary) and
+`cd web && npm ci && npm run build`, then **rebuilds the sandbox image only when
+the bundle's `sandbox/Containerfile` changed** — it stores a SHA-256 of the
+Containerfile under `.fleet-state/` and compares, skipping the ~2-3 min image
+build when unchanged. Services self-migrate on restart, so `update` runs no
+migrations; it finishes with `systemctl restart fleet` and a unit health check.
+If the pull changed `update.sh` itself, the script **re-execs the fresh copy** in
+rebuild-only mode (bash holds the pre-pull inode open, so the fix would otherwise
+only land on the *next* update). On a build failure the live binary/image is left
+untouched; roll back with `git checkout <sha> && fleet-admin update --no-pull`.
+
+### status (doctor) — is the box healthy?
+
+```
+fleet-admin status                # ✓/✗ report; exits non-zero if unhealthy
+fleet-admin status --no-sandbox   # skip the podman run check
+```
+
+`status` runs read-only checks and prints a ✓/✗ line per check, exiting non-zero
+(6) if any required check fails: the client bundle loads + validates, required
+env vars are set, **both** databases answer `SELECT 1` (a lightweight ping — no
+migrations), the **sandbox image is present + runnable** (a throwaway
+`podman run --rm <ref> true`, where `<ref>` is resolved exactly as the running
+process resolves it — `FLEET_SANDBOX_IMAGE` env wins, else the bundle's
+`ResolvedImageRef()`), and the systemd unit state when a unit is installed.
+DSN passwords are redacted in the output.
+
+### Where the sandbox build fits
+
+The execution sandbox is a **per-client bundle artifact**: each bundle ships its
+own `sandbox/Containerfile` (digest-pinned base). `bootstrap` builds it on the
+box by default (auditable supply chain); `update` rebuilds it only when the
+Containerfile changed; `status` verifies the resolved image runs. Registry
+publish stays opt-in — set `sandbox.image` in the bundle manifest to a prebuilt
+ref and all three steps consume that instead of building.
