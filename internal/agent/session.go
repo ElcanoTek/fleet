@@ -31,7 +31,7 @@ type HistoryEntry struct {
 
 // entryTypeToolCall is the HistoryEntry.Type for an assistant tool call. The
 // other type strings appear at most twice and stay inline; this one is shared
-// by the persist path, both replay switches, and countToolCalls.
+// by the persist path and both replay switches.
 const entryTypeToolCall = "tool_call"
 
 // TextContent for Type=text (user + assistant). Images is set on the
@@ -351,7 +351,7 @@ func loadImageAttachments(atts []ImageAttachment) ([]fantasy.FilePart, []ImageRe
 			log.Printf("loadImageAttachments: %s is %d bytes (> %d cap)", a.Path, info.Size(), maxBytesPerFile)
 			continue
 		}
-		data, err := os.ReadFile(a.Path) //nolint:gosec // path was re-validated against uploads root
+		data, err := os.ReadFile(a.Path) // path was re-validated against uploads root
 		if err != nil {
 			log.Printf("loadImageAttachments: read %s: %v", a.Path, err)
 			continue
@@ -397,7 +397,7 @@ func loadHistoryImageParts(refs []ImageRefMeta) []fantasy.FilePart {
 			log.Printf("loadHistoryImageParts: %s is %d bytes (> %d cap)", r.Path, info.Size(), maxBytesPerFile)
 			continue
 		}
-		data, err := os.ReadFile(r.Path) //nolint:gosec // path is from a previously validated history row
+		data, err := os.ReadFile(r.Path) // path is from a previously validated history row
 		if err != nil {
 			log.Printf("loadHistoryImageParts: read %s: %v", r.Path, err)
 			continue
@@ -430,4 +430,3 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "…[truncated]"
 }
-

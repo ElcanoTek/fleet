@@ -152,7 +152,7 @@ func (h *Handlers) ElcanoLogout(w http.ResponseWriter, r *http.Request) {
 	// attributes must mirror how auth originally set the cookie for the browser
 	// to actually clear it — forcing Secure here unconditionally would prevent
 	// logout from clearing the cookie over plain HTTP.
-	http.SetCookie(w, &http.Cookie{ //nolint:gosec
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: deletion cookie (no secret); Secure is conditional on HTTPS so logout works over plain-HTTP dev, mirroring how the cookie was set — see comment above.
 		Name:     h.config.ElcanoCookieName,
 		Value:    "",
 		Path:     "/",

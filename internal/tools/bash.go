@@ -498,7 +498,7 @@ func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int
 		}
 		dir = filepath.Join(dataDir, "audit")
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil { //nolint:gosec // audit dir built from operator-set env or default
+	if err := os.MkdirAll(dir, 0o750); err != nil { // audit dir built from operator-set env or default
 		auditWarnOnce("mkdir audit dir failed: " + err.Error())
 		return
 	}
@@ -536,7 +536,7 @@ func auditWarnOnce(msg string) {
 	if _, loaded := auditWarnedAbout.LoadOrStore(msg, true); loaded {
 		return
 	}
-	log.Printf("bash audit: %s", msg) //nolint:gosec // msg comes from our own audit code, not user input
+	log.Printf("bash audit: %s", msg) // msg comes from our own audit code, not user input
 }
 
 func cleanupOldTruncationFiles() {
@@ -682,7 +682,7 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 	if marshalErr != nil {
 		// JSON marshal of a plain struct should never fail; fall back to a
 		// best-effort plain-text rendering rather than poisoning the turn.
-		//nolint:nilerr
+		//nolint:nilerr // intentional: marshal of a plain struct should never fail; fall back to a best-effort text rendering rather than erroring the turn.
 		return fmt.Sprintf("Exit Code: %d\nStdout: %s\nStderr: %s\nError: %v",
 			result.ExitCode, result.Stdout, result.Stderr, result.Error), nil
 	}

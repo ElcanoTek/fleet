@@ -203,7 +203,12 @@ func run() error {
 // auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
 func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
+	// ClientIPFromXFF replaces the deprecated, spoofable middleware.RealIP
+	// (GHSA-3fxj-6jh8-hvhx et al.): with no trusted prefixes it reads the
+	// rightmost (closest-hop) X-Forwarded-For entry and never trusts the
+	// client-supplied leftmost values, storing the result for GetClientIP —
+	// exactly what getClientIP() already expects.
+	r.Use(middleware.ClientIPFromXFF())
 	r.Use(middleware.Recoverer)
 	r.Use(h.SecurityHeadersMiddleware)
 	r.Use(h.BodySizeLimitMiddleware)

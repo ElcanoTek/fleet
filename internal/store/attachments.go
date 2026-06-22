@@ -35,14 +35,14 @@ func SweepAttachments(dir string, ttl time.Duration) (int, error) {
 		// Per-entry errors (a file disappeared mid-walk, perms, etc.)
 		// shouldn't abort the whole sweep — keep going.
 		if err != nil {
-			return nil //nolint:nilerr
+			return nil //nolint:nilerr // intentional: a per-entry walk error (file vanished mid-sweep, perms) must not abort the whole cleanup sweep.
 		}
 		if d.IsDir() {
 			return nil
 		}
 		fi, err := d.Info()
 		if err != nil || fi.ModTime().After(cutoff) {
-			return nil //nolint:nilerr
+			return nil //nolint:nilerr // intentional: an Info() error just means skip this entry; the sweep continues.
 		}
 		if err := os.Remove(path); err == nil { //nolint:gosec // sweep operates on our own attachment tree
 			removed++
