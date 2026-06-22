@@ -12,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // ingressApprover is the ingress HUMAN-IN-THE-LOOP surface. It implements the
@@ -84,15 +85,29 @@ var _ agent.ApprovalStager = (*ingressApprover)(nil)
 // path's does. It performs NO human wait and NO execution here — that happens in
 // ResolvePending after the run loop releases the orchestration mutex.
 //
-// KNOWN LIMITATION (documented honestly): the web stager (httpapi/approvals.go)
-// additionally materializes email content_file → inline content and rewrites
-// relative attachment paths to absolute at stage time, because the email MCP
-// subprocess resolves paths against a different cwd. Ingress does NOT yet
-// replicate that materialization (those helpers are HTTP-layer-coupled), so an
-// ingress send_email that relies on a workspace content_file / relative
-// attachment may fail at execution. Inline-content emails and the (default
-// bundle's) non-email critical tools are unaffected. See docs/USING-AGENTS.md.
+// Email materialization: for email tools (send_email / preview_email /
+// mcp_<server>_send_email) we inline a workspace content_file into content and
+// rewrite relative attachment paths to absolute BEFORE persisting — the SAME
+// host-side transform the web stager runs (shared in internal/tools), because
+// the email MCP subprocess resolves paths against a different cwd. Both the
+// persisted approval row and the post-turn replay (ResolvePending →
+// stagedToolRunner) therefore carry resolvable args, so an ingress send_email
+// that relies on a workspace content_file / relative attachment now works
+// identically to the web path. A missing/oversized content_file fails the Stage
+// (fail-closed), which the policy surfaces as a tool-call failure — never a
+// silent send of the wrong bytes.
 func (a *ingressApprover) Stage(toolName, toolCallID, rawInput string) (string, error) {
+	if tools.IsEmailToolName(toolName) {
+		inlined, err := tools.MaterializeContentFile(a.conversationID, rawInput)
+		if err != nil {
+			return "", err
+		}
+		rewritten, err := tools.MaterializeAttachmentPaths(a.conversationID, inlined)
+		if err != nil {
+			return "", err
+		}
+		rawInput = rewritten
+	}
 	approval, err := a.store.CreateApproval(context.Background(), a.conversationID, a.userEmail, toolName, toolCallID, rawInput)
 	if err != nil {
 		return "", err

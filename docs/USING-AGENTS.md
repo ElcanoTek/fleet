@@ -480,7 +480,7 @@ signed-key auth: whoever can start the process can drive a governed turn. So:
 | Human approval over `session/request_permission` (default-**deny** on timeout / cancel / no answer — **no approve-all**) | Remote / networked ingress |
 | Full governance: fleet's policy, sandbox, MCP catalog, notes, audit, cost ceilings | `loadSession` / resuming a prior ACP session       |
 | Whatever runtime flavor the box runs (`native-inprocess` / `native-acp` sandbox) | Image prompt blocks                              |
-| `propose_note` (inherited host-side) and inline-content emails                  | `propose_memory` (no ACP-host confirm surface) and email `content_file` / relative-attachment materialization (a web-layer affordance not yet replicated for ingress) |
+| `propose_note` (inherited host-side); email `content_file` inlining + relative-attachment-path materialization (same host-side transform as the web path) | `propose_memory` (no ACP-host confirm surface) |
 
 ### fleet uses its OWN sandbox + MCP catalog (host MCP passthrough is unsupported)
 
