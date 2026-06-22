@@ -3,16 +3,21 @@ package acpingress
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // IngressAgent is fleet's ACP AGENT face (acp.Agent): an external host (Zed /
@@ -104,16 +109,20 @@ func New(engine TurnEngine, st ConversationStore, approvals ApprovalStore, runne
 // both call back to the client through it.
 func (a *IngressAgent) SetAgentConnection(conn *acp.AgentSideConnection) { a.conn = conn }
 
-// Initialize advertises fleet's agent capabilities. Prompt: text only (no image
-// prompt blocks yet, no loadSession). AgentInfo names us "fleet".
+// Initialize advertises fleet's agent capabilities. Prompt accepts text and image
+// content blocks (the governed turn supports vision); loadSession stays false
+// (resuming a prior session is a later phase). AgentInfo names us "fleet".
 func (a *IngressAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp.InitializeResponse, error) {
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{
 			// loadSession intentionally false for now — ingress is single-turn
 			// streaming; resuming a prior session is a later phase.
-			LoadSession:        false,
-			PromptCapabilities: acp.PromptCapabilities{},
+			LoadSession: false,
+			// Image: the editor may attach images; we decode them to the
+			// conversation workspace and feed them to the governed turn as vision
+			// input (see decodeImageBlocks). Audio stays unset (not consumed).
+			PromptCapabilities: acp.PromptCapabilities{Image: true},
 		},
 		AgentInfo: &acp.Implementation{Name: "fleet", Version: a.cfg.Version},
 	}, nil
@@ -187,6 +196,11 @@ func (a *IngressAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Pro
 		History:        history,
 		ConversationID: sess.conversationID,
 		Runtime:        a.cfg.Runtime,
+		// Decode any image prompt blocks the editor attached to per-conversation
+		// workspace files and feed them to the turn as vision input — the SAME
+		// TurnInput.ImageAttachments the web path populates. Text-only prompts yield
+		// nil. Decode/cap failures are logged and dropped, never fatal.
+		ImageAttachments: a.decodeImageBlocks(sess.conversationID, p.Prompt),
 		// Force the sealed, no-network per-turn sandbox when this session is
 		// locked down (mirrors the web path threading conv.Lockdown into the
 		// turn). The engine re-checks the model against the lockdown allow-list.
@@ -290,6 +304,87 @@ func (s *ingressSession) cancelRun() {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+// imageBlock caps mirror loadImageAttachments (internal/agent): at most 8 images,
+// 8 MiB each. We bound at decode time so a hostile/large prompt can't fill the
+// workspace before the turn even runs.
+const (
+	maxIngressImages       = 8
+	maxIngressImageBytes   = 8 * 1024 * 1024
+	defaultIngressImageExt = ".png"
+)
+
+// extForImageMIME maps a VALIDATED image MIME to a safe file extension. We key on
+// the validated MIME (never on the raw, editor-supplied MimeType string, which
+// could carry path separators) — this writer is the sole trust boundary, since
+// loadImageAttachments does not re-validate the path.
+func extForImageMIME(mime string) string {
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return defaultIngressImageExt
+	}
+}
+
+// decodeImageBlocks turns the editor's ACP image content blocks into governed
+// vision input: each base64 block is decoded and written to the conversation
+// workspace (already mounted into the sandbox, conversation-scoped) under an
+// agent-uninfluenced basename, and returned as an agent.ImageAttachment for the
+// turn. Non-image / oversized / undecodable blocks are dropped non-fatally so a
+// bad block never fails the turn (the silent-degrade contract). Text blocks are
+// ignored here (promptText handles them).
+func (a *IngressAgent) decodeImageBlocks(convID string, blocks []acp.ContentBlock) []agent.ImageAttachment {
+	var out []agent.ImageAttachment
+	var dir string
+	for _, b := range blocks {
+		if b.Image == nil {
+			continue
+		}
+		if len(out) >= maxIngressImages {
+			log.Printf("acpingress: dropping image block (over %d-image cap, conv=%s)", maxIngressImages, convID)
+			continue
+		}
+		// Resolve + validate the MIME: prefer the declared MimeType, else the
+		// extension fallback; skip anything that isn't a supported image type.
+		mime := strings.TrimSpace(b.Image.MimeType)
+		if !tools.IsImageMIME(mime) {
+			log.Printf("acpingress: dropping non-image prompt block (mime=%q, conv=%s)", b.Image.MimeType, convID)
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(b.Image.Data)
+		if err != nil {
+			log.Printf("acpingress: dropping image block (base64 decode: %v, conv=%s)", err, convID)
+			continue
+		}
+		if len(data) > maxIngressImageBytes {
+			log.Printf("acpingress: dropping image block (%d bytes > %d cap, conv=%s)", len(data), maxIngressImageBytes, convID)
+			continue
+		}
+		if dir == "" {
+			d, err := tools.EnsureWorkspaceDir(convID)
+			if err != nil {
+				log.Printf("acpingress: cannot ensure workspace dir for images (conv=%s): %v", convID, err)
+				return out
+			}
+			dir = d
+		}
+		name := fmt.Sprintf("acp-image-%d%s", len(out)+1, extForImageMIME(mime))
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, data, 0o644); err != nil { //nolint:gosec // image written into the conversation-scoped workspace dir under an agent-uninfluenced basename
+			log.Printf("acpingress: write image %s (conv=%s): %v", name, convID, err)
+			continue
+		}
+		out = append(out, agent.ImageAttachment{Path: path, MediaType: mime, Name: name})
+	}
+	return out
 }
 
 // promptText flattens the ACP prompt content blocks to the user's turn text.
