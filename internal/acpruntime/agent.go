@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -120,6 +121,10 @@ func (a *AgentRunner) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prom
 	if spec.FallbackSlug != "" {
 		if fb, ferr := a.modelFor(ctx, spec.FallbackSlug); ferr == nil {
 			fallback = fb
+		} else {
+			// Non-fatal: the run proceeds without a fallback, but log it so a
+			// misconfigured/unavailable fallback slug isn't a silent no-fallback.
+			log.Printf("fleet-native-agent: fallback model %q unavailable; running without fallback: %v", spec.FallbackSlug, ferr)
 		}
 	}
 

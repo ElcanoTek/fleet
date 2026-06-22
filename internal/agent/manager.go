@@ -483,6 +483,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		MemoryProposer:   in.MemoryProposer,
 		Runtime:          runtimeName,
 		NativeAgentImage: m.nativeAgentImage,
+		Lockdown:         in.Lockdown,
 	}
 
 	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink})
