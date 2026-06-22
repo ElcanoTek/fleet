@@ -1,35 +1,66 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
-import { getPill, PROTOCOL_PILLS, type ProtocolPill } from "./protocolPills";
+import { type ProtocolPill } from "./protocolPills";
 
-function pill(id: string): ProtocolPill {
-  const p = getPill(id);
-  if (!p) throw new Error(`missing pill: ${id}`);
-  return p;
-}
+// Config-driven fixtures — the shape a pill arrives in over JSON from
+// /api/client-config. No client specifics; the component must render whatever
+// titles/descs/templates it's handed.
+const FORM_PILL: ProtocolPill = {
+  id: "report",
+  section: "Reporting",
+  type: "form",
+  icon: "bar-chart",
+  title: "Build a report",
+  desc: "Fill a few fields and generate a report.",
+  cta: "Run report",
+  fields: [
+    { key: "client", label: "Client name", type: "text", required: true, placeholder: "Acme" },
+    { key: "deck", label: "Build a slide deck", type: "toggle", default: false },
+  ],
+  promptTemplate: "Build a report for {client}.",
+};
+
+const CONVERSATION_PILL: ProtocolPill = {
+  id: "diagnostic",
+  section: "Reporting",
+  type: "conversation",
+  optionalForm: true,
+  icon: "activity",
+  title: "Run a diagnostic",
+  desc: "Talk it through and dig into the numbers.",
+  cta: "Run diagnostic",
+  starterPrompt: "I'd like to run a diagnostic. Ask me what you need, then dig in.",
+  fields: [{ key: "client", label: "Client name", type: "text" }],
+};
 
 const noop = () => {};
 
 describe("EmptyStatePrompts", () => {
-  it("renders a card per pill and reports the picked id", () => {
+  it("renders a card per config-sourced pill and reports the picked id", () => {
     const onPick = vi.fn();
-    render(<EmptyStatePrompts pills={PROTOCOL_PILLS} onPick={onPick} />);
+    render(<EmptyStatePrompts pills={[FORM_PILL, CONVERSATION_PILL]} onPick={onPick} />);
 
-    expect(screen.getByRole("button", { name: /weekly performance report/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /performance diagnostic/i })).toBeInTheDocument();
+    // Titles/descs come straight from the passed pills — nothing hardcoded.
+    expect(screen.getByRole("button", { name: /build a report/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /run a diagnostic/i })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /optimization report/i }));
-    expect(onPick).toHaveBeenCalledWith("optimization");
+    fireEvent.click(screen.getByRole("button", { name: /build a report/i }));
+    expect(onPick).toHaveBeenCalledWith("report");
+  });
+
+  it("renders nothing when given no pills", () => {
+    const { container } = render(<EmptyStatePrompts pills={[]} onPick={noop} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });
 
 describe("ProtocolPillForm — form pill", () => {
-  it("gates Run on required fields, then emits the templated prompt", () => {
+  it("gates Run on required fields, then emits the interpolated template", () => {
     const onRun = vi.fn();
     render(
       <ProtocolPillForm
-        pill={pill("weekly")}
+        pill={FORM_PILL}
         onRun={onRun}
         onCancel={noop}
         onDescribe={noop}
@@ -41,19 +72,18 @@ describe("ProtocolPillForm — form pill", () => {
     expect(run).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText(/client name/i), { target: { value: "TestCo" } });
-    fireEvent.change(screen.getByLabelText(/campaign code/i), { target: { value: "ELC-9999" } });
     expect(run).toBeEnabled();
 
     fireEvent.click(run);
     expect(onRun).toHaveBeenCalledTimes(1);
-    expect(onRun.mock.calls[0][0]).toContain("Run the DSP reporting protocol for TestCo (ELC-9999).");
+    expect(onRun.mock.calls[0][0]).toBe("Build a report for TestCo.");
   });
 
-  it("seeds the composer via the skip-the-form escape hatch", () => {
+  it("seeds the composer with the generated prompt via the skip-the-form escape hatch", () => {
     const onDescribe = vi.fn();
     render(
       <ProtocolPillForm
-        pill={pill("weekly")}
+        pill={FORM_PILL}
         onRun={noop}
         onCancel={noop}
         onDescribe={onDescribe}
@@ -61,22 +91,23 @@ describe("ProtocolPillForm — form pill", () => {
       />,
     );
 
+    fireEvent.change(screen.getByLabelText(/client name/i), { target: { value: "TestCo" } });
     fireEvent.click(screen.getByRole("button", { name: /skip the form, start in chat/i }));
     expect(onDescribe).toHaveBeenCalledTimes(1);
-    expect(String(onDescribe.mock.calls[0][0])).toMatch(/weekly performance report/i);
+    expect(String(onDescribe.mock.calls[0][0])).toBe("Build a report for TestCo.");
   });
 
-  it("exposes the Gamma deck toggle (off by default) on the wrap pill", () => {
+  it("exposes a toggle field (off by default)", () => {
     render(
       <ProtocolPillForm
-        pill={pill("wrap")}
+        pill={FORM_PILL}
         onRun={noop}
         onCancel={noop}
         onDescribe={noop}
         onStartChat={noop}
       />,
     );
-    const toggle = screen.getByRole("switch", { name: /gamma slide deck/i });
+    const toggle = screen.getByRole("switch", { name: /build a slide deck/i });
     expect(toggle).toHaveAttribute("aria-checked", "false");
   });
 });
@@ -86,7 +117,7 @@ describe("ProtocolPillForm — conversation pill", () => {
     const onStartChat = vi.fn();
     render(
       <ProtocolPillForm
-        pill={pill("diagnostic")}
+        pill={CONVERSATION_PILL}
         onRun={noop}
         onCancel={noop}
         onDescribe={noop}
@@ -96,14 +127,14 @@ describe("ProtocolPillForm — conversation pill", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /skip the form, start in chat/i }));
     expect(onStartChat).toHaveBeenCalledTimes(1);
-    expect(String(onStartChat.mock.calls[0][0])).toMatch(/performance diagnostic/i);
+    expect(String(onStartChat.mock.calls[0][0])).toMatch(/run a diagnostic/i);
   });
 
-  it("shows the form up front and folds the split campaign fields into the prompt", () => {
+  it("falls back to a neutral prompt built from the title + filled fields", () => {
     const onRun = vi.fn();
     render(
       <ProtocolPillForm
-        pill={pill("diagnostic")}
+        pill={CONVERSATION_PILL}
         onRun={onRun}
         onCancel={noop}
         onDescribe={noop}
@@ -111,12 +142,11 @@ describe("ProtocolPillForm — conversation pill", () => {
       />,
     );
 
-    // The form is the primary surface now — no disclosure to expand first.
     fireEvent.change(screen.getByLabelText(/client name/i), { target: { value: "Acme" } });
-    fireEvent.change(screen.getByLabelText(/campaign code/i), { target: { value: "ELC-1" } });
-
     fireEvent.click(screen.getByRole("button", { name: /run diagnostic/i }));
     expect(onRun).toHaveBeenCalledTimes(1);
-    expect(onRun.mock.calls[0][0]).toContain("Campaign: Acme (ELC-1)");
+    // No promptTemplate → neutral "Title. Label: value." fallback.
+    expect(onRun.mock.calls[0][0]).toContain("Run a diagnostic.");
+    expect(onRun.mock.calls[0][0]).toContain("Client name: Acme");
   });
 });

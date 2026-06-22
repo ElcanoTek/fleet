@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -55,6 +56,20 @@ type Server struct {
 	inflightMu      sync.Mutex
 	inflight        map[string]inflightEntry
 	inflightCounter uint64
+
+	// clientConfig is the loaded client bundle that backs GET /client-config
+	// (branding + empty-state). nil in tests / mock mode that don't supply one;
+	// the endpoint then returns neutral generic defaults.
+	clientConfig *clientconfig.Bundle
+}
+
+// Option customizes a Server at construction.
+type Option func(*Server)
+
+// WithClientConfig wires the loaded client bundle so GET /client-config can
+// serve the deployment's branding + chat empty-state to the web.
+func WithClientConfig(b *clientconfig.Bundle) Option {
+	return func(s *Server) { s.clientConfig = b }
 }
 
 // inflightEntry pairs the cancel-func for a turn with a unique token,
@@ -86,8 +101,8 @@ func (e inflightEntry) IsRunning() bool {
 // in mock mode and in tests that exercise only the DB-backed, mock-turn, or
 // auth paths — the live turn path short-circuits before touching it. cmd/fleet
 // (P6b) supplies the concrete engine implementation.
-func New(cfg *config.Config, mgr turnEngine, st *store.Store) *Server {
-	return &Server{
+func New(cfg *config.Config, mgr turnEngine, st *store.Store, opts ...Option) *Server {
+	s := &Server{
 		cfg:         cfg,
 		agent:       mgr,
 		store:       st,
@@ -95,6 +110,10 @@ func New(cfg *config.Config, mgr turnEngine, st *store.Store) *Server {
 		rate:        newRateLimiter(cfg.RatePerMinute, cfg.RatePerDay),
 		inflight:    make(map[string]inflightEntry),
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // defaultTurnExecutionTimeout caps how long a single turn may run
@@ -246,6 +265,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/personas", auth(member(http.HandlerFunc(s.listPersonas))))
 	mux.Handle("/mcp-servers", auth(member(http.HandlerFunc(s.listMCPServerCatalog))))
 	mux.Handle("/server-config", auth(member(http.HandlerFunc(s.serverConfig))))
+	mux.Handle("/client-config", auth(member(http.HandlerFunc(s.clientConfigHandler))))
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
@@ -370,6 +390,66 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if resp.LockdownAvailable {
 		resp.LockdownAllowedModels = append(resp.LockdownAllowedModels, s.cfg.LockdownAllowedModels...)
+	}
+	writeJSON(w, resp)
+}
+
+// ── /client-config ──────────────────────────────────────────────────────────
+
+// clientConfigResponse is the white-label surface the web renders: branding
+// strings + the chat empty-state catalog. Sourced from the loaded client
+// bundle's manifest; neutral generic defaults when no bundle is wired.
+type clientConfigResponse struct {
+	Branding   clientConfigBranding   `json:"branding"`
+	EmptyState clientConfigEmptyState `json:"empty_state"`
+}
+
+type clientConfigBranding struct {
+	AppName          string `json:"app_name"`
+	LoginTitle       string `json:"login_title"`
+	LoginTagline     string `json:"login_tagline"`
+	ShareTitle       string `json:"share_title"`
+	ShareDescription string `json:"share_description"`
+}
+
+type clientConfigEmptyState struct {
+	Cards         []map[string]any `json:"cards"`
+	ProtocolPills []map[string]any `json:"protocol_pills"`
+}
+
+func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	resp := clientConfigResponse{
+		Branding: clientConfigBranding{
+			AppName:          "Fleet",
+			LoginTitle:       "Welcome aboard.",
+			LoginTagline:     "Sign in to your workspace and pick up where you left off.",
+			ShareTitle:       "Fleet — your team's AI workspace",
+			ShareDescription: "An AI workspace with real tool use.",
+		},
+		EmptyState: clientConfigEmptyState{
+			Cards:         []map[string]any{},
+			ProtocolPills: []map[string]any{},
+		},
+	}
+	if s.clientConfig != nil {
+		b := s.clientConfig
+		resp.Branding = clientConfigBranding{
+			AppName:          b.Branding.AppName,
+			LoginTitle:       b.Branding.LoginTitle,
+			LoginTagline:     b.Branding.LoginTagline,
+			ShareTitle:       b.Branding.ShareTitle,
+			ShareDescription: b.Branding.ShareDescription,
+		}
+		if len(b.EmptyState.Cards) > 0 {
+			resp.EmptyState.Cards = b.EmptyState.Cards
+		}
+		if len(b.EmptyState.ProtocolPills) > 0 {
+			resp.EmptyState.ProtocolPills = b.EmptyState.ProtocolPills
+		}
 	}
 	writeJSON(w, resp)
 }

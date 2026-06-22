@@ -84,7 +84,7 @@ func fixtureManager(t *testing.T) *Manager {
 	t.Helper()
 	dir := t.TempDir()
 
-	writeFile(t, filepath.Join(dir, "system_prompts", "default.md"), "# Chat System Prompt\n\nBe helpful.\n")
+	writeFile(t, filepath.Join(dir, "system_prompts", "chat.md"), "# Chat System Prompt\n\nBe helpful.\n")
 	writeFile(t, filepath.Join(dir, "personas", "victoria.yaml"), "name: Victoria\n")
 	writeFile(t, filepath.Join(dir, "personas", "generic.yaml"), "name: Generic\n")
 	writeFile(t, filepath.Join(dir, "protocols", "optimization.md"), "# Optimization Protocol\n")
@@ -92,10 +92,11 @@ func fixtureManager(t *testing.T) *Manager {
 	writeFile(t, filepath.Join(dir, "protocols", "README.txt"), "ignored\n")
 
 	return &Manager{
-		config:           &config.Config{PersonaDefault: "victoria"},
-		personasDir:      filepath.Join(dir, "personas"),
-		protocolsDir:     filepath.Join(dir, "protocols"),
-		systemPromptsDir: filepath.Join(dir, "system_prompts"),
+		config:               &config.Config{PersonaDefault: "victoria"},
+		personasDir:          filepath.Join(dir, "personas"),
+		protocolsDir:         filepath.Join(dir, "protocols"),
+		systemPromptsDir:     filepath.Join(dir, "system_prompts"),
+		chatSystemPromptFile: "chat.md",
 	}
 }
 

@@ -54,7 +54,7 @@ const emDashCell = "—"
 // not have to think about detail levels, pagination, or two-step
 // search→details flows.
 type FastIOFindParams struct {
-	Query       string `json:"query" description:"Free-text search. Filenames, ELC codes, deal names, etc. all work — the tool auto-promotes ELC codes (ELCxxxxx) when the original query returns nothing, because the ELC code is the canonical cross-file identifier in Elcano's workspace. Examples: \"ELC00109\", \"ABC plumbing ELC00109\", \"Allegra Overall Report\"."`
+	Query       string `json:"query" description:"Free-text search. Filenames, account/project codes, names, etc. all work — the tool auto-promotes account codes (ELCxxxxx-style) when the original query returns nothing, because such a code is often the canonical cross-file identifier in a workspace. Examples: \"ELC00109\", \"ABC plumbing ELC00109\", \"Overall Report\"."`
 	WorkspaceID string `json:"workspace_id" description:"19-digit fast.io workspace id. Get it once per conversation via mcp_fast_io_workspace action=list (the first row's id) and reuse the same value for every find/upload/download call."`
 	Limit       int    `json:"limit,omitempty" description:"Max results returned (1-25). Default 10. Higher values cost one bulk-details lookup, no extra round-trips. Use 25 to see every variant when triaging same-name duplicates."`
 }
@@ -81,11 +81,12 @@ const fastIOFindMaxLimit = 25
 // max, vs the 9–12 calls the unwrapped flow burns).
 const fastIOFindMaxFallbacks = 2
 
-// elcCodeRe matches Elcano's account codes — ELC followed by 3–6
+// elcCodeRe matches ELC-style account codes — ELC followed by 3–6
 // digits, with word boundaries so we don't match e.g. "telco" or a
 // substring of another token. Case-insensitive because the codes show
 // up as `ELC00109`, `elc00109`, and `Elc00109` interchangeably in
-// user messages and filenames.
+// user messages and filenames. (A common account-code convention; the
+// heuristic is harmless when a workspace doesn't use such codes.)
 var elcCodeRe = regexp.MustCompile(`(?i)\bELC\d{3,6}\b`)
 
 // Storage tool argument keys. Pulled out as constants so the dispatch
@@ -110,12 +111,12 @@ const (
 	fastIOEmptyBodyPlacehold = "(no body)"
 )
 
-const fastIOFindDescription = "Find files in fast.io by name, ELC code, or any keyword — efficiently and without bloating context. " +
+const fastIOFindDescription = "Find files in fast.io by name, account code, or any keyword — efficiently and without bloating context. " +
 	"This is the right tool for `find the latest report for X`, `which files match Y`, `is there an X file in fast.io`, and similar discovery questions. " +
 	"It wraps `mcp_fast_io_storage action=search` with smarter query handling and a compact response format:\n\n" +
 	"BEHAVIOR:\n" +
-	"  - Auto-detects ELC codes in the query (e.g. `ELC00109`) and unions an extra ELC-only search with the user's natural phrasing. " +
-	"This is critical because Elcano report files are named by ELC code (`ABC_ELC00109_Overall_Report.csv`), so a natural-language query like \"ABC plumbing\" misses them.\n" +
+	"  - Auto-detects ELC-style account codes in the query (e.g. `ELC00109`) and unions an extra code-only search with the user's natural phrasing. " +
+	"This matters when report files are named by account code (`ABC_ELC00109_Overall_Report.csv`), so a natural-language query like \"ABC plumbing\" would otherwise miss them.\n" +
 	"  - Returns a single tight markdown table — id, name, parent, modified, size, mimetype — sorted newest-first. " +
 	"Use the node id with `mcp_fast_io_download action=file-url` to fetch a result; use the parent id with `mcp_fast_io_storage action=list` to see siblings.\n\n" +
 	"FILE-PICK POLICY (enforced by the response, not optional):\n" +
