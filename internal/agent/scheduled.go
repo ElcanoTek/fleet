@@ -61,8 +61,8 @@ type Agent struct {
 	logFile string
 }
 
-// AgentOptions configure a scheduled Agent.
-type AgentOptions struct {
+// Options configure a scheduled Agent.
+type Options struct {
 	Config        *config.Config
 	Model         fantasy.LanguageModel
 	FallbackModel fantasy.LanguageModel
@@ -83,7 +83,7 @@ type AgentOptions struct {
 }
 
 // NewAgent builds a scheduled driver from options. The session log is fresh.
-func NewAgent(opts AgentOptions) *Agent {
+func NewAgent(opts Options) *Agent {
 	maxIter := opts.MaxIterations
 	if maxIter <= 0 && opts.Config != nil {
 		maxIter = opts.Config.MaxIterations

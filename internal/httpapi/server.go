@@ -933,7 +933,6 @@ func memoryContents(memories []store.Memory) []string {
 	return out
 }
 
-//nolint:gocyclo // request validation + turn orchestration; refactor tracked separately
 func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

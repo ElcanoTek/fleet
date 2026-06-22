@@ -71,7 +71,8 @@ func writeValidatedLogFile(path string, data []byte) error {
 	if err := validateLogSessionJSON(data); err != nil {
 		return fmt.Errorf("refusing to write invalid session-log JSON: %w", err)
 	}
-	return os.WriteFile(path, data, 0o600) // #nosec G306 — 0600 is the intended mode.
+	//nolint:gosec // G703/G306: path is the operator-configured session-log location (FLEET_LOG_FILE / CUTLASS_LOG_FILE / a server-set LogFile), not request or LLM input; 0600 is the intended mode.
+	return os.WriteFile(path, data, 0o600)
 }
 
 // redactLogSession returns a copy of session with secrets scrubbed from text,
@@ -203,7 +204,7 @@ func writeLogFile(session *LogSession, logFile string) {
 	log.Printf("Session summary: %d prompt + %d completion tokens, $%.4f total cost, cache: %d read / %d created (%.1f%% hit rate)",
 		session.PromptTokens, session.CompletionTokens, session.Cost,
 		session.CachedTokens, session.CacheCreationTokens, session.CumulativeCacheHitRate())
-	log.Printf("Session log written to: %q (%d bytes)", logFile, len(data))
+	log.Printf("Session log written to: %q (%d bytes)", logFile, len(data)) //nolint:gosec // G706 false positive: logFile is an operator-configured path rendered with %q (escapes CR/LF), not request input.
 }
 
 // summarizeForConsole clamps text to a single-line preview (verifier logging).
