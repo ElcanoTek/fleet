@@ -61,10 +61,12 @@ jobs:
             -c 'CREATE DATABASE fleet_sched_test;'
 
       - name: Disable podman so container sandbox tests self-skip
-        # GitHub's ubuntu-latest runner ships podman, but the per-turn sandbox
-        # image (ghcr.io/elcanotek/sandbox:latest) is private and there is no
-        # Containerfile in-repo to build a local one, so the podman-gated
-        # integration tests in internal/sandbox cannot run here. They gate on
+        # GitHub's ubuntu-latest runner ships podman, but building the ~1.3GB
+        # default-bundle sandbox image (config/default/sandbox/Containerfile) per
+        # unit-test run would dominate this fast lint/test job — the real sandbox
+        # is exercised in the e2e-live job, which builds/pulls it. So the
+        # podman-gated integration tests in internal/sandbox are skipped here by
+        # masking podman. They gate on
         # exec.LookPath("podman"): when podman is absent they cleanly t.Skip,
         # but when present they attempt a real `podman pull` and t.Fatalf on
         # failure. Masking the binary makes LookPath fail so every container
@@ -217,7 +219,8 @@ jobs:
       # admin DSN (the service container's superuser has CREATEDB).
       E2E_DATABASE_DSN: postgres://fleet:fleet@127.0.0.1:5432/postgres?sslmode=disable
       # Sandbox image: pulled from GHCR when published (see publish-sandbox-image.yml),
-      # else built locally by the boot script. Resolved into FLEET_SANDBOX_IMAGE below.
+      # else built locally from the default bundle (config/default/sandbox/Containerfile)
+      # by the boot script. Resolved into FLEET_SANDBOX_IMAGE below.
       SANDBOX_IMAGE_GHCR: ghcr.io/elcanotek/sandbox:latest
       SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
 
@@ -261,16 +264,18 @@ jobs:
         id: sandbox
         # PULL is preferred (the 1.3GB image is published by publish-sandbox-image.yml).
         # If the package isn't available yet (e.g. a PR before the first publish),
-        # fall back to a LOCAL build so the gate is green regardless. GHCR pull is
-        # best-effort and unauthenticated for a public package; private packages
-        # would need a login step, but the fallback build keeps the job working.
+        # fall back to a LOCAL build from the default bundle
+        # (config/default/sandbox/Containerfile) so the gate is green regardless.
+        # GHCR pull is best-effort and unauthenticated for a public package;
+        # private packages would need a login step, but the fallback build keeps
+        # the job working.
         run: |
           set -euo pipefail
           if podman pull "$SANDBOX_IMAGE_GHCR" >/dev/null 2>&1; then
             echo "Pulled $SANDBOX_IMAGE_GHCR from GHCR"
             echo "image=$SANDBOX_IMAGE_GHCR" >> "$GITHUB_OUTPUT"
           else
-            echo "GHCR pull failed/unavailable; building sandbox image locally"
+            echo "GHCR pull failed/unavailable; building sandbox image locally from the default bundle"
             IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
             echo "image=$SANDBOX_IMAGE_LOCAL" >> "$GITHUB_OUTPUT"
           fi

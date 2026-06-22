@@ -4,6 +4,24 @@
 #
 # See internal/clientconfig and config/default/README.md for the bundle contract.
 
+# The execution sandbox is a PER-CLIENT bundle artifact. This bundle ships its
+# own sandbox/Containerfile (built on-box by scripts/build-sandbox-image.sh) and
+# its own base-image digest pin (see sandbox/Containerfile). A client's
+# XYZ-config bundle overrides this block with its own flavor.
+#
+#   containerfile: path (relative to this bundle) to the Containerfile to build.
+#   tag:           local image tag to build/consume when building on-box (default).
+#   image:         OPTIONAL prebuilt ref. If non-empty (e.g. a registry pull) it
+#                  WINS over tag — that's the opt-in registry-publish path. Empty
+#                  here => build-on-box default. Resolves via ${FLEET_SANDBOX_IMAGE}
+#                  so an operator can point at a prebuilt image without editing the
+#                  manifest; an explicit FLEET_SANDBOX_IMAGE in the process env
+#                  always overrides regardless.
+sandbox:
+  containerfile: sandbox/Containerfile
+  tag: localhost/fleet-sandbox:latest
+  image: "${FLEET_SANDBOX_IMAGE:-}"
+
 branding:
   app_name: "Fleet"
   login_title: "Welcome aboard."

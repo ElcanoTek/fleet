@@ -1,21 +1,28 @@
 name: Publish sandbox image
 
-# Builds the ~1.3GB fleet sandbox image (images/sandbox/Containerfile) and pushes
-# it to GHCR so the e2e-live job can PULL it instead of building it per run.
+# Builds the ~1.3GB DEFAULT-bundle sandbox image
+# (config/default/sandbox/Containerfile) and pushes it to GHCR so the e2e-live
+# job can PULL it instead of building it per run.
+#
+# The sandbox is a per-client CONFIG-BUNDLE artifact (build-on-box by default).
+# This workflow only publishes the GENERIC default bundle's flavor as an
+# optional cache for CI; each client publishes its own (opt-in, set
+# sandbox.image in the client manifest) from its own repo.
 #
 # Push auth uses the in-Actions GITHUB_TOKEN, which is granted packages:write by
 # the job-level permissions block below — that write scope exists ONLY inside
 # Actions (a local `gh` token typically lacks write:packages), so publishing must
 # happen here, never from a developer machine.
 #
-# Triggers: pushes to main that touch the Containerfile or the build script (the
-# only inputs to the image), plus manual dispatch for ad-hoc republishes.
+# Triggers: pushes to main that touch the default bundle's sandbox Containerfile
+# or the build script (the only inputs to the image), plus manual dispatch for
+# ad-hoc republishes.
 
 on:
   push:
     branches: [main]
     paths:
-      - 'images/sandbox/**'
+      - 'config/default/sandbox/**'
       - 'scripts/build-sandbox-image.sh'
       - '.github/workflows/publish-sandbox-image.yml'
   workflow_dispatch: {}

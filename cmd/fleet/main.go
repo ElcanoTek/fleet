@@ -70,6 +70,20 @@ func run() error {
 	// process env.
 	cfg.MCPServers = bundle.MCPServerConfigs()
 
+	// The sandbox image is a per-client bundle artifact: resolve it from the
+	// bundle manifest (sandbox.image when set — the opt-in prebuilt/registry
+	// path — else sandbox.tag, the build-on-box default). An explicit
+	// FLEET_SANDBOX_IMAGE / CHAT_SANDBOX_IMAGE in the process env still wins
+	// (config.Load already populated cfg.SandboxImage from it). fleet does NOT
+	// build the image here — bootstrap / scripts/build-sandbox-image.sh does;
+	// this only feeds the resolved ref to the consuming sandbox pool.
+	if strings.TrimSpace(cfg.SandboxImage) == "" {
+		if ref := bundle.Sandbox().ResolvedImageRef(); ref != "" {
+			cfg.SandboxImage = ref
+			log.Printf("sandbox: image resolved from bundle = %s", ref)
+		}
+	}
+
 	// Install the bundle's agent tool-behavior policy (parallel-safe tools,
 	// critical-tool suffixes, substitute map). The generic bundle ships none, so
 	// agentcore stays on its base generic critical suffixes. Must run before any

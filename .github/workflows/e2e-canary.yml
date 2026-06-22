@@ -69,6 +69,8 @@ jobs:
 
     env:
       E2E_DATABASE_DSN: postgres://fleet:fleet@127.0.0.1:5432/postgres?sslmode=disable
+      # Sandbox image: pulled from GHCR when published, else built locally from
+      # the default bundle (config/default/sandbox/Containerfile) by the script.
       SANDBOX_IMAGE_GHCR: ghcr.io/elcanotek/sandbox:latest
       SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
 
