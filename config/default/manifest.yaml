@@ -122,10 +122,20 @@ mcp_servers: []
 #                               automatically — list only client-specific ones).
 #   critical_tool_substitutes:  committed-suffix -> allowed executed substitute
 #                               suffixes that may discharge the commitment.
+#   allow_ungoverned_scheduled_agents:
+#                               per-client opt-in (default false) that lets an
+#                               EXTERNAL (type: acp / delegated_policy) flavor run
+#                               as a SCHEDULED task at the CONTAINMENT tier. fleet
+#                               is FAIL-CLOSED: with this off, a scheduled task that
+#                               selects an external flavor is a LOUD ERROR at
+#                               dispatch — never a silent fallback to a native
+#                               flavor. The generic bundle leaves it false. See
+#                               docs/USING-AGENTS.md ("Scheduled-external").
 agent_policy:
   parallel_safe_tools: []
   critical_tools: []
   critical_tool_substitutes: {}
+  allow_ungoverned_scheduled_agents: false
 
 empty_state:
   # Neutral example quick-start cards. The shape is the web's ProtocolPill — the
