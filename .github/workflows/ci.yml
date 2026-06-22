@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: read
+  # Required by golangci-lint-action's only-new-issues option (reads the PR diff).
+  pull-requests: read
 
 jobs:
   go:
@@ -90,6 +92,14 @@ jobs:
           # Repo .golangci.yml is the v2 schema (version: "2") and pins
           # run.go: "1.26.4", so a recent golangci-lint v2 is required.
           version: v2.12.2
+          # The codebase currently has ~136 pre-existing golangci-lint findings
+          # (gosec, goconst, revive, errcheck, ...) on main, so a full run would
+          # be red regardless of the change under review. only-new-issues makes
+          # the linter gate only NEW issues introduced by a PR (vs the merge
+          # base) while still running the full linter and validating the config.
+          # This wires golangci-lint into CI without blocking on the existing
+          # backlog; tightening to a full clean run is a separate cleanup effort.
+          only-new-issues: true
 
       - name: go test
         run: go test -p 1 ./... -count=1
