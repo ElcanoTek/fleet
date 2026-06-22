@@ -32,6 +32,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/runner"
@@ -50,15 +51,39 @@ func main() {
 }
 
 func run() error {
+	// Load the client bundle first: it supplies the MCP catalog (built into
+	// cfg.MCPServers), the supporting-doc dirs, and branding/empty-state. Its
+	// manifest also tells us which connector env-var names to admit from the
+	// .env file, so register them BEFORE config.Load reads the env.
+	bundle, err := clientconfig.Load(clientconfig.Dir())
+	if err != nil {
+		return fmt.Errorf("load client config bundle: %w", err)
+	}
+	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
+	log.Printf("client config: bundle=%s app=%q mcp_catalog=%d", bundle.Dir, bundle.Branding.AppName, len(bundle.MCPCatalog))
+
 	cfg, err := config.Load(os.Getenv("FLEET_ENV_FILE"))
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	// The MCP catalog comes from the bundle manifest, gated on the now-loaded
+	// process env.
+	cfg.MCPServers = bundle.MCPServerConfigs()
 
-	rootDir := resolveRootDir()
-	personasDir := filepath.Join(rootDir, "personas")
-	protocolsDir := filepath.Join(rootDir, "protocols")
-	systemPromptsDir := filepath.Join(rootDir, "system_prompts")
+	// Install the bundle's agent tool-behavior policy (parallel-safe tools,
+	// critical-tool suffixes, substitute map). The generic bundle ships none, so
+	// agentcore stays on its base generic critical suffixes. Must run before any
+	// turn starts.
+	bundlePolicy := bundle.AgentPolicy()
+	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
+		ParallelSafeTools:       bundlePolicy.ParallelSafeTools,
+		CriticalToolSuffixes:    bundlePolicy.CriticalToolSuffixes,
+		CriticalToolSubstitutes: bundlePolicy.CriticalToolSubstitutes,
+	})
+
+	personasDir := bundle.PersonasDir
+	protocolsDir := bundle.ProtocolsDir
+	systemPromptsDir := bundle.SystemPromptsDir
 
 	// ── DB pools (both self-migrate on open) ──
 	chatStore, err := store.Open(chatDSN(cfg))
@@ -83,19 +108,20 @@ func run() error {
 	// ── interactive engine (the concrete turnEngine) ──
 	serverSpecs := buildMCPSpecs(cfg)
 	mgr, err := agent.New(agent.ManagerOptions{
-		Config:           cfg,
-		ServerSpecs:      serverSpecs,
-		PersonasDir:      personasDir,
-		ProtocolsDir:     protocolsDir,
-		SystemPromptsDir: systemPromptsDir,
-		NotesProvider:    notesProvider,
+		Config:               cfg,
+		ServerSpecs:          serverSpecs,
+		PersonasDir:          personasDir,
+		ProtocolsDir:         protocolsDir,
+		SystemPromptsDir:     systemPromptsDir,
+		ChatSystemPromptFile: "chat.md",
+		NotesProvider:        notesProvider,
 	})
 	if err != nil {
 		return fmt.Errorf("build interactive engine: %w", err)
 	}
 	defer mgr.Close()
 
-	chatSrv := httpapi.New(cfg, mgr, chatStore)
+	chatSrv := httpapi.New(cfg, mgr, chatStore, httpapi.WithClientConfig(bundle))
 
 	// ── orchestrator HTTP (sched/handlers) ──
 	keyMgr, err := apikeys.NewManager(filepath.Join(cfg.DataDir, "api_keys.json"), "")
@@ -298,20 +324,6 @@ func orchestratorAddr() string {
 		return v
 	}
 	return ":8000"
-}
-
-// resolveRootDir returns the directory holding personas/ protocols/
-// system_prompts/. Prefers the cwd; falls back to the executable's dir.
-func resolveRootDir() string {
-	if _, err := os.Stat("system_prompts"); err == nil {
-		wd, _ := os.Getwd()
-		return wd
-	}
-	if exe, err := os.Executable(); err == nil {
-		return filepath.Dir(exe)
-	}
-	wd, _ := os.Getwd()
-	return wd
 }
 
 // buildMCPSpecs converts config.MCPServers into the agent.MCPServerSpec map the

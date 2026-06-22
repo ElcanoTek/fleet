@@ -32,45 +32,22 @@ const sendEmailToolSuffix = "send_email"
 // criticalActionsBeingUnblockedField is the legacy free-text confirm_audit key.
 const criticalActionsBeingUnblockedField = "critical_actions_being_unblocked"
 
-// criticalToolSuffixes are the bare tool names that require audit before
-// execution. Matched by suffix so mcp_sendgrid_send_email matches "send_email".
-// Longer suffixes first so longest-match-wins pins, e.g.,
-// "execute_deal_from_prompt_inputs" over "create_deal".
-var criticalToolSuffixes = []string{
-	sendEmailToolSuffix,
-	"send_template_email",
-	"generate_presentation",
-	"generate_wrap_up_presentation",
-	"generate_standard_presentation",
-	"generate_and_wait_for_presentation",
-	"generate_and_wait_for_wrap_up_presentation",
-	"generate_and_wait_for_standard_presentation",
-	"execute_deal_from_prompt_inputs",
-	"create_marketplace_deal",
-	"create_curated_deal",
-	"create_xandr_deal",
-	"create_prepared_deal",
-	"create_deal",
-}
-
-// criticalToolSubstitutes maps a committed-tool suffix to the substitute
-// suffixes that may discharge its commitment (the protocol-approved fallback
-// from a high-level execute_* to the SSP's lower-level create_*).
-var criticalToolSubstitutes = map[string][]string{
-	"execute_deal_from_prompt_inputs": {
-		"create_marketplace_deal",
-		"create_curated_deal",
-		"create_prepared_deal",
-		"create_xandr_deal",
-		"create_deal",
-	},
-}
+// The critical tool-name suffixes and the substitute map are NOT hardcoded
+// here: they come from the client bundle's AgentPolicy (see agent_policy.go,
+// ConfigureAgentPolicy). The base generic suffixes (send_email,
+// send_template_email) are always present even with no bundle. Matched by suffix
+// so mcp_sendgrid_send_email matches "send_email"; matchCriticalSuffix picks the
+// longest match so e.g. "execute_deal_from_prompt_inputs" pins over
+// "create_deal" regardless of slice order.
 
 func substituteSatisfies(committedSuffix, executedSuffix string) bool {
 	if committedSuffix == "" || executedSuffix == "" {
 		return false
 	}
-	for _, allowed := range criticalToolSubstitutes[committedSuffix] {
+	policyMu.RLock()
+	allowedList := activeCriticalSubstitutes[committedSuffix]
+	policyMu.RUnlock()
+	for _, allowed := range allowedList {
 		if allowed == executedSuffix {
 			return true
 		}
@@ -79,7 +56,9 @@ func substituteSatisfies(committedSuffix, executedSuffix string) bool {
 }
 
 func isCriticalTool(toolName string) bool {
-	for _, suffix := range criticalToolSuffixes {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	for _, suffix := range activeCriticalSuffixes {
 		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
 			return true
 		}
@@ -98,7 +77,9 @@ const maxAttemptsPerCriticalAction = 2
 func matchCriticalSuffix(declared string) string {
 	needle := strings.ToLower(declared)
 	best := ""
-	for _, suffix := range criticalToolSuffixes {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	for _, suffix := range activeCriticalSuffixes {
 		if !strings.Contains(needle, suffix) {
 			continue
 		}
@@ -131,7 +112,7 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 			"consume on the first critical execution and any trailing critical call "+
 			"will be blocked. Likely cause: paraphrased declarations instead of "+
 			"literal tool names. Use the typed `critical_actions` field with the "+
-			"exact tool name (e.g. \"mcp_openx_mcp_ox_create_prepared_deal\"). "+
+			"exact tool name (e.g. \"mcp_myserver_create_record\"). "+
 			"See protocols/self-audit.md.", len(declared))
 	}
 }
@@ -151,12 +132,14 @@ func (o *orchestrationState) markCommittedExecuted(toolName string) {
 		}
 	}
 	executedSuffix := ""
-	for _, suffix := range criticalToolSuffixes {
+	policyMu.RLock()
+	for _, suffix := range activeCriticalSuffixes {
 		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
 			executedSuffix = suffix
 			break
 		}
 	}
+	policyMu.RUnlock()
 	if executedSuffix == "" {
 		return
 	}
@@ -302,7 +285,7 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 // ── confirm_audit tool ──
 
 type criticalActionStruct struct {
-	Tool       string `json:"tool" description:"Literal MCP tool name being unblocked, e.g. \"mcp_openx_mcp_ox_create_prepared_deal\". Copy verbatim from the tool list — substring matching against the orchestration's known suffixes will fail on paraphrased names."`
+	Tool       string `json:"tool" description:"Literal MCP tool name being unblocked, e.g. \"mcp_myserver_create_record\". Copy verbatim from the tool list — substring matching against the orchestration's known suffixes will fail on paraphrased names."`
 	Identifier string `json:"identifier,omitempty" description:"Optional human-readable tag distinguishing this action (deal name, recipient address, etc.). Used only for audit logging — not for matching."`
 }
 

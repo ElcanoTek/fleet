@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Canonical + legacy env prefixes. FLEET_ wins; the two legacy prefixes are
@@ -34,33 +35,25 @@ const (
 
 var legacyPrefixes = []string{"CHAT_", "CUTLASS_"}
 
-// Environment-variable names shared by the allowlist, the loader, and the
-// per-server env builders. Defined as constants so a typo in one place can't
-// silently disable a server.
+// Environment-variable names shared by the allowlist and the loader for the
+// generic email/SendGrid infrastructure fleet ships with. Client-specific MCP
+// connector credentials are NOT enumerated here — the MCP catalog now lives in
+// the client bundle's manifest (internal/clientconfig), which references its own
+// env-var names; cmd/fleet registers those names via RegisterAllowedEnvVars.
 const (
-	envSendGridAPIKey                    = "SENDGRID_API_KEY"    //nolint:gosec // G101: env var name, not a credential value
-	envSendGridFromEmail                 = "SENDGRID_FROM_EMAIL" //nolint:gosec // G101: env var name, not a credential value
-	envOpenXAPIKey                       = "OPENX_API_KEY"       //nolint:gosec // G101: env var name, not a credential value
-	envPubMaticOwnerID                   = "PUBMATIC_OWNER_ID"
-	envIndexExchangeBaseURL              = "INDEXEXCHANGE_BASE_URL"
-	envIndexExchangeMarketplaceAccountID = "INDEXEXCHANGE_MARKETPLACE_ACCOUNT_ID"
-	envEmailS3Bucket                     = "EMAIL_S3_BUCKET"
-	envEmailS3Prefix                     = "EMAIL_S3_PREFIX"
-)
-
-// MCP server transport / command literals.
-const (
-	mcpServerTypeStdio = "stdio"
-	mcpServerTypeHTTP  = "http"
-	mcpCommandPython3  = "python3"
+	envSendGridAPIKey    = "SENDGRID_API_KEY"    //nolint:gosec // G101: env var name, not a credential value
+	envSendGridFromEmail = "SENDGRID_FROM_EMAIL" //nolint:gosec // G101: env var name, not a credential value
+	envEmailS3Bucket     = "EMAIL_S3_BUCKET"
+	envEmailS3Prefix     = "EMAIL_S3_PREFIX"
 )
 
 // DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL:
 // the "default" product tier. Mirrors the frontend's DEFAULT_MODEL.
 const DefaultTitleModel = "google/gemini-3.5-flash"
 
-// DefaultFromEmail is the fallback From address for outgoing mail.
-const DefaultFromEmail = "victoria@elcanotek.com"
+// DefaultFromEmail is the fallback From address for outgoing mail. Neutral by
+// default; a deployment overrides via SENDGRID_FROM_EMAIL / MAILBUX_FROM_EMAIL.
+const DefaultFromEmail = "noreply@example.com"
 
 // allowedEnvVars is the union allowlist of keys that may be set from a .env
 // file. Anything else in the file is ignored. The process environment wins
@@ -115,7 +108,6 @@ var allowedEnvVars = map[string]bool{
 	"CUTLASS_TEMPERATURE":      true,
 	"CUTLASS_MAX_COST_USD":     true,
 	"CUTLASS_MAX_TOTAL_TOKENS": true,
-	"DEAL_SHEET_OUTPUT_DIR":    true,
 
 	// ── cutlass image gen ──
 	"CUTLASS_IMAGE_OUTPUT":    true,
@@ -165,77 +157,12 @@ var allowedEnvVars = map[string]bool{
 	// ── web search ──
 	"TAVILY_API_KEY": true,
 
-	// ── fast.io ──
-	"FAST_IO_MCP_TOKEN": true,
-
-	// ── gamma (chat-only) ──
-	"GAMMA_API_KEY": true,
-
-	// ── OpenX (cutlass) ──
-	envOpenXAPIKey: true,
-
-	// ── PubMatic ──
-	"PUBMATIC_API_KEY":             true,
-	"PUBMATIC_BASE_URL":            true,
-	"PUBMATIC_MCP_BASE_URL":        true,
-	"PUBMATIC_USERNAME":            true,
-	"PUBMATIC_PASSWORD":            true,
-	"PUBMATIC_API_PRODUCT":         true,
-	"PUBMATIC_ACCESS_TOKEN":        true,
-	"PUBMATIC_DSP_ID":              true,
-	"PUBMATIC_BUYER_ID":            true,
-	"PUBMATIC_SEAT_ID":             true,
-	"PUBMATIC_TARGETING_ID":        true,
-	envPubMaticOwnerID:             true,
-	"PUBMATIC_REPORT_DOWNLOAD_DIR": true,
-
-	// ── Media.net ──
-	"MEDIANET_SELECT_BASE_URL":     true,
-	"MEDIANET_SELECT_EMAIL":        true,
-	"MEDIANET_SELECT_PASSWORD":     true,
-	"MEDIANET_SELECT_TOKEN":        true,
-	"MEDIANET_REPORT_BASE_URL":     true,
-	"MEDIANET_REPORT_TOKEN":        true,
-	"MEDIANET_REPORT_DOWNLOAD_DIR": true,
-
-	// ── Index Exchange ──
-	"INDEXEXCHANGE_USERNAME":             true,
-	"INDEXEXCHANGE_PASSWORD":             true,
-	"INDEXEXCHANGE_SERVICE_ID":           true,
-	"INDEXEXCHANGE_SERVICE_SECRET":       true,
-	envIndexExchangeBaseURL:              true,
-	"INDEXEXCHANGE_TIMEOUT_SECONDS":      true,
-	"INDEXEXCHANGE_DOWNLOAD_DIR":         true,
-	envIndexExchangeMarketplaceAccountID: true,
-
-	// ── Magnite ──
-	"MAGNITE_BASE_URL":     true,
-	"MAGNITE_ACCESS_KEY":   true,
-	"MAGNITE_SECRET_KEY":   true,
-	"MAGNITE_SEAT_ID":      true,
-	"MAGNITE_ACCOUNT_ID":   true,
-	"MAGNITE_DV_BASE_URL":  true,
-	"MAGNITE_DMG_BASE_URL": true,
-	"MAGNITE_DOWNLOAD_DIR": true,
-
-	// ── Xandr ──
-	"XANDR_BASE_URL":            true,
-	"XANDR_USERNAME":            true,
-	"XANDR_PASSWORD":            true,
-	"XANDR_SEAT_ID":             true,
-	"XANDR_REPORT_DOWNLOAD_DIR": true,
-
-	// ── TripleLift ──
-	"TRIPLELIFT_CLIENT_ID":           true,
-	"TRIPLELIFT_CLIENT_SECRET":       true,
-	"TRIPLELIFT_MEMBER_ID":           true,
-	"TRIPLELIFT_TOKEN_URL":           true,
-	"TRIPLELIFT_BASE_URL":            true,
-	"TRIPLELIFT_AUDIENCE":            true,
-	"TRIPLELIFT_ORGANIZATION":        true,
-	"TRIPLELIFT_SCOPE":               true,
-	"TRIPLELIFT_REPORTING_BASE_URL":  true,
-	"TRIPLELIFT_REPORT_DOWNLOAD_DIR": true,
+	// NOTE: client-specific MCP connector credentials (DSPs, fast.io, gamma,
+	// etc.) are NOT enumerated here. The MCP catalog lives in the client
+	// bundle's manifest (internal/clientconfig), and cmd/fleet admits the
+	// manifest-referenced env-var names at startup via RegisterAllowedEnvVars,
+	// keeping fleet client-agnostic while preserving the .env allowlist's
+	// security model.
 
 	// ── rate limiting (chat) ──
 	"CHAT_RATE_PER_MIN": true,
@@ -261,26 +188,74 @@ var allowedEnvVars = map[string]bool{
 
 // allowedEnvPrefixes admits open-ended user/account suffixes the operator names
 // at provisioning time. A key matching one of these is treated like an exact
-// allowlist entry. Currently:
-//   - GAMMA_API_KEY_<NAME>: chat's per-user Gamma keys.
-var allowedEnvPrefixes = []string{
-	"GAMMA_API_KEY_",
+// allowlist entry. A client bundle may register additional prefixes via
+// RegisterAllowedEnvPrefixes (e.g. per-user API-key prefixes for its
+// connectors).
+var allowedEnvPrefixes = []string{}
+
+// registeredEnvVars holds env-var names admitted at runtime from the client
+// bundle's manifest (RegisterAllowedEnvVars). Kept separate from the static
+// allowedEnvVars map so the generic fleet allowlist stays client-agnostic while
+// a bundle's connector credentials still survive the .env-file load. Guarded by
+// registerMu because RegisterAllowedEnvVars runs at startup before Load.
+var (
+	registeredEnvVars = map[string]bool{}
+	registerMu        sync.RWMutex
+)
+
+// RegisterAllowedEnvVars admits the given env-var names so a bundle's connector
+// credentials (the names its manifest references) flow from a .env file into the
+// process environment. Call once at startup, before Load. Names are matched
+// exactly AND participate in the per-account "<BASE>_<SUFFIX>" rule, so an
+// account variant of a registered base var is admitted too.
+func RegisterAllowedEnvVars(names ...string) {
+	registerMu.Lock()
+	defer registerMu.Unlock()
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" {
+			registeredEnvVars[n] = true
+		}
+	}
+}
+
+// RegisterAllowedEnvPrefixes admits open-ended env-var prefixes from the client
+// bundle (e.g. a per-user API-key prefix). Call once at startup, before Load.
+func RegisterAllowedEnvPrefixes(prefixes ...string) {
+	registerMu.Lock()
+	defer registerMu.Unlock()
+	for _, p := range prefixes {
+		if p = strings.TrimSpace(p); p != "" {
+			allowedEnvPrefixes = append(allowedEnvPrefixes, p)
+		}
+	}
+}
+
+// isRegisteredEnvVar reports whether k was admitted at runtime via
+// RegisterAllowedEnvVars.
+func isRegisteredEnvVar(k string) bool {
+	registerMu.RLock()
+	defer registerMu.RUnlock()
+	return registeredEnvVars[k]
 }
 
 // isAllowedEnvVar returns true when k may flow from a .env file into the
 // process environment. A key is allowed when:
 //
-//  1. It is literally present in allowedEnvVars, OR
-//  2. It matches a prefix in allowedEnvPrefixes (chat's open-ended Gamma keys), OR
+//  1. It is literally present in allowedEnvVars, OR registered at startup from
+//     the client bundle's manifest via RegisterAllowedEnvVars, OR
+//  2. It matches a prefix in allowedEnvPrefixes, OR
 //  3. It matches "<BASE>_<UPPERCASE_ALPHANUMERIC_SUFFIX>" where BASE is an
-//     allowlisted key (cutlass's per-account credential-variant suffixing,
-//     e.g. PUBMATIC_OWNER_ID_REKLAIM). The suffix MUST be uppercase
+//     allowlisted (static or registered) key (per-account credential-variant
+//     suffixing, e.g. PROVIDER_API_KEY_ACCOUNTB). The suffix MUST be uppercase
 //     alphanumeric so LD_PRELOAD / PATH_PRELOAD style keys cannot match.
 func isAllowedEnvVar(k string) bool {
-	if allowedEnvVars[k] {
+	if allowedEnvVars[k] || isRegisteredEnvVar(k) {
 		return true
 	}
-	for _, p := range allowedEnvPrefixes {
+	registerMu.RLock()
+	prefixes := allowedEnvPrefixes
+	registerMu.RUnlock()
+	for _, p := range prefixes {
 		if strings.HasPrefix(k, p) {
 			return true
 		}
@@ -291,7 +266,7 @@ func isAllowedEnvVar(k string) bool {
 	}
 	base := k[:idx]
 	suffix := k[idx+1:]
-	if !allowedEnvVars[base] {
+	if !allowedEnvVars[base] && !isRegisteredEnvVar(base) {
 		return false
 	}
 	for _, r := range suffix {
@@ -348,112 +323,21 @@ type Config struct {
 	InputDir   string
 	InputFiles []string
 
-	// MCPServers is the scheduled-mode credential-gated server catalog
-	// (cutlass). configureMCPServers populates it from the loaded credentials.
+	// MCPServers is the runtime MCP server catalog. It is sourced from the
+	// client bundle's manifest (internal/clientconfig) — cmd/fleet builds it via
+	// Bundle.MCPServerConfigs() and assigns it here — NOT loaded from typed
+	// credential fields. fleet itself ships no client connectors; the generic
+	// default bundle's catalog is empty. Nil/empty means "no MCP servers".
 	MCPServers map[string]MCPServerConfig
 
-	// ── MCP: email ──
-	AWSAccessKeyID           string
-	AWSSecretAccessKey       string
-	AWSRegion                string
-	EmailS3Bucket            string
-	EmailS3Prefix            string
-	EmailS3DatePrefixFormat  string
-	EmailS3MaxDatePrefixDays string
-	EmailAttachmentDir       string
-	EmailLastCheckFile       string
-	SendGridAPIKey           string
-	SendGridFromEmail        string
-
-	// ── MCP: mailbux (chat-only) ──
-	MailbuxUsername           string
-	MailbuxPassword           string
-	MailbuxFromEmail          string
-	MailbuxJMAPBaseURL        string
-	MailbuxSMTPHost           string
-	MailbuxSMTPPort           string
-	MailbuxDownloadDir        string
-	MailbuxJMAPTimeoutSeconds string
-	MailbuxQueryPageLimit     string
-	MailbuxSearchMaxScan      string
+	// ── attachments / uploads (generic infra) ──
+	// EmailAttachmentDir is the host directory MCP tools write downloaded
+	// attachments to and where uploads are staged for the sandbox bind mount.
+	// Generic infrastructure, independent of any specific email connector.
+	EmailAttachmentDir string
 
 	// ── web search ──
 	TavilyAPIKey string
-
-	// ── fast.io ──
-	FastIOMCPToken string
-
-	// ── gamma (chat-only) ──
-	GammaAPIKey string
-
-	// ── OpenX (cutlass) ──
-	OpenXAPIKey string
-
-	// ── deal sheet (cutlass) ──
-	DealSheetOutputDir string
-
-	// ── PubMatic ──
-	PubMaticAPIKey            string
-	PubMaticBaseURL           string
-	PubMaticMCPBaseURL        string
-	PubMaticUsername          string
-	PubMaticPassword          string
-	PubMaticAPIProduct        string
-	PubMaticAccessToken       string
-	PubMaticDSPID             string
-	PubMaticBuyerID           string
-	PubMaticSeatID            string
-	PubMaticTargetingID       string
-	PubMaticOwnerID           string
-	PubMaticReportDownloadDir string
-
-	// ── Index Exchange ──
-	IndexExchangeUsername             string
-	IndexExchangePassword             string
-	IndexExchangeServiceID            string
-	IndexExchangeServiceSecret        string
-	IndexExchangeBaseURL              string
-	IndexExchangeTimeoutSeconds       string
-	IndexExchangeDownloadDir          string
-	IndexExchangeMarketplaceAccountID string
-
-	// ── Magnite ──
-	MagniteBaseURL     string
-	MagniteAccessKey   string
-	MagniteSecretKey   string
-	MagniteSeatID      string
-	MagniteAccountID   string
-	MagniteDVBaseURL   string
-	MagniteDMGBaseURL  string
-	MagniteDownloadDir string
-
-	// ── Xandr ──
-	XandrBaseURL           string
-	XandrUsername          string
-	XandrPassword          string
-	XandrSeatID            string
-	XandrReportDownloadDir string
-
-	// ── Media.net ──
-	MediaNetSelectBaseURL     string
-	MediaNetSelectEmail       string
-	MediaNetSelectPassword    string
-	MediaNetSelectToken       string
-	MediaNetReportBaseURL     string
-	MediaNetReportToken       string
-	MediaNetReportDownloadDir string
-
-	// ── TripleLift ──
-	TripleLiftClientID          string
-	TripleLiftClientSecret      string
-	TripleLiftMemberID          string
-	TripleLiftTokenURL          string
-	TripleLiftBaseURL           string
-	TripleLiftAudience          string
-	TripleLiftOrganization      string
-	TripleLiftScope             string
-	TripleLiftReportingBaseURL  string
-	TripleLiftReportDownloadDir string
 
 	// ── rate limit (interactive) ──
 	RatePerMinute int
@@ -549,7 +433,7 @@ func Load(envFile string) (*Config, error) {
 		MaxConcurrentAgents: getenvFleetInt("MAX_CONCURRENT_AGENTS", 4),
 
 		// ── personas ──
-		PersonaDefault: getenvDefault("PERSONA_DEFAULT", "victoria"),
+		PersonaDefault: getenvDefault("PERSONA_DEFAULT", "assistant"),
 
 		// ── scheduled task (cutlass) ──
 		TaskModel:         stripQuotes(os.Getenv("CUTLASS_TASK_MODEL")),
@@ -557,106 +441,11 @@ func Load(envFile string) (*Config, error) {
 		TaskMaxIterations: getEnvOrDefaultInt("CUTLASS_TASK_MAX_ITERATIONS", 0),
 		LLMTemperature:    getEnvOrDefaultFloat("CUTLASS_TEMPERATURE", 0.3),
 
-		// ── MCP: email ──
-		AWSAccessKeyID:           stripQuotes(os.Getenv("AWS_ACCESS_KEY_ID")),
-		AWSSecretAccessKey:       stripQuotes(os.Getenv("AWS_SECRET_ACCESS_KEY")),
-		AWSRegion:                getEnvOrDefault("AWS_REGION", "us-east-2"),
-		EmailS3Bucket:            stripQuotes(os.Getenv(envEmailS3Bucket)),
-		EmailS3Prefix:            getEnvOrDefault(envEmailS3Prefix, "emails/"),
-		EmailS3DatePrefixFormat:  stripQuotes(os.Getenv("EMAIL_S3_DATE_PREFIX_FORMAT")),
-		EmailS3MaxDatePrefixDays: stripQuotes(os.Getenv("EMAIL_S3_MAX_DATE_PREFIX_DAYS")),
-		EmailAttachmentDir:       getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),
-		EmailLastCheckFile:       getenvDefault("EMAIL_LAST_CHECK_FILE", "./data/email_last_checked.txt"),
-		SendGridAPIKey:           stripQuotes(os.Getenv(envSendGridAPIKey)),
-		SendGridFromEmail:        getEnvOrDefault(envSendGridFromEmail, DefaultFromEmail),
-
-		// ── mailbux (chat-only) ──
-		MailbuxUsername:           os.Getenv("MAILBUX_USERNAME"),
-		MailbuxPassword:           os.Getenv("MAILBUX_PASSWORD"),
-		MailbuxFromEmail:          getEnvOrDefault("MAILBUX_FROM_EMAIL", DefaultFromEmail),
-		MailbuxJMAPBaseURL:        os.Getenv("MAILBUX_JMAP_BASE_URL"),
-		MailbuxSMTPHost:           os.Getenv("MAILBUX_SMTP_HOST"),
-		MailbuxSMTPPort:           os.Getenv("MAILBUX_SMTP_PORT"),
-		MailbuxDownloadDir:        getenvDefault("MAILBUX_DOWNLOAD_DIR", "./data/attachments"),
-		MailbuxJMAPTimeoutSeconds: os.Getenv("MAILBUX_JMAP_TIMEOUT_SECONDS"),
-		MailbuxQueryPageLimit:     os.Getenv("MAILBUX_QUERY_PAGE_LIMIT"),
-		MailbuxSearchMaxScan:      os.Getenv("MAILBUX_SEARCH_MAX_SCAN"),
+		// ── attachments / uploads (generic infra) ──
+		EmailAttachmentDir: getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),
 
 		// ── web search ──
 		TavilyAPIKey: stripQuotes(os.Getenv("TAVILY_API_KEY")),
-
-		// ── fast.io ──
-		FastIOMCPToken: stripQuotes(os.Getenv("FAST_IO_MCP_TOKEN")),
-
-		// ── gamma (chat-only) ──
-		GammaAPIKey: os.Getenv("GAMMA_API_KEY"),
-
-		// ── OpenX (cutlass) ──
-		OpenXAPIKey: stripQuotes(os.Getenv(envOpenXAPIKey)),
-
-		// ── deal sheet ──
-		DealSheetOutputDir: stripQuotes(os.Getenv("DEAL_SHEET_OUTPUT_DIR")),
-
-		// ── PubMatic ──
-		PubMaticAPIKey:            stripQuotes(os.Getenv("PUBMATIC_API_KEY")),
-		PubMaticUsername:          stripQuotes(os.Getenv("PUBMATIC_USERNAME")),
-		PubMaticPassword:          stripQuotes(os.Getenv("PUBMATIC_PASSWORD")),
-		PubMaticAPIProduct:        getEnvOrDefault("PUBMATIC_API_PRODUCT", "PUBLISHER"),
-		PubMaticAccessToken:       stripQuotes(os.Getenv("PUBMATIC_ACCESS_TOKEN")),
-		PubMaticDSPID:             stripQuotes(os.Getenv("PUBMATIC_DSP_ID")),
-		PubMaticBuyerID:           stripQuotes(os.Getenv("PUBMATIC_BUYER_ID")),
-		PubMaticSeatID:            stripQuotes(os.Getenv("PUBMATIC_SEAT_ID")),
-		PubMaticTargetingID:       stripQuotes(os.Getenv("PUBMATIC_TARGETING_ID")),
-		PubMaticOwnerID:           getEnvOrDefault(envPubMaticOwnerID, "60067"),
-		PubMaticReportDownloadDir: stripQuotes(os.Getenv("PUBMATIC_REPORT_DOWNLOAD_DIR")),
-
-		// ── Index Exchange ──
-		IndexExchangeUsername:             stripQuotes(os.Getenv("INDEXEXCHANGE_USERNAME")),
-		IndexExchangePassword:             stripQuotes(os.Getenv("INDEXEXCHANGE_PASSWORD")),
-		IndexExchangeServiceID:            stripQuotes(os.Getenv("INDEXEXCHANGE_SERVICE_ID")),
-		IndexExchangeServiceSecret:        stripQuotes(os.Getenv("INDEXEXCHANGE_SERVICE_SECRET")),
-		IndexExchangeBaseURL:              getEnvOrDefault(envIndexExchangeBaseURL, "https://app.indexexchange.com"),
-		IndexExchangeTimeoutSeconds:       getEnvOrDefault("INDEXEXCHANGE_TIMEOUT_SECONDS", ""),
-		IndexExchangeDownloadDir:          getEnvOrDefault("INDEXEXCHANGE_DOWNLOAD_DIR", ""),
-		IndexExchangeMarketplaceAccountID: getEnvOrDefault(envIndexExchangeMarketplaceAccountID, "1491166"),
-
-		// ── Magnite ──
-		MagniteBaseURL:     os.Getenv("MAGNITE_BASE_URL"),
-		MagniteAccessKey:   stripQuotes(os.Getenv("MAGNITE_ACCESS_KEY")),
-		MagniteSecretKey:   stripQuotes(os.Getenv("MAGNITE_SECRET_KEY")),
-		MagniteSeatID:      stripQuotes(os.Getenv("MAGNITE_SEAT_ID")),
-		MagniteAccountID:   stripQuotes(os.Getenv("MAGNITE_ACCOUNT_ID")),
-		MagniteDVBaseURL:   getEnvOrDefault("MAGNITE_DV_BASE_URL", "https://api.rubiconproject.com"),
-		MagniteDMGBaseURL:  getEnvOrDefault("MAGNITE_DMG_BASE_URL", "https://dmg.rubiconproject.com"),
-		MagniteDownloadDir: getEnvOrDefault("MAGNITE_DOWNLOAD_DIR", ""),
-
-		// ── Xandr ──
-		XandrBaseURL:           os.Getenv("XANDR_BASE_URL"),
-		XandrUsername:          stripQuotes(os.Getenv("XANDR_USERNAME")),
-		XandrPassword:          stripQuotes(os.Getenv("XANDR_PASSWORD")),
-		XandrSeatID:            stripQuotes(os.Getenv("XANDR_SEAT_ID")),
-		XandrReportDownloadDir: stripQuotes(os.Getenv("XANDR_REPORT_DOWNLOAD_DIR")),
-
-		// ── Media.net ──
-		MediaNetSelectBaseURL:     getEnvOrDefault("MEDIANET_SELECT_BASE_URL", "https://select.media.net"),
-		MediaNetSelectEmail:       stripQuotes(os.Getenv("MEDIANET_SELECT_EMAIL")),
-		MediaNetSelectPassword:    stripQuotes(os.Getenv("MEDIANET_SELECT_PASSWORD")),
-		MediaNetSelectToken:       stripQuotes(os.Getenv("MEDIANET_SELECT_TOKEN")),
-		MediaNetReportBaseURL:     getEnvOrDefault("MEDIANET_REPORT_BASE_URL", "https://select-analytics.media.net"),
-		MediaNetReportToken:       stripQuotes(os.Getenv("MEDIANET_REPORT_TOKEN")),
-		MediaNetReportDownloadDir: stripQuotes(os.Getenv("MEDIANET_REPORT_DOWNLOAD_DIR")),
-
-		// ── TripleLift ──
-		TripleLiftClientID:          stripQuotes(os.Getenv("TRIPLELIFT_CLIENT_ID")),
-		TripleLiftClientSecret:      stripQuotes(os.Getenv("TRIPLELIFT_CLIENT_SECRET")),
-		TripleLiftMemberID:          stripQuotes(os.Getenv("TRIPLELIFT_MEMBER_ID")),
-		TripleLiftTokenURL:          getEnvOrDefault("TRIPLELIFT_TOKEN_URL", ""),
-		TripleLiftBaseURL:           getEnvOrDefault("TRIPLELIFT_BASE_URL", "https://api.triplelift.net"),
-		TripleLiftAudience:          stripQuotes(os.Getenv("TRIPLELIFT_AUDIENCE")),
-		TripleLiftOrganization:      stripQuotes(os.Getenv("TRIPLELIFT_ORGANIZATION")),
-		TripleLiftScope:             stripQuotes(os.Getenv("TRIPLELIFT_SCOPE")),
-		TripleLiftReportingBaseURL:  stripQuotes(os.Getenv("TRIPLELIFT_REPORTING_BASE_URL")),
-		TripleLiftReportDownloadDir: stripQuotes(os.Getenv("TRIPLELIFT_REPORT_DOWNLOAD_DIR")),
 
 		// ── rate limit (interactive) ──
 		RatePerMinute: getenvInt("CHAT_RATE_PER_MIN", 40),
@@ -674,19 +463,14 @@ func Load(envFile string) (*Config, error) {
 		MockMode:              getenvFleetBool("MOCK_MODE", false),
 	}
 
-	// PubMatic base URL: PUBMATIC_BASE_URL, else PUBMATIC_MCP_BASE_URL, else default.
-	cfg.PubMaticBaseURL = getEnvOrDefault("PUBMATIC_BASE_URL", "")
-	if cfg.PubMaticBaseURL == "" {
-		cfg.PubMaticBaseURL = getEnvOrDefault("PUBMATIC_MCP_BASE_URL", "https://api.pubmatic.com")
-	}
-	cfg.PubMaticMCPBaseURL = cfg.PubMaticBaseURL
-
 	// ── personas / prompts (cutlass file-name normalization) ──
+	// Defaults are the generic bundle's names; a client bundle sets PERSONA /
+	// SYSTEM_PROMPT (and PERSONA_DEFAULT) to its own.
 	cfg.SystemPrompt = getEnvOrDefault("SYSTEM_PROMPT", "default.md")
 	if !hasKnownPromptExtension(cfg.SystemPrompt) {
 		cfg.SystemPrompt += ".md"
 	}
-	cfg.Persona = getEnvOrDefault("PERSONA", "personas/victoria.yaml")
+	cfg.Persona = getEnvOrDefault("PERSONA", "personas/assistant.yaml")
 	if !hasKnownPromptExtension(cfg.Persona) {
 		cfg.Persona += ".yaml"
 	}
@@ -697,8 +481,9 @@ func Load(envFile string) (*Config, error) {
 		cfg.InputFiles = strings.Split(inputFiles, ",")
 	}
 
-	// Scheduled-mode credential-gated MCP server catalog.
-	cfg.configureMCPServers()
+	// The MCP server catalog is NOT built here — it is sourced from the client
+	// bundle's manifest (internal/clientconfig) and assigned to cfg.MCPServers by
+	// cmd/fleet at startup. Leave it as the empty map initialized above.
 
 	// Lockdown is a no-op without an image. Surface the misconfiguration loudly.
 	if cfg.LockdownOnly && cfg.SandboxImage == "" {
@@ -836,118 +621,6 @@ func splitEmails(raw string) []string {
 		}
 	}
 	return out
-}
-
-// EmailMCPEnv returns the env-var map the ses_s3_email and sendgrid MCP
-// subprocesses expect.
-func (c *Config) EmailMCPEnv() map[string]string {
-	env := map[string]string{}
-	add := func(k, v string) {
-		if v != "" {
-			env[k] = v
-		}
-	}
-	add("AWS_ACCESS_KEY_ID", c.AWSAccessKeyID)
-	add("AWS_SECRET_ACCESS_KEY", c.AWSSecretAccessKey)
-	add("AWS_REGION", c.AWSRegion)
-	add("EMAIL_S3_BUCKET", c.EmailS3Bucket)
-	add("EMAIL_S3_PREFIX", c.EmailS3Prefix)
-	add("EMAIL_S3_DATE_PREFIX_FORMAT", c.EmailS3DatePrefixFormat)
-	add("EMAIL_S3_MAX_DATE_PREFIX_DAYS", c.EmailS3MaxDatePrefixDays)
-	add("EMAIL_ATTACHMENT_DIR", c.EmailAttachmentDir)
-	add("EMAIL_LAST_CHECK_FILE", c.EmailLastCheckFile)
-	add("SENDGRID_API_KEY", c.SendGridAPIKey)
-	add("SENDGRID_FROM_EMAIL", c.SendGridFromEmail)
-	return env
-}
-
-// MailbuxMCPEnv returns the env-var map the mailbux MCP subprocess expects.
-func (c *Config) MailbuxMCPEnv() map[string]string {
-	env := map[string]string{}
-	add := func(k, v string) {
-		if v != "" {
-			env[k] = v
-		}
-	}
-	add("MAILBUX_USERNAME", c.MailbuxUsername)
-	add("MAILBUX_PASSWORD", c.MailbuxPassword)
-	add("MAILBUX_FROM_EMAIL", c.MailbuxFromEmail)
-	add("MAILBUX_JMAP_BASE_URL", c.MailbuxJMAPBaseURL)
-	add("MAILBUX_SMTP_HOST", c.MailbuxSMTPHost)
-	add("MAILBUX_SMTP_PORT", c.MailbuxSMTPPort)
-	add("MAILBUX_DOWNLOAD_DIR", c.MailbuxDownloadDir)
-	add("MAILBUX_JMAP_TIMEOUT_SECONDS", c.MailbuxJMAPTimeoutSeconds)
-	add("MAILBUX_QUERY_PAGE_LIMIT", c.MailbuxQueryPageLimit)
-	add("MAILBUX_SEARCH_MAX_SCAN", c.MailbuxSearchMaxScan)
-	return env
-}
-
-// ProviderMCPEnv returns the subset of env vars a provider reporting MCP needs.
-// This is the base (default-seat) env; per-account variants are applied by
-// creds.ApplyClientSuffix at bind time.
-func (c *Config) ProviderMCPEnv(provider string) map[string]string {
-	env := map[string]string{}
-	add := func(k, v string) {
-		if v != "" {
-			env[k] = v
-		}
-	}
-
-	switch provider {
-	case "magnite", "magnite_mcp":
-		add("MAGNITE_BASE_URL", c.MagniteBaseURL)
-		add("MAGNITE_ACCESS_KEY", c.MagniteAccessKey)
-		add("MAGNITE_SECRET_KEY", c.MagniteSecretKey)
-		add("MAGNITE_SEAT_ID", c.MagniteSeatID)
-		add("MAGNITE_ACCOUNT_ID", c.MagniteAccountID)
-		add("MAGNITE_DV_BASE_URL", c.MagniteDVBaseURL)
-		add("MAGNITE_DMG_BASE_URL", c.MagniteDMGBaseURL)
-		add("MAGNITE_DOWNLOAD_DIR", c.MagniteDownloadDir)
-	case "indexexchange", "indexexchange_mcp":
-		add("INDEXEXCHANGE_BASE_URL", c.IndexExchangeBaseURL)
-		add("INDEXEXCHANGE_MARKETPLACE_ACCOUNT_ID", c.IndexExchangeMarketplaceAccountID)
-		add("INDEXEXCHANGE_TIMEOUT_SECONDS", c.IndexExchangeTimeoutSeconds)
-		add("INDEXEXCHANGE_DOWNLOAD_DIR", c.IndexExchangeDownloadDir)
-		add("INDEXEXCHANGE_SERVICE_ID", c.IndexExchangeServiceID)
-		add("INDEXEXCHANGE_SERVICE_SECRET", c.IndexExchangeServiceSecret)
-		add("INDEXEXCHANGE_USERNAME", c.IndexExchangeUsername)
-		add("INDEXEXCHANGE_PASSWORD", c.IndexExchangePassword)
-	case "pubmatic", "pubmatic_mcp":
-		add("PUBMATIC_API_KEY", c.PubMaticAPIKey)
-		add("PUBMATIC_BASE_URL", c.PubMaticMCPBaseURL)
-		add("PUBMATIC_MCP_BASE_URL", c.PubMaticMCPBaseURL)
-		add("PUBMATIC_USERNAME", c.PubMaticUsername)
-		add("PUBMATIC_PASSWORD", c.PubMaticPassword)
-		add("PUBMATIC_API_PRODUCT", c.PubMaticAPIProduct)
-		add("PUBMATIC_ACCESS_TOKEN", c.PubMaticAccessToken)
-		add("PUBMATIC_DSP_ID", c.PubMaticDSPID)
-		add("PUBMATIC_BUYER_ID", c.PubMaticBuyerID)
-		add("PUBMATIC_SEAT_ID", c.PubMaticSeatID)
-		add("PUBMATIC_TARGETING_ID", c.PubMaticTargetingID)
-		add("PUBMATIC_OWNER_ID", c.PubMaticOwnerID)
-		add("PUBMATIC_REPORT_DOWNLOAD_DIR", c.PubMaticReportDownloadDir)
-	case "xandr", "xandr_mcp":
-		add("XANDR_BASE_URL", c.XandrBaseURL)
-		add("XANDR_USERNAME", c.XandrUsername)
-		add("XANDR_PASSWORD", c.XandrPassword)
-		add("XANDR_SEAT_ID", c.XandrSeatID)
-		add("XANDR_REPORT_DOWNLOAD_DIR", c.XandrReportDownloadDir)
-	case "medianet", "medianet_mcp":
-		add("MEDIANET_SELECT_BASE_URL", c.MediaNetSelectBaseURL)
-		add("MEDIANET_SELECT_EMAIL", c.MediaNetSelectEmail)
-		add("MEDIANET_SELECT_PASSWORD", c.MediaNetSelectPassword)
-		add("MEDIANET_SELECT_TOKEN", c.MediaNetSelectToken)
-		add("MEDIANET_REPORT_BASE_URL", c.MediaNetReportBaseURL)
-		add("MEDIANET_REPORT_TOKEN", c.MediaNetReportToken)
-		add("MEDIANET_REPORT_DOWNLOAD_DIR", c.MediaNetReportDownloadDir)
-	case "openx", "openx_mcp":
-		add("OPENX_API_KEY", c.OpenXAPIKey)
-	case "triplelift", "triplelift_mcp":
-		for k, v := range buildTripleLiftEnv(c) {
-			add(k, v)
-		}
-	}
-	return env
 }
 
 // loadEnvFile parses a KEY=VALUE env file, respecting the allowlist. It strips

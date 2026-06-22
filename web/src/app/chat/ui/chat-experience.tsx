@@ -37,7 +37,8 @@ import { parseSseChunk, type ServerEvent } from "@/app/lib/sse";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import { LoadingLogo } from "./LoadingLogo";
 import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
-import { PROTOCOL_PILLS, getPill } from "./protocolPills";
+import { getPill } from "./protocolPills";
+import { useClientConfig } from "@/app/lib/useClientConfig";
 import {
   applyModelRequired,
   applyRetryNotice,
@@ -631,6 +632,10 @@ export function ChatExperience() {
   // panel (null = show the card grid). Only meaningful on the empty new-chat
   // view; reset whenever we return to a clean slate.
   const [activePillId, setActivePillId] = useState<string | null>(null);
+  // Runtime client config: branding strings + the empty-state quick-start
+  // cards, fetched from the member-gated /api/client-config so the UI is
+  // client-agnostic. Falls back to neutral defaults on error / while loading.
+  const { branding, pills } = useClientConfig();
   // selectedModel is the OpenRouter slug for the active conversation. Empty
   // means "use the server-configured primary." It can be edited mid-chat;
   // submitPrompt forwards the current value with every turn so the backend
@@ -1721,9 +1726,10 @@ export function ChatExperience() {
   // Keep the browser tab title in sync with the active conversation. The
   // base document title is set by app/layout.tsx; we prepend the active
   // conversation title when there is one so tab switchers show the chat
-  // name instead of a generic "Elcano Chat".
+  // name instead of the bare app name. The base name comes from the runtime
+  // client config (branding.app_name) so it's client-agnostic.
   useEffect(() => {
-    const base = "Elcano Chat";
+    const base = branding.app_name;
     if (!activeConversationId) {
       document.title = base;
       return;
@@ -1731,7 +1737,7 @@ export function ChatExperience() {
     const server = conversations.find((c) => c.id === activeConversationId);
     const name = server?.title?.trim();
     document.title = name ? `${name} — ${base}` : base;
-  }, [activeConversationId, conversations]);
+  }, [activeConversationId, conversations, branding.app_name]);
 
   // Prefer the server's (possibly auto-summarized) title for the active
   // conversation. Falls back to a first-user-message derivation for brand
@@ -1754,7 +1760,7 @@ export function ChatExperience() {
     if (typeof navigator === "undefined") return "Ctrl+K";
     return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? "⌘K" : "Ctrl+K";
   }, []);
-  const promptPlaceholder = "Message Elcano AI...";
+  const promptPlaceholder = `Message ${branding.app_name} AI...`;
 
   // patchAssistantMessage updates a specific message inside a specific
   // conversation's slot. The convId is required because stream events
@@ -3440,13 +3446,13 @@ export function ChatExperience() {
             <a className="flex items-center gap-2.5 no-underline" href="#">
               <Image
                 src="/logos/elcano-mark-primary.svg"
-                alt="Elcano"
+                alt={branding.app_name}
                 width={28}
                 height={28}
                 priority
               />
               <span className="font-heading text-[0.9375rem] font-semibold text-[var(--color-text-primary)]">
-                Elcano
+                {branding.app_name}
               </span>
             </a>
             <div className="flex items-center gap-1">
@@ -4236,9 +4242,9 @@ export function ChatExperience() {
                     ) : null}
                   </div>
                   {!isLockdown && selectedPersona === "victoria" ? (
-                    activePillId && getPill(activePillId) ? (
+                    activePillId && getPill(activePillId, pills) ? (
                       <ProtocolPillForm
-                        pill={getPill(activePillId)!}
+                        pill={getPill(activePillId, pills)!}
                         onRun={(promptText) => {
                           setActivePillId(null);
                           void submitPrompt(promptText);
@@ -4256,9 +4262,9 @@ export function ChatExperience() {
                       />
                     ) : (
                       <EmptyStatePrompts
-                        pills={PROTOCOL_PILLS}
+                        pills={pills}
                         onPick={(id) => {
-                          const picked = getPill(id);
+                          const picked = getPill(id, pills);
                           if (!picked) return;
                           // A pure conversation pill jumps straight into the
                           // intake; form pills (and the diagnostic's optional

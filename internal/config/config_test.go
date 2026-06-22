@@ -108,7 +108,7 @@ func TestLoad_DefaultsApply(t *testing.T) {
 	if !cfg.ReasoningEnabled {
 		t.Error("ReasoningEnabled default: expected true")
 	}
-	if cfg.PersonaDefault != "victoria" {
+	if cfg.PersonaDefault != "assistant" {
 		t.Errorf("PersonaDefault default: got %q", cfg.PersonaDefault)
 	}
 	if cfg.TitleModel != DefaultTitleModel {
@@ -204,6 +204,11 @@ func TestLoad_AllowsPrefixedKeys(t *testing.T) {
 	isolateEnv(t)
 	dir := t.TempDir()
 	chdir(t, dir)
+
+	// Open-ended per-user credential prefixes are admitted by the client bundle
+	// at startup (no longer statically allowlisted). Register the prefix so its
+	// suffixed variants flow from the .env file.
+	RegisterAllowedEnvPrefixes("GAMMA_API_KEY_")
 
 	_ = os.WriteFile(filepath.Join(dir, ".env.local"), []byte(
 		`GAMMA_API_KEY_BRAD="sk-gamma-brad"`+"\n"+
@@ -462,20 +467,6 @@ func TestLoad_LockdownAllowedModelsEnvOverride(t *testing.T) {
 	}
 }
 
-func TestEmailMCPEnv_OmitsEmpty(t *testing.T) {
-	cfg := &Config{
-		AWSAccessKeyID: "A",
-		AWSRegion:      "us-east-2",
-	}
-	env := cfg.EmailMCPEnv()
-	if _, present := env["EMAIL_S3_BUCKET"]; present {
-		t.Error("empty value should be omitted")
-	}
-	if env["AWS_REGION"] != "us-east-2" {
-		t.Errorf("AWS_REGION: got %q", env["AWS_REGION"])
-	}
-}
-
 // ──────────────────────────────────────────────────────────────────────────
 // Scheduled (cutlass) config suite — ported; colliding names disambiguated.
 // ──────────────────────────────────────────────────────────────────────────
@@ -507,8 +498,10 @@ SENDGRID_API_KEY=sendgrid-key
 	if cfg.OpenRouterAPIKey != "test-key" {
 		t.Errorf("Expected OpenRouterAPIKey=test-key, got %s", cfg.OpenRouterAPIKey)
 	}
-	if server, ok := cfg.MCPServers["sendgrid"]; !ok || !server.Enabled {
-		t.Error("Expected SendGrid MCP server to be enabled")
+	// The MCP catalog is no longer built by config.Load; it is sourced from the
+	// client bundle's manifest and assigned by cmd/fleet. After Load it is empty.
+	if len(cfg.MCPServers) != 0 {
+		t.Errorf("Expected empty MCPServers after Load, got %v", cfg.MCPServers)
 	}
 }
 
@@ -537,136 +530,13 @@ func TestGetEnvOrDefault(t *testing.T) {
 	}
 }
 
-func TestLoadWithAllMCPServers(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	tmpfile, err := os.CreateTemp("", "test-full.env")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	content := `
-OPENROUTER_API_KEY=test-openrouter-key
-SENDGRID_API_KEY=test-sendgrid-key
-SENDGRID_FROM_EMAIL=test@example.com
-AWS_ACCESS_KEY_ID=test-aws-key
-AWS_SECRET_ACCESS_KEY=test-aws-secret
-AWS_REGION=us-west-2
-EMAIL_S3_BUCKET=test-bucket
-EMAIL_S3_PREFIX=test-prefix/
-`
-	if _, err := tmpfile.Write([]byte(content)); err != nil {
-		t.Fatal(err)
-	}
-	tmpfile.Close()
-
-	cfg, err := Load(tmpfile.Name())
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	if cfg.OpenRouterAPIKey != "test-openrouter-key" {
-		t.Errorf("Expected OpenRouterAPIKey='test-openrouter-key', got '%s'", cfg.OpenRouterAPIKey)
-	}
-	if cfg.SendGridAPIKey != "test-sendgrid-key" {
-		t.Errorf("Expected SendGridAPIKey='test-sendgrid-key', got '%s'", cfg.SendGridAPIKey)
-	}
-	if cfg.SendGridFromEmail != "test@example.com" {
-		t.Errorf("Expected SendGridFromEmail='test@example.com', got '%s'", cfg.SendGridFromEmail)
-	}
-	if cfg.AWSAccessKeyID != "test-aws-key" {
-		t.Errorf("Expected AWSAccessKeyID='test-aws-key', got '%s'", cfg.AWSAccessKeyID)
-	}
-	if cfg.AWSRegion != "us-west-2" {
-		t.Errorf("Expected AWSRegion='us-west-2', got '%s'", cfg.AWSRegion)
-	}
-	if cfg.EmailS3Bucket != "test-bucket" {
-		t.Errorf("Expected EmailS3Bucket='test-bucket', got '%s'", cfg.EmailS3Bucket)
-	}
-
-	expectedServers := []string{"sendgrid", "email"}
-	for _, server := range expectedServers {
-		if _, ok := cfg.MCPServers[server]; !ok {
-			t.Errorf("Expected MCP server '%s' to be configured", server)
-		}
-		if !cfg.MCPServers[server].Enabled {
-			t.Errorf("Expected MCP server '%s' to be enabled", server)
-		}
-	}
-}
-
-func TestEmailMCPEnabledWithBucketOnly(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	tmpfile, err := os.CreateTemp("", "test-email-bucket-only.env")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	content := `EMAIL_S3_BUCKET=test-bucket`
-	if _, err := tmpfile.Write([]byte(content)); err != nil {
-		t.Fatal(err)
-	}
-	tmpfile.Close()
-
-	cfg, err := Load(tmpfile.Name())
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	server, ok := cfg.MCPServers["email"]
-	if !ok {
-		t.Fatal("Expected email MCP server to be configured")
-	}
-	if !server.Enabled {
-		t.Fatal("Expected email MCP server to be enabled")
-	}
-}
-
-func TestEmailMCPDoesNotForwardEmptyOptionalEnvVars(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	tmpfile, err := os.CreateTemp("", "test-email-optional-env.env")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	content := `
-EMAIL_S3_BUCKET=test-bucket
-EMAIL_S3_DATE_PREFIX_FORMAT=
-EMAIL_S3_MAX_DATE_PREFIX_DAYS=
-`
-	if _, err := tmpfile.Write([]byte(content)); err != nil {
-		t.Fatal(err)
-	}
-	tmpfile.Close()
-
-	cfg, err := Load(tmpfile.Name())
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	server, ok := cfg.MCPServers["email"]
-	if !ok {
-		t.Fatal("Expected email MCP server to be configured")
-	}
-	if _, ok := server.Env["EMAIL_S3_DATE_PREFIX_FORMAT"]; ok {
-		t.Error("Expected EMAIL_S3_DATE_PREFIX_FORMAT to be omitted when empty")
-	}
-	if _, ok := server.Env["EMAIL_S3_MAX_DATE_PREFIX_DAYS"]; ok {
-		t.Error("Expected EMAIL_S3_MAX_DATE_PREFIX_DAYS to be omitted when empty")
-	}
-}
-
 func TestLoadEnvFileWithQuotes(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()
+
+	// OPENX_API_KEY is a connector credential the client bundle registers at
+	// startup; register it here so it flows from the .env file under test.
+	RegisterAllowedEnvVars("OPENX_API_KEY")
 
 	tmpfile, err := os.CreateTemp("", "test-quotes.env")
 	if err != nil {
@@ -716,6 +586,12 @@ LOG_LEVEL = spaced-value
 func TestLoadEnvFile_AcceptsSuffixedVariantKeys(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()
+
+	// DSP connector credentials are no longer in the static allowlist; the client
+	// bundle admits them at startup. Register the base names so their per-account
+	// "<BASE>_<SUFFIX>" variants are admitted by the suffix rule. PATH is NOT
+	// registered, so PATH_REKLAIM must still be rejected.
+	RegisterAllowedEnvVars("PUBMATIC_OWNER_ID", "OPENX_API_KEY", "INDEXEXCHANGE_MARKETPLACE_ACCOUNT_ID")
 
 	tmpfile, err := os.CreateTemp("", "test-suffixed.env")
 	if err != nil {
@@ -777,42 +653,6 @@ INDEXEXCHANGE_MARKETPLACE_ACCOUNT_ID_ZETA=1507580
 	})
 }
 
-func TestIndexExchangeMarketplaceAccountIDDefault(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	os.Unsetenv("INDEXEXCHANGE_MARKETPLACE_ACCOUNT_ID")
-	t.Setenv("INDEXEXCHANGE_USERNAME", "testuser")
-	t.Setenv("INDEXEXCHANGE_PASSWORD", "testpass")
-
-	cfg, err := Load("")
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if cfg.IndexExchangeMarketplaceAccountID != "1491166" {
-		t.Errorf("IndexExchangeMarketplaceAccountID default: expected %q, got %q",
-			"1491166", cfg.IndexExchangeMarketplaceAccountID)
-	}
-}
-
-func TestIndexExchangeMarketplaceAccountIDOverride(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	t.Setenv("INDEXEXCHANGE_USERNAME", "testuser")
-	t.Setenv("INDEXEXCHANGE_PASSWORD", "testpass")
-	t.Setenv("INDEXEXCHANGE_MARKETPLACE_ACCOUNT_ID", "1485234")
-
-	cfg, err := Load("")
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if cfg.IndexExchangeMarketplaceAccountID != "1485234" {
-		t.Errorf("IndexExchangeMarketplaceAccountID override: expected %q, got %q",
-			"1485234", cfg.IndexExchangeMarketplaceAccountID)
-	}
-}
-
 func TestStripInlineComment(t *testing.T) {
 	cases := map[string]string{
 		"60067 # Elcano default":   "60067",
@@ -833,26 +673,52 @@ func TestStripInlineComment(t *testing.T) {
 }
 
 func TestIsAllowedEnvVar(t *testing.T) {
+	// DSP connector credentials are no longer in the static allowlist; a client
+	// bundle registers them at startup. Register a couple here so the suffix-rule
+	// cases below exercise the registered-base path.
+	RegisterAllowedEnvVars("PUBMATIC_OWNER_ID", "OPENX_API_KEY")
+
 	cases := map[string]bool{
+		// generic static-allowlist entries
+		"OPENROUTER_API_KEY": true,
+		"TAVILY_API_KEY":     true,
+		"FLEET_SERVER_ADDR":  true,
+		// registered bases + their per-account suffix variants
 		"PUBMATIC_OWNER_ID":           true,
 		"PUBMATIC_OWNER_ID_REKLAIM":   true,
 		"PUBMATIC_OWNER_ID_INFOLINKS": true,
 		"OPENX_API_KEY":               true,
 		"OPENX_API_KEY_REKLAIM":       true,
-		"INDEXEXCHANGE_BASE_URL":      true,
-		"PATH":                        false,
-		"PATH_REKLAIM":                false,
-		"LD_PRELOAD":                  false,
-		"OPENX_API_KEY_reklaim":       false,
-		"OPENX_API_KEY_":              false,
-		"":                            false,
-		"_REKLAIM":                    false,
+		// rejections
+		"INDEXEXCHANGE_BASE_URL": false, // base not registered
+		"PATH":                   false,
+		"PATH_REKLAIM":           false,
+		"LD_PRELOAD":             false,
+		"OPENX_API_KEY_reklaim":  false, // suffix must be uppercase
+		"OPENX_API_KEY_":         false, // empty suffix
+		"":                       false,
+		"_REKLAIM":               false,
 	}
 	for input, want := range cases {
 		got := isAllowedEnvVar(input)
 		if got != want {
 			t.Errorf("isAllowedEnvVar(%q) = %v, want %v", input, got, want)
 		}
+	}
+}
+
+func TestRegisterAllowedEnvVars(t *testing.T) {
+	const fresh = "FLEET_TEST_REGISTERED_CONNECTOR_KEY"
+	if isAllowedEnvVar(fresh) {
+		t.Fatalf("%q should not be allowed before registration", fresh)
+	}
+	RegisterAllowedEnvVars(fresh)
+	if !isAllowedEnvVar(fresh) {
+		t.Errorf("%q should be allowed after RegisterAllowedEnvVars", fresh)
+	}
+	// A per-account suffix variant of a registered base is admitted too.
+	if !isAllowedEnvVar(fresh + "_REKLAIM") {
+		t.Errorf("%q_REKLAIM should be allowed via the suffix rule", fresh)
 	}
 }
 
@@ -887,7 +753,11 @@ func TestLoadOverridesWithEmptyString(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()
 
+	// A registered connector credential set to an empty string in the process env
+	// must beat the file value (process env wins, even when empty).
+	RegisterAllowedEnvVars("OPENX_API_KEY")
 	os.Setenv("OPENX_API_KEY", "")
+	defer os.Unsetenv("OPENX_API_KEY")
 
 	tmpfile, err := os.CreateTemp("", "test-empty-override.env")
 	if err != nil {
@@ -901,15 +771,11 @@ func TestLoadOverridesWithEmptyString(t *testing.T) {
 	}
 	tmpfile.Close()
 
-	cfg, err := Load(tmpfile.Name())
-	if err != nil {
+	if _, err := Load(tmpfile.Name()); err != nil {
 		t.Fatalf("Failed to load config: %v", err)
 	}
-	if cfg.OpenXAPIKey != "" {
-		t.Errorf("Expected OpenXAPIKey='', got '%s'", cfg.OpenXAPIKey)
-	}
-	if _, ok := cfg.MCPServers["openx_mcp"]; ok {
-		t.Error("Expected OpenX MCP server to be disabled")
+	if got := os.Getenv("OPENX_API_KEY"); got != "" {
+		t.Errorf("Expected OPENX_API_KEY='' (process env wins), got '%s'", got)
 	}
 }
 
@@ -1000,7 +866,7 @@ func TestLoadPreservesTaskModelOverride(t *testing.T) {
 	}
 }
 
-func TestMCPServerNotEnabledWithoutCredentials(t *testing.T) {
+func TestMCPServersEmptyAfterLoad(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()
 
@@ -1021,131 +887,13 @@ func TestMCPServerNotEnabledWithoutCredentials(t *testing.T) {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	for name := range cfg.MCPServers {
-		if name != "deal_sheet" {
-			t.Errorf("Expected no credentialed MCP servers to be enabled without credentials, got %q", name)
-		}
+	// config.Load no longer builds an MCP catalog; cmd/fleet assigns one sourced
+	// from the client bundle's manifest. After Load the map is non-nil but empty.
+	if cfg.MCPServers == nil {
+		t.Fatal("Expected MCPServers to be a non-nil (empty) map after Load")
 	}
-}
-
-func TestDefaultAWSRegion(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	tmpfile, err := os.CreateTemp("", "test-aws.env")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	content := `AWS_ACCESS_KEY_ID=test-key`
-	if _, err := tmpfile.Write([]byte(content)); err != nil {
-		t.Fatal(err)
-	}
-	tmpfile.Close()
-
-	cfg, err := Load(tmpfile.Name())
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-	if cfg.AWSRegion != "us-east-2" {
-		t.Errorf("Expected default AWSRegion='us-east-2', got '%s'", cfg.AWSRegion)
-	}
-}
-
-func TestDefaultEmailS3Prefix(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	tmpfile, err := os.CreateTemp("", "test-s3.env")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	content := `EMAIL_S3_BUCKET=test-bucket`
-	if _, err := tmpfile.Write([]byte(content)); err != nil {
-		t.Fatal(err)
-	}
-	tmpfile.Close()
-
-	cfg, err := Load(tmpfile.Name())
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-	if cfg.EmailS3Prefix != "emails/" {
-		t.Errorf("Expected default EmailS3Prefix='emails/', got '%s'", cfg.EmailS3Prefix)
-	}
-}
-
-func TestFastIOMCPServerConfiguration(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	tmpfile, err := os.CreateTemp("", "test-fastio.env")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	content := `FAST_IO_MCP_TOKEN=test-fastio-token`
-	if _, err := tmpfile.Write([]byte(content)); err != nil {
-		t.Fatal(err)
-	}
-	tmpfile.Close()
-
-	cfg, err := Load(tmpfile.Name())
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-
-	if cfg.FastIOMCPToken != "test-fastio-token" {
-		t.Errorf("Expected FastIOMCPToken='test-fastio-token', got '%s'", cfg.FastIOMCPToken)
-	}
-
-	fastIO, ok := cfg.MCPServers["fast_io"]
-	if !ok {
-		t.Fatal("Expected fast_io MCP server to be configured")
-	}
-	if !fastIO.Enabled {
-		t.Error("Expected fast_io MCP server to be enabled")
-	}
-	if fastIO.Type != "http" {
-		t.Errorf("Expected fast_io type='http', got '%s'", fastIO.Type)
-	}
-	if fastIO.URL != "https://mcp.fast.io/mcp" {
-		t.Errorf("Expected fast_io URL='https://mcp.fast.io/mcp', got '%s'", fastIO.URL)
-	}
-	if fastIO.Headers == nil {
-		t.Fatal("Expected fast_io Headers to be set")
-	}
-	if fastIO.Headers["Authorization"] != "Bearer test-fastio-token" {
-		t.Errorf("Expected Authorization='Bearer test-fastio-token', got '%s'", fastIO.Headers["Authorization"])
-	}
-}
-
-func TestFastIOMCPServerNotEnabledWithoutToken(t *testing.T) {
-	clearEnvVars()
-	defer clearEnvVars()
-
-	tmpfile, err := os.CreateTemp("", "test-fastio-empty.env")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpfile.Name())
-
-	content := `# No fast.io token`
-	if _, err := tmpfile.Write([]byte(content)); err != nil {
-		t.Fatal(err)
-	}
-	tmpfile.Close()
-
-	cfg, err := Load(tmpfile.Name())
-	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
-	}
-	if _, ok := cfg.MCPServers["fast_io"]; ok {
-		t.Error("Expected fast_io MCP server to NOT be configured without token")
+	if len(cfg.MCPServers) != 0 {
+		t.Errorf("Expected no MCP servers after Load, got %v", cfg.MCPServers)
 	}
 }
 

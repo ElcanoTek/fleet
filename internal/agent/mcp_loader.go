@@ -22,7 +22,7 @@ import (
 type mcpListServersInput struct{}
 
 type mcpLoadServersInput struct {
-	Names  []string `json:"names" description:"One or more MCP server names to load, as listed by mcp_list_servers. Use the bare server name (e.g. \"openx_mcp\"). Already-loaded servers are silently skipped."`
+	Names  []string `json:"names" description:"One or more MCP server names to load, as listed by mcp_list_servers. Use the bare server name (e.g. \"myserver\"). Already-loaded servers are silently skipped."`
 	Client string   `json:"client" description:"Optional client/account suffix selecting a non-default credential set (e.g. \"reklaim\" picks env vars suffixed with _REKLAIM). Spawns a separate subprocess under \"<server>_<client>\"; tools surface as mcp_<server>_<client>_*. Omit for the default account. Stdio servers only — HTTP servers reject this."`
 }
 

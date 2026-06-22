@@ -6,10 +6,18 @@
 #
 # Install:
 #   install -D -m 0755 fleet            /opt/fleet/fleet
-#   cp -r personas protocols system_prompts /opt/fleet/   # resolveRootDir reads these from WorkingDirectory
+#   # Check out the CLIENT CONFIG BUNDLE — fleet ships NO client content. Point
+#   # FLEET_CLIENT_CONFIG_DIR (in fleet.env below) at the checkout:
+#   git clone <client-config-repo> /opt/fleet/client    # e.g. /opt/fleet/client or /etc/fleet/client
 #   install -D -m 0644 deploy/fleet.service /etc/systemd/system/fleet.service
 #   install -D -m 0600 /dev/null        /etc/fleet/fleet.env   # then fill it in (see below)
 #   systemctl daemon-reload && systemctl enable --now fleet
+#
+# fleet loads its client bundle from FLEET_CLIENT_CONFIG_DIR (default
+# ./config/default — the generic bundle baked into the repo, neutral branding +
+# no MCP connectors, runs bare). A real deployment points it at a checked-out
+# client repo whose bundle supplies system_prompts/, personas/, protocols/,
+# mcp/, and the manifest (branding + MCP catalog + empty-state + agent policy).
 #
 # The EnvironmentFile is the SAME 0600 credential file scripts/bootstrap.sh
 # ensures (FLEET_ENV_FILE). cmd/fleet *also* parses FLEET_ENV_FILE itself via
@@ -17,9 +25,12 @@
 # config-loaded values in sync. Minimum keys it should contain:
 #
 #   OPENROUTER_API_KEY=...
+#   FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client    # the checked-out client bundle
 #   FLEET_CHAT_DATABASE_URL=postgres://chat:...@127.0.0.1:5432/chat?sslmode=disable
 #   FLEET_SCHED_DATABASE_URL=postgres://sched:...@127.0.0.1:5432/sched?sslmode=disable
 #   FLEET_ENV_FILE=/etc/fleet/fleet.env          # so config.Load reads the same file
+#   # plus the client bundle's MCP connector credentials (the env vars its
+#   # manifest references, e.g. SENDGRID_API_KEY=..., XANDR_USERNAME=...).
 #   # optional:
 #   # FLEET_SERVER_ADDR=127.0.0.1:8080           # chat listener  (default 127.0.0.1:8080)
 #   # FLEET_ORCHESTRATOR_ADDR=127.0.0.1:8000     # orchestrator listener (default :8000)
@@ -35,7 +46,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# personas/ protocols/ system_prompts/ are resolved relative to WorkingDirectory.
+# WorkingDirectory holds the binary + data dir. The client bundle's
+# system_prompts/ personas/ protocols/ mcp/ are resolved from
+# FLEET_CLIENT_CONFIG_DIR (set in fleet.env), NOT from here.
 WorkingDirectory=/opt/fleet
 EnvironmentFile=/etc/fleet/fleet.env
 ExecStart=/opt/fleet/fleet

@@ -24,9 +24,12 @@ type ProviderHeaders struct {
 }
 
 // DefaultProviderHeaders identify the unified fleet runtime to OpenRouter.
+// Generic by default; a deployment may override per binary (e.g. via
+// OPENROUTER_X_TITLE / OPENROUTER_HTTP_REFERER) to surface its own product
+// identity in the provider dashboard.
 var DefaultProviderHeaders = ProviderHeaders{
-	XTitle:      "Elcano fleet",
-	HTTPReferer: "https://elcano.ai",
+	XTitle:      "fleet",
+	HTTPReferer: "https://github.com/ElcanoTek/fleet",
 }
 
 // newOpenRouterProvider builds the fantasy OpenRouter provider with the given

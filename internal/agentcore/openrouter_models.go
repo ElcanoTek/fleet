@@ -130,7 +130,7 @@ func fetchOpenRouterModels(timeout time.Duration) ([]orModelEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("User-Agent", "Elcano-fleet/1.0 (+https://elcano.ai)")
+	req.Header.Set("User-Agent", "fleet/1.0 (+https://github.com/ElcanoTek/fleet)")
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

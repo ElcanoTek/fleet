@@ -103,6 +103,10 @@ type Manager struct {
 	personasDir      string
 	protocolsDir     string
 	systemPromptsDir string
+
+	// chatSystemPromptFile is the interactive base-prompt filename inside
+	// systemPromptsDir (e.g. "chat.md"). The scheduled path uses its own base.
+	chatSystemPromptFile string
 }
 
 // MCPServerSpec describes one MCP server to connect to. Either stdio
@@ -285,8 +289,12 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 
 	fastIOOn := m.fastIOEnabledForTurn(enabledOptionalMCPServers)
 
-	// 1. system prompt
-	sp, err := os.ReadFile(filepath.Join(m.systemPromptsDir, "default.md"))
+	// 1. system prompt — the interactive base (bundle's chat.md by default).
+	promptFile := m.chatSystemPromptFile
+	if promptFile == "" {
+		promptFile = "chat.md"
+	}
+	sp, err := os.ReadFile(filepath.Join(m.systemPromptsDir, filepath.Base(promptFile)))
 	if err != nil {
 		return "", fmt.Errorf("read system prompt: %w", err)
 	}
@@ -425,22 +433,18 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 	// 6. per-conversation absolute workspace path. Native tools
 	// (bash, run_python) already cwd into this dir, so the agent can
 	// use bare relative paths there. MCP subprocesses do NOT inherit
-	// the per-conv cwd — they stay at the chat-server root — so any
-	// MCP tool that writes files (e.g. mcp_email_download_attachment)
-	// needs to receive this ABSOLUTE path as output_dir. Otherwise
-	// "./foo.csv" lands in /opt/chat (read-only) and the call fails.
+	// the per-conv cwd — they stay at the server root — so any MCP tool
+	// that writes files needs to receive this ABSOLUTE path as
+	// output_dir. Otherwise "./foo.csv" lands in the read-only server
+	// root and the call fails.
 	if conversationID != "" {
 		if abs, err := filepath.Abs(tools.WorkspaceDirForConversation(conversationID)); err == nil {
 			fmt.Fprintf(&sb, "## Working directory\n\nYour per-conversation scratch directory for this turn is:\n\n    %s\n\n", abs)
 			sb.WriteString(
-				"Whenever an MCP tool takes an `output_dir` argument, pass this absolute path. " +
-					"Examples include `mcp_email_download_attachment`, `mcp_email_download_link_attachment`, `mcp_email_download_all_link_attachments`, the SSP reporting tools " +
-					"(`mcp_indexexchange_ix_download_report_file`, `mcp_indexexchange_ix_run_marketplace_draft_report`, " +
-					"`mcp_magnite_magnite_download_report`, `mcp_pubmatic_pm_run_standard_report`, " +
-					"`mcp_xandr_xandr_run_curator_report`, `mcp_medianet_mn_queue_report_data`), and " +
-					"Gamma's `wait_for_presentation_completion`. Their built-in defaults point at " +
-					"`~/Victoria/...` which is read-only on production hosts (systemd ProtectSystem=strict), " +
-					"so a missing `output_dir` will fail with `[Errno 30] Read-only file system`. " +
+				"Whenever an MCP tool takes an `output_dir` (or equivalent output-path) argument, pass this absolute path. " +
+					"MCP subprocesses run from the server root, not your scratch directory, and their built-in default output " +
+					"locations are read-only on production hosts (systemd ProtectSystem=strict), so a missing `output_dir` " +
+					"fails with `[Errno 30] Read-only file system`. " +
 					"Bash and run_python already cwd into this dir — bare relative paths work there.\n\n",
 			)
 		}

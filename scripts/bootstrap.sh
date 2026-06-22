@@ -21,6 +21,10 @@
 #
 # Env knobs (all optional; sensible local defaults):
 #   FLEET_ENV_FILE          credential env file to ensure exists (default .env.local)
+#   FLEET_CLIENT_CONFIG_DIR client config bundle dir (default ./config/default —
+#                           the generic bundle baked into the repo). Point at a
+#                           checked-out client repo (e.g. /opt/fleet/client) for a
+#                           branded deploy with its own MCP catalog + prompts.
 #   CHAT_DB_NAME            chat database name (default chat)
 #   CHAT_DB_USER            chat owner role  (default chat)
 #   CHAT_DB_PASSWORD        chat role password (local: generated if unset)
@@ -60,6 +64,7 @@ die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 
 ENV_FILE="${FLEET_ENV_FILE:-.env.local}"
+CLIENT_CONFIG_DIR="${FLEET_CLIENT_CONFIG_DIR:-config/default}"
 CHAT_DB_NAME="${CHAT_DB_NAME:-chat}"
 CHAT_DB_USER="${CHAT_DB_USER:-chat}"
 SCHED_DB_NAME="${SCHED_DB_NAME:-sched}"
@@ -81,6 +86,19 @@ else
     chmod 0600 "$ENV_FILE"
     ok "${ENV_FILE} present (mode set to 0600)"
   fi
+fi
+
+# ── client config bundle ──
+step "Checking client config bundle (FLEET_CLIENT_CONFIG_DIR=${CLIENT_CONFIG_DIR})"
+if [[ -f "${CLIENT_CONFIG_DIR}/manifest.yaml" ]]; then
+  ok "client bundle manifest found at ${CLIENT_CONFIG_DIR}/manifest.yaml"
+  if [[ "${CLIENT_CONFIG_DIR}" == "config/default" ]]; then
+    info "using the GENERIC default bundle (neutral branding, no MCP connectors)."
+    info "for a branded deploy, check out a client repo and set FLEET_CLIENT_CONFIG_DIR to it."
+  fi
+else
+  warn "no manifest.yaml at ${CLIENT_CONFIG_DIR} — fleet will fail to start until"
+  warn "FLEET_CLIENT_CONFIG_DIR points at a valid bundle (a dir with manifest.yaml)."
 fi
 
 # ── Postgres provisioning ──

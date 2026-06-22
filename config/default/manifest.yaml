@@ -1,0 +1,79 @@
+# Generic client bundle — ships in fleet so the app runs bare with no
+# client-specific content. A real deployment points FLEET_CLIENT_CONFIG_DIR at a
+# checked-out client repo whose manifest overrides everything here.
+#
+# See internal/clientconfig and config/default/README.md for the bundle contract.
+
+branding:
+  app_name: "Fleet"
+  login_title: "Welcome aboard."
+  login_tagline: "Sign in to your workspace and pick up where you left off."
+  share_title: "Fleet — your team's AI workspace"
+  share_description: "Persistent multi-turn conversations with real tool use across files, data, and the web."
+
+models:
+  default_core: "google/gemini-3.5-flash"
+  default_max: "anthropic/claude-sonnet-4.5"
+
+# No client MCP servers in the generic bundle: the catalog is empty so fleet
+# runs without any credentialed connectors. A client bundle declares its own
+# mcp_servers[] here (see /root/elcano-config/manifest.yaml for a full example).
+mcp_servers: []
+
+# Agent tool-behavior policy. Client-specific (e.g. ad-tech DSP deal tools); the
+# generic bundle ships NONE, so fleet stays on its base generic critical
+# suffixes (send_email, send_template_email — always enforced regardless of this
+# section). A client bundle overrides this with its full lists:
+#   parallel_safe_tools:        fully-prefixed MCP tool names safe to run in
+#                               parallel within one assistant turn.
+#   critical_tools:             bare tool-name suffixes that require audit gating
+#                               before execution (base email suffixes are added
+#                               automatically — list only client-specific ones).
+#   critical_tool_substitutes:  committed-suffix -> allowed executed substitute
+#                               suffixes that may discharge the commitment.
+agent_policy:
+  parallel_safe_tools: []
+  critical_tools: []
+  critical_tool_substitutes: {}
+
+empty_state:
+  # Neutral example quick-start cards. The shape is the web's ProtocolPill — the
+  # Go side passes these through to the browser as opaque JSON.
+  cards:
+    - id: "summarize"
+      section: "Get started"
+      type: "form"
+      icon: "file-text"
+      title: "Summarize a document"
+      desc: "Paste or attach a document and get a concise summary."
+      cta: "Summarize"
+      fields:
+        - key: "focus"
+          label: "What should the summary focus on?"
+          type: "text"
+          placeholder: "key decisions, action items, risks…"
+      promptTemplate: "Summarize the attached/pasted document."
+    - id: "analyze-data"
+      section: "Get started"
+      type: "conversation"
+      optionalForm: true
+      icon: "bar-chart"
+      title: "Analyze a dataset"
+      desc: "Attach a CSV and ask questions — I'll run Python to dig in."
+      cta: "Start analysis"
+      starterPrompt: "I'd like to analyze a dataset. Ask me what you need to know, then load it with Python and walk me through what stands out."
+    - id: "draft"
+      section: "Get started"
+      type: "form"
+      icon: "edit"
+      title: "Draft something"
+      desc: "An email, a plan, a snippet of code — describe it and I'll draft it."
+      cta: "Draft it"
+      fields:
+        - key: "what"
+          label: "What should I draft?"
+          type: "text"
+          required: true
+          placeholder: "a follow-up email to a client about…"
+      promptTemplate: "Draft the following for me, and ask me anything you need first."
+  protocol_pills: []
