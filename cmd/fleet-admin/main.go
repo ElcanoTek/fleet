@@ -13,6 +13,7 @@
 //	fleet-admin chat user add|update|del|list
 //	fleet-admin sched user add|update|set-role|rename|del|list
 //	fleet-admin sched apikey create|list|revoke|delete
+//	fleet-admin sched task export|import   (versioned JSON via stdout/stdin)
 //	fleet-admin mcp account set|list|del
 //	fleet-admin notes set|get|list|rm
 //	fleet-admin notes proposal publish|reject
@@ -99,6 +100,8 @@ Users, credentials, notes:
   fleet-admin sched apikey list
   fleet-admin sched apikey revoke <key-id>
   fleet-admin sched apikey delete <key-id>
+  fleet-admin sched task export > tasks.json    (versioned JSON of scheduled tasks → stdout)
+  fleet-admin sched task import < tasks.json     (recreate tasks from stdin; upsert on id)
   fleet-admin mcp account set <server> <account> --secret KEY=-   (value via stdin)
   fleet-admin mcp account list <server>
   fleet-admin mcp account del <server> <account>
