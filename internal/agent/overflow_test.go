@@ -140,7 +140,7 @@ func TestTruncateToolResults_OverflowFileContent(t *testing.T) {
 	truncateToolResults(messages, dir)
 
 	path := filepath.Join(dir, "tool-result-call-overflow-chat-abc.json")
-	data, err := os.ReadFile(path) //nolint:gosec // path is derived from our sanitized id under a test-owned dir
+	data, err := os.ReadFile(path) // path is derived from our sanitized id under a test-owned dir
 	if err != nil {
 		t.Fatalf("overflow file should exist at %s: %v", path, err)
 	}

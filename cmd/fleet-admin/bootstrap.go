@@ -54,10 +54,7 @@ func findBootstrapScript() string {
 		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "scripts", "bootstrap.sh"))
 	}
 	for _, c := range candidates {
-		// G703: candidate paths are operator-controlled — FLEET_ROOT env, the
-		// literal "scripts/bootstrap.sh", and the binary's own dir — never
-		// request or LLM input.
-		if _, err := os.Stat(c); err == nil { //nolint:gosec
+		if _, err := os.Stat(c); err == nil { //nolint:gosec // G703: candidate paths are operator-controlled (FLEET_ROOT env, the literal "scripts/bootstrap.sh", the binary's own dir), never request or LLM input.
 			return c
 		}
 	}

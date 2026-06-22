@@ -298,7 +298,7 @@ func getFileChecksum(dataDir, filename string) (string, error) {
 
 	// Ensure checksums directory exists before writing (checksumDir was already
 	// validated within uploadsDir above).
-	if err := os.MkdirAll(checksumDir, 0700); err == nil { //nolint:gosec // G703: checksumDir is asserted within uploadsDir via withinDir/filepath.Rel above.
+	if err := os.MkdirAll(checksumDir, 0700); err == nil {
 		// Cache the result for next time
 		if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil { //nolint:gosec // G703: checksumPath is asserted within checksumDir via withinDir/filepath.Rel above.
 			//nolint:gosec // G706: filename is sanitized via logSafe (strips CR/LF) and already passed sanitizeFilename; gosec's taint tracker cannot see through the helper.
