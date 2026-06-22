@@ -305,6 +305,12 @@ func (s *memStore) CreateConversation(_ context.Context, userEmail, title, perso
 	return c, nil
 }
 
+func (s *memStore) Get(_ context.Context, _ string, convID string) (*store.Conversation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.convs[convID], nil // nil when absent (matches *store.Store.Get)
+}
+
 func (s *memStore) LoadHistory(_ context.Context, convID string) ([]agent.HistoryEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

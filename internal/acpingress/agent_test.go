@@ -53,11 +53,17 @@ type wired struct {
 // setup wires the agent + editor over io.Pipe with the given scripted model and
 // editor permission policy. Closing happens via t.Cleanup.
 func setup(t *testing.T, model fantasy.LanguageModel, cfg Config) *wired {
+	return setupOn(t, model, cfg, newMemStore())
+}
+
+// setupOn is setup over an EXISTING memStore — used by the resume tests to wire a
+// SECOND IngressAgent (a fresh connection + empty in-mem session map) against the
+// SAME persisted store, simulating a `fleet acp` restart.
+func setupOn(t *testing.T, model fantasy.LanguageModel, cfg Config, st *memStore) *wired {
 	t.Helper()
 	clientToAgentR, clientToAgentW := pipePair()
 	agentToClientR, agentToClientW := pipePair()
 
-	st := newMemStore()
 	runner := &fakeRunner{}
 	spy := &recordingObserver{}
 	eng := newFakeEngine(model)

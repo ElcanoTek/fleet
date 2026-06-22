@@ -2,8 +2,11 @@ package acpingress
 
 import (
 	"context"
+	"encoding/json"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	"github.com/ElcanoTek/fleet/internal/agent"
 )
 
 // ingressSink adapts the governed turn's agent.EventSink (the SAME sink the web
@@ -116,6 +119,44 @@ func (s *ingressSink) toolResult(toolCallID string, isErr bool) {
 		SessionId: s.sessionID,
 		Update:    acp.UpdateToolCall(acp.ToolCallId(toolCallID), acp.WithUpdateStatus(status)),
 	})
+}
+
+// replayToEditor re-renders a persisted conversation transcript to the editor on
+// session/load, so a reconnecting host shows the prior turns. It routes each entry
+// through the SAME Emit mapping the live stream uses (so a tool_call+tool_result
+// pair yields exactly one tool card with a terminal status, not two) — except the
+// user's own messages, which Emit never streams, surfaced here as user message
+// chunks. It runs NO turn and executes NO tools; it only replays already-persisted
+// content. Unknown/empty entries are skipped.
+func (s *ingressSink) replayToEditor(entries []agent.HistoryEntry) {
+	for _, e := range entries {
+		var c struct {
+			Text  string `json:"text"`
+			ID    string `json:"id"`
+			Name  string `json:"name"`
+			Input string `json:"input"`
+			IsErr bool   `json:"is_err"`
+		}
+		_ = json.Unmarshal(e.Content, &c)
+
+		switch {
+		case e.Role == "user" && e.Type == "text":
+			if c.Text != "" {
+				_ = s.conn.SessionUpdate(context.Background(), acp.SessionNotification{
+					SessionId: s.sessionID,
+					Update:    acp.UpdateUserMessageText(c.Text),
+				})
+			}
+		case e.Type == "text":
+			s.Emit("text", map[string]any{"text": c.Text})
+		case e.Type == "reasoning":
+			s.Emit("reasoning", map[string]any{"text": c.Text})
+		case e.Type == "tool_call":
+			s.Emit("tool.call", map[string]any{"id": c.ID, "name": c.Name, "input": c.Input})
+		case e.Type == "tool_result":
+			s.Emit("tool.result", map[string]any{"id": c.ID, "is_err": c.IsErr})
+		}
+	}
 }
 
 // toolTitle returns a human-readable tool-call title for the editor card.
