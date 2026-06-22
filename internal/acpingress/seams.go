@@ -30,6 +30,11 @@ type TurnEngine interface {
 type ConversationStore interface {
 	// CreateConversation creates the fleet conversation bound to an ACP session.
 	CreateConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error)
+	// Get returns the conversation by id, scoped to userEmail (nil,nil when absent).
+	// The conversation row IS the durable ACP-session binding — the SessionId equals
+	// conv.ID — so this is how a reconnect after a `fleet acp` restart rehydrates a
+	// session (LoadSession / ResumeSession / a post-restart Prompt).
+	Get(ctx context.Context, userEmail, convID string) (*store.Conversation, error)
 	// LoadHistory returns the conversation's persisted history for replay.
 	LoadHistory(ctx context.Context, convID string) ([]agent.HistoryEntry, error)
 	// AppendHistory persists this turn's new history entries (atomic batch).
