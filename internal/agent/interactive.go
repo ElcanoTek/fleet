@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"charm.land/fantasy"
@@ -160,7 +161,12 @@ func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Obs
 		return agentcore.Result{}, fmt.Errorf("marshal turn messages: %w", err)
 	}
 
-	rt := acpruntime.NewClientRuntime(acpruntime.ClientConfig{Image: tc.NativeAgentImage})
+	rt := acpruntime.NewClientRuntime(acpruntime.ClientConfig{
+		Image: tc.NativeAgentImage,
+		// Pass ONLY the model-endpoint credentials into the agent container —
+		// its one allowed egress. MCP creds are never shipped (host-brokered).
+		ModelEnv: modelEndpointEnv(),
+	})
 	res, err := rt.Run(ctx,
 		acpruntime.RunSpec{
 			Mode:                agentcore.ModeInteractive.String(),
@@ -210,6 +216,22 @@ func slugOf(m fantasy.LanguageModel) string {
 		return ""
 	}
 	return m.Model()
+}
+
+// modelEndpointEnv collects the model-endpoint env vars the native ACP agent
+// needs to drive the LLM loop inside its container: the OpenRouter API key and
+// (for dev/E2E) the base-URL override. These are the ONLY secrets that enter
+// the agent container — MCP credentials are brokered host-side at delegation
+// and never shipped in. Vendor-named (un-prefixed), matching how the rest of
+// the codebase reads them.
+func modelEndpointEnv() map[string]string {
+	env := map[string]string{}
+	for _, k := range []string{"OPENROUTER_API_KEY", "OPENROUTER_BASE_URL"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			env[k] = v
+		}
+	}
+	return env
 }
 
 // latestUserText returns the text of the last user message in the slice (the new
