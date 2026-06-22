@@ -133,6 +133,7 @@ func maxConcurrentFromEnv() int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
+		//nolint:gosec // G706 false positive: v is rendered with %q, which escapes any CR/LF, so it cannot forge log lines. v is also an operator-set env var, not request input.
 		log.Printf("⚠ Ignoring invalid FLEET_MAX_CONCURRENT_AGENTS=%q; using default %d", v, DefaultMaxConcurrentAgents)
 		return DefaultMaxConcurrentAgents
 	}

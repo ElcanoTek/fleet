@@ -146,7 +146,13 @@ func (h *Handlers) ElcanoLogin(w http.ResponseWriter, r *http.Request) {
 // name + domain + path match how auth set the cookie, so we mirror them here.
 func (h *Handlers) ElcanoLogout(w http.ResponseWriter, r *http.Request) {
 	secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
-	http.SetCookie(w, &http.Cookie{
+	// G124: HttpOnly + SameSite are always set; Secure is conditional ON the
+	// request being HTTPS so plain-HTTP local dev still works. This is a
+	// DELETION cookie (Value="", MaxAge=-1) carrying no secret, and its
+	// attributes must mirror how auth originally set the cookie for the browser
+	// to actually clear it — forcing Secure here unconditionally would prevent
+	// logout from clearing the cookie over plain HTTP.
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec
 		Name:     h.config.ElcanoCookieName,
 		Value:    "",
 		Path:     "/",
