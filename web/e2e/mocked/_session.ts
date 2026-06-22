@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { BrowserContext } from "@playwright/test";
-import { TEST_SESSION_SECRET } from "../../playwright.config";
+import { TEST_SESSION_SECRET, TEST_AUTH_PRIVATE_KEY_PEM } from "../../playwright.config";
 
 // Session helpers for the mocked suite. Both login paths the unified middleware
 // accepts can be minted here so a spec can start "already logged in" without
@@ -32,16 +32,14 @@ export function mintSessionToken(email: string): string {
 }
 
 // ── elcano_auth: Ed25519 cookie (magic-link path) ──────────────────────────
-// The PRIVATE half of the throwaway keypair whose PUBLIC half is exported to the
-// server as AUTH_SIGNING_PUBKEY in playwright.config.ts. Signing here lets a
-// spec mint a token the real verifier (verifyElcanoToken) accepts, exercising
-// the Ed25519 branch of the dual-login middleware. Token format mirrors the auth
-// service: base64url(JSON{email,tenant,iat,exp}) + "." + base64url(ed25519Sig),
+// The PRIVATE half of the throwaway keypair is GENERATED AT RUNTIME in
+// playwright.config.ts (no key literal in the repo) and imported here; its
+// matching PUBLIC half is exported to the server as AUTH_SIGNING_PUBKEY in the
+// same config, so server + signer always agree. Signing here lets a spec mint a
+// token the real verifier (verifyElcanoToken) accepts, exercising the Ed25519
+// branch of the dual-login middleware. Token format mirrors the auth service:
+// base64url(JSON{email,tenant,iat,exp}) + "." + base64url(ed25519Sig),
 // signature over the base64url body STRING.
-const TEST_AUTH_PRIVATE_KEY_PEM = `-----BEGIN PRIVATE KEY-----
-***REMOVED***
------END PRIVATE KEY-----`;
-
 export function mintElcanoToken(email: string): string {
   const now = Math.floor(Date.now() / 1000);
   const payload = JSON.stringify({ email: email.toLowerCase(), tenant: "", iat: now, exp: now + 60 * 60 * 24 });

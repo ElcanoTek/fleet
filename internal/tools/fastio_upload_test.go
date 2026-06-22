@@ -76,7 +76,7 @@ func TestFastIOUploadFile_ForwardsBytesAsBase64(t *testing.T) {
 
 	out, err := runFastIOUpload(ctx, caller, FastIOUploadFileParams{
 		Path:        "report.docx",
-		WorkspaceID: "***REMOVED***",
+		WorkspaceID: "1234567890000000000",
 	})
 	if err != nil {
 		t.Fatalf("upload returned error: %v", err)
@@ -100,7 +100,7 @@ func TestFastIOUploadFile_ForwardsBytesAsBase64(t *testing.T) {
 	for k, want := range map[string]string{
 		"action":         "stream-upload",
 		"profile_type":   "workspace",
-		"profile_id":     "***REMOVED***",
+		"profile_id":     "1234567890000000000",
 		"parent_node_id": "root",
 		"filename":       "report.docx",
 		"content_type":   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

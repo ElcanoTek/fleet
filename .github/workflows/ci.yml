@@ -147,13 +147,16 @@ jobs:
       # The mocked e2e suite drives the REAL Next app but route-intercepts every
       # Go backend, so no chat-server / orchestrator / OpenRouter / Podman is
       # needed — it's fully deterministic. These throwaway secrets must be set at
-      # BOTH build time (server components read AUTH_SIGNING_PUBKEY to render the
-      # "Use Elcano email" button) and runtime (the session HMAC + Ed25519
-      # verification). playwright.config.ts also passes them to the `next start`
-      # webServer it boots, so they're defined once here for the build step.
+      # build time (server components read AUTH_SIGNING_PUBKEY to render the
+      # "Use Elcano email" button). At RUNTIME the mocked suite regenerates a
+      # fresh Ed25519 keypair per run (see web/e2e/test-auth-key.ts) and
+      # playwright.config.ts overrides AUTH_SIGNING_PUBKEY on the `next start`
+      # webServer with that generated pubkey — so the value below only needs to
+      # be a shape-valid throwaway pubkey for the build-step button render.
       CHAT_MOCK_MODE: '1'
       APP_SESSION_SECRET: e2e-session-secret-0123456789abcdef
-      AUTH_SIGNING_PUBKEY: ***REMOVED***
+      # TEST ONLY — throwaway Ed25519 pubkey, not used in any deployment.
+      AUTH_SIGNING_PUBKEY: P8Lyn/xy8bS2SWcnPkg2kKiGBctyJZdEMMzNEixh0As=
       CHAT_SERVER_URL: http://127.0.0.1:18080
       CHAT_SERVER_TOKEN: e2e-shared-secret
       ORCHESTRATOR_SERVER_URL: http://127.0.0.1:18000

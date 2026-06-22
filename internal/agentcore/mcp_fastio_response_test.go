@@ -37,10 +37,10 @@ const realFastIOSearchResponse = `**Result:** success
 
 # _next
 - Search hits at detail='terse' do NOT indicate trash status, and content_snippet is platform-capped at ~200 bytes (hits ending in ` + "`" + `…` + "`" + ` have more content available). Bump to detail='standard' for both trash visibility (the ` + "`" + `deleted` + "`" + `/` + "`" + `deleted_from` + "`" + ` lifecycle fields) and a longer snippet (~600 bytes), or detail='full' for the untruncated snippet.
-- Upload a file: upload action create-session with profile_type="workspace", profile_id="***REMOVED***" (then POST /blob + chunk + finalize), or upload action web-import for URLs
-- Search files: storage action search with profile_type="workspace", profile_id="***REMOVED***"
-- Download a file: download action file-url with profile_type="workspace", profile_id="***REMOVED***"
-- Ask AI about files: ai action chat-create with workspace_id="***REMOVED***"
+- Upload a file: upload action create-session with profile_type="workspace", profile_id="1234567890000000000" (then POST /blob + chunk + finalize), or upload action web-import for URLs
+- Search files: storage action search with profile_type="workspace", profile_id="1234567890000000000"
+- Download a file: download action file-url with profile_type="workspace", profile_id="1234567890000000000"
+- Ask AI about files: ai action chat-create with workspace_id="1234567890000000000"
 - ` + "`" + ` fetch one with storage action='details' node_id=<id> (use entries from _fetched_ids to recover specific results) ` + "`" + `
 `
 
@@ -53,7 +53,7 @@ const realFastIODetailsSingleResponse = `**Result:** success
 single
 
 # node
-- **id:** ***REMOVED***
+- **id:** aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff
 - **type:** file
 - **name:** ABC_ELC00109_Overall_Report.csv
 - **parent:** root
@@ -97,29 +97,30 @@ single
 2026.05.7-b118774ec8
 
 # web_url
-https://elcano.fast.io/workspace/3117763504443666597-general/preview/***REMOVED***
+https://elcano.fast.io/workspace/3117763504443666597-general/preview/aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff
 
 # _next
 - Download: download action file-url
 - Comment: comment action add
 `
 
-// Real fast.io download.file-url response. The JWT in download_token
-// is the same JWT embedded in download_url's ?token= query — pure
-// duplication.
-const realFastIODownloadResponse = `**Result:** success
+// Fabricated fast.io download.file-url response (TEST FIXTURE ONLY — all
+// tokens/ids are made-up, not from any live workspace). The JWT in
+// download_token is the same JWT embedded in download_url's ?token= query —
+// pure duplication, preserved here so the trim parser sees production's shape.
+const fakeFastIODownloadResponse = `**Result:** success
 
 # download_token
-***REMOVED***
+eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJvcCI6ImRsIiwic3ViIjoiZXhhbXBsZS1mYWtlLW9iamVjdCIsImV4cGlyZXMiOjk5OTk5OTk5OTksImlhdCI6MTcwMDAwMDAwMCwiaWQiOmZhbHNlfQ.FAKEFAKEsignaturesegmentforTESTfixtureONLYnotarealtokenAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 # download_url
-https://api.fast.io/current/workspace/***REMOVED***/storage/***REMOVED***/read/?token=***REMOVED***
+https://api.fast.io/current/workspace/1234567890000000000/storage/aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff/read/?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJvcCI6ImRsIiwic3ViIjoiZXhhbXBsZS1mYWtlLW9iamVjdCIsImV4cGlyZXMiOjk5OTk5OTk5OTksImlhdCI6MTcwMDAwMDAwMCwiaWQiOmZhbHNlfQ.FAKEFAKEsignaturesegmentforTESTfixtureONLYnotarealtokenAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 # resource_uri
-download://workspace/***REMOVED***/***REMOVED***
+download://workspace/1234567890000000000/aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff
 
 # web_url
-https://elcano.fast.io/workspace/3117763504443666597-general/preview/***REMOVED***
+https://elcano.fast.io/workspace/3117763504443666597-general/preview/aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff
 
 # _next
 - Return the download_url to the user — it provides direct file access
@@ -230,7 +231,7 @@ func TestTrimFastIOResponse_DetailsSavings(t *testing.T) {
 // === Download response (drop JWT duplication + resource_uri) ===
 
 func TestTrimFastIOResponse_DownloadDropsTokenAndResourceURI(t *testing.T) {
-	got := trimFastIOResponse(realFastIODownloadResponse)
+	got := trimFastIOResponse(fakeFastIODownloadResponse)
 	for _, must := range []string{
 		"# download_token",
 		"# resource_uri",
@@ -291,7 +292,7 @@ func TestTrimFastIOResponse_NontrivialByteSavings(t *testing.T) {
 	}{
 		{"search", realFastIOSearchResponse},
 		{"details", realFastIODetailsSingleResponse},
-		{"download", realFastIODownloadResponse},
+		{"download", fakeFastIODownloadResponse},
 		{"upload", realFastIOUploadCreateSessionResponse},
 	}
 	for _, c := range cases {
