@@ -256,7 +256,7 @@ func (m *mcpTool) Info() fantasy.ToolInfo {
 		Description: m.tool.Description,
 		Parameters:  parameters,
 		Required:    required,
-		Parallel:    parallelSafeMCPTools[m.Name()],
+		Parallel:    isParallelSafeTool(m.Name()),
 	}
 }
 

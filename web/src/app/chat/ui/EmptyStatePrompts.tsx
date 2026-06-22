@@ -5,6 +5,7 @@ import {
   asText,
   formInitialValues,
   isPillReady,
+  pillToPrompt,
   type DateRangeValue,
   type PillField,
   type PillFieldValue,
@@ -100,7 +101,7 @@ export function ProtocolPillForm({
   const baseFields = fields.filter((f) => !f.advanced);
   const advFields = fields.filter((f) => f.advanced);
   const ready = isPillReady(pill, values);
-  const generatedPrompt = pill.promptTemplate?.(values) ?? "";
+  const generatedPrompt = pillToPrompt(pill, values);
 
   // The skip link reads the same on every pill, but conversation pills (the
   // diagnostic) start a real chat intake while form pills seed the composer.
@@ -162,7 +163,7 @@ export function ProtocolPillForm({
           onClick={() =>
             canStartChat
               ? onStartChat(pill.starterPrompt ?? "")
-              : onDescribe(pill.describePreload?.(values) ?? "")
+              : onDescribe(generatedPrompt)
           }
           className="inline-flex items-center gap-1 text-[0.8rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] focus-visible:rounded-[var(--radius-sm)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
