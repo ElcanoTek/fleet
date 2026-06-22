@@ -62,8 +62,8 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// errors out with "Content file not found" when they click Send.
 	// Materializing here (the one place that has convID + the file is
 	// still on disk) closes both gaps at once. See logs/Email-to-Kyle-*.
-	if toolName == "preview_email" || toolName == "send_email" || strings.HasSuffix(toolName, "_send_email") {
-		inlined, err := materializeContentFile(a.conversationID, rawInput)
+	if tools.IsEmailToolName(toolName) {
+		inlined, err := tools.MaterializeContentFile(a.conversationID, rawInput)
 		if err != nil {
 			return "", err
 		}
@@ -74,7 +74,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		// workspace/<convID>/ never resolves at send time. Rewrite
 		// relative attachment paths to absolute now so the args
 		// replayed post-approval carry resolvable paths.
-		rewritten, err := materializeAttachmentPaths(a.conversationID, rawInput)
+		rewritten, err := tools.MaterializeAttachmentPaths(a.conversationID, rawInput)
 		if err != nil {
 			return "", err
 		}
@@ -278,145 +278,6 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 		approval.ID,
 	)
 	return approval.ID, msg, nil
-}
-
-// maxInlinedContentBytes caps what we pull off disk into a staged
-// approval. SendGrid accepts ~30 MiB total including attachments; a
-// ten-megabyte body is already far beyond any reasonable marketing
-// email and would bloat the approvals row, the SSE event, and the
-// UI preview state. If a legitimate use case ever needs more, lift
-// the cap — don't quietly truncate.
-const maxInlinedContentBytes = 10 << 20
-
-// materializeContentFile reads content_file (relative paths resolved
-// against the conversation workspace that run_python chdirs into) and
-// rewrites the JSON args so content holds the inline bytes and
-// content_file is removed. Returns the unchanged rawInput if the args
-// don't parse or don't name a file. When content_file is set, it
-// always takes precedence over any inline content — matching the tool
-// descriptions and the MCP sendgrid server's behavior.
-func materializeContentFile(convID, rawInput string) (string, error) {
-	var args map[string]any
-	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
-		return rawInput, nil //nolint:nilerr // non-JSON args pass through unchanged
-	}
-	file, _ := args["content_file"].(string)
-	file = strings.TrimSpace(file)
-	if file == "" {
-		return rawInput, nil
-	}
-
-	// content_file takes precedence over inline content — the tool
-	// descriptions for both preview_email and send_email document this
-	// contract, and the MCP sendgrid server enforces the same rule.
-	// Always read the file when content_file is set, replacing any
-	// inline content the agent may have also provided.
-	path := os.ExpandEnv(file)
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			path = filepath.Join(home, path[2:])
-		}
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(tools.WorkspaceDirForConversation(convID), path)
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", fmt.Errorf("read content_file %q: %w", file, err)
-	}
-	if info.Size() > maxInlinedContentBytes {
-		return "", fmt.Errorf("content_file %q is %d bytes, exceeds %d-byte inline cap", file, info.Size(), maxInlinedContentBytes)
-	}
-	data, err := os.ReadFile(path) //nolint:gosec // path resolved within per-conversation workspace by caller
-	if err != nil {
-		return "", fmt.Errorf("read content_file %q: %w", file, err)
-	}
-
-	args["content"] = string(data)
-	delete(args, "content_file")
-	out, err := json.Marshal(args)
-	if err != nil {
-		return rawInput, err
-	}
-	return string(out), nil
-}
-
-// materializeAttachmentPaths rewrites every relative `path` inside the
-// `attachments` and `inline_attachments` arrays to an absolute path
-// rooted at the conversation workspace dir. The sendgrid MCP resolves
-// paths against ITS cwd, which is not the per-conversation workspace —
-// so bare filenames the agent passes (e.g. "chart.png" written by
-// run_python into workspace/<convID>/) never resolve at send time, and
-// the post-approval send errors out with "Inline attachment file not
-// found." Doing this at staging time means the staged args row carries
-// absolute paths, and the replay after approval works.
-//
-// Symmetric with materializeContentFile: same convID, same workspace
-// resolution, same `~/` and `$VAR` expansion. Skips entries that are
-// already absolute, unparseable args, missing arrays, or non-string
-// path fields. Files don't need to exist at staging time — preview_email
-// stages before the file is necessarily on disk in some flows; the
-// real MCP call is the one that needs the file.
-func materializeAttachmentPaths(convID, rawInput string) (string, error) {
-	var args map[string]any
-	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
-		return rawInput, nil //nolint:nilerr // non-JSON args pass through unchanged
-	}
-	// Short-circuit: skipping the marshal round-trip when neither array
-	// exists keeps rawInput byte-identical for the common no-attachment
-	// case (and avoids alphabetizing keys in the args row).
-	_, hasA := args["attachments"].([]any)
-	_, hasI := args["inline_attachments"].([]any)
-	if !hasA && !hasI {
-		return rawInput, nil
-	}
-	changed := false
-	rewriteList := func(key string) {
-		raw, ok := args[key].([]any)
-		if !ok {
-			return
-		}
-		for i, item := range raw {
-			obj, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			file, ok := obj["path"].(string)
-			if !ok {
-				continue
-			}
-			file = strings.TrimSpace(file)
-			if file == "" {
-				continue
-			}
-			path := os.ExpandEnv(file)
-			if strings.HasPrefix(path, "~/") {
-				if home, err := os.UserHomeDir(); err == nil {
-					path = filepath.Join(home, path[2:])
-				}
-			}
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(tools.WorkspaceDirForConversation(convID), path)
-			}
-			if path != obj["path"] {
-				obj["path"] = path
-				raw[i] = obj
-				changed = true
-			}
-		}
-		args[key] = raw
-	}
-	rewriteList("attachments")
-	rewriteList("inline_attachments")
-	if !changed {
-		return rawInput, nil
-	}
-	out, err := json.Marshal(args)
-	if err != nil {
-		return rawInput, err
-	}
-	return string(out), nil
 }
 
 // prevalidateEmail calls the MCP validate_email_content tool to catch
