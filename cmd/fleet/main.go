@@ -186,10 +186,18 @@ func run() error {
 	// the bundle's runtimes catalog (process-wide; the scheduled Task model carries
 	// no per-task runtime). An unknown / empty value falls back to native-inprocess.
 	// native-acp scheduled tasks reuse the SAME native-agent image as interactive.
+	// An EXTERNAL (type: acp / delegated_policy) flavor is admitted on the scheduler
+	// ONLY behind the per-client opt-in below — otherwise the scheduled-external gate
+	// fails it closed at dispatch (internal/agent/scheduled_external.go).
 	scheduledRuntime := clientconfig.RuntimeNativeInprocess
+	var scheduledFlavor clientconfig.Runtime
+	if rt, ok := bundle.Runtime(clientconfig.RuntimeNativeInprocess); ok {
+		scheduledFlavor = rt
+	}
 	if want := strings.TrimSpace(cfg.ScheduledRuntime); want != "" {
 		if rt, ok := bundle.Runtime(want); ok {
 			scheduledRuntime = rt.Name
+			scheduledFlavor = rt
 		} else {
 			log.Printf("FLEET_SCHEDULED_RUNTIME not found in bundle; using %s", clientconfig.RuntimeNativeInprocess)
 		}
@@ -197,10 +205,22 @@ func run() error {
 	if scheduledRuntime == clientconfig.RuntimeNativeACP && nativeAgentImage == "" {
 		log.Printf("warn: scheduled runtime native-acp selected but no native-agent image is configured; scheduled tasks will fall back to in-process")
 	}
+	// The per-client opt-in for ungoverned external agents on the scheduler. Default
+	// false (the generic bundle leaves it unset): a scheduled-external task without
+	// this is a LOUD ERROR at dispatch (fail-closed; no fallback to a native flavor).
+	allowUngovernedScheduled := bundlePolicy.AllowUngovernedScheduledAgents
+	externalScheduled := scheduledFlavor.Type == clientconfig.RuntimeTypeACP || scheduledFlavor.DelegatedPolicy
+	if externalScheduled {
+		log.Printf("scheduled runtime %q is EXTERNAL (containment tier, governance: delegated); allow_ungoverned_scheduled_agents=%v",
+			scheduledRuntime, allowUngovernedScheduled)
+		if !allowUngovernedScheduled {
+			log.Printf("warn: scheduled-external runtime %q selected but allow_ungoverned_scheduled_agents is OFF; scheduled tasks will FAIL at dispatch (fail-closed, no fallback)", scheduledRuntime)
+		}
+	}
 	log.Printf("scheduled runtime: flavor=%s native_agent_image=%q", scheduledRuntime, nativeAgentImage)
 
 	// ── capped worker pool: TaskRunner = the scheduled agent over the SHARED sandbox pool ──
-	taskRunner := newScheduledRunner(cfg, mgr, schedStorage, notesProvider, personasDir, systemPromptsDir, protocolsDir, scheduledRuntime, nativeAgentImage)
+	taskRunner := newScheduledRunner(cfg, mgr, schedStorage, notesProvider, personasDir, systemPromptsDir, protocolsDir, scheduledRuntime, nativeAgentImage, scheduledFlavor, allowUngovernedScheduled)
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{})
 	log.Printf("worker pool: cap=%d", pool.Cap()) //nolint:gosec // G706 false positive: pool.Cap() is an int formatted with %d; it cannot carry CR/LF.
 

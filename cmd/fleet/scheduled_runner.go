@@ -10,6 +10,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -47,28 +48,43 @@ type scheduledRunner struct {
 
 	// runtime / nativeAgentImage select the scheduled execution flavor. Empty /
 	// "native-inprocess" runs the in-process loop; "native-acp" routes scheduled
-	// tasks through the sandboxed ACP agent (fully governed host-side). Resolved
-	// once at boot from FLEET_SCHEDULED_RUNTIME against the bundle's runtimes
-	// catalog (cmd/fleet/main.go).
+	// tasks through the sandboxed ACP agent (fully governed host-side); an external
+	// "acp" flavor routes through the containment-tier scheduled-external path
+	// (fail-closed; gated by allowUngovernedScheduled). Resolved once at boot from
+	// FLEET_SCHEDULED_RUNTIME against the bundle's runtimes catalog
+	// (cmd/fleet/main.go).
 	runtime          string
 	nativeAgentImage string
+
+	// runtimeFlavor is the resolved clientconfig descriptor for runtime. For an
+	// EXTERNAL (type: acp) flavor it carries the provider image, args, model_env,
+	// and the delegated-policy bit the scheduled-external path needs.
+	runtimeFlavor clientconfig.Runtime
+
+	// allowUngovernedScheduled is the per-client opt-in
+	// (agent_policy.allow_ungoverned_scheduled_agents, default false) that admits
+	// an EXTERNAL flavor as a SCHEDULED task. Off → scheduled-external is a loud
+	// error at dispatch (fail-closed).
+	allowUngovernedScheduled bool
 }
 
 // newScheduledRunner builds the scheduled TaskRunner. The base system prompt +
 // persona are read once at boot (operators editing them in place take effect on
 // the next process restart, matching the scheduled path's prior behaviour).
-func newScheduledRunner(cfg *config.Config, mgr *agent.Manager, st *storage.Storage, notes *notesAdapter, personasDir, systemPromptsDir, protocolsDir, runtime, nativeAgentImage string) *scheduledRunner {
+func newScheduledRunner(cfg *config.Config, mgr *agent.Manager, st *storage.Storage, notes *notesAdapter, personasDir, systemPromptsDir, protocolsDir, runtime, nativeAgentImage string, runtimeFlavor clientconfig.Runtime, allowUngovernedScheduled bool) *scheduledRunner {
 	r := &scheduledRunner{
-		cfg:              cfg,
-		mgr:              mgr,
-		storage:          st,
-		notesProvider:    notes,
-		noteProposer:     notes,
-		personasDir:      personasDir,
-		systemPromptsDir: systemPromptsDir,
-		protocolsDir:     protocolsDir,
-		runtime:          runtime,
-		nativeAgentImage: nativeAgentImage,
+		cfg:                      cfg,
+		mgr:                      mgr,
+		storage:                  st,
+		notesProvider:            notes,
+		noteProposer:             notes,
+		personasDir:              personasDir,
+		systemPromptsDir:         systemPromptsDir,
+		protocolsDir:             protocolsDir,
+		runtime:                  runtime,
+		nativeAgentImage:         nativeAgentImage,
+		runtimeFlavor:            runtimeFlavor,
+		allowUngovernedScheduled: allowUngovernedScheduled,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -150,20 +166,22 @@ func (r *scheduledRunner) Run(ctx context.Context, task *models.Task) (*models.L
 	defer mcpCleanup()
 
 	a := agent.NewAgent(agent.Options{
-		Config:           r.cfg,
-		Model:            model,
-		FallbackModel:    fallback,
-		MCPClient:        mcpClient,
-		NativeTools:      turnTools.Tools,
-		SystemPrompt:     r.baseSystemPrompt,
-		Persona:          r.cfg.Persona,
-		MaxIterations:    maxIter,
-		Sandbox:          sb,
-		NotesProvider:    r.notesProvider,
-		NoteProposer:     r.noteProposer,
-		Runtime:          r.runtime,
-		NativeAgentImage: r.nativeAgentImage,
-		MCPSelection:     taskMCPSelection(task),
+		Config:                   r.cfg,
+		Model:                    model,
+		FallbackModel:            fallback,
+		MCPClient:                mcpClient,
+		NativeTools:              turnTools.Tools,
+		SystemPrompt:             r.baseSystemPrompt,
+		Persona:                  r.cfg.Persona,
+		MaxIterations:            maxIter,
+		Sandbox:                  sb,
+		NotesProvider:            r.notesProvider,
+		NoteProposer:             r.noteProposer,
+		Runtime:                  r.runtime,
+		NativeAgentImage:         r.nativeAgentImage,
+		RuntimeFlavor:            r.runtimeFlavor,
+		AllowUngovernedScheduled: r.allowUngovernedScheduled,
+		MCPSelection:             taskMCPSelection(task),
 	})
 
 	runErr := a.Execute(ctx, task.Prompt)
