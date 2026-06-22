@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"sync"
 
 	"charm.land/fantasy"
 	acp "github.com/coder/acp-go-sdk"
@@ -203,6 +205,171 @@ func (s *delegatingStager) Propose(content string) (string, error) {
 	}
 	return resp.ProposalID, nil
 }
+
+// delegatingVerifier rides `_fleet/verify` to run the host-side end-of-run
+// verifier. The agent's scheduled policy DECIDES to verify (when its inner
+// audit/finish enforcement clears); the verifier EFFECT (an LLM re-check on the
+// host fallback model, host-side creds) runs on the host. Mirrors delegatingStager.
+type delegatingVerifier struct {
+	conn      *acp.AgentSideConnection
+	sessionID string
+}
+
+// verify ships the tool-exec summary + round and returns the missing required
+// actions. A transport failure OR a host-reported VerifyResponse.Error is
+// returned as an error so the caller (CanFinish) can fail OPEN, exactly as the
+// in-process verifier does on error.
+func (v *delegatingVerifier) verify(round int, records []ToolExecRecord) ([]string, error) {
+	raw, err := v.conn.CallExtension(context.Background(), ExtMethodVerify, VerifyRequest{
+		SessionID: v.sessionID,
+		Round:     round,
+		Records:   records,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ExtMethodVerify, err)
+	}
+	var resp VerifyResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("decode verify response: %w", err)
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+	return resp.Missing, nil
+}
+
+// toolExecAccumulator is an agentcore.Observer that builds the verifier's
+// tool-exec summary from the agent's OWN authoritative run stream — the
+// tool.call/tool.result events agentcore emits in this container. This is the
+// causally-ordered, ground-truth view at the moment the loop decides to finish,
+// so the verifier never depends on the host re-deriving the summary from a live
+// (cross-process, possibly-lossy) event projection. It pairs calls with results
+// the SAME way the host's buildToolExecSummary does: a call with no result counts
+// as failed.
+type toolExecAccumulator struct {
+	mu       sync.Mutex
+	callName map[string]string // tool_call id → tool name
+	results  []ToolExecRecord  // one per tool.result, in arrival order
+	resolved map[string]bool   // call ids that produced a result
+}
+
+func newToolExecAccumulator() *toolExecAccumulator {
+	return &toolExecAccumulator{callName: map[string]string{}, resolved: map[string]bool{}}
+}
+
+func (a *toolExecAccumulator) Observe(eventType string, payload map[string]any) {
+	switch eventType {
+	case "tool.call":
+		id, _ := payload["id"].(string)
+		name, _ := payload["name"].(string)
+		a.mu.Lock()
+		a.callName[id] = name
+		a.mu.Unlock()
+	case "tool.result":
+		id, _ := payload["id"].(string)
+		isErr, _ := payload["is_err"].(bool)
+		a.mu.Lock()
+		a.results = append(a.results, ToolExecRecord{Name: a.callName[id], Succeeded: !isErr})
+		a.resolved[id] = true
+		a.mu.Unlock()
+	}
+}
+
+// records returns the tool-exec summary: every completed tool result, plus any
+// issued tool call that never produced a result (counted failed, like the host's
+// buildToolExecSummary).
+func (a *toolExecAccumulator) records() []ToolExecRecord {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := append([]ToolExecRecord(nil), a.results...)
+	for id, name := range a.callName {
+		if !a.resolved[id] {
+			out = append(out, ToolExecRecord{Name: name, Succeeded: false})
+		}
+	}
+	return out
+}
+
+// observerFanout fans run events to two observers — the agent's delegating
+// observer (→ host) AND the tool-exec accumulator the verifier reads.
+type observerFanout struct {
+	a, b agentcore.Observer
+}
+
+func (f observerFanout) Observe(eventType string, payload map[string]any) {
+	f.a.Observe(eventType, payload)
+	f.b.Observe(eventType, payload)
+}
+
+// endOfRunVerifier runs the host-side verifier for a round + tool-exec summary.
+// *delegatingVerifier is the production implementation (over `_fleet/verify`);
+// the interface lets tests inject a fake without an ACP connection.
+type endOfRunVerifier interface {
+	verify(round int, records []ToolExecRecord) (missing []string, err error)
+}
+
+var _ endOfRunVerifier = (*delegatingVerifier)(nil)
+
+// verifyingScheduledPolicy wraps the agent's in-loop ScheduledPolicy with the
+// end-of-run verifier, mirroring the in-process scheduledPolicy.CanFinish exactly:
+// defer to the inner audit/finish enforcement; once it clears, run the verifier
+// ONCE; a non-empty missing list becomes a final enforcement round. The only
+// difference from in-process is WHERE the verifier runs — over `_fleet/verify` on
+// the host — so native-acp governs identically instead of silently skipping it.
+type verifyingScheduledPolicy struct {
+	inner    agentcore.Policy // the *agentcore.ScheduledPolicy; Unwrap exposes it for orchestration binding
+	verifier endOfRunVerifier
+	acc      *toolExecAccumulator
+	verified bool
+}
+
+var (
+	_ agentcore.Policy          = (*verifyingScheduledPolicy)(nil)
+	_ agentcore.PolicyUnwrapper = (*verifyingScheduledPolicy)(nil)
+)
+
+func (p *verifyingScheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
+	return p.inner.BeforeToolCall(toolName, toolCallID, rawInput)
+}
+
+func (p *verifyingScheduledPolicy) RecordToolResult(toolName, rawInput, resultText string, succeeded bool) {
+	p.inner.RecordToolResult(toolName, rawInput, resultText, succeeded)
+}
+
+func (p *verifyingScheduledPolicy) CanFinish(round int) (bool, []string) {
+	if ok, msgs := p.inner.CanFinish(round); !ok {
+		return false, msgs
+	}
+	if p.verified || p.verifier == nil {
+		return true, nil
+	}
+	// Attempt-once, set BEFORE the call: a flapping/erroring host verifier must not
+	// trap the loop into repeated verify rounds (parity with the in-process path).
+	p.verified = true
+	var recs []ToolExecRecord
+	if p.acc != nil {
+		recs = p.acc.records()
+	}
+	missing, err := p.verifier.verify(round, recs)
+	if err != nil {
+		// FAIL-OPEN on any verifier failure (transport, decode, host-side error),
+		// exactly as the in-process verifier logs and allows finish.
+		log.Printf("verifier skipped: %v", err)
+		return true, nil
+	}
+	if len(missing) == 0 {
+		return true, nil
+	}
+	return false, []string{fmt.Sprintf(
+		"End-of-run verification found unfinished required actions: %v. "+
+			"Complete each one now, or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
+		missing)}
+}
+
+// Unwrap exposes the inner ScheduledPolicy so agentcore can reach its
+// orchestration state (confirm_audit binding + usage), identical to the
+// in-process scheduledPolicy wrapper.
+func (p *verifyingScheduledPolicy) Unwrap() agentcore.Policy { return p.inner }
 
 // noteProposerAdapter adapts delegatingStager's note path to agentcore.NoteProposer
 // (whose Propose has a different signature than MemoryProposer.Propose, so it
