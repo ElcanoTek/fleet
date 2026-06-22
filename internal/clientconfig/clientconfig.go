@@ -108,10 +108,21 @@ type Bundle struct {
 //     only the client-specific ones).
 //   - CriticalToolSubstitutes: committed-suffix -> allowed executed substitute
 //     suffixes that may discharge the commitment.
+//   - AllowUngovernedScheduledAgents: the per-client OPT-IN that lets an EXTERNAL
+//     (type: acp / delegated_policy) flavor run as a SCHEDULED task. Default
+//     false. fleet's scheduled path is FAIL-CLOSED: with this off, a scheduled
+//     task that selects an external flavor is a LOUD ERROR at dispatch (never a
+//     silent fallback to a native flavor). With it on, the scheduled-external run
+//     is admitted at the CONTAINMENT tier (governance: delegated, sandbox
+//     REQUIRED, permissions default-DENY — there is no human on the scheduled
+//     loop). The generic bundle leaves it false/unset. See docs/USING-AGENTS.md
+//     ("scheduled-external") and internal/agent/scheduled.go for the gate.
 type AgentPolicy struct {
 	ParallelSafeTools       []string            `yaml:"parallel_safe_tools"`
 	CriticalToolSuffixes    []string            `yaml:"critical_tools"`
 	CriticalToolSubstitutes map[string][]string `yaml:"critical_tool_substitutes"`
+
+	AllowUngovernedScheduledAgents bool `yaml:"allow_ungoverned_scheduled_agents"`
 }
 
 // Sandbox is the bundle's resolved execution-sandbox descriptor. The sandbox is
@@ -459,8 +470,9 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 // base generic critical suffixes with no parallel-safe or DSP-specific tools.
 func (b *Bundle) AgentPolicy() AgentPolicy {
 	p := AgentPolicy{
-		ParallelSafeTools:    append([]string(nil), b.AgentPolicyConfig.ParallelSafeTools...),
-		CriticalToolSuffixes: append([]string(nil), b.AgentPolicyConfig.CriticalToolSuffixes...),
+		ParallelSafeTools:              append([]string(nil), b.AgentPolicyConfig.ParallelSafeTools...),
+		CriticalToolSuffixes:           append([]string(nil), b.AgentPolicyConfig.CriticalToolSuffixes...),
+		AllowUngovernedScheduledAgents: b.AgentPolicyConfig.AllowUngovernedScheduledAgents,
 	}
 	if len(b.AgentPolicyConfig.CriticalToolSubstitutes) > 0 {
 		p.CriticalToolSubstitutes = make(map[string][]string, len(b.AgentPolicyConfig.CriticalToolSubstitutes))
