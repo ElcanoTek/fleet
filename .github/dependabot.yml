@@ -35,6 +35,14 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # eslint 10+ is blocked UPSTREAM, not by us: eslint-config-next (Next 16)
+      # pins eslint-plugin-import / eslint-plugin-jsx-a11y to peer eslint "<=9",
+      # so adopting eslint 10 breaks `npm ci` / the lint job. Hold at 9.x (minor +
+      # patch still flow) until the Next.js eslint plugins declare eslint >=10
+      # support, then drop this ignore and take the major deliberately.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
 
   # GitHub Actions referenced by .github/workflows/*.
   - package-ecosystem: github-actions
