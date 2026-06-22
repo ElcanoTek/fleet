@@ -59,6 +59,17 @@ type Runtime struct {
 	// flavors (containment tier, not full governance). Native flavors leave it
 	// false (fully governed).
 	DelegatedPolicy bool `yaml:"delegated_policy"`
+	// ModelEnv lists the env var NAMES carrying the external provider's OWN
+	// model-endpoint credential(s) (e.g. ["ANTHROPIC_API_KEY"] for Claude Code,
+	// ["OPENROUTER_API_KEY"] for Goose-on-OpenRouter). At spawn the host reads
+	// these from its own environment and passes ONLY them into the agent
+	// container — the scrubbed env. fleet secrets and MCP credentials are NEVER
+	// shipped to an external agent. Only meaningful for type: acp.
+	ModelEnv []string `yaml:"model_env"`
+	// Args are extra arguments appended to the external agent's container
+	// ENTRYPOINT (after the image) — e.g. a bridge's `acp` subcommand. Provider
+	// specific; only meaningful for type: acp.
+	Args []string `yaml:"args"`
 	// DisplayName / Description drive the flavor-picker UI; Beta marks it.
 	DisplayName string `yaml:"display_name"`
 	Description string `yaml:"description"`

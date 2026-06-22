@@ -59,3 +59,21 @@ sandbox:
 
 `Bundle.Sandbox().ResolvedImageRef()` is the single resolution point
 (`image` if set, else `tag`). fleet does **not** build at process startup.
+
+## Runtime flavors and external agents
+
+The manifest's `runtimes:` block declares the selectable execution flavors. This
+generic bundle ships the two native flavors (`native-inprocess`, `native-acp`)
+plus **documented placeholder** external entries for `claude-code` and `goose`
+(`type: acp`, `network: model_only`, `delegated_policy: true`, with their
+model-cred env var names). The placeholder images are `localhost/...` refs — a
+real `XYZ-config` bundle overrides them with its own digest-pinned provider
+images and supplies the provider model keys.
+
+External (`type: acp`) flavors drive a third-party agent that **self-executes**
+in a locked sandbox — the **containment** tier, not full governance. Before
+enabling one, read **[`docs/USING-AGENTS.md`](../../docs/USING-AGENTS.md)**: it
+spells out the governance tiers, the permission UI (default-deny, no
+approve-all), the data-residency caveat (an external agent can send the
+workspace to its own model endpoint), and a worked example. An `XYZ-config` repo
+can carry its own provider `runtimes:` entries exactly like this bundle's.

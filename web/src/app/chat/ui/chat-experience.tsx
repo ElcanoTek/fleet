@@ -38,6 +38,7 @@ import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import { LoadingLogo } from "./LoadingLogo";
 import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
 import { RuntimePicker } from "./RuntimePicker";
+import { PermissionCard } from "./PermissionCard";
 import { getPill } from "./protocolPills";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import {
@@ -59,6 +60,8 @@ import {
   type MemoryProposal,
   type Message,
   type ModelRequiredEventPayload,
+  type PermissionOption,
+  type PermissionStatus,
   type PythonStream,
   type RetryEventPayload,
   type ToolCall,
@@ -2574,6 +2577,62 @@ export function ChatExperience() {
       return;
     }
 
+    // An EXTERNAL ACP agent (Claude Code / Goose) asked for permission to do
+    // something sensitive. Surface it inline as an allow/deny prompt; the
+    // agent's turn is BLOCKED server-side until the user decides (or the
+    // default-deny timeout fires). There is no "approve all".
+    if (event.event === "permission.requested") {
+      const p = payload as {
+        request_id: string;
+        title?: string;
+        kind?: string;
+        locations?: string[];
+        options?: PermissionOption[];
+      };
+      patchAssistantMessage(ctx.target, ctx.assistantId, (m) => {
+        const existing = m.permissionRequests ?? [];
+        if (existing.some((pr) => pr.id === p.request_id)) return m;
+        return {
+          ...m,
+          permissionRequests: [
+            ...existing,
+            {
+              id: p.request_id,
+              title: p.title ?? "The agent wants to perform an action",
+              kind: p.kind,
+              locations: p.locations,
+              options: p.options ?? [],
+              status: "pending" as PermissionStatus,
+            },
+          ],
+        };
+      });
+      return;
+    }
+
+    // The server resolved a permission request (the human decided, or the
+    // default-deny timeout fired). Reflect the terminal state so a stale prompt
+    // can't linger — important when the timeout, not the user, decided.
+    if (event.event === "permission.resolved") {
+      const p = payload as { request_id: string; allowed?: boolean };
+      const status: PermissionStatus = p.allowed ? "allowed" : "denied";
+      setMessagesByConv((prev) => {
+        const existing = prev[ctx.target];
+        if (!existing) return prev;
+        const next = existing.map((msg) => {
+          if (!msg.permissionRequests?.length) return msg;
+          return {
+            ...msg,
+            permissionRequests: msg.permissionRequests.map((pr) =>
+              pr.id === p.request_id && pr.status === "pending" ? { ...pr, status } : pr,
+            ),
+          };
+        });
+        return { ...prev, [ctx.target]: next };
+      });
+      return;
+    }
+
     if (event.event === "memory.proposed") {
       const p = payload as { proposal_id: string; content: string };
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => {
@@ -4714,6 +4773,26 @@ export function ChatExperience() {
                                       }}
                                       onModelSwitched={(model) => setSelectedModel(model)}
                                       onSwitchAndRetry={() => retryLastUserMessage()}
+                                    />
+                                  ))}
+                                </div>
+                              ) : null}
+
+                              {message.permissionRequests && message.permissionRequests.length > 0 ? (
+                                <div className="grid gap-1.5">
+                                  {message.permissionRequests.map((pr) => (
+                                    <PermissionCard
+                                      key={pr.id}
+                                      request={pr}
+                                      conversationId={realConvId(currentConvKey) ?? ""}
+                                      onResolved={(next) => {
+                                        patchAssistantMessage(currentConvKey, message.id, (m) => ({
+                                          ...m,
+                                          permissionRequests: (m.permissionRequests ?? []).map((x) =>
+                                            x.id === next.id ? next : x,
+                                          ),
+                                        }));
+                                      }}
                                     />
                                   ))}
                                 </div>
