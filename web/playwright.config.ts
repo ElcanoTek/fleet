@@ -39,7 +39,72 @@ const serverCommand = useProdServer
   ? `next start -p ${NEXT_PORT} -H 127.0.0.1`
   : `next dev -p ${NEXT_PORT} -H 127.0.0.1`;
 
+// E2E_LIVE selects the REAL-backend suite (e2e/live/*.spec.ts). In that mode the
+// whole stack — Postgres, both Go listeners, SSE, the scheduler + worker pool,
+// and the Podman sandbox — is booted for real by scripts/e2e-boot-server.sh;
+// only the LLM is stubbed by the wire-compatible fake (cmd/fake-llm), reached
+// via OPENROUTER_BASE_URL. The boot script owns the Next server too, so in
+// live/canary mode Playwright launches the boot script as its webServer.
+//
+// E2E_CANARY is the same real stack but with the FAKE swapped for a REAL cheap
+// OpenRouter model (drift canary, secret-gated, never a PR gate). The boot
+// script reads E2E_CANARY itself; here it just selects the canary project +
+// the boot webServer.
+const canaryMode = process.env.E2E_CANARY === "1";
+const liveMode = process.env.E2E_LIVE === "1" || canaryMode;
+
+// The live suite boots the whole real stack (incl. the Next server) via
+// scripts/e2e-boot-server.sh, which is repo-root-relative; Playwright runs from
+// web/, so the command reaches up one directory.
+const liveWebServer = {
+  command: "bash ../scripts/e2e-boot-server.sh",
+  url: `http://127.0.0.1:${NEXT_PORT}/login`,
+  // The boot includes a go build, an (optional) 1.3GB sandbox image build, a
+  // sandbox probe, and a full `next build` — generous timeout, never a sleep.
+  timeout: 900_000,
+  reuseExistingServer: !process.env.CI,
+  stdout: "pipe" as const,
+  stderr: "pipe" as const,
+  env: {
+    NEXT_PORT: String(NEXT_PORT),
+    // Forward the sandbox image + DB DSN the CI job resolves, when present.
+    ...(process.env.FLEET_SANDBOX_IMAGE
+      ? { FLEET_SANDBOX_IMAGE: process.env.FLEET_SANDBOX_IMAGE }
+      : {}),
+    ...(process.env.E2E_DATABASE_DSN ? { E2E_DATABASE_DSN: process.env.E2E_DATABASE_DSN } : {}),
+    // Canary: tell the boot script to use the REAL OpenRouter + forward the key.
+    ...(canaryMode ? { E2E_CANARY: "1" } : {}),
+    ...(canaryMode && process.env.OPENROUTER_API_KEY
+      ? { OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY }
+      : {}),
+    ...(process.env.CANARY_MODEL ? { CANARY_MODEL: process.env.CANARY_MODEL } : {}),
+  },
+};
+
+const mockedWebServer = {
+  // The Next server in CHAT_MOCK_MODE. The same mock-mode contract the live
+  // harness relies on stays wired; in the mocked suite the /api/* layer is
+  // additionally route-intercepted by Playwright itself, so the upstream URLs
+  // below are never actually reached.
+  command: serverCommand,
+  url: `http://127.0.0.1:${NEXT_PORT}`,
+  timeout: 120_000,
+  reuseExistingServer: !process.env.CI,
+  stdout: "pipe" as const,
+  stderr: "pipe" as const,
+  env: {
+    CHAT_MOCK_MODE: "1",
+    APP_SESSION_SECRET: TEST_SESSION_SECRET,
+    AUTH_SIGNING_PUBKEY: TEST_AUTH_PUBKEY,
+    CHAT_SERVER_URL: "http://127.0.0.1:18080",
+    CHAT_SERVER_TOKEN: "e2e-shared-secret",
+    ORCHESTRATOR_SERVER_URL: "http://127.0.0.1:18000",
+  },
+};
+
 export default defineConfig({
+  // Default testDir is the mocked suite (the fast CI layer). The live project
+  // overrides testDir to e2e/live; select it with `--project=live`.
   testDir: "./e2e/mocked",
   timeout: 60_000,
   expect: { timeout: 10_000 },
@@ -54,35 +119,38 @@ export default defineConfig({
     video: "off",
   },
 
-  projects: [
-    {
-      name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
-    },
-  ],
+  // Projects are mode-scoped so a run only ever contains the matching suite:
+  //   default          → the mocked "chromium" project (the fast CI layer),
+  //   E2E_LIVE=1        → the real-backend "live" project.
+  // This keeps `--project=live` from silently running against the mocked server
+  // (and vice-versa): the live project simply isn't present unless E2E_LIVE=1.
+  projects: canaryMode
+    ? [
+        {
+          name: "canary",
+          testDir: "./e2e/canary",
+          use: { ...devices["Desktop Chrome"] },
+        },
+      ]
+    : liveMode
+      ? [
+          {
+            name: "live",
+            testDir: "./e2e/live",
+            use: { ...devices["Desktop Chrome"] },
+          },
+        ]
+      : [
+          {
+            name: "chromium",
+            testDir: "./e2e/mocked",
+            use: { ...devices["Desktop Chrome"] },
+          },
+        ],
 
-  webServer: [
-    {
-      // The Next server in CHAT_MOCK_MODE. The same mock-mode contract the live
-      // harness relies on stays wired; in the mocked suite the /api/* layer is
-      // additionally route-intercepted by Playwright itself, so the upstream
-      // URLs below are never actually reached.
-      command: serverCommand,
-      url: `http://127.0.0.1:${NEXT_PORT}`,
-      timeout: 120_000,
-      reuseExistingServer: !process.env.CI,
-      stdout: "pipe",
-      stderr: "pipe",
-      env: {
-        CHAT_MOCK_MODE: "1",
-        APP_SESSION_SECRET: TEST_SESSION_SECRET,
-        AUTH_SIGNING_PUBKEY: TEST_AUTH_PUBKEY,
-        CHAT_SERVER_URL: "http://127.0.0.1:18080",
-        CHAT_SERVER_TOKEN: "e2e-shared-secret",
-        ORCHESTRATOR_SERVER_URL: "http://127.0.0.1:18000",
-      },
-    },
-  ],
+  // Pick the webServer by mode: the live boot script when E2E_LIVE=1, else the
+  // mocked Next server.
+  webServer: liveMode ? [liveWebServer] : [mockedWebServer],
 });
 
 export { TEST_EMAIL, TEST_PASSWORD, TEST_SESSION_SECRET, TEST_AUTH_PUBKEY };

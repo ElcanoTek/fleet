@@ -188,3 +188,120 @@ jobs:
           name: playwright-report
           path: web/playwright-report/
           retention-days: 14
+
+  e2e-live:
+    name: Web e2e (Playwright, live — real backend + sandbox)
+    runs-on: ubuntu-latest
+    # The full real stack: Postgres (service container), both Go listeners, SSE,
+    # the scheduler + worker pool, and the REAL rootless-podman sandbox. ONLY the
+    # LLM is stubbed — by the wire-compatible fake (cmd/fake-llm), reached via
+    # OPENROUTER_BASE_URL. No OpenRouter spend, fully deterministic.
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: fleet
+          POSTGRES_PASSWORD: fleet
+          POSTGRES_DB: fleet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fleet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The boot script creates the fleet_e2e_chat + fleet_e2e_sched DBs on this
+      # admin DSN (the service container's superuser has CREATEDB).
+      E2E_DATABASE_DSN: postgres://fleet:fleet@127.0.0.1:5432/postgres?sslmode=disable
+      # Sandbox image: pulled from GHCR when published (see publish-sandbox-image.yml),
+      # else built locally by the boot script. Resolved into FLEET_SANDBOX_IMAGE below.
+      SANDBOX_IMAGE_GHCR: ghcr.io/elcanotek/sandbox:latest
+      SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          check-latest: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright browser (chromium)
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Ensure podman + postgres client
+        # ubuntu-latest already ships podman and the postgres client, but install
+        # defensively so the job is robust to runner image changes. The boot
+        # script can stand up its own cluster too, but here we use the service.
+        run: |
+          sudo apt-get update -qq
+          command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
+          command -v psql   >/dev/null 2>&1 || sudo apt-get install -y -qq postgresql-client
+          podman --version
+          psql --version
+
+      - name: Resolve sandbox image (pull from GHCR, else build locally)
+        id: sandbox
+        # PULL is preferred (the 1.3GB image is published by publish-sandbox-image.yml).
+        # If the package isn't available yet (e.g. a PR before the first publish),
+        # fall back to a LOCAL build so the gate is green regardless. GHCR pull is
+        # best-effort and unauthenticated for a public package; private packages
+        # would need a login step, but the fallback build keeps the job working.
+        run: |
+          set -euo pipefail
+          if podman pull "$SANDBOX_IMAGE_GHCR" >/dev/null 2>&1; then
+            echo "Pulled $SANDBOX_IMAGE_GHCR from GHCR"
+            echo "image=$SANDBOX_IMAGE_GHCR" >> "$GITHUB_OUTPUT"
+          else
+            echo "GHCR pull failed/unavailable; building sandbox image locally"
+            IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
+            echo "image=$SANDBOX_IMAGE_LOCAL" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Boot the live stack + run the live Playwright project
+        working-directory: web
+        env:
+          CI: '1'
+          E2E_LIVE: '1'
+          E2E_PROD: '1'
+          FLEET_SANDBOX_IMAGE: ${{ steps.sandbox.outputs.image }}
+        # playwright.config.ts (E2E_LIVE=1) launches ../scripts/e2e-boot-server.sh
+        # as its webServer; the script boots everything (health-gated, no sleeps),
+        # then the "live" project runs against it.
+        run: npx playwright test --project=live --reporter=list
+
+      - name: Upload Playwright live report
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-live-report
+          path: web/playwright-report/
+          retention-days: 14
+
+      - name: Upload server logs on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-live-server-logs
+          path: |
+            .e2e-run/logs/
+            web/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
