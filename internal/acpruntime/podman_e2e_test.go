@@ -53,11 +53,11 @@ func TestPodmanE2E(t *testing.T) {
 
 	rt := NewClientRuntime(ClientConfig{
 		Image: image,
-		// Default network so the agent reaches the fake LLM at the host IP; MCP
-		// creds are never shipped regardless of network.
-		ExtraRunArgs: []string{
-			"--env", "OPENROUTER_API_KEY=test-key",
-			"--env", "OPENROUTER_BASE_URL=" + baseURL,
+		// Model-endpoint env only — the agent's one allowed egress. MCP creds
+		// are never shipped regardless of network.
+		ModelEnv: map[string]string{
+			"OPENROUTER_API_KEY":  "test-key",
+			"OPENROUTER_BASE_URL": baseURL,
 		},
 		StartTimeout: 60 * time.Second,
 	})

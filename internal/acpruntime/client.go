@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -45,6 +46,13 @@ type ClientConfig struct {
 	// that should not reach the network sets it true. The agent NEVER gets
 	// MCP credentials regardless — those are brokered host-side at delegation.
 	NoNetwork bool
+	// ModelEnv is the set of env vars passed into the agent container — the
+	// MODEL-endpoint credentials only (OPENROUTER_API_KEY, and the
+	// OPENROUTER_BASE_URL override for dev/E2E). The model endpoint is the
+	// agent's one allowed egress; MCP credentials are NEVER included here —
+	// they are brokered host-side at delegation, never handed into the
+	// container.
+	ModelEnv map[string]string
 	// ExtraRunArgs are appended to the podman run invocation before the image.
 	ExtraRunArgs []string
 	// StartTimeout caps how long Initialize may take after spawn.
@@ -183,6 +191,12 @@ func (r *ClientRuntime) spawn() (*agentProc, error) {
 	}
 	if r.cfg.NoNetwork {
 		args = append(args, "--network=none")
+	}
+	// Pass ONLY the model-endpoint env into the container (sorted for a stable
+	// invocation). MCP credentials are never included — they ride the host-side
+	// delegation seam, never the agent container.
+	for _, k := range sortedKeys(r.cfg.ModelEnv) {
+		args = append(args, "--env", k+"="+r.cfg.ModelEnv[k])
 	}
 	args = append(args, r.cfg.ExtraRunArgs...)
 	args = append(args, r.cfg.Image)
@@ -408,6 +422,17 @@ func (c *hostClient) WaitForTerminalExit(_ context.Context, _ acp.WaitForTermina
 
 func (c *hostClient) KillTerminal(_ context.Context, _ acp.KillTerminalRequest) (acp.KillTerminalResponse, error) {
 	return acp.KillTerminalResponse{}, acp.NewMethodNotFound(acp.ClientMethodTerminalKill)
+}
+
+// sortedKeys returns the map's keys in sorted order, for a deterministic podman
+// invocation (stable across runs / easy to assert in tests).
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // logf is a thin logging helper kept for diagnostics on the host side.
