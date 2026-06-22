@@ -11,6 +11,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -107,6 +108,39 @@ type Manager struct {
 	// chatSystemPromptFile is the interactive base-prompt filename inside
 	// systemPromptsDir (e.g. "chat.md"). The scheduled path uses its own base.
 	chatSystemPromptFile string
+
+	// runtimes is the bundle's runtime-flavor catalog + the default flavor name.
+	// A turn's requested flavor is validated against this; native-acp turns spawn
+	// nativeAgentImage. Empty leaves every turn on native-inprocess.
+	runtimes         []clientconfig.Runtime
+	defaultRuntime   string
+	nativeAgentImage string
+}
+
+// SetRuntimes configures the runtime-flavor catalog + the native-agent image the
+// Manager honors on a turn's requested flavor. Called at boot from the loaded
+// client bundle (cmd/fleet). When unset, every turn runs native-inprocess.
+func (m *Manager) SetRuntimes(runtimes []clientconfig.Runtime, defaultRuntime, nativeAgentImage string) {
+	m.runtimes = runtimes
+	m.defaultRuntime = defaultRuntime
+	m.nativeAgentImage = nativeAgentImage
+}
+
+// resolveRuntime picks the effective flavor for a requested name: the requested
+// flavor when it exists in the catalog, else the bundle default, else
+// native-inprocess. Returns the flavor name + whether it is the native-acp
+// flavor (so RunTurn can route).
+func (m *Manager) resolveRuntime(requested string) (name string, nativeACP bool) {
+	want := strings.TrimSpace(requested)
+	if want == "" {
+		want = m.defaultRuntime
+	}
+	for _, rt := range m.runtimes {
+		if rt.Name == want {
+			return rt.Name, rt.Type == clientconfig.RuntimeTypeNativeACP
+		}
+	}
+	return clientconfig.RuntimeNativeInprocess, false
 }
 
 // MCPServerSpec describes one MCP server to connect to. Either stdio

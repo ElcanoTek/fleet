@@ -2,11 +2,17 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
 	"strings"
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/acpruntime"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
@@ -62,6 +68,19 @@ type TurnConfig struct {
 	MaxCostUSD     float64
 	MaxTotalTokens int
 
+	// Runtime selects the execution flavor for this turn: "" / "native-inprocess"
+	// run today's in-process loop (default + parity oracle); "native-acp" routes
+	// the SAME loop through a sandboxed ACP agent (acpruntime.ClientRuntime) over
+	// podman-stdio, with tool execution delegated back to the host sandbox
+	// (governed identically). NativeAgentImage names the agent image.
+	Runtime          string
+	NativeAgentImage string
+
+	// Lockdown mirrors the conversation's lockdown bit. native-acp does not yet
+	// reproduce the lockdown no-network guarantee for the agent container, so a
+	// lockdown turn falls back to the in-process path (see acpInteractiveFallback).
+	Lockdown bool
+
 	// ApprovalStager / MemoryProposer stage critical tool calls + memory
 	// proposals for user confirmation (interactive). Wired onto the
 	// InteractivePolicy's orchestration so send_email / risky bash /
@@ -95,6 +114,28 @@ func (m messagesInput) Prompt(_ context.Context) (string, []fantasy.Message, str
 // the opt-in Selection, wrapped in the SAME InteractivePolicy gate as the native
 // tools, so cost/repeat/email/approval enforcement covers both surfaces.
 func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
+	// native-acp routes the SAME loop through a sandboxed ACP agent. The host
+	// keeps governance for the tool-execution surface: bash/python delegate back
+	// to the host sandbox (tc.Sandbox) via the real Executor, and obs receives
+	// the same run events.
+	//
+	// HONESTY GATE: the P-ACP-1 interactive ACP path does NOT yet reproduce the
+	// full in-process governance surface — approval staging (send_email / risky
+	// bash / preview_email / suggest_advanced_model), memory/note proposals, MCP
+	// tools + per-task credential brokering, and the lockdown no-network
+	// guarantee for the agent container. Rather than SILENTLY under-govern, fall
+	// back to the fully-governed in-process loop whenever any of those features
+	// is active for this turn. native-acp then runs only when it can behave AND
+	// govern identically (no MCP selection, no approval/memory/note staging, not
+	// lockdown). The remaining surfaces land in P-ACP-2.
+	if tc.Runtime == clientconfig.RuntimeNativeACP {
+		if reason := acpInteractiveFallback(tc); reason != "" {
+			log.Printf("native-acp: falling back to in-process for this turn (%s)", reason)
+		} else {
+			return runInteractiveTurnACP(ctx, tc, obs)
+		}
+	}
+
 	policy := agentcore.NewInteractivePolicy(tc.MaxCostUSD, tc.MaxTotalTokens, tc.ApprovalStager, tc.MemoryProposer)
 	if tc.NoteProposer != nil {
 		policy.SetNoteProposer(tc.NoteProposer)
@@ -123,6 +164,141 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)
+}
+
+// acpInteractiveFallback returns a non-empty reason when the turn uses a
+// governed feature the P-ACP-1 interactive ACP path cannot yet reproduce, so
+// the caller falls back to the fully-governed in-process loop instead of
+// silently under-governing. Empty = native-acp may run.
+func acpInteractiveFallback(tc TurnConfig) string {
+	switch {
+	case tc.Lockdown:
+		// The agent container is not yet sealed to no-network for lockdown.
+		return "lockdown conversation"
+	case len(tc.Selection) > 0:
+		// MCP tools + per-task credential brokering are not yet delegated.
+		return "MCP servers enabled"
+	case tc.ApprovalStager != nil:
+		// Critical-tool approval staging (send_email / risky bash / …) is not
+		// yet wired through the ACP permission surface.
+		return "approval staging active"
+	case tc.MemoryProposer != nil || tc.NoteProposer != nil:
+		// Memory / note proposal staging is not yet delegated.
+		return "memory/note proposal staging active"
+	default:
+		return ""
+	}
+}
+
+// runInteractiveTurnACP drives one interactive turn through the native-acp
+// flavor: a sandboxed ACP agent (acpruntime.ClientRuntime) runs the SAME
+// agentcore.Run loop, but its tool execution delegates back to the HOST sandbox
+// (tc.Sandbox, via the real Executor) and its streamed events flow to obs — so
+// the turn is governed identically to the in-process path. The host owns the
+// sandbox; the agent container holds no executor (no Podman-in-Podman).
+func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
+	if tc.NativeAgentImage == "" {
+		return agentcore.Result{}, fmt.Errorf("native-acp runtime selected but no agent image configured")
+	}
+
+	messagesJSON, err := json.Marshal(tc.Messages)
+	if err != nil {
+		return agentcore.Result{}, fmt.Errorf("marshal turn messages: %w", err)
+	}
+
+	rt := acpruntime.NewClientRuntime(acpruntime.ClientConfig{
+		Image: tc.NativeAgentImage,
+		// Pass ONLY the model-endpoint credentials into the agent container —
+		// its one allowed egress. MCP creds are never shipped (host-brokered).
+		ModelEnv: modelEndpointEnv(),
+	})
+	res, err := rt.Run(ctx,
+		acpruntime.RunSpec{
+			Mode:                agentcore.ModeInteractive.String(),
+			ModelSlug:           slugOf(tc.Model),
+			FallbackSlug:        slugOf(tc.FallbackModel),
+			SystemPrompt:        tc.SystemPrompt,
+			Temperature:         tc.Temperature,
+			MaxTokens:           tc.MaxTokens,
+			MaxCostUSD:          tc.MaxCostUSD,
+			MaxTotalTokens:      tc.MaxTotalTokens,
+			Label:               tc.Label,
+			ProviderXTitle:      agentcore.DefaultProviderHeaders.XTitle,
+			ProviderHTTPReferer: agentcore.DefaultProviderHeaders.HTTPReferer,
+		},
+		latestUserText(tc.Messages),
+		acpruntime.PromptMeta{MessagesJSON: string(messagesJSON)},
+		acpruntime.Deps{
+			Executor: NewSandboxExecutor(tc.Sandbox),
+			Observer: obs,
+		},
+	)
+	if err != nil {
+		return agentcore.Result{}, err
+	}
+
+	// Map the ACP result onto an agentcore.Result. The final reply is persisted
+	// as a single assistant text entry (the streamed text already reached obs →
+	// SSE). Token/cost accounting for the ACP path lands in P-ACP-1's follow-up;
+	// the turn behaves + governs identically here.
+	entries := []agentcore.RunEntry{}
+	if res.FinalText != "" {
+		entries = append(entries, agentcore.RunEntry{Role: "assistant", Type: "text", Text: res.FinalText})
+	}
+	return agentcore.Result{
+		FinalText: res.FinalText,
+		Rounds:    1,
+		Label:     tc.Label,
+		Entries:   entries,
+		ModelSlug: slugOf(tc.Model),
+		Cancelled: res.Cancelled,
+	}, nil
+}
+
+// slugOf returns a model's OpenRouter slug, or "" when nil.
+func slugOf(m fantasy.LanguageModel) string {
+	if m == nil {
+		return ""
+	}
+	return m.Model()
+}
+
+// modelEndpointEnv collects the model-endpoint env vars the native ACP agent
+// needs to drive the LLM loop inside its container: the OpenRouter API key and
+// (for dev/E2E) the base-URL override. These are the ONLY secrets that enter
+// the agent container — MCP credentials are brokered host-side at delegation
+// and never shipped in. Vendor-named (un-prefixed), matching how the rest of
+// the codebase reads them.
+func modelEndpointEnv() map[string]string {
+	env := map[string]string{}
+	for _, k := range []string{"OPENROUTER_API_KEY", "OPENROUTER_BASE_URL"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			env[k] = v
+		}
+	}
+	return env
+}
+
+// latestUserText returns the text of the last user message in the slice (the new
+// turn), for the ACP prompt's spec-required content block. The full replayed
+// history rides PromptMeta.
+func latestUserText(messages []fantasy.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		if m.Role != fantasy.MessageRoleUser {
+			continue
+		}
+		var sb strings.Builder
+		for _, part := range m.Content {
+			if tp, ok := part.(fantasy.TextPart); ok {
+				sb.WriteString(tp.Text)
+			}
+		}
+		if sb.Len() > 0 {
+			return sb.String()
+		}
+	}
+	return ""
 }
 
 // buildInteractiveFinalize returns the agentcore finalize hook implementing
