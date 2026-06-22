@@ -24,8 +24,21 @@
 # Network-shaped tools (curl, wget) are intentionally absent — the image
 # is intended for --network=none use, and shipping them would only
 # mislead callers.
+#
+# This Containerfile ships in the GENERIC default client bundle
+# (config/default/sandbox/). The sandbox image is a per-client CONFIG-BUNDLE
+# artifact: each client's XYZ-config repo ships its own
+# sandbox/Containerfile flavor and is free to add/remove packages and to pin
+# its own base digest. This generic flavor is what fleet builds on-box when a
+# deployment uses the default bundle (or any bundle that doesn't override it).
+#
+# Base pinned by DIGEST (not :latest) for reproducible, audit-stable builds:
+# the same bytes build the same image regardless of when the upstream
+# fedora-minimal:latest tag moves. Refresh deliberately by re-pulling
+# fedora-minimal:latest and updating the digest below. Clients pin their OWN
+# base digest in their own bundle's Containerfile.
 
-FROM registry.fedoraproject.org/fedora-minimal:latest
+FROM registry.fedoraproject.org/fedora-minimal@sha256:44f3e90b32a35832753f5533f838576d142d164207aa8b10d179178beb608af8
 
 # Python stack via Fedora RPMs rather than pip. Fedora rebuilds the
 # native packages against whatever python3 it ships, which sidesteps
