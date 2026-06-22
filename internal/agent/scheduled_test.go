@@ -146,6 +146,36 @@ func TestACPScheduledFallback_NoImage(t *testing.T) {
 	}
 }
 
+// TestACPScheduledFallback_LoadOnDemandFallsBack pins issue #41: a scheduled
+// native-acp task that declares NO mcp_selection but runs on a box with loadable
+// (enabled) MCP servers falls back to the in-process loop (which ships the
+// mcp_load_servers loader) rather than running silently tool-less. A declared
+// selection, a disabled-only catalog, or a nil config must NOT trigger this
+// fallback.
+func TestACPScheduledFallback_LoadOnDemandFallsBack(t *testing.T) {
+	sb := &sandbox.Sandbox{}
+	const img = "localhost/fleet-native-agent:latest"
+	withEnabled := &config.Config{MCPServers: map[string]config.MCPServerConfig{"acme": {Enabled: true}}}
+	withDisabled := &config.Config{MCPServers: map[string]config.MCPServerConfig{"acme": {Enabled: false}}}
+
+	// (a) nil selection + a loadable server → fall back (would be tool-less otherwise).
+	if reason := acpScheduledFallback(&Agent{nativeAgentImage: img, sb: sb, config: withEnabled, mcpSelection: nil}); reason == "" {
+		t.Fatal("no-selection task with loadable servers must fall back to in-process")
+	}
+	// (b) declared selection → native-acp advertises it up-front, no loader needed.
+	if reason := acpScheduledFallback(&Agent{nativeAgentImage: img, sb: sb, config: withEnabled, mcpSelection: agentcore.MCPSelection{{Server: "acme"}}}); reason != "" {
+		t.Fatalf("a declared selection must NOT fall back, got %q", reason)
+	}
+	// (c) nil selection + only disabled servers → nothing loadable, native-acp is fine.
+	if reason := acpScheduledFallback(&Agent{nativeAgentImage: img, sb: sb, config: withDisabled, mcpSelection: nil}); reason != "" {
+		t.Fatalf("a disabled-only catalog has nothing to load; must NOT fall back, got %q", reason)
+	}
+	// (d) nil config (regression guard for TestACPScheduledFallback_NoImage's shape).
+	if reason := acpScheduledFallback(&Agent{nativeAgentImage: img, sb: sb, config: nil, mcpSelection: nil}); reason != "" {
+		t.Fatalf("nil config must be safe (nothing loadable); must NOT fall back, got %q", reason)
+	}
+}
+
 // TestACPMCPClient_NoSelectionAdvertisesNoSurface proves the cross-task
 // scope-creep guard: a scheduled task with NO declared mcp_selection (which reuses
 // the SHARED process-wide client) advertises NO MCP surface — acpMCPClient returns

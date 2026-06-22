@@ -430,19 +430,20 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 // tool-exec summary crosses the seam). So a verifier-reliant task is verified, not
 // silently finished unverified — closing the P0 #35 governance gap.
 //
-// Honest residuals (documented, not silent):
-//
-//   - MCP LOAD-ON-DEMAND: native-acp advertises the MCP tool surface from the
-//     servers bound on the per-task client up-front (the task's mcp_selection); it
-//     does not ship the in-loop mcp_load_servers loader tool. A scheduled task that
-//     relies on load-on-demand instead of a declared mcp_selection would see no MCP
-//     surface under native-acp. Tasks should declare their servers via
-//     mcp_selection (the credentialed, per-task-isolated path) for native-acp.
+// MCP LOAD-ON-DEMAND is also handled here rather than left as a silent residual:
+// native-acp advertises a FIXED MCP surface up-front (the task's mcp_selection)
+// and ships no in-loop mcp_load_servers loader, whereas the in-process path can
+// load servers mid-run. A task that declares NO mcp_selection but runs on a box
+// that HAS loadable (enabled) MCP servers would, under native-acp, run with NO
+// MCP tools and be unable to load any — a silent capability divergence. So that
+// case falls back to the fully-governed in-process loop (which ships the loader)
+// instead of running tool-less. A task that declared a selection needs no loader
+// (native-acp advertises it up-front) and does NOT fall back.
 //
 // The CORE governance — per-tool policy, audit, finish enforcement, MCP credential
-// brokering, note staging, usage/cost — is at FULL parity. The switch is the
-// auditable place to add a fallback if a future scheduled surface lands before its
-// delegation seam, so the flavor never silently under-governs.
+// brokering, note staging, usage/cost, end-of-run verifier — is at FULL parity.
+// This switch is the single auditable place to fall back when a scheduled surface
+// cannot be faithfully reproduced, so the flavor never silently under-governs.
 func acpScheduledFallback(a *Agent) string {
 	if a.nativeAgentImage == "" {
 		return "native-acp runtime selected but no agent image configured"
@@ -454,7 +455,28 @@ func acpScheduledFallback(a *Agent) string {
 		// spawning an agent that cannot execute tools.
 		return "native-acp runtime selected but no host sandbox is configured"
 	}
+	if len(a.mcpSelection) == 0 && a.hasLoadableMCPServers() {
+		// No declared selection + loadable servers exist = the task relies on the
+		// in-loop loader (mcp_load_servers), which native-acp does not ship. Fall
+		// back to the in-process loop rather than run silently tool-less.
+		return "native-acp has no in-loop MCP loader; task declares no mcp_selection but loadable servers exist"
+	}
 	return ""
+}
+
+// hasLoadableMCPServers reports whether the runtime MCP catalog holds at least
+// one ENABLED server the in-loop mcp_load_servers tool could load. Nil-safe: a
+// nil config (some tests / a minimally-built agent) has nothing to load.
+func (a *Agent) hasLoadableMCPServers() bool {
+	if a.config == nil {
+		return false
+	}
+	for _, sc := range a.config.MCPServers {
+		if sc.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // runScheduledACP drives one scheduled task through the native-acp flavor: a
@@ -597,9 +619,10 @@ func (b *acpVerifyBroker) Verify(ctx context.Context, _ int, records []acpruntim
 // servers), so its full tool set is the task's selection — safe to advertise. A
 // task with no selection reuses the SHARED process-wide client, whose contents are
 // not task-scoped; advertising it would leak an unselected, cross-task MCP surface,
-// so we return nil. native-acp has no in-loop loader to add servers later, so a
-// no-selection task simply runs without MCP — matching the in-process path's empty
-// load-on-demand start.
+// so we return nil. A no-selection task that COULD load servers never reaches here
+// — acpScheduledFallback routes it to the in-process loop (which ships the loader)
+// rather than run tool-less. So when this returns nil, the catalog has no loadable
+// servers and a tool-less native-acp run is genuinely correct.
 func (a *Agent) acpMCPClient() *mcp.Client {
 	if len(a.mcpSelection) == 0 {
 		return nil
