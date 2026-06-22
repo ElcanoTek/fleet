@@ -17,6 +17,15 @@ describe("LoginCard — Elcano-email button gating", () => {
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
   });
 
+  it("shows neutral, client-agnostic welcome copy (no Elcano brand text)", () => {
+    render(<LoginCard elcanoLoginEnabled={false} />);
+    expect(screen.getByText("Welcome aboard.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Sign in to your workspace and pick up where you left off."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Elcano workspace/i)).toBeNull();
+  });
+
   it("shows the Use Elcano email button when enabled", () => {
     render(<LoginCard elcanoLoginEnabled={true} />);
     const button = screen.getByRole("link", { name: "Use Elcano email" });

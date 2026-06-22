@@ -1,1 +1,0 @@
-# Xandr MCP tests package
