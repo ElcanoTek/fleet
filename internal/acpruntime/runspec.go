@@ -66,6 +66,13 @@ type RunSpec struct {
 	// side (tool execution is host-side, where lockdown's no-network sandbox is
 	// applied); carried so the agent can stamp it for the audit trail.
 	Lockdown bool `json:"lockdown,omitempty"`
+
+	// VerifierWired tells a SCHEDULED agent the host has an end-of-run verifier
+	// available over `_fleet/verify`, so its scheduled policy should run the extra
+	// verification round when CanFinish clears (matching the in-process path, which
+	// runs the verifier only when a fallback model exists). When false the agent's
+	// finish behaves exactly like an in-process run with no verifier configured.
+	VerifierWired bool `json:"verifierWired,omitempty"`
 }
 
 // PromptMeta is the per-prompt payload (the conversation history + the new user

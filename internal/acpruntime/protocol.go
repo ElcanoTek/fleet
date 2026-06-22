@@ -54,7 +54,50 @@ const (
 	// this seam; the host routes it to the real ApprovalStager / MemoryProposer /
 	// NoteProposer.
 	ExtMethodStage = "_fleet/stage"
+
+	// ExtMethodVerify is the agent→client request that runs the host-side
+	// end-of-run VERIFIER for a scheduled run. The in-process scheduled path layers
+	// an extra fallback-model re-check on top of agentcore's audit/finish
+	// enforcement (scheduledPolicy.CanFinish → runEndOfRunVerifier); native-acp runs
+	// the SAME loop inside the agent, so its policy reaches the host verifier over
+	// this seam when its CanFinish clears. The agent ships the tool-exec summary it
+	// authoritatively holds (Records); the host runs the SAME verifier on its own
+	// fallback model (host-side creds) and returns any missing required actions,
+	// which the agent's CanFinish turns into a final enforcement round. Without this
+	// seam a native-acp scheduled task would silently finish UNVERIFIED — a
+	// one-governed-core gap (P0 #35).
+	ExtMethodVerify = "_fleet/verify"
 )
+
+// ToolExecRecord pairs one tool the agent executed with whether it succeeded —
+// the minimal summary the end-of-run verifier needs. The agent builds these from
+// its OWN authoritative run stream (the tool.call/tool.result events agentcore
+// emits in its container), so the verifier never depends on the host re-deriving
+// the summary from a live, possibly-lossy event projection. Mirrors the host
+// agent package's toolExecRecord shape so the mapping at the seam is a field copy.
+type ToolExecRecord struct {
+	Name      string `json:"name"`
+	Succeeded bool   `json:"succeeded"`
+}
+
+// VerifyRequest is the agent→client `_fleet/verify` payload: the round at which
+// the agent wants to finish + the tool-exec summary the verifier should judge.
+type VerifyRequest struct {
+	SessionID string           `json:"sessionId"`
+	Round     int              `json:"round"`
+	Records   []ToolExecRecord `json:"records,omitempty"`
+}
+
+// VerifyResponse is the client→agent `_fleet/verify` result. Missing is the list
+// of required user-visible actions the task demanded that were never successfully
+// attempted (empty = verified clean); the agent turns a non-empty Missing into a
+// final enforcement round. Error carries a host-side verifier failure — the agent
+// treats it as FAIL-OPEN (allow finish), matching the in-process path which logs
+// and allows finish when the verifier errors.
+type VerifyResponse struct {
+	Missing []string `json:"missing,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
 
 // MCPRequest is the agent→client `_fleet/mcp` payload: a single delegated MCP
 // tool call. The agent passes the server name + bare tool name + decoded args;

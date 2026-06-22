@@ -7,12 +7,47 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/acpruntime"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
+
+// TestACPVerifyBroker_RunsHostVerifier proves the host side of the native-acp
+// verifier seam (#35): the broker maps the agent-shipped tool-exec summary onto
+// the agent package's records and runs the SAME runEndOfRunVerifier the
+// in-process path runs, on the HOST fallback model — so the verifier's model call
+// and creds never enter the agent container. The records cross the seam; the
+// missing-actions verdict comes back.
+func TestACPVerifyBroker_RunsHostVerifier(t *testing.T) {
+	t.Run("missing actions surface", func(t *testing.T) {
+		model := &itMockModel{generateText: `{"missing_actions":["send the report"],"reasoning":"no send_email call observed"}`}
+		broker := &acpVerifyBroker{agent: &Agent{fallbackModel: model}, task: "email the team the weekly report"}
+		missing, err := broker.Verify(context.Background(), 1, []acpruntime.ToolExecRecord{
+			{Name: "bash", Succeeded: true},
+		})
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if len(missing) != 1 || missing[0] != "send the report" {
+			t.Fatalf("missing = %v, want [send the report]", missing)
+		}
+	})
+
+	t.Run("clean verdict returns empty", func(t *testing.T) {
+		model := &itMockModel{generateText: `{"missing_actions":[],"reasoning":"all required actions attempted"}`}
+		broker := &acpVerifyBroker{agent: &Agent{fallbackModel: model}, task: "look up a contact"}
+		missing, err := broker.Verify(context.Background(), 1, []acpruntime.ToolExecRecord{{Name: "mcp_acme_lookup", Succeeded: true}})
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		if len(missing) != 0 {
+			t.Fatalf("missing = %v, want empty on a clean verdict", missing)
+		}
+	})
+}
 
 // newTestScheduledAgent builds a scheduled Agent over a mock model with no MCP
 // servers and no captain's log (so Execute touches no network / git).

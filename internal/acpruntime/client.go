@@ -92,6 +92,13 @@ type Deps struct {
 	// but routes its staging EFFECT here. Nil leaves the staging gates inert
 	// (matching an in-process turn with no stagers wired).
 	StageBroker StageBroker
+	// Verifier runs the host-side end-of-run verifier for a SCHEDULED run when the
+	// agent's policy clears and reaches `_fleet/verify`. The agent ships the
+	// tool-exec summary; the host runs the SAME verifier on its own fallback model
+	// (host-side creds) and returns the missing required actions. Nil leaves the
+	// verifier seam inert — the agent (which only calls it when RunSpec.VerifierWired
+	// is set, i.e. the host wired one) treats a nil-broker reply as fail-open.
+	Verifier VerifyBroker
 }
 
 // MCPBroker runs a delegated MCP tool call host-side against the per-task
@@ -117,6 +124,17 @@ type StageBroker interface {
 	StageMemory(content string) (proposalID string, err error)
 	// StageNote stages a propose_note proposal; returns the proposal id.
 	StageNote(slug, title, body, reason string) (proposalID string, err error)
+}
+
+// VerifyBroker runs the host-side end-of-run verifier on the agent-supplied
+// tool-exec summary and returns the required actions the task demanded that were
+// never successfully attempted (empty = verified clean). The host wires an
+// implementation backed by the SAME runEndOfRunVerifier the in-process scheduled
+// path uses, so the verifier model call + its credentials stay host-side. An
+// error means the host could not verify; the agent treats that as fail-open
+// (allow finish), matching the in-process path.
+type VerifyBroker interface {
+	Verify(ctx context.Context, round int, records []ToolExecRecord) (missing []string, err error)
 }
 
 // Result is the run outcome the client surfaces to the driver.
@@ -366,9 +384,37 @@ func (c *hostClient) HandleExtensionMethod(ctx context.Context, method string, p
 		return c.handleMCP(ctx, params)
 	case ExtMethodStage:
 		return c.handleStage(params)
+	case ExtMethodVerify:
+		return c.handleVerify(ctx, params)
 	default:
 		return nil, acp.NewMethodNotFound(method)
 	}
+}
+
+// handleVerify runs the host-side end-of-run verifier on the agent-shipped
+// tool-exec summary. The DECISION to verify was made by the agent's scheduled
+// policy (identical to in-process); the verifier EFFECT — an LLM re-check on the
+// host fallback model with host-side creds — runs here. A host-side failure rides
+// VerifyResponse.Error (NOT an RPC error) so the agent has exactly one fail-open
+// branch, mirroring the in-process verifier's "log and allow finish" on error.
+func (c *hostClient) handleVerify(ctx context.Context, params json.RawMessage) (any, error) {
+	var req VerifyRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, acp.NewInvalidParams(map[string]any{"error": err.Error()})
+	}
+	if c.deps.Verifier == nil {
+		// Defensive: the agent only calls verify when the host set
+		// RunSpec.VerifierWired, which it does only when a broker is wired. A call
+		// with no broker is a wiring bug — surface it so the agent fails open rather
+		// than silently treating the run as verified.
+		return VerifyResponse{Error: "verifier not wired host-side"}, nil
+	}
+	missing, err := c.deps.Verifier.Verify(ctx, req.Round, req.Records)
+	if err != nil {
+		//nolint:nilerr // a verifier failure is reported via VerifyResponse.Error (fail-open on the agent), not the RPC error — mirrors the in-process "log and allow finish" contract.
+		return VerifyResponse{Error: err.Error()}, nil
+	}
+	return VerifyResponse{Missing: missing}, nil
 }
 
 // handleMCP runs a delegated MCP tool call HOST-SIDE against the per-task
