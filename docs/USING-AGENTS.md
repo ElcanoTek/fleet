@@ -212,13 +212,27 @@ conversation's next turn. An empty/cleared choice falls back to the bundle's
 
 ### Per scheduled task
 
-The orchestrator selects a flavor per task the same way (the task's runtime
-field). A bundle that wants to keep scheduled work fully governed simply does
-not offer external flavors to the scheduler — external scheduled runs are gated
-behind a per-client flag and default off.
+Scheduled work selects its flavor **process-wide** via `FLEET_SCHEDULED_RUNTIME`
+(resolved at boot against the bundle's `runtimes:` catalog; unset / unknown falls
+back to `native-inprocess`). A scheduled `native-acp` task runs the SAME scheduled
+loop (audit gating, finish enforcement) through the sandboxed agent, fully
+governed host-side — MCP credentials are brokered over `_fleet/mcp` and never
+enter the container, `propose_note` staging rides `_fleet/stage`, and usage/cost
+is reconciled over `_fleet/event`. It governs identically to a scheduled
+`native-inprocess` task.
 
-A flavor name that no longer exists in the catalog falls back to the default at
-run time, so a stale picker value can never wedge a turn.
+A bundle that wants to keep scheduled work fully governed simply does not point
+`FLEET_SCHEDULED_RUNTIME` at an external flavor — external scheduled runs remain
+the containment tier and are opt-in.
+
+**One honest residual** for scheduled `native-acp`: the in-process scheduled
+driver layers an extra **end-of-run verifier** (a host-side LLM re-check) on top
+of the shared audit/finish enforcement. That verifier wraps the host's
+`Policy.CanFinish` and has no `_fleet/*` delegation seam, so it runs only on the
+in-process path. The core governance — per-tool policy, audit, finish
+enforcement, MCP credential brokering, note staging, usage/cost — is at full
+parity; the supplemental verifier round is in-process-only and is the single
+documented gap.
 
 ---
 
