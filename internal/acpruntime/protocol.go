@@ -38,7 +38,100 @@ const (
 	// session/update text (e.g. enforcement nudges, usage accounting). The
 	// client forwards it to fleet's real Observer.
 	ExtMethodEvent = "_fleet/event"
+
+	// ExtMethodMCP is the agent→client request to EXECUTE a delegated MCP tool
+	// call HOST-SIDE. The agent advertises the same mcp_<server>_<tool> surface
+	// the in-process path advertises (descriptors travel in the RunSpec), but the
+	// CALL itself rides this seam so the host runs it against the per-task
+	// credentialed mcp.Client. MCP credentials NEVER enter the agent container —
+	// this is the host-side credential-brokering seam (P-ACP-2b).
+	ExtMethodMCP = "_fleet/mcp"
+
+	// ExtMethodStage is the agent→client request to STAGE an approval / memory /
+	// note proposal for human confirmation HOST-SIDE. The agent's InteractivePolicy
+	// runs in the container (identical governance), but the staging EFFECT (DB
+	// write + SSE card) belongs to the host. The agent's delegating stagers ride
+	// this seam; the host routes it to the real ApprovalStager / MemoryProposer /
+	// NoteProposer.
+	ExtMethodStage = "_fleet/stage"
 )
+
+// MCPRequest is the agent→client `_fleet/mcp` payload: a single delegated MCP
+// tool call. The agent passes the server name + bare tool name + decoded args;
+// the host runs mcpClient.CallToolOn against the per-task credentialed client.
+type MCPRequest struct {
+	SessionID string         `json:"sessionId"`
+	Server    string         `json:"server"`
+	Tool      string         `json:"tool"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
+// MCPResponse is the client→agent `_fleet/mcp` result. Text is the flattened
+// text content blocks (the same view the in-process mcpTool renders); IsError
+// mirrors the MCP isError bit so the agent maps it onto a fantasy error response
+// exactly as the in-process path would. Error carries a delegation/transport
+// failure (the host could not reach the server) distinct from a tool-level
+// isError result.
+type MCPResponse struct {
+	Text    string `json:"text"`
+	IsError bool   `json:"isError,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// MCPToolDescriptor describes one MCP tool the host wants the agent to advertise.
+// It carries everything the agent needs to register a delegating mcp_<server>_<tool>
+// tool WITHOUT any credentials: the server + bare tool name, the description, and
+// the JSON-schema input shape. Travels in the RunSpec so the agent's tool surface
+// matches the in-process path's exactly.
+type MCPToolDescriptor struct {
+	Server      string         `json:"server"`
+	Tool        string         `json:"tool"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema,omitempty"`
+}
+
+// StageKind enumerates the host-side staging effects the agent delegates.
+type StageKind string
+
+const (
+	// StageApproval stages a critical tool call (send_email / risky bash /
+	// preview_email) via the host ApprovalStager.Stage.
+	StageApproval StageKind = "approval"
+	// StageSuggestion stages a suggest_advanced_model card via
+	// ApprovalStager.StageSuggestion (carries the per-conversation gate).
+	StageSuggestion StageKind = "suggestion"
+	// StageMemory stages a propose_memory proposal via MemoryProposer.Propose.
+	StageMemory StageKind = "memory"
+	// StageNote stages a propose_note proposal via NoteProposer.Propose.
+	StageNote StageKind = "note"
+)
+
+// StageRequest is the agent→client `_fleet/stage` payload: a single host-side
+// staging effect. Fields are populated per Kind (approval/suggestion use
+// ToolName/ToolCallID/RawInput/Reason; memory uses Content; note uses
+// Slug/Title/Body/Reason).
+type StageRequest struct {
+	SessionID  string    `json:"sessionId"`
+	Kind       StageKind `json:"kind"`
+	ToolName   string    `json:"toolName,omitempty"`
+	ToolCallID string    `json:"toolCallId,omitempty"`
+	RawInput   string    `json:"rawInput,omitempty"`
+	Reason     string    `json:"reason,omitempty"`
+	Content    string    `json:"content,omitempty"`
+	Slug       string    `json:"slug,omitempty"`
+	Title      string    `json:"title,omitempty"`
+	Body       string    `json:"body,omitempty"`
+}
+
+// StageResponse is the client→agent `_fleet/stage` result. ProposalID is the
+// host-assigned approval/proposal id (empty when the host suppressed the
+// suggestion). Message is the host-supplied agent-facing message (StageSuggestion
+// returns one verbatim; empty otherwise). Error carries a staging failure.
+type StageResponse struct {
+	ProposalID string `json:"proposalId,omitempty"`
+	Message    string `json:"message,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
 
 // ToolKind enumerates the delegated native tools the client can execute.
 type ToolKind string
@@ -87,4 +180,54 @@ type EventNotification struct {
 	SessionID string         `json:"sessionId"`
 	EventType string         `json:"eventType"`
 	Payload   map[string]any `json:"payload,omitempty"`
+}
+
+// EventUsage is the `_fleet/event` eventType the agent emits per LLM step with
+// the step's token + cost accounting. The host both re-emits it onto the Observer
+// AND accumulates it into the run's usage totals — the agent makes the LLM calls
+// (in its container), so usage accrues there and is reported back here. The
+// payload uses the usageKey* field names below.
+const EventUsage = "usage"
+
+// usageKey* are the EventUsage payload field names (the agent writes them, the
+// host reads them). They mirror agentcore.RunUsage's fields so accumulation is a
+// straight field copy.
+const (
+	usageKeyPromptTokens        = "prompt_tokens"
+	usageKeyLastStepInputTokens = "last_step_input_tokens"
+	usageKeyCompletionTokens    = "completion_tokens"
+	usageKeyCachedTokens        = "cached_tokens" //nolint:gosec // G101 false positive: an event-payload field NAME for cached-token counts, not a credential.
+	usageKeyCacheCreationTokens = "cache_creation_tokens"
+	usageKeyCostUSD             = "cost_usd"
+)
+
+// intFromPayload reads an integer field from an event payload, tolerating the
+// float64 a JSON round-trip produces (numbers decode as float64 when the payload
+// arrived over the wire) and a native int (same-process tests).
+func intFromPayload(payload map[string]any, key string) int {
+	switch v := payload[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
+// floatFromPayload reads a float field from an event payload (cost), tolerating
+// both float64 (wire / native) and int.
+func floatFromPayload(payload map[string]any, key string) float64 {
+	switch v := payload[key].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	default:
+		return 0
+	}
 }
