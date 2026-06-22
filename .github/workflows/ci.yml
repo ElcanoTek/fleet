@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go build / vet / lint / test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: fleet
+          POSTGRES_PASSWORD: fleet
+          POSTGRES_DB: fleet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fleet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Chat suites (internal/store, internal/httpapi) read FLEET_TEST_DATABASE_URL,
+      # falling back to CHAT_TEST_DATABASE_URL. Sched suite (internal/sched/*,
+      # internal/runner) reads DATABASE_URL. The chat and sched migration systems
+      # both use a table named schema_migrations with INCOMPATIBLE schemas, so they
+      # MUST point at separate databases. Both suites auto-migrate from an empty DB.
+      FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
+      CHAT_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
+      DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable
+      # The clientconfig tests self-resolve config/default, but point the binaries at
+      # the in-repo bundle explicitly for any code path that reads it.
+      FLEET_CLIENT_CONFIG_DIR: ${{ github.workspace }}/config/default
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          check-latest: true
+
+      - name: Create test databases
+        run: |
+          PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
+            -c 'CREATE DATABASE fleet_chat_test;' \
+            -c 'CREATE DATABASE fleet_sched_test;'
+
+      - name: Disable podman so container sandbox tests self-skip
+        # GitHub's ubuntu-latest runner ships podman, but the per-turn sandbox
+        # image (ghcr.io/elcanotek/sandbox:latest) is private and there is no
+        # Containerfile in-repo to build a local one, so the podman-gated
+        # integration tests in internal/sandbox cannot run here. They gate on
+        # exec.LookPath("podman"): when podman is absent they cleanly t.Skip,
+        # but when present they attempt a real `podman pull` and t.Fatalf on
+        # failure. Masking the binary makes LookPath fail so every container
+        # test skips. The host-backend sandbox tests (bash/python3 via os/exec)
+        # still run normally.
+        run: |
+          if command -v podman >/dev/null 2>&1; then
+            sudo mv "$(command -v podman)" "$(command -v podman).disabled"
+          fi
+          if command -v podman >/dev/null 2>&1; then
+            echo "podman still on PATH at $(command -v podman); failing" >&2
+            exit 1
+          fi
+          echo "podman is not on PATH (container sandbox tests will skip)"
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          # Repo .golangci.yml is the v2 schema (version: "2") and pins
+          # run.go: "1.26.4", so a recent golangci-lint v2 is required.
+          version: v2.12.2
+
+      - name: go test
+        run: go test -p 1 ./... -count=1
+
+  web:
+    name: Web lint / test / build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests (vitest)
+        run: npx vitest run
+
+      - name: Build
+        run: npm run build
