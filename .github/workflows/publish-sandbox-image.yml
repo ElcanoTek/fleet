@@ -1,0 +1,59 @@
+name: Publish sandbox image
+
+# Builds the ~1.3GB fleet sandbox image (images/sandbox/Containerfile) and pushes
+# it to GHCR so the e2e-live job can PULL it instead of building it per run.
+#
+# Push auth uses the in-Actions GITHUB_TOKEN, which is granted packages:write by
+# the job-level permissions block below — that write scope exists ONLY inside
+# Actions (a local `gh` token typically lacks write:packages), so publishing must
+# happen here, never from a developer machine.
+#
+# Triggers: pushes to main that touch the Containerfile or the build script (the
+# only inputs to the image), plus manual dispatch for ad-hoc republishes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/sandbox/**'
+      - 'scripts/build-sandbox-image.sh'
+      - '.github/workflows/publish-sandbox-image.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build + push sandbox image to GHCR
+    runs-on: ubuntu-latest
+    env:
+      # Lowercase the owner: GHCR repository paths must be lowercase, while
+      # github.repository_owner may carry the org's display casing (ElcanoTek).
+      IMAGE: ghcr.io/elcanotek/sandbox
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure podman
+        run: |
+          command -v podman >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq podman)
+          podman --version
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build sandbox image
+        # Reuse the repo's own build script so the published image is byte-for-byte
+        # what a local build produces (same Containerfile, same context).
+        run: IMAGE_NAME="$IMAGE" scripts/build-sandbox-image.sh latest
+
+      - name: Tag with the commit SHA (immutable reference)
+        run: podman tag "$IMAGE:latest" "$IMAGE:${GITHUB_SHA}"
+
+      - name: Push :latest and :<sha>
+        run: |
+          podman push "$IMAGE:latest"
+          podman push "$IMAGE:${GITHUB_SHA}"
+          echo "Published $IMAGE:latest and $IMAGE:${GITHUB_SHA}"
