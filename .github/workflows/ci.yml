@@ -133,3 +133,58 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  playwright:
+    name: Web e2e (Playwright, mocked)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    env:
+      # The mocked e2e suite drives the REAL Next app but route-intercepts every
+      # Go backend, so no chat-server / orchestrator / OpenRouter / Podman is
+      # needed — it's fully deterministic. These throwaway secrets must be set at
+      # BOTH build time (server components read AUTH_SIGNING_PUBKEY to render the
+      # "Use Elcano email" button) and runtime (the session HMAC + Ed25519
+      # verification). playwright.config.ts also passes them to the `next start`
+      # webServer it boots, so they're defined once here for the build step.
+      CHAT_MOCK_MODE: '1'
+      APP_SESSION_SECRET: e2e-session-secret-0123456789abcdef
+      AUTH_SIGNING_PUBKEY: ***REMOVED***
+      CHAT_SERVER_URL: http://127.0.0.1:18080
+      CHAT_SERVER_TOKEN: e2e-shared-secret
+      ORCHESTRATOR_SERVER_URL: http://127.0.0.1:18000
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Build
+        # Production build; playwright.config.ts boots `next start` against it in
+        # CI (CHAT_MOCK_MODE=1) so the suite validates the shipped bundle.
+        run: npm run build
+
+      - name: Run Playwright tests
+        run: npx playwright test
+
+      - name: Upload Playwright HTML report
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 14

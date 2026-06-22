@@ -2,10 +2,11 @@ import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
 
-// Mocked P7 e2e for the orchestrator view: task-create (with MCP enable +
-// account select), task list, and log view — all driven against the Next dev
-// server with every /api/orchestrator/* call intercepted by Playwright (no Go
-// backend; that's P8).
+// Mocked e2e for the orchestrator view: dashboard load, task-create through the
+// shared <McpServerPicker> (enable a server + pick a credential account),
+// asserting the legacy target_node_name field is GONE, task-list refresh, and
+// the react-markdown log viewer. Every /api/orchestrator/* call is intercepted
+// by Playwright (no Go moc backend).
 
 const STATS = {
   total_nodes: 1,
@@ -35,7 +36,7 @@ const SEED_TASKS = [
   },
 ];
 
-async function mockOrchestrator(page: Page, captured: { createBody?: unknown }) {
+async function mockOrchestrator(page: Page, captured: { createBody?: Record<string, unknown> }) {
   await page.route("**/api/orchestrator/**", async (route: Route) => {
     const url = new URL(route.request().url());
     const path = url.pathname.replace("/api/orchestrator", "");
@@ -54,8 +55,9 @@ async function mockOrchestrator(page: Page, captured: { createBody?: unknown }) 
       return route.fulfill({ json: { data: tasks, total: tasks.length, limit: 20, offset: 0 } });
     }
     if (path === "/tasks" && method === "POST") {
-      captured.createBody = JSON.parse(route.request().postData() ?? "{}");
-      return route.fulfill({ json: createdTask(captured.createBody) });
+      const body = JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>;
+      captured.createBody = body;
+      return route.fulfill({ json: createdTask(body) });
     }
     if (path.startsWith("/logs/")) {
       return route.fulfill({
@@ -73,11 +75,10 @@ async function mockOrchestrator(page: Page, captured: { createBody?: unknown }) 
   });
 }
 
-function createdTask(body: unknown) {
-  const b = body as { prompt?: string };
+function createdTask(body: Record<string, unknown>) {
   return {
     id: "22222222-2222-2222-2222-222222222222",
-    prompt: b.prompt ?? "",
+    prompt: (body.prompt as string) ?? "",
     status: "pending",
     created_at: new Date().toISOString(),
   };
@@ -87,8 +88,8 @@ test.beforeEach(async ({ context }) => {
   await loginViaCookie(context);
 });
 
-test("orchestrator dashboard loads stats and the task list", async ({ page }) => {
-  const captured: { createBody?: unknown } = {};
+test("the dashboard loads stats and the task list", async ({ page }) => {
+  const captured: { createBody?: Record<string, unknown> } = {};
   await mockOrchestrator(page, captured);
   await page.goto("/orchestrator");
 
@@ -96,14 +97,21 @@ test("orchestrator dashboard loads stats and the task list", async ({ page }) =>
   await expect(page.getByText("Run the optimization protocol")).toBeVisible();
 });
 
-test("create a task with an MCP server enabled + account selected", async ({ page }) => {
-  const captured: { createBody?: unknown } = {};
+test("create a task via the MCP picker (enable a server + select an account); target_node_name is gone", async ({
+  page,
+}) => {
+  const captured: { createBody?: Record<string, unknown> } = {};
   await mockOrchestrator(page, captured);
   await page.goto("/orchestrator");
   await expect(page.getByTestId("orchestrator-dashboard")).toBeVisible();
 
   await page.getByTestId("new-task-btn").click();
   await expect(page.getByRole("dialog", { name: "Create New Task" })).toBeVisible();
+
+  // The MCP picker section exists where the legacy Target Agent / node-name
+  // input used to be — and that legacy input is gone entirely.
+  await expect(page.getByTestId("task-mcp-section")).toBeVisible();
+  await expect(page.getByLabel(/target node|target agent/i)).toHaveCount(0);
 
   await page.getByLabel("Prompt / Command").fill("Pull yesterday's deal report");
 
@@ -114,16 +122,23 @@ test("create a task with an MCP server enabled + account selected", async ({ pag
   await page.getByRole("button", { name: "Launch task" }).click();
 
   await expect.poll(() => captured.createBody).toBeTruthy();
-  const body = captured.createBody as { prompt: string; mcp_selection: Array<{ server: string; account?: string }> };
+  const body = captured.createBody as {
+    prompt: string;
+    mcp_selection: Array<{ server: string; account?: string }>;
+    target_node_name?: unknown;
+  };
   expect(body.prompt).toContain("Pull yesterday's deal report");
   expect(body.mcp_selection).toEqual([{ server: "xandr", account: "client_a" }]);
+  // The migration replaced target_node_name with the MCP selection — assert the
+  // payload never carries the legacy field.
+  expect(body.target_node_name).toBeUndefined();
 
   // The new task shows up in the refreshed list.
   await expect(page.getByText("Pull yesterday's deal report")).toBeVisible();
 });
 
-test("open a task's log viewer", async ({ page }) => {
-  const captured: { createBody?: unknown } = {};
+test("opening a task renders its log viewer (react-markdown)", async ({ page }) => {
+  const captured: { createBody?: Record<string, unknown> } = {};
   await mockOrchestrator(page, captured);
   await page.goto("/orchestrator");
   await expect(page.getByTestId("orchestrator-dashboard")).toBeVisible();
@@ -131,5 +146,7 @@ test("open a task's log viewer", async ({ page }) => {
   await page.getByText("Run the optimization protocol").click();
   await expect(page.getByRole("dialog", { name: "Task Logs" })).toBeVisible();
   await expect(page.getByTestId("log-modal-body")).toContainText("Run the optimization protocol");
-  await expect(page.getByTestId("log-modal-body")).toContainText("Report");
+  // The assistant message's **Report** markdown renders to <strong>Report</strong>
+  // via react-markdown — assert the bolded text, proving the markdown pipeline ran.
+  await expect(page.getByTestId("log-modal-body").getByText("Report", { exact: true })).toBeVisible();
 });
