@@ -122,11 +122,21 @@ func (c *modelsCache) ensureFresh() {
 	log.Printf("📥 OpenRouter /models refreshed: %d entries cached", len(c.contextMap))
 }
 
+// modelsEndpointFor returns the /models listing URL, honoring the
+// OPENROUTER_BASE_URL override (E2E) so the context-window cache refresh hits
+// the same fake origin as chat completions rather than the live network.
+func modelsEndpointFor() string {
+	if override := openRouterBaseURLOverride(); override != "" {
+		return strings.TrimRight(override, "/") + "/api/v1/models"
+	}
+	return modelsEndpointURL
+}
+
 // fetchOpenRouterModels performs the HTTP GET. /api/v1/models is public.
 func fetchOpenRouterModels(timeout time.Duration) ([]orModelEntry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsEndpointURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsEndpointFor(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}

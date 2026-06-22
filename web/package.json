@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:live": "CHAT_E2E_LIVE=1 playwright test",
+    "test:e2e:live:real": "E2E_LIVE=1 playwright test --project=live",
     "test:all": "npm run test && npm run test:e2e"
   },
   "dependencies": {
