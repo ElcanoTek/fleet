@@ -200,6 +200,89 @@ func TestRecoveredTaskRejectsOldNode(t *testing.T) {
 	}
 }
 
+// TestRecoverExpiredLeasesSelectivity pins the recovery predicate's
+// selectivity: RecoverExpiredLeases must re-queue ONLY genuinely-expired active
+// leases (status in leased/running/analyzing AND lease_expires_at < now). A
+// not-yet-expired lease, a terminal task, and a plain pending task must all be
+// left untouched — so the crash-safe backstop never steals a live worker's task
+// nor resurrects a finished one. The existing TestTaskLeasing only asserts the
+// recovered count for a single expired task; this isolates the negative cases in
+// one mixed pending set.
+func TestRecoverExpiredLeasesSelectivity(t *testing.T) {
+	past := time.Now().UTC().Add(-time.Minute)
+	future := time.Now().UTC().Add(LeaseDuration)
+
+	cases := []struct {
+		name          string
+		status        models.TaskStatus
+		leaseExpires  *time.Time
+		wantRecovered bool // becomes pending with cleared lease
+	}{
+		{"expired-leased", models.TaskStatusLeased, &past, true},
+		{"expired-running", models.TaskStatusRunning, &past, true},
+		{"expired-analyzing", models.TaskStatusAnalyzing, &past, true},
+		{"live-running-not-expired", models.TaskStatusRunning, &future, false},
+		{"live-leased-not-expired", models.TaskStatusLeased, &future, false},
+		{"terminal-success-stale-lease", models.TaskStatusSuccess, &past, false},
+		{"plain-pending-no-lease", models.TaskStatusPending, nil, false},
+	}
+
+	store, _ := newTestStore(t)
+
+	owner := uuid.New().String()
+	ids := make(map[string]uuid.UUID, len(cases))
+	for _, tc := range cases {
+		task := &models.Task{
+			ID:             uuid.New(),
+			Prompt:         tc.name,
+			Status:         tc.status,
+			Priority:       1,
+			CreatedAt:      time.Now().UTC(),
+			LeaseExpiresAt: tc.leaseExpires,
+		}
+		if tc.leaseExpires != nil {
+			o := owner
+			task.LeaseOwner = &o
+		}
+		if _, err := store.AddTask(task); err != nil {
+			t.Fatalf("%s: AddTask: %v", tc.name, err)
+		}
+		ids[tc.name] = task.ID
+	}
+
+	wantCount := 0
+	for _, tc := range cases {
+		if tc.wantRecovered {
+			wantCount++
+		}
+	}
+
+	got, err := store.RecoverExpiredLeases()
+	if err != nil {
+		t.Fatalf("RecoverExpiredLeases: %v", err)
+	}
+	if got != wantCount {
+		t.Fatalf("recovered %d tasks, want exactly %d (only genuinely-expired active leases)", got, wantCount)
+	}
+
+	for _, tc := range cases {
+		after, err := store.GetTask(ids[tc.name])
+		if err != nil {
+			t.Fatalf("%s: GetTask: %v", tc.name, err)
+		}
+		if tc.wantRecovered {
+			if after.Status != models.TaskStatusPending {
+				t.Errorf("%s: status = %s after recovery, want pending", tc.name, after.Status)
+			}
+			if after.LeaseOwner != nil || after.LeaseExpiresAt != nil {
+				t.Errorf("%s: lease not cleared after recovery: owner=%v expiry=%v", tc.name, after.LeaseOwner, after.LeaseExpiresAt)
+			}
+		} else if after.Status != tc.status {
+			t.Errorf("%s: status = %s, want it LEFT as %s (recovery over-reached)", tc.name, after.Status, tc.status)
+		}
+	}
+}
+
 func TestTaskLeasingUsesFixedLeaseWindow(t *testing.T) {
 	store, _ := newTestStore(t)
 
