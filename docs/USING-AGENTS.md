@@ -69,8 +69,25 @@ fleet owns execution end to end:
 - **Notes & context.** The notes wiki and per-conversation context are injected
   host-side.
 - **MCP credentials.** Brokered host-side at the moment of delegation. They are
-  **never** placed in any agent container.
+  **never** placed in any agent container. For `native-acp` this means the agent
+  advertises the MCP tool surface but every `mcp_*` call rides `_fleet/mcp` back
+  to the host, which runs it against the per-task credentialed client — the
+  container holds only the model-endpoint key, never an MCP credential.
+- **Approval / memory / note staging.** `native-acp`'s in-loop policy decides
+  *when* to stage (identically to in-process); the staging *effect* (the approval
+  card, the memory/note proposal) rides `_fleet/stage` back to the host, where the
+  real stagers persist it and emit the SSE card.
+- **Usage & cost.** The `native-acp` agent makes the LLM calls inside its
+  container and reports each step's token/cost over `_fleet/event`; the host
+  accumulates it and enforces the same cost/token ceilings (shipped in the run
+  spec, enforced in-loop) as in-process.
 - **Blast radius.** Tool calls run in fleet's own hardened per-turn sandbox.
+- **Lockdown.** Lockdown bounds *tool execution*, not the model call. Tool calls
+  already execute host-side in fleet's per-turn sandbox, so a lockdown turn hands
+  `native-acp` a **no-network** host sandbox and the isolation holds exactly as
+  in-process. The agent container itself legitimately keeps model-endpoint egress
+  to run the LLM loop — the same posture as the in-process server process under
+  lockdown, where only the per-turn TOOL sandbox is sealed.
 
 ### Tier 2 — **Containment** (`acp` external, `delegated_policy: true`)
 

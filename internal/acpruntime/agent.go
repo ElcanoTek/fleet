@@ -132,6 +132,14 @@ func (a *AgentRunner) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prom
 	// sandbox. The agent has NO local executor.
 	sb := sandbox.NewDelegating(&toolForwarder{conn: a.conn, sessionID: sid})
 	turn := tools.NewTurnTools(sb)
+	nativeTools := turn.Tools
+	// propose_note is not in the default per-turn tool set (it is wired only when
+	// a note proposer is present, in BOTH modes — mirroring the scheduled driver,
+	// which adds it to its native tools). Register it here when the host advertised
+	// a note-proposer surface so the agent's tool roster matches.
+	if spec.NoteProposerWired {
+		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeNoteTool())
+	}
 
 	obs := &delegatingObserver{conn: a.conn, sessionID: acp.SessionId(sid)}
 
@@ -148,15 +156,44 @@ func (a *AgentRunner) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prom
 		headers.HTTPReferer = spec.ProviderHTTPReferer
 	}
 
+	// Delegating stagers: the agent's policy DECIDES when to stage (identical to
+	// in-process), the host performs the EFFECT (DB write + SSE card) over
+	// `_fleet/stage`. Wired only when the host advertised a staging surface so the
+	// agent reports "not wired" identically to an in-process turn with no stagers.
+	var stager *delegatingStager
+	if spec.StagingWired || spec.NoteProposerWired {
+		stager = &delegatingStager{conn: a.conn, sessionID: sid}
+	}
+
 	var policy agentcore.Policy
 	includeConfirmAudit := false
-	if mode == agentcore.ModeScheduled {
+	switch mode {
+	case agentcore.ModeScheduled:
 		sp := agentcore.NewScheduledPolicy(nil, 0)
+		if spec.NoteProposerWired && stager != nil {
+			sp.SetNoteProposer(noteProposerAdapter{s: stager})
+		}
 		policy = sp
 		includeConfirmAudit = true
-	} else {
-		policy = agentcore.NewInteractivePolicy(spec.MaxCostUSD, spec.MaxTotalTokens, nil, nil)
+	default:
+		var approvalSink agentcore.ApprovalStager
+		var memoryProposer agentcore.MemoryProposer
+		if spec.StagingWired && stager != nil {
+			approvalSink = stager
+			memoryProposer = stager
+		}
+		ip := agentcore.NewInteractivePolicy(spec.MaxCostUSD, spec.MaxTotalTokens, approvalSink, memoryProposer)
+		if spec.NoteProposerWired && stager != nil {
+			ip.SetNoteProposer(noteProposerAdapter{s: stager})
+		}
+		policy = ip
 	}
+
+	// Delegating MCP tools: the agent advertises the host-supplied mcp_<server>_<tool>
+	// surface (descriptors carry NO credentials) and delegates every call over
+	// `_fleet/mcp` to the host, which runs it against the per-task credentialed
+	// client. MCP credentials NEVER enter this container.
+	mcpTools := buildDelegatingMCPTools(a.conn, sid, policy, spec.MCPTools)
 
 	deps := agentcore.Deps{
 		Input:    promptInput{system: spec.SystemPrompt, messages: messages, label: spec.Label},
@@ -164,12 +201,17 @@ func (a *AgentRunner) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prom
 		Policy:   policy,
 		Executor: agentExecutor{sb: sb},
 		Model:    model, FallbackModel: fallback,
+		// Report usage per LLM step to the host over `_fleet/event` so the host
+		// accounts for tokens/cost identically to in-process (the agent makes the
+		// LLM calls, so usage accrues here).
+		UsageReporter: obs.reportUsage,
 	}
 	cfg := agentcore.RunConfig{
 		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         spec.Temperature,
 		MaxCompletionTokens: spec.MaxTokens,
-		NativeTools:         turn.Tools,
+		NativeTools:         nativeTools,
+		PreGatedTools:       mcpTools,
 		IncludeConfirmAudit: includeConfirmAudit,
 		ProviderHeaders:     headers,
 	}

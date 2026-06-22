@@ -75,10 +75,48 @@ func NewClientRuntime(cfg ClientConfig) *ClientRuntime {
 // the whole point is that native-acp governs identically.
 type Deps struct {
 	// Executor runs delegated bash/python in the host-managed sandbox. REQUIRED.
+	// For a lockdown turn the host hands a no-network sandbox here, so lockdown's
+	// tool-isolation holds for native-acp exactly as in-process.
 	Executor agentcore.Executor
 	// Observer receives the agent's streamed text/tool/progress + `_fleet/event`
 	// notifications, re-emitted as fleet's real run events. REQUIRED.
 	Observer agentcore.Observer
+	// MCPBroker runs a delegated MCP tool call HOST-SIDE against the per-task
+	// credentialed mcp.Client (P-ACP-2b). The agent advertises the tool surface
+	// but never holds credentials; this is where the call physically happens, with
+	// creds bound host-side. Nil when no MCP servers are selected (the agent then
+	// advertises no MCP tools, so it is never invoked).
+	MCPBroker MCPBroker
+	// StageBroker stages an approval / memory / note proposal HOST-SIDE (the DB
+	// write + SSE card). The agent's policy runs in-loop (identical governance)
+	// but routes its staging EFFECT here. Nil leaves the staging gates inert
+	// (matching an in-process turn with no stagers wired).
+	StageBroker StageBroker
+}
+
+// MCPBroker runs a delegated MCP tool call host-side against the per-task
+// credentialed client. The host (agent driver) wires an implementation backed by
+// the bound mcp.Client; the cred-isolation invariant lives here — credentials are
+// applied host-side at this call, never shipped into the agent container.
+type MCPBroker interface {
+	// CallMCP runs server.tool with args and returns the flattened text, the
+	// isError bit, and a transport error (distinct from a tool-level isError).
+	CallMCP(ctx context.Context, server, tool string, args map[string]any) (text string, isError bool, err error)
+}
+
+// StageBroker stages a host-side approval / memory / note proposal. The host
+// wires an implementation backed by the real ApprovalStager / MemoryProposer /
+// NoteProposer. Each method mirrors the in-process staging contract.
+type StageBroker interface {
+	// StageApproval stages a critical tool call; returns the approval id.
+	StageApproval(toolName, toolCallID, rawInput string) (approvalID string, err error)
+	// StageSuggestion stages a suggest_advanced_model card; returns the approval
+	// id (empty when suppressed) and the agent-facing message (always populated).
+	StageSuggestion(reason string) (approvalID, msg string, err error)
+	// StageMemory stages a propose_memory proposal; returns the proposal id.
+	StageMemory(content string) (proposalID string, err error)
+	// StageNote stages a propose_note proposal; returns the proposal id.
+	StageNote(slug, title, body, reason string) (proposalID string, err error)
 }
 
 // Result is the run outcome the client surfaces to the driver.
@@ -90,6 +128,11 @@ type Result struct {
 	StopReason string
 	// Cancelled reports the run ended because the caller's ctx was cancelled.
 	Cancelled bool
+	// Usage is the accumulated token + cost accounting the agent reported over
+	// `_fleet/event` ("usage" events). The agent makes the LLM calls, so usage
+	// accrues in its container; it reports each step's usage to the host, which
+	// accumulates it here for the same accounting the in-process path produces.
+	Usage agentcore.RunUsage
 }
 
 // Run spawns the agent, drives one run to completion, and tears the whole group
@@ -152,18 +195,19 @@ func (r *ClientRuntime) Run(ctx context.Context, spec RunSpec, promptText string
 		Meta:      map[string]any{MetaKeyPromptMeta: json.RawMessage(metaJSON)},
 	})
 	if err != nil {
-		// A ctx-cancellation is a clean stop: return the partial transcript so
-		// the driver persists what streamed before the cancel.
+		// A ctx-cancellation is a clean stop: return the partial transcript +
+		// whatever usage accrued so the driver persists what streamed before cancel.
 		if ctx.Err() != nil {
-			return Result{FinalText: cl.finalText(), Cancelled: true}, nil
+			return Result{FinalText: cl.finalText(), Cancelled: true, Usage: cl.usageSnapshot()}, nil
 		}
-		return Result{FinalText: cl.finalText()}, fmt.Errorf("prompt: %w", err)
+		return Result{FinalText: cl.finalText(), Usage: cl.usageSnapshot()}, fmt.Errorf("prompt: %w", err)
 	}
 
 	return Result{
 		FinalText:  cl.finalText(),
 		StopReason: string(promptResp.StopReason),
 		Cancelled:  promptResp.StopReason == acp.StopReasonCancelled,
+		Usage:      cl.usageSnapshot(),
 	}, nil
 }
 
@@ -271,6 +315,15 @@ type hostClient struct {
 
 	mu    sync.Mutex
 	final strings.Builder
+	usage agentcore.RunUsage
+}
+
+// usageSnapshot returns the accumulated usage the agent reported over
+// `_fleet/event`. Safe to call after the run completes.
+func (c *hostClient) usageSnapshot() agentcore.RunUsage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.usage
 }
 
 var (
@@ -309,9 +362,77 @@ func (c *hostClient) HandleExtensionMethod(ctx context.Context, method string, p
 		return c.handleTool(ctx, params)
 	case ExtMethodEvent:
 		return c.handleEvent(params)
+	case ExtMethodMCP:
+		return c.handleMCP(ctx, params)
+	case ExtMethodStage:
+		return c.handleStage(params)
 	default:
 		return nil, acp.NewMethodNotFound(method)
 	}
+}
+
+// handleMCP runs a delegated MCP tool call HOST-SIDE against the per-task
+// credentialed client (P-ACP-2b credential brokering). The agent advertises the
+// tool surface but holds no credentials; the call physically happens here, with
+// creds applied host-side (BindMCPSelection). MCP credentials NEVER enter the
+// agent container.
+func (c *hostClient) handleMCP(ctx context.Context, params json.RawMessage) (any, error) {
+	var req MCPRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, acp.NewInvalidParams(map[string]any{"error": err.Error()})
+	}
+	if c.deps.MCPBroker == nil {
+		// Defensive: the agent only advertises MCP tools when the host shipped
+		// descriptors, which it does only when a broker is wired. A call with no
+		// broker is a wiring bug — surface it as a tool error, not a silent allow.
+		return MCPResponse{Error: "MCP broker not wired host-side"}, nil
+	}
+	text, isErr, err := c.deps.MCPBroker.CallMCP(ctx, req.Server, req.Tool, req.Arguments)
+	if err != nil {
+		// The DELEGATION succeeded; the broker's transport failure rides the
+		// response Error field (the agent surfaces it as a tool error, exactly as
+		// the in-process mcpTool does). Returning a nil error here is intentional.
+		//nolint:nilerr // a tool/transport failure is reported via MCPResponse.Error, not the RPC error — mirrors the in-process tool-error contract.
+		return MCPResponse{Error: err.Error()}, nil
+	}
+	return MCPResponse{Text: text, IsError: isErr}, nil
+}
+
+// handleStage stages a host-side approval / memory / note proposal. The agent's
+// in-loop policy decided to stage; the EFFECT (DB write + SSE card) belongs to
+// the host and runs here through the real stagers.
+func (c *hostClient) handleStage(params json.RawMessage) (any, error) {
+	var req StageRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, acp.NewInvalidParams(map[string]any{"error": err.Error()})
+	}
+	if c.deps.StageBroker == nil {
+		return StageResponse{Error: "staging broker not wired host-side"}, nil
+	}
+	switch req.Kind {
+	case StageApproval:
+		id, err := c.deps.StageBroker.StageApproval(req.ToolName, req.ToolCallID, req.RawInput)
+		return stageResp(id, "", err), nil
+	case StageSuggestion:
+		id, msg, err := c.deps.StageBroker.StageSuggestion(req.Reason)
+		return stageResp(id, msg, err), nil
+	case StageMemory:
+		id, err := c.deps.StageBroker.StageMemory(req.Content)
+		return stageResp(id, "", err), nil
+	case StageNote:
+		id, err := c.deps.StageBroker.StageNote(req.Slug, req.Title, req.Body, req.Reason)
+		return stageResp(id, "", err), nil
+	default:
+		return StageResponse{Error: "unsupported stage kind: " + string(req.Kind)}, nil
+	}
+}
+
+func stageResp(id, msg string, err error) StageResponse {
+	resp := StageResponse{ProposalID: id, Message: msg}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+	return resp
 }
 
 // handleTool runs the delegated bash/python in the host-managed sandbox via the
@@ -356,13 +477,42 @@ func toToolResponse(out string, err error) ToolResponse {
 }
 
 // handleEvent re-emits a structured agent run event onto fleet's real Observer.
+// The "usage" event additionally accumulates token/cost accounting host-side:
+// the agent makes the LLM calls (in its container), so usage accrues there and is
+// reported here per step. The host accumulates it so the driver surfaces the same
+// usage/cost the in-process path produces — and the cost ceiling is enforced
+// in-loop by the agent's policy (same ceilings, shipped in the RunSpec).
 func (c *hostClient) handleEvent(params json.RawMessage) (any, error) {
 	var ev EventNotification
 	if err := json.Unmarshal(params, &ev); err != nil {
 		return nil, acp.NewInvalidParams(map[string]any{"error": err.Error()})
 	}
+	if ev.EventType == EventUsage {
+		c.accumulateUsage(ev.Payload)
+	}
 	c.deps.Observer.Observe(ev.EventType, ev.Payload)
 	return map[string]any{}, nil
+}
+
+// accumulateUsage records the latest CUMULATIVE usage snapshot the agent
+// reported. The agent ships its running totals (usageSnapshot — already summed
+// across the run's steps) on every step, so the host takes the latest report
+// rather than re-summing. The final value therefore equals the agent's
+// end-of-run usage, which is exactly what the in-process path returns from
+// usageSnapshot(orch). LastStepInputTokens is the latest step's input, carried
+// verbatim. Reports are monotonic, so even an out-of-order delivery converges to
+// the max on each field — but ACP notifications preserve order, so the last wins.
+func (c *hostClient) accumulateUsage(payload map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.usage = agentcore.RunUsage{
+		PromptTokens:        intFromPayload(payload, usageKeyPromptTokens),
+		LastStepInputTokens: intFromPayload(payload, usageKeyLastStepInputTokens),
+		CompletionTokens:    intFromPayload(payload, usageKeyCompletionTokens),
+		CachedTokens:        intFromPayload(payload, usageKeyCachedTokens),
+		CacheCreationTokens: intFromPayload(payload, usageKeyCacheCreationTokens),
+		CostUSD:             floatFromPayload(payload, usageKeyCostUSD),
+	}
 }
 
 // RequestPermission: P-ACP-1 native flavor is fully governed by the in-loop
