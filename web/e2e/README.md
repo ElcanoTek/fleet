@@ -68,7 +68,7 @@ throwaway `AUTH_SIGNING_PUBKEY` so the "Use Elcano email" path renders). In CI
 ## Live suite (local only — never in CI)
 
 The top-level `e2e/*.spec.ts` specs (`auth.spec.ts`, `chat.spec.ts`,
-`bug-report.spec.ts`, `protocol-pills.spec.ts`, …) drive a really booted fleet.
+`protocol-pills.spec.ts`, …) drive a really booted fleet.
 They use `e2e/fixtures.ts`, which performs a **real** login against a live
 chat-server, so they need the Go backend present. In this externalized web tree
 there is no Go binary, so the live suite is run from a full fleet checkout where

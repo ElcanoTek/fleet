@@ -63,7 +63,6 @@ export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
         lockdown_available: false,
         lockdown_only: false,
         lockdown_allowed_models: [],
-        julesEnabled: false,
       },
     }),
   );

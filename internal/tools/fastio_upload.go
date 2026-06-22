@@ -21,7 +21,7 @@ import (
 // Why no `content_base64` field: the entire point of this tool is to
 // keep base64 OUT of the model's context. Carrying file bytes through
 // `run_python.vars` → `tool_call.input` → fast.io is the failure mode
-// we're closing — see mcp_fastio_guard.go for the bug report.
+// we're closing — see mcp_fastio_guard.go for the details.
 type FastIOUploadFileParams struct {
 	Path         string `json:"path" description:"Workspace-relative or absolute path to the file to upload. Relative paths resolve inside the per-conversation workspace (same root the bash and run_python tools cd into). The file must exist when this is called."`
 	WorkspaceID  string `json:"workspace_id" description:"19-digit fast.io workspace id. Get it once per conversation via mcp_fast_io_workspace action=list (the first row's id) and reuse the same value for every upload."`

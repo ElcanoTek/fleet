@@ -1,0 +1,51 @@
+# Dependabot keeps fleet's three dependency surfaces patched: the Go module
+# at the repo root, the Next.js web app under /web, and the GitHub Actions
+# used by the CI workflows. Minor + patch bumps are grouped per ecosystem so
+# routine updates land as one PR instead of a flood; majors stay separate so
+# breaking changes get their own review.
+#
+# Schema: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+
+updates:
+  # Go module (go.mod / go.sum at the repo root).
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(go)"
+    groups:
+      go-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Next.js web app (web/package.json + web/package-lock.json).
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(web)"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions referenced by .github/workflows/*.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(actions)"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
