@@ -68,8 +68,10 @@ E2E_SCHED_USERNAME="${E2E_SCHED_USERNAME:-e2e}"
 FLEET_SERVER_TOKEN="${FLEET_SERVER_TOKEN:-e2e-shared-secret}"
 ADMIN_API_KEY="${ADMIN_API_KEY:-e2e-admin-key}"
 APP_SESSION_SECRET="${APP_SESSION_SECRET:-e2e-session-secret-0123456789abcdef}"
-# A throwaway pubkey so the password login path renders (matches the mocked suite).
-AUTH_SIGNING_PUBKEY="${AUTH_SIGNING_PUBKEY:-***REMOVED***}"
+# TEST ONLY — throwaway Ed25519 pubkey so the "Use Elcano email" login path
+# renders; the live suite never mints/verifies an elcano_auth token, so any
+# shape-valid pubkey works. Not used in any deployment.
+AUTH_SIGNING_PUBKEY="${AUTH_SIGNING_PUBKEY:-P8Lyn/xy8bS2SWcnPkg2kKiGBctyJZdEMMzNEixh0As=}"
 E2E_ENV_FILE="${E2E_ENV_FILE:-$REPO_ROOT/web/.e2e-live.env}"
 # CANARY MODE (E2E_CANARY=1): use the REAL OpenRouter + a real cheap model
 # instead of the fake LLM. This is the drift canary — it spends a few credits to
