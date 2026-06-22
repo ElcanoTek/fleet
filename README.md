@@ -41,6 +41,12 @@ them.
   A model that won't stop calling tools is bounded by the ceiling, the
   per-turn timeout, and an iteration cap — not by your invoice.
 
+- **Resilient scheduling.** A scheduled task that fails on a *transient* infra
+  blip can be re-queued with exponential backoff up to its `max_retries`
+  (default 0 = off, opt-in per task); a deterministic failure is never retried.
+  Retries are bounded and the agent is told its attempt number so it can avoid
+  repeating non-idempotent side-effects — fleet does not auto-dedupe those.
+
 - **Connected to your data and tools, wherever they live.** fleet speaks
   [MCP](#standards) and ships a per-deployment **MCP catalog**. Tasks select
   which MCP servers they need, with **multi-account credentials** brokered

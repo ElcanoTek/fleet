@@ -528,7 +528,7 @@ func (db *Database) GetIdleNodes(ctx context.Context) ([]*models.Node, error) {
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries"
 
 // AddTask adds or updates a task.
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
@@ -537,8 +537,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			id, prompt, model, fallback_model, max_iterations, mcp_selection,
 			priority, instruction_self_improve, status, assigned_node_id, agent_session_id,
 			created_at, started_at, completed_at, result, error_message,
-			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
+			attempt_count, max_retries
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -560,7 +561,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_by = EXCLUDED.created_by,
 			files = EXCLUDED.files,
 			lease_owner = EXCLUDED.lease_owner,
-			lease_expires_at = EXCLUDED.lease_expires_at`,
+			lease_expires_at = EXCLUDED.lease_expires_at,
+			attempt_count = EXCLUDED.attempt_count,
+			max_retries = EXCLUDED.max_retries`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -583,6 +586,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		marshalJSON(task.Files),
 		task.LeaseOwner,
 		task.LeaseExpiresAt,
+		task.AttemptCount,
+		task.MaxRetries,
 	)
 	return err
 }
@@ -625,6 +630,8 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		files                  sql.NullString
 		leaseOwner             sql.NullString
 		leaseExpiresAt         sql.NullTime
+		attemptCount           int
+		maxRetries             int
 	)
 
 	err := scanner.Scan(
@@ -632,6 +639,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&priority, &instructionSelfImprove, &status, &assignedNodeID, &agentSessionID,
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
+		&attemptCount, &maxRetries,
 	)
 	if err != nil {
 		return nil, err
@@ -646,6 +654,8 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		AssignedNodeID:         assignedNodeID,
 		CreatedAt:              createdAt,
 		CreatedBy:              createdBy,
+		AttemptCount:           attemptCount,
+		MaxRetries:             maxRetries,
 	}
 	if model.Valid {
 		task.Model = &model.String
@@ -1172,7 +1182,9 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			lease_expires_at = $19,
 			model = $20,
 			fallback_model = $21,
-			max_iterations = $22
+			max_iterations = $22,
+			attempt_count = $23,
+			max_retries = $24
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1196,6 +1208,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.Model,
 		task.FallbackModel,
 		task.MaxIterations,
+		task.AttemptCount,
+		task.MaxRetries,
 	)
 	return err
 }
