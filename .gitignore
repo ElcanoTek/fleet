@@ -45,3 +45,11 @@ node_modules/
 *.tsbuildinfo
 web/test-results/
 web/playwright-report/
+
+# Live e2e runtime artifacts (scripts/e2e-boot-server.sh)
+.e2e-bin/
+.e2e-run/
+web/.e2e-live.env
+# Stray local fleet runtime files
+/fake-llm
+/fleet-session.json
