@@ -327,7 +327,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 // cancelledResult builds the partial Result returned when the run's ctx was
 // cancelled mid-flight. It carries whatever transcript + usage accumulated so
 // the driver can persist the partial work (chat's Stop semantics).
-func cancelledResult(ctx context.Context, sink *streamSink, orch *orchestrationState, label string, activeModel fantasy.LanguageModel, swapped bool, round int) Result {
+func cancelledResult(_ context.Context, sink *streamSink, orch *orchestrationState, label string, activeModel fantasy.LanguageModel, swapped bool, round int) Result {
 	entries, text := sink.snapshot()
 	final := strings.TrimSpace(text)
 	if final != "" {

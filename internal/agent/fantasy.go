@@ -80,7 +80,7 @@ func fastIOServerEnabled(serverTools []mcp.ServerTool) bool {
 func buildFantasyTools(
 	nativeTools []fantasy.AgentTool,
 	mcpClient *mcp.Client,
-	allow mcpAllowlist,
+	allow mcpAllowlist, //nolint:unparam // per-server tool allowlist (Gate 2 below) is wired infrastructure; no caller supplies a non-nil allowlist yet, but the filter is intentional and must stay live.
 	orch *orchestrationState,
 	optionalServers mcpOptionalSet,
 	enabledOptIns []string,

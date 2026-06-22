@@ -2,8 +2,6 @@ package agentcore
 
 import (
 	"context"
-	"regexp"
-	"strings"
 
 	"charm.land/fantasy"
 )
@@ -28,22 +26,6 @@ type FinalizeInput struct {
 // FinalizeHook is the interactive recovery hook. It returns recovered final text
 // (empty to keep the loop's text) and an error. Scheduled mode passes nil.
 type FinalizeHook func(ctx context.Context, in FinalizeInput) (recovered string, err error)
-
-// leakedToolCallRe matches a "function call narrated as plain text" leak, e.g.
-// `call:default_api:download_url{output_dir:...,url:...}`. Some Gemini turns emit
-// a tool call as prose instead of a structured call; it never executes and the
-// raw syntax lands in the user-visible reply. Narrow by design: namespace:name{…}
-// with no nested braces.
-var leakedToolCallRe = regexp.MustCompile(`call:[A-Za-z0-9_.]+:[A-Za-z0-9_]+\{[^{}]*\}`)
-
-// stripLeakedToolCalls removes leaked tool-call-as-text fragments from a reply
-// and trims the result. Cheap no-op when there's no "call:" marker.
-func stripLeakedToolCalls(text string) string {
-	if text == "" || !strings.Contains(text, "call:") {
-		return text
-	}
-	return strings.TrimSpace(leakedToolCallRe.ReplaceAllString(text, ""))
-}
 
 // leakedToolCallNudge tells the model it narrated a tool call as text and must
 // invoke it for real. (Used by the P3 interactive finalize impl.)

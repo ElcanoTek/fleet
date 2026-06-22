@@ -15,7 +15,7 @@ import (
 func newTestScheduledAgent(t *testing.T, model fantasy.LanguageModel) *Agent {
 	t.Helper()
 	t.Setenv("FLEET_LOG_FILE", t.TempDir()+"/session.json")
-	return NewAgent(AgentOptions{
+	return NewAgent(Options{
 		Config:        &config.Config{MaxIterations: 50, LLMMaxTokens: 4096, MCPServers: map[string]config.MCPServerConfig{}},
 		Model:         model,
 		SystemPrompt:  "you are a scheduled agent",

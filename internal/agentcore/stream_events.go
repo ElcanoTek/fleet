@@ -177,14 +177,6 @@ func (s *streamSink) snapshot() ([]RunEntry, string) {
 	return out, s.finalText.String()
 }
 
-// appendEntry records an externally-produced entry (e.g. the finalize hook's
-// recovered assistant text) so it persists with the rest of the run.
-func (s *streamSink) appendEntry(e RunEntry) {
-	s.mu.Lock()
-	s.entries = append(s.entries, e)
-	s.mu.Unlock()
-}
-
 // toolResultText flattens a fantasy ToolResultContent into the (text, isErr)
 // pair we forward + persist. Shared with the finalize hook.
 func toolResultText(tr fantasy.ToolResultContent) (string, bool) {

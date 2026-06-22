@@ -431,16 +431,3 @@ func truncate(s string, n int) string {
 	return s[:n] + "…[truncated]"
 }
 
-// countToolCalls reports how many tool_call entries a turn's history slice
-// holds. Used by the stall-notice fallback in RunTurn to distinguish "the
-// model did work but never wrote a reply" from "the model produced nothing
-// at all" (the latter keeps the UI's own empty-reply fallback).
-func countToolCalls(entries []HistoryEntry) int {
-	n := 0
-	for _, e := range entries {
-		if e.Type == entryTypeToolCall {
-			n++
-		}
-	}
-	return n
-}

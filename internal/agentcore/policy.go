@@ -82,7 +82,7 @@ func (p *InteractivePolicy) RecordToolResult(toolName, rawInput, resultText stri
 // CanFinish always returns true at round 0 — this is the 1-round collapse that
 // makes the chat single pass a special case of the unified loop. (Any later
 // round would also finish, but interactive runs never reach one.)
-func (p *InteractivePolicy) CanFinish(round int) (bool, []string) {
+func (p *InteractivePolicy) CanFinish(_ int) (bool, []string) {
 	return true, nil
 }
 
@@ -126,6 +126,6 @@ func (p *ScheduledPolicy) RecordToolResult(toolName, rawInput, resultText string
 // CanFinish delegates to checkFinishEnforcement (audit + commitments + task
 // tracker). The round arg is unused — scheduled finishing is state-driven, not
 // round-driven.
-func (p *ScheduledPolicy) CanFinish(round int) (bool, []string) {
+func (p *ScheduledPolicy) CanFinish(_ int) (bool, []string) {
 	return p.orch.checkFinishEnforcement()
 }
