@@ -17,6 +17,8 @@ This guide is for the person wiring those agents into a deployment. It covers:
 - [The permission UI](#the-permission-ui) — how an external agent asks the human
 - [Worked example: adding Goose](#worked-example-adding-goose)
 - [Data-residency caveat](#data-residency-caveat) — the one thing you cannot wave away
+- [Drive fleet from your editor over ACP (ingress)](#drive-fleet-from-your-editor-over-acp-ingress) —
+  the inverse: an editor drives fleet's own governed pipeline
 
 Everything here is generic. The manifest snippets are written to be copied
 straight into any `XYZ-config` client bundle's `manifest.yaml`.
@@ -342,6 +344,107 @@ unambiguous.
 
 ---
 
+## Drive fleet from your editor over ACP (ingress)
+
+Everything above is fleet driving *other* agents. Ingress is the **inverse**:
+fleet exposes **itself** as an ACP agent so an editor (Zed, Neovim, any
+ACP-speaking host) can launch it and drive fleet's **own** governed, sandboxed
+pipeline — your editor becomes the chat surface, and fleet's policy, sandbox, MCP
+catalog, notes, audit, and cost ceilings all still apply.
+
+You start it with the `acp` subcommand:
+
+```bash
+fleet acp
+```
+
+It speaks ACP over **stdio** (JSON-RPC on stdin/stdout, logs on stderr — no PTY),
+which is exactly how editors spawn ACP agents.
+
+### Configure your editor
+
+`fleet acp` is just an ACP agent command. Point your editor's ACP agent config at
+it and pass the same environment fleet's server uses (the OpenRouter key, the
+client-config bundle dir, the database URLs).
+
+**Zed** — in `settings.json`:
+
+```json
+{
+  "agent_servers": {
+    "fleet": {
+      "command": "/usr/local/bin/fleet",
+      "args": ["acp"],
+      "env": {
+        "OPENROUTER_API_KEY": "sk-or-...",
+        "FLEET_ACP_MODEL": "anthropic/claude-opus-4.8",
+        "FLEET_CLIENT_CONFIG_DIR": "/etc/fleet/config",
+        "FLEET_CHAT_DATABASE_URL": "postgres://.../fleet_chat",
+        "FLEET_SCHED_DATABASE_URL": "postgres://.../fleet_sched"
+      }
+    }
+  }
+}
+```
+
+**Neovim** (any ACP plugin, e.g. CodeCompanion's ACP adapter) — configure an agent
+whose command is `fleet acp` with the same `env`. The exact key names vary by
+plugin; the command + env are what matter.
+
+Ingress-specific environment knobs:
+
+| Env var                | Meaning                                                                 |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `FLEET_ACP_MODEL`      | **Required.** The OpenRouter slug ingress turns drive (e.g. `anthropic/claude-opus-4.8`). Falls back to `LLM_DEFAULT_MODEL`. |
+| `FLEET_ACP_RUNTIME`    | Flavor for ingress turns (`native-inprocess` / `native-acp`). Defaults to the bundle's default flavor. |
+| `FLEET_ACP_PERSONA`    | Persona for ingress turns. Defaults to the bundle's default persona.    |
+| `FLEET_ACP_PRINCIPAL`  | The audit identity ingress sessions attribute to (see the trust model). Defaults to a placeholder. |
+
+### Trust model (read this)
+
+Launching `fleet acp` runs **as the box user** — it is the same trust as running
+`fleet` itself. This is **local-process trust**, distinct from the web path's
+signed-key auth: whoever can start the process can drive a governed turn. So:
+
+- Only configure `fleet acp` on a machine where the operator already has the
+  same trust the fleet process has.
+- Ingress sessions bind to a configured **principal** (`FLEET_ACP_PRINCIPAL`, an
+  operator/service identity) so the conversation + approval rows attribute
+  correctly in the audit trail. It is **not** an authentication credential — it
+  only names who the local operator is acting as.
+- **Remote ingress is out of scope.** `fleet acp` is a local stdio adapter; it
+  does not listen on a socket and is not meant to be exposed over a network.
+
+### What is and isn't supported
+
+| Supported                                                          | Not supported (yet)                                  |
+| ------------------------------------------------------------------ | ---------------------------------------------------- |
+| Interactive streaming turns (`session/update` text + tool calls)   | Scheduled tasks (use the orchestrator for those)     |
+| Human approval over `session/request_permission` (default-**deny** on timeout / cancel / no answer — **no approve-all**) | Remote / networked ingress |
+| Full governance: fleet's policy, sandbox, MCP catalog, notes, audit, cost ceilings | `loadSession` / resuming a prior ACP session       |
+| Whatever runtime flavor the box runs (`native-inprocess` / `native-acp` sandbox) | Image prompt blocks                              |
+| `propose_note` (inherited host-side) and inline-content emails                  | `propose_memory` (no ACP-host confirm surface) and email `content_file` / relative-attachment materialization (a web-layer affordance not yet replicated for ingress) |
+
+### fleet uses its OWN sandbox + MCP catalog (host MCP passthrough is unsupported)
+
+This is a deliberate governance choice, not a gap. The ACP `session/new` request
+lets a host advertise its own `mcpServers`. **fleet ignores them.** fleet brokers
+its **own** client-config MCP catalog host-side, with credentials that never
+leave the host — so accepting the editor's MCP endpoints would open an
+un-governed credential path that bypasses exactly the brokering ingress is built
+to preserve. Likewise, tool execution always happens in **fleet's** sandbox under
+**fleet's** policy, never in the editor. If you need a tool available to an
+ingress turn, add it to fleet's MCP catalog, not your editor's.
+
+The human-approval surface is the one piece that *does* cross to the editor: when
+fleet's policy stages a critical action (a risky `bash`, an outbound email), the
+ingress agent sends an outbound `session/request_permission` and your editor
+prompts you. Approve, and fleet executes the staged action through the **same**
+governed out-of-band path the web approval card uses. Deny — or simply don't
+answer before the timeout — and the action is **not** taken.
+
+---
+
 ## How it works (for the curious)
 
 - fleet is an ACP **client** (`internal/acpruntime`). For an external flavor it
@@ -360,3 +463,13 @@ The deterministic test provider for the external path is the credential-free ACP
 example agent in `cmd/acp-example-agent` (a turn streams, a permission request is
 handled) — proving the generic external path end-to-end without any provider
 credentials. Claude Code and Goose are wired the same way.
+
+- **Ingress** (`internal/acpingress`) is the inverse: fleet is the ACP **agent**.
+  `fleet acp` serves `acp.Agent` over stdio; each `Prompt` runs the **same**
+  governed interactive turn the web path runs (`agent.Manager.RunTurn` →
+  `agentcore.Run`), only swapping the I/O surfaces — the prompt comes from an ACP
+  `PromptRequest`, streamed output goes out as `session/update`, and a staged
+  critical-tool approval goes out as `session/request_permission` (default-deny).
+  It is an I/O adapter on the existing governed turn, **not** a second governance
+  path: the policy, sandbox, MCP brokering, notes, audit, and cost ceilings are
+  all the web path's, inherited verbatim.

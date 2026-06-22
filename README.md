@@ -88,7 +88,9 @@ tested in this repository:
   flavor as a sandboxed subprocess and owns the host-side governance seam (tool
   execution, MCP calls, policy/audit, observer events). The native flavor
   (`cmd/fleet-native-agent`) wraps fleet's own run loop as an ACP agent; external
-  agents (Claude Code, Goose, …) plug in the same way. See
+  agents (Claude Code, Goose, …) plug in the same way. fleet is also an ACP
+  **agent**: `fleet acp` lets an editor (Zed, Neovim) drive fleet's own governed
+  pipeline over stdio ([ingress](internal/acpingress)). See
   [`internal/acpruntime`](internal/acpruntime) and
   [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md).
 - **MCP — Model Context Protocol.** A merged Go MCP client (stdio + HTTP) drives
@@ -107,7 +109,7 @@ them:
 
 ```
 cmd/
-  fleet/          the Mega Box binary (chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool)
+  fleet/          the Mega Box binary (chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool); `fleet acp` runs it as an ACP agent over stdio (editor ingress)
   fleet-admin/    unified admin CLI (bootstrap, users, MCP credential accounts)
   fleet-native-agent/  the native ACP agent (wraps agentcore.Run inside the sandbox)
   cutlass/        optional local one-shot debug entrypoint (not the production scheduled path)
@@ -115,6 +117,7 @@ cmd/
 internal/
   agentcore/      the one unified run loop + shared agent primitives (cost ceilings, policy)
   acpruntime/     the ACP client + agent-side runner (drives native + external agents)
+  acpingress/     fleet AS an ACP agent over stdio (`fleet acp`) — editor ingress on the governed turn
   agent/          input sources, observers, policies, finalize (interactive + scheduled)
   runner/         in-process capped worker pool (the old "gig", folded in)
   creds/          MCP credential-account store (host-side credential broker)
@@ -156,10 +159,13 @@ deployment at it.
 
 fleet is an ACP client: besides its own loop it can drive **other coding agents**
 (Claude Code, Goose, …) as selectable, sandboxed flavors you pick per chat or per
-scheduled task. See **[`docs/USING-AGENTS.md`](docs/USING-AGENTS.md)** for the
-flavor model, how to add an external agent to a client bundle, the permission UI,
-the governance tiers (stated honestly), and a worked example. Read the governance
-and data-residency sections before enabling an external agent.
+scheduled task. It is also an ACP **agent** — `fleet acp` lets an editor (Zed,
+Neovim) drive fleet's own governed pipeline over stdio. See
+**[`docs/USING-AGENTS.md`](docs/USING-AGENTS.md)** for the flavor model, how to add
+an external agent to a client bundle, the permission UI, the governance tiers
+(stated honestly), a worked example, and the "drive fleet from your editor over
+ACP" ingress guide. Read the governance and data-residency sections before
+enabling an external agent.
 
 ## Development
 
