@@ -1,7 +1,71 @@
 # fleet
 
-Elcano's fleet of agents — one-shot and interactive — consolidated into a single
-"Mega Box" deployment.
+**A general-purpose agent fleet you run yourself — any agent, any model, in a
+sandbox, on a budget, connected to your data.**
+
+fleet is an open-source platform for running AI agents — both one-shot scheduled
+tasks and interactive real-time chat — on infrastructure you control. One
+`fleet` process boots a unified agent runtime, an execution sandbox, a
+scheduler, and a worker pool, and serves both a chat UI and an orchestrator UI.
+Every tool call an agent makes runs inside a rootless-Podman sandbox; every turn
+is metered against a cost ceiling; and the tools and data an agent can reach are
+brokered host-side so credentials never enter the sandbox.
+
+If your team keeps reaching for the same agent recipes — the same prompts, the
+same connected tools, the same guardrails — fleet is the place to standardize
+them. It is built in the spirit of internal agent platforms like
+[Shopify's "quick"](https://shopify.engineering/quick): reusable, governed agent
+tooling that the whole org can build on, but as an MIT-licensed project you own
+end to end.
+
+> **Status:** early, active development. fleet is pre-1.0 — the architecture is
+> in place and exercised by an extensive test suite (Go + web + live e2e), but
+> APIs and config shapes can still change. Expect rough edges.
+
+## Why fleet
+
+- **Any agent, any model.** fleet is an [ACP](#standards) client: alongside its
+  own native agent loop it can drive **other coding agents** (Claude Code,
+  Goose, …) as selectable, sandboxed "flavors" you pick per chat or per
+  scheduled task. Models are routed OpenRouter-style, so you choose the right
+  model per task rather than hard-wiring one vendor. (The
+  ["best model for the job" idea](https://www.notdiamond.ai/) is a good mental
+  model for why this matters.)
+
+- **Sandboxed by default.** Tool calls — bash, Python, file I/O, MCP calls —
+  execute inside an ephemeral, rootless-Podman container over a persistent
+  per-conversation workspace. **Even the native agent runs in the sandbox**: its
+  loop runs inside the container and delegates every execution back to the host,
+  so it has no privileged local executor. There is no "trusted" fast path that
+  skips the sandbox.
+
+- **Cost-controlled.** Each turn runs against configurable per-task cost and
+  token **ceilings**, with usage and cost accounting tracked as the agent works.
+  A model that won't stop calling tools is bounded by the ceiling, the
+  per-turn timeout, and an iteration cap — not by your invoice.
+
+- **Connected to your data and tools, wherever they live.** fleet speaks
+  [MCP](#standards) and ships a per-deployment **MCP catalog**. Tasks select
+  which MCP servers they need, with **multi-account credentials** brokered
+  host-side: the broker injects the right credentials when it runs a delegated
+  MCP call, so secrets never travel into the sandbox or the model's context.
+
+- **Reusable workflows and shared, preconfigured tools.** Personas, protocols
+  (playbooks), the MCP catalog, branding, and model defaults all come from a
+  pluggable **client-config bundle** (see below). Standardize your team's agent
+  setups once; roll your own as needed.
+
+- **Standards-compliant.** fleet implements two open protocols, both shipped and
+  tested (see [Standards](#standards)): **ACP** (Agent Client Protocol) to drive
+  the native and external agents, and **MCP** (Model Context Protocol) for
+  tools and data.
+
+- **MIT-licensed and observable.** The whole platform is open source. The agent
+  runtime emits structured observer events for every turn — tool calls, results,
+  usage, enforcement nudges — so you can see exactly what an agent did and what
+  it cost.
+
+## Architecture at a glance
 
 A single `fleet` process runs, on one box:
 
@@ -15,19 +79,45 @@ This repository consolidates what used to live across five repositories
 (`chat`, `moc`, `cutlass`, `gig`, `sandbox`). `lifeline` remains an external
 per-developer coding MCP and is not vendored here.
 
-## Layout
+## Standards
+
+fleet is built on open protocols. We list only what is actually implemented and
+tested in this repository:
+
+- **ACP — Agent Client Protocol.** fleet is an ACP client that spawns each agent
+  flavor as a sandboxed subprocess and owns the host-side governance seam (tool
+  execution, MCP calls, policy/audit, observer events). The native flavor
+  (`cmd/fleet-native-agent`) wraps fleet's own run loop as an ACP agent; external
+  agents (Claude Code, Goose, …) plug in the same way. See
+  [`internal/acpruntime`](internal/acpruntime) and
+  [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md).
+- **MCP — Model Context Protocol.** A merged Go MCP client (stdio + HTTP) drives
+  the tools and data sources in the deployment's MCP catalog. See
+  [`internal/mcp`](internal/mcp).
+
+### Roadmap (not yet shipped)
+
+Items here are aspirational and **not** current capabilities — do not rely on
+them:
+
+- **Skills** — packaged, shareable agent capabilities beyond the current
+  persona/protocol bundle.
+
+## Repository layout
 
 ```
 cmd/
   fleet/          the Mega Box binary (chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool)
   fleet-admin/    unified admin CLI (bootstrap, users, MCP credential accounts)
+  fleet-native-agent/  the native ACP agent (wraps agentcore.Run inside the sandbox)
   cutlass/        optional local one-shot debug entrypoint (not the production scheduled path)
   sandbox-probe/  deploy-time sandbox smoke test
 internal/
-  agentcore/      the one unified run loop + shared agent primitives
+  agentcore/      the one unified run loop + shared agent primitives (cost ceilings, policy)
+  acpruntime/     the ACP client + agent-side runner (drives native + external agents)
   agent/          input sources, observers, policies, finalize (interactive + scheduled)
   runner/         in-process capped worker pool (the old "gig", folded in)
-  creds/          MCP credential-account store
+  creds/          MCP credential-account store (host-side credential broker)
   clientconfig/   loads the pluggable CLIENT BUNDLE (branding, MCP catalog, prompts, ...)
   mcp/            merged Go MCP client (stdio + HTTP)
   sandbox/        the single execution backend (ephemeral container over a persistent workspace)
@@ -42,6 +132,11 @@ config/default/   the GENERIC client bundle baked into the repo (runs bare),
                   image is a per-client bundle artifact (build-on-box default)
 ```
 
+See [`docs/MIGRATION_PLAN_V2.md`](docs/MIGRATION_PLAN_V2.md) for the architecture
+and the phased migration plan.
+
+## The client-config bundle
+
 fleet ships **no** client-specific content. It loads a **client config bundle**
 from `FLEET_CLIENT_CONFIG_DIR` (default `config/default`, a generic bundle with
 neutral branding and no MCP connectors). A real deployment points the variable
@@ -49,10 +144,13 @@ at a checked-out client repo whose `manifest.yaml` supplies the branding, model
 defaults, MCP-server catalog, empty-state cards, and agent tool policy, and
 whose `system_prompts/`, `personas/`, `protocols/`, and `mcp/` directories
 supply the prompts, personas, playbooks, and Python MCP servers. See
-`config/default/README.md` and `internal/clientconfig/clientconfig.go` for the
-bundle contract.
+[`config/default/README.md`](config/default/README.md) and
+[`internal/clientconfig/clientconfig.go`](internal/clientconfig/clientconfig.go)
+for the bundle contract.
 
-See `docs/MIGRATION_PLAN_V2.md` for the architecture and the phased migration plan.
+This is how you make fleet yours: package your team's reusable agent setups —
+the personas, the playbooks, the connected MCP tools — into a bundle and point a
+deployment at it.
 
 ## Using other agents
 
@@ -70,6 +168,10 @@ make build      # go build ./...
 make test       # go test ./...
 make lint       # golangci-lint run
 ```
+
+For the full build/test workflow (including the Postgres-backed Go suites, the
+web app, and the Playwright e2e suites), see
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Deploy
 
@@ -250,3 +352,14 @@ box by default (auditable supply chain); `update` rebuilds it only when the
 Containerfile changed; `status` verifies the resolved image runs. Registry
 publish stays opt-in — set `sandbox.image` in the bundle manifest to a prebuilt
 ref and all three steps consume that instead of building.
+
+## Contributing
+
+Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+build/test workflow, branch/PR conventions, and CI gates. Please also read the
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). To report a security issue privately,
+see [`SECURITY.md`](SECURITY.md).
+
+## License
+
+fleet is released under the [MIT License](LICENSE).
