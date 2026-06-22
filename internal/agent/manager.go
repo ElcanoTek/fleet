@@ -66,6 +66,11 @@ type TurnInput struct {
 	// per-turn container sandbox and constrains the resolved model slug to the
 	// operator's lockdown allow-list.
 	Lockdown bool
+
+	// Runtime selects the execution flavor for this turn (clientconfig flavor
+	// name). "" / "native-inprocess" run the in-process loop; "native-acp" routes
+	// through the sandboxed ACP agent. Unknown values fall back to the default.
+	Runtime string
 }
 
 // TurnResult is returned after a turn completes.
@@ -456,24 +461,28 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		}
 	}
 
+	runtimeName, _ := m.resolveRuntime(in.Runtime)
+
 	tc := TurnConfig{
-		SystemPrompt:    systemPrompt,
-		Messages:        messages,
-		Label:           in.ConversationID,
-		Model:           model,
-		Temperature:     m.config.Temperature,
-		MaxTokens:       maxTokens,
-		PriorHistory:    in.History,
-		NativeTools:     turnTools.Tools,
-		Sandbox:         sb,
-		MCPClient:       m.mcpClient,
-		Allowlist:       agentcore.MCPAllowlist(m.allowlist),
-		OptionalServers: agentcore.MCPOptionalSet(m.optionalServers),
-		Selection:       selection,
-		MaxCostUSD:      m.config.MaxCostUSD,
-		MaxTotalTokens:  m.config.MaxTotalTokens,
-		ApprovalStager:  in.ApprovalStager,
-		MemoryProposer:  in.MemoryProposer,
+		SystemPrompt:     systemPrompt,
+		Messages:         messages,
+		Label:            in.ConversationID,
+		Model:            model,
+		Temperature:      m.config.Temperature,
+		MaxTokens:        maxTokens,
+		PriorHistory:     in.History,
+		NativeTools:      turnTools.Tools,
+		Sandbox:          sb,
+		MCPClient:        m.mcpClient,
+		Allowlist:        agentcore.MCPAllowlist(m.allowlist),
+		OptionalServers:  agentcore.MCPOptionalSet(m.optionalServers),
+		Selection:        selection,
+		MaxCostUSD:       m.config.MaxCostUSD,
+		MaxTotalTokens:   m.config.MaxTotalTokens,
+		ApprovalStager:   in.ApprovalStager,
+		MemoryProposer:   in.MemoryProposer,
+		Runtime:          runtimeName,
+		NativeAgentImage: m.nativeAgentImage,
 	}
 
 	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink})

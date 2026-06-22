@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { DEFAULT_PILLS, type ProtocolPill } from "@/app/chat/ui/protocolPills";
+import { type RuntimeFlavor } from "@/app/chat/ui/RuntimePicker";
 
 // useClientConfig fetches the active client's runtime config from
 // /api/client-config (which proxies chat-server's member-gated /client-config)
@@ -38,17 +39,26 @@ export const DEFAULT_BRANDING: ClientBranding = {
 export type UseClientConfig = {
   branding: ClientBranding;
   pills: ProtocolPill[];
+  // runtimes is the bundle's runtime-flavor catalog for the chat flavor picker;
+  // defaultRuntime is the flavor a conversation uses when it has no explicit
+  // choice. Empty/single-flavor catalogs let the picker hide itself.
+  runtimes: RuntimeFlavor[];
+  defaultRuntime: string;
   loading: boolean;
 };
 
 type ClientConfigResponse = {
   branding?: Partial<ClientBranding>;
   empty_state?: { cards?: ProtocolPill[] };
+  runtimes?: RuntimeFlavor[];
+  default_runtime?: string;
 };
 
 export function useClientConfig(enabled = true): UseClientConfig {
   const [branding, setBranding] = useState<ClientBranding>(DEFAULT_BRANDING);
   const [pills, setPills] = useState<ProtocolPill[]>(DEFAULT_PILLS);
+  const [runtimes, setRuntimes] = useState<RuntimeFlavor[]>([]);
+  const [defaultRuntime, setDefaultRuntime] = useState<string>("");
   const [loading, setLoading] = useState(enabled);
 
   useEffect(() => {
@@ -65,11 +75,15 @@ export function useClientConfig(enabled = true): UseClientConfig {
         setBranding({ ...DEFAULT_BRANDING, ...(data.branding ?? {}) });
         const cards = data.empty_state?.cards;
         setPills(Array.isArray(cards) && cards.length > 0 ? cards : DEFAULT_PILLS);
+        setRuntimes(Array.isArray(data.runtimes) ? data.runtimes : []);
+        setDefaultRuntime(typeof data.default_runtime === "string" ? data.default_runtime : "");
       } catch {
         if (cancelled) return;
         // Fall back to neutral defaults — never blank, never client-specific.
         setBranding(DEFAULT_BRANDING);
         setPills(DEFAULT_PILLS);
+        setRuntimes([]);
+        setDefaultRuntime("");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -80,5 +94,5 @@ export function useClientConfig(enabled = true): UseClientConfig {
     };
   }, [enabled]);
 
-  return { branding, pills, loading };
+  return { branding, pills, runtimes, defaultRuntime, loading };
 }

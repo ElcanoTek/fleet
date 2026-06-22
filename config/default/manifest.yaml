@@ -22,6 +22,37 @@ sandbox:
   tag: localhost/fleet-sandbox:latest
   image: "${FLEET_SANDBOX_IMAGE:-}"
 
+# Runtime flavors. fleet is an ACP client that drives each flavor as an ACP
+# agent; native-inprocess is the fast in-process path kept as the default and
+# the parity oracle. A flavor is selected per conversation / scheduled task (the
+# chat + orchestrator flavor pickers).
+#
+#   type:             native-inprocess | native-acp | acp
+#   image:            agent container image ref (native-acp / acp). Pin by digest
+#                     in production; resolves ${VAR} via the manifest pass. The
+#                     generic bundle uses the build-on-box native-agent tag,
+#                     overridable via ${FLEET_NATIVE_AGENT_IMAGE}.
+#   network:          restricted | none | model_only — the agent container's
+#                     egress posture. native-acp needs model-endpoint egress
+#                     (the loop runs in the agent); MCP creds are NEVER shipped
+#                     into the container regardless (brokered host-side).
+#   delegated_policy: containment tier for self-executing external flavors
+#                     (governance: delegated). Native flavors leave it false
+#                     (fully governed, identical to in-process native).
+#   default:          the flavor selected when none is chosen (at most one).
+runtimes:
+  native-inprocess:
+    type: native-inprocess
+    display_name: "Native (in-process)"
+    description: "Fast in-process loop. Dev/test/trusted-local; the parity oracle."
+    default: true
+  native-acp:
+    type: native-acp
+    image: "${FLEET_NATIVE_AGENT_IMAGE:-localhost/fleet-native-agent:latest}"
+    network: restricted
+    display_name: "Native (sandboxed)"
+    description: "Native loop wrapped as a sandboxed ACP agent. Fully governed."
+
 branding:
   app_name: "Fleet"
   login_title: "Welcome aboard."

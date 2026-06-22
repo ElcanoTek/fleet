@@ -135,6 +135,17 @@ func run() error {
 	}
 	defer mgr.Close()
 
+	// Wire the bundle's runtime-flavor catalog so a conversation can select a
+	// flavor (native-inprocess default, native-acp sandboxed). The native-agent
+	// image for native-acp turns is the manifest's runtimes.native-acp.image.
+	var nativeAgentImage string
+	if acpRT, ok := bundle.Runtime(clientconfig.RuntimeNativeACP); ok {
+		nativeAgentImage = acpRT.Image
+	}
+	mgr.SetRuntimes(bundle.Runtimes(), bundle.DefaultRuntime(), nativeAgentImage)
+	log.Printf("runtimes: default=%s flavors=%d native_agent_image=%q",
+		bundle.DefaultRuntime(), len(bundle.Runtimes()), nativeAgentImage)
+
 	chatSrv := httpapi.New(cfg, mgr, chatStore, httpapi.WithClientConfig(bundle))
 
 	// ── orchestrator HTTP (sched/handlers) ──

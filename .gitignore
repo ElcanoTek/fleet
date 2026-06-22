@@ -58,3 +58,6 @@ web/.e2e-live.env
 # Stray local fleet runtime files
 /fake-llm
 /fleet-session.json
+
+# Per-run bash audit logs the agent loop writes to CWD during tests.
+internal/acpruntime/data/

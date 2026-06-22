@@ -89,6 +89,12 @@ const (
 	// Podman container with --read-only / dropped caps. Network egress
 	// is per-turn (ContainerConfig.NoNetwork) — see container.go.
 	ModeContainer
+
+	// ModeDelegating forwards bash/python to a Delegate instead of running
+	// them locally. Used by the native ACP agent: it holds no executor of
+	// its own and ships every call back over ACP to the client, which runs
+	// it in the real host-managed sandbox. See delegating.go.
+	ModeDelegating
 )
 
 // BashRequest is the per-call input the sandbox sees for a bash
@@ -175,6 +181,8 @@ func (s *Sandbox) ModeName() string {
 		return "host"
 	case ModeContainer:
 		return "container"
+	case ModeDelegating:
+		return "delegating"
 	default:
 		return "unknown"
 	}
