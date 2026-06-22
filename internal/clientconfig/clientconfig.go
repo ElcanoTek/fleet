@@ -204,8 +204,17 @@ func Load(dir string) (*Bundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read manifest %s: %w", manifestPath, err)
 	}
+	// Interpolate env references over the RAW bytes before YAML unmarshal so that
+	// "env-or-default" config semantics — ${VAR:-default} / ${VAR:?message} —
+	// resolve at load time. This restores the getEnvOrDefault("VAR","literal")
+	// behavior the old internal/config carried, which had degenerated into bare
+	// hardcoded literals once the catalog moved into the manifest.
+	interpolated, err := interpolateManifest(raw, manifestPath)
+	if err != nil {
+		return nil, err
+	}
 	var m manifest
-	if err := yaml.Unmarshal(raw, &m); err != nil {
+	if err := yaml.Unmarshal(interpolated, &m); err != nil {
 		return nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
 	}
 
@@ -448,6 +457,155 @@ func resolveEnvMap(in map[string]string, optional []string) map[string]string {
 		out[k] = resolved
 	}
 	return out
+}
+
+// interpolateManifest performs a pre-unmarshal pass over the raw manifest bytes,
+// expanding shell-style env references so the bundle can carry "env-or-default"
+// config semantics (the getEnvOrDefault("VAR","literal") behavior the legacy
+// internal/config had). It supports three POSIX-style forms:
+//
+//	${VAR}            Bare reference. If VAR is SET, substitute its value. If VAR
+//	                  is UNSET, the token is LEFT INTACT (deferred): per-MCP-server
+//	                  env/header values are resolved lazily at spawn time against
+//	                  the live process env (after the .env file is loaded), where
+//	                  an unset credential is legitimate (the server gates off or
+//	                  optional_env drops the key). The pre-unmarshal pass therefore
+//	                  must NOT hard-fail on an unset bare ${VAR} — that would make
+//	                  loading any bundle impossible unless every connector secret
+//	                  were exported up front. A value that MUST be present at load
+//	                  uses the explicit ${VAR:?message} form instead.
+//	${VAR:-default}   POSIX use-default. If VAR is set AND non-empty, use it; else
+//	                  use default (empty env counts as unset). This is the restored
+//	                  env-or-default form: env can override, the literal is kept.
+//	${VAR:?message}   POSIX required. If VAR is unset OR empty, fail the load with
+//	                  message (naming the var + the manifest path).
+//
+// Escaping: a literal "$${" emits "${" without triggering expansion, so a value
+// that genuinely needs a literal ${...} can be written.
+//
+// Nested braces: the default/message body of a :- / :? form is scanned with
+// brace-depth tracking, so a default that itself contains "${...}" (or any
+// balanced braces) survives intact; expansion does NOT recurse into it.
+//
+// YAML-quoting requirement: a :- / :? default contains a ':' (and a URL default
+// contains '://'), so the field MUST be quoted in YAML, e.g.
+//
+//	pubmatic_base_url: "${PUBMATIC_BASE_URL:-https://api.pubmatic.com}"
+//
+// An unquoted value would make the YAML parser read the ':' as a mapping
+// separator. The interpolation runs on raw bytes before unmarshal, so the quotes
+// remain around the substituted value and the YAML round-trips correctly.
+func interpolateManifest(raw []byte, manifestPath string) ([]byte, error) {
+	s := string(raw)
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for i := 0; i < len(s); {
+		// Escape: "$${" -> literal "${" (consume one leading '$').
+		if strings.HasPrefix(s[i:], "$${") {
+			sb.WriteString("${")
+			i += 3
+			continue
+		}
+		if !strings.HasPrefix(s[i:], "${") {
+			sb.WriteByte(s[i])
+			i++
+			continue
+		}
+		// Found "${": scan to the matching '}' tracking brace depth so nested
+		// braces in a default body don't terminate the expression early.
+		end, ok := matchBrace(s, i+1) // index of the '}' closing the '{' at i+1
+		if !ok {
+			return nil, fmt.Errorf("client config manifest %s: unterminated ${...} expression at offset %d", manifestPath, i)
+		}
+		expr := s[i+2 : end] // contents between "${" and "}"
+		val, err := expandExpr(expr, manifestPath)
+		if err != nil {
+			return nil, err
+		}
+		if val.deferred {
+			// Unset bare ${VAR}: leave the literal token in place for spawn-time
+			// resolution.
+			sb.WriteString(s[i : end+1])
+		} else {
+			sb.WriteString(val.text)
+		}
+		i = end + 1
+	}
+	return []byte(sb.String()), nil
+}
+
+// expandResult is the outcome of expanding one ${...} expression.
+type expandResult struct {
+	text     string // resolved replacement text (when deferred is false)
+	deferred bool   // true => leave the literal ${VAR} token in place (unset bare ref)
+}
+
+// expandExpr resolves the body of a single ${...} expression (the text between
+// the braces) into a replacement, implementing the ${VAR}, ${VAR:-default} and
+// ${VAR:?message} forms.
+func expandExpr(expr, manifestPath string) (expandResult, error) {
+	// Find the first ":-" or ":?" operator at the TOP of the expression. The var
+	// name itself never contains ':', so the first ':' (if any) starts the op.
+	if idx := strings.IndexByte(expr, ':'); idx >= 0 && idx+1 < len(expr) {
+		name := expr[:idx]
+		op := expr[idx+1]
+		body := expr[idx+2:]
+		switch op {
+		case '-': // ${VAR:-default}
+			if v, ok := lookupNonEmpty(name); ok {
+				return expandResult{text: v}, nil
+			}
+			return expandResult{text: body}, nil
+		case '?': // ${VAR:?message}
+			if v, ok := lookupNonEmpty(name); ok {
+				return expandResult{text: v}, nil
+			}
+			msg := strings.TrimSpace(body)
+			if msg == "" {
+				msg = "required value is unset or empty"
+			}
+			return expandResult{}, fmt.Errorf("client config manifest %s: ${%s:?...}: %s", manifestPath, strings.TrimSpace(name), msg)
+		}
+		// Any other ':X' is not a form we support; fall through and treat the
+		// whole expression as a bare name (which will almost certainly be unset,
+		// hence deferred) rather than silently mangling it.
+	}
+	name := strings.TrimSpace(expr)
+	if v, ok := lookupNonEmpty(name); ok {
+		return expandResult{text: v}, nil
+	}
+	// Unset bare ${VAR}: defer to spawn-time resolution.
+	return expandResult{deferred: true}, nil
+}
+
+// lookupNonEmpty reports the trimmed process-env value for name and whether it is
+// set AND non-empty (empty env counts as unset, matching POSIX ${VAR:-default}
+// and the legacy getEnvOrDefault, which treated an empty value as "use default").
+func lookupNonEmpty(name string) (string, bool) {
+	v := strings.TrimSpace(os.Getenv(strings.TrimSpace(name)))
+	if v == "" {
+		return "", false
+	}
+	return v, true
+}
+
+// matchBrace returns the index of the '}' that closes the '{' at position open
+// (s[open] must be '{'), tracking nested '{' '}' so a brace inside a default body
+// is balanced rather than terminating the expression.
+func matchBrace(s string, open int) (int, bool) {
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // interpolate replaces ${VAR} occurrences with the process-env value (empty
