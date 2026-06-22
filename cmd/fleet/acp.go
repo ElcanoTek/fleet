@@ -124,6 +124,21 @@ func runACP() error {
 	runtime := acpRuntime(bundle)
 	principal := acpPrincipal()
 
+	// Lockdown for ingress mirrors the web path's req.Lockdown||LockdownOnly OR:
+	// a LockdownOnly server seals EVERY ingress turn (so an editor connecting can
+	// never get a network-enabled turn), and FLEET_ACP_LOCKDOWN opts a session in
+	// otherwise. Validate availability + the model allow-list up-front so the
+	// operator gets an immediate, honest failure rather than a per-turn refusal.
+	lockdown := acpLockdown() || cfg.LockdownOnly
+	if lockdown {
+		if !cfg.LockdownAvailable() {
+			return fmt.Errorf("lockdown requested (FLEET_ACP_LOCKDOWN/CHAT_LOCKDOWN_ONLY) but no sandbox image is configured")
+		}
+		if !cfg.LockdownAllows(model) {
+			return fmt.Errorf("model %q is not on the lockdown allow-list (CHAT_LOCKDOWN_ALLOWED_MODELS); ingress lockdown turns would fail", model)
+		}
+	}
+
 	ingress := acpingress.New(
 		mgr,                                 // TurnEngine
 		chatStore,                           // ConversationStore
@@ -134,6 +149,7 @@ func runACP() error {
 			Persona:   strings.TrimSpace(os.Getenv("FLEET_ACP_PERSONA")),
 			Model:     model,
 			Runtime:   runtime,
+			Lockdown:  lockdown,
 			Version:   "fleet",
 		},
 	)
@@ -146,8 +162,8 @@ func runACP() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("ready on stdio (model=%s runtime=%q principal=%s sandbox_image=%q)",
-		model, runtime, principal, cfg.SandboxImage)
+	log.Printf("ready on stdio (model=%s runtime=%q lockdown=%t principal=%s sandbox_image=%q)",
+		model, runtime, lockdown, principal, cfg.SandboxImage)
 	select {
 	case <-conn.Done():
 		log.Printf("editor disconnected")
@@ -176,6 +192,18 @@ func acpRuntime(bundle *clientconfig.Bundle) string {
 		log.Printf("FLEET_ACP_RUNTIME %q not in bundle; using default %s", want, bundle.DefaultRuntime()) //nolint:gosec // G706 false positive: want is an operator-configured env var, not request input; %q quotes it.
 	}
 	return bundle.DefaultRuntime()
+}
+
+// acpLockdown reports whether the operator opted this `fleet acp` process into
+// lockdown via FLEET_ACP_LOCKDOWN. It is ORed with the server's LockdownOnly, so
+// a LockdownOnly server always wins regardless of this value (see runACP).
+func acpLockdown() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("FLEET_ACP_LOCKDOWN"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // acpPrincipal resolves the audit identity ingress sessions bind to.
