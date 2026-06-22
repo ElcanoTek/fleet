@@ -8,6 +8,8 @@
 //	fleet-admin bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
 //	fleet-admin update    [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run]
 //	fleet-admin status    [--service <name>] [--no-sandbox]
+//	fleet-admin restart|stop [--service <name>]
+//	fleet-admin logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
 //	fleet-admin chat user add|update|del|list
 //	fleet-admin sched user add|update|set-role|rename|del|list
 //	fleet-admin sched apikey create|list|revoke|delete
@@ -18,7 +20,8 @@
 // The operator lifecycle is bootstrap → update → status: bootstrap provisions a
 // box, update rolls a new version in place, status (a.k.a. doctor) reports
 // health. bootstrap + update are thin wrappers over scripts/bootstrap.sh +
-// scripts/update.sh; status runs in-process read-only checks.
+// scripts/update.sh; status runs in-process read-only checks. restart/stop/logs
+// are day-2 conveniences over the host systemd unit (systemctl/journalctl).
 //
 // Passwords are NEVER taken on argv — pass `--password -` to read from stdin.
 // Email/username normalization, bcrypt.DefaultCost, and the 0-users
@@ -46,6 +49,12 @@ func dispatch(argv []string) int {
 		return cmdUpdate(argv[1:])
 	case "status", "doctor":
 		return cmdStatus(argv[1:])
+	case "restart":
+		return cmdRestart(argv[1:])
+	case "stop":
+		return cmdStop(argv[1:])
+	case "logs", "tail":
+		return cmdLogs(argv[1:])
 	case "chat":
 		return cmdChat(argv[1:])
 	case "sched":
@@ -71,6 +80,9 @@ Operator lifecycle (bootstrap → update → status):
   fleet-admin bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
   fleet-admin update    [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--yes] [--dry-run]
   fleet-admin status    [--service <name>] [--no-sandbox]    (a.k.a. doctor; non-zero exit if unhealthy)
+  fleet-admin restart   [--service <name>]                   (systemctl restart; needs root/sudo)
+  fleet-admin stop      [--service <name>]                   (systemctl stop; needs root/sudo)
+  fleet-admin logs      [--service <name>] [-n 50] [-f]      (journalctl tail; -f follows; a.k.a. tail)
 
 Users, credentials, notes:
   fleet-admin chat user add <email>    --password -
