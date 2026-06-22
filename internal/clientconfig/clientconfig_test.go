@@ -172,6 +172,144 @@ mcp_servers:
 	}
 }
 
+func TestSandboxDefaultBundleResolvesToTag(t *testing.T) {
+	root := repoRoot(t)
+	// Ensure no FLEET_SANDBOX_IMAGE override leaks in from the env so the
+	// default bundle's sandbox.image (${FLEET_SANDBOX_IMAGE:-}) resolves empty
+	// and ResolvedImageRef falls back to the tag.
+	t.Setenv("FLEET_SANDBOX_IMAGE", "")
+	b, err := Load(filepath.Join(root, "config", "default"))
+	if err != nil {
+		t.Fatalf("load default bundle: %v", err)
+	}
+	sb := b.Sandbox()
+	if sb.Tag != "localhost/fleet-sandbox:latest" {
+		t.Errorf("Tag = %q, want localhost/fleet-sandbox:latest", sb.Tag)
+	}
+	if sb.Image != "" {
+		t.Errorf("Image = %q, want empty (build-on-box default)", sb.Image)
+	}
+	if got := sb.ResolvedImageRef(); got != "localhost/fleet-sandbox:latest" {
+		t.Errorf("ResolvedImageRef() = %q, want the tag", got)
+	}
+	if filepath.Base(sb.ContainerfileAbsPath) != "Containerfile" {
+		t.Errorf("ContainerfileAbsPath = %q, want .../Containerfile", sb.ContainerfileAbsPath)
+	}
+	if _, err := os.Stat(sb.ContainerfileAbsPath); err != nil {
+		t.Errorf("default bundle Containerfile should exist: %v", err)
+	}
+}
+
+func TestSandboxImageOverrideWins(t *testing.T) {
+	dir := t.TempDir()
+	// An explicit image override means the Containerfile is NOT required.
+	manifest := `
+sandbox:
+  containerfile: sandbox/Containerfile
+  tag: localhost/fleet-sandbox:latest
+  image: "ghcr.io/acme/sandbox@sha256:deadbeef"
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	sb := b.Sandbox()
+	if sb.Image != "ghcr.io/acme/sandbox@sha256:deadbeef" {
+		t.Errorf("Image = %q", sb.Image)
+	}
+	if got := sb.ResolvedImageRef(); got != "ghcr.io/acme/sandbox@sha256:deadbeef" {
+		t.Errorf("ResolvedImageRef() = %q, want the image override to win over the tag", got)
+	}
+}
+
+func TestSandboxImageOverrideViaEnv(t *testing.T) {
+	dir := t.TempDir()
+	// The generic-style manifest defers the image to ${FLEET_SANDBOX_IMAGE:-};
+	// when that env is set the override resolves at Load time and wins.
+	manifest := `
+sandbox:
+  tag: localhost/fleet-sandbox:latest
+  image: "${FLEET_SANDBOX_IMAGE:-}"
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_SANDBOX_IMAGE", "ghcr.io/acme/sandbox:pinned")
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := b.Sandbox().ResolvedImageRef(); got != "ghcr.io/acme/sandbox:pinned" {
+		t.Errorf("ResolvedImageRef() = %q, want the env-provided image", got)
+	}
+}
+
+func TestSandboxMissingContainerfileWithEmptyImageErrors(t *testing.T) {
+	dir := t.TempDir()
+	// No image override AND the Containerfile does not exist => Load must fail.
+	manifest := `
+sandbox:
+  containerfile: sandbox/Containerfile
+  tag: localhost/fleet-sandbox:latest
+  image: ""
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err == nil {
+		t.Error("expected error: missing containerfile with empty image")
+	}
+}
+
+func TestSandboxOmittedBlockIsNotEnforced(t *testing.T) {
+	dir := t.TempDir()
+	// A minimal/legacy bundle with NO sandbox: block must still load (it never
+	// opted into the sandbox-as-config contract). The descriptor falls back to
+	// the conventional defaults so a consumer still gets a usable tag.
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("branding: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("minimal bundle with no sandbox block should load: %v", err)
+	}
+	sb := b.Sandbox()
+	if sb.Tag != "localhost/fleet-sandbox:latest" {
+		t.Errorf("default Tag = %q", sb.Tag)
+	}
+	if got := sb.ResolvedImageRef(); got != "localhost/fleet-sandbox:latest" {
+		t.Errorf("ResolvedImageRef() = %q", got)
+	}
+}
+
+func TestSandboxDeclaredBlockRequiresContainerfile(t *testing.T) {
+	dir := t.TempDir()
+	// A DECLARED sandbox block (with no image override) enforces the Containerfile
+	// invariant: drop one at the conventional path and Load succeeds.
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("sandbox:\n  tag: localhost/x:latest\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err == nil {
+		t.Error("expected error: declared sandbox block, no image override, missing Containerfile")
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sandbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sandbox", "Containerfile"), []byte("FROM scratch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load with default Containerfile: %v", err)
+	}
+	if got := b.Sandbox().Tag; got != "localhost/x:latest" {
+		t.Errorf("Tag = %q, want localhost/x:latest", got)
+	}
+}
+
 func TestMissingManifestIsError(t *testing.T) {
 	if _, err := Load(t.TempDir()); err == nil {
 		t.Error("expected error for bundle with no manifest.yaml")
