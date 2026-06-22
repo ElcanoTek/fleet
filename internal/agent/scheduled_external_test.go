@@ -9,6 +9,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/acpruntime"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 )
@@ -38,6 +39,10 @@ type fakeExternalRuntime struct {
 	gotBroker       acpruntime.PermissionBroker
 	gotBrokerWasNil bool
 	permGranted     bool
+	// usage is the self-reported usage the fake agent returns on Result.Usage, so a
+	// test can assert the scheduled-external driver reconciles it into the session
+	// log (issue #31). Zero value = an agent that reported nothing.
+	usage agentcore.RunUsage
 }
 
 func (f *fakeExternalRuntime) Run(ctx context.Context, promptText string, deps acpruntime.ExternalDeps) (acpruntime.Result, error) {
@@ -83,7 +88,7 @@ func (f *fakeExternalRuntime) Run(ctx context.Context, promptText string, deps a
 		final = "applied the change."
 	}
 	deps.Observer.Observe("text.delta", map[string]any{"text": final})
-	return acpruntime.Result{FinalText: "working on it. " + final, StopReason: "end_turn"}, nil
+	return acpruntime.Result{FinalText: "working on it. " + final, StopReason: "end_turn", Usage: f.usage}, nil
 }
 
 func denyReasonFor(b acpruntime.PermissionBroker, granted bool) string {
@@ -225,6 +230,37 @@ func TestScheduledExternal_FlagOnRunsContainment(t *testing.T) {
 	// The auto-deny is recorded honestly.
 	if !sessionLogContains(a, "skipped the change") {
 		t.Error("the final text should reflect the auto-denied action (skipped)")
+	}
+}
+
+// TestScheduledExternal_RecordsSelfReportedUsage: a containment-tier run must
+// reconcile the agent's SELF-REPORTED usage into the captain's-log session, so it
+// never shows a misleading zero-token / $0 run at the very tier where the agent
+// drives its own model endpoint (issue #31).
+func TestScheduledExternal_RecordsSelfReportedUsage(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-key") // obvious placeholder; the path never calls a model
+	fake := &fakeExternalRuntime{usage: agentcore.RunUsage{
+		PromptTokens:     1234,
+		CompletionTokens: 567,
+		CachedTokens:     89,
+		CostUSD:          0.1234,
+	}}
+	a := newExternalScheduledAgent(t, true /* flag ON */, "registry/claude-code:pinned", fake)
+	a.model = nil // external drives its own endpoint; prove usage is recorded regardless
+
+	if err := a.Execute(context.Background(), "do the thing"); err != nil {
+		t.Fatalf("flag ON + sandbox + external should run, got: %v", err)
+	}
+
+	if a.logSession.PromptTokens != 1234 || a.logSession.CompletionTokens != 567 {
+		t.Errorf("session tokens = (prompt %d, completion %d), want (1234, 567)",
+			a.logSession.PromptTokens, a.logSession.CompletionTokens)
+	}
+	if a.logSession.CachedTokens != 89 {
+		t.Errorf("session cached tokens = %d, want 89", a.logSession.CachedTokens)
+	}
+	if a.logSession.Cost != 0.1234 {
+		t.Errorf("session cost = %v, want 0.1234 (self-reported)", a.logSession.Cost)
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // fakeExternalAgent is a deterministic, CREDENTIAL-FREE external ACP agent for
@@ -259,6 +261,60 @@ func TestExternalNoBrokerFailsClosed(t *testing.T) {
 		t.Fatal("a nil broker must fail closed (deny), not auto-allow")
 	}
 	assertPermissionResolved(t, obs, false)
+}
+
+// TestExternalUsageMapping pins issue #31's core: the external (containment-tier)
+// client captures the agent's SELF-REPORTED usage from both UNSTABLE SDK
+// surfaces — cumulative cost via a SessionUsageUpdate notification (routed through
+// SessionUpdate), token totals via PromptResponse.Usage (capturePromptUsage, the
+// exact call ExternalRuntime.Run makes) — and maps them onto agentcore.RunUsage so
+// Result.Usage is non-zero instead of a misleading $0/zero-token run.
+func TestExternalUsageMapping(t *testing.T) {
+	cl := &externalClient{obs: &recordingObserver{}}
+
+	// Cost arrives over the stream as a SessionUsageUpdate; SessionUpdate must route
+	// it to the cost field (USD).
+	if err := cl.SessionUpdate(context.Background(), acp.SessionNotification{
+		SessionId: acp.SessionId("s"),
+		Update:    acp.SessionUpdate{UsageUpdate: &acp.SessionUsageUpdate{Cost: &acp.Cost{Amount: 0.42, Currency: "USD"}}},
+	}); err != nil {
+		t.Fatalf("SessionUpdate(usage): %v", err)
+	}
+	// Token totals arrive on PromptResponse.Usage at end-of-turn.
+	cl.capturePromptUsage(&acp.Usage{
+		InputTokens:       100,
+		OutputTokens:      50,
+		CachedReadTokens:  acp.Ptr(20),
+		CachedWriteTokens: acp.Ptr(5),
+	})
+
+	got := cl.usageSnapshot()
+	if got.PromptTokens != 100 || got.CompletionTokens != 50 {
+		t.Errorf("tokens = (prompt %d, completion %d), want (100, 50)", got.PromptTokens, got.CompletionTokens)
+	}
+	if got.CachedTokens != 20 || got.CacheCreationTokens != 5 {
+		t.Errorf("cache tokens = (read %d, write %d), want (20, 5)", got.CachedTokens, got.CacheCreationTokens)
+	}
+	if got.CostUSD != 0.42 {
+		t.Errorf("CostUSD = %v, want 0.42", got.CostUSD)
+	}
+}
+
+// TestExternalUsageNonUSDNotFabricated: a non-USD self-reported cost is NOT
+// stamped onto CostUSD — a false dollar figure is worse than the honest unmetered
+// zero (issue #31's Note). nil usage is a no-op (stays zero), never a panic.
+func TestExternalUsageNonUSDNotFabricated(t *testing.T) {
+	cl := &externalClient{obs: &recordingObserver{}}
+	cl.recordReportedCost(&acp.Cost{Amount: 9.99, Currency: "EUR"})
+	if got := cl.usageSnapshot(); got.CostUSD != 0 {
+		t.Errorf("non-USD cost must not be recorded as USD; CostUSD = %v, want 0", got.CostUSD)
+	}
+	// nil-safety: neither surface panics or mutates on a no-report run.
+	cl.recordReportedCost(nil)
+	cl.capturePromptUsage(nil)
+	if got := cl.usageSnapshot(); got != (agentcore.RunUsage{}) {
+		t.Errorf("nil reports must leave usage zero; got %+v", got)
+	}
 }
 
 func assertPermissionResolved(t *testing.T, obs *recordingObserver, wantAllowed bool) {

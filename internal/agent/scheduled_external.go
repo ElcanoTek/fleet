@@ -122,6 +122,12 @@ func (a *Agent) runScheduledExternal(ctx context.Context, task string) error {
 		// task that needs approval simply cannot take that action, by design.
 		PermissionBroker: nil,
 	})
+	// Record the agent's SELF-REPORTED usage on EVERY exit path (mirroring the
+	// native runScheduledACP). This is a containment-tier run — the external agent
+	// drives its own model endpoint, so fleet does not meter it; the recorded
+	// tokens/cost are the agent's self-report. An unreported cost stays zero, which
+	// is documented as unmetered (NOT a true $0) — see issue #31.
+	a.recordACPUsage(res.Usage)
 	if res.FinalText != "" {
 		a.logSession.AddMessage(roleAssistant, res.FinalText, nil, nil)
 	}
