@@ -251,28 +251,15 @@ func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Obs
 		return agentcore.Result{}, fmt.Errorf("marshal turn messages: %w", err)
 	}
 
-	// MCP descriptors (no credentials) the agent advertises — filtered by the
-	// SAME Gate-1/Gate-2 the in-process path applies. The host runs each call
-	// against the credentialed client (mcpBroker).
-	mcpDescs := buildMCPDescriptors(tc.MCPClient, tc.Allowlist, tc.OptionalServers, tc.Selection)
-	var mcpBrk acpruntime.MCPBroker
-	if len(mcpDescs) > 0 && tc.MCPClient != nil {
-		mcpBrk = &mcpBroker{client: tc.MCPClient}
-	}
-
-	// Staging broker: routes the agent's delegated staging to the real host
-	// stagers. Wired only when the host actually has a stager (so the agent
-	// reports "not wired" identically to an in-process turn with no stagers).
-	stagingWired := tc.ApprovalStager != nil || tc.MemoryProposer != nil
-	noteWired := tc.NoteProposer != nil
-	var stageBrk acpruntime.StageBroker
-	if stagingWired || noteWired {
-		stageBrk = &stageBroker{
-			approval: tc.ApprovalStager,
-			memory:   tc.MemoryProposer,
-			note:     tc.NoteProposer,
-		}
-	}
+	// Host-side governance seam (MCP descriptors + brokers + staging), built by
+	// the SAME shared helper the scheduled driver uses so both modes broker MCP
+	// credentials and delegate staging identically. Interactive wires all three
+	// stagers (approval / memory / note); the descriptors carry no credentials.
+	gov := buildACPHostGovernance(tc.MCPClient, tc.Allowlist, tc.OptionalServers, tc.Selection, acpStagers{
+		approval: tc.ApprovalStager,
+		memory:   tc.MemoryProposer,
+		note:     tc.NoteProposer,
+	})
 
 	// Lockdown seals the agent container's NETWORK except for the model endpoint?
 	// No — the agent must reach the model endpoint to run the loop, exactly like
@@ -299,9 +286,9 @@ func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Obs
 			Label:               tc.Label,
 			ProviderXTitle:      agentcore.DefaultProviderHeaders.XTitle,
 			ProviderHTTPReferer: agentcore.DefaultProviderHeaders.HTTPReferer,
-			MCPTools:            mcpDescs,
-			StagingWired:        stagingWired,
-			NoteProposerWired:   noteWired,
+			MCPTools:            gov.MCPDescriptors,
+			StagingWired:        gov.StagingWired,
+			NoteProposerWired:   gov.NoteProposerWired,
 			Lockdown:            tc.Lockdown,
 		},
 		latestUserText(tc.Messages),
@@ -309,8 +296,8 @@ func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Obs
 		acpruntime.Deps{
 			Executor:    NewSandboxExecutor(tc.Sandbox),
 			Observer:    obs,
-			MCPBroker:   mcpBrk,
-			StageBroker: stageBrk,
+			MCPBroker:   gov.MCPBroker,
+			StageBroker: gov.StageBroker,
 		},
 	)
 	if err != nil {

@@ -104,6 +104,78 @@ func TestMCPBroker_TypeContract(_ *testing.T) {
 	_ = context.Background()
 }
 
+// TestBuildACPHostGovernance_ScheduledWiresNoteOnly proves the shared host-side
+// governance builder wires the SCHEDULED seam set correctly: only the note
+// proposer is wired (approval/memory are interactive-only, matching the in-process
+// scheduled policy which wires the note proposer but no approval/memory staging),
+// and with no MCP client there are no descriptors and no broker. This is the
+// scheduled driver's exact wiring (runScheduledACP), so it pins the parity
+// contract that scheduled native-acp stages notes — and only notes — host-side.
+func TestBuildACPHostGovernance_ScheduledWiresNoteOnly(t *testing.T) {
+	note := &recordingNoteProposer{}
+	gov := buildACPHostGovernance(nil, nil, nil, nil, acpStagers{note: note})
+
+	if gov.StagingWired {
+		t.Fatalf("scheduled wiring must NOT set StagingWired (approval/memory are interactive-only)")
+	}
+	if !gov.NoteProposerWired {
+		t.Fatalf("scheduled wiring must set NoteProposerWired when a note proposer is present")
+	}
+	if gov.StageBroker == nil {
+		t.Fatalf("a note proposer must produce a StageBroker so propose_note delegates host-side")
+	}
+	// No MCP client → no descriptors and no broker (the agent advertises no MCP
+	// surface), exactly as the in-process scheduled path with no servers bound.
+	if gov.MCPDescriptors != nil {
+		t.Fatalf("no client → no MCP descriptors, got %v", gov.MCPDescriptors)
+	}
+	if gov.MCPBroker != nil {
+		t.Fatalf("no client → no MCP broker")
+	}
+
+	// The wired note proposer is the one the broker forwards to (the EFFECT stays
+	// host-side; only the public proposal rides the seam).
+	if id, err := gov.StageBroker.StageNote("s", "T", "B", "R"); err != nil || id != "note-1" || note.slug != "s" {
+		t.Fatalf("StageNote = (%q, %v), slug=%q; want (note-1, nil), slug=s", id, err, note.slug)
+	}
+	// An approval request fails closed (interactive-only surface, unwired here).
+	if _, err := gov.StageBroker.StageApproval("send_email", "", ""); !errors.Is(err, errStagerNotWired) {
+		t.Fatalf("scheduled StageApproval = %v, want errStagerNotWired (interactive-only)", err)
+	}
+}
+
+// TestBuildACPHostGovernance_InteractiveWiresAllStagers proves the SAME shared
+// builder wires all three stagers for the interactive driver — the DRY guarantee
+// that both drivers build the identical seam set, differing only in which stagers
+// they pass.
+func TestBuildACPHostGovernance_InteractiveWiresAllStagers(t *testing.T) {
+	appr := &recordingApprovalStager{}
+	mem := &recordingMemoryProposer{}
+	note := &recordingNoteProposer{}
+	gov := buildACPHostGovernance(nil, nil, nil, nil, acpStagers{approval: appr, memory: mem, note: note})
+
+	if !gov.StagingWired {
+		t.Fatalf("interactive wiring must set StagingWired when approval/memory are present")
+	}
+	if !gov.NoteProposerWired {
+		t.Fatalf("interactive wiring must set NoteProposerWired when a note proposer is present")
+	}
+	if gov.StageBroker == nil {
+		t.Fatalf("stagers present must produce a StageBroker")
+	}
+}
+
+// TestBuildACPHostGovernance_NoStagersInert proves the builder leaves the staging
+// seam inert when no stagers are wired (matching an in-process run with no stagers
+// — the agent reports "not wired" identically).
+func TestBuildACPHostGovernance_NoStagersInert(t *testing.T) {
+	gov := buildACPHostGovernance(nil, nil, nil, nil, acpStagers{})
+	if gov.StagingWired || gov.NoteProposerWired || gov.StageBroker != nil {
+		t.Fatalf("no stagers → fully inert staging seam, got StagingWired=%v NoteProposerWired=%v broker=%v",
+			gov.StagingWired, gov.NoteProposerWired, gov.StageBroker)
+	}
+}
+
 // TestMCPBroker_FastIOInlineUploadRejectedHostSide proves the host broker applies
 // the SAME fast.io inline-base64 pre-guard the in-process mcpTool applies: an
 // oversized inline upload is rejected BEFORE the wire (the client is never
