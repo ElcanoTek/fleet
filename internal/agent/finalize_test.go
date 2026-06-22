@@ -54,7 +54,7 @@ func messageContainsText(m fantasy.Message, want string) bool {
 }
 
 func TestStripLeakedToolCalls(t *testing.T) {
-	// The exact leak from logs/bugreport3 — a download_url call narrated as
+	// The exact leak observed in the wild — a download_url call narrated as
 	// text. Should collapse to empty so the forced-summary fallback fires.
 	leak := "call:default_api:download_url{output_dir:/opt/chat/workspace/abc,url:https://api.fast.io/x/read/?token=eyJ0eXAiabc._sig}"
 	if got := stripLeakedToolCalls(leak); got != "" {

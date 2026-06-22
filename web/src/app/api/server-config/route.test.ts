@@ -1,6 +1,5 @@
-// Verifies the Next.js server-config proxy merges in `julesEnabled` from the
-// JULES_API_KEY env var. The Go chat-server doesn't know about this flag,
-// so the merge has to happen here.
+// Verifies the Next.js server-config proxy passes the chat-server's
+// capability flags through to the browser and gates on a session.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,10 +16,7 @@ vi.mock("@/app/lib/chatServer", () => ({
 import { GET } from "./route";
 
 describe("GET /api/server-config", () => {
-  const originalEnv = process.env;
-
   beforeEach(() => {
-    process.env = { ...originalEnv };
     getServerSessionMock.mockReset();
     chatServerFetchMock.mockReset();
     getServerSessionMock.mockResolvedValue({ email: "alice@example.com", exp: 0 });
@@ -37,25 +33,16 @@ describe("GET /api/server-config", () => {
   });
 
   afterEach(() => {
-    process.env = originalEnv;
     vi.restoreAllMocks();
   });
 
-  it("returns julesEnabled=true when JULES_API_KEY is set", async () => {
-    process.env.JULES_API_KEY = "k";
+  it("passes the upstream capability flags through to the browser", async () => {
     const res = await GET();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.julesEnabled).toBe(true);
     expect(body.lockdown_available).toBe(true);
-  });
-
-  it("returns julesEnabled=false when JULES_API_KEY is unset", async () => {
-    delete process.env.JULES_API_KEY;
-    const res = await GET();
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.julesEnabled).toBe(false);
+    expect(body.lockdown_only).toBe(false);
+    expect(body.lockdown_allowed_models).toEqual(["openai/gpt-5"]);
   });
 
   it("returns 401 when there is no session", async () => {
@@ -69,16 +56,5 @@ describe("GET /api/server-config", () => {
     const res = await GET();
     expect(res.status).toBe(500);
     expect(await res.text()).toBe("upstream boom");
-  });
-
-  it("still returns julesEnabled when upstream returns malformed JSON", async () => {
-    process.env.JULES_API_KEY = "k";
-    chatServerFetchMock.mockResolvedValue(
-      new Response("not json", { status: 200, headers: { "Content-Type": "application/json" } }),
-    );
-    const res = await GET();
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.julesEnabled).toBe(true);
   });
 });

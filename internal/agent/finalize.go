@@ -13,7 +13,7 @@ import (
 // it never executes and the raw syntax lands in the user-visible reply. We
 // strip these so the user never sees the gibberish — and so a reply that was
 // ONLY a leaked call collapses to empty and triggers the forced-summary
-// fallback below. See logs/bugreport3 (call:default_api:download_url{...}).
+// fallback below. Observed in the wild as call:default_api:download_url{...}.
 //
 // Intentionally narrow: namespace:name{...} with no nested braces. Real prose
 // virtually never matches, and a false positive only costs us one stripped

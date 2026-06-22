@@ -3,7 +3,7 @@ import { test, expect } from "./fixtures";
 // Covers the "agent stopped without a written reply" safety net end-to-end
 // against the MOCKED chat-server. The prompt "simulate empty reply" makes the
 // mock turn run a tool call and then complete with NO assistant text — the
-// Husqvarna / bugreport.txt / bugreport2.txt failure shape. The UI must show a
+// "model ran a tool then went silent" failure shape. The UI must show a
 // clear notice + Retry instead of a blank assistant bubble.
 //
 // (The real server forces a summary in this case — verified by the agent
