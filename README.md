@@ -37,8 +37,9 @@ internal/
   httpapi/        chat HTTP/SSE/auth layer
   config/         unified configuration (env loading; the MCP catalog comes from the bundle)
 web/              one Next.js app: /chat and /orchestrator
-images/sandbox/   the one sandbox container image
-config/default/   the GENERIC client bundle baked into the repo (runs bare)
+config/default/   the GENERIC client bundle baked into the repo (runs bare),
+                  including config/default/sandbox/Containerfile — the sandbox
+                  image is a per-client bundle artifact (build-on-box default)
 ```
 
 fleet ships **no** client-specific content. It loads a **client config bundle**
@@ -84,13 +85,27 @@ browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet:
    bundle's MCP connector credentials, and any MCP account secrets
    (`fleet-admin mcp account set ...`) in the env file.
 
-2. **Build** the binary and the web app:
+2. **Build** the binary, the sandbox image, and the web app:
 
    ```
    make build                              # → ./fleet
-   scripts/build-sandbox-image.sh          # → localhost/fleet-sandbox:latest (podman)
+   # The sandbox image is a per-client BUNDLE artifact (build-on-box by default):
+   # the Containerfile lives in the bundle at <bundle>/sandbox/Containerfile and
+   # each client ships + digest-pins its own flavor. Build the bundle's sandbox:
+   FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh   # → the manifest's tag (podman)
+   #   (defaults to config/default → localhost/fleet-sandbox:latest)
    cd web && npm ci && npm run build       # Next production build
    ```
+
+   Registry publish is **opt-in per client**: instead of building on the box, a
+   client may set `sandbox.image` in its `manifest.yaml` to a prebuilt ref it
+   pushed (e.g. `ghcr.io/<org>/sandbox@sha256:...`); fleet then pulls/uses that
+   and skips the build. fleet resolves the ref from the bundle
+   (`clientconfig.Sandbox().ResolvedImageRef()` — `image` if set, else `tag`); an
+   explicit `FLEET_SANDBOX_IMAGE` env var still overrides. fleet never builds at
+   process startup — this deploy step (or the client's registry push) does.
+   Reproducibility comes from the digest-pinned base each bundle's Containerfile
+   owns.
 
 3. **systemd** — run the single binary under `deploy/fleet.service` (it
    `EnvironmentFile`s the 0600 env file, `Restart=always`, drains the worker
