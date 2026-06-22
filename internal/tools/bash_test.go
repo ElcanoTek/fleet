@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +44,69 @@ func TestBashTool(t *testing.T) {
 
 	if result.WorkingDir == "" {
 		t.Error("Expected non-empty working directory")
+	}
+}
+
+// unwritableAuditDir returns a path that os.MkdirAll cannot create: a
+// subdirectory UNDER a regular file, which fails with ENOTDIR. Used to force
+// auditBashInvocation's write to fail deterministically.
+func unwritableAuditDir(t *testing.T) string {
+	t.Helper()
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+	return filepath.Join(blocker, "audit") // MkdirAll under a file → ENOTDIR
+}
+
+// TestAuditBashInvocation_ReportsWriteFailure pins that the audit writer now
+// RETURNS its failure (issue #33) instead of silently dropping it, and that the
+// happy path stays nil + actually writes the line.
+func TestAuditBashInvocation_ReportsWriteFailure(t *testing.T) {
+	t.Setenv("FLEET_AUDIT_DIR", unwritableAuditDir(t))
+	if err := auditBashInvocation("echo hi", "/tmp", 0, 1, ""); err == nil {
+		t.Fatal("auditBashInvocation returned nil on an uncreatable audit dir; want an error")
+	}
+
+	good := t.TempDir()
+	t.Setenv("FLEET_AUDIT_DIR", good)
+	if err := auditBashInvocation("echo hi", "/tmp", 0, 1, ""); err != nil {
+		t.Fatalf("auditBashInvocation on a writable dir = %v; want nil", err)
+	}
+	if _, err := os.Stat(filepath.Join(good, "bash.log")); err != nil {
+		t.Fatalf("expected bash.log written: %v", err)
+	}
+}
+
+// TestRunBash_SurfacesAuditFailureInResult: a successful command whose audit
+// write fails flags the turn — result.Error carries an audit_failed note rather
+// than the failure being silent (issue #33 acceptance).
+func TestRunBash_SurfacesAuditFailureInResult(t *testing.T) {
+	t.Setenv("FLEET_AUDIT_DIR", unwritableAuditDir(t))
+	raw, err := runBash(context.Background(), BashParams{Command: "echo audit-probe"})
+	if err != nil {
+		t.Fatalf("runBash returned a hard error: %v", err)
+	}
+	result := parseBashResult(t, raw)
+	if result.ExitCode != 0 || !strings.Contains(result.Stdout, "audit-probe") {
+		t.Fatalf("command should still run: exit=%d stdout=%q", result.ExitCode, result.Stdout)
+	}
+	if !strings.Contains(result.Error, "audit_failed") {
+		t.Fatalf("result.Error %q should flag audit_failed when the audit write fails", result.Error)
+	}
+}
+
+// TestRunBash_BlockedCommandSurfacesAuditFailure: even a hard-blocked command is
+// an auditable event; when its audit write fails too, the returned error names
+// both the block reason and the audit failure (issue #33).
+func TestRunBash_BlockedCommandSurfacesAuditFailure(t *testing.T) {
+	t.Setenv("FLEET_AUDIT_DIR", unwritableAuditDir(t))
+	_, err := runBash(context.Background(), BashParams{Command: "eval ls"})
+	if err == nil {
+		t.Fatal("expected a hard error for a blocked command")
+	}
+	if !strings.Contains(err.Error(), "audit_failed") {
+		t.Fatalf("blocked-command error %q should also surface audit_failed", err.Error())
 	}
 }
 

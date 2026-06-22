@@ -483,13 +483,16 @@ func truncateWithFile(output []byte, prefix string) (string, string) {
 	return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total; head+tail shown above. Recover the FULL bytes with `view_file path=%s` (best for inspecting), or — if you need to feed them back to another tool — re-run inside run_python and capture via `return_vars` (vars are never truncated; do NOT copy-paste the head+tail above as if it were the whole payload).]\n\n", len(output), path) + tail, path
 }
 
-// auditBashInvocation appends one JSON line describing a bash
-// invocation to an audit log. Best-effort — on failure we log a warning
-// once per process and otherwise stay silent so audit problems never
-// break a turn. Log dir resolution: $FLEET_AUDIT_DIR (or legacy
-// $CHAT_AUDIT_DIR), else $FLEET_DATA_DIR/audit (or legacy
-// $CHAT_DATA_DIR/audit), else ./data/audit.
-func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int64, blockedReason string) {
+// auditBashInvocation appends one JSON line describing a bash invocation
+// to an audit log and returns a non-nil error when the write could not be
+// completed. fleet treats the bash audit trail as a core governance
+// guarantee, so a dropped write must reach the turn (see the call sites,
+// which fold the failure into the tool result) rather than being silenced
+// after the first occurrence. We still emit a once-per-process log line as
+// a server-side breadcrumb, but the returned error is the per-turn signal.
+// Log dir resolution: $FLEET_AUDIT_DIR (or legacy $CHAT_AUDIT_DIR), else
+// $FLEET_DATA_DIR/audit (or legacy $CHAT_DATA_DIR/audit), else ./data/audit.
+func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int64, blockedReason string) error {
 	dir := fleetEnv("AUDIT_DIR")
 	if dir == "" {
 		dataDir := fleetEnv("DATA_DIR")
@@ -500,13 +503,13 @@ func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil { // audit dir built from operator-set env or default
 		auditWarnOnce("mkdir audit dir failed: " + err.Error())
-		return
+		return fmt.Errorf("create audit dir: %w", err)
 	}
 	path := filepath.Join(dir, "bash.log")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640) //nolint:gosec // audit log readable by the chat group
 	if err != nil {
 		auditWarnOnce("open audit log failed: " + err.Error())
-		return
+		return fmt.Errorf("open audit log: %w", err)
 	}
 	defer f.Close()
 
@@ -522,9 +525,14 @@ func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int
 	}
 	line, err := json.Marshal(entry)
 	if err != nil {
-		return
+		auditWarnOnce("marshal audit entry failed: " + err.Error())
+		return fmt.Errorf("marshal audit entry: %w", err)
 	}
-	_, _ = f.Write(append(line, '\n'))
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		auditWarnOnce("write audit log failed: " + err.Error())
+		return fmt.Errorf("write audit log: %w", err)
+	}
+	return nil
 }
 
 // auditWarnedAbout is touched from concurrent bash invocations across
@@ -600,7 +608,12 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 	}
 
 	if err := checkCommandSafety(command); err != nil {
-		auditBashInvocation(command, workingDir, -1, 0, err.Error())
+		// A blocked command is still an auditable event. If the audit write also
+		// fails, surface it on the returned error so the dropped trail is visible
+		// for THIS turn rather than only as a once-per-process log line.
+		if auditErr := auditBashInvocation(command, workingDir, -1, 0, err.Error()); auditErr != nil {
+			return "", fmt.Errorf("%w (audit_failed: %w)", err, auditErr)
+		}
 		return "", err
 	}
 
@@ -676,7 +689,19 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 		result.TruncationInfo = ti
 	}
 
-	auditBashInvocation(command, workingDir, result.ExitCode, result.ExecutionTimeMs, "")
+	// Audit is a core governance guarantee, so a dropped write flags the turn.
+	// Keep it non-fatal (the command already ran), but fold the failure into the
+	// result's Error — the same channel as the capNote above — so the model and
+	// the operator see that this invocation's audit row is missing, instead of it
+	// being silently dropped after the first per-process warning.
+	if auditErr := auditBashInvocation(command, workingDir, result.ExitCode, result.ExecutionTimeMs, ""); auditErr != nil {
+		auditNote := "audit_failed: " + auditErr.Error()
+		if result.Error != "" {
+			result.Error += " | " + auditNote
+		} else {
+			result.Error = auditNote
+		}
+	}
 
 	jsonBytes, marshalErr := json.Marshal(result)
 	if marshalErr != nil {
