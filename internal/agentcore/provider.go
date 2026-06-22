@@ -72,15 +72,6 @@ var canonicalUpstream = []struct {
 	{"moonshotai/", upstreamProviderMoonshot, false},
 }
 
-// isAliasModel reports whether the slug is an OpenRouter floating alias
-// (`~`-prefixed). Used to suppress reasoning for alias slugs: fantasy's
-// send-side reasoning reconstruction keys on the raw slug's family prefix, which
-// the `~` sigil defeats, so thinking signatures are silently dropped on the
-// round-trip. Pinned slugs are unaffected.
-func isAliasModel(modelSlug string) bool {
-	return strings.HasPrefix(modelSlug, "~")
-}
-
 // upstreamPinFor returns the OpenRouter provider routing policy for a model
 // slug, or nil if the family has no canonical upstream. A leading `~` (floating
 // alias) is stripped before prefix-matching so the alias inherits the lab's pin
@@ -101,20 +92,6 @@ func upstreamPinFor(modelSlug string) *openrouter.Provider {
 		return p
 	}
 	return nil
-}
-
-// anthropicSupportsLongContext reports whether a model is a Claude variant that
-// supports the 1M-context beta (cutlass's conservative explicit allowlist).
-func anthropicSupportsLongContext(model fantasy.LanguageModel) bool {
-	if model == nil {
-		return false
-	}
-	slug := strings.ToLower(strings.TrimSpace(model.Model()))
-	return strings.Contains(slug, "claude-sonnet-4.5") ||
-		strings.Contains(slug, "claude-sonnet-4.6") ||
-		strings.Contains(slug, "claude-opus-4.6") ||
-		strings.Contains(slug, "claude-opus-4.7") ||
-		strings.Contains(slug, "claude-opus-4.8")
 }
 
 // anthropicLongContextSlug reports whether a raw slug string is a long-context

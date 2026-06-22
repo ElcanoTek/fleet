@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"charm.land/fantasy"
@@ -214,24 +213,6 @@ func truncate(s string, maxLen int) string {
 		return s[:maxLen]
 	}
 	return s[:maxLen-3] + "..."
-}
-
-// parseBoolEnvValue is a tolerant bool parser used where strconv.ParseBool's
-// strictness would reject "yes"/"on"/etc.
-func parseBoolEnvValue(raw string) (val, ok bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "":
-		return false, false
-	case "1", "true", "yes", "on":
-		return true, true
-	case "0", "false", "no", "off":
-		return false, true
-	default:
-		if b, err := strconv.ParseBool(raw); err == nil {
-			return b, true
-		}
-		return false, false
-	}
 }
 
 // taskTrackerSnapshot is the parsed state of the scheduled-mode task tracker,

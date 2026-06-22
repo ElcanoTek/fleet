@@ -62,7 +62,7 @@ func cleanDB(s *storage.Storage) error {
 	return nil
 }
 
-func setupTest(t *testing.T) (*Handlers, *storage.Storage, string) {
+func setupTest(t *testing.T) (*Handlers, *storage.Storage) {
 	tmpDir := t.TempDir()
 	store := storage.New()
 	if err := store.Initialize(filepath.Join(tmpDir, "test.db")); err != nil {
@@ -87,11 +87,11 @@ func setupTest(t *testing.T) (*Handlers, *storage.Storage, string) {
 		DataDir:     tmpDir,
 	}, store, keyMgr)
 
-	return h, store, tmpDir
+	return h, store
 }
 
 func TestUpload(t *testing.T) {
-	h, _, _ := setupTest(t)
+	h, _ := setupTest(t)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -125,7 +125,7 @@ func TestUpload(t *testing.T) {
 }
 
 func TestUserLogin(t *testing.T) {
-	h, store, _ := setupTest(t)
+	h, store := setupTest(t)
 
 	// First create a user
 	createBody := `{"username": "testlogin", "password": "testpassword123", "role": "client"}`
@@ -193,7 +193,7 @@ func TestUserLogin(t *testing.T) {
 }
 
 func TestDashboardStatsWithUserToken(t *testing.T) {
-	h, store, _ := setupTest(t)
+	h, store := setupTest(t)
 
 	// Create a user with a session token
 	user := &models.User{
@@ -261,7 +261,7 @@ func TestDashboardStatsWithUserToken(t *testing.T) {
 }
 
 func TestLoginToDashboardFlow(t *testing.T) {
-	h, _, _ := setupTest(t)
+	h, _ := setupTest(t)
 
 	// Step 1: Create a user (admin creates it)
 	createBody := `{"username": "flowtest", "password": "securepassword123", "role": "client"}`
@@ -316,7 +316,7 @@ func TestLoginToDashboardFlow(t *testing.T) {
 }
 
 func TestGetLogsWithUserAuth(t *testing.T) {
-	h, store, _ := setupTest(t)
+	h, store := setupTest(t)
 
 	// Create an admin user with session token
 	adminUser := &models.User{
@@ -459,11 +459,12 @@ func TestGetLogsWithUserAuth(t *testing.T) {
 	}
 
 	agentSessionID, exists := taskData["agent_session_id"]
-	if !exists {
+	switch {
+	case !exists:
 		t.Errorf("Expected agent_session_id field in task")
-	} else if agentSessionID == nil {
+	case agentSessionID == nil:
 		t.Errorf("Expected agent_session_id to be set, got nil")
-	} else if agentSessionID != logSession.ID {
+	case agentSessionID != logSession.ID:
 		t.Errorf("Expected agent_session_id '%s', got '%v'", logSession.ID, agentSessionID)
 	}
 }
@@ -475,7 +476,7 @@ func TestGetLogsWithUserAuth(t *testing.T) {
 // signal ever drifts the backend must still degrade gracefully so the modal's
 // 404 path renders the empty state instead of cascading into an error toast.
 func TestGetLogsForScheduledTaskReturns404(t *testing.T) {
-	h, store, _ := setupTest(t)
+	h, store := setupTest(t)
 
 	scheduledFor := time.Now().Add(1 * time.Hour).UTC()
 	task := &models.Task{
