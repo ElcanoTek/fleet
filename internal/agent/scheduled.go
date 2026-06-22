@@ -72,6 +72,29 @@ type Agent struct {
 	runtime          string
 	nativeAgentImage string
 
+	// runtimeFlavor is the resolved clientconfig descriptor for runtime. For an
+	// EXTERNAL (type: acp / delegated_policy) flavor it carries the provider
+	// image, the model_only egress posture, the delegated-policy bit, and the
+	// model-cred env var names the scheduled-external path needs to spawn the
+	// provider's agent at the CONTAINMENT tier. Empty Type for the native
+	// flavors (which never consult it).
+	runtimeFlavor clientconfig.Runtime
+
+	// allowUngovernedScheduled is the per-client opt-in (manifest
+	// agent_policy.allow_ungoverned_scheduled_agents, default false) that admits
+	// an EXTERNAL flavor as a SCHEDULED task. fleet is FAIL-CLOSED here: when this
+	// is false and a scheduled task selects an external flavor, Execute returns a
+	// LOUD ERROR at dispatch — NEVER a silent fallback to a native flavor (the
+	// INVERSE of the native-acp fallback). See Execute's external gate.
+	allowUngovernedScheduled bool
+
+	// newExternalRuntime builds the runtime that drives a scheduled-external turn.
+	// Production wires acpruntime.NewExternalRuntime (spawns the provider's agent
+	// via podman); tests inject a fake that drives an in-process fake external ACP
+	// agent over io.Pipe so the scheduled-external path is exercised with NO
+	// podman, NO live key. Nil falls back to the real runtime.
+	newExternalRuntime func(acpruntime.ExternalConfig) externalRuntime
+
 	// mcpSelection is the task's declared MCP selection (the {server, account}
 	// choices the scheduled runner bound onto a DEDICATED per-task client). It is
 	// the authoritative MCP surface for the native-acp path: only these servers are
@@ -102,11 +125,26 @@ type Options struct {
 	NoteProposer agentcore.NoteProposer
 
 	// Runtime selects the scheduled execution flavor ("" / "native-inprocess" =
-	// in-process loop; "native-acp" = sandboxed ACP agent, fully governed).
-	// NativeAgentImage names the agent image for the native-acp flavor; required
-	// when Runtime is native-acp.
+	// in-process loop; "native-acp" = sandboxed ACP agent, fully governed; an
+	// external "acp" flavor = the CONTAINMENT tier, gated by
+	// AllowUngovernedScheduled). NativeAgentImage names the agent image for the
+	// native-acp flavor; required when Runtime is native-acp.
 	Runtime          string
 	NativeAgentImage string
+
+	// RuntimeFlavor is the resolved clientconfig descriptor for Runtime. For an
+	// EXTERNAL (type: acp) flavor it carries the provider image, args, model_env,
+	// and the delegated-policy bit the scheduled-external path needs. The native
+	// flavors leave it zero (they never read it).
+	RuntimeFlavor clientconfig.Runtime
+
+	// AllowUngovernedScheduled is the per-client opt-in
+	// (agent_policy.allow_ungoverned_scheduled_agents, default false) that admits
+	// an EXTERNAL flavor as a SCHEDULED task. Off → a scheduled-external task is a
+	// LOUD ERROR at dispatch (fail-closed, no fallback). On → the scheduled turn
+	// runs at the containment tier (sandbox REQUIRED, governance: delegated,
+	// permissions default-DENY).
+	AllowUngovernedScheduled bool
 
 	// MCPSelection is the task's declared {server, account} MCP selection. For the
 	// native-acp flavor it is the authoritative advertised MCP surface (only these
@@ -125,23 +163,25 @@ func NewAgent(opts Options) *Agent {
 		maxIter = 500
 	}
 	return &Agent{
-		config:           opts.Config,
-		model:            opts.Model,
-		fallbackModel:    opts.FallbackModel,
-		mcpClient:        opts.MCPClient,
-		nativeTools:      opts.NativeTools,
-		systemPrompt:     opts.SystemPrompt,
-		persona:          opts.Persona,
-		maxIterations:    maxIter,
-		logSession:       NewLogSession(),
-		sb:               opts.Sandbox,
-		loadedServers:    make(map[string]bool),
-		logFile:          opts.LogFile,
-		notesProvider:    opts.NotesProvider,
-		noteProposer:     opts.NoteProposer,
-		runtime:          opts.Runtime,
-		nativeAgentImage: opts.NativeAgentImage,
-		mcpSelection:     opts.MCPSelection,
+		config:                   opts.Config,
+		model:                    opts.Model,
+		fallbackModel:            opts.FallbackModel,
+		mcpClient:                opts.MCPClient,
+		nativeTools:              opts.NativeTools,
+		systemPrompt:             opts.SystemPrompt,
+		persona:                  opts.Persona,
+		maxIterations:            maxIter,
+		logSession:               NewLogSession(),
+		sb:                       opts.Sandbox,
+		loadedServers:            make(map[string]bool),
+		logFile:                  opts.LogFile,
+		notesProvider:            opts.NotesProvider,
+		noteProposer:             opts.NoteProposer,
+		runtime:                  opts.Runtime,
+		nativeAgentImage:         opts.NativeAgentImage,
+		runtimeFlavor:            opts.RuntimeFlavor,
+		allowUngovernedScheduled: opts.AllowUngovernedScheduled,
+		mcpSelection:             opts.MCPSelection,
 	}
 }
 
@@ -248,11 +288,32 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		}
 	}()
 
+	a.logSession.AddMessage(roleUser, task, nil, nil)
+
+	// EXTERNAL (type: acp / delegated_policy) flavor as a SCHEDULED task — the
+	// FAIL-CLOSED gate (P-ACP-4). This is the deliberate INVERSE of the native-acp
+	// fallback below: native-acp may SILENTLY fall back to the fully-governed
+	// in-process loop when it cannot faithfully govern; an external scheduled task
+	// must NEVER fall back to a native flavor, because doing so would run a
+	// DIFFERENT agent than the operator selected. Instead, when the per-client
+	// opt-in is OFF, dispatch is a LOUD ERROR recorded in the run/session log; the
+	// run is failed, not degraded. When the opt-in is ON, the scheduled turn runs
+	// at the CONTAINMENT tier (governance: delegated), the sandbox is REQUIRED, and
+	// permissions default-DENY (no human on the scheduled loop). We check this
+	// FIRST — before the OpenRouter model guard and the native-acp branch — because
+	// an external agent drives its OWN model endpoint with its own provider key
+	// (a.model / OPENROUTER_API_KEY is irrelevant to it), and an external flavor
+	// must never reach a native path.
+	if a.isExternalFlavor() {
+		return a.runScheduledExternal(ctx, task)
+	}
+
+	// The native paths drive the LLM loop through fleet's resolved OpenRouter
+	// model; without one there is nothing to run. (External flavors returned
+	// above and never reach this guard.)
 	if a.model == nil {
 		return fmt.Errorf("no language model configured — set OPENROUTER_API_KEY")
 	}
-
-	a.logSession.AddMessage(roleUser, task, nil, nil)
 
 	// Inject the admin-curated knowledge base into the system prompt (both modes
 	// inject the same notes; here we append to the scheduled base prompt before

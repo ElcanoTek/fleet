@@ -336,3 +336,41 @@ mcp_servers:
 		t.Error("expected duplicate-name error")
 	}
 }
+
+// TestAllowUngovernedScheduledAgents_DefaultFalse pins the FAIL-CLOSED default:
+// a manifest that does NOT set the flag (the generic-bundle case) leaves
+// AllowUngovernedScheduledAgents false, so the scheduled-external gate refuses to
+// run an external flavor on the scheduler.
+func TestAllowUngovernedScheduledAgents_DefaultFalse(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("branding: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if b.AgentPolicy().AllowUngovernedScheduledAgents {
+		t.Error("default must be false (fail-closed): an unset flag must not admit ungoverned scheduled agents")
+	}
+}
+
+// TestAllowUngovernedScheduledAgents_OptIn proves the manifest opt-in plumbs
+// through agent_policy → Bundle.AgentPolicy().
+func TestAllowUngovernedScheduledAgents_OptIn(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `
+agent_policy:
+  allow_ungoverned_scheduled_agents: true
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !b.AgentPolicy().AllowUngovernedScheduledAgents {
+		t.Error("agent_policy.allow_ungoverned_scheduled_agents=true must plumb through to AgentPolicy()")
+	}
+}

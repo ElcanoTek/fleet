@@ -114,7 +114,10 @@ it does not run. So instead of *governing*, fleet **contains**:
 - **Coordinated teardown.** fleet kills the whole process group + container; it
   never trusts `--rm` alone.
 - **Permission gate.** Anything the agent flags as sensitive routes to a human
-  (next section), **default-deny on timeout, no "approve all."**
+  (next section), **default-deny on timeout, no "approve all."** On the
+  **scheduler** there is no human, so there is no broker at all — every permission
+  request is **denied** (see
+  [Scheduled-external](#scheduled-external-is-fail-closed-and-off-by-default), below).
 
 > **The honest bottom line:** containment bounds what an external agent can *do
 > on your host*. It does **not** stop a self-executing agent from sending what
@@ -225,7 +228,49 @@ is reconciled over `_fleet/event`. It governs identically to a scheduled
 
 A bundle that wants to keep scheduled work fully governed simply does not point
 `FLEET_SCHEDULED_RUNTIME` at an external flavor — external scheduled runs remain
-the containment tier and are opt-in.
+the containment tier and are opt-in (see the next section).
+
+#### Scheduled-external is FAIL-CLOSED and off by default
+
+Pointing `FLEET_SCHEDULED_RUNTIME` at an **external** (`type: acp` /
+`delegated_policy: true`) flavor runs a third-party agent **on the scheduler,
+with no human watching it**. That is a deliberately gated capability, off by
+default, and **fail-closed** — the exact OPPOSITE of the `native-acp` fallback:
+
+- **Per-client opt-in.** A scheduled-external run is admitted ONLY when the
+  client manifest sets
+
+  ```yaml
+  agent_policy:
+    allow_ungoverned_scheduled_agents: true   # default: false (the generic bundle leaves it unset)
+  ```
+
+- **Off → a LOUD ERROR at dispatch, never a fallback.** With the flag off (the
+  default), a scheduled task that selects an external flavor **fails at dispatch**
+  with a clear governance message recorded in the run/session log. fleet does
+  **not** silently fall back to a native flavor — doing so would run a *different*
+  agent than the operator chose. An under-governed external agent never runs
+  unless you explicitly opt in. (Contrast: `native-acp` *may* fall back to the
+  in-process loop, because that runs the SAME agent under STRONGER governance.)
+- **On → containment tier, sandbox REQUIRED.** With the flag on, the scheduled
+  turn runs through the **same** `acpruntime.ExternalRuntime` the interactive path
+  uses, at the **containment** tier: `governance: delegated` is stamped in the run
+  record, the agent self-executes in its locked provider sandbox, and the env is
+  scrubbed to the `model_env` key only. The sandbox image is **mandatory** — a
+  scheduled-external flavor with no image is an error, not a degraded run.
+- **No human on the loop → default-DENY permissions.** Scheduled work has no
+  approver, so fleet wires **no** permission broker. Every
+  `session/request_permission` the external agent raises is **denied** (the same
+  fail-closed deny a misconfigured interactive flavor gets — no approve-all, no
+  hang). A scheduled-external task that needs approval simply cannot take that
+  action, by design.
+
+> **Honest framing:** containment is **not** full governance. A scheduled-external
+> run is the same containment posture as interactive-external (the agent may
+> transmit your workspace to its own model endpoint — see the
+> [Data-residency caveat](#data-residency-caveat)), minus the human approval gate.
+> Keep `allow_ungoverned_scheduled_agents` off unless a specific vendor agent's
+> convenience is worth running it unattended.
 
 **One honest residual** for scheduled `native-acp`: the in-process scheduled
 driver layers an extra **end-of-run verifier** (a host-side LLM re-check) on top
