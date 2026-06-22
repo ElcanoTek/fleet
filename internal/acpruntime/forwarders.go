@@ -34,13 +34,17 @@ func (f *toolForwarder) RunBash(ctx context.Context, req sandbox.BashRequest) (s
 	if err != nil {
 		return sandbox.BashResult{}, err
 	}
-	// Map the delegated result back onto a BashResult: Output is the combined
-	// view; a tool failure rides Error → surfaced via a non-zero exit so the
-	// tool layer renders it exactly as the in-process path would.
+	// Map the delegated result back onto a BashResult. resp.Output is the host
+	// Executor's COMBINED stdout+stderr view (the same view the in-process tool
+	// layer renders), so it goes in Stdout. A tool failure rides resp.Error as a
+	// non-zero exit signal; we do NOT also copy it into Stderr because the failing
+	// output is already present in resp.Output — duplicating it would double the
+	// error text the model sees. (The host Executor flattens stdout/stderr into
+	// one stream, so per-stream fidelity is not recoverable on this seam; the
+	// model-visible content is identical to the in-process path.)
 	res := sandbox.BashResult{Stdout: []byte(resp.Output), ExitCode: resp.ExitCode, TimedOut: resp.TimedOut}
-	if resp.Error != "" && resp.ExitCode == 0 {
+	if resp.Error != "" && res.ExitCode == 0 {
 		res.ExitCode = 1
-		res.Stderr = []byte(resp.Error)
 	}
 	return res, nil
 }
@@ -90,15 +94,18 @@ var _ interface {
 
 func (o *delegatingObserver) Observe(eventType string, payload map[string]any) {
 	ctx := context.Background()
+
+	// 1. Spec-compliant streaming mirror: emit the user-visible deltas as ACP
+	//    session/update so a GENERIC ACP client could render the turn. The host
+	//    client does NOT map these to its Observer (it uses _fleet/event as the
+	//    single source) — this is purely the public streaming surface.
 	switch eventType {
 	case "text.delta", "text":
 		if text, _ := payload["text"].(string); text != "" {
-			// Per-chunk flush: one SessionUpdate per delta → SSE streams live.
 			_ = o.conn.SessionUpdate(ctx, acp.SessionNotification{
 				SessionId: o.sessionID,
 				Update:    acp.UpdateAgentMessageText(text),
 			})
-			return
 		}
 	case "reasoning.delta", "reasoning":
 		if text, _ := payload["text"].(string); text != "" {
@@ -106,7 +113,6 @@ func (o *delegatingObserver) Observe(eventType string, payload map[string]any) {
 				SessionId: o.sessionID,
 				Update:    acp.UpdateAgentThoughtText(text),
 			})
-			return
 		}
 	case "tool.call":
 		title, _ := payload["name"].(string)
@@ -114,16 +120,18 @@ func (o *delegatingObserver) Observe(eventType string, payload map[string]any) {
 			title, _ = payload["title"].(string)
 		}
 		id, _ := payload["id"].(string)
-		if id == "" {
-			id = newSessionID()
+		if id != "" {
+			_ = o.conn.SessionUpdate(ctx, acp.SessionNotification{
+				SessionId: o.sessionID,
+				Update:    acp.StartToolCall(acp.ToolCallId(id), title),
+			})
 		}
-		_ = o.conn.SessionUpdate(ctx, acp.SessionNotification{
-			SessionId: o.sessionID,
-			Update:    acp.StartToolCall(acp.ToolCallId(id), title),
-		})
 	}
-	// Everything (including the cases above) ALSO rides _fleet/event so the host
-	// Observer receives the full neutral event stream for governance/persistence.
+
+	// 2. Single authoritative source for the HOST Observer: the FULL neutral
+	//    (eventType, payload) stream rides _fleet/event, so fleet's real Observer
+	//    (→ SSE / session log) sees exactly what the in-process path emits — no
+	//    more, no less. This is the one place every event is forwarded.
 	_ = o.conn.NotifyExtension(ctx, ExtMethodEvent, EventNotification{
 		SessionID: string(o.sessionID),
 		EventType: eventType,

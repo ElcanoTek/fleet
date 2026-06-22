@@ -195,3 +195,39 @@ func TestRunInteractiveTurn_OneRoundCollapse(t *testing.T) {
 		t.Errorf("Label = %q, want turn-1", res.Label)
 	}
 }
+
+// TestACPInteractiveFallback asserts the governance-honesty gate: native-acp is
+// refused (falls back to the in-process path) whenever a governed feature it
+// cannot yet faithfully reproduce is active for the turn.
+func TestACPInteractiveFallback(t *testing.T) {
+	cases := []struct {
+		name       string
+		mutate     func(*TurnConfig)
+		wantReason bool
+	}{
+		{"clean", func(*TurnConfig) {}, false},
+		{"lockdown", func(tc *TurnConfig) { tc.Lockdown = true }, true},
+		{"mcp", func(tc *TurnConfig) { tc.Selection = agentcore.MCPSelection{{Server: "x"}} }, true},
+		{"approvals", func(tc *TurnConfig) { tc.ApprovalStager = stubApprovalStager{} }, true},
+		{"memory", func(tc *TurnConfig) { tc.MemoryProposer = stubMemoryProposer{} }, true},
+	}
+	for _, tcase := range cases {
+		t.Run(tcase.name, func(t *testing.T) {
+			tc := TurnConfig{Runtime: "native-acp", NativeAgentImage: "img"}
+			tcase.mutate(&tc)
+			reason := acpInteractiveFallback(tc)
+			if (reason != "") != tcase.wantReason {
+				t.Fatalf("acpInteractiveFallback(%s) = %q, wantReason=%v", tcase.name, reason, tcase.wantReason)
+			}
+		})
+	}
+}
+
+type stubApprovalStager struct{}
+
+func (stubApprovalStager) Stage(string, string, string) (string, error)   { return "", nil }
+func (stubApprovalStager) StageSuggestion(string) (string, string, error) { return "", "", nil }
+
+type stubMemoryProposer struct{}
+
+func (stubMemoryProposer) Propose(string) (string, error) { return "", nil }
