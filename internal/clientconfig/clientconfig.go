@@ -12,11 +12,19 @@
 //	<bundle>/
 //	  manifest.yaml        # branding, models, mcp_servers[] (the catalog),
 //	                       #   empty_state{cards[], protocol_pills[]},
-//	                       #   agent_policy{parallel/critical tool lists}
+//	                       #   agent_policy{parallel/critical tool lists},
+//	                       #   sandbox{containerfile, tag, image}
+//	  sandbox/             # the bundle's own Containerfile (build-on-box default)
 //	  system_prompts/      # default.md (scheduled base), chat.md (interactive base)
 //	  personas/            # *.yaml
 //	  protocols/           # *.yaml|md
 //	  mcp/                 # the client's Python MCP servers + requirements.txt
+//
+// The execution SANDBOX is a per-client bundle artifact: each bundle ships its
+// own sandbox/Containerfile flavor (and pins its own base digest). Bundle.Sandbox()
+// resolves the descriptor — ResolvedImageRef() = the manifest's sandbox.image
+// when set (opt-in registry/prebuilt) else sandbox.tag (build-on-box). fleet
+// does not build at startup; bootstrap/build-sandbox-image.sh builds it.
 //
 // The MCP catalog is declarative: each entry names the subprocess command/args
 // (args resolve relative to the bundle's mcp/ dir), an enable gate over process
@@ -64,6 +72,16 @@ type Bundle struct {
 	// in the generic bundle. cmd/fleet translates it into agentcore.AgentPolicy.
 	AgentPolicyConfig AgentPolicy
 
+	// SandboxConfig is the bundle's resolved sandbox descriptor (Containerfile,
+	// local tag, optional prebuilt image override). Access it via Sandbox().
+	SandboxConfig Sandbox
+
+	// sandboxDeclared reports whether the manifest carried an explicit sandbox:
+	// block. Only a declared block enforces the Containerfile-exists invariant
+	// in validate (a minimal/legacy bundle gets the conventional defaults without
+	// being forced to ship a Containerfile).
+	sandboxDeclared bool
+
 	// Resolved absolute directories inside the bundle. These are the
 	// same-path bind-mount sources and the source dirs the prompt/persona/
 	// protocol loaders read.
@@ -89,6 +107,50 @@ type AgentPolicy struct {
 	ParallelSafeTools       []string            `yaml:"parallel_safe_tools"`
 	CriticalToolSuffixes    []string            `yaml:"critical_tools"`
 	CriticalToolSubstitutes map[string][]string `yaml:"critical_tool_substitutes"`
+}
+
+// Sandbox is the bundle's resolved execution-sandbox descriptor. The sandbox is
+// a per-client CONFIG-BUNDLE artifact: each bundle ships its own
+// sandbox/Containerfile flavor (and pins its own base digest). The default is
+// BUILD-ON-BOX — scripts/build-sandbox-image.sh builds ContainerfileAbsPath into
+// Tag, and the process consumes Tag. REGISTRY PUBLISH is opt-in: a client sets a
+// non-empty Image (e.g. a prebuilt registry ref) in its manifest, which then
+// WINS over Tag.
+//
+// The process does NOT build at startup. Bootstrap / build-sandbox-image.sh
+// builds the image; the process only consumes the resolved ref
+// (ResolvedImageRef).
+type Sandbox struct {
+	// ContainerfileAbsPath is the absolute path to the bundle's Containerfile
+	// (manifest sandbox.containerfile resolved against the bundle dir; defaults
+	// to <bundle>/sandbox/Containerfile when unset). Empty only when the
+	// manifest explicitly blanks it AND supplies an Image override.
+	ContainerfileAbsPath string
+
+	// Tag is the local image tag the on-box build produces and the process
+	// consumes when Image is empty (default localhost/fleet-sandbox:latest).
+	Tag string
+
+	// Image is the optional prebuilt image ref. When non-empty it is the
+	// resolved ref (the opt-in registry-pull path); when empty the build-on-box
+	// Tag is used.
+	Image string
+}
+
+// ResolvedImageRef returns the image reference the fleet process should consume:
+// Image when set (opt-in prebuilt/registry pull), else Tag (build-on-box).
+func (s Sandbox) ResolvedImageRef() string {
+	if strings.TrimSpace(s.Image) != "" {
+		return strings.TrimSpace(s.Image)
+	}
+	return strings.TrimSpace(s.Tag)
+}
+
+// sandboxManifest is the on-disk YAML shape of the manifest's sandbox: block.
+type sandboxManifest struct {
+	Containerfile string `yaml:"containerfile"`
+	Tag           string `yaml:"tag"`
+	Image         string `yaml:"image"`
 }
 
 // Branding carries the white-label strings surfaced in the web UI + login.
@@ -161,13 +223,17 @@ type ServerDef struct {
 	EnabledByDefault bool   `yaml:"enabled_by_default"`
 }
 
-// manifest is the on-disk YAML shape.
+// manifest is the on-disk YAML shape. Sandbox is a pointer so an absent block
+// (a minimal/legacy bundle that never opted into the sandbox-as-config contract)
+// is distinguishable from a present-but-empty one: only a DECLARED sandbox block
+// enforces the Containerfile-exists invariant.
 type manifest struct {
-	Branding    Branding    `yaml:"branding"`
-	Models      Models      `yaml:"models"`
-	MCPServers  []ServerDef `yaml:"mcp_servers"`
-	EmptyState  EmptyState  `yaml:"empty_state"`
-	AgentPolicy AgentPolicy `yaml:"agent_policy"`
+	Branding    Branding         `yaml:"branding"`
+	Models      Models           `yaml:"models"`
+	MCPServers  []ServerDef      `yaml:"mcp_servers"`
+	EmptyState  EmptyState       `yaml:"empty_state"`
+	AgentPolicy AgentPolicy      `yaml:"agent_policy"`
+	Sandbox     *sandboxManifest `yaml:"sandbox"`
 }
 
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
@@ -225,6 +291,8 @@ func Load(dir string) (*Bundle, error) {
 		EmptyState:        m.EmptyState,
 		MCPCatalog:        m.MCPServers,
 		AgentPolicyConfig: m.AgentPolicy,
+		SandboxConfig:     resolveSandbox(m.Sandbox, abs),
+		sandboxDeclared:   m.Sandbox != nil,
 		SystemPromptsDir:  filepath.Join(abs, "system_prompts"),
 		PersonasDir:       filepath.Join(abs, "personas"),
 		ProtocolsDir:      filepath.Join(abs, "protocols"),
@@ -257,10 +325,59 @@ func applyBrandingDefaults(br *Branding) {
 	}
 }
 
+// resolveSandbox turns the manifest's sandbox: block into a resolved Sandbox.
+// The Containerfile path is resolved against the bundle dir; an unset
+// containerfile defaults to the conventional <bundle>/sandbox/Containerfile.
+// Tag defaults to the generic build-on-box tag. Image carries the optional
+// prebuilt override verbatim (already env-interpolated by the manifest pass).
+func resolveSandbox(sm *sandboxManifest, bundleDir string) Sandbox {
+	var raw sandboxManifest
+	if sm != nil {
+		raw = *sm
+	}
+	cf := strings.TrimSpace(raw.Containerfile)
+	if cf == "" {
+		cf = "sandbox/Containerfile"
+	}
+	tag := strings.TrimSpace(raw.Tag)
+	if tag == "" {
+		tag = "localhost/fleet-sandbox:latest"
+	}
+	return Sandbox{
+		ContainerfileAbsPath: filepath.Join(bundleDir, cf),
+		Tag:                  tag,
+		Image:                strings.TrimSpace(raw.Image),
+	}
+}
+
+// Sandbox returns the bundle's resolved execution-sandbox descriptor.
+func (b *Bundle) Sandbox() Sandbox {
+	return b.SandboxConfig
+}
+
 // validate checks the MCP catalog for the structural invariants the spawn path
-// relies on. Content dirs are NOT required to exist (a manifest-only bundle is
-// valid); callers that read a specific file surface their own not-found errors.
+// relies on, plus the sandbox descriptor. Content dirs are NOT required to exist
+// (a manifest-only bundle is valid); callers that read a specific file surface
+// their own not-found errors.
 func (b *Bundle) validate() error {
+	// Sandbox: only a DECLARED sandbox block enforces the invariant (a minimal
+	// bundle that never opted into the contract gets the conventional defaults
+	// without being forced to ship a Containerfile). When no prebuilt Image
+	// override is set the on-box build is the only way to materialize the image,
+	// so the Containerfile MUST exist. When an Image override is present the
+	// Containerfile is irrelevant (the process pulls/uses the prebuilt ref).
+	if b.sandboxDeclared && b.SandboxConfig.Image == "" {
+		cf := b.SandboxConfig.ContainerfileAbsPath
+		if cf == "" {
+			return fmt.Errorf("sandbox: containerfile is required when sandbox.image is empty")
+		}
+		if info, err := os.Stat(cf); err != nil {
+			return fmt.Errorf("sandbox: containerfile %s: %w (set sandbox.image to use a prebuilt image instead)", cf, err)
+		} else if info.IsDir() {
+			return fmt.Errorf("sandbox: containerfile %s is a directory", cf)
+		}
+	}
+
 	seen := map[string]bool{}
 	for i := range b.MCPCatalog {
 		s := &b.MCPCatalog[i]

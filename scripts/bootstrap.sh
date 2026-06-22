@@ -101,6 +101,30 @@ else
   warn "FLEET_CLIENT_CONFIG_DIR points at a valid bundle (a dir with manifest.yaml)."
 fi
 
+# ── sandbox image (per-client bundle artifact; build-on-box default) ──
+# The execution sandbox is a per-client bundle artifact: the Containerfile lives
+# in the bundle at <bundle>/sandbox/Containerfile. DEFAULT = build it on this box
+# (auditable supply chain). REGISTRY PUBLISH is opt-in: a client sets
+# sandbox.image in its manifest to a prebuilt ref and fleet pulls/uses that
+# instead — in which case skip the on-box build here.
+step "Building the sandbox image from the bundle (build-on-box default)"
+SANDBOX_CONTAINERFILE="${CLIENT_CONFIG_DIR}/sandbox/Containerfile"
+if grep -Eq '^[[:space:]]+image:[[:space:]]*["'\'']?[^"'\'' ]' "${CLIENT_CONFIG_DIR}/manifest.yaml" 2>/dev/null; then
+  info "manifest sets sandbox.image — using a prebuilt/registry image; skipping on-box build."
+elif [[ "$DRY_RUN" == "1" ]]; then
+  info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_CONFIG_DIR} scripts/build-sandbox-image.sh"
+elif [[ ! -f "$SANDBOX_CONTAINERFILE" ]]; then
+  warn "no ${SANDBOX_CONTAINERFILE} — bundle ships no sandbox Containerfile; set sandbox.image or add one."
+elif ! command -v podman >/dev/null 2>&1; then
+  warn "podman not found — skipping sandbox build (install podman, then run scripts/build-sandbox-image.sh)."
+else
+  if FLEET_CLIENT_CONFIG_DIR="${CLIENT_CONFIG_DIR}" "$(dirname "$0")/build-sandbox-image.sh"; then
+    ok "sandbox image built from ${SANDBOX_CONTAINERFILE}"
+  else
+    warn "sandbox image build failed — run scripts/build-sandbox-image.sh manually before starting fleet."
+  fi
+fi
+
 # ── Postgres provisioning ──
 if [[ "$POSTGRES_MODE" == "local" ]]; then
   SSLMODE="disable"
