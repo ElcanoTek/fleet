@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -155,7 +156,7 @@ func TestNodeOperations(t *testing.T) {
 	if !deleted {
 		t.Error("RemoveNode returned false, expected true")
 	}
-	if _, err = db.GetNode(ctx, node.ID); err != sql.ErrNoRows {
+	if _, err = db.GetNode(ctx, node.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("Expected ErrNoRows, got %v", err)
 	}
 }
@@ -333,7 +334,7 @@ func TestUserOperations(t *testing.T) {
 		t.Errorf("Expected role client, got %s", retrieved.Role)
 	}
 
-	if err := db.UpdateUserRole(ctx, uuid.New(), "admin"); err != sql.ErrNoRows {
+	if err := db.UpdateUserRole(ctx, uuid.New(), "admin"); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("Expected sql.ErrNoRows updating unknown user, got %v", err)
 	}
 
@@ -347,13 +348,13 @@ func TestUserOperations(t *testing.T) {
 	if retrieved.Username != "renameduser" {
 		t.Errorf("Expected username renameduser, got %s", retrieved.Username)
 	}
-	if _, err := db.GetUserByUsername(ctx, "testuser"); err != sql.ErrNoRows {
+	if _, err := db.GetUserByUsername(ctx, "testuser"); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("Expected sql.ErrNoRows fetching old username, got %v", err)
 	}
 	if byName, err := db.GetUserByUsername(ctx, "renameduser"); err != nil || byName.ID != user.ID {
 		t.Errorf("Expected new username to resolve to user %s, got %v (err %v)", user.ID, byName, err)
 	}
-	if err := db.RenameUser(ctx, uuid.New(), "ghost"); err != sql.ErrNoRows {
+	if err := db.RenameUser(ctx, uuid.New(), "ghost"); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("Expected sql.ErrNoRows renaming unknown user, got %v", err)
 	}
 
@@ -371,10 +372,10 @@ func TestUserOperations(t *testing.T) {
 	if err := db.DeleteUser(ctx, user.ID); err != nil {
 		t.Fatalf("Failed to delete user: %v", err)
 	}
-	if _, err := db.GetUser(ctx, user.ID); err != sql.ErrNoRows {
+	if _, err := db.GetUser(ctx, user.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("Expected sql.ErrNoRows fetching deleted user, got %v", err)
 	}
-	if err := db.DeleteUser(ctx, user.ID); err != sql.ErrNoRows {
+	if err := db.DeleteUser(ctx, user.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("Expected sql.ErrNoRows deleting unknown user, got %v", err)
 	}
 }

@@ -187,7 +187,11 @@ func (s *Storage) UpdateNodeHeartbeat(nodeID uuid.UUID, status models.NodeStatus
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
+	// the error paths the function already returns the underlying error, and a
+	// rollback failure in a defer can't be surfaced — so the result is
+	// intentionally ignored.
+	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now().UTC()
 
@@ -335,7 +339,11 @@ func (s *Storage) AssignTaskToNode(taskID uuid.UUID, nodeID uuid.UUID) (*models.
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
+	// the error paths the function already returns the underlying error, and a
+	// rollback failure in a defer can't be surfaced — so the result is
+	// intentionally ignored.
+	defer func() { _ = tx.Rollback() }()
 
 	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
 	if err != nil {
@@ -539,7 +547,11 @@ func (s *Storage) CancelTaskAtomic(taskID uuid.UUID) (*models.Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
+	// the error paths the function already returns the underlying error, and a
+	// rollback failure in a defer can't be surfaced — so the result is
+	// intentionally ignored.
+	defer func() { _ = tx.Rollback() }()
 
 	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
 	if err != nil {
@@ -608,7 +620,11 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
+	// the error paths the function already returns the underlying error, and a
+	// rollback failure in a defer can't be surfaced — so the result is
+	// intentionally ignored.
+	defer func() { _ = tx.Rollback() }()
 
 	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
 	if err != nil {
@@ -664,7 +680,11 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
+	// the error paths the function already returns the underlying error, and a
+	// rollback failure in a defer can't be surfaced — so the result is
+	// intentionally ignored.
+	defer func() { _ = tx.Rollback() }()
 
 	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
 	if err != nil {

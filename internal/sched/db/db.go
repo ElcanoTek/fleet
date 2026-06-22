@@ -463,7 +463,7 @@ func (db *Database) GetNodeByAPIKey(ctx context.Context, apiKey string) (*models
 	if err == nil {
 		return node, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 
@@ -833,7 +833,11 @@ func (db *Database) ClaimNextPendingTask(ctx context.Context, leaseOwner string,
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
+	// the error paths the function already returns the underlying error, and a
+	// rollback failure in a defer can't be surfaced — so the result is
+	// intentionally ignored.
+	defer func() { _ = tx.Rollback() }()
 
 	// SKIP LOCKED: skip rows a concurrent claim already locked rather than
 	// blocking, so two workers polling at once each get a distinct task.
@@ -1091,7 +1095,11 @@ func (db *Database) DeleteOldHistory(ctx context.Context, days int) (int, error)
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
+	// the error paths the function already returns the underlying error, and a
+	// rollback failure in a defer can't be surfaced — so the result is
+	// intentionally ignored.
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM logs WHERE task_id IN (
@@ -1276,7 +1284,7 @@ func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (in
 func (db *Database) GetNodeByName(ctx context.Context, name string) (*models.Node, error) {
 	row := db.conn.QueryRowContext(ctx, "SELECT "+nodeColumns+" FROM nodes WHERE name = $1", name)
 	node, err := db.scanNode(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return node, err

@@ -119,18 +119,20 @@ func writeEnvLines(path string, lines []string) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		// Releasing the fd before the deferred os.Remove discards the temp file;
+		// the close error is irrelevant since we're already returning err.
+		_ = tmp.Close()
 		return err
 	}
 	w := bufio.NewWriter(tmp)
 	for _, ln := range lines {
 		if _, err := w.WriteString(ln + "\n"); err != nil {
-			tmp.Close()
+			_ = tmp.Close() // discarding the temp file; original error already being returned.
 			return err
 		}
 	}
 	if err := w.Flush(); err != nil {
-		tmp.Close()
+		_ = tmp.Close() // discarding the temp file; original error already being returned.
 		return err
 	}
 	if err := tmp.Close(); err != nil {
