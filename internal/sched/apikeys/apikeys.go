@@ -11,8 +11,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -217,7 +219,8 @@ func (m *Manager) load() error {
 
 func (m *Manager) save() error {
 	dir := filepath.Dir(m.storagePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// 0700: the API-keys store holds secret material; only the owner needs it.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	keys := make([]*APIKey, 0, len(m.keys))
@@ -237,15 +240,26 @@ func (m *Manager) save() error {
 
 func (m *Manager) logAudit(entry AuditLogEntry) {
 	dir := filepath.Dir(m.auditLogPath)
-	os.MkdirAll(dir, 0755)
+	// 0700: the audit log can reveal key IDs and operations; keep it owner-only.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Printf("apikeys: failed to create audit log dir %s: %v", dir, err)
+		return
+	}
 	entry.Timestamp = time.Now().UTC()
-	data, _ := json.Marshal(entry)
+	data, err := json.Marshal(entry)
+	if err != nil {
+		log.Printf("apikeys: failed to marshal audit entry: %v", err)
+		return
+	}
 	f, err := os.OpenFile(m.auditLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
+		log.Printf("apikeys: failed to open audit log %s: %v", m.auditLogPath, err)
 		return
 	}
 	defer f.Close()
-	f.Write(append(data, '\n'))
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		log.Printf("apikeys: failed to append audit entry: %v", err)
+	}
 }
 
 // CreateKey creates a new API key.
@@ -421,7 +435,13 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 			delete(m.keyHashIndex, *key.PreviousKeyHash)
 			key.PreviousKeyHash = nil
 			key.PreviousKeyExpires = nil
-			m.save()
+			// Persist the retirement of the rotated-out previous key. If this
+			// fails the in-memory index is already updated (the old hash will be
+			// rejected this process), but the change must survive a restart, so
+			// surface the failure rather than dropping it silently.
+			if err := m.save(); err != nil {
+				log.Printf("apikeys: failed to persist expiry of rotated key %s: %v", key.KeyID, err)
+			}
 			return false, nil, "API key has been rotated"
 		}
 	}
@@ -579,7 +599,7 @@ func (m *Manager) GetAuditLog(keyID, action *string, since *time.Time, limit int
 
 	for {
 		line, err := scanner.scan()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
