@@ -43,17 +43,20 @@ func (s *Store) CreateTurn(ctx context.Context, turnID, convID string, startedAt
 	return err
 }
 
-// FinishTurn updates the terminal status + finished_at. Safe to call
-// multiple times; a second update to the same terminal value is a
-// no-op. Never moves a terminal turn back to "running".
-func (s *Store) FinishTurn(ctx context.Context, turnID string, status TurnStatus, finishedAt int64) error {
+// FinishTurn updates the terminal status + finished_at and records whether the
+// turn's persisted event stream is lossy (the in-memory buffer could not fully
+// persist it — see turnBuffer.Finish). Safe to call multiple times; a second
+// update to the same terminal value is a no-op. Never moves a terminal turn back
+// to "running".
+func (s *Store) FinishTurn(ctx context.Context, turnID string, status TurnStatus, finishedAt int64, lossy bool) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE turns
 		    SET status = $1,
-		        finished_at = $2
-		  WHERE turn_id = $3
+		        finished_at = $2,
+		        lossy = $3
+		  WHERE turn_id = $4
 		    AND status = 'running'`,
-		string(status), finishedAt, turnID,
+		string(status), finishedAt, lossy, turnID,
 	)
 	return err
 }
@@ -127,15 +130,19 @@ type TurnRecord struct {
 	StartedAt      int64
 	FinishedAt     sql.NullInt64
 	Status         TurnStatus
+	// Lossy is true when the turn's persisted event stream may be incomplete
+	// (the buffer's backfill on Finish could not write every event). A
+	// reattaching client can use this to warn that the replayed history is partial.
+	Lossy bool
 }
 
 func (s *Store) LookupTurn(ctx context.Context, turnID string) (*TurnRecord, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT turn_id, conversation_id, started_at, finished_at, status
+		`SELECT turn_id, conversation_id, started_at, finished_at, status, lossy
 		 FROM turns WHERE turn_id = $1`, turnID)
 	var r TurnRecord
 	var status string
-	if err := row.Scan(&r.TurnID, &r.ConversationID, &r.StartedAt, &r.FinishedAt, &status); err != nil {
+	if err := row.Scan(&r.TurnID, &r.ConversationID, &r.StartedAt, &r.FinishedAt, &status, &r.Lossy); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
