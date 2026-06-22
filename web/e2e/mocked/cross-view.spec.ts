@@ -1,30 +1,14 @@
 import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
+import { mockChatBoot } from "./_mocks";
 
-// The P7 cross-view gate: ONE session (the elcano/password cookie the unified
-// middleware accepts) navigates Chat ↔ Orchestrator without re-login. We assert
-// neither view ever bounces to /login, proving the single middleware gates both
-// segments off the same cookie.
+// The cross-view gate: ONE session (the elcano_session cookie the unified
+// middleware accepts) navigates Chat ↔ Orchestrator — using the IN-APP links,
+// not just direct gotos — without ever bouncing to /login. This proves the
+// single middleware gates both segments off the same cookie.
 
-async function mockBoth(page: Page) {
-  // Chat shell mount.
-  await page.route("**/api/session", (r: Route) => r.fulfill({ json: { email: "e2e@example.com" } }));
-  await page.route("**/api/version", (r: Route) => r.fulfill({ json: { build_id: "test" } }));
-  await page.route("**/api/personas", (r: Route) =>
-    r.fulfill({ json: { personas: [{ id: "default", name: "Default" }], default: "default" } }),
-  );
-  await page.route("**/api/server-config", (r: Route) =>
-    r.fulfill({
-      json: { lockdown_available: false, lockdown_only: false, lockdown_allowed_models: [] },
-    }),
-  );
-  await page.route("**/api/mcp-servers", (r: Route) => r.fulfill({ json: { servers: [] } }));
-  await page.route("**/api/conversations", (r: Route) => r.fulfill({ json: { conversations: [] } }));
-  await page.route("**/api/model-rankings", (r: Route) => r.fulfill({ json: { rankings: [] } }));
-  await page.route("**/api/model-catalog", (r: Route) => r.fulfill({ json: { models: [] } }));
-
-  // Orchestrator shell.
+async function mockOrchestratorShell(page: Page) {
   await page.route("**/api/orchestrator/**", (r: Route) => {
     const path = new URL(r.request().url()).pathname.replace("/api/orchestrator", "");
     if (path === "/me") return r.fulfill({ json: { authenticated: true, username: "e2e" } });
@@ -40,9 +24,20 @@ async function mockBoth(page: Page) {
   });
 }
 
-test("one session crosses Chat ↔ Orchestrator without re-login", async ({ page, context }) => {
+test("one session crosses Chat ↔ Orchestrator via in-app links without re-login", async ({
+  page,
+  context,
+}) => {
   await loginViaCookie(context);
-  await mockBoth(page);
+  await mockChatBoot(page);
+  await mockOrchestratorShell(page);
+
+  // Bounce-to-login guard: any navigation to /login during this test fails it.
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame() && new URL(frame.url()).pathname === "/login") {
+      throw new Error("session bounced to /login mid-navigation");
+    }
+  });
 
   // Start in chat.
   await page.goto("/chat");
@@ -51,12 +46,12 @@ test("one session crosses Chat ↔ Orchestrator without re-login", async ({ page
   });
   expect(new URL(page.url()).pathname).toBe("/chat");
 
-  // Cross to the orchestrator — same cookie, no login prompt.
-  await page.goto("/orchestrator");
+  // Cross to the orchestrator via the in-app sidebar link — same cookie.
+  await page.getByTestId("nav-to-orchestrator").click();
   await expect(page.getByTestId("orchestrator-dashboard")).toBeVisible({ timeout: 15_000 });
   expect(new URL(page.url()).pathname).toBe("/orchestrator");
 
-  // Use the in-app link back to chat (header "Go to Chat").
+  // …and back to chat via the orchestrator header's "Go to Chat" link.
   await page.getByTestId("nav-to-chat").click();
   await expect(page.getByRole("heading", { name: /what can i help with/i })).toBeVisible({
     timeout: 15_000,
