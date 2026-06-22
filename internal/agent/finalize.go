@@ -7,19 +7,6 @@ import (
 	"charm.land/fantasy"
 )
 
-// SSE event-payload field keys. Named so the emit maps shared by the turn loop
-// and the follow-up calls below don't repeat the same string literals (which
-// goconst flags once they recur enough). These are the field names the
-// frontend reads off each event — keep them in sync with the tool.call /
-// tool.result / text.delta handlers in chat-experience.tsx.
-const (
-	fieldID    = "id"
-	fieldName  = "name"
-	fieldInput = "input"
-	fieldText  = "text"
-	fieldIsErr = "is_err"
-)
-
 // leakedToolCallRe matches a Gemini "function call narrated as plain text"
 // leak, e.g. `call:default_api:download_url{output_dir:...,url:...}`. Some
 // Gemini Flash turns emit a tool call as prose instead of a structured call;
@@ -41,25 +28,6 @@ func stripLeakedToolCalls(text string) string {
 		return text
 	}
 	return strings.TrimSpace(leakedToolCallRe.ReplaceAllString(text, ""))
-}
-
-// toolResultText flattens a fantasy ToolResultContent into the (text, isErr)
-// pair we persist and stream. Shared by the main turn loop and the leaked-call
-// retry so both record tool outcomes identically.
-func toolResultText(tr fantasy.ToolResultContent) (string, bool) {
-	if tr.Result == nil {
-		return "", false
-	}
-	if txt, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentText](tr.Result); ok {
-		return txt.Text, false
-	}
-	if errv, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](tr.Result); ok {
-		if errv.Error != nil {
-			return errv.Error.Error(), true
-		}
-		return "", true
-	}
-	return "", false
 }
 
 // leakedToolCallNudge tells the model it narrated a tool call as text and must

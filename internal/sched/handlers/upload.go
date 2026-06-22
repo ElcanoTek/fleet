@@ -118,8 +118,12 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	shortUUID := uuid.New().String()[:8]
 	filename := fmt.Sprintf("%s_%s%s", baseName, shortUUID, ext)
 	path := filepath.Join(tempDir, filename)
+	if !withinDir(tempDir, path) {
+		writeError(w, http.StatusBadRequest, "Invalid filename")
+		return
+	}
 
-	dst, err := os.Create(path)
+	dst, err := os.Create(path) //nolint:gosec // G304: filename is sanitized (sanitizeFilename allowlist) AND the resolved path is asserted within tempDir via withinDir/filepath.Rel.
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to save file")
 		return
@@ -191,8 +195,13 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	path := filepath.Join(h.config.DataDir, "temp_uploads", filename)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	uploadsDir := filepath.Join(h.config.DataDir, "temp_uploads")
+	path := filepath.Join(uploadsDir, filename)
+	if !withinDir(uploadsDir, path) {
+		writeError(w, http.StatusBadRequest, "Invalid filename")
+		return
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) { //nolint:gosec // G703: filename is sanitized (sanitizeFilename) AND the resolved path is asserted within uploadsDir via withinDir/filepath.Rel.
 		writeError(w, http.StatusNotFound, "File not found")
 		return
 	}
@@ -204,7 +213,7 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Serve the file
-	http.ServeFile(w, r, path)
+	http.ServeFile(w, r, path) //nolint:gosec // G703: path is asserted within uploadsDir via withinDir/filepath.Rel above; filename is sanitized.
 }
 
 // CleanupTempFiles removes files older than the specified duration.
@@ -223,6 +232,7 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 			return nil
 		}
 		if !info.IsDir() && time.Since(info.ModTime()) > maxAge {
+			//nolint:gosec // G122: this walks the server's own DataDir/temp_uploads (operator-owned), removing aged temp files during scheduled cleanup. The path is produced by filepath.Walk over a server-controlled root, not by request input; symlink-TOCTOU is not a meaningful vector here.
 			if err := os.Remove(path); err != nil {
 				log.Printf("Failed to remove old temp file %s: %v", path, err)
 			} else {
@@ -236,9 +246,11 @@ func (h *Handlers) CleanupTempFiles(maxAge time.Duration) {
 	}
 }
 
-// calculateFileChecksum calculates the SHA-256 checksum of a file.
+// calculateFileChecksum calculates the SHA-256 checksum of a file. The only
+// caller (getFileChecksum) asserts path containment within temp_uploads via
+// withinDir/filepath.Rel before calling.
 func calculateFileChecksum(path string) (string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: path is validated within temp_uploads by the sole caller (getFileChecksum) via withinDir/filepath.Rel.
 	if err != nil {
 		return "", err
 	}
@@ -260,13 +272,21 @@ func getFileChecksum(dataDir, filename string) (string, error) {
 		return "", fmt.Errorf("invalid filename: path traversal not allowed")
 	}
 
-	path := filepath.Join(dataDir, "temp_uploads", filename)
+	uploadsDir := filepath.Join(dataDir, "temp_uploads")
+	path := filepath.Join(uploadsDir, filename)
 
 	// Use a dedicated directory for checksums to prevent collisions
-	checksumPath := filepath.Join(dataDir, "temp_uploads", ".checksums", filename+".sha256")
+	checksumDir := filepath.Join(uploadsDir, ".checksums")
+	checksumPath := filepath.Join(checksumDir, filename+".sha256")
+
+	// Containment gate: both the data file and its sidecar must resolve inside
+	// temp_uploads (defense in depth on top of the filename validation above).
+	if !withinDir(uploadsDir, path) || !withinDir(checksumDir, checksumPath) {
+		return "", fmt.Errorf("invalid filename: path traversal not allowed")
+	}
 
 	// Try reading from sidecar file first
-	if data, err := os.ReadFile(checksumPath); err == nil {
+	if data, err := os.ReadFile(checksumPath); err == nil { //nolint:gosec // G304: filename is validated (no ../, /, \) and checksumPath is asserted within checksumDir via withinDir/filepath.Rel.
 		return string(data), nil
 	}
 
@@ -276,16 +296,43 @@ func getFileChecksum(dataDir, filename string) (string, error) {
 		return "", err
 	}
 
-	// Ensure checksums directory exists before writing
-	checksumDir := filepath.Dir(checksumPath)
+	// Ensure checksums directory exists before writing (checksumDir was already
+	// validated within uploadsDir above).
 	if err := os.MkdirAll(checksumDir, 0700); err == nil {
 		// Cache the result for next time
-		if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil {
-			log.Printf("Failed to save checksum sidecar for %s: %v", filename, err)
+		if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil { //nolint:gosec // G703: checksumPath is asserted within checksumDir via withinDir/filepath.Rel above.
+			//nolint:gosec // G706: filename is sanitized via logSafe (strips CR/LF) and already passed sanitizeFilename; gosec's taint tracker cannot see through the helper.
+			log.Printf("Failed to save checksum sidecar for %s: %v", logSafe(filename), err)
 		}
 	}
 
 	return checksum, nil
+}
+
+// withinDir reports whether target resolves to a location inside base. It uses
+// filepath.Rel (NOT a string-prefix check, which is fooled by sibling dirs like
+// /data/temp_uploads-evil) and rejects any path whose relative form escapes the
+// base via "..". base and target are cleaned/absolutized first. This is the
+// containment gate the upload/download path operations assert before touching
+// the filesystem, on top of sanitizeFilename's allowlist — defense in depth
+// against any future caller that forgets to sanitize.
+func withinDir(base, target string) bool {
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return false
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absBase, absTarget)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
 
 func sanitizeFilename(filename string) string {

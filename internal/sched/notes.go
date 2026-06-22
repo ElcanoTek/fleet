@@ -262,7 +262,11 @@ func (s *Store) PublishProposal(ctx context.Context, id uuid.UUID, decidedBy, de
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
+	// the error paths the function already returns the underlying error, and a
+	// rollback failure in a defer can't be surfaced — so the result is
+	// intentionally ignored.
+	defer func() { _ = tx.Rollback() }()
 
 	// Lock the proposal row.
 	var (

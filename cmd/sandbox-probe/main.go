@@ -44,14 +44,22 @@ func envOr(key, def string) string {
 }
 
 func main() {
-	rootCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	// main delegates to run so every defer (ctx cancel, pool.Close) executes
+	// before the process exits — os.Exit in main would skip them (gocritic
+	// exitAfterDefer).
+	os.Exit(run())
+}
 
+func run() int {
 	image := envOr("FLEET_SANDBOX_IMAGE", os.Getenv("SANDBOX_IMAGE"))
 	if image == "" {
 		fmt.Fprintln(os.Stderr, "FLEET_SANDBOX_IMAGE (or SANDBOX_IMAGE) is required")
-		os.Exit(2)
+		return 2
 	}
+
+	rootCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	workspace := envOr("SANDBOX_WORKSPACE", absDefault("workspace"))
 	bridgeDir := envOr("SANDBOX_BRIDGE_DIR", filepath.Join(filepath.Dir(workspace), "data", "sandbox-bridge"))
 	supporting := parseSupportingDocs(envOr("SANDBOX_SUPPORTING", defaultSupporting()))
@@ -59,7 +67,7 @@ func main() {
 
 	if err := os.MkdirAll(workspace, 0o755); err != nil { //nolint:gosec // bind-mount source must be readable by the rootless container user
 		fmt.Fprintf(os.Stderr, "ensure workspace %s: %v\n", workspace, err)
-		os.Exit(2)
+		return 2
 	}
 
 	pool := sandbox.NewPool(sandbox.PoolConfig{
@@ -93,7 +101,7 @@ func main() {
 		exit = 3
 	}
 
-	os.Exit(exit)
+	return exit
 }
 
 func absDefault(rel string) string {

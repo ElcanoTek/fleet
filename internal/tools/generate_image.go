@@ -165,7 +165,7 @@ func runGenerateImage(ctx context.Context, client *http.Client, params GenerateI
 		if info.Size() > maxImageGenReferenceBytes {
 			return nil, fmt.Errorf("reference image %q exceeds %d bytes", ref, maxImageGenReferenceBytes)
 		}
-		data, err := os.ReadFile(validRef) //nolint:gosec
+		data, err := os.ReadFile(validRef) //nolint:gosec // G304: validRef came from ValidatePathForRead (pathsec containment check), not raw input.
 		if err != nil {
 			return nil, fmt.Errorf("read reference image %q: %w", ref, err)
 		}

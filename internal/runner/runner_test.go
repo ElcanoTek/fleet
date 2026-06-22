@@ -70,7 +70,7 @@ func TestPoolClaimsAndCompletes(t *testing.T) {
 	seedPending(t, store, 1)
 
 	var ran int32
-	runner := TaskRunnerFunc(func(ctx context.Context, task *models.Task) (*models.LogSession, error) {
+	runner := TaskRunnerFunc(func(_ context.Context, task *models.Task) (*models.LogSession, error) {
 		atomic.AddInt32(&ran, 1)
 		return &models.LogSession{ID: "s-" + task.ID.String()}, nil
 	})
@@ -104,13 +104,13 @@ func TestPoolClaimsAndCompletes(t *testing.T) {
 // stays pending until a slot frees.
 func TestPoolCapSaturation(t *testing.T) {
 	store := newTestStore(t)
-	const cap = 2
-	seedPending(t, store, cap+1)
+	const capacity = 2
+	seedPending(t, store, capacity+1)
 
 	var concurrent int32
 	var maxConcurrent int32
 	release := make(chan struct{})
-	runner := TaskRunnerFunc(func(ctx context.Context, task *models.Task) (*models.LogSession, error) {
+	runner := TaskRunnerFunc(func(_ context.Context, _ *models.Task) (*models.LogSession, error) {
 		c := atomic.AddInt32(&concurrent, 1)
 		for {
 			m := atomic.LoadInt32(&maxConcurrent)
@@ -123,21 +123,21 @@ func TestPoolCapSaturation(t *testing.T) {
 		return &models.LogSession{ID: "s"}, nil
 	})
 
-	pool := NewPool(store, runner, Config{MaxConcurrentAgents: cap, PollInterval: 20 * time.Millisecond, LeaseRenewInterval: time.Hour})
-	if pool.Cap() != cap {
-		t.Fatalf("Cap() = %d, want %d", pool.Cap(), cap)
+	pool := NewPool(store, runner, Config{MaxConcurrentAgents: capacity, PollInterval: 20 * time.Millisecond, LeaseRenewInterval: time.Hour})
+	if pool.Cap() != capacity {
+		t.Fatalf("Cap() = %d, want %d", pool.Cap(), capacity)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { pool.Run(ctx); close(done) }()
 
 	// Wait until the cap is saturated (exactly cap tasks blocked in Run).
-	waitFor(t, 2*time.Second, func() bool { return atomic.LoadInt32(&concurrent) == cap })
+	waitFor(t, 2*time.Second, func() bool { return atomic.LoadInt32(&concurrent) == capacity })
 
 	// Give the pool extra ticks to (incorrectly) over-claim if the cap leaked.
 	time.Sleep(150 * time.Millisecond)
-	if got := atomic.LoadInt32(&concurrent); got != cap {
-		t.Fatalf("concurrency exceeded cap: got %d concurrent, cap %d", got, cap)
+	if got := atomic.LoadInt32(&concurrent); got != capacity {
+		t.Fatalf("concurrency exceeded cap: got %d concurrent, cap %d", got, capacity)
 	}
 	// Exactly one task must still be pending (N+1 seeded, N running).
 	pending, _ := store.GetPendingTasks()
@@ -147,8 +147,8 @@ func TestPoolCapSaturation(t *testing.T) {
 
 	close(release) // let them all finish
 	waitFor(t, 2*time.Second, func() bool { return atomic.LoadInt32(&concurrent) == 0 })
-	if got := atomic.LoadInt32(&maxConcurrent); got != cap {
-		t.Errorf("max observed concurrency = %d, want exactly %d", got, cap)
+	if got := atomic.LoadInt32(&maxConcurrent); got != capacity {
+		t.Errorf("max observed concurrency = %d, want exactly %d", got, capacity)
 	}
 	cancel()
 	<-done
@@ -162,7 +162,7 @@ func TestRestartMidTaskRecovery(t *testing.T) {
 	tasks := seedPending(t, store, 1)
 	taskID := tasks[0].ID
 
-	pool := NewPool(store, TaskRunnerFunc(func(ctx context.Context, task *models.Task) (*models.LogSession, error) {
+	pool := NewPool(store, TaskRunnerFunc(func(_ context.Context, _ *models.Task) (*models.LogSession, error) {
 		return nil, nil
 	}), Config{MaxConcurrentAgents: 1})
 
@@ -225,7 +225,7 @@ func TestPerTaskMCPSelectionReachesRunner(t *testing.T) {
 	}
 
 	got := make(chan models.MCPSelection, 1)
-	runner := TaskRunnerFunc(func(ctx context.Context, task *models.Task) (*models.LogSession, error) {
+	runner := TaskRunnerFunc(func(_ context.Context, task *models.Task) (*models.LogSession, error) {
 		got <- task.MCPSelection
 		return &models.LogSession{ID: "s"}, nil
 	})
@@ -256,7 +256,7 @@ func TestGracefulDrain(t *testing.T) {
 	started := make(chan struct{})
 	finish := make(chan struct{})
 	var wrote int32
-	runner := TaskRunnerFunc(func(ctx context.Context, task *models.Task) (*models.LogSession, error) {
+	runner := TaskRunnerFunc(func(_ context.Context, _ *models.Task) (*models.LogSession, error) {
 		close(started)
 		<-finish // still running when shutdown begins
 		atomic.StoreInt32(&wrote, 1)

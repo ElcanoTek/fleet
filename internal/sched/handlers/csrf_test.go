@@ -18,7 +18,7 @@ import (
 func TestCSRFMiddlewareOrigin(t *testing.T) {
 	h := &Handlers{}
 	reached := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
 	})

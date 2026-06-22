@@ -24,7 +24,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
-func setupTestHandler(t *testing.T) (*storage.Storage, *chi.Mux, func()) {
+func setupTestHandler(t *testing.T) (*chi.Mux, func()) {
 	tmpDir, err := os.MkdirTemp("", "sched-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -122,7 +122,7 @@ func setupTestHandler(t *testing.T) (*storage.Storage, *chi.Mux, func()) {
 		os.RemoveAll(tmpDir)
 	}
 
-	return store, r, cleanup
+	return r, cleanup
 }
 
 func isDatabaseUnavailable(err error) bool {
@@ -133,7 +133,7 @@ func isDatabaseUnavailable(err error) bool {
 }
 
 func TestHealthCheck(t *testing.T) {
-	_, r, cleanup := setupTestHandler(t)
+	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
 	req := httptest.NewRequest("GET", "/health", nil)
@@ -158,7 +158,7 @@ func TestHealthCheck(t *testing.T) {
 }
 
 func TestTaskManagement(t *testing.T) {
-	_, r, cleanup := setupTestHandler(t)
+	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
 	// Create task
@@ -234,7 +234,7 @@ func TestTaskManagement(t *testing.T) {
 }
 
 func TestAPIKeyManagement(t *testing.T) {
-	_, r, cleanup := setupTestHandler(t)
+	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
 	// Create API key
@@ -321,7 +321,7 @@ func TestAPIKeyManagement(t *testing.T) {
 // so a scoped key no longer has to (and cannot) name a target node — it simply
 // creates the task.
 func TestScopedAPIKeyUsage(t *testing.T) {
-	_, r, cleanup := setupTestHandler(t)
+	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
 	// Create scoped API key
@@ -358,7 +358,7 @@ func TestScopedAPIKeyUsage(t *testing.T) {
 }
 
 func TestHistoryCleanup(t *testing.T) {
-	_, r, cleanup := setupTestHandler(t)
+	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
 	// Create and complete a task

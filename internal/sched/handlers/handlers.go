@@ -273,11 +273,26 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	// The status line + headers are already committed, so a mid-body encode
+	// failure (typically the client disconnecting) can't change the response —
+	// log it for diagnostics rather than swallowing it silently.
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("writeJSON: failed to encode response body: %v", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, detail string) {
 	writeJSON(w, status, models.ErrorResponse{Detail: detail})
+}
+
+// logSafe strips CR/LF (and stray carriage returns) from a value before it is
+// interpolated into a log line, so attacker-controlled strings (e.g. a key_id
+// taken straight from the URL path, or an uploaded filename) cannot forge or
+// split log entries. gosec flags these as G706 (log injection via taint
+// analysis); this is the real mitigation for the ones that carry untrusted
+// text.
+func logSafe(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
 func readJSON(r *http.Request, v interface{}) error {
@@ -589,7 +604,7 @@ func (h *Handlers) UnregisterNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Node unregistered: %s", nodeID)
+	log.Printf("Node unregistered: %s", nodeID) //nolint:gosec // G706 false positive: nodeID is a uuid.UUID parsed via uuid.Parse, so its String() is canonical hex+dashes and cannot carry CR/LF.
 	writeJSON(w, http.StatusOK, models.DeleteNodeResponse{
 		Status: "deleted",
 		NodeID: nodeIDStr,
@@ -1111,7 +1126,7 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Task cancelled: %s", taskID)
+	log.Printf("Task cancelled: %s", taskID) //nolint:gosec // G706 false positive: taskID is a uuid.UUID parsed via uuid.Parse; String() is canonical and cannot carry CR/LF.
 	writeJSON(w, http.StatusOK, task)
 }
 
@@ -1222,7 +1237,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Task updated: %s (prompt: %.50s...)", updated.ID, updated.Prompt)
+	//nolint:gosec // G706: untrusted fields are sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper. updated.ID is a uuid.UUID.
+	log.Printf("Task updated: %s (prompt: %.50s...)", updated.ID, logSafe(updated.Prompt))
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -1412,7 +1428,7 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListAPIKeys handles GET /keys
-func (h *Handlers) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) ListAPIKeys(w http.ResponseWriter, _ *http.Request) {
 	keys := h.apiKeys.ListKeys()
 	responses := make([]models.APIKeyResponse, len(keys))
 	for i, key := range keys {
@@ -1494,7 +1510,8 @@ func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Rotated API key: %s", keyID)
+	//nolint:gosec // G706: keyID is sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
+	log.Printf("Rotated API key: %s", logSafe(keyID))
 
 	resp := key.ToResponse()
 	writeJSON(w, http.StatusOK, models.APIKeyRotated{
@@ -1512,7 +1529,8 @@ func (h *Handlers) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Revoked API key: %s", keyID)
+	//nolint:gosec // G706: keyID is sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
+	log.Printf("Revoked API key: %s", logSafe(keyID))
 
 	key := h.apiKeys.GetKey(keyID)
 	if key == nil {
@@ -1531,7 +1549,8 @@ func (h *Handlers) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Deleted API key: %s", keyID)
+	//nolint:gosec // G706: keyID is sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
+	log.Printf("Deleted API key: %s", logSafe(keyID))
 	writeJSON(w, http.StatusOK, models.DeleteKeyResponse{
 		Deleted: true,
 		KeyID:   keyID,
@@ -1639,7 +1658,7 @@ func (h *Handlers) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetDashboardConfig handles GET /api/config
-func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, _ *http.Request) {
 	config := map[string]interface{}{
 		"version":  h.config.Version,
 		"timezone": h.config.Timezone,
@@ -1651,7 +1670,7 @@ func (h *Handlers) GetDashboardConfig(w http.ResponseWriter, r *http.Request) {
 // Health Check
 
 // HealthCheck handles GET /health
-func (h *Handlers) HealthCheck(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) HealthCheck(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, models.HealthResponse{
 		Status:    "healthy",
 		Version:   h.config.Version,

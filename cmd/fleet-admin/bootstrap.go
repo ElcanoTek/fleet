@@ -1,11 +1,14 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // cmdBootstrap wraps scripts/bootstrap.sh. It forwards --postgres / --dry-run /
@@ -22,7 +25,12 @@ func cmdBootstrap(argv []string) int {
 	if !hasFlag(argv, "--postgres") {
 		args = append(args, "--postgres=local")
 	}
-	cmd := exec.Command("bash", args...) //nolint:gosec // script path is repo-local, args are operator-supplied flags
+	// Run under a signal-cancelled context so Ctrl-C / SIGTERM tears the
+	// provisioning script down instead of orphaning it.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	//nolint:gosec // G204: fixed "bash" binary; args are the repo-local script path + operator-supplied flags passed as separate argv (no shell string interpolation).
+	cmd := exec.CommandContext(ctx, "bash", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -46,7 +54,7 @@ func findBootstrapScript() string {
 		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "scripts", "bootstrap.sh"))
 	}
 	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
+		if _, err := os.Stat(c); err == nil { //nolint:gosec // G703: candidate paths are operator-controlled (FLEET_ROOT env, the literal "scripts/bootstrap.sh", the binary's own dir), never request or LLM input.
 			return c
 		}
 	}
@@ -63,10 +71,5 @@ func hasFlag(argv []string, name string) bool {
 }
 
 func asExit(err error, target **exec.ExitError) bool {
-	if e, ok := err.(*exec.ExitError); ok {
-		*target = e
-		return true
-	}
-	_ = fmt.Sprint // keep fmt referenced
-	return false
+	return errors.As(err, target)
 }

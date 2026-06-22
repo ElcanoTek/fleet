@@ -42,10 +42,10 @@ func runWriteFile(ctx context.Context, params WriteFileParams) (string, error) {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
 	dir := filepath.Dir(validPath)
-	if err := os.MkdirAll(dir, 0750); err != nil { //nolint:gosec
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return "", fmt.Errorf("error creating directories: %w", err)
 	}
-	if err := os.WriteFile(validPath, []byte(params.Content), 0600); err != nil { //nolint:gosec
+	if err := os.WriteFile(validPath, []byte(params.Content), 0600); err != nil {
 		return "", fmt.Errorf("error writing file: %w", err)
 	}
 	return fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), validPath), nil
@@ -85,7 +85,7 @@ func runEditFile(ctx context.Context, params EditFileParams) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
-	content, err := os.ReadFile(validPath) //nolint:gosec
+	content, err := os.ReadFile(validPath) //nolint:gosec // G304: validPath came from ValidatePathForRead (pathsec containment check), not raw input.
 	if err != nil {
 		return "", fmt.Errorf("error reading file: %w", err)
 	}
@@ -102,7 +102,7 @@ func runEditFile(ctx context.Context, params EditFileParams) (string, error) {
 		newContent = strings.Replace(contentStr, params.OldText, params.NewText, 1)
 		count = 1
 	}
-	if err := os.WriteFile(validPath, []byte(newContent), 0600); err != nil { //nolint:gosec
+	if err := os.WriteFile(validPath, []byte(newContent), 0600); err != nil { //nolint:gosec // G304: validPath came from ValidatePathForRead (pathsec containment check), not raw input.
 		return "", fmt.Errorf("error writing file: %w", err)
 	}
 	return fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", count, validPath), nil
@@ -146,7 +146,7 @@ func runViewFile(ctx context.Context, params ViewFileParams) (string, error) {
 	if limit > maxLimit {
 		limit = maxLimit
 	}
-	f, err := os.Open(validPath) //nolint:gosec
+	f, err := os.Open(validPath) //nolint:gosec // G304: validPath came from ValidatePath (pathsec containment check), not raw input.
 	if err != nil {
 		return "", fmt.Errorf("error opening file: %w", err)
 	}

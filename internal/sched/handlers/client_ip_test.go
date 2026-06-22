@@ -19,7 +19,7 @@ func TestGetClientIP(t *testing.T) {
 
 	resolve := func(remoteAddr string, xff ...string) string {
 		var got string
-		handler := clientIPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := clientIPMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			got = getClientIP(r)
 		}))
 		req := httptest.NewRequest("GET", "/", nil)

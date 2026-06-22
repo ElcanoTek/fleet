@@ -232,6 +232,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			// transcript + usage rather than erroring, so the driver can persist
 			// what the model produced before the cancel. The interactive driver
 			// uses Cancelled to emit turn.cancelled instead of turn.error.
+			//nolint:nilerr // intentional: a cancelled context is a clean stop, not a failure; returning nil error is the contract so the driver persists partial work and emits turn.cancelled.
 			return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
 		}
 
@@ -257,6 +258,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			// cancel: return the partial transcript instead of a hard error so
 			// the interactive Stop path persists partial work.
 			if ctx.Err() != nil {
+				//nolint:nilerr // intentional: ctx cancellation that surfaced as a stream error is a clean stop; returning nil error is the contract so the Stop path persists partial work.
 				return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
 			}
 			return Result{}, serr
@@ -327,7 +329,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 // cancelledResult builds the partial Result returned when the run's ctx was
 // cancelled mid-flight. It carries whatever transcript + usage accumulated so
 // the driver can persist the partial work (chat's Stop semantics).
-func cancelledResult(ctx context.Context, sink *streamSink, orch *orchestrationState, label string, activeModel fantasy.LanguageModel, swapped bool, round int) Result {
+func cancelledResult(_ context.Context, sink *streamSink, orch *orchestrationState, label string, activeModel fantasy.LanguageModel, swapped bool, round int) Result {
 	entries, text := sink.snapshot()
 	final := strings.TrimSpace(text)
 	if final != "" {
