@@ -87,8 +87,9 @@ browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet:
 2. **Build** the binary and the web app:
 
    ```
-   make build                          # → ./fleet
-   cd web && npm ci && npm run build    # Next production build
+   make build                              # → ./fleet
+   scripts/build-sandbox-image.sh          # → localhost/fleet-sandbox:latest (podman)
+   cd web && npm ci && npm run build       # Next production build
    ```
 
 3. **systemd** — run the single binary under `deploy/fleet.service` (it
