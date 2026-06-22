@@ -76,6 +76,19 @@ type TurnConfig struct {
 	Runtime          string
 	NativeAgentImage string
 
+	// RuntimeFlavor is the resolved clientconfig descriptor for Runtime. For an
+	// EXTERNAL (type: acp) flavor it carries the provider image, the model_only
+	// egress posture, the delegated-policy bit, and the model-cred env var names
+	// the external path needs to spawn the provider's agent at the containment
+	// tier.
+	RuntimeFlavor clientconfig.Runtime
+
+	// PermissionBroker routes an EXTERNAL agent's session/request_permission to a
+	// human (default-deny on timeout, no approve-all). Nil for the native
+	// flavors. Required for the external flavor; nil fails permission requests
+	// closed (deny).
+	PermissionBroker acpruntime.PermissionBroker
+
 	// Lockdown mirrors the conversation's lockdown bit. native-acp does not yet
 	// reproduce the lockdown no-network guarantee for the agent container, so a
 	// lockdown turn falls back to the in-process path (see acpInteractiveFallback).
@@ -134,6 +147,16 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		} else {
 			return runInteractiveTurnACP(ctx, tc, obs)
 		}
+	}
+
+	// An EXTERNAL (type: acp) flavor drives a third-party provider's agent
+	// (Claude Code / Goose) at the CONTAINMENT tier: it self-executes in a
+	// locked, model-only-egress sandbox, fleet observes (does not enforce) its
+	// self-report, and session/request_permission is routed to a human. This is a
+	// distinct, weaker trust posture from native — never silently conflated. We
+	// route here whenever the resolved flavor is acp-typed.
+	if tc.RuntimeFlavor.Type == clientconfig.RuntimeTypeACP {
+		return runExternalTurnACP(ctx, tc, obs)
 	}
 
 	policy := agentcore.NewInteractivePolicy(tc.MaxCostUSD, tc.MaxTotalTokens, tc.ApprovalStager, tc.MemoryProposer)
@@ -253,6 +276,70 @@ func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Obs
 		ModelSlug: slugOf(tc.Model),
 		Cancelled: res.Cancelled,
 	}, nil
+}
+
+// runExternalTurnACP drives one interactive turn through an EXTERNAL acp flavor:
+// fleet's ExternalRuntime spawns the provider's agent (Claude Code / Goose) in a
+// locked, model-only-egress sandbox and drives it over ACP. The external agent
+// SELF-EXECUTES — it does not delegate to the host. fleet stamps governance:
+// delegated, captures the agent's self-reported session/update stream onto obs
+// (→ SSE; the containment-tier audit), and routes session/request_permission to
+// the human via tc.PermissionBroker (default-deny on timeout, no approve-all).
+//
+// Honesty: this is NOT the governed tier. fleet does not apply per-tool policy,
+// notes, or MCP-credential brokering, and the agent may transmit the workspace
+// to its own model endpoint. The trade-off and the data-residency caveat are
+// documented in docs/USING-AGENTS.md and stamped in the session log.
+func runExternalTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
+	flavor := tc.RuntimeFlavor
+	if flavor.Image == "" {
+		return agentcore.Result{}, fmt.Errorf("external acp flavor %q selected but no agent image configured", flavor.Name)
+	}
+
+	rt := acpruntime.NewExternalRuntime(acpruntime.ExternalConfig{
+		Image: flavor.Image,
+		Args:  flavor.Args,
+		// SCRUBBED env: ONLY the provider's own model-endpoint credential(s),
+		// named by the manifest's model_env. fleet secrets / MCP creds are never
+		// shipped to an external agent.
+		ProviderEnv: providerEnv(flavor.ModelEnv),
+	})
+
+	res, err := rt.Run(ctx, latestUserText(tc.Messages), acpruntime.ExternalDeps{
+		Observer:         obs,
+		PermissionBroker: tc.PermissionBroker,
+	})
+	if err != nil {
+		return agentcore.Result{}, err
+	}
+
+	entries := []agentcore.RunEntry{}
+	if res.FinalText != "" {
+		entries = append(entries, agentcore.RunEntry{Role: "assistant", Type: "text", Text: res.FinalText})
+	}
+	return agentcore.Result{
+		FinalText: res.FinalText,
+		Rounds:    1,
+		Label:     tc.Label,
+		Entries:   entries,
+		ModelSlug: flavor.Name, // external: the flavor name, not an OpenRouter slug
+		Cancelled: res.Cancelled,
+	}, nil
+}
+
+// providerEnv reads the named env vars from the host environment and returns the
+// set that is present. These are the external provider's OWN model-endpoint
+// credentials (e.g. ANTHROPIC_API_KEY) — the only secrets that enter an external
+// agent's container. A missing var is simply omitted (the provider agent will
+// surface its own auth error), never substituted.
+func providerEnv(names []string) map[string]string {
+	env := map[string]string{}
+	for _, k := range names {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			env[k] = v
+		}
+	}
+	return env
 }
 
 // slugOf returns a model's OpenRouter slug, or "" when nil.
