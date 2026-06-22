@@ -598,7 +598,7 @@ func (c *containerImpl) ensureBridge(ctx context.Context) error {
 	args := []string{"exec", "-i", c.containerID, "python3", "/opt/bridge/bridge.py"}
 	// The bridge is intentionally not bound to the caller's ctx: it outlives
 	// any single request and is torn down in close() via podman kill.
-	cmd := exec.Command(c.cfg.PodmanBinary, c.podmanArgs(args)...) //nolint:gosec,noctx
+	cmd := exec.Command(c.cfg.PodmanBinary, c.podmanArgs(args)...) //nolint:gosec,noctx // G204: fixed operator-configured podman binary + our own args (no shell). noctx: the bridge intentionally outlives any single request ctx and is torn down in close() via podman kill.
 	stderrBuf := &syncBuffer{}
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
 

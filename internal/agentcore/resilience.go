@@ -74,7 +74,7 @@ func loadResilienceConfigFor(prefix EnvPrefix) resilienceConfig {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
 			attempts = n
 		} else {
-			log.Printf("Warning: ignoring invalid %s=%q (using default %d)", retryMaxAttemptsEnv, raw, defaultRetryMaxAttempts) //nolint:gosec
+			log.Printf("Warning: ignoring invalid %s=%q (using default %d)", retryMaxAttemptsEnv, raw, defaultRetryMaxAttempts)
 		}
 	}
 	return resilienceConfig{maxAttempts: attempts}
