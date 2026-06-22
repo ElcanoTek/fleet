@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -9,7 +10,9 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/acpruntime"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -59,6 +62,23 @@ type Agent struct {
 
 	// logFile is where the session log is persisted at run end ("" = default).
 	logFile string
+
+	// runtime selects the scheduled execution flavor. "" / "native-inprocess"
+	// run the in-process loop (default + parity oracle); "native-acp" routes the
+	// SAME loop through a sandboxed ACP agent (acpruntime.ClientRuntime) over
+	// podman-stdio, with every governed effect (tool exec, MCP, staging, usage)
+	// delegated back to the host — governed identically to in-process.
+	// nativeAgentImage names the agent image for the native-acp flavor.
+	runtime          string
+	nativeAgentImage string
+
+	// mcpSelection is the task's declared MCP selection (the {server, account}
+	// choices the scheduled runner bound onto a DEDICATED per-task client). It is
+	// the authoritative MCP surface for the native-acp path: only these servers are
+	// advertised, so a no-selection task gets NO MCP surface (native-acp has no
+	// in-loop load-on-demand) rather than inheriting whatever the shared client
+	// happens to hold — avoiding cross-task scope creep. Empty/nil = no MCP surface.
+	mcpSelection agentcore.MCPSelection
 }
 
 // Options configure a scheduled Agent.
@@ -80,6 +100,19 @@ type Options struct {
 	// NoteProposer stages agent-proposed note edits (propose_note). Nil leaves
 	// the tool reporting "not wired".
 	NoteProposer agentcore.NoteProposer
+
+	// Runtime selects the scheduled execution flavor ("" / "native-inprocess" =
+	// in-process loop; "native-acp" = sandboxed ACP agent, fully governed).
+	// NativeAgentImage names the agent image for the native-acp flavor; required
+	// when Runtime is native-acp.
+	Runtime          string
+	NativeAgentImage string
+
+	// MCPSelection is the task's declared {server, account} MCP selection. For the
+	// native-acp flavor it is the authoritative advertised MCP surface (only these
+	// servers); empty = no MCP surface. The in-process flavor ignores it (it uses
+	// load-on-demand via the loader tools).
+	MCPSelection agentcore.MCPSelection
 }
 
 // NewAgent builds a scheduled driver from options. The session log is fresh.
@@ -92,20 +125,23 @@ func NewAgent(opts Options) *Agent {
 		maxIter = 500
 	}
 	return &Agent{
-		config:        opts.Config,
-		model:         opts.Model,
-		fallbackModel: opts.FallbackModel,
-		mcpClient:     opts.MCPClient,
-		nativeTools:   opts.NativeTools,
-		systemPrompt:  opts.SystemPrompt,
-		persona:       opts.Persona,
-		maxIterations: maxIter,
-		logSession:    NewLogSession(),
-		sb:            opts.Sandbox,
-		loadedServers: make(map[string]bool),
-		logFile:       opts.LogFile,
-		notesProvider: opts.NotesProvider,
-		noteProposer:  opts.NoteProposer,
+		config:           opts.Config,
+		model:            opts.Model,
+		fallbackModel:    opts.FallbackModel,
+		mcpClient:        opts.MCPClient,
+		nativeTools:      opts.NativeTools,
+		systemPrompt:     opts.SystemPrompt,
+		persona:          opts.Persona,
+		maxIterations:    maxIter,
+		logSession:       NewLogSession(),
+		sb:               opts.Sandbox,
+		loadedServers:    make(map[string]bool),
+		logFile:          opts.LogFile,
+		notesProvider:    opts.NotesProvider,
+		noteProposer:     opts.NoteProposer,
+		runtime:          opts.Runtime,
+		nativeAgentImage: opts.NativeAgentImage,
+		mcpSelection:     opts.MCPSelection,
 	}
 }
 
@@ -231,6 +267,23 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		}
 	}
 
+	// native-acp routes the SAME scheduled loop (Mode=Scheduled, confirm_audit
+	// gating, finish enforcement) through a sandboxed ACP agent. Every governed
+	// effect stays host-side over `_fleet/*`: bash/python → the host sandbox; MCP
+	// calls → the host's per-task credentialed client (creds NEVER enter the
+	// container); propose_note staging → the real NoteProposer; usage/cost →
+	// reported per step and accounted host-side. It governs identically to the
+	// in-process scheduled path (the parity gate). A future surface added before
+	// its delegation seam would fall back here — acpScheduledFallback is the single
+	// place to re-introduce that, so the flavor never silently under-governs.
+	if a.runtime == clientconfig.RuntimeNativeACP {
+		if reason := acpScheduledFallback(a); reason != "" {
+			log.Printf("native-acp: falling back to in-process for this scheduled task (%s)", reason)
+		} else {
+			return a.runScheduledACP(ctx, task, systemPrompt)
+		}
+	}
+
 	// Scheduled policy: audit gating + finish enforcement (agentcore) + verifier.
 	inner := agentcore.NewScheduledPolicy(a.logSession, a.maxIterations)
 	if a.noteProposer != nil {
@@ -294,6 +347,195 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		a.logSession.AddMessage(roleAssistant, res.FinalText, nil, nil)
 	}
 	return nil
+}
+
+// acpScheduledFallback returns a non-empty reason when a scheduled task uses a
+// governed feature the native-acp path cannot faithfully reproduce, so the caller
+// falls back to the fully-governed in-process loop instead of silently
+// under-governing. Empty = native-acp may run.
+//
+// P-ACP-2c closed the scheduled native-acp governance gap the same way P-ACP-2b
+// closed it for interactive: the SAME ScheduledPolicy (confirm_audit gating +
+// finish enforcement) runs inside the agent loop; MCP tool calls delegate over
+// `_fleet/mcp` to the host's per-task credentialed client (creds never enter the
+// container); propose_note staging delegates over `_fleet/stage`; usage/cost is
+// reported over `_fleet/event` and accounted host-side.
+//
+// Honest residuals (documented, not silent):
+//
+//   - END-OF-RUN VERIFIER: the in-process scheduled driver layers an extra
+//     host-side LLM re-check (scheduledPolicy.CanFinish → runEndOfRunVerifier) on
+//     top of agentcore's audit/finish enforcement. That verifier wraps
+//     Deps.Policy.CanFinish and has no `_fleet/*` delegation seam, so the agent's
+//     in-loop ScheduledPolicy enforces audit/finish identically but the extra
+//     verifier round does not run for native-acp.
+//   - MCP LOAD-ON-DEMAND: native-acp advertises the MCP tool surface from the
+//     servers bound on the per-task client up-front (the task's mcp_selection); it
+//     does not ship the in-loop mcp_load_servers loader tool. A scheduled task that
+//     relies on load-on-demand instead of a declared mcp_selection would see no MCP
+//     surface under native-acp. Tasks should declare their servers via
+//     mcp_selection (the credentialed, per-task-isolated path) for native-acp.
+//
+// The CORE governance — per-tool policy, audit, finish enforcement, MCP credential
+// brokering, note staging, usage/cost — is at FULL parity. The switch is the
+// auditable place to add a fallback if a future scheduled surface lands before its
+// delegation seam, so the flavor never silently under-governs.
+func acpScheduledFallback(a *Agent) string {
+	if a.nativeAgentImage == "" {
+		return "native-acp runtime selected but no agent image configured"
+	}
+	if a.sb == nil {
+		// bash/python delegate to the HOST sandbox over `_fleet/tool`; without one
+		// the delegated executor would fail at the first tool call. Fall back to the
+		// in-process loop (which makes the same requirement explicit) rather than
+		// spawning an agent that cannot execute tools.
+		return "native-acp runtime selected but no host sandbox is configured"
+	}
+	return ""
+}
+
+// runScheduledACP drives one scheduled task through the native-acp flavor: a
+// sandboxed ACP agent (acpruntime.ClientRuntime) runs the SAME agentcore.Run loop
+// in Mode=Scheduled with the SAME ScheduledPolicy (confirm_audit gating + finish
+// enforcement), but EVERY governed effect stays host-side via the `_fleet/*`
+// delegation seam, so the task governs identically to the in-process scheduled
+// path (the parity gate):
+//
+//   - bash/python execute in the HOST sandbox (a.sb) via the real Executor;
+//   - MCP tool calls run against the HOST's per-task credentialed mcp.Client
+//     (mcpBroker) — MCP credentials NEVER enter the agent container;
+//   - propose_note staging hits the real NoteProposer (stageBroker);
+//   - usage/cost is reported per step over `_fleet/event` and accounted host-side
+//     (written into the captain's-log session for the SAME accounting the
+//     in-process path produces).
+//
+// The host owns the sandbox + credentials; the agent container holds no executor
+// and no secrets beyond the model-endpoint key.
+func (a *Agent) runScheduledACP(ctx context.Context, task, systemPrompt string) error {
+	messages := []fantasy.Message{fantasy.NewUserMessage(task)}
+	messagesJSON, err := json.Marshal(messages)
+	if err != nil {
+		return fmt.Errorf("marshal scheduled task message: %w", err)
+	}
+
+	allow, optional := a.mcpGates()
+
+	// The MCP surface is the task's DECLARED selection only. The scheduled runner
+	// binds a DEDICATED per-task client for a non-empty selection (so its
+	// GetAllTools() is exactly those servers) but reuses the SHARED process-wide
+	// client for an empty selection (which may hold other servers). To avoid
+	// advertising an unselected, cross-task surface, we hand buildACPHostGovernance
+	// a client ONLY when the task declared a selection; an empty selection yields no
+	// MCP surface — matching the in-process load-on-demand start (native-acp has no
+	// in-loop loader to add servers mid-run).
+	mcpClient := a.acpMCPClient()
+
+	// Host-side governance seam, built by the SAME shared helper the interactive
+	// driver uses. Scheduled wires the note proposer only (approval/memory are
+	// interactive-only) — matching the in-process scheduled policy. MCP descriptors
+	// carry NO credentials; the broker runs each call host-side against the
+	// per-task credentialed client.
+	gov := buildACPHostGovernance(mcpClient, allow, optional, a.mcpSelection, acpStagers{
+		note: a.noteProposer,
+	})
+
+	maxTokens := agentcore.DefaultMaxCompletionTokens
+	if a.config != nil && a.config.LLMMaxTokens > 0 {
+		maxTokens = a.config.LLMMaxTokens
+	}
+	temp := 0.3
+	if a.config != nil {
+		temp = a.config.LLMTemperature
+	}
+
+	rt := acpruntime.NewClientRuntime(acpruntime.ClientConfig{
+		Image: a.nativeAgentImage,
+		// ONLY the model-endpoint credentials enter the agent container — its one
+		// allowed egress. MCP creds are never shipped (host-brokered).
+		ModelEnv: modelEndpointEnv(),
+	})
+
+	res, err := rt.Run(ctx,
+		acpruntime.RunSpec{
+			Mode:                agentcore.ModeScheduled.String(),
+			ModelSlug:           slugOf(a.model),
+			FallbackSlug:        slugOf(a.fallbackModel),
+			SystemPrompt:        systemPrompt,
+			Temperature:         temp,
+			MaxTokens:           maxTokens,
+			Label:               a.logSession.Title,
+			ProviderXTitle:      agentcore.DefaultProviderHeaders.XTitle,
+			ProviderHTTPReferer: agentcore.DefaultProviderHeaders.HTTPReferer,
+			MCPTools:            gov.MCPDescriptors,
+			StagingWired:        gov.StagingWired,
+			NoteProposerWired:   gov.NoteProposerWired,
+		},
+		task,
+		acpruntime.PromptMeta{MessagesJSON: string(messagesJSON)},
+		acpruntime.Deps{
+			Executor:    NewSandboxExecutor(a.sb),
+			Observer:    &scheduledObserver{session: a.logSession},
+			MCPBroker:   gov.MCPBroker,
+			StageBroker: gov.StageBroker,
+		},
+	)
+
+	// Reconcile usage/cost from the agent's per-step `_fleet/event` reports into
+	// the captain's-log session BEFORE handling any error. The in-process path
+	// accumulates usage onto the LogSession LIVE (every LLM step writes through
+	// orchestration.updateUsage), so an errored in-process scheduled run still
+	// persists its partial token/cost. acpruntime.Run mirrors that by returning the
+	// usage that accrued so far even on error, so we record it on EVERY exit path —
+	// a native-acp run that exhausts the enforcement round cap (the common
+	// scheduled error) accounts for what it consumed, identically to in-process. The
+	// run is complete (single goroutine here), so the direct field writes are
+	// race-free.
+	a.recordACPUsage(res.Usage)
+	if res.FinalText != "" {
+		a.logSession.AddMessage(roleAssistant, res.FinalText, nil, nil)
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// acpMCPClient returns the client whose tools the native-acp path advertises, or
+// nil to advertise NO MCP surface. A task that declared an mcp_selection ran on a
+// DEDICATED per-task client (bound by the scheduled runner to exactly those
+// servers), so its full tool set is the task's selection — safe to advertise. A
+// task with no selection reuses the SHARED process-wide client, whose contents are
+// not task-scoped; advertising it would leak an unselected, cross-task MCP surface,
+// so we return nil. native-acp has no in-loop loader to add servers later, so a
+// no-selection task simply runs without MCP — matching the in-process path's empty
+// load-on-demand start.
+func (a *Agent) acpMCPClient() *mcp.Client {
+	if len(a.mcpSelection) == 0 {
+		return nil
+	}
+	return a.mcpClient
+}
+
+// recordACPUsage folds the ACP-reported run usage into the captain's-log session
+// counters, the SAME fields the in-process orchestration writes via updateUsage.
+func (a *Agent) recordACPUsage(u agentcore.RunUsage) {
+	if a.logSession == nil {
+		return
+	}
+	a.logSession.PromptTokens = u.PromptTokens
+	a.logSession.CompletionTokens = u.CompletionTokens
+	a.logSession.CachedTokens = u.CachedTokens
+	a.logSession.CacheCreationTokens = u.CacheCreationTokens
+	// LastStepPromptTokens: the in-process path sets this to the last step's
+	// (input + cache-read) tokens. agentcore.RunUsage reports the last step's input
+	// (LastStepInputTokens) but only the CUMULATIVE cached total, so the last step's
+	// cache-read split is not recoverable here — we record the input portion. The
+	// gross fields (PromptTokens, CachedTokens, Cost) are exact; only this single
+	// last-step counter omits cache reads when prompt caching is active. It is not
+	// persisted by convertLogSession today (it feeds chat's per-turn context
+	// estimate, not the scheduled captain's-log), so this is a benign approximation.
+	a.logSession.LastStepPromptTokens = u.LastStepInputTokens
+	a.logSession.Cost = u.CostUSD
 }
 
 func (a *Agent) mcpDirty() bool {
