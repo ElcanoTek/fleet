@@ -13,10 +13,7 @@ brokered host-side so credentials never enter the sandbox.
 
 If your team keeps reaching for the same agent recipes — the same prompts, the
 same connected tools, the same guardrails — fleet is the place to standardize
-them. It is built in the spirit of internal agent platforms like
-[Shopify's "quick"](https://shopify.engineering/quick): reusable, governed agent
-tooling that the whole org can build on, but as an MIT-licensed project you own
-end to end.
+them.
 
 > **Status:** early, active development. fleet is pre-1.0 — the architecture is
 > in place and exercised by an extensive test suite (Go + web + live e2e), but
