@@ -26,6 +26,11 @@ go.work.sum
 
 # env file
 .env
+.env.local
+
+# Operator lifecycle runtime artifacts (scripts/bootstrap.sh + scripts/update.sh)
+.fleet-state/
+.fleet-client/
 
 # Editor/IDE
 # .idea/

@@ -8,10 +8,22 @@
 # self-migrates on first start (chat's advisory-lock runner; sched's
 # golang-migrate).
 #
+# It is IDEMPOTENT end to end: re-runs converge on the same state (roles/dbs are
+# created only when missing via \gexec; the env file is refreshed in place; the
+# sandbox image is rebuilt; the client bundle checkout is updated or left as-is).
+#
 # Usage:
 #   scripts/bootstrap.sh --postgres=local            # dnf+initdb+pg_hba+\gexec, sslmode=disable
 #   scripts/bootstrap.sh --postgres=external         # validate DSNs with SELECT 1, sslmode=require
 #   scripts/bootstrap.sh --postgres=local --dry-run  # print the plan, touch nothing
+#   scripts/bootstrap.sh --client-config <git-url|path>   # check out / point at a client bundle
+#   scripts/bootstrap.sh --enable-service            # systemctl enable --now fleet at the end
+#
+# End-to-end flow (every run): ensure 0600 env file → ensure the client bundle is
+# in place (--client-config) → build the sandbox image from the bundle → provision
+# both chat+sched roles/databases (local) or validate DSNs (external) → write the
+# resolved DSNs + FLEET_CLIENT_CONFIG_DIR into the env file → optionally enable +
+# start the systemd unit.
 #
 # Branch A (local):  install + init a local cluster, create the two owner roles
 #                    and two databases idempotently via psql \gexec, sslmode=disable.
@@ -19,12 +31,25 @@
 #                    assume the roles/dbs are pre-provisioned (opt-in superuser
 #                    create via FLEET_DB_SUPERUSER_URL), sslmode=require.
 #
+# Flags:
+#   --postgres=local|external  provisioning mode (default local).
+#   --client-config <url|path> a git URL (cloned to a stable location) or an
+#                              existing path (pointed at directly). Sets
+#                              FLEET_CLIENT_CONFIG_DIR in the env file.
+#   --enable-service           systemctl enable --now the fleet unit at the end.
+#   --dry-run                  print the plan; touch nothing.
+#
 # Env knobs (all optional; sensible local defaults):
-#   FLEET_ENV_FILE          credential env file to ensure exists (default .env.local)
+#   FLEET_ENV_FILE          credential env file to write/refresh (default .env.local)
 #   FLEET_CLIENT_CONFIG_DIR client config bundle dir (default ./config/default —
 #                           the generic bundle baked into the repo). Point at a
 #                           checked-out client repo (e.g. /opt/fleet/client) for a
 #                           branded deploy with its own MCP catalog + prompts.
+#                           --client-config is the operator-friendly way to set it.
+#   FLEET_CLIENT_CONFIG_CHECKOUT  stable dir a cloned client repo lands in when
+#                           --client-config is a git URL (default /opt/fleet/client,
+#                           or ./.fleet-client when /opt is not writable).
+#   FLEET_SERVICE_NAME      systemd unit to enable/start (default fleet)
 #   CHAT_DB_NAME            chat database name (default chat)
 #   CHAT_DB_USER            chat owner role  (default chat)
 #   CHAT_DB_PASSWORD        chat role password (local: generated if unset)
@@ -38,17 +63,23 @@ set -euo pipefail
 
 POSTGRES_MODE="local"
 DRY_RUN=0
+CLIENT_CONFIG_ARG=""
+ENABLE_SERVICE=0
 
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --postgres=local)    POSTGRES_MODE="local" ;;
     --postgres=external) POSTGRES_MODE="external" ;;
     --postgres=*)        echo "error: --postgres must be local|external" >&2; exit 1 ;;
+    --client-config)     shift; [[ $# -gt 0 ]] || { echo "error: --client-config needs a git-url|path" >&2; exit 1; }; CLIENT_CONFIG_ARG="$1" ;;
+    --client-config=*)   CLIENT_CONFIG_ARG="${1#*=}" ;;
+    --enable-service)    ENABLE_SERVICE=1 ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,40p' "$0"; exit 0 ;;
-    *) echo "error: unknown argument: $arg" >&2; exit 1 ;;
+      sed -n '2,57p' "$0"; exit 0 ;;
+    *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
+  shift
 done
 
 if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
@@ -65,12 +96,45 @@ run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 
 ENV_FILE="${FLEET_ENV_FILE:-.env.local}"
 CLIENT_CONFIG_DIR="${FLEET_CLIENT_CONFIG_DIR:-config/default}"
+SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 CHAT_DB_NAME="${CHAT_DB_NAME:-chat}"
 CHAT_DB_USER="${CHAT_DB_USER:-chat}"
 SCHED_DB_NAME="${SCHED_DB_NAME:-sched}"
 SCHED_DB_USER="${SCHED_DB_USER:-sched}"
 
 gen_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
+
+# upsert_env KEY VALUE — idempotently set KEY=VALUE in $ENV_FILE, replacing an
+# existing KEY= line in place and preserving comments/unrelated lines (mirrors
+# internal/creds.SetEnvKey). No-ops under --dry-run. Values are written verbatim;
+# DSNs may contain '&'/'/' so we avoid sed substitution and rewrite via awk.
+upsert_env() {
+  local key="$1" value="$2"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    # Never echo secret values in the plan — show the key only.
+    info "[dry-run] would set ${key}=… in ${ENV_FILE}"
+    return 0
+  fi
+  [[ -f "$ENV_FILE" ]] || install -m 0600 /dev/null "$ENV_FILE"
+  local tmp
+  tmp="$(mktemp "${ENV_FILE}.XXXXXX")"
+  KEY="$key" VALUE="$value" awk '
+    BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
+    {
+      line = $0
+      eq = index(line, "=")
+      if (!done && eq > 0 && substr(line, 1, eq - 1) == k) {
+        print k "=" v
+        done = 1
+        next
+      }
+      print line
+    }
+    END { if (!done) print k "=" v }
+  ' "$ENV_FILE" > "$tmp"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$ENV_FILE"
+}
 
 step "fleet bootstrap (postgres=${POSTGRES_MODE}, dry-run=${DRY_RUN})"
 
@@ -88,6 +152,46 @@ else
   fi
 fi
 
+# ── client config bundle: resolve --client-config (clone url / point at path) ──
+# A git URL is cloned (or pulled if already cloned) into a stable checkout dir; a
+# path is pointed at directly. Either way CLIENT_CONFIG_DIR is updated and later
+# persisted to the env file. Idempotent: re-running pulls an existing clone.
+if [[ -n "$CLIENT_CONFIG_ARG" ]]; then
+  step "Resolving client config (--client-config ${CLIENT_CONFIG_ARG})"
+  if [[ "$CLIENT_CONFIG_ARG" == *://* || "$CLIENT_CONFIG_ARG" == *@*:* ]]; then
+    # Looks like a git URL (scheme:// or scp-style git@host:path).
+    CHECKOUT="${FLEET_CLIENT_CONFIG_CHECKOUT:-/opt/fleet/client}"
+    if [[ "$DRY_RUN" != "1" && -z "${FLEET_CLIENT_CONFIG_CHECKOUT:-}" ]]; then
+      # Fall back to a repo-local checkout when /opt is not writable.
+      if ! mkdir -p "$(dirname "$CHECKOUT")" 2>/dev/null || [[ ! -w "$(dirname "$CHECKOUT")" ]]; then
+        CHECKOUT="./.fleet-client"
+        warn "/opt not writable — cloning client config into ${CHECKOUT} instead"
+      fi
+    fi
+    if ! command -v git >/dev/null 2>&1; then
+      die "git is required to clone a --client-config URL (install git or pass a path)"
+    fi
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would clone/pull ${CLIENT_CONFIG_ARG} into ${CHECKOUT}"
+    elif [[ -d "${CHECKOUT}/.git" ]]; then
+      info "client config already cloned at ${CHECKOUT} — pulling latest"
+      git -C "$CHECKOUT" pull --ff-only --quiet || warn "git pull failed in ${CHECKOUT} (leaving existing checkout)"
+    else
+      run mkdir -p "$(dirname "$CHECKOUT")"
+      git clone --quiet "$CLIENT_CONFIG_ARG" "$CHECKOUT" || die "git clone ${CLIENT_CONFIG_ARG} failed"
+      ok "cloned client config into ${CHECKOUT}"
+    fi
+    CLIENT_CONFIG_DIR="$CHECKOUT"
+  else
+    # A path: point at it directly (must exist unless dry-run).
+    if [[ "$DRY_RUN" != "1" && ! -d "$CLIENT_CONFIG_ARG" ]]; then
+      die "--client-config path ${CLIENT_CONFIG_ARG} does not exist"
+    fi
+    CLIENT_CONFIG_DIR="$CLIENT_CONFIG_ARG"
+    ok "using client config at ${CLIENT_CONFIG_DIR}"
+  fi
+fi
+
 # ── client config bundle ──
 step "Checking client config bundle (FLEET_CLIENT_CONFIG_DIR=${CLIENT_CONFIG_DIR})"
 if [[ -f "${CLIENT_CONFIG_DIR}/manifest.yaml" ]]; then
@@ -101,6 +205,34 @@ else
   warn "FLEET_CLIENT_CONFIG_DIR points at a valid bundle (a dir with manifest.yaml)."
 fi
 
+# resolve_sandbox_image MANIFEST — print the bundle's resolved sandbox.image, the
+# SAME way the Go loader (internal/clientconfig) does: extract the scalar under
+# the sandbox: block, then interpolate a bare ${VAR:-default} / ${VAR} reference
+# against the process env. An empty result => build-on-box (the default-bundle
+# value "${FLEET_SANDBOX_IMAGE:-}" resolves to empty when the var is unset).
+resolve_sandbox_image() {
+  local file="$1" raw
+  [[ -f "$file" ]] || return 0
+  raw="$(awk '
+    /^sandbox:[[:space:]]*$/ { in_block=1; next }
+    /^[^[:space:]]/          { in_block=0 }
+    in_block && $0 ~ "^[[:space:]]+image:" {
+      sub("^[[:space:]]+image:[[:space:]]*", "")
+      sub(/[[:space:]]+#.*$/, "")
+      gsub(/^["'\'']|["'\'']$/, "")
+      print; exit
+    }
+  ' "$file")"
+  # Interpolate a single leading ${VAR} or ${VAR:-default} (the only shapes the
+  # default bundle uses). Anything else is treated as a literal image ref.
+  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}$ ]]; then
+    local var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
+    printf '%s' "${!var:-$def}"
+  else
+    printf '%s' "$raw"
+  fi
+}
+
 # ── sandbox image (per-client bundle artifact; build-on-box default) ──
 # The execution sandbox is a per-client bundle artifact: the Containerfile lives
 # in the bundle at <bundle>/sandbox/Containerfile. DEFAULT = build it on this box
@@ -109,8 +241,9 @@ fi
 # instead — in which case skip the on-box build here.
 step "Building the sandbox image from the bundle (build-on-box default)"
 SANDBOX_CONTAINERFILE="${CLIENT_CONFIG_DIR}/sandbox/Containerfile"
-if grep -Eq '^[[:space:]]+image:[[:space:]]*["'\'']?[^"'\'' ]' "${CLIENT_CONFIG_DIR}/manifest.yaml" 2>/dev/null; then
-  info "manifest sets sandbox.image — using a prebuilt/registry image; skipping on-box build."
+SANDBOX_IMAGE_REF="$(resolve_sandbox_image "${CLIENT_CONFIG_DIR}/manifest.yaml")"
+if [[ -n "$SANDBOX_IMAGE_REF" ]]; then
+  info "manifest resolves sandbox.image=${SANDBOX_IMAGE_REF} — using a prebuilt/registry image; skipping on-box build."
 elif [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_CONFIG_DIR} scripts/build-sandbox-image.sh"
 elif [[ ! -f "$SANDBOX_CONTAINERFILE" ]]; then
@@ -178,8 +311,6 @@ SQL
   SCHED_URL="postgres://${SCHED_DB_USER}:${SCHED_DB_PASSWORD}@127.0.0.1:5432/${SCHED_DB_NAME}?sslmode=${SSLMODE}"
   ok "chat DB:  ${CHAT_DB_NAME} (owner ${CHAT_DB_USER}), sslmode=${SSLMODE}"
   ok "sched DB: ${SCHED_DB_NAME} (owner ${SCHED_DB_USER}), sslmode=${SSLMODE}"
-  info "FLEET_CHAT_DATABASE_URL=${CHAT_URL}"
-  info "FLEET_SCHED_DATABASE_URL=${SCHED_URL}"
 
 else
   SSLMODE="require"
@@ -217,7 +348,46 @@ SQL
   fi
 fi
 
+# ── write/refresh the env file (0600) ──
+# Persist the resolved DSNs + the client-bundle dir so the fleet process and
+# fleet-admin read them from the SAME 0600 file deploy/fleet.service EnvironmentFiles.
+# Idempotent: re-running rewrites these keys in place (passwords rotate only when
+# CHAT_DB_PASSWORD/SCHED_DB_PASSWORD are pre-set; generated ones change per run).
+step "Writing connection settings into ${ENV_FILE} (0600)"
+upsert_env FLEET_CHAT_DATABASE_URL "$CHAT_URL"
+upsert_env FLEET_SCHED_DATABASE_URL "$SCHED_URL"
+upsert_env FLEET_CLIENT_CONFIG_DIR "$CLIENT_CONFIG_DIR"
+# Point config.Load at the same file so process-env and config-loaded values match.
+upsert_env FLEET_ENV_FILE "$ENV_FILE"
+if [[ "$DRY_RUN" != "1" ]]; then
+  ok "wrote FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL / FLEET_CLIENT_CONFIG_DIR / FLEET_ENV_FILE"
+  info "remember to add OPENROUTER_API_KEY and the bundle's MCP connector credentials."
+fi
+
+# ── optionally enable + start the systemd unit ──
+if [[ "$ENABLE_SERVICE" == "1" ]]; then
+  step "Enabling + starting the ${SERVICE_NAME} systemd unit"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl not found — skipping --enable-service (install the unit manually)."
+  elif [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would run: systemctl daemon-reload && systemctl enable --now ${SERVICE_NAME}"
+  elif ! systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1 \
+       || ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
+    warn "${SERVICE_NAME}.service is not installed — install deploy/fleet.service first:"
+    warn "  install -D -m 0644 deploy/fleet.service /etc/systemd/system/${SERVICE_NAME}.service"
+  else
+    systemctl daemon-reload || warn "systemctl daemon-reload failed"
+    if systemctl enable --now "${SERVICE_NAME}" >/dev/null 2>&1; then
+      ok "${SERVICE_NAME} enabled + started (services self-migrate on start)"
+    else
+      warn "could not enable/start ${SERVICE_NAME} — check: journalctl -u ${SERVICE_NAME} -n 50"
+    fi
+  fi
+fi
+
 step "Reminders"
 info "Migrations are NOT run here — each service self-migrates on first start."
 info "Set MCP account secrets post-bootstrap: fleet-admin mcp account set <server> <account> --secret KEY=-"
+info "Check health any time:  fleet-admin status"
+info "Update in place later:  fleet-admin update   (or scripts/update.sh)"
 ok "bootstrap complete (postgres=${POSTGRES_MODE}, dry-run=${DRY_RUN})"
