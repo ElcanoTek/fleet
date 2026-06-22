@@ -275,29 +275,18 @@ func (c *hostClient) finalText() string {
 	return c.final.String()
 }
 
-// SessionUpdate maps the agent's streamed updates onto fleet's real Observer so
-// SSE / the session log see the same events the in-process path emits. Text
-// chunks accumulate into the final reply.
+// SessionUpdate is the spec-compliant streaming mirror. It accumulates the
+// agent's text chunks into the final reply, but it does NOT forward events to
+// the Observer — the agent ALSO sends the full neutral (eventType, payload)
+// stream over `_fleet/event`, and that is the single authoritative source for
+// fleet's real Observer (→ SSE / session log). Driving the Observer from both
+// would double-emit. Mapping it here would also under-report (session/update
+// can't carry the full event vocabulary the in-process path emits).
 func (c *hostClient) SessionUpdate(_ context.Context, p acp.SessionNotification) error {
-	u := p.Update
-	switch {
-	case u.AgentMessageChunk != nil && u.AgentMessageChunk.Content.Text != nil:
-		text := u.AgentMessageChunk.Content.Text.Text
+	if u := p.Update; u.AgentMessageChunk != nil && u.AgentMessageChunk.Content.Text != nil {
 		c.mu.Lock()
-		c.final.WriteString(text)
+		c.final.WriteString(u.AgentMessageChunk.Content.Text.Text)
 		c.mu.Unlock()
-		c.deps.Observer.Observe("text.delta", map[string]any{"text": text})
-	case u.AgentThoughtChunk != nil && u.AgentThoughtChunk.Content.Text != nil:
-		c.deps.Observer.Observe("reasoning.delta", map[string]any{"text": u.AgentThoughtChunk.Content.Text.Text})
-	case u.ToolCall != nil:
-		c.deps.Observer.Observe("tool.call", map[string]any{
-			"id":    string(u.ToolCall.ToolCallId),
-			"title": u.ToolCall.Title,
-		})
-	case u.ToolCallUpdate != nil:
-		c.deps.Observer.Observe("tool.result", map[string]any{
-			"id": string(u.ToolCallUpdate.ToolCallId),
-		})
 	}
 	return nil
 }
@@ -324,6 +313,15 @@ func (c *hostClient) handleTool(ctx context.Context, params json.RawMessage) (an
 	var req ToolRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, acp.NewInvalidParams(map[string]any{"error": err.Error()})
+	}
+	// Honor the per-call timeout the native tool requested (the model can set
+	// bash/python timeout_seconds), so a delegated call enforces the SAME bound
+	// the in-process path applies via sandbox.BashRequest.Timeout. The host
+	// Executor adds its own default when ctx carries no deadline.
+	if req.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
+		defer cancel()
 	}
 	switch req.Tool {
 	case ToolBash:

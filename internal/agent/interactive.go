@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -75,6 +76,11 @@ type TurnConfig struct {
 	Runtime          string
 	NativeAgentImage string
 
+	// Lockdown mirrors the conversation's lockdown bit. native-acp does not yet
+	// reproduce the lockdown no-network guarantee for the agent container, so a
+	// lockdown turn falls back to the in-process path (see acpInteractiveFallback).
+	Lockdown bool
+
 	// ApprovalStager / MemoryProposer stage critical tool calls + memory
 	// proposals for user confirmation (interactive). Wired onto the
 	// InteractivePolicy's orchestration so send_email / risky bash /
@@ -109,10 +115,25 @@ func (m messagesInput) Prompt(_ context.Context) (string, []fantasy.Message, str
 // tools, so cost/repeat/email/approval enforcement covers both surfaces.
 func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observer) (agentcore.Result, error) {
 	// native-acp routes the SAME loop through a sandboxed ACP agent. The host
-	// keeps governance: tool execution delegates back to the host sandbox
-	// (tc.Sandbox) via the real Executor, and obs receives the same run events.
+	// keeps governance for the tool-execution surface: bash/python delegate back
+	// to the host sandbox (tc.Sandbox) via the real Executor, and obs receives
+	// the same run events.
+	//
+	// HONESTY GATE: the P-ACP-1 interactive ACP path does NOT yet reproduce the
+	// full in-process governance surface — approval staging (send_email / risky
+	// bash / preview_email / suggest_advanced_model), memory/note proposals, MCP
+	// tools + per-task credential brokering, and the lockdown no-network
+	// guarantee for the agent container. Rather than SILENTLY under-govern, fall
+	// back to the fully-governed in-process loop whenever any of those features
+	// is active for this turn. native-acp then runs only when it can behave AND
+	// govern identically (no MCP selection, no approval/memory/note staging, not
+	// lockdown). The remaining surfaces land in P-ACP-2.
 	if tc.Runtime == clientconfig.RuntimeNativeACP {
-		return runInteractiveTurnACP(ctx, tc, obs)
+		if reason := acpInteractiveFallback(tc); reason != "" {
+			log.Printf("native-acp: falling back to in-process for this turn (%s)", reason)
+		} else {
+			return runInteractiveTurnACP(ctx, tc, obs)
+		}
 	}
 
 	policy := agentcore.NewInteractivePolicy(tc.MaxCostUSD, tc.MaxTotalTokens, tc.ApprovalStager, tc.MemoryProposer)
@@ -143,6 +164,30 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)
+}
+
+// acpInteractiveFallback returns a non-empty reason when the turn uses a
+// governed feature the P-ACP-1 interactive ACP path cannot yet reproduce, so
+// the caller falls back to the fully-governed in-process loop instead of
+// silently under-governing. Empty = native-acp may run.
+func acpInteractiveFallback(tc TurnConfig) string {
+	switch {
+	case tc.Lockdown:
+		// The agent container is not yet sealed to no-network for lockdown.
+		return "lockdown conversation"
+	case len(tc.Selection) > 0:
+		// MCP tools + per-task credential brokering are not yet delegated.
+		return "MCP servers enabled"
+	case tc.ApprovalStager != nil:
+		// Critical-tool approval staging (send_email / risky bash / …) is not
+		// yet wired through the ACP permission surface.
+		return "approval staging active"
+	case tc.MemoryProposer != nil || tc.NoteProposer != nil:
+		// Memory / note proposal staging is not yet delegated.
+		return "memory/note proposal staging active"
+	default:
+		return ""
+	}
 }
 
 // runInteractiveTurnACP drives one interactive turn through the native-acp
