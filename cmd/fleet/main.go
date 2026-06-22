@@ -170,8 +170,25 @@ func run() error {
 	sch.Start()
 	defer sch.Stop()
 
+	// Resolve the scheduled execution flavor from FLEET_SCHEDULED_RUNTIME against
+	// the bundle's runtimes catalog (process-wide; the scheduled Task model carries
+	// no per-task runtime). An unknown / empty value falls back to native-inprocess.
+	// native-acp scheduled tasks reuse the SAME native-agent image as interactive.
+	scheduledRuntime := clientconfig.RuntimeNativeInprocess
+	if want := strings.TrimSpace(cfg.ScheduledRuntime); want != "" {
+		if rt, ok := bundle.Runtime(want); ok {
+			scheduledRuntime = rt.Name
+		} else {
+			log.Printf("FLEET_SCHEDULED_RUNTIME not found in bundle; using %s", clientconfig.RuntimeNativeInprocess)
+		}
+	}
+	if scheduledRuntime == clientconfig.RuntimeNativeACP && nativeAgentImage == "" {
+		log.Printf("warn: scheduled runtime native-acp selected but no native-agent image is configured; scheduled tasks will fall back to in-process")
+	}
+	log.Printf("scheduled runtime: flavor=%s native_agent_image=%q", scheduledRuntime, nativeAgentImage)
+
 	// ── capped worker pool: TaskRunner = the scheduled agent over the SHARED sandbox pool ──
-	taskRunner := newScheduledRunner(cfg, mgr, schedStorage, notesProvider, personasDir, systemPromptsDir, protocolsDir)
+	taskRunner := newScheduledRunner(cfg, mgr, schedStorage, notesProvider, personasDir, systemPromptsDir, protocolsDir, scheduledRuntime, nativeAgentImage)
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{})
 	log.Printf("worker pool: cap=%d", pool.Cap()) //nolint:gosec // G706 false positive: pool.Cap() is an int formatted with %d; it cannot carry CR/LF.
 

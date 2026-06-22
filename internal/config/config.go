@@ -320,6 +320,16 @@ type Config struct {
 	SystemPrompt      string
 	Persona           string
 
+	// ScheduledRuntime selects the execution flavor for scheduled tasks
+	// (clientconfig flavor name). "" / "native-inprocess" run the in-process
+	// loop (default); "native-acp" routes scheduled tasks through the sandboxed
+	// ACP agent, fully governed host-side (identical governance to in-process).
+	// Resolved against the bundle's runtimes catalog at boot; an unknown value
+	// falls back to native-inprocess. Process-wide (the scheduled Task model
+	// carries no per-task runtime), mirroring how interactive resolves a default
+	// flavor.
+	ScheduledRuntime string
+
 	InputDir   string
 	InputFiles []string
 
@@ -440,6 +450,7 @@ func Load(envFile string) (*Config, error) {
 		TaskFallbackModel: stripQuotes(os.Getenv("CUTLASS_TASK_FALLBACK_MODEL")),
 		TaskMaxIterations: getEnvOrDefaultInt("CUTLASS_TASK_MAX_ITERATIONS", 0),
 		LLMTemperature:    getEnvOrDefaultFloat("CUTLASS_TEMPERATURE", 0.3),
+		ScheduledRuntime:  getenvFleet("SCHEDULED_RUNTIME"),
 
 		// ── attachments / uploads (generic infra) ──
 		EmailAttachmentDir: getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),

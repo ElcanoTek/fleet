@@ -151,6 +151,11 @@ type govHarness struct {
 	model *govScriptedModel
 	deps  Deps
 	spec  RunSpec
+	// toleratePromptErr keeps the harness from failing when the agent loop returns
+	// an error (e.g. a scheduled run that intentionally exhausts the enforcement
+	// round cap because the audit never clears). The host client is still returned
+	// so the test can assert on the events that were forwarded before the error.
+	toleratePromptErr bool
 }
 
 func runGovHarness(t *testing.T, h govHarness) *hostClient {
@@ -193,6 +198,14 @@ func runGovHarness(t *testing.T, h govHarness) *hostClient {
 		Meta:      map[string]any{MetaKeyPromptMeta: json.RawMessage(pmJSON)},
 	})
 	if err != nil {
+		if h.toleratePromptErr {
+			// Expected for a scheduled run whose audit never clears: the loop
+			// exhausts the enforcement round cap and errors. The events forwarded
+			// before the error (the enforcement nudges) are the assertion target.
+			_ = clientToAgentW.Close()
+			_ = agentToClientW.Close()
+			return cl
+		}
 		t.Fatalf("prompt: %v", err)
 	}
 	if resp.StopReason != acp.StopReasonEndTurn {
@@ -208,6 +221,132 @@ func baseGovSpec() RunSpec {
 	return RunSpec{
 		Mode: agentcore.ModeInteractive.String(), ModelSlug: "scripted-model",
 		SystemPrompt: "test", Temperature: 0, MaxTokens: 256,
+	}
+}
+
+// baseGovSchedSpec is the SCHEDULED counterpart: Mode=scheduled drives the agent
+// to build a ScheduledPolicy with confirm_audit gating + finish enforcement
+// (IncludeConfirmAudit), exactly as the in-process scheduled path does. The same
+// MCP/staging delegation seams apply.
+func baseGovSchedSpec() RunSpec {
+	return RunSpec{
+		Mode: agentcore.ModeScheduled.String(), ModelSlug: "scripted-model",
+		SystemPrompt: "test", Temperature: 0, MaxTokens: 256,
+	}
+}
+
+// confirmAuditCall returns a scripted confirm_audit(success=true) call whose args
+// satisfy validateConfirmAuditArgs and clear finish enforcement: the declared
+// critical action is a non-critical tool name (no known critical suffix), so it
+// registers zero commitments and leaves nothing to discharge.
+func confirmAuditCall(id string) scriptToolCall {
+	return scriptToolCall{
+		id:   id,
+		name: "confirm_audit",
+		input: `{"success":true,"reasoning":"verified the lookup result",` +
+			`"artifacts_checked":["workspace/out.txt"],"workflow_sections_checked":["lookup"],` +
+			`"critical_actions":[{"tool":"mcp_acme_lookup"}],"send_contract_checked":false,` +
+			`"attachments_checked":[],"remaining_risks":[]}`,
+	}
+}
+
+// TestACPGovern_ScheduledMCPDelegatedNoCreds is the SCHEDULED parity counterpart
+// of TestACPGovern_MCPDelegatedHostSide. It proves a scheduled native-acp run
+// governs identically to the in-process scheduled path AND preserves the
+// cred-isolation invariant:
+//
+//   - the agent builds a ScheduledPolicy (Mode=scheduled), so confirm_audit gating
+//   - finish enforcement run in-loop exactly as in-process (the run only reaches
+//     end_turn because the scripted model calls confirm_audit — an interactive
+//     run would finish at round 0 without it);
+//   - the MCP tool call delegates over `_fleet/mcp` and executes HOST-side via the
+//     broker (against the per-task credentialed client);
+//   - the RunSpec the agent receives carries NO credential-shaped field — only the
+//     public descriptor. MCP credentials never enter the agent container.
+func TestACPGovern_ScheduledMCPDelegatedNoCreds(t *testing.T) {
+	// Round 0: call the MCP lookup + confirm the audit. Round 1: final text.
+	model := &govScriptedModel{steps: [][]scriptToolCall{
+		{
+			{id: "c1", name: "mcp_acme_lookup", input: `{"q":"acme"}`},
+			confirmAuditCall("c2"),
+		},
+	}}
+	broker := &recordingMCPBroker{resp: "host-mcp-result"}
+	spec := baseGovSchedSpec()
+	spec.MCPTools = []MCPToolDescriptor{{
+		Server: "acme", Tool: "lookup", Description: "lookup a contact",
+		InputSchema: map[string]any{"properties": map[string]any{"q": map[string]any{"type": "string"}}},
+	}}
+
+	runGovHarness(t, govHarness{
+		t: t, model: model, spec: spec,
+		deps: Deps{
+			Executor:  &recordingExecutor{},
+			Observer:  &recordingObserver{},
+			MCPBroker: broker,
+		},
+	})
+
+	// 1. The MCP call executed HOST-side via the broker (not in the agent).
+	broker.mu.Lock()
+	calls := append([]mcpCall(nil), broker.calls...)
+	broker.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("broker calls = %d, want 1 (scheduled MCP delegated host-side)", len(calls))
+	}
+	if calls[0].server != "acme" || calls[0].tool != "lookup" {
+		t.Fatalf("broker call = %+v, want acme/lookup", calls[0])
+	}
+
+	// 2. CRED ISOLATION (scheduled): the serialized RunSpec the agent received
+	// carries only the public descriptor — no env, no args, no credential field.
+	specJSON, _ := json.Marshal(spec)
+	for _, banned := range []string{"API_KEY", "api_key", "ACME_API_KEY", "secret", "token", "password", "BaseEnv", "Env"} {
+		if strings.Contains(string(specJSON), banned) {
+			t.Fatalf("scheduled RunSpec leaked a credential-shaped field %q: %s", banned, specJSON)
+		}
+	}
+	if !strings.Contains(string(specJSON), "scheduled") {
+		t.Fatalf("scheduled RunSpec missing Mode=scheduled: %s", specJSON)
+	}
+	if !strings.Contains(string(specJSON), "acme") || !strings.Contains(string(specJSON), "lookup") {
+		t.Fatalf("scheduled RunSpec missing the public descriptor: %s", specJSON)
+	}
+}
+
+// TestACPGovern_ScheduledAuditGates proves the scheduled native-acp run engages
+// the FULL audit/finish enforcement (Mode=scheduled, IncludeConfirmAudit): a model
+// that never calls confirm_audit must NOT collapse to end_turn at round 0 (the way
+// an interactive run would) — the ScheduledPolicy keeps injecting enforcement
+// nudges. This is the observable governance difference the parity gate requires.
+func TestACPGovern_ScheduledAuditGates(t *testing.T) {
+	// The model issues a single bash call, then (after step 0) emits final text on
+	// every subsequent step but NEVER calls confirm_audit. The scheduled finish
+	// enforcement must reject the early finish and inject at least one nudge, which
+	// the agent forwards as an "enforcement" event over `_fleet/event`.
+	model := &govScriptedModel{steps: [][]scriptToolCall{
+		{{id: "c1", name: "bash", input: `{"command":"echo hi"}`}},
+	}}
+	obs := &recordingObserver{}
+	runGovHarness(t, govHarness{
+		t: t, model: model, spec: baseGovSchedSpec(),
+		deps:              Deps{Executor: &recordingExecutor{}, Observer: obs},
+		toleratePromptErr: true,
+	})
+
+	// An "enforcement" event proves the ScheduledPolicy blocked the early finish
+	// (the in-loop confirm_audit gate) — the interactive policy never emits one.
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+	enforced := false
+	for _, e := range obs.raw {
+		if e.eventType == "enforcement" {
+			enforced = true
+			break
+		}
+	}
+	if !enforced {
+		t.Fatalf("scheduled native-acp run must engage audit/finish enforcement; got no enforcement event. events=%v", obs.events)
 	}
 }
 

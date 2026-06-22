@@ -44,12 +44,20 @@ type scheduledRunner struct {
 	protocolsDir     string
 
 	baseSystemPrompt string
+
+	// runtime / nativeAgentImage select the scheduled execution flavor. Empty /
+	// "native-inprocess" runs the in-process loop; "native-acp" routes scheduled
+	// tasks through the sandboxed ACP agent (fully governed host-side). Resolved
+	// once at boot from FLEET_SCHEDULED_RUNTIME against the bundle's runtimes
+	// catalog (cmd/fleet/main.go).
+	runtime          string
+	nativeAgentImage string
 }
 
 // newScheduledRunner builds the scheduled TaskRunner. The base system prompt +
 // persona are read once at boot (operators editing them in place take effect on
 // the next process restart, matching the scheduled path's prior behaviour).
-func newScheduledRunner(cfg *config.Config, mgr *agent.Manager, st *storage.Storage, notes *notesAdapter, personasDir, systemPromptsDir, protocolsDir string) *scheduledRunner {
+func newScheduledRunner(cfg *config.Config, mgr *agent.Manager, st *storage.Storage, notes *notesAdapter, personasDir, systemPromptsDir, protocolsDir, runtime, nativeAgentImage string) *scheduledRunner {
 	r := &scheduledRunner{
 		cfg:              cfg,
 		mgr:              mgr,
@@ -59,6 +67,8 @@ func newScheduledRunner(cfg *config.Config, mgr *agent.Manager, st *storage.Stor
 		personasDir:      personasDir,
 		systemPromptsDir: systemPromptsDir,
 		protocolsDir:     protocolsDir,
+		runtime:          runtime,
+		nativeAgentImage: nativeAgentImage,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -140,17 +150,20 @@ func (r *scheduledRunner) Run(ctx context.Context, task *models.Task) (*models.L
 	defer mcpCleanup()
 
 	a := agent.NewAgent(agent.Options{
-		Config:        r.cfg,
-		Model:         model,
-		FallbackModel: fallback,
-		MCPClient:     mcpClient,
-		NativeTools:   turnTools.Tools,
-		SystemPrompt:  r.baseSystemPrompt,
-		Persona:       r.cfg.Persona,
-		MaxIterations: maxIter,
-		Sandbox:       sb,
-		NotesProvider: r.notesProvider,
-		NoteProposer:  r.noteProposer,
+		Config:           r.cfg,
+		Model:            model,
+		FallbackModel:    fallback,
+		MCPClient:        mcpClient,
+		NativeTools:      turnTools.Tools,
+		SystemPrompt:     r.baseSystemPrompt,
+		Persona:          r.cfg.Persona,
+		MaxIterations:    maxIter,
+		Sandbox:          sb,
+		NotesProvider:    r.notesProvider,
+		NoteProposer:     r.noteProposer,
+		Runtime:          r.runtime,
+		NativeAgentImage: r.nativeAgentImage,
+		MCPSelection:     taskMCPSelection(task),
 	})
 
 	runErr := a.Execute(ctx, task.Prompt)
@@ -159,6 +172,21 @@ func (r *scheduledRunner) Run(ctx context.Context, task *models.Task) (*models.L
 		return session, runErr
 	}
 	return session, nil
+}
+
+// taskMCPSelection converts the task's persisted MCP selection into the
+// agentcore.MCPSelection the scheduled agent advertises (native-acp) — the SAME
+// shape bindTaskMCP binds onto the per-task client, so the advertised surface and
+// the bound credentialed servers stay in lockstep. Empty/nil → no MCP surface.
+func taskMCPSelection(task *models.Task) agentcore.MCPSelection {
+	if len(task.MCPSelection) == 0 {
+		return nil
+	}
+	sel := make(agentcore.MCPSelection, 0, len(task.MCPSelection))
+	for _, c := range task.MCPSelection {
+		sel = append(sel, agentcore.MCPChoice{Server: c.Server, Account: c.Account})
+	}
+	return sel
 }
 
 // bindTaskMCP resolves the MCP client the scheduled run should use.
