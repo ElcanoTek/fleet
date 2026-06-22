@@ -39,7 +39,22 @@ sandbox:
 #   delegated_policy: containment tier for self-executing external flavors
 #                     (governance: delegated). Native flavors leave it false
 #                     (fully governed, identical to in-process native).
+#   model_env:        for type: acp — the env var NAMES carrying the external
+#                     PROVIDER's OWN model-endpoint credential(s). The host reads
+#                     these from its environment and passes ONLY them into the
+#                     locked agent container (the scrubbed env). fleet secrets
+#                     and MCP credentials are NEVER shipped to an external agent.
+#   args:             for type: acp — extra args appended to the agent container
+#                     entrypoint (e.g. a bridge's `acp` subcommand).
 #   default:          the flavor selected when none is chosen (at most one).
+#
+# External (type: acp) flavors are the CONTAINMENT tier (governance: delegated):
+# the provider's agent self-executes inside a locked, model-only-egress sandbox
+# and fleet observes (does not enforce) its self-report; session/request_permission
+# is routed to a human (default-deny). See docs/USING-AGENTS.md for the full tier
+# breakdown, the data-residency caveat, and a worked example. The provider images
+# below need not exist in this generic bundle — a real XYZ-config bundle pins its
+# own digests and supplies the model creds; this block documents the wiring.
 runtimes:
   native-inprocess:
     type: native-inprocess
@@ -52,6 +67,33 @@ runtimes:
     network: restricted
     display_name: "Native (sandboxed)"
     description: "Native loop wrapped as a sandboxed ACP agent. Fully governed."
+  # Claude Code as an external ACP agent, wired via the claude-agent-acp bridge
+  # (https://github.com/zed-industries/claude-code-acp) baked into the provider
+  # image. Self-executes in a locked sandbox; fleet contains + observes. The
+  # bridge reads ANTHROPIC_API_KEY for the model endpoint — the only secret that
+  # enters the container.
+  claude-code:
+    type: acp
+    image: "${FLEET_CLAUDE_CODE_IMAGE:-localhost/fleet-claude-code:latest}"
+    network: model_only
+    delegated_policy: true
+    model_env: ["ANTHROPIC_API_KEY"]
+    display_name: "Claude Code (external)"
+    description: "Anthropic Claude Code via the ACP bridge. Self-executing; containment tier."
+    beta: true
+  # Goose (https://github.com/block/goose) speaks ACP natively — `goose acp`.
+  # Same containment tier. Goose-on-OpenRouter reads OPENROUTER_API_KEY; a
+  # bundle targeting a different Goose provider lists that provider's key here.
+  goose:
+    type: acp
+    image: "${FLEET_GOOSE_IMAGE:-localhost/fleet-goose:latest}"
+    network: model_only
+    delegated_policy: true
+    model_env: ["OPENROUTER_API_KEY"]
+    args: ["acp"]
+    display_name: "Goose (external)"
+    description: "Block's Goose via native ACP. Self-executing; containment tier."
+    beta: true
 
 branding:
   app_name: "Fleet"

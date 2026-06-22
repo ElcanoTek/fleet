@@ -61,6 +61,11 @@ type Server struct {
 	// (branding + empty-state). nil in tests / mock mode that don't supply one;
 	// the endpoint then returns neutral generic defaults.
 	clientConfig *clientconfig.Bundle
+
+	// permissions is the in-flight permission-request registry for EXTERNAL acp
+	// agents: the rendezvous between the turn goroutine's blocked broker and the
+	// POST /conversations/{id}/permissions/{requestId} decision handler.
+	permissions *permissionRegistry
 }
 
 // Option customizes a Server at construction.
@@ -109,6 +114,7 @@ func New(cfg *config.Config, mgr turnEngine, st *store.Store, opts ...Option) *S
 		sharedToken: cfg.SharedToken,
 		rate:        newRateLimiter(cfg.RatePerMinute, cfg.RatePerDay),
 		inflight:    make(map[string]inflightEntry),
+		permissions: newPermissionRegistry(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -650,6 +656,14 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 	// Approval resolution lives at /conversations/{id}/approvals/{approvalId}.
 	if sub == "approvals" && subArg != "" {
 		s.handleApproval(w, r, id, subArg)
+		return
+	}
+
+	// External-agent permission decision lives at
+	// /conversations/{id}/permissions/{requestId} (allow/deny; default-deny on
+	// timeout is enforced server-side by the broker).
+	if sub == "permissions" && subArg != "" {
+		s.handlePermissionDecision(w, r, id, subArg)
 		return
 	}
 
@@ -1279,6 +1293,14 @@ func (s *Server) runTurnAsync(
 			store:          s.store,
 			conversationID: conv.ID,
 			userEmail:      user,
+			sink:           buf,
+		},
+		// External (acp) flavors route session/request_permission to the human
+		// through this broker (default-deny on timeout, no approve-all). The
+		// native flavors ignore it — they are governed in-loop.
+		PermissionBroker: &permissionBroker{
+			registry:       s.permissions,
+			conversationID: conv.ID,
 			sink:           buf,
 		},
 	}, buf)
