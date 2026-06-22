@@ -315,6 +315,43 @@ jobs:
             echo "image=$SANDBOX_IMAGE_LOCAL" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Assert sandbox isolation invariants (always-on, real rootless podman)
+        # The project's #1 non-negotiable invariant (AGENTS.md): every agent tool
+        # call runs in the rootless-Podman sandbox, mapped via
+        # `--userns=keep-id:uid=1000,gid=1000` with same-path `:z` workspace
+        # mounts. Its regression tests live in internal/sandbox, but they
+        # SELF-SKIP when run as root or with podman masked — which is exactly the
+        # default PR lanes (the `go` job masks podman; a root `make test` trips the
+        # euid guard). This e2e-live job is the ONLY always-on lane with a real,
+        # non-root, rootless-podman sandbox, so run the invariant tests here.
+        #
+        # A SKIP is treated as a FAILURE: a silently-skipped invariant test is a
+        # false green, which is the precise gap this lane closes (issue #34). We
+        # require an explicit `--- PASS` for each named test and fail on any
+        # `--- SKIP`. FLEET_SANDBOX_TEST_IMAGE points the tests at the SAME image
+        # the live stack resolved (GHCR pull or local build), so the assertion
+        # holds whether or not the published image was available.
+        env:
+          FLEET_SANDBOX_TEST_IMAGE: ${{ steps.sandbox.outputs.image }}
+        run: |
+          set -euo pipefail
+          tests='TestContainerWorkspaceSamePathCoherence|TestContainerReadOnlyMountsSamePath|TestContainerWorkspaceSurvivesConcurrentMount|TestContainerBashSamePath'
+          go test -run "$tests" -v -count=1 ./internal/sandbox 2>&1 | tee sandbox-invariants.log
+          for tc in \
+            TestContainerWorkspaceSamePathCoherence \
+            TestContainerReadOnlyMountsSamePath \
+            TestContainerWorkspaceSurvivesConcurrentMount \
+            TestContainerBashSamePath; do
+            if ! grep -q -- "--- PASS: ${tc}" sandbox-invariants.log; then
+              echo "::error::sandbox invariant test ${tc} did not PASS (skipped or absent) — this always-on lane must actually run it (see issue #34)"
+              exit 1
+            fi
+          done
+          if grep -q -- '--- SKIP' sandbox-invariants.log; then
+            echo "::error::a sandbox invariant test SKIPPED — this lane must run them for real (non-root rootless podman + resolved image), not self-skip into a false green"
+            exit 1
+          fi
+
       - name: Boot the live stack + run the live Playwright project
         working-directory: web
         env:

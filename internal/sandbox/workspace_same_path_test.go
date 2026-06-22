@@ -80,7 +80,7 @@ func TestContainerWorkspaceSamePathCoherence(t *testing.T) {
 	defer cancel()
 
 	sb, err := NewContainer(ctx, ContainerConfig{
-		Image:            "ghcr.io/elcanotek/sandbox:latest",
+		Image:            testImage(),
 		WorkspaceHostDir: wsHost,
 		BridgeScript:     bridge,
 	})
@@ -186,7 +186,7 @@ func TestContainerReadOnlyMountsSamePath(t *testing.T) {
 	defer cancel()
 
 	sb, err := NewContainer(ctx, ContainerConfig{
-		Image:            "ghcr.io/elcanotek/sandbox:latest",
+		Image:            testImage(),
 		WorkspaceHostDir: wsHost,
 		BridgeScript:     []byte("# unused for bash test\n"),
 		ReadOnlyMounts:   []string{docsHost},
@@ -290,7 +290,7 @@ func TestContainerWorkspaceSurvivesConcurrentMount(t *testing.T) {
 	defer cancel()
 
 	cfg := ContainerConfig{
-		Image:            "ghcr.io/elcanotek/sandbox:latest",
+		Image:            testImage(),
 		WorkspaceHostDir: wsHost,
 		BridgeScript:     []byte("# unused for bash test\n"),
 	}
@@ -384,7 +384,7 @@ func TestContainerBashSamePath(t *testing.T) {
 	defer cancel()
 
 	sb, err := NewContainer(ctx, ContainerConfig{
-		Image:            "ghcr.io/elcanotek/sandbox:latest",
+		Image:            testImage(),
 		WorkspaceHostDir: wsHost,
 		BridgeScript:     []byte("# unused for bash test\n"),
 	})
