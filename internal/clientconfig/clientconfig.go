@@ -76,6 +76,11 @@ type Bundle struct {
 	// local tag, optional prebuilt image override). Access it via Sandbox().
 	SandboxConfig Sandbox
 
+	// RuntimesConfig is the bundle's resolved runtime-flavor set (the manifest's
+	// runtimes: block; defaults applied when absent). Access via Runtimes() /
+	// DefaultRuntime() / Runtime().
+	RuntimesConfig []Runtime
+
 	// sandboxDeclared reports whether the manifest carried an explicit sandbox:
 	// block. Only a declared block enforces the Containerfile-exists invariant
 	// in validate (a minimal/legacy bundle gets the conventional defaults without
@@ -234,6 +239,7 @@ type manifest struct {
 	EmptyState  EmptyState       `yaml:"empty_state"`
 	AgentPolicy AgentPolicy      `yaml:"agent_policy"`
 	Sandbox     *sandboxManifest `yaml:"sandbox"`
+	Runtimes    runtimesManifest `yaml:"runtimes"`
 }
 
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
@@ -284,6 +290,11 @@ func Load(dir string) (*Bundle, error) {
 		return nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
 	}
 
+	runtimes, err := resolveRuntimes(m.Runtimes)
+	if err != nil {
+		return nil, fmt.Errorf("client config manifest %s: %w", manifestPath, err)
+	}
+
 	b := &Bundle{
 		Dir:               abs,
 		Branding:          m.Branding,
@@ -293,6 +304,7 @@ func Load(dir string) (*Bundle, error) {
 		AgentPolicyConfig: m.AgentPolicy,
 		SandboxConfig:     resolveSandbox(m.Sandbox, abs),
 		sandboxDeclared:   m.Sandbox != nil,
+		RuntimesConfig:    runtimes,
 		SystemPromptsDir:  filepath.Join(abs, "system_prompts"),
 		PersonasDir:       filepath.Join(abs, "personas"),
 		ProtocolsDir:      filepath.Join(abs, "protocols"),
