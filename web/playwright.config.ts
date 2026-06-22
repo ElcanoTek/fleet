@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { getTestAuthKey } from "./e2e/test-auth-key";
 
 // Playwright config for the unified Fleet frontend.
 //
@@ -23,13 +24,25 @@ const TEST_EMAIL = "e2e@example.com";
 const TEST_PASSWORD = "e2e-test-password";
 const TEST_SESSION_SECRET = "e2e-session-secret-0123456789abcdef";
 
-// A fixed, throwaway Ed25519 keypair so the "Use Elcano email" path renders and
-// the elcano_auth (magic-link) cookie can be minted + verified end-to-end. The
-// PUBLIC key is exported to the server via AUTH_SIGNING_PUBKEY (standard base64,
-// matching auth-admin keygen). The matching PRIVATE key lives only in the test
-// helper (e2e/mocked/_session.ts) so a spec can mint a valid elcano_auth cookie
-// the way the real auth service would. Neither value protects anything real.
-const TEST_AUTH_PUBKEY = "auDU7TeqdSjnPSPeu+SlhZ6ZxNRCfTJJNGY/ifABFj4=";
+// A throwaway Ed25519 keypair, GENERATED FRESH AT RUNTIME (see
+// e2e/test-auth-key.ts), so the "Use Elcano email" path renders and the
+// elcano_auth (magic-link) cookie can be minted + verified end-to-end. NO key
+// literal is committed to the repo.
+//
+// The keypair is generated exactly ONCE per run and persisted to a throwaway
+// file outside the repo, so the Next server process and the spec-worker
+// processes (which both re-load this config) read the SAME material:
+//   - the PUBLIC key is exported to the Next server via AUTH_SIGNING_PUBKEY
+//     (standard base64 of the raw 32-byte key, matching auth-admin keygen and
+//     home/server.js's `Buffer.from(AUTH_SIGNING_PUBKEY, "base64")`), so the
+//     real verifier (verifyElcanoToken) trusts tokens signed by this keypair.
+//   - the matching PRIVATE key (PKCS8 PEM) is read by the mocked test helper
+//     (e2e/mocked/_session.ts) so a spec can mint a valid elcano_auth cookie the
+//     way the real auth service would.
+// Server + signer always agree, and neither value protects anything real.
+const testAuthKey = getTestAuthKey();
+const TEST_AUTH_PUBKEY = testAuthKey.pubkeyStdB64;
+const TEST_AUTH_PRIVATE_KEY_PEM = testAuthKey.privateKeyPem;
 
 // In CI we BUILD the app and run `next start` (production server) so the suite
 // validates the shipped build, not just the dev server. Locally we default to
@@ -153,4 +166,4 @@ export default defineConfig({
   webServer: liveMode ? [liveWebServer] : [mockedWebServer],
 });
 
-export { TEST_EMAIL, TEST_PASSWORD, TEST_SESSION_SECRET, TEST_AUTH_PUBKEY };
+export { TEST_EMAIL, TEST_PASSWORD, TEST_SESSION_SECRET, TEST_AUTH_PUBKEY, TEST_AUTH_PRIVATE_KEY_PEM };

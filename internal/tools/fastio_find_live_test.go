@@ -24,10 +24,10 @@ import (
 // language phrase "ABC plumbing" returns one wrong file. fastio_find
 // should promote to the ELC code and surface the actual report.
 //
-// Workspace id is hardcoded to the Elcano "General" workspace
-// (4817763504744262145) — same id the broken chat used. If that
-// workspace is ever rotated, update the constant or the test should
-// fail loudly.
+// Workspace id is a placeholder (1234567890000000000); point it at a
+// real workspace via the constant below when running this live test
+// locally. If the target workspace is ever rotated, update the
+// constant or the test should fail loudly.
 func TestFastIOFindLive(t *testing.T) {
 	if os.Getenv("FAST_IO_MCP_TOKEN_LIVE_TEST") != "1" {
 		t.Skip("set FAST_IO_MCP_TOKEN_LIVE_TEST=1 to run live tests (requires FAST_IO_MCP_TOKEN)")
@@ -37,7 +37,7 @@ func TestFastIOFindLive(t *testing.T) {
 		t.Skip("FAST_IO_MCP_TOKEN not set")
 	}
 
-	const workspaceID = "4817763504744262145"
+	const workspaceID = "1234567890000000000"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

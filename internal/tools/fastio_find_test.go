@@ -40,11 +40,11 @@ func (r *recordingCaller) CallTool(_ context.Context, toolName string, args map[
 const realFastIOSearchTerseELC00109 = `**Result:** success
 
 # files
-- **2xjcp-ospjo-thypx-7qmav-7z2yl-se5x:**
+- **aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff:**
   - **name:** ABC_ELC00109_Overall_Report.csv
   - **parent_id:** 2xtko-e6gtx-vh25h-wcs2d-24dos-34ko
   - **type:** file
-  - **web_url:** https://elcano.fast.io/workspace/3117763504443666597-general/preview/2xjcp-ospjo-thypx-7qmav-7z2yl-se5x
+  - **web_url:** https://elcano.fast.io/workspace/3117763504443666597-general/preview/aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff
 
 # pagination
 - **total:** 12
@@ -56,7 +56,7 @@ const realFastIOSearchTerseELC00109 = `**Result:** success
 2026.05.7-b118774ec8
 
 # _fetched_ids
-- 2xjcp-ospjo-thypx-7qmav-7z2yl-se5x
+- aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff
 - 2a5fj-opahz-4hsza-xiehb-nscsr-eq7a
 - 2csss-4lokh-zuezi-a2ybi-uybml-oqof
 - 2qbap-m3zzb-4ggdy-gnz23-vb2nh-a4fs
@@ -82,7 +82,7 @@ multi
 # nodes
 | id | type | name | parent | version | created | modified | restricted | dmca | locked | is_imported | size | mimetype | mimecategory | previews | ai | summary | metadata | origin | web_url |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2xjcp-ospjo-thypx-7qmav-7z2yl-se5x | file | ABC_ELC00109_Overall_Report.csv | root | 37du7-l34yh | 2026-05-18 19:26:25 UTC | 2026-05-18 19:26:37 UTC | false | false | false | false | 10205 | text/csv | text | {"thumbnail":{"ready":false}} | {"state":"ready"} | {"title":"Digital Ad Campaign Metrics"} | — | {"creator":"294"} | https://elcano.fast.io/preview/2xjcp |
+| aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff | file | ABC_ELC00109_Overall_Report.csv | root | 37du7-l34yh | 2026-05-18 19:26:25 UTC | 2026-05-18 19:26:37 UTC | false | false | false | false | 10205 | text/csv | text | {"thumbnail":{"ready":false}} | {"state":"ready"} | {"title":"Digital Ad Campaign Metrics"} | — | {"creator":"294"} | https://elcano.fast.io/preview/aaaaa |
 | 2mzo3-a32fw-sxu6r-cjzp6-o6552-wis7 | file | ABC_ELC00109_Overall_Report.csv | 2s7no-f6mdk-qdz5o-yvm6o-upd6i-vymo | 3aovf-fglyy | 2026-05-18 20:38:37 UTC | 2026-05-18 20:38:54 UTC | false | false | false | false | 10205 | text/csv | text | {"thumbnail":{"ready":true}} | {"state":"ready"} | {"title":"Digital Ad Campaign Metrics"} | — | {"creator":"294"} | https://elcano.fast.io/preview/2mzo3 |
 | 2qbap-m3zzb-4ggdy-gnz23-vb2nh-a4fs | file | ABC_ELC00109_Overall Report.csv | root | 3wfw2-nq6mf | 2026-05-18 19:11:03 UTC | 2026-05-18 19:11:20 UTC | false | false | false | false | 86 | text/csv | text | {"thumbnail":{"ready":true}} | {"state":"ready"} | {"title":"Ad Campaign Performance Data"} | — | {"creator":"294"} | https://elcano.fast.io/preview/2qbap |
 
@@ -155,7 +155,7 @@ func TestParseFastIOSearchIDs_FetchedIDsBlock(t *testing.T) {
 	if len(ids) != 4 {
 		t.Fatalf("expected 4 fetched ids; got %d (%v)", len(ids), ids)
 	}
-	if ids[0] != "2xjcp-ospjo-thypx-7qmav-7z2yl-se5x" {
+	if ids[0] != "aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff" {
 		t.Errorf("first id wrong: %s", ids[0])
 	}
 }
@@ -235,7 +235,7 @@ func TestParseFastIODetailsTable_RealRows(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows; got %d", len(rows))
 	}
-	if rows[0].ID != "2xjcp-ospjo-thypx-7qmav-7z2yl-se5x" {
+	if rows[0].ID != "aaaaa-bbbbb-ccccc-ddddd-eeeee-fffff" {
 		t.Errorf("row[0].id wrong: %s", rows[0].ID)
 	}
 	if rows[0].Name != "ABC_ELC00109_Overall_Report.csv" {
@@ -266,7 +266,7 @@ func TestRunFastIOFind_UnionsELCFallbackWithNaturalQuery(t *testing.T) {
 	}
 	out, err := runFastIOFind(context.Background(), caller, FastIOFindParams{
 		Query:       "ABC plumbing ELC00109",
-		WorkspaceID: "4817763504744262145",
+		WorkspaceID: "1234567890000000000",
 		Limit:       10,
 	})
 	if err != nil {
@@ -317,17 +317,17 @@ func TestRunFastIOFind_SortsNewestFirst(t *testing.T) {
 	}
 	out, err := runFastIOFind(context.Background(), caller, FastIOFindParams{
 		Query:       "ELC00109",
-		WorkspaceID: "4817763504744262145",
+		WorkspaceID: "1234567890000000000",
 	})
 	if err != nil {
 		t.Fatalf("runFastIOFind: %v", err)
 	}
 
 	// The newest row (2mzo3, modified 2026-05-18 20:38) should appear
-	// before the older 2xjcp row (modified 19:26) which should appear
+	// before the older aaaaa row (modified 19:26) which should appear
 	// before the oldest 2qbap (19:11).
 	posNewest := strings.Index(out, "2mzo3-a32fw")
-	posMiddle := strings.Index(out, "2xjcp-ospjo")
+	posMiddle := strings.Index(out, "aaaaa-bbbbb")
 	posOldest := strings.Index(out, "2qbap-m3zzb")
 	if posNewest <= 0 || posMiddle <= posNewest || posOldest <= posMiddle {
 		t.Errorf("rows not sorted newest-first; got positions %d %d %d\n%s",
@@ -344,7 +344,7 @@ func TestRunFastIOFind_NoHits(t *testing.T) {
 	}
 	out, err := runFastIOFind(context.Background(), caller, FastIOFindParams{
 		Query:       "ABC plumbing ELC99999",
-		WorkspaceID: "4817763504744262145",
+		WorkspaceID: "1234567890000000000",
 	})
 	if err != nil {
 		t.Fatalf("runFastIOFind: %v", err)
@@ -377,7 +377,7 @@ func TestRunFastIOFind_RequiresWorkspaceID(t *testing.T) {
 func TestRunFastIOFind_RequiresQuery(t *testing.T) {
 	caller := &recordingCaller{}
 	_, err := runFastIOFind(context.Background(), caller, FastIOFindParams{
-		WorkspaceID: "4817763504744262145",
+		WorkspaceID: "1234567890000000000",
 	})
 	if err == nil || !strings.Contains(err.Error(), "query") {
 		t.Errorf("expected query error; got %v", err)
@@ -416,7 +416,7 @@ func TestRunFastIOFind_MultiMatchHardStopsForUserChoice(t *testing.T) {
 		}
 	}
 	// Recommendation should point to the newest row in the fixture
-	// (2mzo3 — modified 2026-05-18 20:38, newer than 2xjcp and 2qbap).
+	// (2mzo3 — modified 2026-05-18 20:38, newer than aaaaa and 2qbap).
 	if !strings.Contains(out, "2mzo3-a32fw-sxu6r-cjzp6-o6552-wis7") {
 		t.Errorf("recommendation should cite the newest row's id; got:\n%s", out)
 	}
@@ -627,7 +627,7 @@ func TestRunFastIOFind_ClampsLimit(t *testing.T) {
 	}
 	_, _ = runFastIOFind(context.Background(), caller, FastIOFindParams{
 		Query:       "ELC00109",
-		WorkspaceID: "4817763504744262145",
+		WorkspaceID: "1234567890000000000",
 		Limit:       500, // way over the max
 	})
 	got := caller.calls[0].args["display_limit"]

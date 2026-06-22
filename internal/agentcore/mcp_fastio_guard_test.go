@@ -21,7 +21,7 @@ func TestRejectFastIOInlineBase64Upload_ExposesBothRemediationHints(t *testing.T
 		"action":         "stream-upload",
 		"filename":       "doc.docx",
 		"profile_type":   "workspace",
-		"profile_id":     "4817763504744262145",
+		"profile_id":     "1234567890000000000",
 		"content_base64": strings.Repeat("A", fastIOInlineUploadByteCap+1),
 	}
 	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args, DefaultRemediationHints)
