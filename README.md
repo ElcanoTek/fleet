@@ -28,17 +28,28 @@ internal/
   agent/          input sources, observers, policies, finalize (interactive + scheduled)
   runner/         in-process capped worker pool (the old "gig", folded in)
   creds/          MCP credential-account store
+  clientconfig/   loads the pluggable CLIENT BUNDLE (branding, MCP catalog, prompts, ...)
   mcp/            merged Go MCP client (stdio + HTTP)
   sandbox/        the single execution backend (ephemeral container over a persistent workspace)
   tools/          native agent tools (bash, python, ...)
   store/          interactive (chat) Postgres layer + migrations
   sched/          orchestrator/scheduler (was moc) + its migrations
   httpapi/        chat HTTP/SSE/auth layer
-  config/         unified configuration
+  config/         unified configuration (env loading; the MCP catalog comes from the bundle)
 web/              one Next.js app: /chat and /orchestrator
 images/sandbox/   the one sandbox container image
-mcp/              the deduped Python MCP servers
+config/default/   the GENERIC client bundle baked into the repo (runs bare)
 ```
+
+fleet ships **no** client-specific content. It loads a **client config bundle**
+from `FLEET_CLIENT_CONFIG_DIR` (default `config/default`, a generic bundle with
+neutral branding and no MCP connectors). A real deployment points the variable
+at a checked-out client repo whose `manifest.yaml` supplies the branding, model
+defaults, MCP-server catalog, empty-state cards, and agent tool policy, and
+whose `system_prompts/`, `personas/`, `protocols/`, and `mcp/` directories
+supply the prompts, personas, playbooks, and Python MCP servers. See
+`config/default/README.md` and `internal/clientconfig/clientconfig.go` for the
+bundle contract.
 
 See `docs/MIGRATION_PLAN_V2.md` for the architecture and the phased migration plan.
 
@@ -68,8 +79,10 @@ browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet:
    scripts/bootstrap.sh --postgres=local      # or --postgres=external
    ```
 
-   Then fill in `OPENROUTER_API_KEY`, the two `FLEET_*_DATABASE_URL`s, and any
-   MCP account secrets (`fleet-admin mcp account set ...`) in the env file.
+   Then fill in `OPENROUTER_API_KEY`, the two `FLEET_*_DATABASE_URL`s,
+   `FLEET_CLIENT_CONFIG_DIR` (the client bundle checkout — see step 3), the
+   bundle's MCP connector credentials, and any MCP account secrets
+   (`fleet-admin mcp account set ...`) in the env file.
 
 2. **Build** the binary and the web app:
 
@@ -80,11 +93,13 @@ browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet:
 
 3. **systemd** — run the single binary under `deploy/fleet.service` (it
    `EnvironmentFile`s the 0600 env file, `Restart=always`, drains the worker
-   pool on `SIGTERM`):
+   pool on `SIGTERM`). Check out the client config bundle and point
+   `FLEET_CLIENT_CONFIG_DIR` at it (fleet itself ships only the generic
+   `config/default` bundle):
 
    ```
    install -D -m 0755 fleet            /opt/fleet/fleet
-   cp -r personas protocols system_prompts /opt/fleet/
+   git clone <client-config-repo>      /opt/fleet/client   # set FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client
    install -D -m 0644 deploy/fleet.service /etc/systemd/system/fleet.service
    install -D -m 0600 <your-env-file>  /etc/fleet/fleet.env
    systemctl daemon-reload && systemctl enable --now fleet

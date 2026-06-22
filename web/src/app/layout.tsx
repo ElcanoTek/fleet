@@ -4,24 +4,31 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
-// metadataBase resolves relative URLs (icons, OG images) against this
-// origin when scrapers unfurl shared links. Hardcoded to the production
-// hostname because dev/staging URLs are never the ones being shared in
-// Slack / iMessage / etc.
-const PUBLIC_ORIGIN = "https://chat.elcanotek.com";
+// Branding here is static/SSR metadata that scrapers read to unfurl shared
+// links, so it can't fetch the member-gated /client-config. Instead it reads
+// build-time NEXT_PUBLIC_* env vars (with neutral, client-agnostic defaults) to
+// stay white-labellable without a runtime fetch. Per-request branding (the tab
+// title, sidebar) is overridden client-side from /api/client-config.
+const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME?.trim() || "Fleet";
 
-const SHARE_TITLE = "Elcano Chat — your team's AI workspace";
+// metadataBase resolves relative URLs (icons, OG images) against this origin
+// when scrapers unfurl shared links. Configurable via env so each deploy points
+// at its own public hostname; the default is a neutral placeholder.
+const PUBLIC_ORIGIN =
+  process.env.NEXT_PUBLIC_PUBLIC_ORIGIN?.trim() || "https://chat.example.com";
+
+const SHARE_TITLE = `${APP_NAME} — your team's AI workspace`;
 const SHARE_DESCRIPTION =
-  "Persistent multi-turn conversations with real tool use across email, files, and analytics. Built by Elcano for the way your team actually works.";
+  "Persistent multi-turn conversations with real tool use across files, data, and the web.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(PUBLIC_ORIGIN),
   // Default tab title. The chat experience overrides this with
-  // "{conversation title} — Elcano Chat" once a conversation is active.
-  title: "Elcano Chat",
+  // "{conversation title} — {app name}" once a conversation is active.
+  title: APP_NAME,
   description: SHARE_DESCRIPTION,
-  applicationName: "Elcano Chat",
-  authors: [{ name: "Elcano" }],
+  applicationName: APP_NAME,
+  authors: [{ name: APP_NAME }],
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -42,14 +49,14 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    siteName: "Elcano Chat",
+    siteName: APP_NAME,
     title: SHARE_TITLE,
     description: SHARE_DESCRIPTION,
     url: PUBLIC_ORIGIN,
     images: [
       {
-        url: "/logos/elcano-mark-primary.svg",
-        alt: "Elcano",
+        url: "/icon.png",
+        alt: APP_NAME,
       },
     ],
   },
@@ -57,7 +64,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: SHARE_TITLE,
     description: SHARE_DESCRIPTION,
-    images: ["/logos/elcano-mark-primary.svg"],
+    images: ["/icon.png"],
   },
 };
 

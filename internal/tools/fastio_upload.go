@@ -178,8 +178,8 @@ func detectFastIOContentType(filename string) string {
 	// mime.TypeByExtension misses a few office formats on stripped-down
 	// systems (it relies on /etc/mime.types). Pin the ones we care about
 	// so the agent's `.docx`/`.xlsx`/`.pptx` uploads always go through
-	// with the right type. The list mirrors the file types Victoria
-	// produces most often in chat — Word, Excel, PowerPoint, PDF.
+	// with the right type. The list covers the office file types agents
+	// produce most often in chat — Word, Excel, PowerPoint, PDF.
 	switch ext {
 	case ".docx":
 		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

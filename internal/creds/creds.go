@@ -39,8 +39,8 @@ import (
 // is set in the process environment — this prevents leaking unrelated env
 // state into a spawned subprocess.
 //
-// Convention: OPENX_API_KEY (default / Elcano) + OPENX_API_KEY_REKLAIM
-// (Reklaim's account). Adding a new account requires only setting their
+// Convention: PROVIDER_API_KEY (default seat) + PROVIDER_API_KEY_ACCOUNTB
+// (a named account). Adding a new account requires only setting their
 // suffixed env vars — no code change. Empty suffixed values are treated
 // the same as unset and fall back to the bare value (matches the
 // `getEnvOrDefault` semantics used elsewhere).
