@@ -52,6 +52,14 @@ type Config struct {
 	// bundle default; "native-inprocess"; "native-acp"). Inherited by the turn,
 	// so "fleet runs in a sandbox" holds for ingress for free.
 	Runtime string
+	// Lockdown, when true, marks every ingress conversation locked-down and forces
+	// each turn into the sealed, no-network per-turn sandbox (mirroring the web
+	// path, which ORs req.Lockdown with the server's LockdownOnly and threads
+	// conv.Lockdown into the turn). cmd/fleet/acp.go ORs FLEET_ACP_LOCKDOWN with
+	// the server's CHAT_LOCKDOWN_ONLY to populate this, so a LockdownOnly server is
+	// never silently network-enabled when an editor connects. The model is
+	// validated against the lockdown allow-list up-front there.
+	Lockdown bool
 	// PermissionTimeout caps how long a staged approval waits for the human over
 	// ACP before defaulting to DENY. Zero uses DefaultPermissionTimeout.
 	PermissionTimeout time.Duration
@@ -120,7 +128,7 @@ func (a *IngressAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) 
 	if a.cfg.Model == "" {
 		return acp.NewSessionResponse{}, errors.New("fleet acp: no model configured (set the ingress model)")
 	}
-	conv, err := a.store.CreateConversation(ctx, a.cfg.Principal.Email, "", a.cfg.Persona, a.cfg.Model, false /* lockdown */)
+	conv, err := a.store.CreateConversation(ctx, a.cfg.Principal.Email, "", a.cfg.Persona, a.cfg.Model, a.cfg.Lockdown)
 	if err != nil {
 		return acp.NewSessionResponse{}, fmt.Errorf("create ingress conversation: %w", err)
 	}
@@ -130,8 +138,8 @@ func (a *IngressAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) 
 	a.sessions[sid] = &ingressSession{conversationID: conv.ID, cwd: p.Cwd}
 	a.mu.Unlock()
 
-	log.Printf("acpingress: new session %s → conversation %s (cwd=%s, model=%s, runtime=%q, principal=%s)",
-		sid, conv.ID, p.Cwd, a.cfg.Model, a.cfg.Runtime, a.cfg.Principal.Email)
+	log.Printf("acpingress: new session %s → conversation %s (cwd=%s, model=%s, runtime=%q, lockdown=%t, principal=%s)",
+		sid, conv.ID, p.Cwd, a.cfg.Model, a.cfg.Runtime, a.cfg.Lockdown, a.cfg.Principal.Email)
 	return acp.NewSessionResponse{SessionId: acp.SessionId(sid)}, nil
 }
 
@@ -179,6 +187,10 @@ func (a *IngressAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Pro
 		History:        history,
 		ConversationID: sess.conversationID,
 		Runtime:        a.cfg.Runtime,
+		// Force the sealed, no-network per-turn sandbox when this session is
+		// locked down (mirrors the web path threading conv.Lockdown into the
+		// turn). The engine re-checks the model against the lockdown allow-list.
+		Lockdown: a.cfg.Lockdown,
 		// The human-in-the-loop approval surface: a staged critical tool routes
 		// to the editor over OUTBOUND request_permission (default-DENY). The
 		// other staging surfaces are handled per the approver's documented

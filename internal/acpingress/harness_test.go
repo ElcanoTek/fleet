@@ -145,6 +145,17 @@ type fakeEngine struct {
 	model  fantasy.LanguageModel
 	pool   *sandbox.Pool
 	spyObs agentcore.Observer
+
+	mu        sync.Mutex
+	lastInput agent.TurnInput // the TurnInput of the most recent RunTurn, for assertions
+}
+
+// lastTurnInput returns a copy of the most recent RunTurn input (nil History to
+// keep the copy cheap; tests assert scalar fields like Lockdown).
+func (e *fakeEngine) lastTurnInput() agent.TurnInput {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.lastInput
 }
 
 func newFakeEngine(model fantasy.LanguageModel) *fakeEngine {
@@ -161,6 +172,10 @@ func newFakeEngine(model fantasy.LanguageModel) *fakeEngine {
 // RunTurn assembles + runs the real interactive turn, mapping the result onto a
 // TurnResult the same way Manager.RunTurn does.
 func (e *fakeEngine) RunTurn(ctx context.Context, in agent.TurnInput, sink agent.EventSink) (*agent.TurnResult, error) {
+	e.mu.Lock()
+	e.lastInput = in
+	e.mu.Unlock()
+
 	sb, cleanup, err := e.pool.Take()
 	if err != nil {
 		return nil, err

@@ -444,6 +444,7 @@ Ingress-specific environment knobs:
 | `FLEET_ACP_RUNTIME`    | Flavor for ingress turns (`native-inprocess` / `native-acp`). Defaults to the bundle's default flavor. |
 | `FLEET_ACP_PERSONA`    | Persona for ingress turns. Defaults to the bundle's default persona.    |
 | `FLEET_ACP_PRINCIPAL`  | The audit identity ingress sessions attribute to (see the trust model). Defaults to a placeholder. |
+| `FLEET_ACP_LOCKDOWN`   | Opt this `fleet acp` process into lockdown: every ingress turn runs in the sealed, no-network per-turn sandbox. ORed with the server's `CHAT_LOCKDOWN_ONLY`, so a `LockdownOnly` server always seals ingress turns regardless of this flag. Requires a configured sandbox image and a model on `CHAT_LOCKDOWN_ALLOWED_MODELS` — validated at startup. |
 
 ### Trust model (read this)
 

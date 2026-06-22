@@ -47,6 +47,7 @@ type wired struct {
 	store  *memStore
 	runner *fakeRunner
 	spy    *recordingObserver
+	engine *fakeEngine
 }
 
 // setup wires the agent + editor over io.Pipe with the given scripted model and
@@ -74,7 +75,7 @@ func setup(t *testing.T, model fantasy.LanguageModel, cfg Config) *wired {
 		_ = agentToClientW.Close()
 	})
 
-	return &wired{agent: ia, editor: editor, client: clientConn, store: st, runner: runner, spy: spy}
+	return &wired{agent: ia, editor: editor, client: clientConn, store: st, runner: runner, spy: spy, engine: eng}
 }
 
 // initNewPrompt runs the standard initialize → new-session → prompt sequence and
@@ -126,6 +127,62 @@ func TestRoundTrip(t *testing.T) {
 		if len(hist) == 0 {
 			t.Fatalf("conversation %s has empty persisted history", id)
 		}
+	}
+}
+
+// TestLockdownThreadsThroughTurn: when the ingress Config is locked down, the
+// bound conversation is created lockdown=true AND every turn's TurnInput carries
+// Lockdown=true — so a LockdownOnly server (which ORs into Config.Lockdown in
+// cmd/fleet/acp.go) seals the per-turn sandbox the moment an editor connects.
+// Guards the governance hole from issue #30.
+func TestLockdownThreadsThroughTurn(t *testing.T) {
+	model := &scriptedModel{rounds: [][]fantasy.StreamPart{textRound("sealed reply")}}
+	cfg := baseCfg()
+	cfg.Lockdown = true
+	w := setup(t, model, cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if resp := w.initNewPrompt(ctx, t, "hi"); resp.StopReason != acp.StopReasonEndTurn {
+		t.Fatalf("stop reason = %q, want end_turn", resp.StopReason)
+	}
+
+	// The bound conversation was created locked down (CreateConversation lockdown arg).
+	if len(w.store.convs) != 1 {
+		t.Fatalf("conversations created = %d, want 1", len(w.store.convs))
+	}
+	for id, c := range w.store.convs {
+		if !c.Lockdown {
+			t.Fatalf("conversation %s created with lockdown=false, want true", id)
+		}
+	}
+	// The turn ran with Lockdown set, so Manager.takeTurnSandbox forces the sealed
+	// no-network sandbox.
+	if !w.engine.lastTurnInput().Lockdown {
+		t.Fatal("TurnInput.Lockdown = false, want true — ingress turn would run with network egress")
+	}
+}
+
+// TestNoLockdownByDefault: the default ingress Config leaves lockdown off, so the
+// conversation + turn are unlocked (the opt-in default; a LockdownOnly server or
+// FLEET_ACP_LOCKDOWN flips it on via cmd/fleet/acp.go, exercised at that layer).
+func TestNoLockdownByDefault(t *testing.T) {
+	model := &scriptedModel{rounds: [][]fantasy.StreamPart{textRound("open reply")}}
+	w := setup(t, model, baseCfg())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if resp := w.initNewPrompt(ctx, t, "hi"); resp.StopReason != acp.StopReasonEndTurn {
+		t.Fatalf("stop reason = %q, want end_turn", resp.StopReason)
+	}
+
+	for id, c := range w.store.convs {
+		if c.Lockdown {
+			t.Fatalf("conversation %s created with lockdown=true, want false by default", id)
+		}
+	}
+	if w.engine.lastTurnInput().Lockdown {
+		t.Fatal("TurnInput.Lockdown = true, want false by default")
 	}
 }
 
