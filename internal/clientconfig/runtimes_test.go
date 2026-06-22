@@ -13,8 +13,8 @@ func TestDefaultBundleRuntimes(t *testing.T) {
 		t.Fatalf("load default bundle: %v", err)
 	}
 	rts := b.Runtimes()
-	if len(rts) != 2 {
-		t.Fatalf("default runtimes = %d, want 2 (native-inprocess, native-acp)", len(rts))
+	if len(rts) != 4 {
+		t.Fatalf("default runtimes = %d, want 4 (native-inprocess, native-acp, claude-code, goose)", len(rts))
 	}
 	// native-inprocess is first (canonical order) and the default.
 	if rts[0].Name != RuntimeNativeInprocess {
@@ -38,6 +38,36 @@ func TestDefaultBundleRuntimes(t *testing.T) {
 	}
 	if acp.DelegatedPolicy {
 		t.Error("native-acp must NOT be delegated_policy (it is fully governed)")
+	}
+
+	// The two external (containment-tier) provider flavors ship in the generic
+	// bundle documenting the wiring: type acp, model_only egress, delegated
+	// policy, and the provider's own model-cred env var name(s) declared.
+	cc, ok := b.Runtime("claude-code")
+	if !ok {
+		t.Fatal("claude-code external flavor should be present")
+	}
+	if cc.Type != RuntimeTypeACP {
+		t.Errorf("claude-code type = %q, want acp", cc.Type)
+	}
+	if !cc.DelegatedPolicy {
+		t.Error("claude-code must be delegated_policy (containment tier)")
+	}
+	if cc.Network != RuntimeNetworkModelOnly {
+		t.Errorf("claude-code network = %q, want model_only", cc.Network)
+	}
+	if len(cc.ModelEnv) != 1 || cc.ModelEnv[0] != "ANTHROPIC_API_KEY" {
+		t.Errorf("claude-code model_env = %v, want [ANTHROPIC_API_KEY]", cc.ModelEnv)
+	}
+	goose, ok := b.Runtime("goose")
+	if !ok {
+		t.Fatal("goose external flavor should be present")
+	}
+	if !goose.DelegatedPolicy || goose.Network != RuntimeNetworkModelOnly {
+		t.Errorf("goose = %+v, want delegated_policy + model_only", goose)
+	}
+	if len(goose.Args) != 1 || goose.Args[0] != "acp" {
+		t.Errorf("goose args = %v, want [acp]", goose.Args)
 	}
 }
 

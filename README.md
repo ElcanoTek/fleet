@@ -54,6 +54,15 @@ bundle contract.
 
 See `docs/MIGRATION_PLAN_V2.md` for the architecture and the phased migration plan.
 
+## Using other agents
+
+fleet is an ACP client: besides its own loop it can drive **other coding agents**
+(Claude Code, Goose, …) as selectable, sandboxed flavors you pick per chat or per
+scheduled task. See **[`docs/USING-AGENTS.md`](docs/USING-AGENTS.md)** for the
+flavor model, how to add an external agent to a client bundle, the permission UI,
+the governance tiers (stated honestly), and a worked example. Read the governance
+and data-residency sections before enabling an external agent.
+
 ## Development
 
 ```

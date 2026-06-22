@@ -94,17 +94,27 @@ func (e *recordingExecutor) RunPython(_ context.Context, code string) (string, e
 	return "host-py: " + code, nil
 }
 
-// recordingObserver captures the events the client re-emits.
+// recordingObserver captures the events the client re-emits. It keeps both the
+// event-type sequence (events) and the full (eventType, payload) tuples (raw) so
+// tests can assert on payload contents — e.g. the external path's
+// permission.resolved audit events.
 type recordingObserver struct {
 	mu     sync.Mutex
 	events []string
+	raw    []recordedEvent
 	text   strings.Builder
+}
+
+type recordedEvent struct {
+	eventType string
+	payload   map[string]any
 }
 
 func (o *recordingObserver) Observe(eventType string, payload map[string]any) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.events = append(o.events, eventType)
+	o.raw = append(o.raw, recordedEvent{eventType: eventType, payload: payload})
 	if eventType == "text.delta" {
 		if t, _ := payload["text"].(string); t != "" {
 			o.text.WriteString(t)

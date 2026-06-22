@@ -201,10 +201,19 @@ func (r *ClientRuntime) spawn() (*agentProc, error) {
 	args = append(args, r.cfg.ExtraRunArgs...)
 	args = append(args, r.cfg.Image)
 
-	// Not bound to a per-call timeout ctx: the agent process lives for the whole
-	// run and is torn down explicitly by teardown(). We DO honor ctx via the
-	// connection-level request contexts and the teardown on the deferred path.
-	cmd := exec.Command(r.cfg.PodmanBinary, args...) //nolint:gosec,noctx // podman binary + args are operator-configured (image is a manifest ref), not user input; lifetime is managed by teardown(), not a request ctx.
+	return spawnAgentProc(r.cfg.PodmanBinary, args)
+}
+
+// spawnAgentProc launches `<podmanBinary> <args...>` as the agent subprocess
+// with its own process group (so teardown reaps the whole tree), stderr split
+// to the journal, and the protocol stdio piped. Shared by the native
+// ClientRuntime and the ExternalRuntime so both spawn + tear down identically.
+//
+// Not bound to a per-call timeout ctx: the agent process lives for the whole run
+// and is torn down explicitly by teardown(). ctx is honored via the
+// connection-level request contexts and the deferred teardown.
+func spawnAgentProc(podmanBinary string, args []string) (*agentProc, error) {
+	cmd := exec.Command(podmanBinary, args...) //nolint:gosec,noctx // podman binary + args are operator-configured (image is a manifest ref), not user input; lifetime is managed by teardown(), not a request ctx.
 	cmd.Stderr = os.Stderr
 	// Own process group so SIGTERM/SIGKILL reaches the podman supervisor (and,
 	// through it, the conmon/container) as a group — don't trust --rm alone.

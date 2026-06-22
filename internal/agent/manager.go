@@ -12,6 +12,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/acpruntime"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -69,9 +70,31 @@ type TurnInput struct {
 
 	// Runtime selects the execution flavor for this turn (clientconfig flavor
 	// name). "" / "native-inprocess" run the in-process loop; "native-acp" routes
-	// through the sandboxed ACP agent. Unknown values fall back to the default.
+	// through the sandboxed ACP agent; an "acp" (external) flavor drives an
+	// external provider's agent (Claude Code / Goose) at the containment tier.
+	// Unknown values fall back to the default.
 	Runtime string
+
+	// PermissionBroker, when set, routes an EXTERNAL acp agent's
+	// session/request_permission to a human (default-deny on timeout, no
+	// approve-all). Required for the external flavor; ignored by the native
+	// flavors (which are fully governed in-loop). Nil with an external flavor
+	// fails the turn's permission requests closed (deny).
+	PermissionBroker PermissionBroker
 }
+
+// PermissionBroker routes an external ACP agent's permission request to a human
+// and blocks for the decision (default-deny on timeout / cancel; no
+// approve-all). It is re-exported from acpruntime so the httpapi layer can wire
+// an implementation without importing acpruntime directly.
+type PermissionBroker = acpruntime.PermissionBroker
+
+// PermissionRequest / PermissionDecision are the broker's request/response
+// shapes, re-exported from acpruntime for the same reason.
+type (
+	PermissionRequest  = acpruntime.PermissionRequest
+	PermissionDecision = acpruntime.PermissionDecision
+)
 
 // TurnResult is returned after a turn completes.
 type TurnResult struct {
@@ -461,7 +484,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		}
 	}
 
-	runtimeName, _ := m.resolveRuntime(in.Runtime)
+	flavor := m.resolveRuntime(in.Runtime)
 
 	tc := TurnConfig{
 		SystemPrompt:     systemPrompt,
@@ -481,9 +504,11 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		MaxTotalTokens:   m.config.MaxTotalTokens,
 		ApprovalStager:   in.ApprovalStager,
 		MemoryProposer:   in.MemoryProposer,
-		Runtime:          runtimeName,
+		Runtime:          flavor.Name,
+		RuntimeFlavor:    flavor,
 		NativeAgentImage: m.nativeAgentImage,
 		Lockdown:         in.Lockdown,
+		PermissionBroker: in.PermissionBroker,
 	}
 
 	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink})

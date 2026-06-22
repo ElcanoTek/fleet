@@ -97,6 +97,43 @@ export type Approval = {
   resultText?: string;
 };
 
+/**
+ * Status of an external-agent permission request. "pending" while awaiting the
+ * human; "allowed"/"denied" after the human (or the default-deny timeout)
+ * decides. There is intentionally no "approve all" state — each request is
+ * decided on its own.
+ */
+export type PermissionStatus = "pending" | "allowed" | "denied";
+
+/** One option an external agent offered for a permission request. */
+export type PermissionOption = {
+  optionId: string;
+  name: string;
+  /** ACP option kind: "allow_once" / "reject_once" / … — drives button shape. */
+  kind: string;
+};
+
+/**
+ * PermissionRequest is an EXTERNAL ACP agent's session/request_permission
+ * surfaced to the human as an inline allow/deny prompt. The external agent
+ * (Claude Code / Goose) self-executes in a locked sandbox; when it wants to do
+ * something sensitive it asks, and fleet blocks its turn on the human's
+ * decision (default-deny on timeout). The user picks an option (or denies) and
+ * the decision is POSTed back; the agent's turn then continues.
+ */
+export type PermissionRequest = {
+  id: string;
+  /** Human-readable description of what the agent wants to do. */
+  title: string;
+  /** ACP tool kind (edit/read/execute/…) for an icon/treatment, if provided. */
+  kind?: string;
+  /** File paths the action touches, for the human to review. */
+  locations?: string[];
+  /** The agent's offered choices. */
+  options: PermissionOption[];
+  status: PermissionStatus;
+};
+
 /** Per-turn cost + tokens + duration for the inline chip under assistant messages. */
 export type TurnSummary = {
   costUsd: number;
@@ -263,6 +300,8 @@ export type Message = {
   pythonStreams?: PythonStream[];
   approvals?: Approval[];
   memoryProposals?: MemoryProposal[];
+  /** External-agent permission prompts surfaced inline (allow/deny). */
+  permissionRequests?: PermissionRequest[];
   summary?: TurnSummary;
   /** Populated when kind === "summary" — drives the summary banner chip. */
   summaryMeta?: SummaryMeta;
