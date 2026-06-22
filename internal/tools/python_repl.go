@@ -207,7 +207,7 @@ func runPythonWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params RunPy
 	if marshalErr != nil {
 		// JSON marshal failures shouldn't poison the turn — fall back to
 		// the raw output. The marshal error is opaque to the model.
-		return resp.Output, nil //nolint:nilerr
+		return resp.Output, nil //nolint:nilerr // intentional: marshal failure falls back to raw output rather than erroring the turn; the marshal error is opaque to the model.
 	}
 	return string(jsonBytes), nil
 }

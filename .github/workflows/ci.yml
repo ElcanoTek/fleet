@@ -90,16 +90,16 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           # Repo .golangci.yml is the v2 schema (version: "2") and pins
-          # run.go: "1.26.4", so a recent golangci-lint v2 is required.
+          # run.go: "1.26.4". Pin the binary to the SAME version the repo config
+          # is tuned against (see the header note in .golangci.yml) so CI and a
+          # local `golangci-lint run` agree and the full gate never flaps on a
+          # version bump.
           version: v2.12.2
-          # The codebase currently has ~136 pre-existing golangci-lint findings
-          # (gosec, goconst, revive, errcheck, ...) on main, so a full run would
-          # be red regardless of the change under review. only-new-issues makes
-          # the linter gate only NEW issues introduced by a PR (vs the merge
-          # base) while still running the full linter and validating the config.
-          # This wires golangci-lint into CI without blocking on the existing
-          # backlog; tightening to a full clean run is a separate cleanup effort.
-          only-new-issues: true
+          # FULL GATE: the lint backlog has been burned down to zero, so this
+          # fails on ANY finding (not just new-vs-merge-base). only-new-issues is
+          # intentionally removed/false. To keep it clean: fix the finding, or
+          # add a //nolint with a reason (nolintlint enforces the reason).
+          only-new-issues: false
 
       - name: go test
         run: go test -p 1 ./... -count=1

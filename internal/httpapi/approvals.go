@@ -149,7 +149,7 @@ func validateEmailHasContent(toolName, rawInput string) error {
 	if err := json.Unmarshal([]byte(rawInput), &parsed); err != nil {
 		// Non-JSON: nothing useful to check. Stage and let downstream
 		// handle the error — same behavior as prevalidateEmail.
-		return nil //nolint:nilerr
+		return nil //nolint:nilerr // intentional: a non-JSON body is not a validation failure here; downstream handles the malformed input.
 	}
 	if strings.TrimSpace(firstString(parsed, "content")) != "" {
 		return nil

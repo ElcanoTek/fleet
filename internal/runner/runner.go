@@ -101,9 +101,9 @@ type Pool struct {
 
 // NewPool builds a pool over a storage layer and a task runner.
 func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
-	cap := cfg.MaxConcurrentAgents
-	if cap <= 0 {
-		cap = maxConcurrentFromEnv()
+	capacity := cfg.MaxConcurrentAgents
+	if capacity <= 0 {
+		capacity = maxConcurrentFromEnv()
 	}
 	poll := cfg.PollInterval
 	if poll <= 0 {
@@ -116,7 +116,7 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 	return &Pool{
 		store:              store,
 		runner:             runner,
-		sem:                make(chan struct{}, cap),
+		sem:                make(chan struct{}, capacity),
 		pollInterval:       poll,
 		leaseRenewInterval: renew,
 		leaseOwner:         uuid.New(),
@@ -133,6 +133,7 @@ func maxConcurrentFromEnv() int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
+		//nolint:gosec // G706 false positive: v is rendered with %q, which escapes any CR/LF, so it cannot forge log lines. v is also an operator-set env var, not request input.
 		log.Printf("⚠ Ignoring invalid FLEET_MAX_CONCURRENT_AGENTS=%q; using default %d", v, DefaultMaxConcurrentAgents)
 		return DefaultMaxConcurrentAgents
 	}
