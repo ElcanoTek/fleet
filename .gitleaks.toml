@@ -1,0 +1,20 @@
+# gitleaks configuration for the fleet repo.
+#
+# Inherits gitleaks' full built-in ruleset, then layers a global path allowlist
+# so a local `gitleaks dir .` run skips gitignored build/dependency artifacts
+# (a fresh CI checkout has none of these, so this is purely for local
+# robustness). Per-finding allowlisting of confirmed FAKE test fixtures lives in
+# the repo-root .gitleaksignore (by fingerprint), not here.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Global path allowlist for gitignored build/dependency artifacts"
+paths = [
+  '''web/\.next/''',
+  '''node_modules/''',
+  '''\.venv/''',
+  '''web/test-results/''',
+  '''web/playwright-report/''',
+]
