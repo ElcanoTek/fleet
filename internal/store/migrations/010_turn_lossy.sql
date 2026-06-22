@@ -1,0 +1,15 @@
+-- 010_turn_lossy.sql — flag turns whose persisted event stream may be incomplete.
+--
+-- The in-memory turnBuffer is the source of truth for a live turn; it streams
+-- events to a persister goroutine that batch-writes them to turn_events for
+-- crash recovery. Under sustained Postgres latency the bounded persister channel
+-- can saturate (or a batch insert can fail), which previously dropped events from
+-- the persistent stream with no signal beyond a once-per-process log line.
+--
+-- Finish now backfills the full in-memory event snapshot before sealing the turn
+-- (idempotent via ON CONFLICT DO NOTHING), so a slow-DB turn that SURVIVED is
+-- recovered completely. When that backfill itself fails, the persisted trail is
+-- genuinely incomplete — this column records that fact so reattach / crash
+-- recovery can honestly tell a client the history may be partial instead of
+-- silently presenting a gapped stream.
+ALTER TABLE turns ADD COLUMN lossy BOOLEAN NOT NULL DEFAULT FALSE;

@@ -3,14 +3,157 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
+
+// slowPersister wraps the real *store.Store but stalls every InsertTurnEvents,
+// forcing the bounded persistCh to saturate so Emit drops events on the live
+// path — the exact slow-Postgres condition issue #32 guards. failInserts, when
+// set, also makes every InsertTurnEvents FAIL, so even the Finish backfill cannot
+// heal the gap (the genuinely-lossy case).
+type slowPersister struct {
+	*store.Store
+	delay       time.Duration
+	failInserts bool
+
+	mu          sync.Mutex
+	insertCalls int
+}
+
+func (p *slowPersister) InsertTurnEvents(ctx context.Context, events []store.TurnEvent) error {
+	if p.delay > 0 {
+		time.Sleep(p.delay)
+	}
+	p.mu.Lock()
+	p.insertCalls++
+	p.mu.Unlock()
+	if p.failInserts {
+		return errors.New("simulated turn_events insert failure")
+	}
+	return p.Store.InsertTurnEvents(ctx, events)
+}
+
+// TestPersister_BackfillHealsDropsUnderLatency: under DB latency that saturates
+// the persist channel, Finish re-sends the full in-memory snapshot so the
+// persisted ledger ends up gapless (no permanently-dropped events) and the turn
+// is NOT flagged lossy — the heal succeeded. Core acceptance for issue #32.
+func TestPersister_BackfillHealsDropsUnderLatency(t *testing.T) {
+	s := serverFixture(t)
+	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	buf, turnID, tok := s.registerTurn(conv.ID, cancel)
+
+	ctx, cc := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cc()
+	slow := &slowPersister{Store: s.store, delay: 40 * time.Millisecond}
+	if err := buf.attachPersister(ctx, slow); err != nil {
+		t.Fatalf("attachPersister: %v", err)
+	}
+
+	// Emit far more than the 512-deep persistCh in a tight loop while the persister
+	// is stalled, so the channel saturates and the live path drops events.
+	const n = 2000
+	for i := 1; i < n; i++ {
+		buf.Emit("delta", map[string]any{"i": i})
+	}
+	buf.Emit("turn.completed", map[string]any{}) // event #n; terminal marker
+
+	s.finishTurn(conv.ID, tok)
+
+	// The persisted ledger must be the COMPLETE, gapless 1..n — backfill healed
+	// every drop. (If the live path never dropped, this still holds; the assertion
+	// is on completeness, and slowPersister guarantees drops happened.)
+	events, err := s.store.LoadTurnEvents(t.Context(), turnID, 0)
+	if err != nil {
+		t.Fatalf("LoadTurnEvents: %v", err)
+	}
+	if len(events) != n {
+		t.Fatalf("persisted %d events, want %d (a gap means a turn_event was permanently lost)", len(events), n)
+	}
+	for i, e := range events {
+		if e.EventID != uint64(i+1) {
+			t.Fatalf("event[%d].EventID = %d, want %d (non-contiguous → lost event)", i, e.EventID, i+1)
+		}
+	}
+	rec, err := s.store.LookupTurn(t.Context(), turnID)
+	if err != nil {
+		t.Fatalf("LookupTurn: %v", err)
+	}
+	if rec == nil || rec.Status != "completed" {
+		t.Fatalf("status = %+v, want completed", rec)
+	}
+	if rec.Lossy {
+		t.Errorf("turn flagged lossy=true, but the backfill healed every drop")
+	}
+
+	s.inflightMu.Lock()
+	delete(s.inflight, conv.ID)
+	s.inflightMu.Unlock()
+}
+
+// TestPersister_LossyWhenBackfillFails: when events are dropped AND the Finish
+// backfill itself cannot persist them, the turn still reaches a terminal status
+// but is flagged lossy=true — an honest "the persisted history is incomplete"
+// signal instead of a silent gap. Issue #32 acceptance (the unhealable case).
+func TestPersister_LossyWhenBackfillFails(t *testing.T) {
+	s := serverFixture(t)
+	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	buf, turnID, tok := s.registerTurn(conv.ID, cancel)
+
+	ctx, cc := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cc()
+	// Every InsertTurnEvents fails: the live flush fails (→ needsBackfill) AND the
+	// Finish backfill fails (→ lossy). FinishTurn itself is a different statement
+	// (delegated to the real store), so the turn still seals.
+	failing := &slowPersister{Store: s.store, failInserts: true}
+	if err := buf.attachPersister(ctx, failing); err != nil {
+		t.Fatalf("attachPersister: %v", err)
+	}
+
+	for i := 1; i <= 5; i++ {
+		buf.Emit("delta", map[string]any{"i": i})
+	}
+	buf.Emit("turn.completed", map[string]any{})
+
+	s.finishTurn(conv.ID, tok)
+
+	rec, err := s.store.LookupTurn(t.Context(), turnID)
+	if err != nil {
+		t.Fatalf("LookupTurn: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("turn row missing")
+	}
+	if rec.Status != "completed" {
+		t.Errorf("status = %q, want completed (a lossy turn still seals)", rec.Status)
+	}
+	if !rec.Lossy {
+		t.Error("turn must be flagged lossy=true when its events could not be persisted")
+	}
+
+	s.inflightMu.Lock()
+	delete(s.inflight, conv.ID)
+	s.inflightMu.Unlock()
+}
 
 // Events emitted through a buffer with a persister attached should end
 // up in the turn_events table once the goroutine flushes, and the
@@ -62,6 +205,10 @@ func TestPersister_EventsPersistThenFinish(t *testing.T) {
 	}
 	if rec == nil || rec.Status != "completed" {
 		t.Errorf("status = %+v, want completed", rec)
+	}
+	// A clean turn (no drops) is not flagged lossy and needs no backfill.
+	if rec != nil && rec.Lossy {
+		t.Errorf("clean turn marked lossy=true; want false")
 	}
 
 	// Evict the retained buffer so the TTL timer doesn't leak.

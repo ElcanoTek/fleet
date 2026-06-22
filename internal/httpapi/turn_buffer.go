@@ -18,7 +18,7 @@ import (
 type eventSinkPersister interface {
 	CreateTurn(ctx context.Context, turnID, convID string, startedAt int64) error
 	InsertTurnEvents(ctx context.Context, events []store.TurnEvent) error
-	FinishTurn(ctx context.Context, turnID string, status store.TurnStatus, finishedAt int64) error
+	FinishTurn(ctx context.Context, turnID string, status store.TurnStatus, finishedAt int64, lossy bool) error
 }
 
 // turnBuffer is the single source of truth for a turn's event stream.
@@ -55,6 +55,13 @@ type turnBuffer struct {
 	persister eventSinkPersister
 	persistCh chan bufferedEvent
 	persistWG sync.WaitGroup
+	// needsBackfill is set (under mu) whenever an event could not be
+	// confirmed into turn_events on the live path — either persistCh was
+	// full when Emit tried to enqueue it, or a runPersister batch insert
+	// failed. Finish reads it to decide whether to re-send the full event
+	// snapshot before sealing the turn, so a saturation/latency blip never
+	// leaves a permanent gap in the persisted ledger.
+	needsBackfill bool
 }
 
 // bufferedEvent is one already-serialized SSE frame. Data is the
@@ -87,9 +94,10 @@ func (b *turnBuffer) attachPersister(ctx context.Context, p eventSinkPersister) 
 		return fmt.Errorf("CreateTurn: %w", err)
 	}
 	// Buffered channel so Emit never blocks on DB latency. If the
-	// goroutine falls far enough behind that we drop events here,
-	// the in-memory buffer still has them — crash recovery becomes
-	// incomplete, but live replay stays correct.
+	// goroutine falls far enough behind that Emit drops events here,
+	// the in-memory buffer still has them and Finish backfills the full
+	// snapshot before sealing the turn (see needsBackfill / Finish), so
+	// the persisted ledger is healed rather than left with a permanent gap.
 	b.persistCh = make(chan bufferedEvent, 512)
 	b.persistWG.Add(1)
 	go b.runPersister()
@@ -132,6 +140,9 @@ func (b *turnBuffer) runPersister() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := b.persister.InsertTurnEvents(ctx, toStore); err != nil {
 			log.Printf("persist turn_events (turn=%s n=%d): %v", b.turnID, len(toStore), err)
+			// These rows are unconfirmed; flag the turn for a full backfill on
+			// Finish rather than leaving a permanent gap.
+			b.markNeedsBackfill()
 		}
 		cancel()
 		pending = pending[:0]
@@ -185,17 +196,29 @@ func (b *turnBuffer) Emit(event string, payload any) {
 		}
 	}
 
-	// Persistence fan-out. Non-blocking so DB slowness never stalls
-	// live streaming. If the persister channel is full, drop the
-	// event from the persistent log (in-memory still has it); log
-	// once per buffer via the count so the operator notices.
+	// Persistence fan-out. Non-blocking so DB slowness never stalls live
+	// streaming (this runs under b.mu, which Attach/Finish also take, and
+	// fantasy's streaming callbacks hold other locks behind us — so it must
+	// not block). If the persister channel is full we drop the event from the
+	// live persist path but flag the turn: Finish re-sends the full in-memory
+	// snapshot before sealing it, so the row is recovered rather than lost.
 	if b.persistCh != nil {
 		select {
 		case b.persistCh <- ev:
 		default:
-			log.Printf("persister channel full (turn=%s); dropping event id=%d", b.turnID, ev.ID)
+			b.needsBackfill = true // already under b.mu
+			log.Printf("persister channel full (turn=%s); event id=%d deferred to Finish backfill", b.turnID, ev.ID)
 		}
 	}
+}
+
+// markNeedsBackfill flags the turn for a full snapshot backfill on Finish. Used
+// by runPersister (which holds no lock); Emit sets the flag inline since it
+// already holds b.mu.
+func (b *turnBuffer) markNeedsBackfill() {
+	b.mu.Lock()
+	b.needsBackfill = true
+	b.mu.Unlock()
 }
 
 // Finish seals the buffer. Emit becomes a no-op, all subscriber
@@ -232,12 +255,68 @@ func (b *turnBuffer) Finish() {
 		b.persistWG.Wait()
 	}
 	if b.persister != nil {
+		// If any event went unconfirmed on the live path (persistCh saturation or a
+		// failed batch insert), re-send the FULL in-memory snapshot now, BEFORE
+		// sealing the turn. InsertTurnEvents is idempotent (ON CONFLICT DO NOTHING),
+		// so this heals the gap without duplicating the rows that did land. We snapshot
+		// under the lock (the publisher is done, but b.events is shared state) and
+		// write outside it. lossy stays false on the happy path (no backfill) and when
+		// the backfill fully succeeds; it is set only when the persisted ledger is
+		// genuinely still incomplete after the heal attempt.
+		lossy := false
+		b.mu.Lock()
+		needsBackfill := b.needsBackfill
+		var snapshot []bufferedEvent
+		if needsBackfill {
+			snapshot = append([]bufferedEvent(nil), b.events...)
+		}
+		b.mu.Unlock()
+		if needsBackfill {
+			if err := b.backfill(snapshot); err != nil {
+				log.Printf("persist backfill (turn=%s n=%d): %v", b.turnID, len(snapshot), err)
+				lossy = true
+			}
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := b.persister.FinishTurn(ctx, b.turnID, status, b.finishedAt.Unix()); err != nil {
+		if err := b.persister.FinishTurn(ctx, b.turnID, status, b.finishedAt.Unix(), lossy); err != nil {
 			log.Printf("persist FinishTurn (turn=%s): %v", b.turnID, err)
 		}
 		cancel()
 	}
+}
+
+// backfill re-sends the full event snapshot to the persister in bounded chunks,
+// healing any rows dropped on the live path. ON CONFLICT DO NOTHING makes the
+// re-send idempotent against rows that already landed. Chunked so a very chatty
+// turn stays well under Postgres' parameter cap (InsertTurnEvents uses 5 params
+// per row). Returns the first error so Finish can flag the turn lossy.
+func (b *turnBuffer) backfill(events []bufferedEvent) error {
+	const chunk = 500
+	now := time.Now().Unix()
+	for start := 0; start < len(events); start += chunk {
+		end := start + chunk
+		if end > len(events) {
+			end = len(events)
+		}
+		batch := make([]store.TurnEvent, 0, end-start)
+		for _, ev := range events[start:end] {
+			batch = append(batch, store.TurnEvent{
+				TurnID:    b.turnID,
+				EventID:   ev.ID,
+				Name:      ev.Name,
+				Data:      ev.Data,
+				CreatedAt: now,
+			})
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := b.persister.InsertTurnEvents(ctx, batch)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // inferTerminalStatus scans the event log for a terminal marker and
