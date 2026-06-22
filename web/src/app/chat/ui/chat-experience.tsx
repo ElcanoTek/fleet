@@ -37,6 +37,7 @@ import { parseSseChunk, type ServerEvent } from "@/app/lib/sse";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import { LoadingLogo } from "./LoadingLogo";
 import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
+import { RuntimePicker } from "./RuntimePicker";
 import { getPill } from "./protocolPills";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import {
@@ -83,6 +84,9 @@ type ConversationSummary = {
   // slugs to the server's lockdown allow-list. Drives the lock-icon
   // badge in the sidebar + chat header and filters the model picker.
   lockdown?: boolean;
+  // runtime is the per-conversation execution flavor (fleet's ACP runtime
+  // selection). Empty = the bundle default. Drives the flavor picker.
+  runtime?: string;
 };
 
 type ServerConfig = {
@@ -635,7 +639,11 @@ export function ChatExperience() {
   // Runtime client config: branding strings + the empty-state quick-start
   // cards, fetched from the member-gated /api/client-config so the UI is
   // client-agnostic. Falls back to neutral defaults on error / while loading.
-  const { branding, pills } = useClientConfig();
+  const { branding, pills, runtimes, defaultRuntime } = useClientConfig();
+  // selectedRuntime is the active conversation's runtime flavor ("" = use the
+  // bundle default). Synced from the conversation on load; persisted with the
+  // turn via the chat request body + the dedicated /runtime endpoint.
+  const [selectedRuntime, setSelectedRuntime] = useState<string>("");
   // selectedModel is the OpenRouter slug for the active conversation. Empty
   // means "use the server-configured primary." It can be edited mid-chat;
   // submitPrompt forwards the current value with every turn so the backend
@@ -1803,6 +1811,7 @@ export function ChatExperience() {
       if (conv) {
         setSelectedPersona(conv.persona);
         setSelectedModel(conv.model || DEFAULT_MODEL);
+        setSelectedRuntime(conv.runtime || "");
       }
       setSidebarOpen(false);
       return;
@@ -1828,6 +1837,7 @@ export function ChatExperience() {
       setActiveConversationId(data.conversation.id);
       setSelectedPersona(data.conversation.persona);
       setSelectedModel(data.conversation.model || DEFAULT_MODEL);
+      setSelectedRuntime(data.conversation.runtime || "");
       // Reset compaction UI state so the freshly-loaded conversation
       // starts with pre-summary turns collapsed (when present) and
       // any prior error from another chat does not leak into this one.
@@ -2056,6 +2066,25 @@ export function ChatExperience() {
     }
   };
 
+  // selectRuntime updates the active conversation's runtime flavor. It updates
+  // local state immediately (so the next turn's chat body carries it) and, when
+  // a conversation already exists, persists it via the dedicated endpoint so a
+  // mid-conversation change sticks even without sending a turn. A brand-new chat
+  // has no row yet — the choice rides the first chat request body instead.
+  const selectRuntime = (name: string) => {
+    setSelectedRuntime(name);
+    const convId = activeConversationIdRef.current;
+    if (!convId) return;
+    void fetch(`/api/conversations/${encodeURIComponent(convId)}/runtime`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runtime: name }),
+    }).catch(() => {
+      // Best-effort: the flavor still rides the next chat request body, which
+      // persists it server-side, so a transient failure here is non-fatal.
+    });
+  };
+
   const togglePin = async (conversation: ConversationSummary) => {
     const nextPinned = !conversation.pinned;
     // Optimistic update
@@ -2233,6 +2262,8 @@ export function ChatExperience() {
     // to DEFAULT_MODEL — for lockdown that's also the first allowed
     // slug, and for normal chat it's the product default.
     setSelectedModel(DEFAULT_MODEL);
+    // New chat starts on the bundle default flavor (empty = default).
+    setSelectedRuntime("");
     promptRef.current?.focus();
   };
 
@@ -3222,6 +3253,9 @@ export function ChatExperience() {
       persona: selectedPersona,
       model: trimmedModel,
     };
+    if (selectedRuntime) {
+      body.runtime = selectedRuntime;
+    }
     if (uploadedAttachments.length > 0) {
       body.attachments = uploadedAttachments;
     }
@@ -5018,6 +5052,16 @@ export function ChatExperience() {
                       </div>
                     );
                   })()}
+                  {/* Runtime flavor picker — self-hides unless the bundle ships
+                      more than one flavor. Lets a conversation pick the native
+                      in-process fast path vs the sandboxed native-acp agent
+                      (and, later, external ACP flavors). */}
+                  <RuntimePicker
+                    flavors={runtimes}
+                    selected={selectedRuntime}
+                    defaultRuntime={defaultRuntime}
+                    onSelect={selectRuntime}
+                  />
                   {/* No leading "Persona" / "Model" word labels — the
                       pill values themselves convey what each control is,
                       and dropping the labels keeps the persona dropdown's
