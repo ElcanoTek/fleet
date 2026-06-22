@@ -347,6 +347,26 @@ process resolves it — `FLEET_SANDBOX_IMAGE` env wins, else the bundle's
 `ResolvedImageRef()`), and the systemd unit state when a unit is installed.
 DSN passwords are redacted in the output.
 
+### service lifecycle — restart · stop · logs
+
+Day-2 conveniences over the host systemd unit, so you never drop to raw
+`systemctl`/`journalctl`:
+
+```
+fleet-admin restart                 # systemctl restart the fleet unit
+fleet-admin stop                    # systemctl stop the fleet unit
+fleet-admin logs                    # tail the last 50 journal lines (a.k.a. `tail`)
+fleet-admin logs -n 200             # last 200 lines
+fleet-admin logs -f                 # follow (stream) until Ctrl-C
+fleet-admin restart --service foo   # target a non-default unit name
+```
+
+The unit is resolved from `--service`, else `$FLEET_SERVICE_NAME`, else `fleet`.
+`restart`/`stop` manage a **system** unit, so — like the systemd unit itself —
+they need root/sudo; systemctl's own permission error surfaces via the exit code.
+`logs` reads the journal (usually permitted unprivileged) and exits non-zero if
+the unit isn't installed.
+
 ### Where the sandbox build fits
 
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its
