@@ -72,6 +72,15 @@ var fastIODropBullets = []string{
 // paragraph. Compounded, the discovery turn that broke conversation
 // 3460d911 burned ~25 KB on fast.io meta before the agent gave up.
 // Post-trim that drops to ~5–6 KB of actual file metadata.
+// TrimFastIOResponse is the exported form used by the native-acp host broker so a
+// delegated fast.io MCP response is trimmed EXACTLY as the in-process mcpTool
+// trims it (parity).
+func TrimFastIOResponse(text string) string { return trimFastIOResponse(text) }
+
+// MCPServerFastIO is the fast.io MCP server name, exported so the host broker can
+// detect it and apply the same response trimming the in-process path applies.
+const MCPServerFastIO = mcpServerFastIO
+
 func trimFastIOResponse(text string) string {
 	if text == "" {
 		return text

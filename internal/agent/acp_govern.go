@@ -1,0 +1,149 @@
+package agent
+
+import (
+	"context"
+	"slices"
+	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/acpruntime"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/mcp"
+)
+
+// Host-side governance brokers for the native-acp flavor (P-ACP-2b). The agent
+// container runs the SAME agentcore.Run loop with the SAME policy, but the
+// governed EFFECTS that must stay host-side ride `_fleet/*` back here:
+//
+//   - MCP tool calls execute against the per-task credentialed mcp.Client
+//     (mcpBroker) — MCP credentials NEVER enter the agent container;
+//   - approval / memory / note staging hits the real stagers (stageBroker) —
+//     the DB write + SSE card belong to the host.
+//
+// This is the same set of seams the in-process path uses, applied to the
+// agent's delegated calls — so native-acp governs identically.
+
+// mcpBroker implements acpruntime.MCPBroker by running the delegated call against
+// the host's per-task credentialed mcp.Client. The credentials live in the
+// client's server subprocess env (bound host-side via BindMCPSelection / the
+// manager's startup wiring); they are applied at THIS call, never shipped into
+// the agent container.
+type mcpBroker struct {
+	client *mcp.Client
+}
+
+var _ acpruntime.MCPBroker = (*mcpBroker)(nil)
+
+// CallMCP runs server.tool host-side and returns the flattened text content + the
+// isError bit, mirroring the in-process mcpTool's result rendering (incl. the
+// fast.io inline-upload pre-guard + response trimming) so the agent sees an
+// identical result. Credentials live in the client's server subprocess env (bound
+// host-side); they are applied at THIS call, never shipped into the container.
+func (b *mcpBroker) CallMCP(ctx context.Context, server, tool string, args map[string]any) (string, bool, error) {
+	fullName := "mcp_" + server + "_" + tool
+	// fast.io inline-base64 pre-guard: reject oversized inline uploads before the
+	// wire, exactly as the in-process mcpTool does.
+	if ok, hint := agentcore.RejectFastIOInlineBase64Upload(fullName, args, agentcore.DefaultRemediationHints); !ok {
+		return hint, true, nil
+	}
+	result, err := b.client.CallToolOn(ctx, server, tool, args)
+	if err != nil {
+		return "", false, err
+	}
+	var sb strings.Builder
+	for _, block := range result.Content {
+		if block.Type == "text" {
+			sb.WriteString(block.Text)
+			sb.WriteString("\n")
+		}
+	}
+	resultText := sb.String()
+	if server == agentcore.MCPServerFastIO {
+		resultText = agentcore.TrimFastIOResponse(resultText)
+	}
+	return resultText, result.IsError, nil
+}
+
+// stageBroker implements acpruntime.StageBroker by forwarding to the real
+// host-side stagers (ApprovalStager / MemoryProposer / NoteProposer) the
+// in-process path uses. Any of the three may be nil — a delegated request for an
+// unwired surface returns an error the agent surfaces exactly as the in-process
+// "not wired" path would.
+type stageBroker struct {
+	approval ApprovalStager
+	memory   MemoryProposer
+	note     agentcore.NoteProposer
+}
+
+var _ acpruntime.StageBroker = (*stageBroker)(nil)
+
+func (b *stageBroker) StageApproval(toolName, toolCallID, rawInput string) (string, error) {
+	if b.approval == nil {
+		return "", errStagerNotWired
+	}
+	return b.approval.Stage(toolName, toolCallID, rawInput)
+}
+
+func (b *stageBroker) StageSuggestion(reason string) (string, string, error) {
+	if b.approval == nil {
+		return "", "", errStagerNotWired
+	}
+	return b.approval.StageSuggestion(reason)
+}
+
+func (b *stageBroker) StageMemory(content string) (string, error) {
+	if b.memory == nil {
+		return "", errStagerNotWired
+	}
+	return b.memory.Propose(content)
+}
+
+func (b *stageBroker) StageNote(slug, title, body, reason string) (string, error) {
+	if b.note == nil {
+		return "", errStagerNotWired
+	}
+	return b.note.Propose(slug, title, body, reason)
+}
+
+// errStagerNotWired is returned when a delegated staging request targets a
+// surface the host has no stager for. The agent maps it onto the same "not wired"
+// agent-facing message the in-process gate produces.
+var errStagerNotWired = stagerNotWiredError("staging surface not wired host-side")
+
+type stagerNotWiredError string
+
+func (e stagerNotWiredError) Error() string { return string(e) }
+
+// buildMCPDescriptors computes the mcp_<server>_<tool> descriptors the native-acp
+// agent should advertise, applying the SAME Gate-1 (Optional opt-in) and Gate-2
+// (per-server allowlist) filters agentcore.buildFantasyTools applies in-process,
+// so the agent's MCP tool surface matches the in-process path exactly. Returns
+// descriptors with NO credentials — only the public server/tool/description/schema.
+func buildMCPDescriptors(
+	client *mcp.Client,
+	allow agentcore.MCPAllowlist,
+	optionalServers agentcore.MCPOptionalSet,
+	selection agentcore.MCPSelection,
+) []acpruntime.MCPToolDescriptor {
+	if client == nil {
+		return nil
+	}
+	optIn := selection.OptInSet()
+	var out []acpruntime.MCPToolDescriptor
+	for _, st := range client.GetAllTools() {
+		// Gate 1: Optional servers only when opted in (byte-identical to in-process).
+		if optionalServers[st.ServerName] && !optIn[st.ServerName] {
+			continue
+		}
+		// Gate 2: per-server tool allowlist.
+		if list, ok := allow[st.ServerName]; ok && len(list) > 0 && !slices.Contains(list, st.Tool.Name) {
+			continue
+		}
+		out = append(out, acpruntime.MCPToolDescriptor{
+			Server:      st.ServerName,
+			Tool:        st.Tool.Name,
+			Description: st.Tool.Description,
+			InputSchema: st.Tool.InputSchema,
+		})
+	}
+	return out
+}

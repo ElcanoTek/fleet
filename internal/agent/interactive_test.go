@@ -196,28 +196,37 @@ func TestRunInteractiveTurn_OneRoundCollapse(t *testing.T) {
 	}
 }
 
-// TestACPInteractiveFallback asserts the governance-honesty gate: native-acp is
-// refused (falls back to the in-process path) whenever a governed feature it
-// cannot yet faithfully reproduce is active for the turn.
+// TestACPInteractiveFallback asserts the governance-honesty gate is now EMPTY:
+// P-ACP-2b closed every reason the P-ACP-1 gate carried (MCP, approval staging,
+// memory/note staging, lockdown) by extending the host-side delegation, so
+// native-acp runs FULLY GOVERNED in every case it previously fell back. The gate
+// stays as the single auditable hook to re-introduce a fallback if a new governed
+// surface ever lands before its delegation seam.
 func TestACPInteractiveFallback(t *testing.T) {
 	cases := []struct {
-		name       string
-		mutate     func(*TurnConfig)
-		wantReason bool
+		name   string
+		mutate func(*TurnConfig)
 	}{
-		{"clean", func(*TurnConfig) {}, false},
-		{"lockdown", func(tc *TurnConfig) { tc.Lockdown = true }, true},
-		{"mcp", func(tc *TurnConfig) { tc.Selection = agentcore.MCPSelection{{Server: "x"}} }, true},
-		{"approvals", func(tc *TurnConfig) { tc.ApprovalStager = stubApprovalStager{} }, true},
-		{"memory", func(tc *TurnConfig) { tc.MemoryProposer = stubMemoryProposer{} }, true},
+		{"clean", func(*TurnConfig) {}},
+		{"lockdown", func(tc *TurnConfig) { tc.Lockdown = true }},
+		{"mcp", func(tc *TurnConfig) { tc.Selection = agentcore.MCPSelection{{Server: "x"}} }},
+		{"approvals", func(tc *TurnConfig) { tc.ApprovalStager = stubApprovalStager{} }},
+		{"memory", func(tc *TurnConfig) { tc.MemoryProposer = stubMemoryProposer{} }},
+		{"note", func(tc *TurnConfig) { tc.NoteProposer = stubNoteProposer{} }},
+		{"all", func(tc *TurnConfig) {
+			tc.Lockdown = true
+			tc.Selection = agentcore.MCPSelection{{Server: "x"}}
+			tc.ApprovalStager = stubApprovalStager{}
+			tc.MemoryProposer = stubMemoryProposer{}
+			tc.NoteProposer = stubNoteProposer{}
+		}},
 	}
 	for _, tcase := range cases {
 		t.Run(tcase.name, func(t *testing.T) {
 			tc := TurnConfig{Runtime: "native-acp", NativeAgentImage: "img"}
 			tcase.mutate(&tc)
-			reason := acpInteractiveFallback(tc)
-			if (reason != "") != tcase.wantReason {
-				t.Fatalf("acpInteractiveFallback(%s) = %q, wantReason=%v", tcase.name, reason, tcase.wantReason)
+			if reason := acpInteractiveFallback(tc); reason != "" {
+				t.Fatalf("acpInteractiveFallback(%s) = %q, want empty (native-acp fully governs this case in P-ACP-2b)", tcase.name, reason)
 			}
 		})
 	}
@@ -231,3 +240,7 @@ func (stubApprovalStager) StageSuggestion(string) (string, string, error) { retu
 type stubMemoryProposer struct{}
 
 func (stubMemoryProposer) Propose(string) (string, error) { return "", nil }
+
+type stubNoteProposer struct{}
+
+func (stubNoteProposer) Propose(_, _, _, _ string) (string, error) { return "", nil }
