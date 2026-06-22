@@ -1,0 +1,137 @@
+name: E2E canary (real model)
+
+# A NON-BLOCKING drift canary: runs the live stack against a REAL cheap
+# OpenRouter model (not the fake LLM) to catch upstream/provider drift the
+# deterministic e2e-live job can't see. It is NEVER a PR gate — it runs on a
+# nightly schedule and on manual dispatch only.
+#
+# Secret-gated: it needs the OPENROUTER_API_KEY repo secret. If that secret is
+# absent (e.g. on a fork, or before it's configured) the job SKIPS CLEANLY — it
+# must never fail for a missing secret. We achieve this by surfacing the secret
+# into a job-output guard and conditioning the real work on it; the workflow
+# still reports success (green) when skipped.
+
+on:
+  schedule:
+    # 07:00 UTC daily (~nightly). Cron is best-effort on GitHub-hosted runners.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'OpenRouter model slug to canary against'
+        required: false
+        default: 'openai/gpt-5.2'
+
+permissions:
+  contents: read
+
+jobs:
+  # Gate job: expose whether the secret is present as an output, without ever
+  # printing it. Downstream steps key off this so a missing secret skips cleanly.
+  guard:
+    name: Check for OPENROUTER_API_KEY secret
+    runs-on: ubuntu-latest
+    outputs:
+      has_key: ${{ steps.check.outputs.has_key }}
+    steps:
+      - id: check
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -n "${OPENROUTER_API_KEY}" ]; then
+            echo "has_key=true"  >> "$GITHUB_OUTPUT"
+            echo "OPENROUTER_API_KEY present — canary will run."
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            echo "OPENROUTER_API_KEY absent — canary will SKIP cleanly (this is not a failure)."
+          fi
+
+  canary:
+    name: Live canary against a real model
+    needs: guard
+    if: ${{ needs.guard.outputs.has_key == 'true' }}
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: fleet
+          POSTGRES_PASSWORD: fleet
+          POSTGRES_DB: fleet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fleet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      E2E_DATABASE_DSN: postgres://fleet:fleet@127.0.0.1:5432/postgres?sslmode=disable
+      SANDBOX_IMAGE_GHCR: ghcr.io/elcanotek/sandbox:latest
+      SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          check-latest: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright browser (chromium)
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Ensure podman + postgres client
+        run: |
+          sudo apt-get update -qq
+          command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
+          command -v psql   >/dev/null 2>&1 || sudo apt-get install -y -qq postgresql-client
+
+      - name: Resolve sandbox image (pull from GHCR, else build locally)
+        id: sandbox
+        run: |
+          set -euo pipefail
+          if podman pull "$SANDBOX_IMAGE_GHCR" >/dev/null 2>&1; then
+            echo "image=$SANDBOX_IMAGE_GHCR" >> "$GITHUB_OUTPUT"
+          else
+            IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
+            echo "image=$SANDBOX_IMAGE_LOCAL" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Boot live stack against a REAL model + run the canary project
+        working-directory: web
+        env:
+          CI: '1'
+          E2E_CANARY: '1'
+          E2E_PROD: '1'
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CANARY_MODEL: ${{ github.event.inputs.model || 'openai/gpt-5.2' }}
+          FLEET_SANDBOX_IMAGE: ${{ steps.sandbox.outputs.image }}
+        run: npx playwright test --project=canary --reporter=list
+
+      - name: Upload canary report on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-report
+          path: |
+            web/playwright-report/
+            .e2e-run/logs/
+          retention-days: 14
+          if-no-files-found: ignore
