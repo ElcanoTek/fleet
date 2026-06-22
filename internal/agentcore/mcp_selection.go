@@ -19,7 +19,7 @@ import (
 
 // MCPChoice names one chosen server and its credential account.
 type MCPChoice struct {
-	Server  string `json:"server"`            // catalog key, e.g. "xandr"
+	Server  string `json:"server"`            // catalog key, e.g. "myserver"
 	Account string `json:"account,omitempty"` // e.g. "client_a"; "" = default
 }
 

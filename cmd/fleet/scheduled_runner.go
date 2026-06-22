@@ -78,7 +78,7 @@ func (r *scheduledRunner) buildBaseSystemPrompt() string {
 	}
 	personaPath := r.cfg.Persona
 	if personaPath == "" {
-		personaPath = "victoria.yaml"
+		personaPath = "assistant.yaml"
 	}
 	if content, err := os.ReadFile(filepath.Join(r.personasDir, filepath.Base(personaPath))); err == nil && len(content) > 0 {
 		name := strings.TrimSuffix(filepath.Base(personaPath), filepath.Ext(personaPath))

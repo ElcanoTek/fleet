@@ -62,7 +62,7 @@ export default function LoginCard({ elcanoLoginEnabled }: { elcanoLoginEnabled: 
           <div className="grid gap-2">
             <h1 className="text-[1.25rem] font-semibold text-[var(--color-text-primary)]">Welcome aboard.</h1>
             <p className="text-[0.875rem] text-[var(--color-text-secondary)]">
-              Sign in to your Elcano workspace and pick up where your crew left off.
+              Sign in to your workspace and pick up where you left off.
             </p>
           </div>
 

@@ -34,7 +34,7 @@ import (
 // TurnInput carries per-turn inputs from the HTTP layer to the engine.
 type TurnInput struct {
 	UserMessage string
-	Persona     string // persona name, e.g. "victoria"
+	Persona     string // persona name, e.g. "assistant"
 	// Model is the OpenRouter slug to drive this turn. Required: the server
 	// holds no default. A blank or unresolvable slug fails the turn up-front.
 	Model   string
@@ -115,6 +115,11 @@ type ManagerOptions struct {
 	ProtocolsDir     string
 	SystemPromptsDir string
 
+	// ChatSystemPromptFile is the bundle-relative filename (inside
+	// SystemPromptsDir) of the INTERACTIVE base prompt. Empty defaults to
+	// "chat.md". The scheduled path reads its own base (default.md) separately.
+	ChatSystemPromptFile string
+
 	// NotesProvider supplies the admin-curated knowledge base injected into the
 	// system prompt every turn. Nil = no notes section.
 	NotesProvider agentcore.NotesProvider
@@ -172,18 +177,24 @@ func New(opts ManagerOptions) (*Manager, error) {
 		return nil, err
 	}
 
+	chatPromptFile := strings.TrimSpace(opts.ChatSystemPromptFile)
+	if chatPromptFile == "" {
+		chatPromptFile = "chat.md"
+	}
+
 	m := &Manager{
-		config:           cfg,
-		mcpClient:        client,
-		allowlist:        allow,
-		resolver:         resolver,
-		native:           tools.DefaultTools(),
-		sandboxPool:      pool,
-		notesProvider:    opts.NotesProvider,
-		optionalServers:  optional,
-		personasDir:      opts.PersonasDir,
-		protocolsDir:     opts.ProtocolsDir,
-		systemPromptsDir: opts.SystemPromptsDir,
+		config:               cfg,
+		mcpClient:            client,
+		allowlist:            allow,
+		resolver:             resolver,
+		native:               tools.DefaultTools(),
+		sandboxPool:          pool,
+		notesProvider:        opts.NotesProvider,
+		optionalServers:      optional,
+		personasDir:          opts.PersonasDir,
+		protocolsDir:         opts.ProtocolsDir,
+		systemPromptsDir:     opts.SystemPromptsDir,
+		chatSystemPromptFile: chatPromptFile,
 	}
 	m.mcpToolRoster = m.computeMCPToolRoster()
 	m.optionalServerMetadata = m.buildOptionalServerMetadata(opts.ServerSpecs)

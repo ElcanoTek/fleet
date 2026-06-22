@@ -628,7 +628,7 @@ func NewStdioTransport(command string, args []string, env map[string]string) (*S
 	// Ensure Python subprocesses use UTF-8 encoding for STDIO transport.
 	// Without these, Python defaults to ASCII in minimal environments,
 	// causing UnicodeEncodeError when API responses contain non-ASCII
-	// characters (e.g. \xa0 non-breaking spaces from PubMatic).
+	// characters (e.g. \xa0 non-breaking spaces from some upstream APIs).
 	cmd.Env = append(cmd.Env, "LANG=C.UTF-8")
 	cmd.Env = append(cmd.Env, "LC_ALL=C.UTF-8")
 	cmd.Env = append(cmd.Env, "PYTHONIOENCODING=utf-8")

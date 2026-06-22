@@ -1,18 +1,47 @@
 import { describe, expect, it } from "vitest";
 import {
   asText,
+  DEFAULT_PILLS,
   formInitialValues,
   getPill,
   isPillReady,
-  PROTOCOL_PILLS,
+  pillToPrompt,
   type ProtocolPill,
 } from "./protocolPills";
 
-function pill(id: string): ProtocolPill {
-  const p = getPill(id);
-  if (!p) throw new Error(`missing pill: ${id}`);
-  return p;
-}
+// A small config-style fixture (the shape that arrives over JSON from
+// /api/client-config) — exercises the generic helpers without any client
+// specifics.
+const TEMPLATE_PILL: ProtocolPill = {
+  id: "report",
+  section: "Reporting",
+  type: "form",
+  icon: "bar-chart",
+  title: "Build a report",
+  desc: "Fill a few fields and generate a report.",
+  cta: "Run report",
+  fields: [
+    { key: "client", label: "Client", type: "text", required: true },
+    { key: "window", label: "Window", type: "text", default: "last week" },
+  ],
+  promptTemplate: "Build a report for {client} covering {window}.",
+};
+
+const FALLBACK_PILL: ProtocolPill = {
+  id: "wrap",
+  section: "Reporting",
+  type: "form",
+  icon: "layers",
+  title: "End-of-campaign wrap",
+  desc: "Summarize a finished campaign.",
+  cta: "Build wrap",
+  fields: [
+    { key: "client", label: "Client", type: "text", required: true },
+    { key: "flight", label: "Flight", type: "daterange" },
+    { key: "deck", label: "Build a deck", type: "toggle", default: false },
+  ],
+  // no promptTemplate → neutral fallback
+};
 
 describe("asText", () => {
   it("trims strings and stringifies numbers, blanks everything else", () => {
@@ -26,177 +55,110 @@ describe("asText", () => {
 
 describe("formInitialValues", () => {
   it("honors field defaults and type fallbacks", () => {
-    const weekly = formInitialValues(pill("weekly"));
-    expect(weekly.window).toBe("Last full Mon–Sun"); // explicit default
-    expect(weekly.breakout).toBe("Channel"); // explicit default
-    expect(weekly.client).toBe(""); // text, no default
-    expect(weekly.pacing).toBe(""); // text, no default
+    const v = formInitialValues(FALLBACK_PILL);
+    expect(v.client).toBe(""); // text, no default
+    expect(v.flight).toEqual({ from: "", to: "" }); // daterange fallback
+    expect(v.deck).toBe(false); // explicit default
 
-    const wrap = formInitialValues(pill("wrap"));
-    expect(wrap.gammaDeck).toBe(false);
-    expect(wrap.format).toBe("PPTX");
-    expect(wrap.flight).toEqual({ from: "", to: "" });
-    expect(typeof wrap.year).toBe("number");
-
-    const opt = formInitialValues(pill("optimization"));
-    expect(opt.lookback).toBe(14);
+    const t = formInitialValues(TEMPLATE_PILL);
+    expect(t.window).toBe("last week"); // explicit default
   });
 });
 
 describe("isPillReady", () => {
   it("gates on required fields", () => {
-    const weekly = pill("weekly");
-    const base = formInitialValues(weekly);
-    expect(isPillReady(weekly, base)).toBe(false);
-    expect(isPillReady(weekly, { ...base, client: "Meridian Auto" })).toBe(false);
-    expect(isPillReady(weekly, { ...base, client: "Meridian Auto", elc: "ELC-4821" })).toBe(true);
+    const base = formInitialValues(TEMPLATE_PILL);
+    expect(isPillReady(TEMPLATE_PILL, base)).toBe(false);
+    expect(isPillReady(TEMPLATE_PILL, { ...base, client: "Acme" })).toBe(true);
   });
 
   it("requires both ends of a required daterange", () => {
-    const wrap = pill("wrap");
-    const base = { ...formInitialValues(wrap), client: "Meridian Auto", elc: "ELC-4821" };
-    expect(isPillReady(wrap, base)).toBe(false);
-    expect(isPillReady(wrap, { ...base, flight: { from: "2026-04-01", to: "" } })).toBe(false);
-    expect(isPillReady(wrap, { ...base, flight: { from: "2026-04-01", to: "2026-05-31" } })).toBe(true);
-  });
-
-  it("treats the diagnostic's optional form as always ready", () => {
-    const diag = pill("diagnostic");
-    expect(isPillReady(diag, formInitialValues(diag))).toBe(true);
-  });
-});
-
-describe("promptTemplate — Weekly Performance Report (dsp-reporting trigger)", () => {
-  const weekly = pill("weekly");
-
-  it("emits the protocol trigger and includes only filled details", () => {
-    const v = { ...formInitialValues(weekly), client: "Meridian Auto", elc: "ELC-4821" };
-    const out = weekly.promptTemplate!(v);
-    expect(out).toContain("Run the DSP reporting protocol for Meridian Auto (ELC-4821).");
-    // defaulted advanced fields carry through
-    expect(out).toContain("Reporting window: Last full Mon–Sun");
-    expect(out).toContain("Breakout: Channel");
-    // unfilled optional fields are omitted, not stubbed
-    expect(out).not.toContain("Mailbox:");
-    expect(out).not.toContain("Primary KPI:");
-  });
-
-  it("appends mailbox / recipient / KPI when provided", () => {
-    const v = {
-      ...formInitialValues(weekly),
-      client: "Meridian Auto",
-      elc: "ELC-4821",
-      mailbox: "meridian@victoria.elcanotek.com",
-      recipient: "dana@meridianauto.com",
-      kpi: "CTR = clicks / impressions",
+    const pill: ProtocolPill = {
+      ...FALLBACK_PILL,
+      fields: [{ key: "flight", label: "Flight", type: "daterange", required: true }],
     };
-    const out = weekly.promptTemplate!(v);
-    expect(out).toContain("Mailbox: meridian@victoria.elcanotek.com");
-    expect(out).toContain("Recipient(s): dana@meridianauto.com");
-    expect(out).toContain("Primary KPI: CTR = clicks / impressions");
+    const base = formInitialValues(pill);
+    expect(isPillReady(pill, base)).toBe(false);
+    expect(isPillReady(pill, { flight: { from: "2026-04-01", to: "" } })).toBe(false);
+    expect(isPillReady(pill, { flight: { from: "2026-04-01", to: "2026-05-31" } })).toBe(true);
+  });
+
+  it("treats a pill with no required fields as always ready", () => {
+    const pill: ProtocolPill = { ...TEMPLATE_PILL, fields: [], promptTemplate: undefined };
+    expect(isPillReady(pill, formInitialValues(pill))).toBe(true);
   });
 });
 
-describe("promptTemplate — Optimization Report (optimization trigger)", () => {
-  it("matches the optimization protocol's exact usage string", () => {
-    const opt = pill("optimization");
+describe("getPill", () => {
+  it("looks a pill up by id within a provided list", () => {
+    const list = [TEMPLATE_PILL, FALLBACK_PILL];
+    expect(getPill("wrap", list)?.title).toBe("End-of-campaign wrap");
+    expect(getPill("nope", list)).toBeUndefined();
+  });
+});
+
+describe("pillToPrompt — string template", () => {
+  it("interpolates {key} tokens from filled field values", () => {
+    const v = { ...formInitialValues(TEMPLATE_PILL), client: "Acme" };
+    expect(pillToPrompt(TEMPLATE_PILL, v)).toBe("Build a report for Acme covering last week.");
+  });
+
+  it("leaves a token in place when its field is blank", () => {
+    const v = formInitialValues(TEMPLATE_PILL); // client unset
+    expect(pillToPrompt(TEMPLATE_PILL, v)).toBe("Build a report for {client} covering last week.");
+  });
+
+  it("returns a token-free template verbatim", () => {
+    const pill: ProtocolPill = { ...TEMPLATE_PILL, promptTemplate: "Summarize the attached document." };
+    expect(pillToPrompt(pill, {})).toBe("Summarize the attached document.");
+  });
+});
+
+describe("pillToPrompt — neutral fallback (no template)", () => {
+  it("builds 'Title.' plus Label: value lines for filled fields only", () => {
     const v = {
-      ...formInitialValues(opt),
-      alias: "twc.johndeere.elc00096@victoria.elcanotek.com",
-      recipient: "brad@elcanotek.com",
+      ...formInitialValues(FALLBACK_PILL),
+      client: "Acme",
+      flight: { from: "2026-04-01", to: "2026-05-31" },
+      deck: true,
     };
-    expect(opt.promptTemplate!(v)).toBe(
-      "Run the optimization protocol for emails sent to " +
-        "'twc.johndeere.elc00096@victoria.elcanotek.com' and send recommendations to " +
-        "'brad@elcanotek.com'. Lookback: 14d.",
-    );
+    const out = pillToPrompt(FALLBACK_PILL, v);
+    expect(out).toContain("End-of-campaign wrap.");
+    expect(out).toContain("Client: Acme");
+    expect(out).toContain("Flight: 2026-04-01 → 2026-05-31");
+    expect(out).toContain("Build a deck: yes");
   });
 
-  it("folds in the campaign code when the optional field is filled", () => {
-    const opt = pill("optimization");
-    const v = {
-      ...formInitialValues(opt),
-      alias: "twc.johndeere.elc00096@victoria.elcanotek.com",
-      recipient: "brad@elcanotek.com",
-      elc: "AUTO-2024",
-    };
-    expect(opt.promptTemplate!(v)).toBe(
-      "Run the optimization protocol for emails sent to " +
-        "'twc.johndeere.elc00096@victoria.elcanotek.com' and send recommendations to " +
-        "'brad@elcanotek.com'. Campaign code: AUTO-2024. Lookback: 14d.",
-    );
+  it("omits blank fields entirely", () => {
+    const out = pillToPrompt(FALLBACK_PILL, formInitialValues(FALLBACK_PILL));
+    expect(out).toBe("End-of-campaign wrap. Build a deck: no.");
+    expect(out).not.toContain("Client:");
+    expect(out).not.toContain("Flight:");
   });
 });
 
-describe("promptTemplate — Performance Diagnostic (optional form)", () => {
-  const diag = pill("diagnostic");
-
-  it("works with no inputs (still names the unallocated default)", () => {
-    const out = diag.promptTemplate!(formInitialValues(diag));
-    expect(out).toContain("Run a performance diagnostic.");
-    expect(out).toContain("Include unallocated conversions: no");
-    expect(out).toContain("wins, risks, and what to change");
-  });
-
-  it("folds in the optional details when filled", () => {
-    const v = {
-      ...formInitialValues(diag),
-      client: "Meridian Auto",
-      elc: "ELC-4821",
-      kpi: "CPA",
-      range: { from: "2026-01-01", to: "2026-01-31" },
-      unallocated: true,
-    };
-    const out = diag.promptTemplate!(v);
-    expect(out).toContain("Campaign: Meridian Auto (ELC-4821)");
-    expect(out).toContain("Primary KPI: CPA");
-    expect(out).toContain("Date range: 2026-01-01 → 2026-01-31");
-    expect(out).toContain("Include unallocated conversions: yes");
-  });
-
-  it("ships a conversational starter for the chat-first path", () => {
-    expect(diag.starterPrompt ?? "").toContain("performance diagnostic");
-  });
-});
-
-describe("promptTemplate — End-of-Campaign Wrap (Gamma toggle)", () => {
-  const wrap = pill("wrap");
-  const base = {
-    ...formInitialValues(wrap),
-    client: "Meridian Auto",
-    elc: "ELC-4821",
-    flight: { from: "2026-04-01", to: "2026-05-31" },
-  };
-
-  it("defaults to a written summary (Gamma off)", () => {
-    const out = wrap.promptTemplate!(base);
-    expect(out).toContain(
-      "Build an end-of-campaign wrap for Meridian Auto (ELC-4821), full flight " +
-        "2026-04-01–2026-05-31, for the client audience.",
+describe("DEFAULT_PILLS — neutral fallback catalog", () => {
+  it("ships generic, client-agnostic quick-start cards", () => {
+    expect(DEFAULT_PILLS.map((p) => p.id).sort()).toEqual(
+      ["analyze-data", "draft", "summarize"].sort(),
     );
-    expect(out).toContain("Deliver it as a written end-of-campaign summary.");
-    expect(out).not.toContain("Gamma");
-  });
-
-  it("requests the Gamma deck when the toggle is on", () => {
-    const out = wrap.promptTemplate!({ ...base, gammaDeck: true });
-    expect(out).toContain("Campaign Wrap-Up presentation deck via Gamma");
-    expect(out).toContain("export as PPTX");
-    expect(out).not.toContain("written end-of-campaign summary");
-  });
-});
-
-describe("catalog shape", () => {
-  it("delivers the form + conversation hybrid the four interviewed workflows need", () => {
-    expect(PROTOCOL_PILLS.map((p) => p.id).sort()).toEqual(
-      ["diagnostic", "optimization", "weekly", "wrap"].sort(),
-    );
-    // at least one of each interaction shape ships
-    expect(PROTOCOL_PILLS.some((p) => p.type === "form")).toBe(true);
-    expect(PROTOCOL_PILLS.some((p) => p.optionalForm)).toBe(true);
-    // every form pill can produce a prompt
-    for (const p of PROTOCOL_PILLS) {
-      expect(typeof p.promptTemplate).toBe("function");
+    // at least one of each interaction shape
+    expect(DEFAULT_PILLS.some((p) => p.type === "form")).toBe(true);
+    expect(DEFAULT_PILLS.some((p) => p.optionalForm)).toBe(true);
+    // every pill has the required static fields and renders a prompt
+    for (const p of DEFAULT_PILLS) {
+      expect(p.id).toBeTruthy();
+      expect(p.title).toBeTruthy();
+      expect(p.icon).toBeTruthy();
+      expect(p.cta).toBeTruthy();
+      expect(typeof pillToPrompt(p, formInitialValues(p))).toBe("string");
     }
+  });
+
+  it("carries no client-specific content", () => {
+    const blob = JSON.stringify(DEFAULT_PILLS).toLowerCase();
+    expect(blob).not.toContain("elcano");
+    expect(blob).not.toContain("victoria");
+    expect(blob).not.toContain("dsp");
   });
 });

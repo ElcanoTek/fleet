@@ -134,7 +134,7 @@ type ContainerConfig struct {
 	// system_prompts/). chat-server's tools/workspace.go drops symlinks
 	// into the per-conversation workspace pointing at the host paths of
 	// these dirs. Without this same-path remount, those symlinks dangle
-	// inside the container and `cat personas/victoria.yaml` from bash
+	// inside the container and `cat personas/assistant.yaml` from bash
 	// (or `open(...)` from run_python) fails — even though the *host*
 	// view via view_file works fine.
 	//

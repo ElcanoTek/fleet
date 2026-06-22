@@ -1,21 +1,25 @@
 // Protocol pills — the empty-state "quick start" catalog.
 //
-// Each pill is a curated entry point into one of Victoria's high-traffic
-// workflows. A pill COLLECTS the inputs a protocol would otherwise ask for
-// (its "Step 0 checklist") and templates them into the exact natural-language
-// trigger the backend already understands — e.g. the DSP reporting protocol
-// is invoked by "Run the DSP reporting protocol for <client> (<campaign code>)". The
-// templated string is submitted through the normal composer path, so there
-// is NO backend coupling here: the agent reads the relevant protocol on
-// demand, runs its real tools, and the existing approval / Gamma flows render
-// the output. Nothing in this file fabricates results.
+// A pill COLLECTS the inputs a workflow would otherwise ask for (its "Step 0
+// checklist") and templates them into a natural-language prompt that is
+// submitted through the normal composer path. There is NO backend coupling
+// here: the agent reads the relevant context on demand, runs its real tools,
+// and the existing approval / render flows handle the output.
+//
+// The catalog is now CONFIG-DRIVEN: the live set of pills is fetched at runtime
+// from `/api/client-config` (which proxies the chat-server's member-gated
+// `/client-config`). Pills therefore arrive as plain JSON — they carry only
+// static fields plus an optional `promptTemplate` STRING. They cannot ship
+// JS functions, so prompt assembly is handled generically by `pillToPrompt`
+// (see below) rather than per-pill closures.
+//
+// `DEFAULT_PILLS` is the neutral, client-agnostic fallback used when the config
+// fetch fails or returns no cards.
 //
 // Two interaction shapes:
 //   • Form pills (type "form")          — fill fields → templated prompt → send.
 //   • Conversation pills (optionalForm) — chat-first; an OPTIONAL form can
-//     point Victoria at specifics, but skipping it just starts the intake.
-//
-// Agents are the only editors of this catalog; keep it a plain typed module.
+//     point the assistant at specifics, but skipping it just starts the intake.
 
 export type PillFieldType = "text" | "select" | "number" | "daterange" | "toggle";
 
@@ -60,14 +64,15 @@ export interface ProtocolPill {
   cta: string;
   /** Form fields (form pills, and the optional form on conversation pills). */
   fields?: PillField[];
-  /** Builds the prompt the form submits. */
-  promptTemplate?: (v: PillValues) => string;
+  /** Plain template string the form submits. Config-sourced, so it can't be a
+   *  function. `{key}` tokens are interpolated from the filled field values by
+   *  `pillToPrompt`; when absent, a neutral prompt is built from the title and
+   *  the filled fields. */
+  promptTemplate?: string;
   /** Conversation-first pills: chat is the primary path, the form is optional. */
   optionalForm?: boolean;
   /** Sent when the user picks the chat path on a conversation pill. */
   starterPrompt?: string;
-  /** Seeds the composer (instead of sending) for the "Skip the form, start in Chat" link on form pills. */
-  describePreload?: (v: PillValues) => string;
 }
 
 // ── value helpers ─────────────────────────────────────────────────────────
@@ -79,7 +84,7 @@ export function asText(v: PillFieldValue | undefined): string {
   return "";
 }
 
-function asNumber(v: PillFieldValue | undefined, fallback: number): number {
+export function asNumber(v: PillFieldValue | undefined, fallback: number): number {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string" && v.trim() !== "") {
     const n = Number(v);
@@ -88,7 +93,7 @@ function asNumber(v: PillFieldValue | undefined, fallback: number): number {
   return fallback;
 }
 
-function asRange(v: PillFieldValue | undefined): DateRangeValue {
+export function asRange(v: PillFieldValue | undefined): DateRangeValue {
   if (v && typeof v === "object" && "from" in v && "to" in v) return v;
   return { from: "", to: "" };
 }
@@ -129,170 +134,122 @@ export function isPillReady(pill: ProtocolPill, values: PillValues): boolean {
   return true;
 }
 
-export function getPill(id: string): ProtocolPill | undefined {
-  return PROTOCOL_PILLS.find((p) => p.id === id);
+/** Look a pill up by id within a (dynamic, config-sourced) pill list. */
+export function getPill(id: string, pills: ProtocolPill[]): ProtocolPill | undefined {
+  return pills.find((p) => p.id === id);
 }
 
 // Joins "Label: value" clauses for fields the user actually filled, so empty
 // optional inputs don't inject hollow directives the agent has to ignore.
-function detailLine(parts: string[]): string {
+export function detailLine(parts: string[]): string {
   return parts.length ? ` ${parts.join(". ")}.` : "";
 }
 
-// ── catalog ─────────────────────────────────────────────────────────────
+// Renders a single field's value for a "Label: value" detail line. Daterange
+// and toggle get human-readable forms; everything else uses the trimmed text.
+function fieldValueText(field: PillField, value: PillFieldValue | undefined): string {
+  if (field.type === "toggle") return value ? "yes" : "no";
+  if (field.type === "daterange") {
+    const r = asRange(value);
+    return r.from || r.to ? `${r.from || "?"} → ${r.to || "?"}` : "";
+  }
+  return asText(value);
+}
 
-export const PROTOCOL_PILLS: ProtocolPill[] = [
+// ── prompt assembly ─────────────────────────────────────────────────────────
+
+/**
+ * Build the prompt a pill submits, from its (config-sourced, static) shape and
+ * the form values the user filled.
+ *
+ * - When the pill carries a `promptTemplate` STRING, that string is used.
+ *   Any `{key}` tokens are interpolated from `values` (a token whose field is
+ *   blank is dropped). The template is otherwise returned verbatim — if it has
+ *   no tokens, it's sent as-is.
+ * - When there is NO template, a neutral fallback is built from the pill title
+ *   plus "Label: value" lines for every field the user actually filled.
+ *
+ * This replaces the per-pill function closures the catalog used to ship, so the
+ * same renderer works for pills that arrive over JSON.
+ */
+export function pillToPrompt(pill: ProtocolPill, values: PillValues): string {
+  const template = pill.promptTemplate;
+  if (typeof template === "string" && template.trim() !== "") {
+    if (!template.includes("{")) return template;
+    return template.replace(/\{(\w+)\}/g, (whole, key: string) => {
+      const field = pill.fields?.find((f) => f.key === key);
+      const text = field
+        ? fieldValueText(field, values[key])
+        : asText(values[key]);
+      // Leave the token in place when there's no field value to fill it with,
+      // so the agent can still see what was intended.
+      return text || whole;
+    });
+  }
+
+  const parts: string[] = [];
+  for (const f of pill.fields ?? []) {
+    const text = fieldValueText(f, values[f.key]);
+    if (text) parts.push(`${f.label}: ${text}`);
+  }
+  return `${pill.title}.${detailLine(parts)}`;
+}
+
+// ── neutral fallback catalog ────────────────────────────────────────────────
+//
+// Client-agnostic quick-start cards used when the config fetch fails or returns
+// no cards. Mirrors config/default/manifest.yaml's empty_state.cards so the bare
+// fleet experience matches the generic bundle.
+
+export const DEFAULT_PILLS: ProtocolPill[] = [
   {
-    id: "weekly",
-    section: "Reporting",
+    id: "summarize",
+    section: "Get started",
     type: "form",
-    icon: "bar-chart",
-    title: "Weekly Performance Report",
-    desc: "Templated DSP report — fill a few fields, preview, and send.",
-    cta: "Run report",
+    icon: "file-text",
+    title: "Summarize a document",
+    desc: "Paste or attach a document and get a concise summary.",
+    cta: "Summarize",
     fields: [
-      { key: "client", label: "Client name", type: "text", required: true, placeholder: "Meridian Auto" },
-      { key: "elc", label: "Campaign code", type: "text", required: true, placeholder: "e.g. AUTO-2024" },
-      { key: "mailbox", label: "Mailbox alias", type: "text", placeholder: "name@victoria.elcanotek.com" },
-      { key: "kpi", label: "Primary KPI (name + formula)", type: "text", placeholder: "CTR = clicks / impressions" },
-      { key: "recipient", label: "Recipient(s)", type: "text", placeholder: "name@client.com" },
-      { key: "window", label: "Reporting window", type: "text", advanced: true, default: "Last full Mon–Sun" },
       {
-        key: "breakout",
-        label: "Breakout",
-        type: "select",
-        advanced: true,
-        default: "Channel",
-        options: ["Channel", "Campaign", "Creative", "Daypart"],
+        key: "focus",
+        label: "What should the summary focus on?",
+        type: "text",
+        placeholder: "key decisions, action items, risks…",
       },
-      { key: "pacing", label: "Pacing target", type: "text", advanced: true, placeholder: "none" },
     ],
-    promptTemplate: (v) => {
-      const parts: string[] = [];
-      if (asText(v.mailbox)) parts.push(`Mailbox: ${asText(v.mailbox)}`);
-      if (asText(v.recipient)) parts.push(`Recipient(s): ${asText(v.recipient)}`);
-      if (asText(v.kpi)) parts.push(`Primary KPI: ${asText(v.kpi)}`);
-      if (asText(v.window)) parts.push(`Reporting window: ${asText(v.window)}`);
-      if (asText(v.breakout)) parts.push(`Breakout: ${asText(v.breakout)}`);
-      if (asText(v.pacing)) parts.push(`Pacing target: ${asText(v.pacing)}`);
-      return (
-        `Run the DSP reporting protocol for ${asText(v.client) || "{client}"} ` +
-        `(${asText(v.elc) || "{campaign code}"}).` +
-        detailLine(parts)
-      );
-    },
-    describePreload: (v) =>
-      `Weekly performance report for ${asText(v.client) || "a client"} ` +
-      `(${asText(v.elc) || "campaign code"}) — `,
+    promptTemplate: "Summarize the attached/pasted document.",
   },
   {
-    id: "diagnostic",
-    section: "Reporting",
+    id: "analyze-data",
+    section: "Get started",
     type: "conversation",
     optionalForm: true,
-    icon: "activity",
-    title: "Performance Diagnostic",
-    desc: "Talk it through — I’ll ask a few questions, then dig into the numbers.",
-    cta: "Run diagnostic",
+    icon: "bar-chart",
+    title: "Analyze a dataset",
+    desc: "Attach a CSV and ask questions — I'll run Python to dig in.",
+    cta: "Start analysis",
     starterPrompt:
-      "I’d like to run a performance diagnostic on a campaign. Ask me what you need — " +
-      "which campaign (client + campaign code), the KPI that matters most, whether to include " +
-      "unallocated conversions, and the date range — then dig into the numbers and tell me " +
-      "what stands out.",
-    fields: [
-      { key: "client", label: "Client name", type: "text", placeholder: "Meridian Auto" },
-      { key: "elc", label: "Campaign code", type: "text", placeholder: "e.g. AUTO-2024" },
-      { key: "kpi", label: "Primary KPI", type: "text", placeholder: "CPA" },
-      { key: "range", label: "Date range", type: "daterange" },
-      { key: "unallocated", label: "Include unallocated conversions", type: "toggle", default: false },
-    ],
-    promptTemplate: (v) => {
-      const parts: string[] = [];
-      const client = asText(v.client);
-      const elc = asText(v.elc);
-      const campaign = client && elc ? `${client} (${elc})` : client || elc;
-      if (campaign) parts.push(`Campaign: ${campaign}`);
-      if (asText(v.kpi)) parts.push(`Primary KPI: ${asText(v.kpi)}`);
-      const r = asRange(v.range);
-      if (r.from || r.to) parts.push(`Date range: ${r.from || "?"} → ${r.to || "?"}`);
-      parts.push(`Include unallocated conversions: ${v.unallocated ? "yes" : "no"}`);
-      return (
-        "Run a performance diagnostic." +
-        detailLine(parts) +
-        " Dig into the numbers and walk me through what stands out — wins, risks, and what to change."
-      );
-    },
+      "I'd like to analyze a dataset. Ask me what you need to know, then load it with " +
+      "Python and walk me through what stands out.",
   },
   {
-    id: "wrap",
-    section: "Reporting",
+    id: "draft",
+    section: "Get started",
     type: "form",
-    icon: "layers",
-    title: "End-of-Campaign Wrap",
-    desc: "Full-flight summary, optimizations, and the case for renewal.",
-    cta: "Build wrap",
+    icon: "edit",
+    title: "Draft something",
+    desc: "An email, a plan, a snippet of code — describe it and I'll draft it.",
+    cta: "Draft it",
     fields: [
-      { key: "client", label: "Client name", type: "text", required: true, placeholder: "Meridian Auto" },
-      { key: "elc", label: "Campaign code", type: "text", required: true, placeholder: "e.g. AUTO-2024" },
-      { key: "flight", label: "Full-flight dates", type: "daterange", required: true },
-      { key: "audience", label: "Audience", type: "select", default: "Client", options: ["Client", "Prospect", "Internal"] },
       {
-        key: "gammaDeck",
-        label: "Also build a Gamma slide deck",
-        type: "toggle",
-        default: false,
+        key: "what",
+        label: "What should I draft?",
+        type: "text",
+        required: true,
+        placeholder: "a follow-up email to a client about…",
       },
-      { key: "year", label: "Campaign year", type: "number", advanced: true, default: new Date().getFullYear(), min: 2000 },
-      { key: "format", label: "Deck export format", type: "select", advanced: true, default: "PPTX", options: ["PPTX", "PDF"] },
-      { key: "logo", label: "Client logo URL", type: "text", advanced: true, placeholder: "https://… (optional)" },
     ],
-    promptTemplate: (v) => {
-      const flight = asRange(v.flight);
-      const flightStr =
-        flight.from || flight.to ? `${flight.from || "{start}"}–${flight.to || "{end}"}` : "the full flight";
-      const audience = (asText(v.audience) || "Client").toLowerCase();
-      let out =
-        `Build an end-of-campaign wrap for ${asText(v.client) || "{client}"} ` +
-        `(${asText(v.elc) || "{campaign code}"}), full flight ${flightStr}, for the ${audience} audience. ` +
-        "Pull the campaign’s performance from the reports we have and summarize delivery vs. goal, " +
-        "the trend across the flight, the optimizations we made and their impact, and the case for a " +
-        "renewed or expanded flight.";
-      if (v.gammaDeck) {
-        const fmt = (asText(v.format) || "PPTX").toUpperCase();
-        const year = asNumber(v.year, new Date().getFullYear());
-        const logo = asText(v.logo);
-        out +=
-          ` Then assemble that into the Campaign Wrap-Up presentation deck via Gamma ` +
-          `(export as ${fmt}, campaign year ${year}${logo ? `, client logo ${logo}` : ""}).`;
-      } else {
-        out += " Deliver it as a written end-of-campaign summary.";
-      }
-      return out;
-    },
-    describePreload: (v) =>
-      `End-of-campaign wrap for ${asText(v.client) || "a client"} ` +
-      `(${asText(v.elc) || "campaign code"}) — `,
-  },
-  {
-    id: "optimization",
-    section: "Optimization",
-    type: "form",
-    icon: "target",
-    title: "Optimization Report",
-    desc: "Ranked recommendations from the optimizations you’ve logged.",
-    cta: "Generate report",
-    fields: [
-      { key: "alias", label: "Mailbox alias", type: "text", required: true, placeholder: "name@victoria.elcanotek.com" },
-      { key: "recipient", label: "Recipient(s)", type: "text", required: true, placeholder: "name@client.com" },
-      { key: "elc", label: "Campaign code", type: "text", placeholder: "e.g. AUTO-2024 (optional)" },
-      { key: "lookback", label: "Lookback days", type: "number", advanced: true, default: 14, min: 1 },
-    ],
-    promptTemplate: (v) =>
-      `Run the optimization protocol for emails sent to '${asText(v.alias) || "{mailbox}"}' ` +
-      `and send recommendations to '${asText(v.recipient) || "{recipient}"}'.` +
-      (asText(v.elc) ? ` Campaign code: ${asText(v.elc)}.` : "") +
-      ` Lookback: ${asNumber(v.lookback, 14)}d.`,
-    describePreload: (v) =>
-      `Optimization recommendations from ${asText(v.alias) || "my mailbox"} — `,
+    promptTemplate: "Draft the following for me, and ask me anything you need first.",
   },
 ];
