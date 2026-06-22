@@ -45,6 +45,18 @@ import (
 )
 
 func main() {
+	// Subcommand dispatch. With no args (or any non-subcommand arg) fleet boots
+	// THE Mega Box server (run). `fleet acp` instead runs fleet AS an ACP AGENT
+	// over stdio (P-ACP-3 ingress): an external editor launches it and drives
+	// fleet's OWN governed pipeline. The ingress path deliberately does NOT boot
+	// the HTTP servers / scheduler / worker pool — it is a single-process stdio
+	// adapter on the same governed turn.
+	if len(os.Args) > 1 && os.Args[1] == "acp" {
+		if err := runACP(); err != nil {
+			log.Fatalf("fleet acp: %v", err)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		log.Fatalf("fleet: %v", err)
 	}
