@@ -1,0 +1,29 @@
+# gitleaks allowlist of confirmed FAKE test fixtures.
+#
+# Format: one "file:rule:startline" fingerprint per line. Comments must be on
+# their OWN line (a trailing "# ..." on a fingerprint line is parsed as part of
+# the fingerprint and silently ignored by gitleaks v8, so do not use them).
+#
+# A full security scan confirmed NO real secrets in this repo's tree or history;
+# every fingerprint below is a fabricated value living in a *_test.go file. Any
+# NEW or un-ignored finding will still fail the gitleaks CI job.
+
+# fake: fabricated "sk-or-v1-..."-shaped string fed to redactSecrets() in
+# TestRedactSecretsInLog (asserts the value gets redacted).
+internal/agentcore/orchestration_test.go:generic-api-key:739
+
+# fake: fabricated JWT in the fakeFastIODownloadResponse test fixture
+# (download_token); the comment in the source marks it "TEST FIXTURE ONLY".
+internal/agentcore/mcp_fastio_response_test.go:jwt:114
+
+# fake: the same fabricated JWT duplicated in fakeFastIODownloadResponse
+# (download_url ?token= query).
+internal/agentcore/mcp_fastio_response_test.go:jwt:117
+
+# fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithQuotedEnvFromPodman
+# (double-quote-stripping test).
+internal/config/config_test.go:generic-api-key:946
+
+# fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithSingleQuotedEnvFromPodman
+# (single-quote-stripping test).
+internal/config/config_test.go:generic-api-key:964
