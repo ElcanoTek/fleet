@@ -53,6 +53,14 @@ type RunConfig struct {
 	NativeTools []fantasy.AgentTool
 	// ProviderHeaders identify the run to OpenRouter.
 	ProviderHeaders ProviderHeaders
+
+	// PreGatedTools are already-policy-aware tools registered VERBATIM (NOT
+	// wrapped in the policyGuardedTool gate, because they call BeforeToolCall +
+	// RecordToolResult themselves — exactly like the built-in mcpTool). The
+	// native-acp agent uses this for its delegating MCP tools, which mirror the
+	// in-process mcpTool's policy handling while delegating execution host-side.
+	// Empty for the in-process modes (their MCP tools come from MCPClient).
+	PreGatedTools []fantasy.AgentTool
 }
 
 // Deps are the run dependencies: the four seams plus the model handles, MCP
@@ -102,6 +110,14 @@ type Deps struct {
 	// (the interactive driver wires chat's head/summary/tail compaction here).
 	// Nil falls back to the engine's deterministic placeholder summary.
 	CompactionSummarizer func(ctx context.Context, droppable []fantasy.Message) fantasy.Message
+
+	// UsageReporter, when set, is invoked after each LLM step with that step's
+	// accumulated run usage (the SAME counters usageSnapshot returns). The
+	// native-acp agent wires this to ship a per-step usage event back to the host
+	// over `_fleet/event` so the host accounts for tokens/cost identically to the
+	// in-process path (which reads the counters directly off the orch). Nil in
+	// both in-process modes — they read usage from the orch at the end.
+	UsageReporter func(RunUsage)
 }
 
 // Result is the run outcome.
@@ -169,6 +185,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		temperature:          cfg.Temperature,
 		envPrefix:            cfg.EnvPrefix,
 		compactionSummarizer: deps.CompactionSummarizer,
+		usageReporter:        deps.UsageReporter,
 	}
 
 	systemPrompt, messages, label, err := deps.Input.Prompt(ctx)
@@ -196,6 +213,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	if mcpClient == nil {
 		mcpClient = mcp.NewClient()
 	}
+	toolCfg.preGatedTools = cfg.PreGatedTools
 	buildTools := func() ([]fantasy.AgentTool, error) {
 		return buildFantasyTools(cfg.NativeTools, mcpClient, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
 	}

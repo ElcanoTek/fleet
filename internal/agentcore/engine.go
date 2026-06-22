@@ -46,6 +46,11 @@ type engine struct {
 
 	// envPrefix selects the env-var family (resilience config, kill-switches).
 	envPrefix EnvPrefix
+
+	// usageReporter, when set, is called after each step with the run's
+	// accumulated usage so a driver can ship it out-of-band (native-acp's
+	// per-step `_fleet/event` usage report). Nil in the in-process modes.
+	usageReporter func(RunUsage)
 }
 
 // ErrContextBudgetExhausted is returned when compaction has fired on
@@ -244,6 +249,9 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		},
 		OnStepFinish: func(step fantasy.StepResult) error {
 			r.orch.updateUsage(step.Usage, step.ProviderMetadata)
+			if r.engine.usageReporter != nil {
+				r.engine.usageReporter(usageSnapshot(r.orch))
+			}
 			return nil
 		},
 		PrepareStep: promptCachingStep(modelSlug, WithCacheEnvPrefix(r.engine.envPrefix)),

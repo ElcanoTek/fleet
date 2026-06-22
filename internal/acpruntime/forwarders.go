@@ -11,6 +11,7 @@ import (
 	"charm.land/fantasy"
 	acp "github.com/coder/acp-go-sdk"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
@@ -136,6 +137,26 @@ func (o *delegatingObserver) Observe(eventType string, payload map[string]any) {
 		SessionID: string(o.sessionID),
 		EventType: eventType,
 		Payload:   payload,
+	})
+}
+
+// reportUsage ships one LLM step's accumulated usage to the host over
+// `_fleet/event` (EventUsage). The agent makes the LLM calls (in its container),
+// so usage accrues here; the host accumulates these reports for the same
+// token/cost accounting the in-process path reads off the orch. Wired onto
+// agentcore.Deps.UsageReporter.
+func (o *delegatingObserver) reportUsage(u agentcore.RunUsage) {
+	_ = o.conn.NotifyExtension(context.Background(), ExtMethodEvent, EventNotification{
+		SessionID: string(o.sessionID),
+		EventType: EventUsage,
+		Payload: map[string]any{
+			usageKeyPromptTokens:        u.PromptTokens,
+			usageKeyLastStepInputTokens: u.LastStepInputTokens,
+			usageKeyCompletionTokens:    u.CompletionTokens,
+			usageKeyCachedTokens:        u.CachedTokens,
+			usageKeyCacheCreationTokens: u.CacheCreationTokens,
+			usageKeyCostUSD:             u.CostUSD,
+		},
 	})
 }
 
