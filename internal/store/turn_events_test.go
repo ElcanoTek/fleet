@@ -52,7 +52,7 @@ func TestTurnLifecycle(t *testing.T) {
 
 	// 3. Finish turn
 	finishedAt := startedAt + 10
-	if err := s.FinishTurn(ctx, turnID, TurnStatusCompleted, finishedAt); err != nil {
+	if err := s.FinishTurn(ctx, turnID, TurnStatusCompleted, finishedAt, false); err != nil {
 		t.Fatalf("FinishTurn: %v", err)
 	}
 
@@ -68,6 +68,26 @@ func TestTurnLifecycle(t *testing.T) {
 	}
 	if !r.FinishedAt.Valid || r.FinishedAt.Int64 != finishedAt {
 		t.Errorf("expected valid finishedAt %d, got valid=%v int64=%d", finishedAt, r.FinishedAt.Valid, r.FinishedAt.Int64)
+	}
+	// A turn finished without loss is not flagged lossy.
+	if r.Lossy {
+		t.Errorf("expected lossy=false for a clean turn, got true")
+	}
+
+	// 4. The lossy flag round-trips: a turn finished as lossy reads back lossy.
+	lossyTurn := "turn_lossy"
+	if err := s.CreateTurn(ctx, lossyTurn, conv.ID, startedAt); err != nil {
+		t.Fatalf("CreateTurn(lossy): %v", err)
+	}
+	if err := s.FinishTurn(ctx, lossyTurn, TurnStatusCompleted, finishedAt, true); err != nil {
+		t.Fatalf("FinishTurn(lossy): %v", err)
+	}
+	lr, err := s.LookupTurn(ctx, lossyTurn)
+	if err != nil {
+		t.Fatalf("LookupTurn(lossy): %v", err)
+	}
+	if lr == nil || !lr.Lossy {
+		t.Errorf("expected lossy=true to round-trip, got %+v", lr)
 	}
 }
 
@@ -180,7 +200,7 @@ func TestMarkRunningTurnsErrored(t *testing.T) {
 	if err := s.CreateTurn(ctx, turnFinished, conv.ID, time.Now().Unix()); err != nil {
 		t.Fatalf("CreateTurn: %v", err)
 	}
-	if err := s.FinishTurn(ctx, turnFinished, TurnStatusCompleted, time.Now().Unix()); err != nil {
+	if err := s.FinishTurn(ctx, turnFinished, TurnStatusCompleted, time.Now().Unix(), false); err != nil {
 		t.Fatalf("FinishTurn: %v", err)
 	}
 
@@ -248,7 +268,7 @@ func TestSweepTurnEvents(t *testing.T) {
 	if err := s.CreateTurn(ctx, turnOld, conv.ID, twoHoursAgo-10); err != nil {
 		t.Fatalf("CreateTurn: %v", err)
 	}
-	if err := s.FinishTurn(ctx, turnOld, TurnStatusCompleted, twoHoursAgo); err != nil {
+	if err := s.FinishTurn(ctx, turnOld, TurnStatusCompleted, twoHoursAgo, false); err != nil {
 		t.Fatalf("FinishTurn: %v", err)
 	}
 
@@ -257,7 +277,7 @@ func TestSweepTurnEvents(t *testing.T) {
 	if err := s.CreateTurn(ctx, turnRecent, conv.ID, halfHourAgo-10); err != nil {
 		t.Fatalf("CreateTurn: %v", err)
 	}
-	if err := s.FinishTurn(ctx, turnRecent, TurnStatusCompleted, halfHourAgo); err != nil {
+	if err := s.FinishTurn(ctx, turnRecent, TurnStatusCompleted, halfHourAgo, false); err != nil {
 		t.Fatalf("FinishTurn: %v", err)
 	}
 
