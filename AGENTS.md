@@ -22,7 +22,8 @@ the README "Architecture at a glance" and
 ## Build · test · lint (run before opening any PR)
 
 ```sh
-make build        # go build ./...
+make build        # compile-check ./... AND emit ./fleet + ./fleet-admin
+make compile      # go build ./...   (compile-check only; no artifacts)
 make test         # go test -p 1 ./...   — run in the FOREGROUND
 make lint         # golangci-lint run    — the lint gate; must pass clean
 make test-race    # go test -race -p 1 ./...   (use when touching concurrency)

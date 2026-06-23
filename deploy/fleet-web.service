@@ -1,0 +1,58 @@
+# deploy/fleet-web.service — systemd unit for the public Next.js web tier.
+#
+# The browser only ever talks to this Next app; the app proxies server-side over
+# loopback to the two Go backends the `fleet` process boots (chat :8080,
+# orchestrator :8000). Caddy (deploy/Caddyfile) fronts THIS unit with TLS. The
+# Go backends stay loopback-only — they are NOT exposed.
+#
+#   browser ──TLS──▶ Caddy ──▶ fleet-web (:3000) ──▶ fleet: chat :8080 + orchestrator :8000
+#
+# This unit is the supervised counterpart to fleet.service (it replaces the
+# hand-run `cd web && npm run start` the README used to leave to the operator —
+# the same regression chat-web.service covered in the chat repo). Run BOTH units.
+#
+# Install (after `make build` + `cd web && npm ci && npm run build`):
+#   install -d /opt/fleet/web
+#   cp -a web/. /opt/fleet/web/          # the built Next app (incl. .next/ + node_modules or run npm ci on the box)
+#   install -D -m 0644 deploy/fleet-web.service /etc/systemd/system/fleet-web.service
+#   install -D -m 0600 /dev/null /etc/fleet/fleet-web.env   # then fill it in (see below)
+#   systemctl daemon-reload && systemctl enable --now fleet-web
+#
+# Minimum keys in /etc/fleet/fleet-web.env (0600):
+#   CHAT_SERVER_URL=http://127.0.0.1:8080         # the fleet chat backend (loopback)
+#   ORCHESTRATOR_SERVER_URL=http://127.0.0.1:8000 # the fleet orchestrator backend (loopback)
+#   CHAT_SERVER_TOKEN=...                          # MUST match the binary's FLEET_SERVER_TOKEN
+#   PORT=3000                                      # the port `next start` binds (Caddy proxies to it)
+#   NODE_ENV=production
+#   # plus whatever auth env the web app needs (e.g. the elcano_auth public key).
+
+[Unit]
+Description=fleet web tier (Next.js app — public origin, proxies to loopback backends)
+Documentation=https://github.com/ElcanoTek/fleet
+After=network-online.target fleet.service
+Wants=network-online.target
+# The web app is useless without the backends; keep it bound to fleet.service.
+BindsTo=fleet.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fleet/web
+EnvironmentFile=/etc/fleet/fleet-web.env
+# `npm run start` → `next start`. Use an absolute npm if PATH under the unit is
+# minimal (e.g. ExecStart=/usr/bin/npm run start).
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+# Hardening — the web tier only needs to bind its port and reach the loopback
+# backends. It writes nothing outside its own dir (Next caches under .next/).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/fleet/web/.next
+
+[Install]
+WantedBy=multi-user.target
