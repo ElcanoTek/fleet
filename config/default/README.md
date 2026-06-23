@@ -23,6 +23,7 @@ supply the client's prompts, personas, playbooks, and connectors.
     chat.md            # interactive-chat base prompt
   personas/            # *.yaml — one per persona; PERSONA_DEFAULT picks the default
   protocols/           # *.yaml | *.md — reusable playbooks
+  skills/              # <name>/SKILL.md — Agent Skills (progressive disclosure)
   mcp/                 # the client's Python MCP servers (+ requirements.txt)
 ```
 
@@ -30,6 +31,40 @@ See `internal/clientconfig/clientconfig.go` for the manifest schema and the
 authoritative description of each field, including the MCP catalog's declarative
 enable gate (`enabled_env` / `enabled_groups` / `always`), the `${VAR}` env
 interpolation, the tool allowlist, and the account-suffix vars.
+
+## Skills
+
+The `skills/` directory holds **Agent Skills** — packaged, on-demand capabilities
+following the open [Agent Skills standard](https://github.com/anthropics/skills).
+Each skill is a folder containing a `SKILL.md` with YAML frontmatter (`name`,
+`description`) plus an optional body and bundled scripts/reference files:
+
+```
+skills/
+  example-skill/
+    SKILL.md          # frontmatter (name, description) + instructions
+    scripts/hello.py  # OPTIONAL: code the agent runs via bash / run_python
+```
+
+fleet uses **progressive disclosure**: only each skill's name, description, and
+path go into the system prompt (Level 1). The agent reads the full `SKILL.md`
+(Level 2) and any bundled scripts/resources (Level 3) on demand, by path, when a
+task matches — so installing many skills costs almost no context until one is
+used. The `skills/` dir is bind-mounted read-only into the sandbox and symlinked
+into the per-conversation workspace exactly like `protocols/`, so a `SKILL.md`
+that says `python skills/<name>/scripts/foo.py` resolves and runs inside the
+rootless sandbox. Skills are just files the agent reads and runs — there is no
+bespoke skill executor.
+
+Skills are the progressive-disclosure **sibling of protocols**: a protocol is a
+single markdown playbook; a skill is a folder that can also bundle executable
+code and reference material. This bundle ships one annotated `example-skill` as a
+template — fork it to author your own. A skill's optional `allowed-tools`
+frontmatter is parsed but **not** enforced as a hard authorization boundary; the
+real boundaries remain the sandbox, the MCP tool allowlists, and the critical-tool
+audit gate. Because a skill can run code in the sandbox, treat bundled scripts as
+trusted-but-reviewable — review them the way you review the bundle's `mcp/`
+servers, and use skills only from sources you trust.
 
 ## The execution sandbox is a bundle artifact
 

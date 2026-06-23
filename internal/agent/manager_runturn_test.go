@@ -83,6 +83,7 @@ func newFakeLLMManager(t *testing.T, fake *fakellm.Server) *Manager {
 		Config:           cfg,
 		PersonasDir:      filepath.Join(dir, "personas"),
 		ProtocolsDir:     filepath.Join(dir, "protocols"),
+		SkillsDir:        filepath.Join(dir, "skills"),
 		SystemPromptsDir: filepath.Join(dir, "system_prompts"),
 	})
 	if err != nil {

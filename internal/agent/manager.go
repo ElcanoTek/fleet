@@ -141,6 +141,7 @@ type ManagerOptions struct {
 	ServerSpecs      map[string]MCPServerSpec
 	PersonasDir      string
 	ProtocolsDir     string
+	SkillsDir        string
 	SystemPromptsDir string
 
 	// ChatSystemPromptFile is the bundle-relative filename (inside
@@ -207,7 +208,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		log.Printf("MCP %s connected (%d tools available, optional=%v)", name, len(client.GetAllTools()), spec.Optional)
 	}
 
-	pool, err := buildSandboxPool(cfg, opts.PersonasDir, opts.ProtocolsDir, opts.SystemPromptsDir)
+	pool, err := buildSandboxPool(cfg, opts.PersonasDir, opts.ProtocolsDir, opts.SystemPromptsDir, opts.SkillsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +230,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		optionalServers:      optional,
 		personasDir:          opts.PersonasDir,
 		protocolsDir:         opts.ProtocolsDir,
+		skillsDir:            opts.SkillsDir,
 		systemPromptsDir:     opts.SystemPromptsDir,
 		chatSystemPromptFile: chatPromptFile,
 	}
@@ -241,7 +243,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 // mirroring chat's New() wiring: container mode in production (an image is
 // mandatory — bash/run_python only run inside per-turn containers), a no-op
 // host-mode stub in mock mode.
-func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromptsDir string) (*sandbox.Pool, error) {
+func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromptsDir, skillsDir string) (*sandbox.Pool, error) {
 	poolCfg := sandbox.PoolConfig{
 		Size:         2,
 		Mode:         sandbox.ModeContainer,
@@ -283,15 +285,15 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		WorkspaceHostDir: workspaceRoot,
 		Runtime:          cfg.SandboxRuntime,
 		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
-		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, uploadsRoot),
+		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot),
 	}
 	log.Printf("sandbox: container mode, image=%s, pool=%d, workspace=%s, runtime=%s",
 		poolCfg.Container.Image, poolCfg.Size, poolCfg.Container.WorkspaceHostDir, defaultIfEmpty(poolCfg.Container.Runtime, "podman default"))
 	return sandbox.NewPool(poolCfg), nil
 }
 
-// absSupportingDocs absolutizes the persona/protocol/system-prompt dirs (plus
-// the uploads root) and drops empties so they can be passed as
+// absSupportingDocs absolutizes the persona/protocol/skill/system-prompt dirs
+// (plus the uploads root) and drops empties so they can be passed as
 // ContainerConfig.ReadOnlyMounts. The container backend bind-mounts each at the
 // SAME absolute path inside the container.
 func absSupportingDocs(dirs ...string) []string {

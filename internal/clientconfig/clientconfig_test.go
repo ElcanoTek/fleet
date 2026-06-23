@@ -77,6 +77,96 @@ func TestLoadDefaultBundle(t *testing.T) {
 	if filepath.Base(b.SystemPromptsDir) != "system_prompts" {
 		t.Errorf("SystemPromptsDir = %q", b.SystemPromptsDir)
 	}
+	if filepath.Base(b.SkillsDir) != "skills" {
+		t.Errorf("SkillsDir = %q", b.SkillsDir)
+	}
+}
+
+// TestDefaultBundleSkillsValid asserts the shipped generic bundle's skills/ dir
+// is well-formed: it ships the example skill, and ValidateSkills finds no
+// problems. This is the skills analogue of the ValidateMCPArgPaths CI guard.
+func TestDefaultBundleSkillsValid(t *testing.T) {
+	root := repoRoot(t)
+	b, err := Load(filepath.Join(root, "config", "default"))
+	if err != nil {
+		t.Fatalf("load default bundle: %v", err)
+	}
+	if problems := b.ValidateSkills(); len(problems) != 0 {
+		t.Errorf("default bundle skills should be clean, got problems: %v", problems)
+	}
+	skills := b.Skills()
+	if len(skills) == 0 {
+		t.Fatal("default bundle should ship at least the example skill")
+	}
+	var found bool
+	for _, sk := range skills {
+		if sk.Name == "example-skill" {
+			found = true
+			if sk.Path != filepath.Join("skills", "example-skill", "SKILL.md") {
+				t.Errorf("example-skill Path = %q", sk.Path)
+			}
+			if sk.Description == "" {
+				t.Error("example-skill Description should be non-empty")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("example-skill not found among %d skills", len(skills))
+	}
+}
+
+// TestReadSkills exercises the parser/validator against a hand-built skills dir
+// covering the well-formed case and every problem class.
+func TestReadSkills(t *testing.T) {
+	dir := t.TempDir()
+	skills := filepath.Join(dir, "skills")
+
+	writeSkill := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(skills, name, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Well-formed.
+	writeSkill("good-skill", "---\nname: good-skill\ndescription: Does a good thing when X.\n---\n\n# Good\n")
+	// Name does not match folder → skipped + problem.
+	writeSkill("mismatch", "---\nname: not-mismatch\ndescription: whatever\n---\n")
+	// Empty description → skipped + problem.
+	writeSkill("no-desc", "---\nname: no-desc\ndescription: \"\"\n---\n")
+	// No frontmatter → skipped + problem.
+	writeSkill("no-front", "# just a heading, no frontmatter\n")
+	// Folder with no SKILL.md → problem.
+	if err := os.MkdirAll(filepath.Join(skills, "empty-folder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Stray file at skills/ root → ignored silently (not a skill, not a problem).
+	if err := os.WriteFile(filepath.Join(skills, "README.md"), []byte("docs\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, problems := ReadSkills(skills)
+	if len(got) != 1 || got[0].Name != "good-skill" {
+		t.Fatalf("expected only good-skill in roster, got %+v", got)
+	}
+	if got[0].Path != filepath.Join("skills", "good-skill", "SKILL.md") {
+		t.Errorf("good-skill path = %q", got[0].Path)
+	}
+	// Four malformed entries each produce at least one problem; the README and the
+	// good skill produce none.
+	if len(problems) < 4 {
+		t.Errorf("expected >=4 problems for the malformed skills, got %d: %v", len(problems), problems)
+	}
+
+	// An absent skills/ dir is not a problem.
+	none, noProblems := ReadSkills(filepath.Join(dir, "does-not-exist"))
+	if len(none) != 0 || len(noProblems) != 0 {
+		t.Errorf("absent skills dir should yield (nil,nil), got skills=%v problems=%v", none, noProblems)
+	}
 }
 
 func TestLoadDefaultsBlankDir(t *testing.T) {
