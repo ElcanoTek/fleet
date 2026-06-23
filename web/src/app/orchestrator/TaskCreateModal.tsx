@@ -11,8 +11,8 @@ import { McpServerPicker } from "@/app/shared/ui/McpServerPicker";
 import { FileUpload, type FileUploadHandle } from "@/app/shared/ui/FileUpload";
 
 // TaskCreateModal — the create-task form. React port of moc's tasks.js +
-// modals.js create-task modal, with ONE structural change mandated by the
-// migration plan: the `target_node_name` input is GONE, replaced by the shared
+// modals.js create-task modal, with ONE structural change from moc: the
+// `target_node_name` input is GONE, replaced by the shared
 // <McpServerPicker mode="task"> (enable/disable per MCP + per-MCP credential
 // account dropdown). The global concurrency cap setting also lives here, under
 // Advanced Settings.

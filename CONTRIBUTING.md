@@ -18,8 +18,7 @@ deploy/     systemd unit + Caddyfile for a single-box deployment
 scripts/    bootstrap / update / status and e2e helpers
 ```
 
-See the top-level `README.md` for the architecture overview and
-`docs/MIGRATION_PLAN_V2.md` for the deeper design.
+See the top-level `README.md` for the architecture overview.
 
 ## Prerequisites
 
