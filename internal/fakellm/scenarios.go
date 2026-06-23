@@ -47,12 +47,6 @@ func ToolStep(calls ...ToolCall) Step {
 // StatusStep returns a step that replies with an HTTP error status.
 func StatusStep(code int) Step { return Step{Kind: StepStatus, Status: code} }
 
-// MalformedStep returns a step that streams a malformed SSE body.
-func MalformedStep() Step { return Step{Kind: StepMalformed} }
-
-// TimeoutStep returns a step that stalls for d without finishing the stream.
-func TimeoutStep(d time.Duration) Step { return Step{Kind: StepTimeout, Delay: d} }
-
 // jsonObj builds a one-key JSON object string {"k":"v"} with v properly escaped.
 func jsonObj(k, v string) string {
 	// Hand-roll a tiny encoder to avoid pulling marshalling into a hot path and
