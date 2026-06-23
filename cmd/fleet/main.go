@@ -41,6 +41,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
 	"github.com/ElcanoTek/fleet/internal/sched/scheduler"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -132,7 +133,7 @@ func run() error {
 	notesProvider := &notesAdapter{store: notesStore}
 
 	// ── interactive engine (the concrete turnEngine) ──
-	serverSpecs := buildMCPSpecs(cfg)
+	serverSpecs := scheduledrun.BuildMCPSpecs(cfg)
 	mgr, err := agent.New(agent.ManagerOptions{
 		Config:               cfg,
 		ServerSpecs:          serverSpecs,
@@ -221,9 +222,21 @@ func run() error {
 	log.Printf("scheduled runtime: flavor=%s native_agent_image=%q", scheduledRuntime, nativeAgentImage)
 
 	// ── capped worker pool: TaskRunner = the scheduled agent over the SHARED sandbox pool ──
-	taskRunner := newScheduledRunner(cfg, mgr, schedStorage, notesProvider, personasDir, systemPromptsDir, protocolsDir, scheduledRuntime, nativeAgentImage, scheduledFlavor, allowUngovernedScheduled)
+	taskRunner := scheduledrun.New(scheduledrun.Options{
+		Config:                   cfg,
+		Manager:                  mgr,
+		NotesProvider:            notesProvider,
+		NoteProposer:             notesProvider,
+		PersonasDir:              personasDir,
+		SystemPromptsDir:         systemPromptsDir,
+		ProtocolsDir:             protocolsDir,
+		Runtime:                  scheduledRuntime,
+		NativeAgentImage:         nativeAgentImage,
+		RuntimeFlavor:            scheduledFlavor,
+		AllowUngovernedScheduled: allowUngovernedScheduled,
+	})
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{})
-	log.Printf("worker pool: cap=%d", pool.Cap()) //nolint:gosec // G706 false positive: pool.Cap() is an int formatted with %d; it cannot carry CR/LF.
+	log.Printf("worker pool: cap=%d", pool.Cap())
 
 	// ── boot listeners ──
 	chatAddr := addrOr(cfg.Addr, ":8080")
@@ -405,25 +418,6 @@ func orchestratorAddr() string {
 		return v
 	}
 	return ":8000"
-}
-
-// buildMCPSpecs converts config.MCPServers into the agent.MCPServerSpec map the
-// interactive Manager connects at startup. Credentials live in the env the
-// config builder populated; they reach MCP subprocesses host-side only.
-func buildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
-	out := make(map[string]agent.MCPServerSpec, len(cfg.MCPServers))
-	for name, sc := range cfg.MCPServers {
-		out[name] = agent.MCPServerSpec{
-			Enabled:       sc.Enabled,
-			Command:       sc.Command,
-			Args:          sc.Args,
-			Env:           sc.Env,
-			URL:           sc.URL,
-			Headers:       sc.Headers,
-			ToolAllowlist: sc.ToolAllowlist,
-		}
-	}
-	return out
 }
 
 // ── notes adapter: the sched-backed NotesProvider + NoteProposer ──
