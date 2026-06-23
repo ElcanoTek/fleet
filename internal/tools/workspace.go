@@ -65,11 +65,11 @@ func WorkspaceDirForConversation(conversationID string) string {
 // failing the tool call.
 //
 // We also drop symlinks inside the scoped workspace pointing at the
-// agent's supporting docs (protocols, personas, system_prompts). The
-// bash/run_python tools cd into this workspace, so without these the
-// bare paths in the system prompt ("protocols/foo.yaml") would fail
-// to resolve. Using absolute targets means the symlinks keep working
-// even if the scoped dir is moved around.
+// agent's supporting docs (protocols, personas, system_prompts, skills).
+// The bash/run_python tools cd into this workspace, so without these the
+// bare paths in the system prompt ("protocols/foo.yaml",
+// "skills/<name>/SKILL.md") would fail to resolve. Using absolute targets
+// means the symlinks keep working even if the scoped dir is moved around.
 func EnsureWorkspaceDir(conversationID string) (string, error) {
 	dir := WorkspaceDirForConversation(conversationID)
 	// 0o755 because the per-turn sandbox container runs as uid 1000
@@ -101,7 +101,7 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 	if err != nil {
 		return dir, nil //nolint:nilerr // skip supporting-doc links but return the dir
 	}
-	for _, name := range []string{"protocols", "personas", "system_prompts"} {
+	for _, name := range []string{"protocols", "personas", "system_prompts", "skills"} {
 		link := filepath.Join(dir, name)
 		// Don't replace an existing file — could be a real file the
 		// agent wrote. Only create the symlink if nothing is there.

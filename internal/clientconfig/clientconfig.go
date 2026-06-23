@@ -18,6 +18,7 @@
 //	  system_prompts/      # default.md (scheduled base), chat.md (interactive base)
 //	  personas/            # *.yaml
 //	  protocols/           # *.yaml|md
+//	  skills/              # <name>/SKILL.md Agent Skills (progressive disclosure)
 //	  mcp/                 # the client's Python MCP servers + requirements.txt
 //
 // The execution SANDBOX is a per-client bundle artifact: each bundle ships its
@@ -94,6 +95,7 @@ type Bundle struct {
 	SystemPromptsDir string
 	PersonasDir      string
 	ProtocolsDir     string
+	SkillsDir        string
 	MCPDir           string
 }
 
@@ -325,6 +327,7 @@ func Load(dir string) (*Bundle, error) {
 		SystemPromptsDir:  filepath.Join(abs, "system_prompts"),
 		PersonasDir:       filepath.Join(abs, "personas"),
 		ProtocolsDir:      filepath.Join(abs, "protocols"),
+		SkillsDir:         filepath.Join(abs, "skills"),
 		MCPDir:            filepath.Join(abs, "mcp"),
 	}
 	applyBrandingDefaults(&b.Branding)
@@ -335,6 +338,13 @@ func Load(dir string) (*Bundle, error) {
 	// bundle — a misspelled/missing `mcp/foo.py` would otherwise only surface as
 	// a silent connector launch failure at runtime.
 	for _, p := range b.ValidateMCPArgPaths() {
+		log.Printf("clientconfig: warning: %s", p)
+	}
+	// Warn (don't fail) on malformed Agent Skills — a missing SKILL.md, bad
+	// frontmatter, name/folder mismatch, or empty description. A defective skill
+	// is skipped from the prompt roster but should not block the load; surface it
+	// loudly so the author notices. A CI test asserts the shipped bundle is clean.
+	for _, p := range b.ValidateSkills() {
 		log.Printf("clientconfig: warning: %s", p)
 	}
 	return b, nil

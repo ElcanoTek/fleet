@@ -159,7 +159,7 @@ Key invariants the diagram encodes:
 │                                   #   (cutlass runtime Containerfile ELIMINATED)
 ├── deploy/                         # fleet.target, fleet-cli, Caddyfile (cutlass/ image gone)
 ├── scripts/                        # bootstrap.sh (--postgres=local|external), build-sandbox-image.sh
-├── personas/  protocols/  system_prompts/   # stable abs paths for same-path :ro,z mounts
+├── personas/  protocols/  system_prompts/  skills/   # stable abs paths for same-path :ro,z mounts
 └── mcp/                            # ONE deduped set of Python MCP servers (§5)
     ├── email_lint.py  sendgrid_server.py  ses_s3_email.py
     ├── xandr_mcp.py  magnite_mcp.py  medianet_mcp.py  pubmatic_mcp.py

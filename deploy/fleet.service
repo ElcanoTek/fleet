@@ -17,7 +17,8 @@
 # ./config/default — the generic bundle baked into the repo, neutral branding +
 # no MCP connectors, runs bare). A real deployment points it at a checked-out
 # client repo whose bundle supplies system_prompts/, personas/, protocols/,
-# mcp/, and the manifest (branding + MCP catalog + empty-state + agent policy).
+# skills/, mcp/, and the manifest (branding + MCP catalog + empty-state + agent
+# policy).
 #
 # The EnvironmentFile is the SAME 0600 credential file scripts/bootstrap.sh
 # ensures (FLEET_ENV_FILE). cmd/fleet *also* parses FLEET_ENV_FILE itself via
@@ -47,7 +48,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 # WorkingDirectory holds the binary + data dir. The client bundle's
-# system_prompts/ personas/ protocols/ mcp/ are resolved from
+# system_prompts/ personas/ protocols/ skills/ mcp/ are resolved from
 # FLEET_CLIENT_CONFIG_DIR (set in fleet.env), NOT from here.
 WorkingDirectory=/opt/fleet
 EnvironmentFile=/etc/fleet/fleet.env

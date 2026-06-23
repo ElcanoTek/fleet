@@ -72,11 +72,14 @@ that breaks one is wrong even if tests pass.
 - **No secrets in the repo.** gitleaks gates CI. Use the fake-LLM seam and obvious
   placeholders in tests; the real `OPENROUTER_API_KEY` lives outside the repo.
 - **Honesty in docs.** Claim only shipped, tested capabilities. (The README
-  Standards section lists ACP + MCP as shipped; Skills is on the roadmap.) If you
-  add a capability, document what it actually does — and what it does not.
+  Standards section lists ACP, MCP, and Agent Skills as shipped.) If you add a
+  capability, document what it actually does — and what it does not. (Example: a
+  skill's `allowed-tools` frontmatter is parsed but **not** enforced as a hard
+  authorization gate — the docs say so plainly rather than implying a boundary
+  that isn't there.)
 - **Client content is external.** Branding, the MCP catalog, personas, protocols,
-  and the sandbox Containerfile live in an out-of-repo client-config bundle
-  (`FLEET_CLIENT_CONFIG_DIR`). fleet ships only the generic `config/default`
+  skills, and the sandbox Containerfile live in an out-of-repo client-config
+  bundle (`FLEET_CLIENT_CONFIG_DIR`). fleet ships only the generic `config/default`
   bundle — do not add client-specific content to this repo.
 
 ## Conventions
