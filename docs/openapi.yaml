@@ -47,7 +47,7 @@ components:
     bearerToken:
       type: http
       scheme: bearer
-      description: A user token from the username/password login path (Authorization: Bearer).
+      description: "A user token from the username/password login path (Authorization: Bearer)."
     elcanoAuthCookie:
       type: apiKey
       in: cookie
