@@ -66,6 +66,83 @@ them.
   usage, enforcement nudges — so you can see exactly what an agent did and what
   it cost.
 
+## Built for trust: governed, auditable delegation
+
+The questions anyone asks before handing real work to an agent are simple: *can
+it do the job, should I trust it with this, and am I comfortable giving up
+control?* fleet is built to answer each one with a mechanism you can point at —
+not a promise. The pieces below are described in [Why fleet](#why-fleet); here is
+how they line up against those three concerns.
+
+### Can it do the job — reproducibly?
+
+A setup that worked once but can't be reproduced isn't something you can
+delegate. fleet makes an agent's configuration an **artifact, not a vibe**: the
+system prompt, personas, protocols (playbooks), connected MCP tools, and model
+defaults all live in a versioned **client-config bundle** (a plain git repo — see
+below). The setup that worked is the setup that runs again next time, for the
+next person, on a schedule. And because every turn emits structured **observer
+events** — each tool call, its result, token usage, cost, and any enforcement
+nudge — streamed live over SSE in the chat UI, you judge the work from its actual
+trace, not a black-box final answer.
+
+### Should I trust it with this task?
+
+Trust here means **bounded** and **inspectable** — known limits going in, a full
+record coming out.
+
+- **Hard limits that actually fire.** Each turn runs against a per-turn cost
+  ceiling, a token ceiling, an iteration cap, and a timeout. They are enforced,
+  not advisory: a model that won't stop calling tools is stopped by the ceiling,
+  and for the `native-acp` flavor the host re-checks reconciled usage against the
+  same ceilings and hard-cancels the run if a buggy or compromised agent
+  overshoots. A runaway loop costs you a capped turn, not an open-ended invoice.
+- **A record you can replay.** The observer events persist as a per-turn audit
+  trail an operator can inspect after the fact. fleet ships no usage dashboard,
+  but the trail is the substrate one would be built on — the per-turn data needed
+  to answer "what did this agent do, and what did it cost?" is captured by
+  default. (For external/containment-tier runs, usage is the agent's
+  self-report — see below — so cost there is recorded honestly, including as an
+  unmetered zero when the agent reports none.)
+- **The posture is on the record.** Each turn is stamped with its **governance
+  tier** in the session log — **fully governed** (`native-inprocess` /
+  `native-acp`, where fleet owns tool execution, policy, and accounting) versus
+  **containment / delegated** (an external agent like Claude Code or Goose,
+  self-executing inside a locked sandbox). You don't have to guess how much fleet
+  was in control of a given run; the log says so.
+
+### Am I comfortable handing over control?
+
+The honest answer to "what if it does the wrong thing" is to ensure it **can't**
+reach the things that would hurt, and to keep a human on the decisions that
+matter.
+
+- **The agent has no direct power.** Every tool call — bash, Python, file I/O,
+  MCP — runs inside an ephemeral rootless-Podman sandbox over a persistent
+  per-conversation workspace; even the native agent runs inside it and delegates
+  execution back to the host, so there is no trusted fast path. External agents
+  are contained further (`--read-only`, `--cap-drop=ALL`, scrubbed env,
+  model-only egress). Containment bounds what an external agent can *do on your
+  host* — it does **not** stop a self-executing agent from transmitting what it
+  *reads* to its own model endpoint, so prefer the native flavors for sensitive
+  data (see [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md)).
+- **Credentials stay out of reach.** MCP credentials are brokered host-side: the
+  broker injects them only when it runs a delegated MCP call, so they never enter
+  the sandbox, the agent container, the model's context, or the logs. They live
+  in a `0600` env file managed through `fleet-admin`, with per-MCP multi-account
+  seats. The agent uses your connectors without ever holding their keys.
+- **A human stays on the loop.** Sensitive actions raise an **allow / deny** card
+  in the chat UI and block the turn until someone answers. It is **default-deny**
+  on timeout, and there is **no "approve all"** — every request is decided on its
+  own merits. Scheduled work, which has no human to ask, is **fail-closed**:
+  external flavors on the scheduler are off by default and deny anything
+  sensitive rather than proceed unsupervised.
+
+The throughline: fleet turns black-box delegation into **bounded, auditable
+autonomy** — reproducible setups, a live and replayable record, limits that fire,
+isolated credentials, and human checkpoints on the actions that matter. You
+delegate to a process you can watch, cap, and stop.
+
 ## Architecture at a glance
 
 A single `fleet` process runs, on one box:
@@ -179,6 +256,33 @@ deployment at it.
 
 `bootstrap --client-config <git-url|path>` clones (or points at) the bundle and
 keeps it fast-forwarded on `update`; see **Deploy** and **Operating fleet**.
+
+## No lock-in: your agent IP is portable
+
+Everything that defines how your agents behave lives in the **client-config
+bundle** — a plain git repo or directory you own (`FLEET_CLIENT_CONFIG_DIR`), not
+inside fleet's database or binary:
+
+- **`system_prompts/`** — base prompts for chat and tasks
+- **`personas/`** — reusable agent profiles
+- **`protocols/`** — playbooks your agents follow
+- **`mcp/`** — your MCP connectors (+ `requirements.txt`)
+- **`manifest.yaml`** — MCP catalog, tool policy, model defaults, runtime
+  flavors, sandbox block
+- **`sandbox/Containerfile`** — the exact image your tool calls run in
+
+Those are versioned files you control, and fleet reaches agents and tools over
+**open protocols** — [ACP](#standards) to drive the native and external agents,
+[MCP](#standards) for tools and data. So your agent setup travels *with* you:
+version it in git, fork it per team, share it across orgs, or point it at another
+ACP/MCP-capable platform. Moving off fleet doesn't mean starting over — you keep
+the bundle, and the wire protocols are not fleet-specific. The assets are yours
+and the protocols are open, which is what keeps adoption low-regret: you can
+start on real work without betting that you can never leave.
+
+The public template
+[`ElcanoTek/example-config`](https://github.com/ElcanoTek/example-config) shows
+the full layout — fork it and the whole thing is yours from day one.
 
 ## Using other agents
 
@@ -551,6 +655,29 @@ box by default (auditable supply chain); `update` rebuilds it only when the
 Containerfile changed; `status` verifies the resolved image runs. Registry
 publish stays opt-in — set `sandbox.image` in the bundle manifest to a prebuilt
 ref and all three steps consume that instead of building.
+
+## Built by Elcano (commercial support)
+
+fleet is built by **ElcanoTek**. The platform itself is MIT-licensed,
+pre-1.0, and yours to run — the open-source project ships no support contract or
+SLA. Separately, the same team takes on **commercial engagements** for
+organizations that want to move faster than a self-serve deployment allows.
+
+An agent is only as useful as the data connectors it can reach, the workflows
+it's allowed to run, and the guardrails that keep it honest — which is exactly
+what fleet encodes and what we build:
+
+- **Custom agents** tuned to your domain.
+- **Fleets** deployed and operated on your infrastructure.
+- **Bespoke MCP servers and data connectors** that wire fleet into the systems
+  your work actually lives in.
+
+The platform stays open and self-hostable; an engagement is for when you'd rather
+have the people who wrote it design the connectors, protocols, and ceilings with
+you.
+
+Learn more at [elcanotek.com](https://elcanotek.com) or reach out directly:
+[brad@elcanotek.com](mailto:brad@elcanotek.com).
 
 ## Contributing
 
