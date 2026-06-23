@@ -15,6 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // The INTERACTIVE driver: a live chat turn over the unified agentcore.Run loop.
@@ -161,8 +162,14 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	}
 
 	policy := agentcore.NewInteractivePolicy(tc.MaxCostUSD, tc.MaxTotalTokens, tc.ApprovalStager, tc.MemoryProposer)
+	// propose_note as a single agentcore-boundary guarantee: register the tool iff
+	// a NoteProposer is wired, so the advertised tool, the gate, and the actual
+	// roster stay in lockstep on every interactive flavor (web / ingress /
+	// native-acp builds its own roster in-sandbox gated on NoteProposerWired).
+	nativeTools := tc.NativeTools
 	if tc.NoteProposer != nil {
 		policy.SetNoteProposer(tc.NoteProposer)
+		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeNoteTool())
 	}
 
 	deps := agentcore.Deps{
@@ -181,7 +188,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         tc.Temperature,
 		MaxCompletionTokens: tc.MaxTokens,
-		NativeTools:         tc.NativeTools,
+		NativeTools:         nativeTools,
 		Allowlist:           tc.Allowlist,
 		OptionalServers:     tc.OptionalServers,
 		Selection:           tc.Selection,

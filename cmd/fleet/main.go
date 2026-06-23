@@ -141,6 +141,7 @@ func run() error {
 		SystemPromptsDir:     systemPromptsDir,
 		ChatSystemPromptFile: "chat.md",
 		NotesProvider:        notesProvider,
+		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
 	})
 	if err != nil {
 		return fmt.Errorf("build interactive engine: %w", err)

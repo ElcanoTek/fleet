@@ -481,7 +481,7 @@ signed-key auth: whoever can start the process can drive a governed turn. So:
 | Full governance: fleet's policy, sandbox, MCP catalog, notes, audit, cost ceilings | Remote / networked ingress (listed above)            |
 | `loadSession` / `resume`: reconnect to a prior conversation across `fleet acp` restarts (the SessionId **is** the conversation id) — `loadSession` replays the persisted transcript, `resume` rebinds without replay | Audio prompt blocks |
 | Whatever runtime flavor the box runs (`native-inprocess` / `native-acp` sandbox); image prompt blocks (decoded to the workspace + fed to the turn as vision) | |
-| `propose_note` (inherited host-side); email `content_file` inlining + relative-attachment-path materialization (same host-side transform as the web path) | `propose_memory` (no ACP-host confirm surface) |
+| `propose_note` (wired host-side on the Manager) + `propose_memory` (staged, then confirmed over `request_permission`, default-DENY); email `content_file` inlining + relative-attachment-path materialization (same host-side transform as the web path) | |
 
 ### fleet uses its OWN sandbox + MCP catalog (host MCP passthrough is unsupported)
 

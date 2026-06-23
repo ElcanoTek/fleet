@@ -79,6 +79,12 @@ type Manager struct {
 	// system prompt every turn (nil = no notes section).
 	notesProvider agentcore.NotesProvider
 
+	// noteProposer stages agent-proposed admin-notes edits (propose_note). Wired
+	// once here so EVERY interactive RunTurn (web, ACP ingress, native-acp)
+	// inherits the same propose_note guarantee — not per-entrypoint. Nil leaves
+	// propose_note reporting "unavailable" (and the tool unregistered).
+	noteProposer agentcore.NoteProposer
+
 	// mcpToolRoster is the frozen list of `mcp_<server>_<tool>` names
 	// that survived the initial MCP connection sweep and per-server
 	// allowlists. Optional-server names are filtered from this roster per

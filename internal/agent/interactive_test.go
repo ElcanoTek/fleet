@@ -244,3 +244,46 @@ func (stubMemoryProposer) Propose(string) (string, error) { return "", nil }
 type stubNoteProposer struct{}
 
 func (stubNoteProposer) Propose(_, _, _, _ string) (string, error) { return "", nil }
+
+// TestRunInteractiveTurn_ProposeNoteWiredWhenProposerSet proves the single
+// agentcore-boundary guarantee for propose_note (issue #40): when a NoteProposer
+// is set on the TurnConfig, RunInteractiveTurn both REGISTERS the propose_note
+// tool (so the model's call is accepted, not rejected as unknown) and WIRES the
+// proposer (so the call routes to it) — advertised, registered, and wired in
+// lockstep, on the same path web / ingress / native-acp all use.
+func TestRunInteractiveTurn_ProposeNoteWiredWhenProposerSet(t *testing.T) {
+	np := &recordingNoteProposer{}
+	calls := 0
+	model := &itMockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			calls++
+			round := calls
+			return func(yield func(fantasy.StreamPart) bool) {
+				if round == 1 {
+					// Round 0: emit a propose_note tool call (intercepted by the gate).
+					yield(fantasy.StreamPart{
+						Type: fantasy.StreamPartTypeToolCall, ID: "pn-1",
+						ToolCallName: "propose_note", ToolCallInput: `{"slug":"s","title":"t","body":"b","reason":"because"}`,
+					})
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+					return
+				}
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "done"})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}, nil
+		},
+	}
+	tc := TurnConfig{
+		SystemPrompt: "sys",
+		Messages:     []fantasy.Message{fantasy.NewUserMessage("save a note")},
+		Model:        model,
+		MaxTokens:    1024,
+		NoteProposer: np,
+	}
+	if _, err := RunInteractiveTurn(context.Background(), tc, &captureObs{}); err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	if np.slug != "s" {
+		t.Fatalf("propose_note did not route to the wired proposer (slug=%q); tool must be registered + wired", np.slug)
+	}
+}

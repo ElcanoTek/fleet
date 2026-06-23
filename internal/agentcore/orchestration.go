@@ -283,7 +283,7 @@ func (o *orchestrationState) checkMemoryProposal(toolName, rawInput string) (boo
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.memoryProposer == nil {
-		return true, "MEMORY_PROPOSAL_FAILED: memory proposer is not wired. This is a bug."
+		return true, "MEMORY_PROPOSAL_UNAVAILABLE: saving user memories is not enabled on this transport. Do NOT retry — summarize the point for the user instead."
 	}
 	var args struct {
 		Content string `json:"content"`
@@ -309,7 +309,7 @@ func (o *orchestrationState) checkNoteProposal(toolName, rawInput string) (bool,
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.noteProposer == nil {
-		return true, "NOTE_PROPOSAL_FAILED: note proposer is not wired. This is a bug."
+		return true, "NOTE_PROPOSAL_UNAVAILABLE: note proposals are not enabled on this transport. Do NOT retry."
 	}
 	var args struct {
 		Slug   string `json:"slug"`

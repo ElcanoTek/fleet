@@ -60,15 +60,31 @@ func TestCheckNoteProposal_NotProposeNotePassesThrough(t *testing.T) {
 }
 
 // TestCheckNoteProposal_NilProposerGuard verifies the nil-proposer path returns
-// a clear "not wired" failure instead of panicking.
+// an HONEST capability message (not the old "This is a bug") instead of panicking.
 func TestCheckNoteProposal_NilProposerGuard(t *testing.T) {
 	o := newOrchestrationState(nil, 0)
 	blocked, msg := o.checkNoteProposal("propose_note", `{"slug":"s","title":"t","body":"b"}`)
 	if !blocked {
 		t.Fatal("expected blocked=true even with nil proposer")
 	}
-	if !strings.Contains(msg, "not wired") {
-		t.Fatalf("expected 'not wired' message, got %q", msg)
+	if strings.Contains(msg, "This is a bug") {
+		t.Fatalf("nil-proposer message must be honest capability text, not %q", msg)
+	}
+	if !strings.Contains(msg, "UNAVAILABLE") || !strings.Contains(msg, "Do NOT retry") {
+		t.Fatalf("expected an honest UNAVAILABLE / do-not-retry message, got %q", msg)
+	}
+}
+
+// TestCheckMemoryProposal_NilProposerGuard mirrors the note guard: nil memory
+// proposer → blocked with honest UNAVAILABLE text, no panic, no "This is a bug".
+func TestCheckMemoryProposal_NilProposerGuard(t *testing.T) {
+	o := newOrchestrationState(nil, 0)
+	blocked, msg := o.checkMemoryProposal("propose_memory", `{"content":"x"}`)
+	if !blocked {
+		t.Fatal("expected blocked=true even with nil proposer")
+	}
+	if strings.Contains(msg, "This is a bug") || !strings.Contains(msg, "UNAVAILABLE") {
+		t.Fatalf("expected an honest UNAVAILABLE message, got %q", msg)
 	}
 }
 

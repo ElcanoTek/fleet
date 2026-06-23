@@ -230,11 +230,13 @@ func (a *IngressAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Pro
 		// locked down (mirrors the web path threading conv.Lockdown into the
 		// turn). The engine re-checks the model against the lockdown allow-list.
 		Lockdown: a.cfg.Lockdown,
-		// The human-in-the-loop approval surface: a staged critical tool routes
-		// to the editor over OUTBOUND request_permission (default-DENY). The
-		// other staging surfaces are handled per the approver's documented
-		// choices (propose_memory unwired; propose_note inherited host-side).
+		// The human-in-the-loop approval surface: a staged critical tool routes to
+		// the editor over OUTBOUND request_permission (default-DENY). The approver
+		// also implements MemoryProposer, so propose_memory stages a memory proposal
+		// and resolves it over request_permission post-turn; propose_note is wired
+		// host-side on the Manager (inherited via RunTurn).
 		ApprovalStager: approver,
+		MemoryProposer: approver,
 		// PermissionBroker is the EXTERNAL-acp human surface, irrelevant here:
 		// ingress drives the native/governed flavors, whose human-in-the-loop is
 		// the ApprovalStager above. Left nil.
