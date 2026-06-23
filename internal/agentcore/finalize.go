@@ -21,7 +21,18 @@ type FinalizeInput struct {
 	Messages     []fantasy.Message
 	Observer     Observer
 	SystemPrompt string
+	// RecordUsage meters a recovery model call's tokens/cost into the SAME run
+	// accounting the main loop uses. It is a capability closure over the run's
+	// orchestration state (the state itself never escapes Run), so a finalize
+	// hook that makes its own model call (the interactive leaked-call retry /
+	// forced summary) is not invisible to the cost chip. Nil-safe; the loop wires
+	// it unconditionally, so this is NOT a mode branch in the trunk.
+	RecordUsage UsageSink
 }
+
+// UsageSink records one model step's usage (+ provider metadata, which carries
+// the OpenRouter cost) into the run accounting. See FinalizeInput.RecordUsage.
+type UsageSink func(usage fantasy.Usage, metadata fantasy.ProviderMetadata)
 
 // FinalizeHook is the interactive recovery hook. It returns recovered final text
 // (empty to keep the loop's text) and an error. Scheduled mode passes nil.

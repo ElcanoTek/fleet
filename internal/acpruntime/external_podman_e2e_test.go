@@ -55,6 +55,36 @@ func TestExternalPodmanE2E(t *testing.T) {
 		assertPermissionResolved(t, obs, true)
 	})
 
+	t.Run("usage decode", func(t *testing.T) {
+		// Drive the example agent with FLEET_ACP_EXAMPLE_EMIT_USAGE so it emits a
+		// deterministic acp.Usage (on PromptResponse) + a USD SessionUsageUpdate.Cost.
+		// This validates fleet's UNSTABLE wire-decode against a REAL provider payload
+		// over podman-stdio — not just the in-process struct fakes (#96). The flag
+		// rides ProviderEnv → the container --env; the run stays credential-free.
+		obs := &recordingObserver{}
+		rt := NewExternalRuntime(ExternalConfig{
+			Image:        image,
+			StartTimeout: 60 * time.Second,
+			ProviderEnv:  map[string]string{"FLEET_ACP_EXAMPLE_EMIT_USAGE": "1"},
+		})
+		broker := brokerFunc(func(_ context.Context, _ PermissionRequest) (PermissionDecision, error) {
+			return PermissionDecision{Allowed: true, OptionID: "allow"}, nil
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		res, err := rt.Run(ctx, "please update the config", ExternalDeps{Observer: obs, PermissionBroker: broker})
+		if err != nil {
+			t.Fatalf("external run: %v", err)
+		}
+		if res.Usage.PromptTokens != 100 || res.Usage.CompletionTokens != 20 ||
+			res.Usage.CachedTokens != 5 || res.Usage.CacheCreationTokens != 3 {
+			t.Fatalf("token wire-decode mismatch: %+v (want prompt=100 completion=20 cached=5 cacheCreation=3)", res.Usage)
+		}
+		if res.Usage.CostUSD != 0.42 {
+			t.Fatalf("USD cost wire-decode = %v, want 0.42", res.Usage.CostUSD)
+		}
+	})
+
 	t.Run("default-deny", func(t *testing.T) {
 		obs := &recordingObserver{}
 		rt := NewExternalRuntime(ExternalConfig{Image: image, StartTimeout: 60 * time.Second})

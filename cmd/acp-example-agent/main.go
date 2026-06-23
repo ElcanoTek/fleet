@@ -115,7 +115,32 @@ func (a *exampleAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Pro
 	}); err != nil {
 		return acp.PromptResponse{}, err
 	}
-	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+
+	promptResp := acp.PromptResponse{StopReason: acp.StopReasonEndTurn}
+	// Optional, deterministic usage/cost emission so the live podman e2e can
+	// validate fleet's UNSTABLE acp.Usage / SessionUsageUpdate.Cost wire-decode
+	// against a REAL provider payload over stdio (not just in-process struct
+	// fakes). Off by default — set FLEET_ACP_EXAMPLE_EMIT_USAGE=1 (the e2e passes
+	// it as a container env). Stays credential-free.
+	if os.Getenv("FLEET_ACP_EXAMPLE_EMIT_USAGE") != "" {
+		_ = a.conn.SessionUpdate(ctx, acp.SessionNotification{
+			SessionId: sid,
+			Update: acp.SessionUpdate{UsageUpdate: &acp.SessionUsageUpdate{
+				SessionUpdate: "usage_update",
+				Cost:          &acp.Cost{Amount: 0.42, Currency: "USD"},
+				Size:          200000,
+				Used:          128,
+			}},
+		})
+		promptResp.Usage = &acp.Usage{
+			InputTokens:       100,
+			OutputTokens:      20,
+			CachedReadTokens:  acp.Ptr(5),
+			CachedWriteTokens: acp.Ptr(3),
+			TotalTokens:       128,
+		}
+	}
+	return promptResp, nil
 }
 
 func (a *exampleAgent) Cancel(context.Context, acp.CancelNotification) error { return nil }

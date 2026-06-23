@@ -382,6 +382,11 @@ type MCPServerConfig struct {
 	// resolve against the bundle rather than the fleet process cwd. Empty for
 	// HTTP servers and for catalogs that supply absolute args.
 	Dir string
+	// AccountVars are the base credential env-var names the account-suffix scan
+	// uses to discover this server's provisioned `<VAR>_<ACCOUNT>` seats
+	// (creds.AccountsFor). Surfaced (names only) in the MCP catalog + the
+	// model-facing roster so a task/agent can discover valid account names.
+	AccountVars []string
 }
 
 // Load reads environment variables in this precedence order (highest wins):

@@ -65,7 +65,7 @@ func (a *Agent) renderMCPCatalog() string {
 		}
 	}
 
-	var loaded, available, disabled []string
+	var loaded, available, disabled, availableNames []string
 	for name, sc := range a.config.MCPServers {
 		switch {
 		case !sc.Enabled:
@@ -73,11 +73,20 @@ func (a *Agent) renderMCPCatalog() string {
 		case loadedSet[name]:
 			loaded = append(loaded, fmt.Sprintf("%s (%d tools)", name, toolsByServer[name]))
 		default:
-			available = append(available, name)
+			availableNames = append(availableNames, name)
+			entry := name
+			// Surface the provisioned credential-account seats so the model can
+			// discover valid `client`/account names for mcp_load_servers (the tool
+			// invites client="<name>" but otherwise gives no way to learn them).
+			if accts := creds.AccountsFor(sc.AccountVars); len(accts) > 0 {
+				entry = fmt.Sprintf("%s — accounts: %s", name, strings.Join(accts, ", "))
+			}
+			available = append(available, entry)
 		}
 	}
 	sort.Strings(loaded)
 	sort.Strings(available)
+	sort.Strings(availableNames)
 	sort.Strings(disabled)
 
 	var b strings.Builder
@@ -94,11 +103,12 @@ func (a *Agent) renderMCPCatalog() string {
 		for _, e := range available {
 			fmt.Fprintf(&b, "  • %s\n", e)
 		}
-		names := make([]string, 0, len(available))
-		for _, e := range available {
+		names := make([]string, 0, len(availableNames))
+		for _, e := range availableNames {
 			names = append(names, fmt.Sprintf("%q", e))
 		}
-		fmt.Fprintf(&b, "\n  To load: mcp_load_servers(names=[%s])\n\n", strings.Join(names, ", "))
+		fmt.Fprintf(&b, "\n  To load: mcp_load_servers(names=[%s])"+
+			"  (add client=\"<account>\" to bind a named credential seat shown above)\n\n", strings.Join(names, ", "))
 	}
 	if len(disabled) > 0 {
 		b.WriteString("DISABLED (missing credentials or explicitly off; NOT callable):\n")
