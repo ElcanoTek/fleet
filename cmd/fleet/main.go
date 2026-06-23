@@ -34,7 +34,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
-	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/sched"
@@ -178,28 +177,25 @@ func run() error {
 	}
 	h := handlers.New(hcfg, schedStorage, keyMgr)
 	// Wire the orchestrator's read-only Optional-MCP catalog + credential-account
-	// seats from the SAME in-process sources the chat side uses: the Manager's
-	// Optional-server catalog (descriptions + tool counts) and the per-server
-	// credential-account suffix scan (creds.AccountsFor over each server's base
-	// env vars). Never exposes secret values — only server + account names. This
-	// is what makes the scheduled-task MCP picker + credential admin table work.
+	// seats from the SAME in-process source the chat side uses: the Manager's
+	// Optional-server catalog (descriptions, tool counts, and the per-server
+	// credential-account seat names it derives from the bundle's AccountVars via
+	// creds.AccountsFor). Never exposes secret values — only server + account
+	// names. This is what makes the scheduled-task MCP picker + credential admin
+	// table work.
 	h.SetMCPCatalogProvider(func() []handlers.MCPServerCatalogEntry {
 		catalog := mgr.MCPServerCatalog()
 		out := make([]handlers.MCPServerCatalogEntry, 0, len(catalog))
 		for _, info := range catalog {
-			var baseVars []string
-			if sc, ok := cfg.MCPServers[info.Name]; ok {
-				for k := range sc.Env {
-					baseVars = append(baseVars, k)
-				}
-			}
 			out = append(out, handlers.MCPServerCatalogEntry{
 				Name:        info.Name,
 				DisplayName: info.DisplayName,
 				Description: info.Description,
 				ToolCount:   info.ToolCount,
 				Enabled:     info.EnabledByDefault,
-				Accounts:    creds.AccountsFor(baseVars),
+				// Seats are derived from the bundle's AccountVars by the Manager's
+				// catalog (creds.AccountsFor) — names only, never secret values.
+				Accounts: info.Accounts,
 			})
 		}
 		return out
@@ -285,7 +281,7 @@ func run() error {
 
 	errCh := make(chan error, 2)
 	go func() {
-		log.Printf("chat-server listening on %s", chatAddr)
+		log.Printf("chat-server listening on %s", chatAddr) //nolint:gosec // G706 false positive: chatAddr is an operator-configured bind address (env/flag), not request input.
 		if err := chatServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("chat-server: %w", err)
 		}
