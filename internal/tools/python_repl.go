@@ -54,7 +54,7 @@ const runPythonDescription = "Executes Python code in a per-turn IPython kernel 
 	"the download into your workspace, so prefer it for one-off fetches when you don't know which mode you're in.\n\n" +
 	"FILESYSTEM — your cwd is a private per-conversation scratch directory. Bare writes like `open('foo.html', 'w')` " +
 	"land in THIS chat's scratch and are invisible to other chats. Files from supporting docs — `protocols/`, `personas/`, " +
-	"`system_prompts/` — are exposed via symlinks inside your scratch so relative reads still work. For attachments the " +
+	"`system_prompts/`, `skills/` — are exposed via symlinks inside your scratch so relative reads still work. For attachments the " +
 	"user uploaded or the email MCP downloaded, use the absolute path from the tool that produced them.\n\n" +
 	"DISPLAYING IMAGES — to show a chart or image to the user: save it to your workspace with `plt.savefig('chart.png')` " +
 	"(or any other PNG/JPG/SVG writer) and reference it in your reply with markdown image syntax: `![Chart caption](chart.png)`. " +

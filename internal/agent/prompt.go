@@ -104,11 +104,12 @@ type Manager struct {
 	// every request.
 	optionalServerMetadata []OptionalServerInfo
 
-	// Source directories for persona + protocol + system-prompt files. These
-	// are read on every turn because operators may edit them in place without
-	// a server restart (particularly useful for prompt iteration).
+	// Source directories for persona + protocol + skill + system-prompt files.
+	// These are read on every turn because operators may edit them in place
+	// without a server restart (particularly useful for prompt iteration).
 	personasDir      string
 	protocolsDir     string
+	skillsDir        string
 	systemPromptsDir string
 
 	// chatSystemPromptFile is the interactive base-prompt filename inside
@@ -472,6 +473,21 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 				continue
 			}
 			fmt.Fprintf(&sb, "- `protocols/%s`\n", e.Name())
+		}
+		sb.WriteString("\n")
+	}
+
+	// 5b. skill listing — the Agent Skills standard (https://github.com/anthropics/skills).
+	// Progressive disclosure: only each skill's name + description + path go in the
+	// prompt (Level 1 metadata). The agent reads the skill's SKILL.md (Level 2) and
+	// any bundled scripts/resources (Level 3) on demand, by path, when a task
+	// matches — the skills/ dir is mounted read-only in the sandbox and symlinked
+	// into the workspace, so `skills/<name>/...` paths resolve for bash/run_python.
+	if skills, _ := clientconfig.ReadSkills(m.skillsDir); len(skills) > 0 {
+		sb.WriteString("## Skills\n")
+		sb.WriteString("Skills are packaged, on-demand capabilities. Only each skill's name and description are listed here; when a task matches one, read its `SKILL.md` for the full instructions — it may bundle scripts you run via `bash`/`run_python` and reference files you read on demand. Do NOT read a skill's files unless the task calls for it.\n\n")
+		for _, sk := range skills {
+			fmt.Fprintf(&sb, "- **%s** (`%s`): %s\n", sk.Name, sk.Path, sk.Description)
 		}
 		sb.WriteString("\n")
 	}

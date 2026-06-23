@@ -117,6 +117,7 @@ func defaultSupporting() string {
 		filepath.Join(root, "personas"),
 		filepath.Join(root, "protocols"),
 		filepath.Join(root, "system_prompts"),
+		filepath.Join(root, "skills"),
 	}, ":")
 }
 

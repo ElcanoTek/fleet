@@ -95,8 +95,53 @@ func fixtureManager(t *testing.T) *Manager {
 		config:               &config.Config{PersonaDefault: "victoria"},
 		personasDir:          filepath.Join(dir, "personas"),
 		protocolsDir:         filepath.Join(dir, "protocols"),
+		skillsDir:            filepath.Join(dir, "skills"),
 		systemPromptsDir:     filepath.Join(dir, "system_prompts"),
 		chatSystemPromptFile: "chat.md",
+	}
+}
+
+// TestBuildSystemPrompt_SkillsRoster verifies the Skills section appears only
+// when the bundle ships at least one well-formed skill, and that each listed
+// skill carries its name, bundle-relative SKILL.md path, and description
+// (Level-1 progressive-disclosure metadata).
+func TestBuildSystemPrompt_SkillsRoster(t *testing.T) {
+	m := fixtureManager(t)
+
+	// No skills yet → no Skills section.
+	none, err := m.buildSystemPrompt("victoria", "conv-x", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt (no skills): %v", err)
+	}
+	if strings.Contains(none, "## Skills") {
+		t.Error("Skills section should be absent when the bundle ships no skills")
+	}
+
+	// Add one well-formed skill + one malformed (no SKILL.md) → only the good one
+	// is rostered.
+	writeFile(t, filepath.Join(m.skillsDir, "deal-pacing", "SKILL.md"),
+		"---\nname: deal-pacing\ndescription: Pace a deal toward its budget. Use when a campaign is over/under-delivering.\n---\n\n# Deal pacing\n")
+	if err := os.MkdirAll(filepath.Join(m.skillsDir, "broken-skill"), 0o755); err != nil {
+		t.Fatalf("mkdir broken-skill: %v", err)
+	}
+
+	with, err := m.buildSystemPrompt("victoria", "conv-x", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt (with skills): %v", err)
+	}
+	must := []string{
+		"## Skills",
+		"**deal-pacing**",
+		"skills/deal-pacing/SKILL.md",
+		"Pace a deal toward its budget",
+	}
+	for _, want := range must {
+		if !strings.Contains(with, want) {
+			t.Errorf("prompt missing %q\n\n--- prompt ---\n%s", want, with)
+		}
+	}
+	if strings.Contains(with, "broken-skill") {
+		t.Error("malformed skill (no SKILL.md) should not be rostered")
 	}
 }
 
