@@ -52,12 +52,14 @@ export function formatFileSize(bytes: number, decimals = 2): string {
 // ESC control char as a unicode escape so the no-control-regex lint rule
 // (which only flags *literal* control chars in a regex literal) stays quiet.
 const ANSI_ESCAPE = new RegExp("\\u001b\\[[0-9;]*m", "g");
-const ANSI_BARE = /\[(\d+)(;\d+)*m/g;
 
 export function stripAnsiCodes(text: string | null | undefined): string {
   if (!text) return text ?? "";
-  // Strip terminal color codes: ESC[..m sequences and bare bracket codes.
-  return text.replace(ANSI_ESCAPE, "").replace(ANSI_BARE, "");
+  // Strip real terminal color codes only (ESC[..m). We deliberately do NOT also
+  // strip bare "[..m" without the ESC byte: chat-server output always carries
+  // the ESC prefix, and a bare-bracket pass mangles legitimate log text like
+  // model ids ("claude-opus-4-8[1m]") or "[42m headroom".
+  return text.replace(ANSI_ESCAPE, "");
 }
 
 // Truncates a filename for display, preserving the extension. From moc's
