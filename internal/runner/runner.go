@@ -32,6 +32,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -72,8 +73,15 @@ func (f TaskRunnerFunc) Run(ctx context.Context, task *models.Task) (*models.Log
 
 // Config configures the pool.
 type Config struct {
-	// MaxConcurrentAgents is the global cap. 0 → read FLEET_MAX_CONCURRENT_AGENTS
-	// (default DefaultMaxConcurrentAgents).
+	// Limiter, when set, is the SHARED process-wide admission governor (interactive
+	// chat + scheduled tasks). The pool admits scheduled tasks through it, so total
+	// in-flight turns stay within the box-wide cap and scheduled work never consumes
+	// the slots reserved for interactive chat. When nil, the pool builds a private
+	// limiter from MaxConcurrentAgents (reserving nothing) — the standalone behavior
+	// tests rely on.
+	Limiter *admission.Limiter
+	// MaxConcurrentAgents is the global cap used only when Limiter is nil. 0 → read
+	// FLEET_MAX_CONCURRENT_AGENTS (default DefaultMaxConcurrentAgents).
 	MaxConcurrentAgents int
 	// PollInterval is how often to poll for pending tasks. 0 → default.
 	PollInterval time.Duration
@@ -86,9 +94,11 @@ type Pool struct {
 	store  *storage.Storage
 	runner TaskRunner
 
-	// sem is THE global cap: a buffered channel of cap slots. Acquire BEFORE
-	// claiming/running a task, release AFTER cleanup.
-	sem chan struct{}
+	// limiter is the shared admission governor. tryClaim admits scheduled tasks
+	// through TryAcquireScheduled (non-blocking); when the scheduler is at its
+	// sub-cap — or the whole box is full — the claim is a no-op and work stays
+	// pending until a slot frees.
+	limiter *admission.Limiter
 
 	pollInterval       time.Duration
 	leaseRenewInterval time.Duration
@@ -108,9 +118,15 @@ type Pool struct {
 
 // NewPool builds a pool over a storage layer and a task runner.
 func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
-	capacity := cfg.MaxConcurrentAgents
-	if capacity <= 0 {
-		capacity = maxConcurrentFromEnv()
+	limiter := cfg.Limiter
+	if limiter == nil {
+		capacity := cfg.MaxConcurrentAgents
+		if capacity <= 0 {
+			capacity = maxConcurrentFromEnv()
+		}
+		// Standalone pool (no shared limiter): reserve nothing, so the scheduler
+		// may use the whole cap — the legacy behavior the runner's own tests assert.
+		limiter = admission.New(capacity, 0)
 	}
 	poll := cfg.PollInterval
 	if poll <= 0 {
@@ -123,7 +139,7 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 	return &Pool{
 		store:              store,
 		runner:             runner,
-		sem:                make(chan struct{}, capacity),
+		limiter:            limiter,
 		pollInterval:       poll,
 		leaseRenewInterval: renew,
 		leaseOwner:         uuid.New(),
@@ -147,8 +163,9 @@ func maxConcurrentFromEnv() int {
 	return n
 }
 
-// Cap returns the configured global concurrency cap.
-func (p *Pool) Cap() int { return cap(p.sem) }
+// Cap returns the max number of scheduled tasks that may run concurrently
+// (the shared limiter's schedulable slots = total - interactive reserve).
+func (p *Pool) Cap() int { return p.limiter.SchedulableSlots() }
 
 // LeaseOwner returns this process's synthetic worker identity.
 func (p *Pool) LeaseOwner() uuid.UUID { return p.leaseOwner }
@@ -188,16 +205,16 @@ func (p *Pool) Run(ctx context.Context) {
 	}
 }
 
-// tryClaim acquires a cap slot (non-blocking) and, if one is free, claims and
-// runs one pending task. The semaphore is THE cap: when full, this poll is a
-// no-op and the extra work stays pending. The drain-loop keeps claiming while
-// slots free up, so a single tick can launch up to cap tasks.
+// tryClaim acquires a scheduler slot from the shared limiter (non-blocking) and,
+// if one is free, claims and runs one pending task. The limiter is THE cap: when
+// the scheduler sub-cap is reached (or the box is full of interactive turns),
+// this poll is a no-op and the extra work stays pending. The drain-loop keeps
+// claiming while slots free up, so a single tick can launch up to the sub-cap.
 func (p *Pool) tryClaim(ctx context.Context) {
 	for {
-		select {
-		case p.sem <- struct{}{}: // acquire BEFORE claiming (blocks at cap → we use select to stay non-blocking)
-		default:
-			return // at cap: leave the rest pending
+		release, ok := p.limiter.TryAcquireScheduled() // acquire BEFORE claiming (non-blocking)
+		if !ok {
+			return // at the scheduler sub-cap or the box is full: leave the rest pending
 		}
 
 		task, err := p.store.ClaimNextPendingTask(ctx, p.leaseOwner.String())
@@ -205,12 +222,12 @@ func (p *Pool) tryClaim(ctx context.Context) {
 			if ctx.Err() == nil {
 				log.Printf("runner: claim error: %v", err)
 			}
-			<-p.sem
+			release()
 			return
 		}
 		if task == nil {
 			// Nothing to claim: release the slot and stop this tick.
-			<-p.sem
+			release()
 			return
 		}
 
@@ -223,16 +240,16 @@ func (p *Pool) tryClaim(ctx context.Context) {
 		p.mu.Unlock()
 
 		p.taskWG.Add(1)
-		go func(task *models.Task, token uuid.UUID) {
+		go func(task *models.Task, token uuid.UUID, release func()) {
 			defer p.taskWG.Done()
 			defer func() {
 				p.mu.Lock()
 				delete(p.active, task.ID)
 				p.mu.Unlock()
-				<-p.sem // release AFTER cleanup
+				release() // release AFTER cleanup
 			}()
 			p.executeTask(ctx, task, token)
-		}(task, token)
+		}(task, token, release)
 		// Loop to claim another task if a slot is still free (drains a burst).
 	}
 }

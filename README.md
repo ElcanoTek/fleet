@@ -357,11 +357,16 @@ you are sizing for sandbox CPU/RAM and image+workspace disk, not GPUs — which 
 exactly why fleet goes so far on a single box: one well-specced server runs an
 org's worth of concurrent agents.
 
-`FLEET_MAX_CONCURRENT_AGENTS` (default **8**) caps simultaneous **scheduled
-tasks**, and the sandbox warm pool scales with it (up to 8 pre-warmed).
-Interactive chat turns are **not** gated by this cap — each takes a sandbox on
-demand, bounded only by host resources — so size the host for your expected
-**peak concurrent agents across chat *and* scheduled tasks**:
+`FLEET_MAX_CONCURRENT_AGENTS` (default **8**) is the **box-wide** cap on agent
+turns in flight at once — interactive chat **and** scheduled tasks combined. It is
+a true sizing knob: the host never runs more concurrent sandboxes than this. Chat
+is prioritized — a slice of the cap (≈¼, derived automatically) is **reserved for
+interactive turns**, so a backlog of scheduled tasks can never starve a person at
+the keyboard; chat still bursts to the full cap when the scheduler is idle. When
+the box is genuinely at capacity, a new chat turn waits briefly, then returns a
+clean "at capacity — resend in a moment" instead of hanging or over-subscribing
+the host. The sandbox warm pool scales with the cap (up to 8 pre-warmed). Size the
+host to the cap:
 
 | Concurrent agents | vCPU | RAM    | Disk   | Who it's for                              |
 | ----------------- | ---- | ------ | ------ | ----------------------------------------- |
