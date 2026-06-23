@@ -286,6 +286,9 @@ func (c *containerImpl) start(ctx context.Context) error {
 		// to a subuid the chat user can't write to next turn).
 		"--userns=keep-id:uid=1000,gid=1000",
 		fmt.Sprintf("--memory=%s", c.cfg.MemoryLimit),
+		// --memory-swap == --memory disables the swap escape: without it a
+		// process on a swap-enabled host can exceed the RSS cap via swap.
+		fmt.Sprintf("--memory-swap=%s", c.cfg.MemoryLimit),
 		fmt.Sprintf("--cpus=%s", c.cfg.CPULimit),
 		fmt.Sprintf("--pids-limit=%d", c.cfg.PidsLimit),
 		// Tmpfs for the directories Python / IPython / matplotlib

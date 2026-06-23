@@ -178,6 +178,9 @@ var allowedEnvVars = map[string]bool{
 	"CHAT_WORKSPACE_ROOT":          true,
 	"FLEET_SANDBOX_IMAGE":          true,
 	"FLEET_SANDBOX_RUNTIME":        true,
+	"FLEET_SANDBOX_MEMORY":         true,
+	"FLEET_SANDBOX_CPUS":           true,
+	"FLEET_SANDBOX_PIDS":           true,
 	"FLEET_WORKSPACE_ROOT":         true,
 	"CHAT_LOCKDOWN_ONLY":           true,
 	"CHAT_LOCKDOWN_ALLOWED_MODELS": true,
@@ -361,8 +364,13 @@ type Config struct {
 	AdminEmails []string
 
 	// ── sandbox ──
-	SandboxImage          string
-	SandboxRuntime        string
+	SandboxImage   string
+	SandboxRuntime string
+	// Per-container cgroup caps (empty/0 → sandbox defaults: 512m / 1.0 / 128).
+	// Operators size these to the host the docs told them to provision.
+	SandboxMemory         string
+	SandboxCPUs           string
+	SandboxPids           int
 	WorkspaceRoot         string
 	LockdownOnly          bool
 	LockdownAllowedModels []string
@@ -482,6 +490,9 @@ func Load(envFile string) (*Config, error) {
 		// ── sandbox ──
 		SandboxImage:          getenvFleet("SANDBOX_IMAGE"),
 		SandboxRuntime:        getenvFleet("SANDBOX_RUNTIME"),
+		SandboxMemory:         getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:           getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:           getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
 		WorkspaceRoot:         getenvFleet("WORKSPACE_ROOT"),
 		LockdownOnly:          getenvBool("CHAT_LOCKDOWN_ONLY", false),
 		LockdownAllowedModels: splitLockdownModels(os.Getenv("CHAT_LOCKDOWN_ALLOWED_MODELS")),

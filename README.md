@@ -381,6 +381,13 @@ dollars of dedicated hardware) comfortably runs an org's worth of agents; raise
 `FLEET_MAX_CONCURRENT_AGENTS` and the host together. External managed Postgres
 lowers the host's base footprint.
 
+> **Per-container cap.** Each sandbox runs under a cgroup cap that defaults to
+> **512 MiB / 1.0 CPU / 128 pids**. For the heavy `pandas`/`matplotlib`
+> workloads above, raise it to match the per-agent RAM you provisioned via
+> `FLEET_SANDBOX_MEMORY` (e.g. `2g`), `FLEET_SANDBOX_CPUS`, and
+> `FLEET_SANDBOX_PIDS` — otherwise those workloads are OOM-killed against the
+> 512 MiB default, not your host's free RAM.
+
 ### Quick start (one host)
 
 The topology (Caddy → web app → loopback backends):
