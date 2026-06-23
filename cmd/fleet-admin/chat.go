@@ -52,8 +52,8 @@ func chatUserUpsert(argv []string, create bool) int {
 		}
 		password = v
 	}
-	if password == "" {
-		return errf(1, "password required (use --password -)")
+	if len(password) < 8 {
+		return errf(1, "password must be at least 8 characters (use --password -)")
 	}
 
 	dsn, err := chatDSN(*dbURL)
