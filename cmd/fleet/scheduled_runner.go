@@ -184,7 +184,20 @@ func (r *scheduledRunner) Run(ctx context.Context, task *models.Task) (*models.L
 		MCPSelection:             taskMCPSelection(task),
 	})
 
-	runErr := a.Execute(ctx, task.Prompt)
+	// On a retry (a prior attempt failed transiently and was re-queued), warn the
+	// agent so it can guard non-idempotent external side-effects: a counter alone
+	// can't prevent a re-run from re-sending an email / re-charging / re-mutating
+	// state, so the agent must verify before repeating. Only the integer attempt
+	// number is injected — no prior error text (which could carry leaked context).
+	prompt := task.Prompt
+	if task.AttemptCount > 0 {
+		prompt = fmt.Sprintf(
+			"[retry] This is attempt %d of a previously-failed run. Before repeating any external "+
+				"side-effect (sending email, payments, creating/mutating records), VERIFY it was not "+
+				"already performed by an earlier attempt; do not duplicate it.\n\n%s",
+			task.AttemptCount+1, task.Prompt)
+	}
+	runErr := a.Execute(ctx, prompt)
 	session := convertLogSession(task, a.LogSession())
 	if runErr != nil {
 		return session, runErr

@@ -758,6 +758,72 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 	return task, nil
 }
 
+// RequeueTaskForRetryWithContext re-queues a cleanly-failed task for another
+// whole-task attempt: it increments AttemptCount, sets Status=Scheduled with a
+// future ScheduledFor (the backoff), clears the lease + StartedAt, leaves
+// CompletedAt nil (the task is NOT terminal), and records the failure reason —
+// all in one tx, gated on the caller still owning the lease (a stale runner's
+// requeue is rejected, like UpdateTaskStatusAtomicWithContext). It deliberately
+// does NOT call scheduleNextRecurrence — a retry is the SAME occurrence, not the
+// next cron tick. Returns the updated task.
+func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, nodeID uuid.UUID, scheduledFor time.Time, msg string) (*models.Task, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
+	isAssigned := task.AssignedNodeID != nil && *task.AssignedNodeID == nodeID
+	if !hasValidLease && !isAssigned {
+		return nil, fmt.Errorf("node is not assigned to this task")
+	}
+	// Already-terminal tasks are never resurrected by a retry.
+	if task.Status == models.TaskStatusSuccess || task.Status == models.TaskStatusError || task.Status == models.TaskStatusCancelled {
+		return task, nil
+	}
+
+	task.AttemptCount++
+	task.Status = models.TaskStatusScheduled
+	task.ScheduledFor = &scheduledFor
+	task.StartedAt = nil
+	task.CompletedAt = nil
+	task.LeaseOwner = nil
+	task.LeaseExpiresAt = nil
+	if msg != "" {
+		task.ErrorMessage = &msg
+	}
+
+	// Free the assigned node (mirror the terminal path) so it can pick up other work.
+	if task.AssignedNodeID != nil {
+		node, err := s.db.GetNodeForUpdate(ctx, tx, *task.AssignedNodeID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if node != nil && node.CurrentTaskID != nil && *node.CurrentTaskID == task.ID {
+			node.Status = models.NodeStatusIdle
+			node.CurrentTaskID = nil
+			if err := s.db.UpdateNodeTx(ctx, tx, node); err != nil {
+				return nil, err
+			}
+		}
+		task.AssignedNodeID = nil
+	}
+
+	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
 // scheduleNextRecurrence creates the next occurrence of a recurring task.
 func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task) {
 	schedule, err := cron.ParseStandard(task.Recurrence)

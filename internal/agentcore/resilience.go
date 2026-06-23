@@ -35,6 +35,21 @@ import (
 // back-compat aliases (see env.go); the lifted cutlass test sets
 // CUTLASS_RETRY_MAX_ATTEMPTS via the retryMaxAttemptsEnv constant.
 
+// Transient-failure sentinels. When a run exhausts the in-run recovery budget
+// (the per-step retries + fallback swap above) on a TRANSIENT failure, the error
+// is tagged with one of these so a higher layer (e.g. the scheduler's whole-task
+// retry, internal/runner) can distinguish a recoverable infra blip from a
+// deterministic failure via errors.Is. The original provider error stays in the
+// chain (wrapped alongside the sentinel) for logging.
+var (
+	// ErrRetryBudgetExhausted: the model kept failing after every in-run retry +
+	// fallback swap — a transient class worth a whole-task retry.
+	ErrRetryBudgetExhausted = errors.New("retry budget exhausted")
+	// ErrStreamBlipPersisted: a mid-stream transport blip survived the in-place
+	// retry and there was no fallback to swap to — also transient.
+	ErrStreamBlipPersisted = errors.New("stream blip persisted")
+)
+
 const (
 	// defaultRetryMaxAttempts is the retry count (not counting the original
 	// attempt) passed to fantasy's inner retry loop.
@@ -457,7 +472,7 @@ func (e *engine) streamRoundWithResilience(
 			return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (context still too large after forced compaction): %w", err)
 		case streamErrorRetryExhausted:
 			if !canSwapFallback(e, activeModel, swappedToFallback) {
-				return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (retry budget exhausted): %w", err)
+				return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (retry budget exhausted): %w: %w", ErrRetryBudgetExhausted, err)
 			}
 			e.logFallbackSwap(class, providerErr)
 			activeModel = e.fallbackModel
@@ -480,7 +495,7 @@ func (e *engine) streamRoundWithResilience(
 				continue
 			}
 			if !canSwapFallback(e, activeModel, swappedToFallback) {
-				return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (stream blip persisted, no fallback available): %w", err)
+				return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (stream blip persisted, no fallback available): %w: %w", ErrStreamBlipPersisted, err)
 			}
 			e.logFallbackSwap(class, providerErr)
 			activeModel = e.fallbackModel

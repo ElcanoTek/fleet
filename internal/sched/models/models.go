@@ -215,6 +215,9 @@ type TaskCreate struct {
 	ScheduledFor           *time.Time   `json:"scheduled_for,omitempty"`
 	Recurrence             string       `json:"recurrence,omitempty"`
 	Files                  []string     `json:"files,omitempty"`
+	// MaxRetries is the number of ADDITIONAL whole-task attempts after the first
+	// when a run fails cleanly with a transient error. 0 (default) = no retries.
+	MaxRetries *int `json:"max_retries,omitempty"`
 }
 
 // Task represents a task to be executed by a worker.
@@ -241,6 +244,11 @@ type Task struct {
 	Files                  []string     `json:"files,omitempty"`
 	LeaseOwner             *string      `json:"lease_owner,omitempty"`
 	LeaseExpiresAt         *time.Time   `json:"lease_expires_at,omitempty"`
+	// AttemptCount is how many times this task has been re-queued after a clean,
+	// transient failure (0 on the first run). MaxRetries caps it: the task may run
+	// up to MaxRetries+1 times before a failure is terminal.
+	AttemptCount int `json:"attempt_count"`
+	MaxRetries   int `json:"max_retries"`
 	// CreatedByUsername is populated at query time for display purposes (not persisted)
 	CreatedByUsername *string `json:"created_by_username,omitempty"`
 }
@@ -266,7 +274,16 @@ func NewTask(tc TaskCreate) *Task {
 		ScheduledFor:           tc.ScheduledFor,
 		Recurrence:             tc.Recurrence,
 		Files:                  tc.Files,
+		MaxRetries:             derefOr(tc.MaxRetries, 0),
 	}
+}
+
+// derefOr returns *p, or def when p is nil.
+func derefOr(p *int, def int) int {
+	if p == nil {
+		return def
+	}
+	return *p
 }
 
 // StatusUpdate is a status update for a task (from the in-process worker).
