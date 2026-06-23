@@ -24,10 +24,8 @@ them.
 - **Any agent, any model.** fleet is an [ACP](#standards) client: alongside its
   own native agent loop it can drive **other coding agents** (Claude Code,
   Goose, …) as selectable, sandboxed "flavors" you pick per chat or per
-  scheduled task. Models are routed OpenRouter-style, so you choose the right
-  model per task rather than hard-wiring one vendor. (The
-  ["best model for the job" idea](https://www.notdiamond.ai/) is a good mental
-  model for why this matters.)
+  scheduled task. Models are routed OpenRouter-style, so you pick the **best
+  model for each task** rather than hard-wiring one vendor.
 
 - **Sandboxed by default.** Tool calls — bash, Python, file I/O, MCP calls —
   execute inside an ephemeral, rootless-Podman container over a persistent
@@ -117,7 +115,7 @@ them:
 
 ```
 cmd/
-  fleet/          the Mega Box binary (chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool); `fleet acp` runs it as an ACP agent over stdio (editor ingress)
+  fleet/          the fleet binary (chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool); `fleet acp` runs it as an ACP agent over stdio (editor ingress)
   fleet-admin/    unified admin CLI (bootstrap, users, MCP credential accounts)
   fleet-native-agent/  the native ACP agent (wraps agentcore.Run inside the sandbox)
   cutlass/        optional local one-shot debug entrypoint (not the production scheduled path)
@@ -162,6 +160,25 @@ for the bundle contract.
 This is how you make fleet yours: package your team's reusable agent setups —
 the personas, the playbooks, the connected MCP tools — into a bundle and point a
 deployment at it.
+
+**Choosing a bundle:**
+
+- **Run bare** — point nothing; fleet uses the in-repo `config/default` (neutral
+  branding, no connectors). Good for a first look.
+- **Fork the public template** —
+  [`ElcanoTek/example-config`](https://github.com/ElcanoTek/example-config) is a
+  public, generic "fork-this-to-start" bundle (fictional branding, an example
+  always-on MCP + a gated connector, three example personas). Clone it, rename,
+  and add your own connectors.
+- **Your own private bundle** — a private git repo with your branding, MCP
+  catalog, personas, and protocols. Because it's private, the box needs **read
+  access** when it clones the bundle: create a **read-only GitHub Personal Access
+  Token** (fine-grained, `Contents: read` on just that repo) and either bake it
+  into the clone URL or configure git's credential store on the box (see the
+  quick start below). The token never needs write or any other scope.
+
+`bootstrap --client-config <git-url|path>` clones (or points at) the bundle and
+keeps it fast-forwarded on `update`; see **Deploy** and **Operating fleet**.
 
 ## Using other agents
 
@@ -208,24 +225,84 @@ task schema (a thin mirror of the scheduled-task create shape).
 
 ## Deploy
 
-The Mega Box is **one** `fleet` process. The browser only ever talks to the
-Next.js web app; the web app proxies, server-side over loopback, to the two Go
-backends the single process boots (chat on `127.0.0.1:8080`, orchestrator on
-`:8000`). Caddy fronts the web app with TLS; the backends stay loopback-only.
+fleet runs as **one** `fleet` process on a **single host** (one well-sized
+server or VM). The browser only ever talks to the Next.js web app; the web app
+proxies, server-side over loopback, to the two Go backends the single process
+boots (chat on `127.0.0.1:8080`, orchestrator on `:8000`). Caddy fronts the web
+app with TLS; the backends stay loopback-only.
+
+> **Single-host by design.** The concurrency cap is a per-process semaphore and
+> scheduled-task crash recovery uses single-owner database leases — both assume
+> one running process. fleet scales **vertically** (a bigger host), not by
+> running multiple replicas. Kubernetes shops: see
+> [Deploying on Kubernetes](#deploying-on-kubernetes) — the model is the same
+> (a single-replica, node-pinned workload), and a plain VM is often the simpler
+> choice.
+
+### Choosing a host (sizing)
+
+The dominant cost is the **execution sandbox**: each concurrently-running agent
+holds one rootless-Podman container (the ~1.3 GB Python/IPython image) doing the
+agent's bash/`run_python` work. Model inference is **remote** (OpenRouter), so
+you are sizing for sandbox CPU/RAM and image+workspace disk, not GPUs. Size the
+host to your concurrency cap (`FLEET_MAX_CONCURRENT_AGENTS`, default **4** —
+shared across interactive chat *and* scheduled tasks):
+
+| Concurrent agents | vCPU | RAM   | Disk  | Who it's for                          |
+| ----------------- | ---- | ----- | ----- | ------------------------------------- |
+| 2                 | 2    | 8 GB  | 40 GB | trial / a couple of users             |
+| 4 (default)       | 4    | 16 GB | 80 GB | a small team                          |
+| 8                 | 8    | 32 GB | 120 GB| a busy team / steady scheduled load   |
+| 16                | 16   | 64 GB | 200 GB| heavy concurrent + scheduled workloads|
+
+Rule of thumb: a **~2 vCPU / 6 GB base** (the Go process + web app + local
+Postgres) plus **~1 vCPU and ~1.5–3 GB RAM per concurrent agent**, and disk for
+the sandbox image (~1.5 GB) + the Podman overlay store + your persistent
+per-conversation workspaces. Heavy `pandas`/`matplotlib` workloads push RAM per
+agent up; bump the cap and the host together (keep the warm pool `≤` the cap).
+External managed Postgres lowers the host's base footprint.
+
+### Quick start (one host)
+
+The topology (Caddy → web app → loopback backends):
 
 ```
 browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet: chat :8080 + orchestrator :8000
 ```
 
-**Quick start (bare Fedora/RHEL box).** Clone the repo and run the bootstrap
-script — it installs the toolchain (Go, Node, podman, python3), provisions
-Postgres, builds + installs the binary, and installs the systemd units:
+On a bare Fedora/RHEL box this is **four steps** — the bootstrap script installs
+the toolchain (Go, Node, podman, python3), provisions Postgres, builds + installs
+the binary, and installs + enables the systemd units:
 
-```
+```sh
+# 1. Git, and (for a PRIVATE config bundle) cache a read-only token so the box
+#    can clone it. Skip the credential line if your bundle is public or you pass
+#    a token in the --client-config URL.
 sudo dnf install -y git
-git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src
-sudo bash /opt/fleet/src/scripts/bootstrap.sh --postgres=local --enable-service
+git config --global credential.helper store   # then `git clone` your private bundle once to cache the PAT
+
+# 2. Clone fleet.
+sudo git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src
+
+# 3. Bootstrap. Point --client-config at your bundle (a git URL or a path);
+#    omit it to run bare on config/default, or use the public template
+#    https://github.com/ElcanoTek/example-config to start from.
+sudo bash /opt/fleet/src/scripts/bootstrap.sh \
+  --postgres=local --enable-service \
+  --client-config https://github.com/ElcanoTek/example-config.git
+
+# 4. Add your OpenRouter key + connector secrets to the env file, then restart.
+sudo "$EDITOR" /etc/fleet/fleet.env       # set OPENROUTER_API_KEY=… (+ MCP creds)
+sudo fleet-admin restart
 ```
+
+> **The read-only token.** A private bundle repo needs read access at clone
+> time. Create a **fine-grained GitHub PAT** scoped to *just that repo* with
+> **`Contents: read`** (no write, no other scope). Cache it via
+> `git config --global credential.helper store` (then one manual `git clone` to
+> seed it) or embed it in the `--client-config` URL
+> (`https://<token>@github.com/ORG/your-config.git`). `update` reuses the same
+> cached credential to fast-forward the bundle.
 
 The first run is always the **shell script** — `fleet-admin` doesn't exist until
 it's built. Once installed, `fleet-admin bootstrap`/`update`/`status` wrap the
@@ -307,6 +384,17 @@ does (and the manual path if you'd rather run each piece yourself):
 
 See `deploy/fleet.service` and `deploy/Caddyfile` for the full annotated knob
 list (listener addresses, admin/registration tokens, data dir, timezone).
+
+### Deploying on Kubernetes
+
+If you run everything on Kubernetes, fleet can live there too — but it's a
+**VM-shaped workload**: a single-replica, node-pinned StatefulSet (the
+concurrency cap and crash-recovery leases assume one process), and the pod must
+run nested rootless Podman for the sandbox (cleanly via a **sysbox** node pool,
+or a privileged-namespace fallback). A dedicated VM is often the simpler choice.
+See **[`docs/DEPLOY-KUBERNETES.md`](docs/DEPLOY-KUBERNETES.md)** for the
+architecture, reference manifests, the node-local-graphroot storage gotcha, and
+a validation checklist.
 
 ## Operating fleet
 

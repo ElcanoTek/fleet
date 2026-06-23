@@ -1,4 +1,4 @@
-# deploy/fleet.service — systemd unit for the single `fleet` Mega Box binary.
+# deploy/fleet.service — systemd unit for the single `fleet` binary.
 #
 # ONE process boots, on one box: the chat HTTP/SSE server (default
 # 127.0.0.1:8080), the orchestrator HTTP server (default :8000), the scheduler
@@ -39,7 +39,7 @@
 #   # FLEET_TIMEZONE=UTC / FLEET_DATA_DIR=/var/lib/fleet
 
 [Unit]
-Description=fleet Mega Box (chat + orchestrator + scheduler + worker pool)
+Description=fleet (chat + orchestrator + scheduler + worker pool)
 Documentation=https://github.com/ElcanoTek/fleet
 After=network-online.target postgresql.service
 Wants=network-online.target
