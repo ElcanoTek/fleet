@@ -352,6 +352,21 @@ func runExternalTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		return agentcore.Result{}, fmt.Errorf("external acp flavor %q selected but no agent image configured", flavor.Name)
 	}
 
+	// Bind the conversation's workspace READ-ONLY into the external agent's
+	// sandbox so it can READ the files the user uploaded / the conversation
+	// accumulated (the documented data-residency posture). Read-only: a
+	// self-executing third-party agent must not write to the host; its scratch
+	// goes to the container's /tmp tmpfs. Best-effort — on error we fall back to
+	// the scratch-only tmpfs rather than failing the turn.
+	var externalWorkspace string
+	if tc.Label != "" {
+		if ws, werr := tools.EnsureWorkspaceDir(tc.Label); werr == nil {
+			externalWorkspace = ws
+		} else {
+			log.Printf("external acp: could not resolve workspace for %s (%v); using scratch-only", tc.Label, werr)
+		}
+	}
+
 	rt := acpruntime.NewExternalRuntime(acpruntime.ExternalConfig{
 		Image: flavor.Image,
 		Args:  flavor.Args,
@@ -359,6 +374,8 @@ func runExternalTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		// named by the manifest's model_env. fleet secrets / MCP creds are never
 		// shipped to an external agent.
 		ProviderEnv: providerEnv(flavor.ModelEnv),
+		// Read-only conversation workspace (see above); "" → scratch-only tmpfs.
+		Workspace: externalWorkspace,
 	})
 
 	res, err := rt.Run(ctx, latestUserText(tc.Messages), acpruntime.ExternalDeps{
