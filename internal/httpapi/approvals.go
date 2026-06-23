@@ -46,7 +46,7 @@ type mcpToolCaller interface {
 // so the frontend renders its approval card immediately.
 type approvalStager struct {
 	ctx            context.Context
-	store          *store.Store
+	store          chatStore
 	conversationID string
 	userEmail      string
 	sink           agent.EventSink
@@ -170,7 +170,7 @@ func validateEmailHasContent(toolName, rawInput string) error {
 // the visibilitychange handler's auto-refetch wipes the card.
 type memoryProposer struct {
 	ctx            context.Context
-	store          *store.Store
+	store          chatStore
 	conversationID string
 	userEmail      string
 	sink           agent.EventSink
@@ -877,7 +877,7 @@ func runStagedBash(ctx context.Context, mgr turnEngine, approval *store.Approval
 
 // appendToolResultToHistory writes a synthetic tool_result row so the
 // conversation transcript reflects the outcome of the (async) approval.
-func appendToolResultToHistory(ctx context.Context, st *store.Store, convID, toolName, callID, text string, isErr bool) {
+func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolName, callID, text string, isErr bool) {
 	entry := agent.HistoryEntry{
 		Role: "tool",
 		Type: "tool_result",

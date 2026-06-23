@@ -23,7 +23,7 @@ func memberFixture(t *testing.T, members ...string) *Server {
 	s := serverFixture(t)
 	s.isMember = nil // fall back to store.IsUser
 	for _, m := range members {
-		seedUser(t, s.store, m)
+		seedUser(t, s.concreteStore(t), m)
 	}
 	return s
 }

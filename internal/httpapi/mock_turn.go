@@ -19,7 +19,7 @@ import (
 // tool call whose result is echoed back in the assistant message. Every
 // user prompt gets the same canned response, which is exactly what the
 // e2e tests assert on.
-func runMockTurn(ctx context.Context, st *store.Store, conv *store.Conversation, userMessage string, sink agent.EventSink) error {
+func runMockTurn(ctx context.Context, st chatStore, conv *store.Conversation, userMessage string, sink agent.EventSink) error {
 	sink.Emit("turn.started", map[string]any{"persona": conv.Persona})
 
 	// Test-only shortcut: when the user prompt contains "send email" we
