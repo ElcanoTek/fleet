@@ -759,16 +759,19 @@ func (db *Database) UpdateTask(ctx context.Context, task *models.Task) error {
 func (db *Database) UpdateTasksModelBatch(ctx context.Context, model, fallbackModel, fromModel string) (int, error) {
 	var res sql.Result
 	var err error
+	// fallback_model is nullable TEXT: an empty fallback must persist as NULL (not
+	// ""), matching the per-task nullableString path so scanTask reads it back as a
+	// nil *string. model stays raw — callers (handler + CLI) require it non-empty.
 	if fromModel != "" {
 		res, err = db.conn.ExecContext(ctx, `
 			UPDATE tasks SET model = $1, fallback_model = $2
 			WHERE status = $3 AND model = $4`,
-			model, fallbackModel, string(models.TaskStatusScheduled), fromModel)
+			model, nullableString(fallbackModel), string(models.TaskStatusScheduled), fromModel)
 	} else {
 		res, err = db.conn.ExecContext(ctx, `
 			UPDATE tasks SET model = $1, fallback_model = $2
 			WHERE status = $3`,
-			model, fallbackModel, string(models.TaskStatusScheduled))
+			model, nullableString(fallbackModel), string(models.TaskStatusScheduled))
 	}
 	if err != nil {
 		return 0, err
