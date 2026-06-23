@@ -17,8 +17,10 @@ This guide is for the person wiring those agents into a deployment. It covers:
 - [The permission UI](#the-permission-ui) — how an external agent asks the human
 - [Worked example: adding Goose](#worked-example-adding-goose)
 - [Data-residency caveat](#data-residency-caveat) — the one thing you cannot wave away
-- [Drive fleet from your editor over ACP (ingress)](#drive-fleet-from-your-editor-over-acp-ingress) —
-  the inverse: an editor drives fleet's own governed pipeline
+- [Drive fleet from your editor over ACP (ingress)](#drive-fleet-from-your-editor-over-acp-ingress)
+  — **advanced/optional**: the inverse — an editor drives fleet's own governed
+  pipeline. A developer convenience, NOT part of the web product; skip unless you
+  specifically want fleet as your editor's agent backend.
 
 Everything here is generic. The manifest snippets are written to be copied
 straight into any `XYZ-config` client bundle's `manifest.yaml`.
@@ -419,6 +421,13 @@ and the declared egress posture.
 ---
 
 ## Drive fleet from your editor over ACP (ingress)
+
+> **Advanced / optional — most deployments never use this.** Ingress is a
+> developer convenience, not part of the web chat/orchestrator product your users
+> log into. It is useful only to a developer who wants fleet's *governed* tool
+> surface (host-brokered MCP credentials, sandbox, personas, notes, cost ceilings)
+> inside their own editor, co-located with a fleet deployment. If that's not you,
+> skip this section — nothing else depends on it.
 
 Everything above is fleet driving *other* agents. Ingress is the **inverse**:
 fleet exposes **itself** as an ACP agent so an editor (Zed, Neovim, any

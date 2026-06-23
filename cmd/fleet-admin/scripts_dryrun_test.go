@@ -63,6 +63,11 @@ func runScriptDryRun(t *testing.T, script string, args ...string) string {
 func TestBootstrapDryRunSmoke(t *testing.T) {
 	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local", "--enable-service")
 	for _, want := range []string{
+		// The toolchain-install STEP must be in the plan. We assert only the
+		// step header (always printed), NOT the dnf package line — that line only
+		// renders on a dnf host, and CI runs on a non-dnf (apt) runner where the
+		// step prints the "install these yourself" warning instead.
+		"Installing system dependencies",
 		"client bundle manifest found",
 		"pg_hba",                                 // the scram-sha-256 loopback rewrite step (#78)
 		"Building + installing the fleet binary", // the binary build+install step (#71)

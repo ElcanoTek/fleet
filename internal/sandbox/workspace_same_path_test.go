@@ -81,6 +81,7 @@ func TestContainerWorkspaceSamePathCoherence(t *testing.T) {
 
 	sb, err := NewContainer(ctx, ContainerConfig{
 		Image:            testImage(),
+		StartTimeout:     90 * time.Second,
 		WorkspaceHostDir: wsHost,
 		BridgeScript:     bridge,
 	})
@@ -187,6 +188,7 @@ func TestContainerReadOnlyMountsSamePath(t *testing.T) {
 
 	sb, err := NewContainer(ctx, ContainerConfig{
 		Image:            testImage(),
+		StartTimeout:     90 * time.Second,
 		WorkspaceHostDir: wsHost,
 		BridgeScript:     []byte("# unused for bash test\n"),
 		ReadOnlyMounts:   []string{docsHost},
@@ -291,6 +293,7 @@ func TestContainerWorkspaceSurvivesConcurrentMount(t *testing.T) {
 
 	cfg := ContainerConfig{
 		Image:            testImage(),
+		StartTimeout:     90 * time.Second,
 		WorkspaceHostDir: wsHost,
 		BridgeScript:     []byte("# unused for bash test\n"),
 	}
@@ -385,6 +388,7 @@ func TestContainerBashSamePath(t *testing.T) {
 
 	sb, err := NewContainer(ctx, ContainerConfig{
 		Image:            testImage(),
+		StartTimeout:     90 * time.Second,
 		WorkspaceHostDir: wsHost,
 		BridgeScript:     []byte("# unused for bash test\n"),
 	})
