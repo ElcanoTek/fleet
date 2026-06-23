@@ -623,3 +623,60 @@ func TestClaimNextPendingTask(t *testing.T) {
 	}
 	tx1.Rollback()
 }
+
+// TestUpdateTasksModelBatch covers the bulk model re-assignment primitive (#44):
+// the from_model filter (NULL-model tasks excluded), the affected count, and the
+// fix that an empty fallback persists as NULL (not "") so scanTask reads nil.
+func TestUpdateTasksModelBatch(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	sp := func(s string) *string { return &s }
+
+	old1 := &models.Task{ID: uuid.New(), Prompt: "a", Status: models.TaskStatusScheduled, Model: sp("old/model"), FallbackModel: sp("fb/old"), CreatedAt: time.Now().UTC()}
+	old2 := &models.Task{ID: uuid.New(), Prompt: "b", Status: models.TaskStatusScheduled, Model: sp("old/model"), CreatedAt: time.Now().UTC()}
+	other := &models.Task{ID: uuid.New(), Prompt: "c", Status: models.TaskStatusScheduled, Model: sp("other/model"), CreatedAt: time.Now().UTC()}
+	nilModel := &models.Task{ID: uuid.New(), Prompt: "d", Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC()} // Model == nil
+	for _, tk := range []*models.Task{old1, old2, other, nilModel} {
+		if err := db.AddTask(ctx, tk); err != nil {
+			t.Fatalf("AddTask: %v", err)
+		}
+	}
+
+	// from_model filter: only the two "old/model" rows change; "" fallback → NULL.
+	n, err := db.UpdateTasksModelBatch(ctx, "new/model", "", "old/model")
+	if err != nil {
+		t.Fatalf("UpdateTasksModelBatch: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("from_model filter updated %d, want 2 (other + nil-model excluded)", n)
+	}
+	for _, id := range []uuid.UUID{old1.ID, old2.ID} {
+		got, _ := db.GetTask(ctx, id)
+		if got.Model == nil || *got.Model != "new/model" {
+			t.Errorf("task %s model = %v, want new/model", id, got.Model)
+		}
+		if got.FallbackModel != nil {
+			t.Errorf("task %s empty fallback must persist as NULL (nil), got %q", id, *got.FallbackModel)
+		}
+	}
+	// Untouched rows.
+	if got, _ := db.GetTask(ctx, other.ID); got.Model == nil || *got.Model != "other/model" {
+		t.Errorf("other-model task should be untouched, got %v", got.Model)
+	}
+	if got, _ := db.GetTask(ctx, nilModel.ID); got.Model != nil {
+		t.Errorf("nil-model task should be untouched (nil), got %v", got.Model)
+	}
+
+	// No from_model: all scheduled tasks re-assigned.
+	all, err := db.UpdateTasksModelBatch(ctx, "final/model", "fb/final", "")
+	if err != nil {
+		t.Fatalf("UpdateTasksModelBatch (all): %v", err)
+	}
+	if all != 4 {
+		t.Fatalf("unfiltered update touched %d, want 4 (all scheduled)", all)
+	}
+	if got, _ := db.GetTask(ctx, nilModel.ID); got.Model == nil || *got.Model != "final/model" || got.FallbackModel == nil || *got.FallbackModel != "fb/final" {
+		t.Errorf("unfiltered update should set model+fallback on every scheduled task; got model=%v fb=%v", got.Model, got.FallbackModel)
+	}
+}

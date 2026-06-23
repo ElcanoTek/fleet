@@ -29,19 +29,73 @@ type taskExportEnvelope struct {
 	Tasks   []*models.Task `json:"tasks"`
 }
 
-// cmdSchedTask dispatches `fleet-admin sched task export|import`.
+// cmdSchedTask dispatches `fleet-admin sched task export|import|set-model`.
 func cmdSchedTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched task export|import")
+		return errf(1, "usage: fleet-admin sched task export|import|set-model")
 	}
 	switch argv[0] {
 	case "export":
 		return schedTaskExport(argv[1:])
 	case "import":
 		return schedTaskImport(argv[1:])
+	case "set-model":
+		return schedTaskSetModel(argv[1:])
 	default:
-		return errf(1, "unknown sched task subcommand %q (want export|import)", argv[0])
+		return errf(1, "unknown sched task subcommand %q (want export|import|set-model)", argv[0])
 	}
+}
+
+// schedTaskSetModel bulk re-assigns the pinned model (and optional fallback)
+// across SCHEDULED tasks, optionally limited to those pinned to --from-model.
+// --dry-run prints the matched tasks without writing. Fleet-wide, operator-only.
+func schedTaskSetModel(argv []string) int {
+	fs := flag.NewFlagSet("sched task set-model", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	model := fs.String("model", "", "the model slug to set (required)")
+	fallback := fs.String("fallback-model", "", "optional fallback model slug ('' clears it to NULL)")
+	fromModel := fs.String("from-model", "", "only re-assign tasks currently pinned to this slug")
+	dryRun := fs.Bool("dry-run", false, "print the tasks that would change without writing")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	if strings.TrimSpace(*model) == "" {
+		return errf(1, "--model is required")
+	}
+	st, code := openSchedStorage(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	if *dryRun {
+		tasks, err := st.ListScheduledTasks(ctx)
+		if err != nil {
+			return errf(5, "list scheduled tasks: %v", err)
+		}
+		n := 0
+		for _, t := range tasks {
+			if *fromModel != "" && (t.Model == nil || *t.Model != *fromModel) {
+				continue
+			}
+			cur := "<none>"
+			if t.Model != nil {
+				cur = *t.Model
+			}
+			fmt.Printf("%s\t%s → %s\n", t.ID, cur, *model)
+			n++
+		}
+		fmt.Fprintf(os.Stderr, "dry-run: %d scheduled task(s) would be re-assigned\n", n)
+		return 0
+	}
+
+	updated, err := st.BulkUpdateScheduledTaskModel(ctx, *model, *fallback, *fromModel)
+	if err != nil {
+		return errf(5, "re-assign model: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "re-assigned model on %d scheduled task(s)\n", updated)
+	return 0
 }
 
 func schedTaskExport(argv []string) int {

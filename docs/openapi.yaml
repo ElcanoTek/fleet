@@ -323,6 +323,27 @@ paths:
       security: [{ adminApiKey: [] }]
       responses:
         "200": { description: OK }
+  /tasks/model:
+    post:
+      summary: Bulk re-assign the pinned model/fallback across scheduled tasks (admin).
+      description: >-
+        Fleet-wide mutation; admin-only. Optionally limited to tasks pinned to
+        from_model. dry_run returns the matched tasks without writing.
+      security: [{ adminApiKey: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model: { type: string }
+                fallback_model: { type: string }
+                from_model: { type: string }
+                dry_run: { type: boolean }
+              required: [model]
+      responses:
+        "200": { description: OK }
+        "400": { $ref: "#/components/responses/Error" }
 
   /status:
     post:

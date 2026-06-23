@@ -1082,6 +1082,70 @@ func (h *Handlers) CleanupHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, models.CleanupResponse{DeletedCount: deleted})
 }
 
+// BulkSetTaskModel handles POST /tasks/model: re-assign the pinned model (and
+// optional fallback) across SCHEDULED tasks, optionally limited to those pinned
+// to from_model. dry_run returns the matched tasks WITHOUT writing. This is a
+// fleet-wide mutation, so it is admin-gated (registered behind AdminAuthMiddleware,
+// like CleanupHistory) — never a per-tenant write.
+func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
+	var req models.BulkModelUpdate
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Model = strings.TrimSpace(req.Model)
+	if req.Model == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+	if len(req.Model) > 200 || strings.ContainsAny(req.Model, "\r\n") {
+		writeError(w, http.StatusBadRequest, "model must be a single line ≤200 chars")
+		return
+	}
+	// Validate the optional fallback with the same rule the per-task path uses.
+	fallback := req.FallbackModel
+	if fallback != "" {
+		fp := &fallback
+		if err := normalizeOptionalModel(&fp, "fallback_model"); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if fp != nil {
+			fallback = *fp
+		} else {
+			fallback = ""
+		}
+	}
+
+	ctx := r.Context()
+	if req.DryRun {
+		tasks, err := h.storage.ListScheduledTasks(ctx)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list scheduled tasks")
+			return
+		}
+		matched := tasks
+		if req.FromModel != "" {
+			matched = matched[:0:0] // fresh slice, don't alias
+			for _, t := range tasks {
+				if t.Model != nil && *t.Model == req.FromModel { // nil-guard; mirrors WHERE model=$ (NULL excluded)
+					matched = append(matched, t)
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: true, MatchedCount: len(matched), Tasks: matched})
+		return
+	}
+
+	updated, err := h.storage.BulkUpdateScheduledTaskModel(ctx, req.Model, fallback, req.FromModel)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to re-assign task model")
+		return
+	}
+	log.Printf("Bulk re-assigned model=%q fallback=%q from=%q on %d scheduled task(s)", req.Model, fallback, req.FromModel, updated)
+	writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: false, UpdatedCount: updated})
+}
+
 // CancelTask handles DELETE /tasks/{task_id}
 func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 	p := h.principalFromRequest(r)
