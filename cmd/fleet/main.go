@@ -34,6 +34,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/sched"
@@ -176,6 +177,33 @@ func run() error {
 		ElcanoCookieName:  "elcano_auth",
 	}
 	h := handlers.New(hcfg, schedStorage, keyMgr)
+	// Wire the orchestrator's read-only Optional-MCP catalog + credential-account
+	// seats from the SAME in-process sources the chat side uses: the Manager's
+	// Optional-server catalog (descriptions + tool counts) and the per-server
+	// credential-account suffix scan (creds.AccountsFor over each server's base
+	// env vars). Never exposes secret values — only server + account names. This
+	// is what makes the scheduled-task MCP picker + credential admin table work.
+	h.SetMCPCatalogProvider(func() []handlers.MCPServerCatalogEntry {
+		catalog := mgr.MCPServerCatalog()
+		out := make([]handlers.MCPServerCatalogEntry, 0, len(catalog))
+		for _, info := range catalog {
+			var baseVars []string
+			if sc, ok := cfg.MCPServers[info.Name]; ok {
+				for k := range sc.Env {
+					baseVars = append(baseVars, k)
+				}
+			}
+			out = append(out, handlers.MCPServerCatalogEntry{
+				Name:        info.Name,
+				DisplayName: info.DisplayName,
+				Description: info.Description,
+				ToolCount:   info.ToolCount,
+				Enabled:     info.EnabledByDefault,
+				Accounts:    creds.AccountsFor(baseVars),
+			})
+		}
+		return out
+	})
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
 	orchHandler := buildOrchestratorMux(h, notesHandlers)
 
@@ -347,6 +375,12 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Get("/logs/{task_id}", h.GetLogs)
 		r.Get("/stats", h.GetDashboardStats)
 		r.Get("/api/me", h.GetCurrentUser)
+
+		// Optional-MCP catalog + credential-account seats for the task-form
+		// picker + admin table (read-only; never secret values). The web app
+		// proxies /api/orchestrator/mcp-servers + /mcp-accounts to these.
+		r.Get("/mcp-servers", h.GetMCPServers)
+		r.Get("/mcp-accounts", h.GetMCPAccounts)
 
 		// Notes reads (admin + scoped user).
 		r.Get("/notes", notes.ListNotes)

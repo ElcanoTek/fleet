@@ -6,6 +6,28 @@ import (
 	"testing"
 )
 
+// TestLoadRejectsUnknownManifestKey is the regression guard for strict manifest
+// parsing: a typo'd / unmodeled key must FAIL the load loudly rather than being
+// silently dropped (which could, e.g., leave a `tools:` allowlist unset and
+// expose a connector's full tool surface).
+func TestLoadRejectsUnknownManifestKey(t *testing.T) {
+	dir := t.TempDir()
+	// `toolz` is a typo for `tools` under an mcp_servers entry.
+	bad := "branding: {}\n" +
+		"mcp_servers:\n" +
+		"  - name: demo\n" +
+		"    type: stdio\n" +
+		"    command: python3\n" +
+		"    args: [\"mcp/demo.py\"]\n" +
+		"    toolz: [\"only_this\"]\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err == nil {
+		t.Fatal("Load accepted a manifest with an unknown key (toolz); want a strict-parse error")
+	}
+}
+
 // repoRoot walks up from the test's cwd (the package dir) to the repo root so
 // the test can load the shipped config/default bundle regardless of where `go
 // test` is invoked from.
