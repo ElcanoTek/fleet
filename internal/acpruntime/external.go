@@ -171,6 +171,12 @@ type ExternalConfig struct {
 	ProviderEnv map[string]string
 	// StartTimeout caps how long Initialize may take after spawn.
 	StartTimeout time.Duration
+	// NoNetwork seals the agent container's network namespace (`--network=none`)
+	// — the enforced egress posture for a flavor whose manifest declares
+	// `network: none`. (`model_only` stays declaration-only: fleet scrubs the env
+	// but the packet-level restriction is the host firewall's job.) The caller
+	// sets this from flavor.Network.
+	NoNetwork bool
 	// Workspace, when set, is a HOST directory bind-mounted READ-ONLY at
 	// /workspace so the external agent can READ the conversation/task workspace
 	// (matching the data-residency caveat in docs/USING-AGENTS.md). It is
@@ -250,14 +256,18 @@ func (r *ExternalRuntime) Run(ctx context.Context, promptText string, deps Exter
 	// to delegate gets a host-governed surface; a self-executing agent simply
 	// won't call them. The trust posture (containment) is independent of the
 	// advertised capabilities.
-	if _, err := conn.Initialize(initCtx, acp.InitializeRequest{
+	initResp, err := conn.Initialize(initCtx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		ClientCapabilities: acp.ClientCapabilities{
 			Fs:       acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
 			Terminal: true,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		return Result{}, fmt.Errorf("initialize external agent: %w", err)
+	}
+	if err := checkInitializeResponse(initResp, "external agent"); err != nil {
+		return Result{}, err
 	}
 
 	sess, err := conn.NewSession(ctx, acp.NewSessionRequest{
@@ -318,6 +328,12 @@ func (r *ExternalRuntime) runArgs() []string {
 		// teardown. With a read-only /workspace bind (below), this is where the
 		// agent's ephemeral writes land — nothing persists to the host workspace.
 		"--tmpfs=/tmp:rw,size=64m",
+	}
+	if r.cfg.NoNetwork {
+		// Seal the network namespace for a `network: none` flavor. (model_only
+		// is intentionally NOT enforced here — it is a declaration the host
+		// firewall enforces; the env is scrubbed regardless.)
+		base = append(base, "--network=none")
 	}
 	if r.cfg.Workspace != "" {
 		// READ-ONLY bind of the conversation/task workspace: the external agent

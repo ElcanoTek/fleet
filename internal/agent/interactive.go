@@ -376,6 +376,8 @@ func runExternalTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		ProviderEnv: providerEnv(flavor.ModelEnv),
 		// Read-only conversation workspace (see above); "" → scratch-only tmpfs.
 		Workspace: externalWorkspace,
+		// Seal the network namespace when the flavor declares `network: none`.
+		NoNetwork: flavor.Network == clientconfig.RuntimeNetworkNone,
 	})
 
 	res, err := rt.Run(ctx, latestUserText(tc.Messages), acpruntime.ExternalDeps{

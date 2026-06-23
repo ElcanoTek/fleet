@@ -180,14 +180,18 @@ func (r *ClientRuntime) Run(ctx context.Context, spec RunSpec, promptText string
 
 	initCtx, cancelInit := context.WithTimeout(ctx, r.cfg.StartTimeout)
 	defer cancelInit()
-	if _, err := conn.Initialize(initCtx, acp.InitializeRequest{
+	initResp, err := conn.Initialize(initCtx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		ClientCapabilities: acp.ClientCapabilities{
 			Fs:       acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
 			Terminal: true,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		return Result{}, fmt.Errorf("initialize: %w", err)
+	}
+	if err := checkInitializeResponse(initResp, "native agent"); err != nil {
+		return Result{}, err
 	}
 
 	specJSON, err := json.Marshal(spec)
