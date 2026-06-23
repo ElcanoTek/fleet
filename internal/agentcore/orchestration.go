@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"sync"
 
@@ -456,6 +455,3 @@ func parseTaskTrackerSnapshot(result string) taskTrackerSnapshot {
 	}
 	return taskTrackerSnapshot{}
 }
-
-// ── shared sort helper for finish-enforcement messaging ──
-var _ = sort.Strings
