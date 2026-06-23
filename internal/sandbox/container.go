@@ -475,7 +475,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	if err := c.ensureBridge(ctx); err != nil {
+	if err := c.ensureBridge(); err != nil {
 		return PythonResult{}, fmt.Errorf("start python bridge in container: %w", err)
 	}
 
@@ -582,7 +582,7 @@ func (c *containerImpl) bridgeStderrSuffix() string {
 // ensureBridge starts the bridge inside the container on first call.
 // Subsequent calls are a no-op as long as the exec session is still
 // healthy.
-func (c *containerImpl) ensureBridge(ctx context.Context) error {
+func (c *containerImpl) ensureBridge() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -625,7 +625,6 @@ func (c *containerImpl) ensureBridge(ctx context.Context) error {
 	// up before we can write. 100ms covers the common case; if the
 	// bridge isn't ready, the first ReadBytes will just wait.
 	time.Sleep(100 * time.Millisecond)
-	_ = ctx // reserved for future cancellation hooks
 	return nil
 }
 
