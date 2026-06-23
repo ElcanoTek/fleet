@@ -6,7 +6,7 @@
 // It exists so an operator can iterate on a task/persona/MCP setup locally and
 // watch it run end to end. The execution is NOT a debug shortcut: cutlass builds
 // the interactive Manager (model resolver + sandbox warm pool) exactly as the
-// Mega Box does, then drives internal/scheduledrun — which calls agentcore.Run
+// fleet server does, then drives internal/scheduledrun — which calls agentcore.Run
 // (Mode=Scheduled), the single governed core (policy, cost/token ceilings, audit,
 // the finish verifier). Tool calls still execute inside the rootless-Podman
 // sandbox; MCP credentials are still brokered host-side. cutlass only swaps the

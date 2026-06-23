@@ -10,7 +10,7 @@ import (
 
 // turnEngine is the interactive agent engine the HTTP layer drives. It is the
 // contract between this transport layer (P6a: routing, SSE, persistence) and
-// the unified agent runtime that the Mega Box binary (cmd/fleet, P6b) wires up.
+// the unified agent runtime that the fleet binary (cmd/fleet) wires up.
 //
 // Background: chat's HTTP server was written against chat's *agent.Manager,
 // which carried the entire interactive turn loop as methods. The fleet

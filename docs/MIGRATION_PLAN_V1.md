@@ -12,7 +12,7 @@ Confirmed: chat uses `jackc/pgx/v5`, moc uses `lib/pq` — a driver divergence t
 
 - **Canonical module path: `github.com/ElcanoTek/fleet`** (CamelCase). This is forced — the fleet git remote is already `git@github.com:ElcanoTek/fleet.git`, and 3 of 4 Go repos (moc/cutlass/gig) already use `github.com/ElcanoTek/*`. Only chat's lowercase `github.com/elcanotek/chat/server` changes. Go is case-sensitive on import paths, so this must be decided before any code moves.
 - **Single Go module, multi-package layout** (`/cmd` + `/internal`). One `go.mod` at `/root/fleet`, Go 1.26.4 (chat/cutlass already there; moc 1.25→1.26, gig 1.22→1.26). This is what lets us extract a *shared* `internal/agentcore` consumed by both the interactive and scheduled drivers — the central goal.
-- **Mega Box = one `fleet` binary, two long-running servers + one scheduler in-process**: the interactive chat HTTP/SSE server (chat-server), the scheduler/orchestrator HTTP server (moc), and the 30s scheduler goroutine — all in a single process, both sandbox workloads via the same rootless-Podman `sandbox.Pool` contract.
+- **single-host fleet = one `fleet` binary, two long-running servers + one scheduler in-process**: the interactive chat HTTP/SSE server (chat-server), the scheduler/orchestrator HTTP server (moc), and the 30s scheduler goroutine — all in a single process, both sandbox workloads via the same rootless-Podman `sandbox.Pool` contract.
 - **MCP dedup is a chat-vs-cutlass exercise only** (moc has zero MCP code). Rule of thumb: **cutlass wins on the DSP Python servers** (newer, larger; chat's last MCP commit literally says "port SSP reporting fixes from cutlass"), **merge the Go client and pubmatic/sendgrid** (genuine bidirectional divergence), **keep chat's gamma.py + mailbux.py** (chat-only).
 - **Agent core unifies behind three seams** — Observer (SSE sink vs JSON log), Enforcement hooks (interactive approvals/memories/ceilings vs batch audit/finish gating), and Executor (Podman container vs direct exec). We do **not** force chat to go one-shot or cutlass into a container; we preserve both designs exactly behind the Executor seam.
 - **One frontend (chat's Next.js 16) with two views**: View A = existing `ChatExperience` at `/chat`, View B = a React **re-port** of moc's dashboard at `/orchestrator` (moc has no React — it's Go-embedded HTML + vanilla ES6, so it must be reimplemented, not imported). Both gated by the already-shared Elcano Ed25519 `elcano_auth` cookie.
@@ -50,7 +50,7 @@ Justification:
 - All four Go modules already pin **`charm.land/fantasy v0.31.0`** identically, so there is no agent-framework version conflict to reconcile at the module level.
 - Driver divergence to flag: chat uses `jackc/pgx/v5 v5.10.0`, moc uses `lib/pq v1.12.3`. A single module can carry both during transition, but we should converge the scheduler onto `pgx` (see §8) to drop `lib/pq`.
 
-**gig is the one exception** and stays a separate repo (`github.com/ElcanoTek/gig`): it is a standalone runner deployed on *different* machines (dedicated runners), with an independent release cycle, only `github.com/google/uuid` as a dependency, and it talks to the orchestrator purely over HTTPS. Pulling it into the fleet module would couple a remote runner's release to the Mega Box's. Keep it out; document its API contract against the consolidated scheduler.
+**gig is the one exception** and stays a separate repo (`github.com/ElcanoTek/gig`): it is a standalone runner deployed on *different* machines (dedicated runners), with an independent release cycle, only `github.com/google/uuid` as a dependency, and it talks to the orchestrator purely over HTTPS. Pulling it into the fleet module would couple a remote runner's release to the single-host fleet's. Keep it out; document its API contract against the consolidated scheduler.
 
 ---
 
@@ -64,7 +64,7 @@ Justification:
 ├── Makefile                        # build/test/lint (merge of chat + cutlass + moc targets)
 │
 ├── cmd/
-│   ├── fleet/                      # THE Mega Box binary: chat HTTP server + scheduler HTTP
+│   ├── fleet/                      # THE fleet binary: chat HTTP server + scheduler HTTP
 │   │   └── main.go                 #   server + 30s scheduler goroutine, all in one process
 │   ├── fleet-admin/                # unified admin CLI (bootstrap, chat/sched user add|update…)
 │   │   └── main.go                 #   absorbs chat-admin + moc's -create-user/-set-role flags
@@ -160,7 +160,7 @@ Notes on placement decisions:
 | `internal/httpapi/` | `internal/httpapi/` | **Keep** — chat HTTP/SSE/auth |
 | `internal/tools/` (bash, python_repl, fs, web_*, xlsx…) | `internal/tools/` | **Merge** with cutlass tools; bash/python parameterized by Executor seam |
 | `internal/config/` | `internal/config/` | **Merge** — keep chat's URL-escaping DSN builder as the standard |
-| `cmd/chat-server/main.go` | `cmd/fleet/main.go` | **Merge** — becomes one subsystem of the Mega Box |
+| `cmd/chat-server/main.go` | `cmd/fleet/main.go` | **Merge** — becomes one subsystem of the single-host fleet |
 | `cmd/chat-admin/main.go` | `cmd/fleet-admin/main.go` | **Merge** — folds into unified CLI verb tree |
 | `cmd/sandbox-probe/main.go` | `cmd/sandbox-probe/main.go` | **Keep** — extend to cover scheduled agents |
 | `server/mcp/{email_lint,sendgrid_server,ses_s3_email,*dsp*}.py` | `mcp/` | **Mostly drop in favor of cutlass** (§5); keep `gamma.py`, `mailbux.py` |
@@ -171,10 +171,10 @@ Notes on placement decisions:
 
 | Source | Fleet target | Note |
 |---|---|---|
-| `internal/scheduler/scheduler.go` | `internal/sched/scheduler/` | **Keep** — 30s ticker runs as goroutine in Mega Box |
+| `internal/scheduler/scheduler.go` | `internal/sched/scheduler/` | **Keep** — 30s ticker runs as goroutine in single-host fleet |
 | `internal/storage/`, `internal/handlers/`, `internal/models/`, `internal/apikeys/` | `internal/sched/{storage,handlers,models,apikeys}/` | **Keep** — orchestrator logic, self-contained |
 | `internal/db/` + `migrations/*.{up,down}.sql` | `internal/sched/db/` | **Keep** — golang-migrate, 13 pairs; converge driver `lib/pq`→`pgx` |
-| `cmd/moc/main.go` | `cmd/fleet/main.go` (sched subsystem) + `cmd/fleet-admin` | **Merge** — server into Mega Box; `-create-user`/`-set-role`/etc. into CLI |
+| `cmd/moc/main.go` | `cmd/fleet/main.go` (sched subsystem) + `cmd/fleet-admin` | **Merge** — server into single-host fleet; `-create-user`/`-set-role`/etc. into CLI |
 | `cmd/moc/templates/dashboard.html` + `assets/js/*.js` | `web/src/app/orchestrator/` | **Merge (re-port)** — reimplement vanilla ES6 as React (§7) |
 | `deploy/{moc.service,moc-cli,Caddyfile}` | `deploy/` | **Merge** into `fleet.target`, `fleet-cli`, shared Caddyfile |
 | `tests/e2e/frontend.spec.ts` | `web/e2e/` | **Merge** into unified Playwright suite |
@@ -381,7 +381,7 @@ Each phase ends with a **test checkpoint** that must pass before the next begins
 **Why now:** independent of Go driver work; can run partly in parallel with P3.
 **Test checkpoint:** consolidated pytest (`test_sendgrid_*`, `test_ses_s3_email`, `test_xandr_reporting`, `test_pubmatic_*`, `test_medianet_*`, `test_triplelift_reporting`, `test_mcp_integration`) green; `@pytest.mark.expensive` skipped. **Per-tool diff verification for medianet/indexexchange** (close tool counts) to prove no chat-only tool dropped.
 
-### P5 — Scheduler + backends into the one Mega Box process
+### P5 — Scheduler + backends into the one fleet process
 **Moves:** move moc's `scheduler`/`storage`/`handlers`/`models`/`apikeys`/`db` into `internal/sched/*`; converge driver to `pgx`. Build `cmd/fleet/main.go` that boots the chat HTTP/SSE server, the scheduler HTTP server, **and** the 30s scheduler goroutine in one process; `cmd/cutlass` as the one-shot entrypoint; `cmd/fleet-admin` unified CLI.
 **Why now:** needs both data layers (`store` from P3, `sched/db` here) and the agent drivers present.
 **Test checkpoint:** moc unit tests (`handlers_test`, `db_test`, `storage_test`, `models_test`, `visibility_test`) against a test Postgres; chat `httpapi` tests; scheduler promotes a `scheduled→pending` task; lease-recovery + timeout loops fire. `sandbox-probe` exercises **both** `Pool.Take` and `Pool.TakeContainer` and is extended to cover a scheduled-agent task.
@@ -391,7 +391,7 @@ Each phase ends with a **test checkpoint** that must pass before the next begins
 **Why now:** backends must be reachable (P5) before the proxy layer is validated.
 **Test checkpoint:** vitest unit suites (chat's 20+ `.test.ts` + new orchestrator components) green; Playwright mocked run (`CHAT_MOCK_MODE=1`) covering `/chat` login+stream and `/orchestrator` task-create+list+log-view.
 
-### P7 — End-to-end Mega Box (chat + sandbox + scheduling)
+### P7 — End-to-end single-host fleet (chat + sandbox + scheduling)
 **Moves:** full deploy via unified `bootstrap.sh` (test **both** `--postgres=local` and `--postgres=external`, plus idempotent re-run + non-interactive mode). One systemd `fleet.target`.
 **Why last:** validates the entire consolidation under real Podman + real Postgres + both views.
 **Test checkpoint:** **Live E2E** — Playwright live suite (`test:e2e:live`, real OpenRouter) drives an interactive chat turn that runs `bash`+`run_python` inside a rootless-Podman sandbox container; the orchestrator view schedules a recurring task whose cron triggers, gets leased (simulated gig runner / direct cutlass invocation), runs the one-shot agent in its container, and reports `success` + logs back. Verify: SSE streaming, sandbox hardening flags, scheduler promotion, both DB pools, single `elcano_auth` session across both views.

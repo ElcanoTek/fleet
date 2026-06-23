@@ -9,7 +9,7 @@ tests, and features.
 fleet is a Go monorepo with a Next.js frontend:
 
 ```
-cmd/        entrypoints (the fleet Mega Box binary, fleet-admin CLI, helpers)
+cmd/        entrypoints (the single fleet binary, fleet-admin CLI, helpers)
 internal/   the Go implementation (agent runtime, sandbox, MCP, scheduler, HTTP API, …)
 web/        the Next.js app (the /chat and /orchestrator views)
 config/     the generic client-config bundle baked into the repo (config/default)

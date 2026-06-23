@@ -1,4 +1,4 @@
-// Command fleet-admin is the unified admin CLI for the Mega Box. It folds chat's
+// Command fleet-admin is the unified admin CLI for a fleet deployment. It folds chat's
 // chat-admin (chat users) and moc's -create-user/-set-role flags (sched users +
 // API keys) into one tool, plus MCP credential-account management, the notes
 // wiki admin verbs, and a thin bootstrap wrapper.
@@ -81,7 +81,7 @@ func dispatch(argv []string) int {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `fleet-admin — unified Mega Box admin CLI
+	fmt.Fprint(os.Stderr, `fleet-admin — unified fleet admin CLI
 
 Operator lifecycle (bootstrap → update → status):
   fleet-admin bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]

@@ -47,7 +47,7 @@ never a real key.
 ## Repository map
 
 See the README "Repository layout" for the annotated tree. In short: `cmd/` (the
-`fleet` Mega Box binary, `fleet-admin` CLI, `fleet-native-agent`, …), `internal/`
+`fleet` binary, `fleet-admin` CLI, `fleet-native-agent`, …), `internal/`
 (`agentcore` the one run loop, `acpruntime` the ACP client + agent, `sandbox`,
 `mcp`, `creds`, `clientconfig`, `store`, `sched`, `httpapi`, …), `web/` (one
 Next.js app: `/chat` + `/orchestrator`), and `config/default/` (the generic
