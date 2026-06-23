@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -35,6 +36,13 @@ type RunConfig struct {
 	// MaxCompletionTokens caps a single completion's output (defaults to
 	// DefaultMaxCompletionTokens when zero).
 	MaxCompletionTokens int
+	// MaxIterations caps the number of agent STEPS (tool-call/model round-trips)
+	// within a single round's fantasy stream. 0 = no cap (loop until the model
+	// stops on its own, bounded only by the per-turn timeout + cost ceiling).
+	// Wired into the stream's StopWhen so a model that never stops calling tools
+	// is bounded by the configured budget. Per-round (each enforcement round gets
+	// a fresh step budget), matching the legacy chat/cutlass per-turn cap.
+	MaxIterations int
 	// Allowlist is the per-server tool allowlist (Gate-2).
 	Allowlist mcpAllowlist
 	// OptionalServers is the authoritative catalog of Optional servers.
@@ -186,6 +194,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		envPrefix:            cfg.EnvPrefix,
 		compactionSummarizer: deps.CompactionSummarizer,
 		usageReporter:        deps.UsageReporter,
+		maxIterations:        cfg.MaxIterations,
 	}
 
 	systemPrompt, messages, label, err := deps.Input.Prompt(ctx)
@@ -277,6 +286,14 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			// the interactive Stop path persists partial work.
 			if ctx.Err() != nil {
 				//nolint:nilerr // intentional: ctx cancellation that surfaced as a stream error is a clean stop; returning nil error is the contract so the Stop path persists partial work.
+				return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
+			}
+			// A cost/token ceiling hit is a clean STOP, not a failure: the
+			// budget-guarded PrepareStep aborted before the next paid completion.
+			// Finish gracefully with the transcript accumulated so far (same
+			// partial-result contract as a cancel) so the budget bounds the run
+			// without erroring the turn.
+			if errors.Is(serr, ErrCostCeilingExceeded) {
 				return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
 			}
 			return Result{}, serr

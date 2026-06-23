@@ -61,6 +61,12 @@
 #   FLEET_DB_SUPERUSER_URL  external superuser DSN for opt-in role/db creation
 set -euo pipefail
 
+# Resolve this script's repo root so --enable-service can build + install the
+# binary and unit files regardless of the caller's cwd (fleet-admin invokes it
+# from elsewhere). The DB/env/bundle steps still use repo-relative defaults.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 POSTGRES_MODE="local"
 DRY_RUN=0
 CLIENT_CONFIG_ARG=""
@@ -285,6 +291,25 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
     if command -v systemctl >/dev/null 2>&1; then
       systemctl enable --now postgresql >/dev/null 2>&1 || warn "could not start postgresql via systemctl (already running?)"
     fi
+
+    # Default Fedora/RHEL initdb authenticates loopback TCP with `ident`, which
+    # REJECTS the password DSN fleet connects with (postgres://chat:…@127.0.0.1).
+    # Rewrite the loopback host lines to scram-sha-256 so first boot authenticates
+    # (chat/moc bootstrap did this; fleet must too). local peer is left intact so
+    # the `runuser -u postgres psql` role provisioning below still works.
+    PG_HBA="$(runuser -u postgres -- psql -tAc 'SHOW hba_file' 2>/dev/null || true)"
+    [[ -n "$PG_HBA" && -f "$PG_HBA" ]] || PG_HBA="/var/lib/pgsql/data/pg_hba.conf"
+    if [[ -f "$PG_HBA" ]]; then
+      if grep -qE '^[[:space:]]*host[[:space:]]+all[[:space:]]+all[[:space:]]+(127\.0\.0\.1/32|::1/128)[[:space:]]+(ident|md5|trust|peer)' "$PG_HBA"; then
+        sed -i -E 's#^([[:space:]]*host[[:space:]]+all[[:space:]]+all[[:space:]]+(127\.0\.0\.1/32|::1/128)[[:space:]]+)(ident|md5|trust|peer)#\1scram-sha-256#' "$PG_HBA"
+        systemctl reload postgresql >/dev/null 2>&1 || warn "could not reload postgresql after pg_hba rewrite"
+        ok "pg_hba: loopback host auth set to scram-sha-256 (${PG_HBA})"
+      else
+        info "pg_hba loopback host lines already scram-sha-256 (or non-default) — left as-is"
+      fi
+    else
+      warn "could not locate pg_hba.conf — verify loopback host auth allows password (scram-sha-256) manually"
+    fi
   fi
 
   step "Creating roles + databases idempotently (chat + sched)"
@@ -364,24 +389,53 @@ if [[ "$DRY_RUN" != "1" ]]; then
   info "remember to add OPENROUTER_API_KEY and the bundle's MCP connector credentials."
 fi
 
-# ── optionally enable + start the systemd unit ──
+# ── optionally build + install the binary + unit, then enable + start it ──
+# fleet-admin bootstrap/update operate on a SOURCE CHECKOUT (this repo) and
+# install the built artifacts to FLEET_INSTALL_DIR (default /opt/fleet) — the
+# location deploy/fleet.service's ExecStart points at.
+INSTALL_DIR="${FLEET_INSTALL_DIR:-/opt/fleet}"
 if [[ "$ENABLE_SERVICE" == "1" ]]; then
-  step "Enabling + starting the ${SERVICE_NAME} systemd unit"
-  if ! command -v systemctl >/dev/null 2>&1; then
-    warn "systemctl not found — skipping --enable-service (install the unit manually)."
-  elif [[ "$DRY_RUN" == "1" ]]; then
+  step "Building + installing the fleet binary, then enabling ${SERVICE_NAME}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would run: (cd ${REPO_ROOT} && make build)  → fleet + fleet-admin"
+    info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR}"
+    info "[dry-run] would install deploy/fleet.service + deploy/fleet-web.service → /etc/systemd/system"
     info "[dry-run] would run: systemctl daemon-reload && systemctl enable --now ${SERVICE_NAME}"
-  elif ! systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1 \
-       || ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
-    warn "${SERVICE_NAME}.service is not installed — install deploy/fleet.service first:"
-    warn "  install -D -m 0644 deploy/fleet.service /etc/systemd/system/${SERVICE_NAME}.service"
+  elif ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl not found — skipping --enable-service (no systemd on this box)."
   else
+    # 1. Build the deployable artifacts from this checkout (needs Go on the box).
+    if command -v go >/dev/null 2>&1 || command -v make >/dev/null 2>&1; then
+      if ( cd "$REPO_ROOT" && make build ) && [[ -x "$REPO_ROOT/fleet" && -x "$REPO_ROOT/fleet-admin" ]]; then
+        install -D -m 0755 "$REPO_ROOT/fleet"       "$INSTALL_DIR/fleet"
+        install -D -m 0755 "$REPO_ROOT/fleet-admin" "$INSTALL_DIR/fleet-admin"
+        ok "installed fleet + fleet-admin → ${INSTALL_DIR}"
+      else
+        die "make build failed or produced no artifacts — install Go and retry"
+      fi
+    elif [[ -x "$INSTALL_DIR/fleet" ]]; then
+      warn "no Go toolchain — using the existing ${INSTALL_DIR}/fleet (build + install manually to update it)."
+    else
+      die "no Go toolchain and no binary at ${INSTALL_DIR}/fleet — install Go (or pre-build) then re-run"
+    fi
+    # 2. Install the unit files from this checkout if not already present.
+    for unit in fleet.service fleet-web.service; do
+      if [[ -f "$REPO_ROOT/deploy/$unit" ]] && ! systemctl cat "$unit" >/dev/null 2>&1; then
+        install -D -m 0644 "$REPO_ROOT/deploy/$unit" "/etc/systemd/system/$unit"
+        info "installed /etc/systemd/system/$unit"
+      fi
+    done
+    # 3. daemon-reload + enable the backend unit. The web unit (fleet-web)
+    #    additionally needs the built Next app at /opt/fleet/web + its 0600
+    #    env file, so we install it but leave enabling it to the operator.
     systemctl daemon-reload || warn "systemctl daemon-reload failed"
     if systemctl enable --now "${SERVICE_NAME}" >/dev/null 2>&1; then
       ok "${SERVICE_NAME} enabled + started (services self-migrate on start)"
     else
       warn "could not enable/start ${SERVICE_NAME} — check: journalctl -u ${SERVICE_NAME} -n 50"
     fi
+    info "web tier: build it (cd web && npm ci && npm run build), deploy to /opt/fleet/web,"
+    info "          fill /etc/fleet/fleet-web.env, then: systemctl enable --now fleet-web"
   fi
 fi
 

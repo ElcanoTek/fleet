@@ -650,7 +650,7 @@ export function ChatExperience() {
   const [confirmSummarize, setConfirmSummarize] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [personas, setPersonas] = useState<string[]>([]);
-  const [selectedPersona, setSelectedPersona] = useState<string>("victoria");
+  const [selectedPersona, setSelectedPersona] = useState<string>("");
   // Which empty-state protocol pill the user has opened into its form/intake
   // panel (null = show the card grid). Only meaningful on the empty new-chat
   // view; reset whenever we return to a clean slate.
@@ -4269,7 +4269,7 @@ export function ChatExperience() {
                       </p>
                     ) : null}
                   </div>
-                  {!isLockdown && selectedPersona === "victoria" ? (
+                  {!isLockdown && pills.length > 0 ? (
                     activePillId && getPill(activePillId, pills) ? (
                       <ProtocolPillForm
                         pill={getPill(activePillId, pills)!}

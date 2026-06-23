@@ -84,11 +84,14 @@ test("the streamed tool.call and tool.result render in the execution trail", asy
 });
 
 test("config-driven empty-state cards render from a stubbed /api/client-config", async ({ page }) => {
-  // The protocol-pill empty-state cards only render under the "victoria"
-  // persona, and their catalog is config-driven via /api/client-config. Stub a
-  // bespoke client catalog and assert those cards (not the neutral defaults)
-  // render.
-  await mockChatBoot(page, { personaDefault: "victoria" });
+  // The protocol-pill empty-state cards render whenever the client config
+  // supplies any (persona-AGNOSTIC — regression guard for #80, where the gate
+  // was hardcoded to the legacy "victoria" persona and so never showed on a
+  // stock install whose default persona is "assistant"). Their catalog is
+  // config-driven via /api/client-config; stub a bespoke client catalog and
+  // assert those cards (not the neutral defaults) render under the DEFAULT
+  // persona.
+  await mockChatBoot(page);
   await page.route("**/api/client-config", (r: Route) =>
     r.fulfill({
       json: {

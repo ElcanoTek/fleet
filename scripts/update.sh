@@ -40,6 +40,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
 CLIENT_DIR="${FLEET_CLIENT_CONFIG_DIR:-$REPO_ROOT/config/default}"
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
+# Where the running unit's binaries live. Resolved (in order): --install-dir /
+# $FLEET_INSTALL_DIR, else the dir of the unit's ExecStart, else /opt/fleet. The
+# freshly built $SRC_DIR/{fleet,fleet-admin} are installed here so the restart
+# actually runs the new code (a build alone leaves the live ExecStart untouched).
+INSTALL_DIR="${FLEET_INSTALL_DIR:-}"
 NO_PULL="${FLEET_UPDATE_NO_PULL:-0}"
 ASSUME_YES="${FLEET_UPDATE_YES:-0}"
 BRANCH_OVERRIDE="${FLEET_UPDATE_BRANCH:-}"
@@ -53,6 +58,8 @@ while [[ $# -gt 0 ]]; do
     --client-config=*) CLIENT_DIR="${1#*=}" ;;
     --service)        shift; [[ $# -gt 0 ]] || { echo "error: --service needs a name" >&2; exit 1; }; SERVICE_NAME="$1" ;;
     --service=*)      SERVICE_NAME="${1#*=}" ;;
+    --install-dir)    shift; [[ $# -gt 0 ]] || { echo "error: --install-dir needs a dir" >&2; exit 1; }; INSTALL_DIR="$1" ;;
+    --install-dir=*)  INSTALL_DIR="${1#*=}" ;;
     --branch)         shift; [[ $# -gt 0 ]] || { echo "error: --branch needs a name" >&2; exit 1; }; BRANCH_OVERRIDE="$1" ;;
     --branch=*)       BRANCH_OVERRIDE="${1#*=}" ;;
     --no-pull)        NO_PULL=1 ;;
@@ -189,11 +196,36 @@ cf_prev="absent"
 # ── 3. build the fleet binary + the web app ───────────────────────────────
 step "3/5  Building the fleet binary + web app"
 if [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would run: (cd ${SRC_DIR} && make build)"
+  info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
+  info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
   info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build)"
 else
   ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
-  ok "fleet binary built"
+  [[ -x "$SRC_DIR/fleet" && -x "$SRC_DIR/fleet-admin" ]] \
+    || die "make build did not emit ${SRC_DIR}/fleet + ${SRC_DIR}/fleet-admin"
+  ok "fleet + fleet-admin binaries built"
+
+  # Install the freshly built binaries to the unit's ExecStart location so the
+  # restart below actually runs the NEW code. Without this the build is a no-op
+  # against the live deployment.
+  if [[ -z "$INSTALL_DIR" ]]; then
+    exec_start="$(systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null | awk '{print $1}')"
+    if [[ -n "$exec_start" && -x "$(dirname "$exec_start")" ]]; then
+      INSTALL_DIR="$(dirname "$exec_start")"
+    else
+      INSTALL_DIR="/opt/fleet"
+    fi
+  fi
+  # Skip the copy when we'd install onto ourselves (dev box running from $SRC_DIR).
+  if [[ "$(cd "$INSTALL_DIR" 2>/dev/null && pwd || echo "$INSTALL_DIR")" == "$SRC_DIR" ]]; then
+    info "install dir == source checkout (${SRC_DIR}) — running in place, no copy needed."
+  elif install -D -m 0755 "$SRC_DIR/fleet" "$INSTALL_DIR/fleet" 2>/dev/null \
+       && install -D -m 0755 "$SRC_DIR/fleet-admin" "$INSTALL_DIR/fleet-admin" 2>/dev/null; then
+    ok "installed fleet + fleet-admin → ${INSTALL_DIR}"
+  else
+    die "could not install binaries into ${INSTALL_DIR} (need root? set --install-dir or FLEET_INSTALL_DIR) — live binary left in place"
+  fi
+
   if [[ -f "$SRC_DIR/web/package.json" ]]; then
     ( cd "$SRC_DIR/web" && npm ci && npm run build ) || die "web build failed"
     ok "web app built"

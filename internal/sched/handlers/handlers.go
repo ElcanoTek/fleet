@@ -74,6 +74,11 @@ type Handlers struct {
 	// (elcano_auth cookie path). nil in production → falls back to
 	// storage.GetUserByUsername. Tests inject a fake to avoid a live database.
 	memberLookup func(ctx context.Context, email string) (*models.User, error)
+
+	// mcpCatalog returns the read-only Optional-MCP catalog the task-form picker
+	// + credential-account admin table render. Injected by cmd/fleet via
+	// SetMCPCatalogProvider; nil → empty catalog. See mcp.go.
+	mcpCatalog func() []MCPServerCatalogEntry
 }
 
 // statsCache caches dashboard statistics.

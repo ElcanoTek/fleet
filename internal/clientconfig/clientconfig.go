@@ -37,6 +37,7 @@ package clientconfig
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,7 +298,12 @@ func Load(dir string) (*Bundle, error) {
 		return nil, err
 	}
 	var m manifest
-	if err := yaml.Unmarshal(interpolated, &m); err != nil {
+	// Strict parse: an unknown or duplicate key FAILS the load rather than being
+	// silently dropped. A typo'd key (e.g. `tool:` for `tools:`, or `optional:`
+	// misspelled) would otherwise leave a connector mis-configured — at worst
+	// exposing a server's full tool surface when a `tools:` allowlist was meant
+	// to scope it. Fail loud at startup instead.
+	if err := yaml.UnmarshalWithOptions(interpolated, &m, yaml.Strict()); err != nil {
 		return nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
 	}
 
@@ -324,6 +330,12 @@ func Load(dir string) (*Bundle, error) {
 	applyBrandingDefaults(&b.Branding)
 	if err := b.validate(); err != nil {
 		return nil, err
+	}
+	// Warn (don't fail) on stdio script-path args that don't resolve under the
+	// bundle — a misspelled/missing `mcp/foo.py` would otherwise only surface as
+	// a silent connector launch failure at runtime.
+	for _, p := range b.ValidateMCPArgPaths() {
+		log.Printf("clientconfig: warning: %s", p)
 	}
 	return b, nil
 }
@@ -430,16 +442,23 @@ func (b *Bundle) validate() error {
 
 // MCPServerConfigs builds the runtime catalog (map[name]config.MCPServerConfig)
 // from the manifest, resolving env values + the enable gate against the current
-// process environment. Only enabled servers are returned. For stdio servers the
-// command's relative args are resolved against the bundle's mcp/ dir parent so a
-// bind-mounted bundle keeps the args correct; we keep args as the manifest
-// supplied them (relative to the bundle root) because the agent process cwd is
-// the bundle-aware root — see cmd/fleet.
+// process environment. Only enabled servers are returned. Manifest stdio args
+// are kept verbatim (relative to the bundle root, e.g. `mcp/foo.py`); each stdio
+// server's Dir is set to the bundle root so its subprocess launches there and
+// the relative args resolve correctly — the fleet process cwd is NOT necessarily
+// the bundle dir (under systemd it is /opt/fleet, while the bundle is the
+// separate /opt/fleet/client checkout). See internal/mcp.AddStdioServer.
 //
 // This REPLACES the formerly hardcoded internal/config catalog: the same Go
 // struct + downstream behavior (tool allowlists, account suffixes via the env
 // keys, command/args), now sourced from the bundle.
 func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
+	// Absolutize the bundle dir so cmd.Dir is correct regardless of the spawning
+	// process's cwd; fall back to the raw dir if Abs fails.
+	bundleDir := b.Dir
+	if abs, err := filepath.Abs(b.Dir); err == nil {
+		bundleDir = abs
+	}
 	out := make(map[string]config.MCPServerConfig, len(b.MCPCatalog))
 	for i := range b.MCPCatalog {
 		s := &b.MCPCatalog[i]
@@ -459,10 +478,53 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 			sc.Command = s.Command
 			sc.Args = append([]string(nil), s.Args...)
 			sc.Env = resolveEnvMap(s.Env, s.OptionalEnv)
+			sc.Dir = bundleDir
 		}
 		out[s.Name] = sc
 	}
 	return out
+}
+
+// scriptExtensions are the arg suffixes ValidateMCPArgPaths treats as a script
+// file path that must resolve under the bundle dir.
+var scriptExtensions = map[string]bool{
+	".py": true, ".js": true, ".mjs": true, ".cjs": true, ".ts": true, ".sh": true, ".rb": true,
+}
+
+// ValidateMCPArgPaths checks that every stdio server's relative script-path args
+// (args ending in a known script extension, e.g. `mcp/foo.py`) resolve to a file
+// under the bundle dir. It returns one human-readable problem per missing path;
+// an empty slice means all paths resolve. This catches the deploy-time failure
+// where a bundle ships `args: ["mcp/foo.py"]` but the file is absent or
+// misspelled — the MCP subprocess would otherwise just fail to launch at runtime
+// (see internal/mcp cmd.Dir). It is checked for ALL stdio servers regardless of
+// the credential enable-gate, since a missing script is a defect whether or not
+// the connector's creds happen to be set. Load logs any problems as warnings; a
+// CI test asserts the shipped bundle returns none.
+func (b *Bundle) ValidateMCPArgPaths() []string {
+	bundleDir := b.Dir
+	if abs, err := filepath.Abs(b.Dir); err == nil {
+		bundleDir = abs
+	}
+	var problems []string
+	for i := range b.MCPCatalog {
+		s := &b.MCPCatalog[i]
+		if s.Type == "http" {
+			continue
+		}
+		for _, arg := range s.Args {
+			if filepath.IsAbs(arg) || !scriptExtensions[strings.ToLower(filepath.Ext(arg))] {
+				continue
+			}
+			p := filepath.Join(bundleDir, arg)
+			if info, err := os.Stat(p); err != nil || info.IsDir() {
+				problems = append(problems, fmt.Sprintf(
+					"mcp_servers[%q]: script arg %q does not resolve to a file under the bundle (looked for %s)",
+					s.Name, arg, p))
+			}
+		}
+	}
+	return problems
 }
 
 // AgentPolicy returns the bundle's agent tool-behavior policy (defensively

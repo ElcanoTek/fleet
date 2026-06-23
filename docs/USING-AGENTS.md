@@ -398,6 +398,24 @@ flavors (`native-inprocess` / `native-acp`) for anything sensitive. fleet stamps
 this caveat into the session log alongside every external turn so the record is
 unambiguous.
 
+### Exactly what an external agent can reach
+
+- **Interactive turns:** the conversation's workspace is bind-mounted at
+  `/workspace` **read-only**. The agent can **read** the files the user uploaded
+  or the conversation accumulated (which is what makes it useful, and what the
+  caveat above is about), but it **cannot write to the host** — its scratch
+  writes go to an ephemeral in-container `/tmp` tmpfs discarded on teardown.
+  Persisting outputs to the durable workspace remains a fully-governed
+  (`native-*`) job.
+- **Scheduled-external turns:** **scratch-only** — `/workspace` is an empty
+  writable tmpfs and the agent sees only the task prompt text, never the host
+  workspace. An unattended, human-less run gets the most conservative posture by
+  design (on top of the per-client opt-in and fail-closed permissions above).
+
+Either way the rest of the containment hardening is unchanged: read-only rootfs,
+`--cap-drop=ALL`, `no-new-privileges`, env scrubbed to the `model_env` key only,
+and the declared egress posture.
+
 ---
 
 ## Drive fleet from your editor over ACP (ingress)
