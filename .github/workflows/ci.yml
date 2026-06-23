@@ -86,6 +86,25 @@ jobs:
           go-version: '1.26.4'
           check-latest: true
 
+      - name: Install postgresql-client-18 (so pg_dump matches the server major)
+        # The runner ships client 16; the postgres service is server 18, and
+        # pg_dump refuses to dump a newer server ("server version mismatch"). Pull
+        # the matching client from PGDG so the backup/restore round-trip test
+        # (cmd/fleet-admin) runs for real. Best-effort: if the repo is unreachable
+        # the step still succeeds and the test skips on the version mismatch (it is
+        # written to skip, never fail, when client and server majors disagree).
+        run: |
+          set -x
+          (sudo install -d /usr/share/postgresql-common/pgdg \
+            && sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+                 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+                 | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null \
+            && sudo apt-get update -qq \
+            && sudo apt-get install -y -qq postgresql-client-18) \
+            || echo "could not install postgresql-client-18; round-trip test will skip on version mismatch"
+          pg_dump --version || true
+
       - name: Create test databases
         run: |
           PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
