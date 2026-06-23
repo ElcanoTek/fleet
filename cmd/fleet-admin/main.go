@@ -17,6 +17,8 @@
 //	fleet-admin mcp account set|list|del
 //	fleet-admin notes set|get|list|rm
 //	fleet-admin notes proposal publish|reject
+//	fleet-admin backup  [--db=chat|sched|all] [--out DIR]
+//	fleet-admin restore  --db=chat|sched <dump-file>
 //
 // The operator lifecycle is bootstrap → update → status: bootstrap provisions a
 // box, update rolls a new version in place, status (a.k.a. doctor) reports
@@ -64,6 +66,10 @@ func dispatch(argv []string) int {
 		return cmdMCP(argv[1:])
 	case "notes":
 		return cmdNotes(argv[1:])
+	case "backup":
+		return cmdBackup(argv[1:])
+	case "restore":
+		return cmdRestore(argv[1:])
 	case "-h", "--help", "help":
 		usage()
 		return 0
@@ -112,6 +118,10 @@ Users, credentials, notes:
   fleet-admin notes rm <slug>
   fleet-admin notes proposal publish <id> [--note "..."]
   fleet-admin notes proposal reject  <id> --reason "..."
+
+Backup / restore (pg_dump -Fc / pg_restore; one dump file per DB):
+  fleet-admin backup  [--db=chat|sched|all] [--out DIR]   (writes fleet-<db>-<stamp>.dump; prints each path)
+  fleet-admin restore  --db=chat|sched <dump-file>         (--clean --if-exists; overwrites the live DB)
 
 Connection:
   Chat DB:  --database-url or FLEET_CHAT_DATABASE_URL / DATABASE_URL
