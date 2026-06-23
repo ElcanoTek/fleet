@@ -101,6 +101,7 @@ func runACP() error {
 		SystemPromptsDir:     bundle.SystemPromptsDir,
 		ChatSystemPromptFile: "chat.md",
 		NotesProvider:        notesProvider,
+		NoteProposer:         notesProvider, // same adapter; wires propose_note over ingress too
 	})
 	if err != nil {
 		return fmt.Errorf("build interactive engine: %w", err)

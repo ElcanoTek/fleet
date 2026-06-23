@@ -16,6 +16,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // The SCHEDULED driver: one-shot run-to-completion over the unified
@@ -352,6 +353,15 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	}
 	policy := &scheduledPolicy{inner: inner, agent: a, task: task}
 
+	// propose_note tool registration in lockstep with wiring + the prompt
+	// advertisement: the scheduled prompt advertises propose_note and the policy
+	// wires the proposer above, so the tool must actually be in the roster when a
+	// proposer is present (the base NewTurnTools set does not include it).
+	nativeTools := a.nativeTools
+	if a.noteProposer != nil {
+		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeNoteTool())
+	}
+
 	// Loader tools (mcp_list_servers / mcp_load_servers) drive the in-loop tool
 	// rebuild via the agentcore MCPServersDirty hook.
 	loaderTools := a.buildLoaderTools()
@@ -396,7 +406,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		Selection:           a.selection(),
 		IncludeConfirmAudit: true,
 		LoaderTools:         loaderTools,
-		NativeTools:         a.nativeTools,
+		NativeTools:         nativeTools,
 		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 	}
 

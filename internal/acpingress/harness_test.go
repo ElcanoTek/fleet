@@ -284,15 +284,37 @@ func (o observerFanout) Observe(eventType string, payload map[string]any) {
 // ── in-memory stores ──
 
 type memStore struct {
-	mu      sync.Mutex
-	convs   map[string]*store.Conversation
-	history map[string][]agent.HistoryEntry
-	apps    map[string]*store.Approval
-	seq     int
+	mu       sync.Mutex
+	convs    map[string]*store.Conversation
+	history  map[string][]agent.HistoryEntry
+	apps     map[string]*store.Approval
+	memories map[string]*store.Memory
+	seq      int
 }
 
 func newMemStore() *memStore {
-	return &memStore{convs: map[string]*store.Conversation{}, history: map[string][]agent.HistoryEntry{}, apps: map[string]*store.Approval{}}
+	return &memStore{convs: map[string]*store.Conversation{}, history: map[string][]agent.HistoryEntry{}, apps: map[string]*store.Approval{}, memories: map[string]*store.Memory{}}
+}
+
+func (s *memStore) CreateMemoryProposal(_ context.Context, userEmail, _, content string) (*store.Memory, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seq++
+	id := "mem-" + itoa(s.seq)
+	m := &store.Memory{ID: id, UserEmail: userEmail, Content: content, Source: "proposed"}
+	s.memories[id] = m
+	return m, nil
+}
+
+func (s *memStore) AcceptMemoryProposal(_ context.Context, _ string, id string) (*store.Memory, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.memories[id]
+	if m == nil {
+		return nil, nil
+	}
+	m.Source = "chat" // accepted
+	return m, nil
 }
 
 func (s *memStore) CreateConversation(_ context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error) {
