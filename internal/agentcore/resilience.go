@@ -434,6 +434,14 @@ func (e *engine) streamRoundWithResilience(
 		result, err := rs.stream(ctx, currentAgent, activeModel, messages)
 
 		if err == nil {
+			// A clean stream round is the "clean step in between" the
+			// consecutive-compaction contract is written against: reset the
+			// counter so the cap (maxConsecutiveCompactions) only trips on
+			// compactions in consecutive FAILING rounds, not well-spaced
+			// compactions that each recovered cleanly over a long run.
+			if e != nil {
+				e.consecutiveCompactions = 0
+			}
 			return streamRoundOutcome{
 				result:            result,
 				messages:          messages,
