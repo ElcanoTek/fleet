@@ -260,8 +260,30 @@ ensure_sandbox() {
 FLEET_ACP_EXTERNAL_E2E_IMAGE="${FLEET_ACP_EXTERNAL_E2E_IMAGE:-localhost/fleet-acp-example-agent:latest}"
 ensure_acp_example_agent() {
   command -v podman >/dev/null 2>&1 || die "podman is required for the external ACP e2e"
+  local need_build=0 reason=""
   if ! podman image exists "$FLEET_ACP_EXTERNAL_E2E_IMAGE" 2>/dev/null; then
-    log "acp-example-agent: image $FLEET_ACP_EXTERNAL_E2E_IMAGE not present; building locally"
+    need_build=1 reason="not present"
+  elif [[ "${FLEET_ACP_E2E_REBUILD:-}" == "1" ]]; then
+    need_build=1 reason="FLEET_ACP_E2E_REBUILD=1"
+  else
+    # Rebuild a STALE image: if any build input is newer than the image, the
+    # cached image predates a source change and the e2e would silently test old
+    # agent code (a real footgun — a stale local image fails confusingly or, if
+    # the change is additive, false-passes). On any inspect/find error we fall
+    # back to the existing image, so this can never make the boot stricter than
+    # before. (Deep transitive deps aren't tracked; FLEET_ACP_E2E_REBUILD=1
+    # forces a rebuild.)
+    local created
+    created="$(podman image inspect "$FLEET_ACP_EXTERNAL_E2E_IMAGE" --format '{{.Created}}' 2>/dev/null || true)"
+    if [[ -n "$created" ]] && [[ -n "$(find \
+        "$REPO_ROOT/cmd/acp-example-agent" \
+        "$REPO_ROOT/config/default/sandbox/Containerfile.acp-example-agent" \
+        "$REPO_ROOT/go.mod" -newermt "$created" -print -quit 2>/dev/null)" ]]; then
+      need_build=1 reason="source newer than image"
+    fi
+  fi
+  if [[ "$need_build" == "1" ]]; then
+    log "acp-example-agent: building image $FLEET_ACP_EXTERNAL_E2E_IMAGE ($reason)"
     podman build -f "$REPO_ROOT/config/default/sandbox/Containerfile.acp-example-agent" \
       -t "$FLEET_ACP_EXTERNAL_E2E_IMAGE" "$REPO_ROOT" \
       >>"$LOG_DIR/acp-example-agent-build.log" 2>&1 \

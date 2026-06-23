@@ -33,6 +33,13 @@
 //
 // Steps can also inject failures (429/500/malformed/timeout) for resilience
 // coverage. When no marker matches, DefaultScenario is used.
+//
+// For the common "give this conversation a distinct, predictable reply" case
+// there is a lighter seam than a scenario: an "[[echo:TEXT]]" marker makes every
+// request carrying it stream back exactly TEXT, turn-independently. Two chats
+// seeded with different echoes get different first-assistant replies — and so
+// different sidebar titles — which the live conversation-management specs rely
+// on to tell conversations apart.
 package fakellm
 
 import (
@@ -105,6 +112,17 @@ type Scenario struct {
 // scenarioMarker matches "[[scenario:NAME]]" in a prompt. NAME is any run of
 // non-"]" characters.
 var scenarioMarker = regexp.MustCompile(`\[\[scenario:([^\]]+)\]\]`)
+
+// echoMarker matches "[[echo:TEXT]]" in a prompt. Unlike a scenario (which is
+// turn-indexed and shared), an echo is a deterministic, turn-INDEPENDENT reply:
+// every completion request whose messages contain the marker streams back
+// exactly TEXT as the assistant text. This gives a spec a stable, DISTINCT
+// reply per conversation without registering a scenario — useful when a journey
+// needs to tell two conversations apart (e.g. the sidebar titles each chat from
+// its first assistant reply, so two distinct echoes yield two distinct titles).
+// The last marker in the message list wins, so an edited/resent turn echoes its
+// new text. An echo marker takes precedence over any scenario marker.
+var echoMarker = regexp.MustCompile(`\[\[echo:([^\]]+)\]\]`)
 
 // Server is the configured fake. It is safe for concurrent use.
 type Server struct {
@@ -202,6 +220,22 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An echo marker short-circuits scenario selection with a deterministic,
+	// turn-independent reply (see echoMarker). This keeps simple "give this
+	// conversation a distinct, predictable reply" journeys from needing a
+	// registered scenario.
+	if text, ok := echoText(req.Messages); ok {
+		s.mu.Lock()
+		s.hits["__echo__"]++
+		s.mu.Unlock()
+		if !req.Stream {
+			s.jsonText(w, req.Model, text)
+			return
+		}
+		s.streamText(w, r, req.Model, text, 0)
+		return
+	}
+
 	name, sc := s.selectScenario(req.Messages)
 	s.mu.Lock()
 	s.hits[name]++
@@ -282,6 +316,23 @@ func (s *Server) selectScenario(msgs []chatMessage) (string, Scenario) {
 		}
 	}
 	return "__default__", s.defaultScenario()
+}
+
+// echoText returns the text of the LAST "[[echo:TEXT]]" marker across all
+// message contents, if any. Last-wins so an edited/resent user turn echoes its
+// new text rather than the original. The returned text is trimmed of
+// surrounding whitespace.
+func echoText(msgs []chatMessage) (string, bool) {
+	var found string
+	var ok bool
+	for _, m := range msgs {
+		text := contentText(m.Content)
+		for _, mt := range echoMarker.FindAllStringSubmatch(text, -1) {
+			found = strings.TrimSpace(mt[1])
+			ok = true
+		}
+	}
+	return found, ok
 }
 
 func (s *Server) defaultScenario() Scenario {
