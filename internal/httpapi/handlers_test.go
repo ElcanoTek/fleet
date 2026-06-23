@@ -210,14 +210,6 @@ func TestConversations_AuthEnforced(t *testing.T) {
 	}
 }
 
-// TestPersonas_RequiresManager documents that /personas hits the agent
-// manager. With a nil manager we expect a panic — which means the test
-// should skip rather than panic uncleanly. We cover the integration in
-// the live smoke test.
-func TestPersonas_IntegrationOnly(t *testing.T) {
-	t.Skip("integration-only — covered by smoke test with live Manager")
-}
-
 // ensureStoreReady is a no-op sanity check that the fixture wiring is
 // correct; used as a compile-time check that package imports resolve.
 func TestFixtureReady(t *testing.T) {
