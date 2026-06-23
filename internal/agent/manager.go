@@ -243,9 +243,29 @@ func New(opts ManagerOptions) (*Manager, error) {
 // mirroring chat's New() wiring: container mode in production (an image is
 // mandatory — bash/run_python only run inside per-turn containers), a no-op
 // host-mode stub in mock mode.
+// warmPoolSize derives how many sandboxes to keep pre-warmed from the configured
+// concurrency cap, clamped to [2, 8]. Warm sandboxes are cheap to park — each is
+// an idle `sleep infinity` container until a turn claims it — so scaling with the
+// cap cuts cold-start latency on a busy box at negligible idle cost, while the
+// ceiling bounds how many containers the pool spawns (in a background goroutine)
+// at boot. This is NOT a concurrency limit: the pool's Take() cold-starts a fresh
+// sandbox whenever the warm slots are empty, so real concurrency is bounded by
+// host resources (and, for scheduled tasks, the worker-pool semaphore), not this.
+func warmPoolSize(maxConcurrent int) int {
+	const floor, ceiling = 2, 8
+	switch {
+	case maxConcurrent < floor:
+		return floor
+	case maxConcurrent > ceiling:
+		return ceiling
+	default:
+		return maxConcurrent
+	}
+}
+
 func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromptsDir, skillsDir string) (*sandbox.Pool, error) {
 	poolCfg := sandbox.PoolConfig{
-		Size:         2,
+		Size:         warmPoolSize(cfg.MaxConcurrentAgents),
 		Mode:         sandbox.ModeContainer,
 		BridgeScript: tools.PythonBridgeScript(),
 	}

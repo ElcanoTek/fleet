@@ -305,8 +305,11 @@ type Config struct {
 	ReasoningEffort    string
 	TitleModel         string
 
-	// MaxConcurrentAgents bounds simultaneous agents across both modes (plan
-	// §6.4). 0 means the default (4) applied by the runner.
+	// MaxConcurrentAgents is the configured concurrency cap (FLEET_MAX_CONCURRENT_AGENTS,
+	// default 8). It bounds simultaneous SCHEDULED tasks (the worker-pool semaphore)
+	// and sizes the sandbox warm pool; interactive chat turns are NOT gated by it —
+	// each takes a sandbox on demand, bounded only by host resources. 0 means the
+	// default applied by the runner.
 	MaxConcurrentAgents int
 
 	// ── personas ──
@@ -450,7 +453,7 @@ func Load(envFile string) (*Config, error) {
 		ReasoningEnabled:    getenvBool("REASONING_ENABLED", true),
 		ReasoningEffort:     getenvDefault("REASONING_EFFORT", "medium"),
 		TitleModel:          getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
-		MaxConcurrentAgents: getenvFleetInt("MAX_CONCURRENT_AGENTS", 4),
+		MaxConcurrentAgents: getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
 
 		// ── personas ──
 		PersonaDefault: getenvDefault("PERSONA_DEFAULT", "assistant"),

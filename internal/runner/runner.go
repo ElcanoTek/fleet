@@ -1,8 +1,9 @@
 // Package runner is the in-process capped worker pool. It folds gig's remote
 // register/heartbeat/HTTP-lease protocol into a single in-box pool:
 //
-//   - a global semaphore (FLEET_MAX_CONCURRENT_AGENTS, default 4) bounds
-//     simultaneous agents across the whole process;
+//   - a global semaphore (FLEET_MAX_CONCURRENT_AGENTS, default 8) bounds
+//     simultaneous SCHEDULED tasks across the whole process (interactive chat
+//     turns are not gated by it — they take a sandbox on demand);
 //   - ClaimNextPendingTask uses FOR UPDATE SKIP LOCKED to lease the next
 //     pending task to one synthetic in-box lease owner (a sentinel UUID),
 //     replacing gig's node UUIDs and the HTTP /tasks/pending poll;
@@ -37,9 +38,11 @@ import (
 )
 
 const (
-	// DefaultMaxConcurrentAgents bounds simultaneous agents when
-	// FLEET_MAX_CONCURRENT_AGENTS is unset/invalid (plan §6.4).
-	DefaultMaxConcurrentAgents = 4
+	// DefaultMaxConcurrentAgents bounds simultaneous scheduled tasks when
+	// FLEET_MAX_CONCURRENT_AGENTS is unset/invalid. fleet is built to scale
+	// vertically on one large box, so the default is generous; raise the env var
+	// to match a bigger host (see the README sizing table).
+	DefaultMaxConcurrentAgents = 8
 
 	// defaultPollInterval is how often an idle pool checks for pending work.
 	defaultPollInterval = 30 * time.Second
