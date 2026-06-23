@@ -50,6 +50,10 @@ type MCPServerBase struct {
 	// HTTPURL means an HTTP server.
 	Command string
 	Args    []string
+	// Dir is the cwd the stdio subprocess launches in (the client-config bundle
+	// root) so relative args like `mcp/foo.py` resolve there; "" inherits the
+	// fleet process cwd.
+	Dir string
 	// HTTPURL, when set, marks this as an HTTP (fast_io) server. HTTP servers
 	// reject account variants (credentials are header-based, not env-suffixed).
 	HTTPURL string
@@ -126,8 +130,9 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 		}
 
 		// NewStdioTransport sets variantEnv on cmd.Env — credentials are never on
-		// argv and never enter the sandbox container.
-		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv); err != nil {
+		// argv and never enter the sandbox container. base.Dir pins the subprocess
+		// cwd to the bundle root so relative `mcp/*.py` args resolve.
+		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv, base.Dir); err != nil {
 			return registered, fmt.Errorf("register server %q: %w", name, err)
 		}
 		registered = append(registered, name)

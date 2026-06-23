@@ -189,7 +189,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		case spec.URL != "":
 			addErr = client.AddHTTPServerWithHeaders(ctx, name, spec.URL, spec.Headers)
 		case spec.Command != "":
-			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, spec.Env)
+			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, spec.Env, spec.Dir)
 		default:
 			addErr = fmt.Errorf("spec has neither Command nor URL")
 		}

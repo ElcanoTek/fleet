@@ -297,7 +297,12 @@ func Load(dir string) (*Bundle, error) {
 		return nil, err
 	}
 	var m manifest
-	if err := yaml.Unmarshal(interpolated, &m); err != nil {
+	// Strict parse: an unknown or duplicate key FAILS the load rather than being
+	// silently dropped. A typo'd key (e.g. `tool:` for `tools:`, or `optional:`
+	// misspelled) would otherwise leave a connector mis-configured — at worst
+	// exposing a server's full tool surface when a `tools:` allowlist was meant
+	// to scope it. Fail loud at startup instead.
+	if err := yaml.UnmarshalWithOptions(interpolated, &m, yaml.Strict()); err != nil {
 		return nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
 	}
 
@@ -430,16 +435,23 @@ func (b *Bundle) validate() error {
 
 // MCPServerConfigs builds the runtime catalog (map[name]config.MCPServerConfig)
 // from the manifest, resolving env values + the enable gate against the current
-// process environment. Only enabled servers are returned. For stdio servers the
-// command's relative args are resolved against the bundle's mcp/ dir parent so a
-// bind-mounted bundle keeps the args correct; we keep args as the manifest
-// supplied them (relative to the bundle root) because the agent process cwd is
-// the bundle-aware root — see cmd/fleet.
+// process environment. Only enabled servers are returned. Manifest stdio args
+// are kept verbatim (relative to the bundle root, e.g. `mcp/foo.py`); each stdio
+// server's Dir is set to the bundle root so its subprocess launches there and
+// the relative args resolve correctly — the fleet process cwd is NOT necessarily
+// the bundle dir (under systemd it is /opt/fleet, while the bundle is the
+// separate /opt/fleet/client checkout). See internal/mcp.AddStdioServer.
 //
 // This REPLACES the formerly hardcoded internal/config catalog: the same Go
 // struct + downstream behavior (tool allowlists, account suffixes via the env
 // keys, command/args), now sourced from the bundle.
 func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
+	// Absolutize the bundle dir so cmd.Dir is correct regardless of the spawning
+	// process's cwd; fall back to the raw dir if Abs fails.
+	bundleDir := b.Dir
+	if abs, err := filepath.Abs(b.Dir); err == nil {
+		bundleDir = abs
+	}
 	out := make(map[string]config.MCPServerConfig, len(b.MCPCatalog))
 	for i := range b.MCPCatalog {
 		s := &b.MCPCatalog[i]
@@ -459,6 +471,7 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 			sc.Command = s.Command
 			sc.Args = append([]string(nil), s.Args...)
 			sc.Env = resolveEnvMap(s.Env, s.OptionalEnv)
+			sc.Dir = bundleDir
 		}
 		out[s.Name] = sc
 	}

@@ -261,7 +261,7 @@ func TestStdioTransport(t *testing.T) {
 	}
 
 	// Use python3 explicitly
-	err := client.AddStdioServer(ctx, "dummy", "python3", []string{scriptPath}, nil)
+	err := client.AddStdioServer(ctx, "dummy", "python3", []string{scriptPath}, nil, "")
 	if err != nil {
 		t.Fatalf("Failed to add stdio server: %v", err)
 	}
@@ -286,6 +286,46 @@ func TestStdioTransport(t *testing.T) {
 	} else if result.Content[0].Text != "Echo: hello" {
 		t.Errorf("Expected 'Echo: hello', got '%s'", result.Content[0].Text)
 	}
+}
+
+// TestStdioServer_RelativeArgResolvesAgainstDir is the regression guard for the
+// systemd-deploy bug where a bundle's relative `mcp/*.py` arg failed to launch
+// because the subprocess inherited the fleet process cwd (/opt/fleet) instead of
+// the bundle root (/opt/fleet/client). With dir set to the directory holding the
+// script the relative arg resolves; with the wrong dir it does not.
+func TestStdioServer_RelativeArgResolvesAgainstDir(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found, skipping stdio dir test")
+	}
+	_, filename, _, _ := runtime.Caller(0)
+	pkgDir := filepath.Dir(filename)
+	relArg := filepath.Join("testdata", "dummy_server.py") // relative to dir
+
+	t.Run("correct dir launches the relative arg", func(t *testing.T) {
+		client := NewClient()
+		defer client.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := client.AddStdioServer(ctx, "rel", "python3", []string{relArg}, nil, pkgDir); err != nil {
+			t.Fatalf("AddStdioServer with correct dir: %v", err)
+		}
+		tools := client.GetAllTools()
+		if len(tools) != 1 || tools[0].Tool.Name != "echo" {
+			t.Fatalf("expected the echo tool from the relative-arg server, got %+v", tools)
+		}
+	})
+
+	t.Run("wrong dir cannot find the relative arg", func(t *testing.T) {
+		client := NewClient()
+		defer client.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		// An empty temp dir does NOT contain testdata/dummy_server.py, so the
+		// subprocess fails to start and initialization errors.
+		if err := client.AddStdioServer(ctx, "rel", "python3", []string{relArg}, nil, t.TempDir()); err == nil {
+			t.Fatal("expected AddStdioServer to fail when dir does not contain the relative script, but it succeeded")
+		}
+	})
 }
 
 func TestHTTPTransport(t *testing.T) {

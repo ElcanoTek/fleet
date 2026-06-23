@@ -291,6 +291,7 @@ func (r *Runner) mcpBases() map[string]agentcore.MCPServerBase {
 			BaseEnv:     sc.Env,
 			Command:     sc.Command,
 			Args:        sc.Args,
+			Dir:         sc.Dir,
 			HTTPHeaders: sc.Headers,
 		}
 		if sc.Type == "http" {
@@ -357,6 +358,7 @@ func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 			Command:       sc.Command,
 			Args:          sc.Args,
 			Env:           sc.Env,
+			Dir:           sc.Dir,
 			URL:           sc.URL,
 			Headers:       sc.Headers,
 			ToolAllowlist: sc.ToolAllowlist,

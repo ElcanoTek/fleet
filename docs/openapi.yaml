@@ -409,6 +409,62 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/DashboardStats" }
 
+  /mcp-servers:
+    get:
+      summary: Optional-MCP catalog for the scheduled-task picker (read-only; never secret values).
+      description: >
+        Mirrors chat's GET /mcp-servers so the same MCP picker renders in the
+        task form. Returns each Optional server's name, display name,
+        description, tool count, default-enabled flag, and its credential-account
+        seat names (derived from the <VAR>_<ACCOUNT> env suffix scan). Secret
+        values are never returned.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  servers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        display_name: { type: string }
+                        description: { type: string }
+                        tool_count: { type: integer }
+                        enabled: { type: boolean }
+                        accounts:
+                          type: array
+                          items: { type: string }
+
+  /mcp-accounts:
+    get:
+      summary: Flat (server, account) credential-seat catalog (names only).
+      description: >
+        Companion to /mcp-servers for the credential-account admin table. Lists
+        every provisioned (server, account) seat by name; never returns secret
+        values.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        server: { type: string }
+                        account: { type: string }
+
   /keys:
     post:
       summary: Create an API key (plaintext shown once).

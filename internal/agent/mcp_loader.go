@@ -183,6 +183,7 @@ func (a *Agent) mcpBases() map[string]agentcore.MCPServerBase {
 			BaseEnv:     sc.Env,
 			Command:     sc.Command,
 			Args:        sc.Args,
+			Dir:         sc.Dir,
 			HTTPHeaders: sc.Headers,
 		}
 		if sc.Type == "http" {
