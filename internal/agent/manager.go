@@ -151,6 +151,13 @@ type ManagerOptions struct {
 	// NotesProvider supplies the admin-curated knowledge base injected into the
 	// system prompt every turn. Nil = no notes section.
 	NotesProvider agentcore.NotesProvider
+
+	// NoteProposer stages agent-proposed admin-notes edits (propose_note). Wired
+	// onto the Manager so every interactive turn inherits propose_note as a single
+	// agentcore-boundary guarantee. Typically the SAME notesAdapter as NotesProvider.
+	// Nil = propose_note unavailable. Note: note proposals are intentionally GLOBAL
+	// (author "agent", un-scoped) — unlike per-conversation/user memory proposals.
+	NoteProposer agentcore.NoteProposer
 }
 
 // New constructs a Manager: it dials OpenRouter (via the model resolver),
@@ -218,6 +225,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		native:               tools.DefaultTools(),
 		sandboxPool:          pool,
 		notesProvider:        opts.NotesProvider,
+		noteProposer:         opts.NoteProposer,
 		optionalServers:      optional,
 		personasDir:          opts.PersonasDir,
 		protocolsDir:         opts.ProtocolsDir,
@@ -504,6 +512,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		MaxTotalTokens:   m.config.MaxTotalTokens,
 		ApprovalStager:   in.ApprovalStager,
 		MemoryProposer:   in.MemoryProposer,
+		NoteProposer:     m.noteProposer,
 		Runtime:          flavor.Name,
 		RuntimeFlavor:    flavor,
 		NativeAgentImage: m.nativeAgentImage,

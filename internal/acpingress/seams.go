@@ -56,6 +56,13 @@ type ApprovalStore interface {
 	// AppendHistory writes the resolution tool_result into the conversation so
 	// the next turn's model sees the outcome (mirrors the web approval handler).
 	AppendHistory(ctx context.Context, convID string, entries []agent.HistoryEntry) error
+
+	// CreateMemoryProposal stages a propose_memory proposal (pending user
+	// confirmation). AcceptMemoryProposal accepts it on human Allow over ACP.
+	// These back the ingress propose_memory surface (the SAME store + tables the
+	// web memory-confirmation path uses). *store.Store implements both.
+	CreateMemoryProposal(ctx context.Context, userEmail, conversationID, content string) (*store.Memory, error)
+	AcceptMemoryProposal(ctx context.Context, userEmail, id string) (*store.Memory, error)
 }
 
 // StagedToolRunner executes an approved staged tool one-shot, outside the agent

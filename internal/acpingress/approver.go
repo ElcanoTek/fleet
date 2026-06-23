@@ -55,8 +55,16 @@ type ingressApprover struct {
 	// before it defaults to DENY. Zero uses DefaultPermissionTimeout.
 	permTimeout time.Duration
 
-	mu      sync.Mutex
-	pending []stagedApproval
+	mu            sync.Mutex
+	pending       []stagedApproval
+	pendingMemory []stagedMemory
+}
+
+// stagedMemory records one propose_memory proposal the turn staged, resolved
+// post-turn by asking the human over ACP (Allow → AcceptMemoryProposal).
+type stagedMemory struct {
+	proposalID string
+	content    string
 }
 
 // stagedApproval records one approval the turn staged, so the post-turn pass can
@@ -76,7 +84,10 @@ type stagedApproval struct {
 // default so the two human-in-the-loop surfaces behave consistently.
 const DefaultPermissionTimeout = 5 * time.Minute
 
-var _ agent.ApprovalStager = (*ingressApprover)(nil)
+var (
+	_ agent.ApprovalStager = (*ingressApprover)(nil)
+	_ agent.MemoryProposer = (*ingressApprover)(nil)
+)
 
 // Stage is the agentcore.ApprovalStager entrypoint for a critical tool call
 // (send_email / risky bash / preview_email). It stages the approval row (the
@@ -133,19 +144,35 @@ func (a *ingressApprover) StageSuggestion(_ string) (string, string, error) {
 	return "", "SUGGESTION_SUPPRESSED: model-switch suggestions are not surfaced over the ACP ingress transport. Do not call suggest_advanced_model again — proceed with the current model.", nil
 }
 
-// Note on the OTHER staging surfaces (propose_memory / propose_note):
+// Propose implements agentcore.MemoryProposer: it stages a propose_memory
+// proposal (pending user confirmation) into the SAME memories table the web path
+// uses and queues it for post-turn resolution over ACP, mirroring the
+// stage-then-resolve lifecycle the approval surface uses. The human's Allow/Reject
+// arrives over request_permission in ResolvePending (default-DENY); nothing is
+// accepted in-loop. Returns the proposal id so the orchestration's MEMORY_PROPOSED
+// message threads exactly as the web path's.
+func (a *ingressApprover) Propose(content string) (string, error) {
+	mem, err := a.store.CreateMemoryProposal(context.Background(), a.userEmail, a.conversationID, content)
+	if err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	a.pendingMemory = append(a.pendingMemory, stagedMemory{proposalID: mem.ID, content: content})
+	a.mu.Unlock()
+	return mem.ID, nil
+}
+
+// Note on the staging surfaces:
 //
-//   - propose_memory: the ingress approver does NOT wire a MemoryProposer onto
-//     the turn (TurnInput.MemoryProposer is left nil). User-memory confirmation
-//     is a web-UI affordance with no ACP-host analogue; leaving it unwired makes
-//     propose_memory report "not wired" to the model — IDENTICAL to a web turn
-//     started without a proposer. This is honest, not a weaker path: it stages
-//     nothing and grants nothing.
-//   - propose_note: the global admin-notes queue is wired host-side on the
-//     Manager itself (cmd/fleet's notesAdapter), independent of the transport,
-//     so propose_note over ingress stages into the SAME pending queue the web
-//     path uses, with NO ingress-specific code. The ingress turn inherits it for
-//     free via RunTurn.
+//   - propose_memory: staged via Propose above and resolved over ACP
+//     request_permission in ResolvePending (Allow → AcceptMemoryProposal; Reject /
+//     timeout / cancel → left pending, source='proposed', mirroring the web path
+//     which never deletes on deny). Conversation+user scoped.
+//   - propose_note: wired host-side on the Manager (cmd/fleet's notesAdapter,
+//     passed as ManagerOptions.NoteProposer), so propose_note over ingress stages
+//     into the SAME global admin-notes queue the web path uses — the interactive
+//     turn inherits it via RunTurn's TurnConfig.NoteProposer. Note proposals are
+//     intentionally GLOBAL (author "agent", un-scoped), unlike memory proposals.
 
 // ResolvePending runs AFTER the turn's run loop completes. For each approval the
 // turn staged it asks the human over ACP (or auto-dismisses display-only ones),
@@ -156,11 +183,40 @@ func (a *ingressApprover) StageSuggestion(_ string) (string, string, error) {
 func (a *ingressApprover) ResolvePending(ctx context.Context, sink *ingressSink) {
 	a.mu.Lock()
 	pending := a.pending
+	pendingMemory := a.pendingMemory
 	a.pending = nil
+	a.pendingMemory = nil
 	a.mu.Unlock()
 
 	for _, p := range pending {
 		a.resolveOne(ctx, sink, p)
+	}
+	for _, m := range pendingMemory {
+		a.resolveMemory(ctx, m)
+	}
+}
+
+// resolveMemory asks the human over ACP whether to save a staged memory proposal.
+// On Allow it accepts the proposal (flips it out of the pending queue); on
+// Reject / timeout / cancel it leaves the proposal pending (source='proposed'),
+// mirroring the web path, which never deletes a proposal on deny. NO tool
+// executes — accepting the proposal IS the effect.
+func (a *ingressApprover) resolveMemory(ctx context.Context, m stagedMemory) {
+	// Reuse askHuman by presenting the proposal as a request_permission; the memory
+	// content is surfaced as the raw input so the editor can show what would be saved.
+	rawInput, _ := json.Marshal(map[string]string{"content": m.content})
+	ask := stagedApproval{
+		approvalID: m.proposalID,
+		toolName:   "propose_memory",
+		toolCallID: "propose_memory-" + m.proposalID,
+		rawInput:   string(rawInput),
+	}
+	if !a.askHuman(ctx, ask) {
+		return // default-DENY: leave the proposal pending for the user to act on later.
+	}
+	// User committed; detach from ctx so a late cancel can't abandon the accept.
+	if _, err := a.store.AcceptMemoryProposal(context.WithoutCancel(ctx), a.userEmail, m.proposalID); err != nil {
+		log.Printf("acpingress: accept memory proposal %s: %v", m.proposalID, err)
 	}
 }
 

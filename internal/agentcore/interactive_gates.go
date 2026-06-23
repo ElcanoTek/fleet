@@ -58,7 +58,7 @@ func (o *orchestrationState) checkPreviewEmailSafety(toolName, toolCallID, rawIn
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.approvalSink == nil {
-		return true, "PREVIEW_FAILED: preview_email ran but the preview sink is not wired. This is a bug."
+		return true, "PREVIEW_UNAVAILABLE: email preview is not enabled on this transport. Do NOT retry — describe the draft in your reply instead."
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 	if err != nil {
@@ -88,7 +88,7 @@ func (o *orchestrationState) checkSuggestAdvancedSafety(toolName, rawInput strin
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.approvalSink == nil {
-		return true, "SUGGESTION_FAILED: suggest_advanced_model ran but the approval sink is not wired. This is a bug."
+		return true, "SUGGESTION_UNAVAILABLE: model-switch suggestions are not surfaced on this transport. Do NOT retry — proceed with the current model."
 	}
 	id, msg, err := o.approvalSink.StageSuggestion(args.Reason)
 	if err != nil {
