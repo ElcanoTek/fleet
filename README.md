@@ -693,6 +693,39 @@ build/test workflow, branch/PR conventions, and CI gates. Please also read the
 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). To report a security issue privately,
 see [`SECURITY.md`](SECURITY.md).
 
+## Acknowledgements
+
+fleet stands on the shoulders of excellent open-source projects and open
+standards. Our thanks to the teams and communities behind them:
+
+- **[Podman](https://github.com/containers/podman)** — rootless, daemonless
+  containers. Every agent tool call (`bash`, `run_python`, MCP) executes inside a
+  rootless-Podman sandbox; there is no trusted fast path that skips it.
+- **[Fedora](https://fedoraproject.org)** — `fedora-minimal`
+  (`registry.fedoraproject.org/fedora-minimal`) is the slim, **digest-pinned**
+  base image for the default sandbox: a small attack surface and reproducible
+  builds, with RPM-sourced Python rather than runtime `pip`.
+- **[Model Context Protocol](https://modelcontextprotocol.io)** and its SDKs —
+  the open standard fleet speaks (stdio + HTTP) to reach tools and data through a
+  credential-brokered MCP catalog.
+- **[Agent Client Protocol](https://agentclientprotocol.com)** and the
+  [`coder/acp-go-sdk`](https://github.com/coder/acp-go-sdk) — the open standard
+  fleet uses to drive its native agent and external agents (Claude Code, Goose, …)
+  as sandboxed flavors, and to run *as* an agent under an editor.
+- **[Agent Skills](https://github.com/anthropics/skills)** — the open skill
+  format fleet loads from the client-config bundle (`SKILL.md` + bundled scripts,
+  with progressive disclosure).
+- **[Fantasy](https://github.com/charmbracelet/fantasy)** by
+  [Charmbracelet](https://github.com/charmbracelet) — the Go framework underneath
+  fleet's multi-provider, multi-model agent run loop.
+- **[OpenRouter](https://openrouter.ai)** — unified, provider-agnostic model
+  routing that backs fleet's "any model, the right one per task" design.
+
+Special thanks to the Red Hat **containers** ecosystem (Podman, Fedora), the
+**Charmbracelet** community, and everyone advancing open agent standards —
+**ACP**, **MCP**, and **Agent Skills** — whose work makes secure, portable, and
+interoperable agent runtimes possible.
+
 ## License
 
 fleet is released under the [MIT License](LICENSE).
