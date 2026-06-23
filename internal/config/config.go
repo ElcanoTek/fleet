@@ -82,6 +82,7 @@ var allowedEnvVars = map[string]bool{
 
 	// ── LLM (shared) ──
 	"OPENROUTER_API_KEY":          true,
+	"OPENROUTER_BASE_URL":         true,
 	"CHAT_MAX_ITERATIONS":         true,
 	"CHAT_MAX_COST_USD":           true,
 	"CHAT_MAX_TOTAL_TOKENS":       true,
@@ -749,9 +750,10 @@ func getEnvOrDefault(key, defaultValue string) string {
 }
 
 func getEnvOrDefaultInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		var result int
-		if _, err := fmt.Sscanf(value, "%d", &result); err == nil {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		// strconv (not Sscanf) so trailing garbage like "12abc" is REJECTED and
+		// falls back to the default, rather than being silently parsed as 12.
+		if result, err := strconv.Atoi(value); err == nil {
 			return result
 		}
 	}
@@ -759,9 +761,8 @@ func getEnvOrDefaultInt(key string, defaultValue int) int {
 }
 
 func getEnvOrDefaultFloat(key string, defaultValue float64) float64 {
-	if value := os.Getenv(key); value != "" {
-		var result float64
-		if _, err := fmt.Sscanf(value, "%f", &result); err == nil {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		if result, err := strconv.ParseFloat(value, 64); err == nil {
 			return result
 		}
 	}
