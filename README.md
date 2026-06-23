@@ -22,10 +22,9 @@ them.
 ## Why fleet
 
 - **Any agent, any model.** fleet is an [ACP](#standards) client: alongside its
-  own native agent loop it can drive **other coding agents** (Claude Code,
+  own native agent loop it can drive **any ACP-compliant AI agents** (Claude Code,
   Goose, …) as selectable, sandboxed "flavors" you pick per chat or per
-  scheduled task. Models are routed OpenRouter-style, so you pick the **best
-  model for each task** rather than hard-wiring one vendor.
+  scheduled task. You can also choose the **best model for each task** rather than hard-wiring one vendor.
 
 - **Sandboxed by default.** Tool calls — bash, Python, file I/O, MCP calls —
   execute inside an ephemeral, rootless-Podman container over a persistent
