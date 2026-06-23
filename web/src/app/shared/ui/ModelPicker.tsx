@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   filterModels,
   loadModels,
   SEED_MODELS,
   type PickerModel,
 } from "@/app/shared/lib/models";
+import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 
 // ModelPicker — combobox autocomplete over OpenRouter model slugs. React port
 // of moc's model-picker.js. The pure filtering/affordability logic lives in
@@ -32,32 +33,24 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
   const listboxId = `${inputId}-listbox`;
 
   const [open, setOpen] = useState(false);
-  const [models, setModels] = useState<PickerModel[] | null>(null);
   const [isUserTyping, setIsUserTyping] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
-  const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // The catalog loads lazily the first time the dropdown opens (gated by
+  // `enabled: open`). loadModels() is module-level cached and falls back to
+  // SEED_MODELS on failure, so reopening is instant and `data` persists across
+  // close/reopen. The shared hook owns the cancelled-ref guard that used to
+  // live here — and with it, the one-shot load-flag setState-in-effect disable.
+  const { data: models, loading } = useCancellableFetch<PickerModel[]>(
+    loadModels,
+    [],
+    { enabled: open },
+  );
 
   const query = isUserTyping ? value : "";
   const source = models ?? SEED_MODELS;
   const visible = filterModels(source, query);
-
-  useEffect(() => {
-    if (!open || models) return;
-    let cancelled = false;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot load flag
-    setLoading(true);
-    loadModels()
-      .then((m) => {
-        if (!cancelled) setModels(m);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, models]);
 
   const commit = (slug: string) => {
     onChange(slug);
