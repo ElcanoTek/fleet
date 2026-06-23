@@ -1,7 +1,7 @@
-# Fleet Migration Plan v2 — One process, one runtime, one frontend on the Mega Box
+# Fleet Migration Plan v2 — One process, one runtime, one frontend on a single host
 
 **Author:** Lead Architect · **Date:** 2026-06-21 · **Status:** LOCKED — supersedes v1, for execution
-**Module:** `github.com/ElcanoTek/fleet` (single Go module) · **Target:** one `fleet` process on one Mega Box
+**Module:** `github.com/ElcanoTek/fleet` (single Go module) · **Target:** one `fleet` process on a single host
 
 This plan supersedes v1. It carries v1's verified facts forward and rewrites every place where the nine LOCKED decisions + the five authoritative analyses change the design. Where v2 is silent, v1 still holds (canonical module path `github.com/ElcanoTek/fleet`, Go 1.26.4, chat's URL-form DSN builder, the two-incompatible-`users`-tables fact, etc.).
 
@@ -24,13 +24,13 @@ This plan supersedes v1. It carries v1's verified facts forward and rewrites eve
 
 ## 2. Revised target architecture
 
-One `fleet` binary on one Mega Box. It exposes two HTTP listeners (chat-server :8080, orchestrator :8000) behind one Next origin, runs one scheduler ticker + one capped in-process worker pool, and drives BOTH interactive turns and scheduled tasks through ONE unified agent runtime over ONE ephemeral-container sandbox pool. Credentials live host-side in MCP subprocesses; the sandbox is credential-free. Only `lifeline` (external per-dev tool) and the agent-emitted sandbox containers live outside the process.
+One `fleet` binary on a single host. It exposes two HTTP listeners (chat-server :8080, orchestrator :8000) behind one Next origin, runs one scheduler ticker + one capped in-process worker pool, and drives BOTH interactive turns and scheduled tasks through ONE unified agent runtime over ONE ephemeral-container sandbox pool. Credentials live host-side in MCP subprocesses; the sandbox is credential-free. Only `lifeline` (external per-dev tool) and the agent-emitted sandbox containers live outside the process.
 
 ```
                     Browser  (one Next.js origin; elcano_auth cookie OR moc bearer)
                         │
    ┌────────────────────┼───────────────────────────────────────────────────────────┐
-   │  ONE fleet process (Mega Box)                                                     │
+   │  ONE fleet process (single host)                                                     │
    │                    │                                                              │
    │   ┌────────────────▼─────────────────┐    ┌───────────────────────────────────┐  │
    │   │ HTTP/SSE servers                  │    │ Scheduler ticker (30s)            │  │
@@ -92,7 +92,7 @@ Key invariants the diagram encodes:
 ├── Makefile
 │
 ├── cmd/
-│   ├── fleet/                      # THE Mega Box binary: chat HTTP/SSE + orchestrator HTTP
+│   ├── fleet/                      # THE fleet binary: chat HTTP/SSE + orchestrator HTTP
 │   │   └── main.go                 #   + scheduler ticker + capped in-process worker pool
 │   ├── fleet-admin/                # unified CLI: bootstrap, chat/sched users, MCP accounts
 │   │   └── main.go
@@ -355,7 +355,7 @@ Each phase ends with a checkpoint of **named, real existing test suites** that m
 - Retire moc `handlers_test.go` `TestStatusReporting`/`TestLogSubmission`/register/heartbeat tests (endpoints deleted; assertions migrate into storage-level tests).
 - Run moc tests `-p 1 -race` against a test Postgres.
 
-### P6 — Scheduler + servers into the one Mega Box process
+### P6 — Scheduler + servers into the one fleet process
 **Moves:** build `cmd/fleet/main.go` booting chat HTTP/SSE + orchestrator HTTP + scheduler ticker + the capped worker pool in ONE process; `cmd/fleet-admin` unified CLI (incl. `mcp account` verbs); `cmd/cutlass` demoted to optional debug.
 **Checkpoint:** chat `httpapi` tests; moc `handlers_test.go` (surviving), `visibility_test.go`, `models_test.go`; scheduler promotes scheduled→pending and the in-process pool leases+runs it; `sandbox-probe` exercises both `Pool.Take` AND a scheduled-agent task.
 
@@ -363,7 +363,7 @@ Each phase ends with a checkpoint of **named, real existing test suites** that m
 **Moves:** scaffold `/web` from chat; lift chat under `/chat`; re-port moc dashboard to React `/orchestrator` (replace the `target_node_name` input with `<McpServerPicker mode="task">` + account dropdowns); add `mocServer.ts` + `/api/orchestrator/*`; ONE `middleware.ts` gating both segments and accepting both login paths; delete moc's jest/marked/dompurify/highlight.js/chart.js/eslint-10/vendoring shim.
 **Checkpoint:** vitest unit (chat's 20+ `.test.ts` + ported moc logic: validation/cron/ModelPicker/file-upload; new `McpServerPicker` rendering identically in `mode="conversation"` and `mode="task"`; `CredentialAccountAdmin` write-only-secret assertion; `ConcurrencyCapSetting`); chat `auth.test.ts`/`middleware.test.ts` extended to assert the widened matcher gates `/orchestrator/*` and BOTH login paths resolve; Playwright mocked (`CHAT_MOCK_MODE=1`): `/chat` login+stream and `/orchestrator` task-create (incl. MCP enable + account select)+list+log-view, plus one elcano_auth session navigating Chat↔Orchestrator without re-login.
 
-### P8 — End-to-end Mega Box (chat + sandbox + scheduling, one box)
+### P8 — End-to-end single-host fleet (chat + sandbox + scheduling, one box)
 **Moves:** full deploy via unified `bootstrap.sh` (test `--postgres=local` AND `--postgres=external`, idempotent re-run, non-interactive). One systemd `fleet.target`.
 **Checkpoint:** **Live E2E** (Playwright `test:e2e:live`, real OpenRouter): an interactive chat turn runs `bash`+`run_python` inside a rootless-Podman sandbox container; the orchestrator schedules a recurring task with `mcp_selection=[{xandr,client_a},{magnite}]` whose cron triggers, gets leased by the in-process pool under the global cap, runs the unified runtime through the SAME sandbox over its persistent workspace, and reports `success` + logs back to the React log viewer. Assert: xandr subprocess saw `XANDR_*_CLIENT_A` creds while magnite saw the default seat; disabled servers contributed no tools; SSE streaming; sandbox hardening flags; both DB pools; single elcano_auth session across both views; the cap holds under a burst.
 
