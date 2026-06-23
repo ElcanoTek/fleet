@@ -41,7 +41,7 @@ func runScriptDryRun(t *testing.T, script string, args ...string) string {
 	}
 	root := repoRootFromTest(t)
 	full := append([]string{filepath.Join(root, "scripts", script)}, args...)
-	cmd := exec.Command("bash", full...) //nolint:gosec // fixed repo script path + literal dry-run args, never request input
+	cmd := exec.Command("bash", full...)
 	cmd.Dir = root
 	// A dry-run reads the bundle manifest; point at the in-repo generic bundle so
 	// the test is self-contained and never depends on an external checkout.
@@ -64,7 +64,7 @@ func TestBootstrapDryRunSmoke(t *testing.T) {
 	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local", "--enable-service")
 	for _, want := range []string{
 		"client bundle manifest found",
-		"pg_hba", // the scram-sha-256 loopback rewrite step (#78)
+		"pg_hba",                                 // the scram-sha-256 loopback rewrite step (#78)
 		"Building + installing the fleet binary", // the binary build+install step (#71)
 		"would install fleet + fleet-admin",
 	} {
