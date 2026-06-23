@@ -101,11 +101,10 @@ func mcpAccountList(argv []string) int {
 	if err != nil {
 		return errf(5, "read %s: %v", path, err)
 	}
-	prefix := strings.ToUpper(server)
 	seen := map[string]struct{}{}
 	var matched []string
 	for _, k := range keys {
-		if !strings.Contains(strings.ToUpper(k), prefix) {
+		if !serverMatchesVar(k, server) {
 			continue
 		}
 		if _, dup := seen[k]; dup {
@@ -125,17 +124,22 @@ func mcpAccountList(argv []string) int {
 	return 0
 }
 
-// mcpAccountDel removes a server account's suffixed keys from the env file. It
-// deletes every <VAR>_<UPPER(account)> key whose VAR contains the server token.
+// mcpAccountDel removes a server account's suffixed keys (<VAR>_<UPPER(account)>)
+// from the env file. The key naming does NOT encode the server, so the server
+// name is matched against the VAR's underscore-delimited segments (anchored, not
+// an arbitrary substring). To avoid silently destroying an unrelated connector's
+// credential, it REFUSES when the server matches more than one distinct VAR;
+// pass --key <VAR> to target one exactly.
 func mcpAccountDel(argv []string) int {
 	fs := flag.NewFlagSet("mcp account del", flag.ContinueOnError)
 	envFile := fs.String("env-file", "", "credential env file (default .env.local / FLEET_ENV_FILE)")
+	keyVar := fs.String("key", "", "exact base VAR to target (skips server-name matching; use when del reports ambiguity)")
 	pos, flagArgs := splitTwoPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
 	}
 	if len(pos) < 2 {
-		return errf(1, "usage: fleet-admin mcp account del <server> <account>")
+		return errf(1, "usage: fleet-admin mcp account del [--key VAR] <server> <account>")
 	}
 	server, account := pos[0], pos[1]
 	path := envFilePath(*envFile)
@@ -144,24 +148,83 @@ func mcpAccountDel(argv []string) int {
 		return errf(5, "read %s: %v", path, err)
 	}
 	wantSuffix := "_" + strings.ToUpper(account)
-	serverTok := strings.ToUpper(server)
-	removed := 0
+
+	// Collect candidate keys ending in _<ACCOUNT>, keyed by their base VAR.
+	type cand struct{ key, baseVar string }
+	var cands []cand
 	for _, k := range keys {
-		up := strings.ToUpper(k)
-		if strings.HasSuffix(up, wantSuffix) && strings.Contains(up, serverTok) {
-			ok, derr := creds.DeleteEnvKey(path, k)
-			if derr != nil {
-				return errf(5, "delete %s: %v", k, derr)
+		if !strings.HasSuffix(strings.ToUpper(k), wantSuffix) {
+			continue
+		}
+		baseVar := k[:len(k)-len(wantSuffix)]
+		if *keyVar != "" {
+			if strings.EqualFold(baseVar, *keyVar) {
+				cands = append(cands, cand{k, baseVar})
 			}
-			if ok {
-				removed++
-			}
+			continue
+		}
+		if serverMatchesVar(baseVar, server) {
+			cands = append(cands, cand{k, baseVar})
 		}
 	}
-	if removed == 0 {
+	if len(cands) == 0 {
 		fmt.Fprintf(os.Stderr, "(no keys matched server %q account %q in %s)\n", server, account, path)
 		return 2
 	}
+
+	// Refuse ambiguous deletes: matches spanning >1 distinct VAR could destroy an
+	// unrelated connector's credential. Operator must disambiguate with --key.
+	distinct := map[string]struct{}{}
+	for _, c := range cands {
+		distinct[strings.ToUpper(c.baseVar)] = struct{}{}
+	}
+	if len(distinct) > 1 {
+		vars := make([]string, 0, len(distinct))
+		for v := range distinct {
+			vars = append(vars, v)
+		}
+		sort.Strings(vars)
+		return errf(1, "ambiguous: server %q matches %d credential vars (%s) — re-run with --key <VAR> to target one (the key naming does not encode the server)",
+			server, len(vars), strings.Join(vars, ", "))
+	}
+
+	removed := 0
+	for _, c := range cands {
+		ok, derr := creds.DeleteEnvKey(path, c.key)
+		if derr != nil {
+			return errf(5, "delete %s: %v", c.key, derr)
+		}
+		if ok {
+			removed++
+		}
+	}
 	fmt.Printf("removed %d key(s) for server %q account %q from %s\n", removed, server, account, path)
 	return 0
+}
+
+// serverMatchesVar reports whether a credential VAR (or a full suffixed key)
+// belongs to server, by matching the server name as a CONTIGUOUS run of the
+// VAR's underscore-delimited segments rather than an arbitrary substring. This
+// stops a short server token from over-matching unrelated connectors (server
+// "io" no longer matches RATIO_TOKEN, only e.g. FAST_IO_API_KEY).
+func serverMatchesVar(varOrKey, server string) bool {
+	s := strings.ToUpper(strings.NewReplacer("-", "_", " ", "_").Replace(strings.TrimSpace(server)))
+	if s == "" {
+		return false
+	}
+	want := strings.Split(s, "_")
+	have := strings.Split(strings.ToUpper(varOrKey), "_")
+	for i := 0; i+len(want) <= len(have); i++ {
+		match := true
+		for j := range want {
+			if have[i+j] != want[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
