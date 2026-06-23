@@ -43,11 +43,16 @@ export async function proxyToOrchestrator(
 
   const init: RequestInit = { method, signal: request.signal };
   if (forwardBody) {
-    // Preserve the incoming Content-Type (JSON vs multipart) and stream the
-    // body through. For multipart uploads we forward the raw body + header so
-    // the boundary is preserved.
+    // Preserve the incoming Content-Type (JSON vs multipart) and STREAM the body
+    // through rather than buffering it in RAM (a large agent-artifact upload
+    // would otherwise spike memory on the single box). For multipart uploads
+    // this also preserves the boundary. Mirrors the chat /attachments route.
     const contentType = request.headers.get("content-type");
-    init.body = await request.arrayBuffer();
+    init.body = request.body;
+    // duplex: "half" is required when streaming a ReadableStream body (Node
+    // fetch honors it; the RequestInit types lag).
+    // @ts-expect-error: duplex is valid at runtime
+    init.duplex = "half";
     if (contentType) {
       init.headers = { "Content-Type": contentType };
     }
