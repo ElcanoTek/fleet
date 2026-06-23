@@ -92,10 +92,14 @@ type ScheduledPolicy struct {
 }
 
 // NewScheduledPolicy builds the scheduled bundle over a session log. maxIterations
-// is informational; the loop owns the real round cap.
-func NewScheduledPolicy(logSession *LogSession, maxIterations int) *ScheduledPolicy {
+// is informational; the loop owns the real round cap. maxCostUSD/maxTotalTokens
+// are the per-run ceilings (0 = unlimited) — enforced for unattended scheduled /
+// one-shot runs exactly as the interactive policy enforces them, so a runaway
+// agent is bounded by the configured budget rather than the invoice.
+func NewScheduledPolicy(logSession *LogSession, maxIterations int, maxCostUSD float64, maxTotalTokens int) *ScheduledPolicy {
 	o := newOrchestrationState(logSession, maxIterations)
 	o.setRepeatGuardNoun(repeatGuardNounFinishTask)
+	o.setCeilings(maxCostUSD, maxTotalTokens)
 	return &ScheduledPolicy{orch: o}
 }
 
@@ -104,9 +108,14 @@ func (p *ScheduledPolicy) orchestration() *orchestrationState { return p.orch }
 // SetNoteProposer wires the admin-notes proposer (propose_note) for this run.
 func (p *ScheduledPolicy) SetNoteProposer(np NoteProposer) { p.orch.setNoteProposer(np) }
 
-// BeforeToolCall runs the scheduled gate chain: repeat-call guard → critical-tool
-// audit gating → note proposal.
+// BeforeToolCall runs the scheduled gate chain: cost/token ceiling → repeat-call
+// guard → critical-tool audit gating → note proposal. The ceiling check is FIRST
+// (matching the interactive policy) so an unattended run that blows its budget
+// stops calling tools and ends with what it has, rather than running unbounded.
 func (p *ScheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
+	if blocked, msg := p.orch.checkCeilings(); blocked {
+		return true, msg
+	}
 	if blocked, msg := p.orch.checkRepeatedCall(toolName, rawInput); blocked {
 		return true, msg
 	}

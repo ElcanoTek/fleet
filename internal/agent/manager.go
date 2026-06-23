@@ -501,6 +501,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		Model:            model,
 		Temperature:      m.config.Temperature,
 		MaxTokens:        maxTokens,
+		MaxIterations:    m.config.MaxIterations,
 		PriorHistory:     in.History,
 		NativeTools:      turnTools.Tools,
 		Sandbox:          sb,

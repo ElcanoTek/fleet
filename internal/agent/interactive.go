@@ -47,6 +47,9 @@ type TurnConfig struct {
 	FallbackModel fantasy.LanguageModel
 	Temperature   float64
 	MaxTokens     int
+	// MaxIterations caps the agent steps in the turn's stream (0 = no cap).
+	// Wired into agentcore.RunConfig.MaxIterations → the stream's StopWhen.
+	MaxIterations int
 
 	// PriorHistory / TurnHistory feed the finalize hook's force-summary replay.
 	PriorHistory []HistoryEntry
@@ -188,6 +191,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         tc.Temperature,
 		MaxCompletionTokens: tc.MaxTokens,
+		MaxIterations:       tc.MaxIterations,
 		NativeTools:         nativeTools,
 		Allowlist:           tc.Allowlist,
 		OptionalServers:     tc.OptionalServers,
