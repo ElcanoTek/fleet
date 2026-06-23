@@ -1,0 +1,28 @@
+# Example cutlass task YAML — the input to `cmd/cutlass` (fleet's local one-shot
+# harness) and `scripts/run_workflow_live.sh`. It is a thin mirror of the
+# scheduled-task create shape. Only `prompt` is required.
+#
+#   scripts/run_workflow_live.sh docs/examples/cutlass-task.yaml
+#
+# The task runs to completion through the SAME governed scheduled runtime the
+# production scheduler uses (agentcore.Run, Mode=Scheduled): tool calls execute in
+# the rootless-Podman sandbox and MCP credentials are brokered host-side.
+
+prompt: |
+  Write a short greeting to a file named hello.txt in your workspace, then read
+  it back and confirm the contents.
+
+# Optional: pin the model + fallback. Omit to use CUTLASS_TASK_MODEL / the
+# configured task model.
+model: anthropic/claude-opus-4.8
+fallback_model: anthropic/claude-sonnet-4-6
+
+# Optional: cap the agent's iteration budget for this run.
+max_iterations: 15
+
+# Optional: pre-declare MCP servers (and per-server credential accounts) the task
+# may use. A named account binds <VAR>_<ACCOUNT> credentials host-side onto a
+# dedicated per-run MCP subprocess; omit `account` to use the default seat.
+# mcp_selection:
+#   - server: sendgrid
+#     account: client_a

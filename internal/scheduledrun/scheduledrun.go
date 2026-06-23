@@ -1,4 +1,16 @@
-package main
+// Package scheduledrun is the shared, governed scheduled-task driver. It builds
+// an agent.Agent over an interactive Manager's model resolver + sandbox warm pool
+// and runs ONE task to completion through agentcore.Run (Mode=Scheduled) — the
+// single governed core (policy, cost/token ceilings, audit, the finish verifier)
+// every fleet entrypoint shares.
+//
+// Two callers drive it: cmd/fleet's capped worker pool (the production scheduler)
+// and cmd/cutlass's local one-shot harness. Both reach the SAME governed loop, so
+// the harness is not a second, weaker execution path — it is the production
+// driver with a CLI front-end instead of the orchestrator round-trip. This is why
+// the logic lives here, in a shared internal package, rather than being copied:
+// the "governance is one core" invariant (AGENTS.md) forbids a divergent fork.
+package scheduledrun
 
 import (
 	"context"
@@ -14,29 +26,50 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
-	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
-// scheduledRunner is the runner.TaskRunner that executes a claimed scheduled
-// task in-process through the unified runtime (Mode=Scheduled). It reuses the
-// model resolver + sandbox warm pool (held on the interactive Manager) — the
-// SAME sandbox boundary interactive turns use.
+// Options configures a Runner. Manager and Config are required; the rest mirror
+// the bundle-resolved scheduled-runtime selection.
+type Options struct {
+	Config           *config.Config
+	Manager          *agent.Manager
+	NotesProvider    agentcore.NotesProvider
+	NoteProposer     agentcore.NoteProposer
+	PersonasDir      string
+	SystemPromptsDir string
+	ProtocolsDir     string
+
+	// Runtime / NativeAgentImage select the scheduled execution flavor. Empty /
+	// "native-inprocess" runs the in-process loop; "native-acp" routes through the
+	// sandboxed ACP agent (fully governed host-side); an external "acp" flavor
+	// routes through the containment-tier scheduled-external path (fail-closed;
+	// gated by AllowUngovernedScheduled).
+	Runtime          string
+	NativeAgentImage string
+	// RuntimeFlavor is the resolved clientconfig descriptor for Runtime.
+	RuntimeFlavor clientconfig.Runtime
+	// AllowUngovernedScheduled is the per-client opt-in admitting an EXTERNAL
+	// flavor as a scheduled task. Off → scheduled-external is a loud error at
+	// dispatch (fail-closed).
+	AllowUngovernedScheduled bool
+}
+
+// Runner executes claimed scheduled tasks in-process through the unified runtime
+// (Mode=Scheduled). It reuses the model resolver + sandbox warm pool held on the
+// interactive Manager — the SAME sandbox boundary interactive turns use.
 //
-// Per-task MCP credential-account isolation (plan §6.3): when a task carries an
-// mcp_selection with named accounts, the run gets its OWN MCP client onto which
-// the selection's account-variant subprocesses are bound via
-// agentcore.BindMCPSelection (which overlays <VAR>_<ACCOUNT> via
-// creds.ApplyClientSuffix onto the subprocess cmd.Env — never argv, never the
-// sandbox). That per-run client is Closed at run end so no credentialed
-// subprocess leaks across runs or into a concurrent task's client. Tasks with no
-// selection (or a default-account-only selection that binds cleanly) reuse the
-// shared process-wide client; only credentialed account variants force an
-// isolated per-run client.
-type scheduledRunner struct {
+// Per-task MCP credential-account isolation: when a task carries an mcp_selection
+// with named accounts, the run gets its OWN MCP client onto which the selection's
+// account-variant subprocesses are bound via agentcore.BindMCPSelection (which
+// overlays <VAR>_<ACCOUNT> via creds.ApplyClientSuffix onto the subprocess cmd.Env
+// — never argv, never the sandbox). That per-run client is Closed at run end so no
+// credentialed subprocess leaks across runs or into a concurrent task's client.
+// Tasks with no selection (or a default-account-only selection) reuse the shared
+// process-wide client.
+type Runner struct {
 	cfg           *config.Config
 	mgr           *agent.Manager
-	storage       *storage.Storage
 	notesProvider agentcore.NotesProvider
 	noteProposer  agentcore.NoteProposer
 
@@ -46,45 +79,29 @@ type scheduledRunner struct {
 
 	baseSystemPrompt string
 
-	// runtime / nativeAgentImage select the scheduled execution flavor. Empty /
-	// "native-inprocess" runs the in-process loop; "native-acp" routes scheduled
-	// tasks through the sandboxed ACP agent (fully governed host-side); an external
-	// "acp" flavor routes through the containment-tier scheduled-external path
-	// (fail-closed; gated by allowUngovernedScheduled). Resolved once at boot from
-	// FLEET_SCHEDULED_RUNTIME against the bundle's runtimes catalog
-	// (cmd/fleet/main.go).
 	runtime          string
 	nativeAgentImage string
+	runtimeFlavor    clientconfig.Runtime
 
-	// runtimeFlavor is the resolved clientconfig descriptor for runtime. For an
-	// EXTERNAL (type: acp) flavor it carries the provider image, args, model_env,
-	// and the delegated-policy bit the scheduled-external path needs.
-	runtimeFlavor clientconfig.Runtime
-
-	// allowUngovernedScheduled is the per-client opt-in
-	// (agent_policy.allow_ungoverned_scheduled_agents, default false) that admits
-	// an EXTERNAL flavor as a SCHEDULED task. Off → scheduled-external is a loud
-	// error at dispatch (fail-closed).
 	allowUngovernedScheduled bool
 }
 
-// newScheduledRunner builds the scheduled TaskRunner. The base system prompt +
-// persona are read once at boot (operators editing them in place take effect on
-// the next process restart, matching the scheduled path's prior behaviour).
-func newScheduledRunner(cfg *config.Config, mgr *agent.Manager, st *storage.Storage, notes *notesAdapter, personasDir, systemPromptsDir, protocolsDir, runtime, nativeAgentImage string, runtimeFlavor clientconfig.Runtime, allowUngovernedScheduled bool) *scheduledRunner {
-	r := &scheduledRunner{
-		cfg:                      cfg,
-		mgr:                      mgr,
-		storage:                  st,
-		notesProvider:            notes,
-		noteProposer:             notes,
-		personasDir:              personasDir,
-		systemPromptsDir:         systemPromptsDir,
-		protocolsDir:             protocolsDir,
-		runtime:                  runtime,
-		nativeAgentImage:         nativeAgentImage,
-		runtimeFlavor:            runtimeFlavor,
-		allowUngovernedScheduled: allowUngovernedScheduled,
+// New builds a Runner. The base system prompt + persona are read once at
+// construction (operators editing them in place take effect on the next process
+// restart, matching the scheduled path's prior behaviour).
+func New(opts Options) *Runner {
+	r := &Runner{
+		cfg:                      opts.Config,
+		mgr:                      opts.Manager,
+		notesProvider:            opts.NotesProvider,
+		noteProposer:             opts.NoteProposer,
+		personasDir:              opts.PersonasDir,
+		systemPromptsDir:         opts.SystemPromptsDir,
+		protocolsDir:             opts.ProtocolsDir,
+		runtime:                  opts.Runtime,
+		nativeAgentImage:         opts.NativeAgentImage,
+		runtimeFlavor:            opts.RuntimeFlavor,
+		allowUngovernedScheduled: opts.AllowUngovernedScheduled,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -93,7 +110,7 @@ func newScheduledRunner(cfg *config.Config, mgr *agent.Manager, st *storage.Stor
 // buildBaseSystemPrompt composes the scheduled base prompt: the default system
 // prompt + the configured persona domain expertise. Failures degrade to an
 // empty/partial prompt with a log line rather than blocking the runner.
-func (r *scheduledRunner) buildBaseSystemPrompt() string {
+func (r *Runner) buildBaseSystemPrompt() string {
 	var sb strings.Builder
 	spName := r.cfg.SystemPrompt
 	if spName == "" {
@@ -114,8 +131,9 @@ func (r *scheduledRunner) buildBaseSystemPrompt() string {
 	return sb.String()
 }
 
-// Run executes one task to completion and returns the converted session log.
-func (r *scheduledRunner) Run(ctx context.Context, task *models.Task) (*models.LogSession, error) {
+// Run executes one task to completion and returns the converted session log. It
+// satisfies runner.TaskRunner.
+func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession, error) {
 	// Resolve the task's model (falls back to the configured task model).
 	modelSlug := r.cfg.TaskModel
 	if task.Model != nil && strings.TrimSpace(*task.Model) != "" {
@@ -156,9 +174,8 @@ func (r *scheduledRunner) Run(ctx context.Context, task *models.Task) (*models.L
 
 	// Wire per-task MCP credential-account isolation. When the task names
 	// accounts, bind its account-variant subprocesses onto a DEDICATED per-run
-	// client and Close them at run end (plan §6.3) so credentials never leak
-	// across runs or to a concurrent task. A default-only / empty selection
-	// reuses the shared process-wide client.
+	// client and Close them at run end so credentials never leak across runs or to
+	// a concurrent task. A default-only / empty selection reuses the shared client.
 	mcpClient, mcpCleanup, err := r.bindTaskMCP(ctx, task)
 	if err != nil {
 		return nil, err
@@ -233,7 +250,7 @@ func taskMCPSelection(task *models.Task) agentcore.MCPSelection {
 //     across runs or into a concurrent task's client. A named account with no
 //     matching <VAR>_<ACCOUNT> creds is REFUSED by BindMCPSelection rather than
 //     silently inheriting the default seat.
-func (r *scheduledRunner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Client, func(), error) {
+func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Client, func(), error) {
 	noop := func() {}
 	if len(task.MCPSelection) == 0 {
 		return r.mgr.MCPClient(), noop, nil
@@ -264,7 +281,7 @@ func (r *scheduledRunner) bindTaskMCP(ctx context.Context, task *models.Task) (*
 // binder needs. Account overlays are applied by agentcore.BindMCPSelection via
 // creds.ApplyClientSuffix; this only supplies the default-seat env. Mirrors the
 // interactive agent's mcpBases so both paths resolve identical specs.
-func (r *scheduledRunner) mcpBases() map[string]agentcore.MCPServerBase {
+func (r *Runner) mcpBases() map[string]agentcore.MCPServerBase {
 	bases := map[string]agentcore.MCPServerBase{}
 	if r.cfg == nil {
 		return bases
@@ -324,6 +341,26 @@ func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession 
 			})
 		}
 		out.Messages = append(out.Messages, mm)
+	}
+	return out
+}
+
+// BuildMCPSpecs converts config.MCPServers into the agent.MCPServerSpec map the
+// interactive Manager connects at construction. Shared by cmd/fleet (interactive
+// + ACP ingress engines) and cmd/cutlass (the one-shot harness) so all callers
+// resolve identical MCP specs.
+func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
+	out := make(map[string]agent.MCPServerSpec, len(cfg.MCPServers))
+	for name, sc := range cfg.MCPServers {
+		out[name] = agent.MCPServerSpec{
+			Enabled:       sc.Enabled,
+			Command:       sc.Command,
+			Args:          sc.Args,
+			Env:           sc.Env,
+			URL:           sc.URL,
+			Headers:       sc.Headers,
+			ToolAllowlist: sc.ToolAllowlist,
+		}
 	}
 	return out
 }

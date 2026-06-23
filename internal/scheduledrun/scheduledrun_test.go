@@ -1,4 +1,4 @@
-package main
+package scheduledrun
 
 import (
 	"context"
@@ -36,11 +36,11 @@ for line in sys.stdin:
         send({"jsonrpc":"2.0","id":rid,"result":{}})
 `
 
-// newCredTestRunner builds a scheduledRunner whose cfg.MCPServers contains one
-// fake stdio server ("acct") whose base env declares SECRET_TOKEN. The runner's
-// Manager is nil — only the credentialed (non-empty-selection) branch of
-// bindTaskMCP is exercised, and that branch never touches the Manager.
-func newCredTestRunner(t *testing.T) *scheduledRunner {
+// newCredTestRunner builds a Runner whose cfg.MCPServers contains one fake stdio
+// server ("acct") whose base env declares SECRET_TOKEN. The runner's Manager is
+// nil — only the credentialed (non-empty-selection) branch of bindTaskMCP is
+// exercised, and that branch never touches the Manager.
+func newCredTestRunner(t *testing.T) *Runner {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not found, skipping MCP credential isolation test")
@@ -58,13 +58,13 @@ func newCredTestRunner(t *testing.T) *scheduledRunner {
 			},
 		},
 	}
-	return &scheduledRunner{cfg: cfg}
+	return &Runner{cfg: cfg}
 }
 
 // callWhoami binds the given selection through bindTaskMCP, then invokes the
 // fake server's whoami tool and returns the SECRET_TOKEN it observed. The
 // per-run client is Closed via the returned cleanup before the function returns.
-func callWhoami(t *testing.T, r *scheduledRunner, sel models.MCPSelection, serverName string) (string, func()) {
+func callWhoami(t *testing.T, r *Runner, sel models.MCPSelection, serverName string) (string, func()) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -185,7 +185,7 @@ func TestScheduledRunner_PerRunClientClosedReapsSubprocess(t *testing.T) {
 // server that isn't in the config catalog is rejected before any subprocess is
 // spawned, rather than silently producing a credential-free client.
 func TestScheduledRunner_UnknownServerFailsFast(t *testing.T) {
-	r := &scheduledRunner{cfg: &config.Config{MCPServers: map[string]config.MCPServerConfig{}}}
+	r := &Runner{cfg: &config.Config{MCPServers: map[string]config.MCPServerConfig{}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "nope"}}}

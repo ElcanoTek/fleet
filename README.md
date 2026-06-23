@@ -187,6 +187,22 @@ For the full build/test workflow (including the Postgres-backed Go suites, the
 web app, and the Playwright e2e suites), see
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
+### Running one task locally (cutlass)
+
+`cmd/cutlass` runs a **single task YAML** to completion locally — no orchestrator,
+no HTTP server, no database — through the **same governed scheduled runtime** the
+production scheduler uses (`agentcore.Run`, `Mode=Scheduled`; tool calls still run
+in the sandbox, MCP credentials still brokered host-side). It is the local
+debug/iteration entrypoint, not a second execution path.
+
+```
+scripts/run_workflow_live.sh docs/examples/cutlass-task.yaml   # builds the sandbox image, isolates a workspace, tails a log
+go run ./cmd/cutlass --log out.json path/to/task.yaml          # or invoke it directly
+```
+
+See [`docs/examples/cutlass-task.yaml`](docs/examples/cutlass-task.yaml) for the
+task schema (a thin mirror of the scheduled-task create shape).
+
 ## Deploy
 
 The Mega Box is **one** `fleet` process. The browser only ever talks to the
