@@ -421,7 +421,9 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
   else
     # 1. Build the deployable artifacts from this checkout (needs Go on the box).
     if command -v go >/dev/null 2>&1 || command -v make >/dev/null 2>&1; then
-      if ( cd "$REPO_ROOT" && make build ) && [[ -x "$REPO_ROOT/fleet" && -x "$REPO_ROOT/fleet-admin" ]]; then
+      # GOTOOLCHAIN=auto: Fedora's `golang` lags go.mod's pinned version, so let
+      # the toolchain fetch the required Go rather than failing an opaque build.
+      if ( cd "$REPO_ROOT" && GOTOOLCHAIN=auto make build ) && [[ -x "$REPO_ROOT/fleet" && -x "$REPO_ROOT/fleet-admin" ]]; then
         install -D -m 0755 "$REPO_ROOT/fleet"       "$INSTALL_DIR/fleet"
         install -D -m 0755 "$REPO_ROOT/fleet-admin" "$INSTALL_DIR/fleet-admin"
         ok "installed fleet + fleet-admin → ${INSTALL_DIR}"

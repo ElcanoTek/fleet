@@ -45,8 +45,27 @@ contributing, never commit real credentials — the generic `config/default`
 bundle ships with no connector secrets, and all deployment secrets live in an
 operator-managed `0600` env file outside the repo (see the README).
 
+## The client-config bundle is root-equivalent
+
+A deployment's behavior comes from an external **client-config bundle** (a git
+repo `FLEET_CLIENT_CONFIG_DIR` points at). Treat write access to that repo as
+**production access**, because the bundle is effectively root-equivalent on the
+box:
+
+- Its `sandbox/Containerfile` is **built and run** on the host.
+- Its `mcp/*.py` servers run as **host-side subprocesses** with the per-account
+  brokered MCP credentials placed in their environment.
+
+So the README's "credentials never enter the sandbox" guarantee is about the
+*sandbox* — brokered secrets **do** reach the bundle's own host-side MCP servers
+by design. Anyone who can push to the bundle's tracked branch gains host-side
+code execution under the fleet service identity and access to those secrets on
+the next `update`. Protect the bundle repo accordingly: restrict who can push,
+require signed commits / branch protection, and pin the checkout to a reviewed
+commit when you can.
+
 ## Scope
 
 This policy covers the code in this repository. Deployments are configured by a
 separate, operator-supplied client-config bundle and environment file; the
-security of a given deployment also depends on how those are managed.
+security of a given deployment also depends on how those are managed (see above).
