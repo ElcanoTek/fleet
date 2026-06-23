@@ -304,6 +304,7 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Use(h.AdminAuthMiddleware)
 		r.Delete("/nodes/{node_id}", h.UnregisterNode)
 		r.Post("/tasks/cleanup", h.CleanupHistory)
+		r.Post("/tasks/model", h.BulkSetTaskModel) // fleet-wide model re-assignment (admin-gated)
 		r.Post("/users", h.CreateUser)
 		r.Post("/keys", h.CreateAPIKey)
 		r.Get("/keys", h.ListAPIKeys)

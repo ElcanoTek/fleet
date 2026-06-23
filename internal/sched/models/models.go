@@ -446,6 +446,27 @@ type CleanupResponse struct {
 	DeletedCount int `json:"deleted_count"`
 }
 
+// BulkModelUpdate is the POST /tasks/model request: re-assign the pinned model
+// (and optional fallback) across scheduled tasks. FromModel, when set, limits the
+// change to tasks currently pinned to that slug (e.g. a deprecated model). DryRun
+// returns the tasks that WOULD change without writing.
+type BulkModelUpdate struct {
+	Model         string `json:"model"`
+	FallbackModel string `json:"fallback_model"`
+	FromModel     string `json:"from_model"`
+	DryRun        bool   `json:"dry_run"`
+}
+
+// BulkModelUpdateResult is the POST /tasks/model response. On a dry run it lists
+// the matched tasks + count without writing; on a real run it reports how many
+// were updated.
+type BulkModelUpdateResult struct {
+	DryRun       bool    `json:"dry_run"`
+	UpdatedCount int     `json:"updated_count,omitempty"`
+	MatchedCount int     `json:"matched_count,omitempty"`
+	Tasks        []*Task `json:"tasks,omitempty"`
+}
+
 // DeleteNodeResponse is the response for node deletion.
 type DeleteNodeResponse struct {
 	Status string `json:"status"`
