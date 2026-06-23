@@ -13,6 +13,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/acpruntime"
+	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -144,6 +145,12 @@ type ManagerOptions struct {
 	SkillsDir        string
 	SystemPromptsDir string
 
+	// Limiter is the SHARED process-wide admission governor. When set, RunTurn
+	// admits each interactive turn through it (with a short bounded wait, then a
+	// graceful ErrAtCapacity) so chat counts against the box-wide concurrency cap.
+	// Nil = no interactive admission control (cutlass one-shot, tests).
+	Limiter *admission.Limiter
+
 	// ChatSystemPromptFile is the bundle-relative filename (inside
 	// SystemPromptsDir) of the INTERACTIVE base prompt. Empty defaults to
 	// "chat.md". The scheduled path reads its own base (default.md) separately.
@@ -233,6 +240,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		skillsDir:            opts.SkillsDir,
 		systemPromptsDir:     opts.SystemPromptsDir,
 		chatSystemPromptFile: chatPromptFile,
+		limiter:              opts.Limiter,
 	}
 	m.mcpToolRoster = m.computeMCPToolRoster()
 	m.optionalServerMetadata = m.buildOptionalServerMetadata(opts.ServerSpecs)
@@ -453,6 +461,25 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 
 	if in.Lockdown && in.Model != "" && !m.config.LockdownAllows(in.Model) {
 		return nil, fmt.Errorf("model %q not allowed in lockdown mode", in.Model)
+	}
+
+	// Admission control: an interactive turn holds one slot in the shared box-wide
+	// concurrency limiter for its whole duration, so chat counts against the same
+	// cap as scheduled tasks (and draws on the reserve that keeps chat ahead of
+	// background work). Wait only briefly — a human is watching — then surface
+	// ErrAtCapacity so the UI shows a clean "at capacity, retry" instead of a hung
+	// turn or an over-subscribed box. The slot is released when the turn returns.
+	if m.limiter != nil {
+		admitCtx, cancel := context.WithTimeout(ctx, interactiveAdmitWait)
+		release, admitted := m.limiter.AcquireInteractive(admitCtx.Done())
+		cancel()
+		if !admitted {
+			if ctx.Err() != nil {
+				return nil, ctx.Err() // the caller (user) abandoned the turn while waiting
+			}
+			return nil, ErrAtCapacity
+		}
+		defer release()
 	}
 
 	// Admin-curated knowledge base (best-effort: a notes failure runs the turn
@@ -717,3 +744,16 @@ func humanMessageForReason(reason agentcore.StreamErrorReason, status int) strin
 // layer detects it with errors.Is and does NOT emit a generic turn.error
 // (turn.model_required was already emitted). Mirrors chat's sentinel.
 var ErrModelSelectionRequired = fmt.Errorf("model selection required")
+
+// interactiveAdmitWait bounds how long an interactive turn waits for a free
+// concurrency slot before giving up. Short, because a human is watching: it
+// smooths a momentary spike (a slot usually frees in well under this) but on a
+// genuinely saturated box yields a fast, honest "at capacity" instead of a hung
+// turn. A var (not const) so tests can shorten it.
+var interactiveAdmitWait = 5 * time.Second
+
+// ErrAtCapacity is the sentinel RunTurn returns when the box is at its concurrency
+// cap and no interactive slot freed within interactiveAdmitWait. The HTTP layer
+// surfaces its message as a turn.error so the user sees a clean "try again in a
+// moment" rather than a hung spinner. The user-facing text is the error itself.
+var ErrAtCapacity = fmt.Errorf("the workspace is at capacity right now — please resend your message in a moment")
