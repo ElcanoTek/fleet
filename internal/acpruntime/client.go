@@ -19,6 +19,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // ClientRuntime is fleet's ACP CLIENT. It spawns a sandboxed ACP agent over
@@ -184,8 +185,10 @@ func (r *ClientRuntime) Run(ctx context.Context, spec RunSpec, promptText string
 	initResp, err := conn.Initialize(initCtx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		ClientCapabilities: acp.ClientCapabilities{
-			Fs:       acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
-			Terminal: true,
+			// fs/* is genuinely implemented (real os.ReadFile/WriteFile below).
+			// Terminal is NOT advertised: every terminal/* handler returns
+			// MethodNotFound, so advertising it would break a spec-compliant agent.
+			Fs: acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
 		},
 	})
 	if err != nil {
@@ -328,6 +331,7 @@ func (p *agentProc) teardown() {
 		_ = syscall.Kill(pgid, syscall.SIGTERM)
 		done := make(chan struct{})
 		go func() {
+			defer safe.Recover("acpruntime.processWait", nil)
 			_, _ = p.cmd.Process.Wait()
 			close(done)
 		}()
@@ -698,8 +702,3 @@ func sortedKeys(m map[string]string) []string {
 	sort.Strings(keys)
 	return keys
 }
-
-// logf is a thin logging helper kept for diagnostics on the host side.
-func logf(format string, args ...any) { log.Printf("acpruntime: "+format, args...) }
-
-var _ = logf

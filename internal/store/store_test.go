@@ -65,10 +65,16 @@ func TestList_PinnedFirstThenRecent(t *testing.T) {
 	ctx := context.Background()
 
 	a, _ := s.CreateConversation(ctx, "u@x.com", "A (older)", "victoria", "", false)
-	time.Sleep(1 * time.Second) // ensure updated_at differs
 	b, _ := s.CreateConversation(ctx, "u@x.com", "B (newer, unpinned)", "victoria", "", false)
-	time.Sleep(1 * time.Second)
 	c, _ := s.CreateConversation(ctx, "u@x.com", "C (newest, unpinned)", "victoria", "", false)
+	// Distinct updated_at, deterministically (a oldest → c newest), instead of
+	// wall-clock sleeps between inserts.
+	base := time.Now().Unix()
+	for i, id := range []string{a.ID, b.ID, c.ID} {
+		if _, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = $1 WHERE id = $2`, base-int64(10-i), id); err != nil {
+			t.Fatalf("set updated_at: %v", err)
+		}
+	}
 
 	if err := s.SetPinned(ctx, "u@x.com", a.ID, true); err != nil {
 		t.Fatalf("SetPinned: %v", err)
@@ -194,10 +200,19 @@ func TestSweep_UnpinnedCap(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	// Create 6 unpinned conversations. Cap at 3 — expect 3 evicted.
+	// Create 6 unpinned conversations. Cap at 3 — expect 3 evicted. Assign
+	// distinct, increasing updated_at deterministically (no sleeps) so the cap
+	// evicts the oldest 3.
+	ids := make([]string, 6)
 	for i := 0; i < 6; i++ {
-		_, _ = s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
-		time.Sleep(1100 * time.Millisecond) // updated_at is per-second
+		conv, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
+		ids[i] = conv.ID
+	}
+	base := time.Now().Unix()
+	for i, id := range ids {
+		if _, err := s.db.ExecContext(ctx, `UPDATE conversations SET updated_at = $1 WHERE id = $2`, base-int64(60-i), id); err != nil {
+			t.Fatalf("set updated_at: %v", err)
+		}
 	}
 
 	_, evicted, err := s.SweepExpired(ctx, 14*24*time.Hour, 3)

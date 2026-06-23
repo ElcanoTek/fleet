@@ -14,9 +14,12 @@
 //
 // One [Client] is constructed at boot. Enabled servers are registered via
 // [Client.AddStdioServer] or [Client.AddHTTPServerWithHeaders]; the client
-// performs the MCP initialize + tools/list handshake synchronously, so
-// [Client.GetAllTools] is safe to call immediately after. Call [Client.Close]
-// on shutdown to reap subprocesses.
+// performs the full MCP lifecycle handshake synchronously — initialize, then the
+// required notifications/initialized notification (via [Transport.Notify]),
+// then tools/list — so [Client.GetAllTools] is safe to call immediately after.
+// The negotiated protocolVersion from the initialize result is checked against
+// the pinned mcpProtocolVersion and a mismatch is logged. Call [Client.Close] on
+// shutdown to reap subprocesses.
 //
 // # Tool naming and dispatch
 //

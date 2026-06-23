@@ -20,8 +20,7 @@ import (
 
 // Per-file size cap. Generous on purpose — the default SweepAttachments TTL
 // will reclaim unused uploads, and the only real constraint is disk pressure
-// on the host. Override via CHAT_UPLOAD_MAX_BYTES if a deployment needs to
-// clamp down further.
+// on the host. (Compile-time constant — there is no env override.)
 const defaultMaxUploadBytes int64 = 256 << 20 // 256 MiB
 
 // uploadedAttachment is the per-file metadata we return to the caller

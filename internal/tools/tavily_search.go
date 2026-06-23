@@ -19,18 +19,6 @@ type TavilySearchTool struct {
 	rateLimiter *rateLimiter
 }
 
-// TavilySearchRequest represents a Tavily API search request
-type TavilySearchRequest struct {
-	AuthToken         string   `json:"api_key"`
-	Query             string   `json:"query"`
-	SearchDepth       string   `json:"search_depth,omitempty"`        // "basic" or "advanced"
-	MaxResults        int      `json:"max_results,omitempty"`         // Default: 5
-	IncludeAnswer     bool     `json:"include_answer,omitempty"`      // Include AI-generated answer
-	IncludeRawContent bool     `json:"include_raw_content,omitempty"` // Include full page content
-	IncludeDomains    []string `json:"include_domains,omitempty"`
-	ExcludeDomains    []string `json:"exclude_domains,omitempty"`
-}
-
 // TavilySearchResponse represents a Tavily API search response
 type TavilySearchResponse struct {
 	Answer       string               `json:"answer,omitempty"`

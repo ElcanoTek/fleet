@@ -39,16 +39,19 @@ func cmdNotes(argv []string) int {
 	}
 }
 
-func openNotesStore(dbURL string) (*sched.Store, int) {
+// openNotesStore opens the sched DB and returns the notes store plus a closer
+// the caller must defer (the underlying *db.Database owns the connection pool;
+// sched.Store keeps only its conn handle, so it cannot close it itself).
+func openNotesStore(dbURL string) (*sched.Store, func(), int) {
 	dsn, err := schedDSN(dbURL)
 	if err != nil {
-		return nil, errf(1, "%v", err)
+		return nil, nil, errf(1, "%v", err)
 	}
 	database := scheddb.New()
 	if err := database.Init(dsn); err != nil {
-		return nil, errf(1, "open sched DB: %v", err)
+		return nil, nil, errf(1, "open sched DB: %v", err)
 	}
-	return sched.NewStore(database), 0
+	return sched.NewStore(database), func() { _ = database.Close() }, 0
 }
 
 func notesSet(argv []string) int {
@@ -70,10 +73,11 @@ func notesSet(argv []string) int {
 	if strings.TrimSpace(body) == "" {
 		return errf(1, "note body required on stdin")
 	}
-	st, code := openNotesStore(*dbURL)
+	st, closeStore, code := openNotesStore(*dbURL)
 	if st == nil {
 		return code
 	}
+	defer closeStore()
 	ctx := context.Background()
 
 	// Upsert: create if the slug is new, else update title/body (bumps version).
@@ -114,10 +118,11 @@ func notesGet(argv []string) int {
 	if strings.TrimSpace(slug) == "" {
 		return errf(1, "slug required")
 	}
-	st, code := openNotesStore(*dbURL)
+	st, closeStore, code := openNotesStore(*dbURL)
 	if st == nil {
 		return code
 	}
+	defer closeStore()
 	note, err := st.GetNoteBySlug(context.Background(), slug)
 	if errors.Is(err, sched.ErrNoteNotFound) {
 		return errf(2, "note %q not found", slug)
@@ -140,10 +145,11 @@ func notesList(argv []string) int {
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
 	}
-	st, code := openNotesStore(*dbURL)
+	st, closeStore, code := openNotesStore(*dbURL)
 	if st == nil {
 		return code
 	}
+	defer closeStore()
 	notes, err := st.ListNotes(context.Background(), *all)
 	if err != nil {
 		return errf(5, "%v", err)
@@ -169,10 +175,11 @@ func notesRm(argv []string) int {
 	if strings.TrimSpace(slug) == "" {
 		return errf(1, "slug required")
 	}
-	st, code := openNotesStore(*dbURL)
+	st, closeStore, code := openNotesStore(*dbURL)
 	if st == nil {
 		return code
 	}
+	defer closeStore()
 	ctx := context.Background()
 	note, err := st.GetNoteBySlug(ctx, slug)
 	if errors.Is(err, sched.ErrNoteNotFound) {
@@ -217,10 +224,11 @@ func notesProposalPublish(argv []string) int {
 	if err != nil {
 		return errf(1, "invalid proposal id")
 	}
-	st, code := openNotesStore(*dbURL)
+	st, closeStore, code := openNotesStore(*dbURL)
 	if st == nil {
 		return code
 	}
+	defer closeStore()
 	n, err := st.PublishProposal(context.Background(), id, *by, *note)
 	if errors.Is(err, sched.ErrNoteNotFound) {
 		return errf(2, "proposal not found")
@@ -248,10 +256,11 @@ func notesProposalReject(argv []string) int {
 	if err != nil {
 		return errf(1, "invalid proposal id")
 	}
-	st, code := openNotesStore(*dbURL)
+	st, closeStore, code := openNotesStore(*dbURL)
 	if st == nil {
 		return code
 	}
+	defer closeStore()
 	if err := st.RejectProposal(context.Background(), id, *by, *reason); err != nil {
 		if errors.Is(err, sched.ErrNoteNotFound) {
 			return errf(2, "pending proposal not found")

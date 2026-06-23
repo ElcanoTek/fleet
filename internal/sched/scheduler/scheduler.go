@@ -9,16 +9,18 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/robfig/cron/v3"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
-// Scheduler manages scheduled and recurring tasks.
+// Scheduler manages scheduled and recurring tasks. Scheduling is intentionally
+// POLL-based (the 30s runLoop ticker over a DB-backed queue, single-host), not an
+// in-memory cron engine; recurrence timezone/DST math lives in storage/handlers
+// via cron.ParseStandard(...).Next(now.In(location)).
 type Scheduler struct {
 	storage  *storage.Storage
-	cron     *cron.Cron
 	location *time.Location
 	stop     chan struct{}
 }
@@ -32,7 +34,6 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 	}
 	return &Scheduler{
 		storage:  store,
-		cron:     cron.New(cron.WithLocation(loc)),
 		location: loc,
 		stop:     make(chan struct{}),
 	}
@@ -48,14 +49,20 @@ func (s *Scheduler) Start() {
 func (s *Scheduler) Stop() { close(s.stop) }
 
 func (s *Scheduler) runLoop() {
+	defer safe.Recover("scheduler.runLoop", nil)
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			s.ProcessScheduledTasks()
-			s.RecoverExpiredLeases()
+			// Recover per tick so a panic in task promotion or lease recovery
+			// fails only that tick — it must never kill the loop or the process.
+			func() {
+				defer safe.Recover("scheduler.tick", nil)
+				s.ProcessScheduledTasks()
+				s.RecoverExpiredLeases()
+			}()
 		case <-s.stop:
 			return
 		}

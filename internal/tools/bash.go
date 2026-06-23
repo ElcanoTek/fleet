@@ -577,15 +577,6 @@ func cleanupOldTruncationFiles() {
 	}
 }
 
-// runBash is a test-only convenience that constructs a fresh host
-// sandbox per call. Production paths (agent turns + approval handler)
-// always pass a pool-issued container sandbox to runBashWithSandbox
-// directly; the host-mode shortcut here is unreachable from any
-// non-test code.
-func runBash(ctx context.Context, params BashParams) (string, error) {
-	return runBashWithSandbox(ctx, sandbox.NewHost(nil), params)
-}
-
 // runBashWithSandbox is the production dispatch path. The caller MUST
 // pass a non-nil per-turn sandbox handed out by the pool — there is no
 // host-mode fallback in production, because letting agent-emitted code

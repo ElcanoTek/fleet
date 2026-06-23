@@ -34,6 +34,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -248,6 +249,17 @@ func (p *Pool) tryClaim(ctx context.Context) {
 				p.mu.Unlock()
 				release() // release AFTER cleanup
 			}()
+			// Recover so a panic in task execution fails only this task, not the
+			// whole single-host process. Registered last → runs first on unwind:
+			// mark the task errored (if still owned) so it isn't stuck running
+			// until lease expiry, then the cleanup defers free the slot.
+			defer safe.Recover("runner.worker", func(any) {
+				if p.stillOwns(task.ID, token) {
+					if _, err := p.reportStatus(task.ID, models.TaskStatusError, "task panicked during execution"); err != nil {
+						log.Printf("runner: failed to mark panicked task %s errored: %v", task.ID, err)
+					}
+				}
+			})
 			p.executeTask(ctx, task, token)
 		}(task, token, release)
 		// Loop to claim another task if a slot is still free (drains a burst).

@@ -632,6 +632,14 @@ func TestContainerNetworkDefaultAllowsEgress(t *testing.T) {
 	// example.com is the canonical IETF reserved test host. Avoid
 	// flakiness: a 5s connect timeout and -sS (silent except errors)
 	// so the test exits fast on a sandboxed CI runner without egress.
+	// Probe egress from the HOST first. If the host itself can't reach the
+	// target, skip (environmental — e.g. a no-internet CI runner). If the host
+	// CAN reach it but the SANDBOX cannot, that is exactly the regression this
+	// test guards (the default sandbox must allow egress) — so fail, don't skip.
+	if out, herr := exec.Command("curl", "-sS", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", "https://example.com").Output(); herr != nil || strings.TrimSpace(string(out)) != "200" {
+		t.Skipf("host has no egress to example.com (code=%q err=%v) — cannot distinguish from a sandbox block", strings.TrimSpace(string(out)), herr)
+	}
+
 	res, err := sb.RunBash(context.Background(), BashRequest{
 		Command: "curl -sS --max-time 5 -o /dev/null -w '%{http_code}\\n' https://example.com",
 	})
@@ -640,6 +648,6 @@ func TestContainerNetworkDefaultAllowsEgress(t *testing.T) {
 	}
 	got := strings.TrimSpace(string(res.Stdout))
 	if got != "200" {
-		t.Skipf("egress test inconclusive — host has no internet (curl returned %q stderr=%q)", got, res.Stderr)
+		t.Errorf("default sandbox blocked egress (curl returned %q stderr=%q) but the host has egress — the default sandbox must allow it", got, res.Stderr)
 	}
 }

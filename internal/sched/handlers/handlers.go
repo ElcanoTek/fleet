@@ -1,5 +1,5 @@
 // Copyright (c) 2025 ElcanoTek
-// All rights reserved. This is a private repository.
+// SPDX-License-Identifier: MIT
 
 // Package handlers provides HTTP handlers for the sched API.
 package handlers
@@ -696,6 +696,20 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, task)
 }
 
+// validateTaskLimits bounds the per-task numeric ceilings. max_retries is
+// bounded because an unbounded value, combined with the 10-minute backoff cap,
+// would let a deterministically-failing task re-queue forever and hold a
+// scheduler slot.
+func validateTaskLimits(tc *models.TaskCreate) error {
+	if tc.MaxIterations != nil && (*tc.MaxIterations < 1 || *tc.MaxIterations > 10000) {
+		return fmt.Errorf("max_iterations must be between 1 and 10000")
+	}
+	if tc.MaxRetries != nil && (*tc.MaxRetries < 0 || *tc.MaxRetries > 10) {
+		return fmt.Errorf("max_retries must be between 0 and 10")
+	}
+	return nil
+}
+
 func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 	tc.Prompt = strings.TrimSpace(tc.Prompt)
 	if tc.Prompt == "" {
@@ -722,10 +736,8 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 	if err := normalizeOptionalModel(&tc.FallbackModel, "fallback_model"); err != nil {
 		return err
 	}
-	if tc.MaxIterations != nil {
-		if *tc.MaxIterations < 1 || *tc.MaxIterations > 10000 {
-			return fmt.Errorf("max_iterations must be between 1 and 10000")
-		}
+	if err := validateTaskLimits(tc); err != nil {
+		return err
 	}
 
 	if tc.Recurrence != "" {

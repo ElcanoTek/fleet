@@ -73,6 +73,9 @@ type Server struct {
 // Transport interface for different MCP connection types
 type Transport interface {
 	Call(ctx context.Context, method string, params interface{}) (json.RawMessage, error)
+	// Notify sends a JSON-RPC notification (no id, no response expected) — used
+	// for the MCP lifecycle's notifications/initialized.
+	Notify(ctx context.Context, method string, params interface{}) error
 	Close() error
 }
 
@@ -424,8 +427,25 @@ func (s *Server) initialize(ctx context.Context) error {
 		return fmt.Errorf("initialize call failed: %w", err)
 	}
 
-	// Parse capabilities (we don't strictly need them for now)
-	_ = result
+	// Validate the negotiated protocol version. A mismatch is not fatal (the
+	// spec lets a server answer with a version it supports), but surface it so
+	// an incompatible server is visible rather than silently discarded.
+	var initResult struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if err := json.Unmarshal(result, &initResult); err == nil &&
+		initResult.ProtocolVersion != "" && initResult.ProtocolVersion != mcpProtocolVersion {
+		log.Printf("MCP %s: server negotiated protocolVersion %q; client pinned %q",
+			s.name, initResult.ProtocolVersion, mcpProtocolVersion)
+	}
+
+	// MCP lifecycle: the client MUST send notifications/initialized after the
+	// initialize result and before any other request. Lenient (FastMCP) servers
+	// tolerate its absence, but a strict/third-party server is within spec to
+	// reject tools/list or tools/call until it arrives.
+	if err := s.transport.Notify(ctx, "notifications/initialized", map[string]interface{}{}); err != nil {
+		return fmt.Errorf("notifications/initialized failed: %w", err)
+	}
 
 	// List available tools
 	toolsResult, err := s.transport.Call(ctx, "tools/list", map[string]interface{}{})
@@ -786,6 +806,30 @@ func (t *StdioTransport) Call(ctx context.Context, method string, params interfa
 	}
 }
 
+// Notify writes a JSON-RPC notification (no id, no response read) to the
+// subprocess. ctx is accepted for interface parity; the write itself is local
+// and non-blocking.
+func (t *StdioTransport) Notify(_ context.Context, method string, params interface{}) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.broken {
+		return errTransportDesynced
+	}
+	msg := map[string]interface{}{
+		jsonRPCFieldJSONRPC: jsonRPCVersion,
+		"method":            method,
+		"params":            params,
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	if _, err := t.stdin.Write(append(b, '\n')); err != nil {
+		return fmt.Errorf("%s: %w", errStdioWriteFailed, err)
+	}
+	return nil
+}
+
 // stdioResponse is the JSON-RPC envelope read off a stdio MCP server's
 // stdout. Method is populated on server-initiated notifications/requests so
 // Call can skip them while waiting for its own response.
@@ -905,6 +949,47 @@ func (t *HTTPTransport) Call(ctx context.Context, method string, params interfac
 
 	// Handle standard JSON responses
 	return t.parseJSONResponse(resp.Body)
+}
+
+// Notify POSTs a JSON-RPC notification (no id) and discards the (typically
+// empty / 202 Accepted) response. Used for notifications/initialized.
+func (t *HTTPTransport) Notify(ctx context.Context, method string, params interface{}) error {
+	t.mu.Lock()
+	sessionID := t.sessionID
+	t.mu.Unlock()
+
+	msg := map[string]interface{}{
+		jsonRPCFieldJSONRPC: jsonRPCVersion,
+		"method":            method,
+		"params":            params,
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", t.url, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	if sessionID != "" {
+		httpReq.Header.Set("Mcp-Session-Id", sessionID)
+	}
+	for key, value := range t.headers {
+		httpReq.Header.Set(key, value)
+	}
+	resp, err := t.client.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	t.captureSessionID(resp.Header)
+	_, _ = io.Copy(io.Discard, resp.Body) // a notification has no response body
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("notification %s: unexpected status %d", method, resp.StatusCode)
+	}
+	return nil
 }
 
 // captureSessionID extracts MCP session ID from response headers
