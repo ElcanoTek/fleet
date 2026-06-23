@@ -285,7 +285,7 @@ func run() error {
 
 	errCh := make(chan error, 2)
 	go func() {
-		log.Printf("chat-server listening on %s", chatAddr) //nolint:gosec // G706 false positive: chatAddr is an operator-configured bind address (env/flag), not request input.
+		log.Printf("chat-server listening on %s", chatAddr)
 		if err := chatServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("chat-server: %w", err)
 		}
