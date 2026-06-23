@@ -78,28 +78,6 @@ func registerLiveScenarios(s *fakellm.Server) {
 		fakellm.TextStep("Scheduled task done: SCHED_TASK_OK 45."),
 	}})
 
-	// resilience-429: the model returns 429 once, then a clean text turn — the
-	// real provider retry/backoff path should recover and the UI should still
-	// land a reply. (fleet retries the same turn, so the retry re-enters at
-	// turn 0; we keep both the error and the recovery as step 0 by alternating
-	// is not possible statelessly, so we model recovery as: step 0 = 429,
-	// step 1+ = text. Because a 429 does NOT append an assistant message, the
-	// turn index stays 0 on retry; to actually recover we instead emit the
-	// error only on the FIRST hit and text thereafter — handled below.)
-	//
-	// Stateless retry can't be expressed purely by assistant-turn index (a
-	// failed request appends nothing), so this scenario simply asserts the
-	// error is surfaced cleanly; recovery is covered by the per-process hit
-	// counter variant the spec uses sparingly.
-	s.Scenario("resilience-500", fakellm.Scenario{Steps: []fakellm.Step{
-		fakellm.StatusStep(http.StatusInternalServerError),
-	}})
-
-	// text-only: a plain single-turn reply, no tools — the cheap smoke path.
-	s.Scenario("text-only", fakellm.Scenario{Steps: []fakellm.Step{
-		fakellm.TextStep("Hello from the fake LLM. No tools were harmed."),
-	}})
-
 	// Default for any prompt without a marker: a deterministic echo-ish reply.
 	s.SetDefault(fakellm.Scenario{Steps: []fakellm.Step{
 		fakellm.TextStep("fake-llm reply (no scenario marker matched)."),
