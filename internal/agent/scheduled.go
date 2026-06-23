@@ -236,6 +236,10 @@ type scheduledPolicy struct {
 	agent    *Agent
 	task     string
 	verified bool
+	// runCtx is the run's context, captured at build time so the end-of-run
+	// verifier's model call honors the run's deadline/cancellation (CanFinish
+	// itself takes no ctx). Falls back to context.Background() if unset.
+	runCtx context.Context
 }
 
 func (p *scheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
@@ -258,7 +262,11 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	}
 	p.verified = true
 	records := buildToolExecSummary(p.agent.logSession)
-	missing, err := p.agent.runEndOfRunVerifier(context.Background(), p.task, records)
+	vctx := p.runCtx
+	if vctx == nil {
+		vctx = context.Background()
+	}
+	missing, err := p.agent.runEndOfRunVerifier(vctx, p.task, records)
 	if err != nil {
 		log.Printf("verifier skipped: %v", err)
 		return true, nil
@@ -347,11 +355,17 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	}
 
 	// Scheduled policy: audit gating + finish enforcement (agentcore) + verifier.
-	inner := agentcore.NewScheduledPolicy(a.logSession, a.maxIterations)
+	var maxCostUSD float64
+	var maxTotalTokens int
+	if a.config != nil {
+		maxCostUSD = a.config.MaxCostUSD
+		maxTotalTokens = a.config.MaxTotalTokens
+	}
+	inner := agentcore.NewScheduledPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTotalTokens)
 	if a.noteProposer != nil {
 		inner.SetNoteProposer(a.noteProposer)
 	}
-	policy := &scheduledPolicy{inner: inner, agent: a, task: task}
+	policy := &scheduledPolicy{inner: inner, agent: a, task: task, runCtx: ctx}
 
 	// propose_note tool registration in lockstep with wiring + the prompt
 	// advertisement: the scheduled prompt advertises propose_note and the policy
@@ -401,6 +415,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         temp,
 		MaxCompletionTokens: maxTokens,
+		MaxIterations:       a.maxIterations,
 		Allowlist:           allow,
 		OptionalServers:     optional,
 		Selection:           a.selection(),

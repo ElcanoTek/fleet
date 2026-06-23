@@ -50,6 +50,10 @@ type MCPServerBase struct {
 	// HTTPURL means an HTTP server.
 	Command string
 	Args    []string
+	// Dir is the cwd the stdio subprocess launches in (the client-config bundle
+	// root) so relative args like `mcp/foo.py` resolve there; "" inherits the
+	// fleet process cwd.
+	Dir string
 	// HTTPURL, when set, marks this as an HTTP (fast_io) server. HTTP servers
 	// reject account variants (credentials are header-based, not env-suffixed).
 	HTTPURL string
@@ -108,7 +112,17 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 	for _, choice := range selection {
 		base, ok := bases[choice.Server]
 		if !ok {
-			return registered, fmt.Errorf("mcp selection references unknown server %q", choice.Server)
+			// A server absent from the active catalog is EITHER misspelled OR
+			// known-to-the-manifest but gated off because its default-seat
+			// credentials are unset (a server provisioned only as a named account
+			// — its <VAR>_<ACCOUNT> set but the bare <VAR> empty — is excluded by
+			// the enable gate). Surface both so the operator knows to check the
+			// default-seat env, not just the spelling.
+			return registered, fmt.Errorf(
+				"mcp selection references server %q which is not in the active catalog — "+
+					"it is either misspelled or configured-but-gated-off (its default-seat "+
+					"credentials are unset; every connector needs its bare default-seat env "+
+					"set before a named account can be selected)", choice.Server)
 		}
 
 		name, variantEnv, err := resolveMCPVariant(choice.Server, base, choice.Account)
@@ -126,8 +140,9 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 		}
 
 		// NewStdioTransport sets variantEnv on cmd.Env — credentials are never on
-		// argv and never enter the sandbox container.
-		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv); err != nil {
+		// argv and never enter the sandbox container. base.Dir pins the subprocess
+		// cwd to the bundle root so relative `mcp/*.py` args resolve.
+		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv, base.Dir); err != nil {
 			return registered, fmt.Errorf("register server %q: %w", name, err)
 		}
 		registered = append(registered, name)

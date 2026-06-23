@@ -83,15 +83,3 @@ func TestStripLeakedToolCalls(t *testing.T) {
 		})
 	}
 }
-
-func TestStepCap(t *testing.T) {
-	if stepCap(0) != nil {
-		t.Error("stepCap(0) should be nil (no cap)")
-	}
-	if stepCap(-5) != nil {
-		t.Error("stepCap(negative) should be nil (no cap)")
-	}
-	if got := stepCap(100); len(got) != 1 {
-		t.Fatalf("stepCap(100): got %d conditions, want exactly 1", len(got))
-	}
-}

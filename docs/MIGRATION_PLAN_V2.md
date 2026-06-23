@@ -213,6 +213,19 @@ moc contributes zero MCP code; this is entirely chat-vs-cutlass. No analysis cha
 
 This is ONE mechanism that both interactive conversations and scheduled tasks feed, modeled on chat's per-conversation opt-in. It REPLACES moc's `target_node_name` (meaningless on one box).
 
+> **Implementation status (2026-06-23): per-account selection shipped for
+> SCHEDULED tasks only.** The credential-account mechanism (`creds`,
+> `ApplyClientSuffix`, `MCPSelection`/`MCPChoice`, the account refusal guard, the
+> `server_account` variant subprocess) is live, and a scheduled task picks
+> `{server, account}` via its `mcp_selection`. The INTERACTIVE chat side is still
+> server **on/off only** — a conversation persists `OptionalMCPServersEnabled
+> []string` (no per-conversation account), so every interactive turn runs the
+> default seat. The §6.1/§6.2 claims below about the chat conversation row
+> carrying `{server, account}` and `scanOptionalMCPServers` decoding both forms
+> describe the DESIGN, not the current code; surfacing the account picker in the
+> chat toolbar remains the deferred open decision in §9.5. This matches legacy
+> chat behavior (no regression).
+
 ### 6.1 The unified selection shape
 
 Defined in `internal/agentcore` (where `buildFantasyTools` lives):

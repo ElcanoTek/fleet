@@ -54,16 +54,3 @@ func buildForceSummaryMessages(priorHistory, turnHistory []HistoryEntry) ([]fant
 	}
 	return append(convo, fantasy.NewUserMessage(forceFinalSummaryNudge)), nil
 }
-
-// stepCap turns the configured per-turn iteration limit into a fantasy stop
-// condition. Zero (or negative) means "no cap" — preserves the prior
-// behavior of looping until the model itself stops. Wiring this closes a
-// latent gap where CHAT_MAX_ITERATIONS was read into config but never applied,
-// so a model that never stopped calling tools was bounded only by the
-// per-turn wall-clock timeout (CHAT_TURN_TIMEOUT_SECONDS) and the cost ceiling.
-func stepCap(maxIterations int) []fantasy.StopCondition {
-	if maxIterations <= 0 {
-		return nil
-	}
-	return []fantasy.StopCondition{fantasy.StepCountIs(maxIterations)}
-}

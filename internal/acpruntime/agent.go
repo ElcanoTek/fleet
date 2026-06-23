@@ -170,7 +170,10 @@ func (a *AgentRunner) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Prom
 	includeConfirmAudit := false
 	switch mode {
 	case agentcore.ModeScheduled:
-		sp := agentcore.NewScheduledPolicy(nil, 0)
+		// Enforce the cost/token ceilings the host ships in the run spec in-loop,
+		// identically to the interactive native-acp path below — a scheduled
+		// native-acp run is bounded by the budget, not the invoice.
+		sp := agentcore.NewScheduledPolicy(nil, 0, spec.MaxCostUSD, spec.MaxTotalTokens)
 		if spec.NoteProposerWired && stager != nil {
 			sp.SetNoteProposer(noteProposerAdapter{s: stager})
 		}

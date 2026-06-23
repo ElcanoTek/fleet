@@ -230,7 +230,7 @@ browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet:
 2. **Build** the binary, the sandbox image, and the web app:
 
    ```
-   make build                              # → ./fleet
+   make build                              # → ./fleet AND ./fleet-admin
    # The sandbox image is a per-client BUNDLE artifact (build-on-box by default):
    # the Containerfile lives in the bundle at <bundle>/sandbox/Containerfile and
    # each client ships + digest-pins its own flavor. Build the bundle's sandbox:
@@ -257,15 +257,29 @@ browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet:
 
    ```
    install -D -m 0755 fleet            /opt/fleet/fleet
+   install -D -m 0755 fleet-admin      /opt/fleet/fleet-admin
    git clone <client-config-repo>      /opt/fleet/client   # set FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client
    install -D -m 0644 deploy/fleet.service /etc/systemd/system/fleet.service
    install -D -m 0600 <your-env-file>  /etc/fleet/fleet.env
    systemctl daemon-reload && systemctl enable --now fleet
    ```
 
-   Run the Next web app alongside (`cd web && npm run start`, port 3000), wiring
+   (`fleet-admin bootstrap --enable-service` automates this build → install →
+   unit-install → enable from a source checkout — see **Operating fleet** below.)
+
+   Run the Next web app as its own supervised unit (`deploy/fleet-web.service` —
+   it `npm run start`s the built app on port 3000), wiring
    `CHAT_SERVER_URL`/`ORCHESTRATOR_SERVER_URL` to the loopback backends and
-   `CHAT_SERVER_TOKEN` to the binary's `FLEET_SERVER_TOKEN`.
+   `CHAT_SERVER_TOKEN` to the binary's `FLEET_SERVER_TOKEN` in its 0600
+   `/etc/fleet/fleet-web.env`:
+
+   ```
+   cd web && npm ci && npm run build        # build the Next app
+   install -d /opt/fleet/web && cp -a web/. /opt/fleet/web/
+   install -D -m 0644 deploy/fleet-web.service /etc/systemd/system/fleet-web.service
+   install -D -m 0600 <your-web-env-file> /etc/fleet/fleet-web.env
+   systemctl daemon-reload && systemctl enable --now fleet-web
+   ```
 
 4. **TLS** — `deploy/Caddyfile` reverse-proxies the public domain to the web app
    (SSE-aware: `flush_interval -1`, long read timeout). Point it at your domain
@@ -286,6 +300,13 @@ self-migrates on start (chat's advisory-lock runner; sched's golang-migrate).
 fleet-admin bootstrap   →   fleet-admin update   →   fleet-admin status
   (provision a box)         (roll a new version)      (health / doctor)
 ```
+
+> **`bootstrap` and `update` operate on a fleet *source checkout*.** They run
+> `make build` (and, on update, `git pull`) against the checkout and install the
+> resulting `fleet` + `fleet-admin` binaries to `FLEET_INSTALL_DIR` (default
+> `/opt/fleet`, the unit's `ExecStart` dir). Keep the repo cloned on the box (Go
+> toolchain present); `status`, `restart`, `stop`, and `logs` work off the
+> installed binary alone.
 
 ### The env file (the one source of credentials)
 

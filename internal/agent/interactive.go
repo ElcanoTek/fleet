@@ -47,6 +47,9 @@ type TurnConfig struct {
 	FallbackModel fantasy.LanguageModel
 	Temperature   float64
 	MaxTokens     int
+	// MaxIterations caps the agent steps in the turn's stream (0 = no cap).
+	// Wired into agentcore.RunConfig.MaxIterations → the stream's StopWhen.
+	MaxIterations int
 
 	// PriorHistory / TurnHistory feed the finalize hook's force-summary replay.
 	PriorHistory []HistoryEntry
@@ -188,6 +191,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         tc.Temperature,
 		MaxCompletionTokens: tc.MaxTokens,
+		MaxIterations:       tc.MaxIterations,
 		NativeTools:         nativeTools,
 		Allowlist:           tc.Allowlist,
 		OptionalServers:     tc.OptionalServers,
@@ -348,6 +352,21 @@ func runExternalTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		return agentcore.Result{}, fmt.Errorf("external acp flavor %q selected but no agent image configured", flavor.Name)
 	}
 
+	// Bind the conversation's workspace READ-ONLY into the external agent's
+	// sandbox so it can READ the files the user uploaded / the conversation
+	// accumulated (the documented data-residency posture). Read-only: a
+	// self-executing third-party agent must not write to the host; its scratch
+	// goes to the container's /tmp tmpfs. Best-effort — on error we fall back to
+	// the scratch-only tmpfs rather than failing the turn.
+	var externalWorkspace string
+	if tc.Label != "" {
+		if ws, werr := tools.EnsureWorkspaceDir(tc.Label); werr == nil {
+			externalWorkspace = ws
+		} else {
+			log.Printf("external acp: could not resolve workspace for %s (%v); using scratch-only", tc.Label, werr)
+		}
+	}
+
 	rt := acpruntime.NewExternalRuntime(acpruntime.ExternalConfig{
 		Image: flavor.Image,
 		Args:  flavor.Args,
@@ -355,6 +374,10 @@ func runExternalTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		// named by the manifest's model_env. fleet secrets / MCP creds are never
 		// shipped to an external agent.
 		ProviderEnv: providerEnv(flavor.ModelEnv),
+		// Read-only conversation workspace (see above); "" → scratch-only tmpfs.
+		Workspace: externalWorkspace,
+		// Seal the network namespace when the flavor declares `network: none`.
+		NoNetwork: flavor.Network == clientconfig.RuntimeNetworkNone,
 	})
 
 	res, err := rt.Run(ctx, latestUserText(tc.Messages), acpruntime.ExternalDeps{

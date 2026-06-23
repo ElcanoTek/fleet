@@ -160,6 +160,9 @@ type MCPServerSpec struct {
 	Command string
 	Args    []string
 	Env     map[string]string
+	// Dir is the cwd the stdio subprocess launches in (the client-config bundle
+	// root) so relative args like `mcp/foo.py` resolve there; "" inherits cwd.
+	Dir string
 
 	// HTTP fields. If URL is set, we treat this as an HTTP MCP server.
 	URL     string

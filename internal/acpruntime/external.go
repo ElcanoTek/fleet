@@ -171,6 +171,21 @@ type ExternalConfig struct {
 	ProviderEnv map[string]string
 	// StartTimeout caps how long Initialize may take after spawn.
 	StartTimeout time.Duration
+	// NoNetwork seals the agent container's network namespace (`--network=none`)
+	// — the enforced egress posture for a flavor whose manifest declares
+	// `network: none`. (`model_only` stays declaration-only: fleet scrubs the env
+	// but the packet-level restriction is the host firewall's job.) The caller
+	// sets this from flavor.Network.
+	NoNetwork bool
+	// Workspace, when set, is a HOST directory bind-mounted READ-ONLY at
+	// /workspace so the external agent can READ the conversation/task workspace
+	// (matching the data-residency caveat in docs/USING-AGENTS.md). It is
+	// deliberately read-only: a self-executing third-party agent must not write
+	// to the host — its ephemeral writes go to the writable /tmp scratch tmpfs,
+	// discarded on teardown. Empty ("") keeps the legacy scratch-only behavior
+	// (a writable /workspace tmpfs), which the credential-free example agent +
+	// the deterministic tests use.
+	Workspace string
 }
 
 // ExternalRuntime is fleet's ClientRuntime specialized for an EXTERNAL ACP
@@ -241,14 +256,18 @@ func (r *ExternalRuntime) Run(ctx context.Context, promptText string, deps Exter
 	// to delegate gets a host-governed surface; a self-executing agent simply
 	// won't call them. The trust posture (containment) is independent of the
 	// advertised capabilities.
-	if _, err := conn.Initialize(initCtx, acp.InitializeRequest{
+	initResp, err := conn.Initialize(initCtx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		ClientCapabilities: acp.ClientCapabilities{
 			Fs:       acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
 			Terminal: true,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		return Result{}, fmt.Errorf("initialize external agent: %w", err)
+	}
+	if err := checkInitializeResponse(initResp, "external agent"); err != nil {
+		return Result{}, err
 	}
 
 	sess, err := conn.NewSession(ctx, acp.NewSessionRequest{
@@ -293,15 +312,39 @@ func (r *ExternalRuntime) Run(ctx context.Context, promptText string, deps Exter
 // the intent and keeps the env scrubbed so even an unrestricted container holds
 // no fleet secrets. Own process group so teardown reaps the whole tree.
 func (r *ExternalRuntime) spawn() (*agentProc, error) {
+	return spawnAgentProc(r.cfg.PodmanBinary, r.runArgs())
+}
+
+// runArgs builds the `podman run` argv for the containment sandbox. Extracted
+// from spawn so the workspace + hardening posture is unit-testable without
+// launching a container (see external_test.go).
+func (r *ExternalRuntime) runArgs() []string {
 	base := []string{
 		"run", "-i", "--rm",
 		"--read-only",
 		"--cap-drop=ALL",
 		"--security-opt=no-new-privileges",
-		// Scratch-only workspace: a writable tmpfs the agent self-executes
-		// against, discarded on teardown. Nothing persists to the host.
+		// A writable scratch tmpfs the agent self-executes against, discarded on
+		// teardown. With a read-only /workspace bind (below), this is where the
+		// agent's ephemeral writes land — nothing persists to the host workspace.
 		"--tmpfs=/tmp:rw,size=64m",
-		"--tmpfs=/workspace:rw,size=256m",
+	}
+	if r.cfg.NoNetwork {
+		// Seal the network namespace for a `network: none` flavor. (model_only
+		// is intentionally NOT enforced here — it is a declaration the host
+		// firewall enforces; the env is scrubbed regardless.)
+		base = append(base, "--network=none")
+	}
+	if r.cfg.Workspace != "" {
+		// READ-ONLY bind of the conversation/task workspace: the external agent
+		// READS the real files (the documented data-residency posture) but cannot
+		// write to the host. `,z` relabels for SELinux shared access (same option
+		// the native sandbox uses for its bind mounts).
+		base = append(base, "--volume="+r.cfg.Workspace+":/workspace:ro,z")
+	} else {
+		// Scratch-only workspace: a writable tmpfs, nothing persists to the host.
+		// Used by the credential-free example agent + the deterministic tests.
+		base = append(base, "--tmpfs=/workspace:rw,size=256m")
 	}
 	envKeys := sortedKeys(r.cfg.ProviderEnv)
 	args := make([]string, 0, len(base)+2*len(envKeys)+1+len(r.cfg.Args))
@@ -313,7 +356,7 @@ func (r *ExternalRuntime) spawn() (*agentProc, error) {
 	}
 	args = append(args, r.cfg.Image)
 	args = append(args, r.cfg.Args...)
-	return spawnAgentProc(r.cfg.PodmanBinary, args)
+	return args
 }
 
 // externalClient implements acp.Client for the CONTAINMENT tier. Unlike the

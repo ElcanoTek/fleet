@@ -335,3 +335,51 @@ func assertPermissionResolved(t *testing.T, obs *recordingObserver, wantAllowed 
 }
 
 var _ = json.Marshal
+
+// TestExternalRunArgs_WorkspacePosture is the regression guard for #81: the
+// containment sandbox exposes the conversation workspace READ-ONLY when a
+// Workspace is configured (so a real Claude Code/Goose can read the user's
+// files) and falls back to a scratch-only tmpfs when it is not. It also pins the
+// non-negotiable hardening flags so they can't silently regress.
+func TestExternalRunArgs_WorkspacePosture(t *testing.T) {
+	const hostWS = "/var/lib/fleet/workspace/conv-abc"
+
+	withWS := NewExternalRuntime(ExternalConfig{Image: "img", Workspace: hostWS}).runArgs()
+	joined := strings.Join(withWS, " ")
+	if !strings.Contains(joined, "--volume="+hostWS+":/workspace:ro,z") {
+		t.Fatalf("workspace set: expected a READ-ONLY bind of %s, got args: %v", hostWS, withWS)
+	}
+	if strings.Contains(joined, "--tmpfs=/workspace") {
+		t.Fatalf("workspace set: must NOT also mount a /workspace tmpfs, got: %v", withWS)
+	}
+	// Hardening invariants must hold regardless of workspace.
+	for _, must := range []string{"--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--tmpfs=/tmp:rw,size=64m"} {
+		if !strings.Contains(joined, must) {
+			t.Errorf("missing hardening flag %q in %v", must, withWS)
+		}
+	}
+
+	scratch := NewExternalRuntime(ExternalConfig{Image: "img"}).runArgs()
+	sj := strings.Join(scratch, " ")
+	if !strings.Contains(sj, "--tmpfs=/workspace:rw,size=256m") {
+		t.Fatalf("no workspace: expected a scratch /workspace tmpfs, got: %v", scratch)
+	}
+	if strings.Contains(sj, "--volume=") {
+		t.Fatalf("no workspace: must NOT bind any host volume, got: %v", scratch)
+	}
+}
+
+// TestExternalRunArgs_NetworkPosture is the regression guard for #85: a
+// `network: none` flavor (NoNetwork=true) seals the container's network
+// namespace; other postures leave default egress (no --network flag — model_only
+// is firewall-enforced, not sealed here).
+func TestExternalRunArgs_NetworkPosture(t *testing.T) {
+	sealed := strings.Join(NewExternalRuntime(ExternalConfig{Image: "img", NoNetwork: true}).runArgs(), " ")
+	if !strings.Contains(sealed, "--network=none") {
+		t.Fatalf("NoNetwork=true must seal the namespace with --network=none, got: %s", sealed)
+	}
+	open := strings.Join(NewExternalRuntime(ExternalConfig{Image: "img"}).runArgs(), " ")
+	if strings.Contains(open, "--network") {
+		t.Fatalf("default posture must NOT pass a --network flag, got: %s", open)
+	}
+}

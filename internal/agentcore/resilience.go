@@ -442,6 +442,12 @@ func (e *engine) streamRoundWithResilience(
 				swappedToFallback: swappedToFallback,
 			}, nil
 		}
+		// A cost/token ceiling abort (budget-guarded PrepareStep) is a clean stop,
+		// not a retryable provider blip — surface it verbatim so the run loop can
+		// finish gracefully with the partial transcript.
+		if errors.Is(err, ErrCostCeilingExceeded) {
+			return streamRoundOutcome{}, err
+		}
 		lastErr = err
 
 		class, providerErr := classifyStreamError(err)

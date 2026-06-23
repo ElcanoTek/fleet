@@ -67,6 +67,7 @@ type Server struct {
 	stdioCommand string
 	stdioArgs    []string
 	stdioEnv     map[string]string
+	stdioDir     string // cwd the subprocess launches in (bundle root); "" = inherit
 }
 
 // Transport interface for different MCP connection types
@@ -207,9 +208,11 @@ func NewClient() *Client {
 	}
 }
 
-// AddStdioServer adds a stdio-based MCP server
-func (c *Client) AddStdioServer(ctx context.Context, name, command string, args []string, env map[string]string) error {
-	transport, err := NewStdioTransport(command, args, env)
+// AddStdioServer adds a stdio-based MCP server. dir is the working directory the
+// subprocess launches in (the client-config bundle root, so relative `mcp/*.py`
+// args resolve there); "" inherits the caller's cwd.
+func (c *Client) AddStdioServer(ctx context.Context, name, command string, args []string, env map[string]string, dir string) error {
+	transport, err := NewStdioTransportInDir(command, args, env, dir)
 	if err != nil {
 		return fmt.Errorf("failed to create stdio transport: %w", err)
 	}
@@ -220,6 +223,7 @@ func (c *Client) AddStdioServer(ctx context.Context, name, command string, args 
 		stdioCommand: command,
 		stdioArgs:    args,
 		stdioEnv:     env,
+		stdioDir:     dir,
 	}
 
 	// Initialize the server and get tools
@@ -501,7 +505,7 @@ func (s *Server) restartLocked(ctx context.Context) error {
 	// Close the old transport (ignore errors — it's already broken).
 	_ = s.transport.Close()
 
-	transport, err := NewStdioTransport(s.stdioCommand, s.stdioArgs, s.stdioEnv)
+	transport, err := NewStdioTransportInDir(s.stdioCommand, s.stdioArgs, s.stdioEnv, s.stdioDir)
 	if err != nil {
 		return fmt.Errorf("failed to create new transport: %w", err)
 	}
@@ -607,8 +611,21 @@ type StdioTransport struct {
 	broken bool
 }
 
+// NewStdioTransport spawns an MCP server subprocess in the caller's current
+// working directory. Most callers want NewStdioTransportInDir to pin the cwd to
+// the client-config bundle root so relative `mcp/*.py` args resolve correctly.
 func NewStdioTransport(command string, args []string, env map[string]string) (*StdioTransport, error) {
+	return NewStdioTransportInDir(command, args, env, "")
+}
+
+// NewStdioTransportInDir is NewStdioTransport with an explicit working directory.
+// When dir != "" the subprocess is launched with cmd.Dir = dir, so relative
+// command args (e.g. a bundle's `mcp/foo.py`) resolve against the bundle root
+// rather than the fleet process cwd (which under systemd is /opt/fleet, NOT the
+// /opt/fleet/client bundle checkout — see internal/clientconfig).
+func NewStdioTransportInDir(command string, args []string, env map[string]string, dir string) (*StdioTransport, error) {
 	cmd := exec.Command(command, args...) //nolint:noctx,gosec // MCP server command comes from trusted config and is intentionally long-running
+	cmd.Dir = dir                         // empty => inherit the caller's cwd (exec.Command's default)
 
 	// Set environment variables with extended PATH for uvx, npx, etc.
 	homedir, err := os.UserHomeDir()
