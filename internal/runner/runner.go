@@ -20,7 +20,10 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"math/rand/v2"
 	"os"
 	"strconv"
 	"sync"
@@ -28,6 +31,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -262,6 +266,28 @@ func (p *Pool) executeTask(ctx context.Context, task *models.Task, token uuid.UU
 		}
 		p.submitLog(task, session, msg)
 		log.Printf("runner: task %s interrupted after %v", task.ID, time.Since(start).Round(time.Second))
+	case runErr != nil && isRetryable(runErr) && task.AttemptCount < task.MaxRetries:
+		// Transient, clean failure with retries left: re-queue the SAME task for
+		// another whole-task attempt after a backoff, instead of failing terminally.
+		// The next attempt re-binds MCP + runs the SAME governed loop via the normal
+		// claim path. (AttemptCount/MaxRetries: MaxRetries is ADDITIONAL attempts, so
+		// the task runs up to MaxRetries+1 times.)
+		backoff := retryBackoff(task.AttemptCount)
+		when := time.Now().UTC().Add(backoff)
+		msg := fmt.Sprintf("Task attempt %d failed (transient); retrying in %s: %v",
+			task.AttemptCount+1, backoff.Round(time.Second), runErr)
+		if _, err := p.store.RequeueTaskForRetryWithContext(context.Background(), task.ID, p.leaseOwner, when, msg); err != nil {
+			// Could not re-queue (e.g. lease lost): fall back to a terminal error so
+			// the task never silently strands as running.
+			log.Printf("runner: failed to re-queue task %s for retry: %v; marking error", task.ID, err)
+			if _, rerr := p.reportStatus(task.ID, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
+				log.Printf("runner: failed to report error for task %s: %v", task.ID, rerr)
+			}
+		} else {
+			log.Printf("runner: task %s attempt %d failed (transient); re-queued for retry at %s",
+				task.ID, task.AttemptCount+1, when.Format(time.RFC3339))
+		}
+		p.submitLog(task, session, msg)
 	case runErr != nil:
 		msg := "Task failed: " + runErr.Error()
 		if _, err := p.reportStatus(task.ID, models.TaskStatusError, msg); err != nil {
@@ -276,6 +302,35 @@ func (p *Pool) executeTask(ctx context.Context, task *models.Task, token uuid.UU
 		p.submitLog(task, session, "")
 		log.Printf("runner: task %s completed in %v", task.ID, time.Since(start).Round(time.Second))
 	}
+}
+
+// isRetryable reports whether a clean run failure is a TRANSIENT class worth a
+// whole-task retry. It is an ALLOWLIST: only the agentcore transient sentinels
+// qualify; everything else (deterministic config errors like "no model
+// configured", validation failures, etc.) is terminal. This keeps the
+// idempotency risk bounded — we never re-run a deterministically-failing task.
+func isRetryable(err error) bool {
+	return errors.Is(err, agentcore.ErrRetryBudgetExhausted) ||
+		errors.Is(err, agentcore.ErrStreamBlipPersisted)
+}
+
+// retryBackoff returns the delay before re-running after a transient failure:
+// exponential in the attempt number (30s, 60s, 120s, …), capped at 10m, with
+// ±10% jitter to avoid thundering-herd re-promotion. The result is always > 0 so
+// the re-queued ScheduledFor is strictly in the future (the scheduler promotes
+// only scheduled_for <= now), preventing a tight crash-loop.
+func retryBackoff(attempt int) time.Duration {
+	const base = 30 * time.Second
+	const maxBackoff = 10 * time.Minute
+	d := maxBackoff
+	if attempt >= 0 && attempt < 8 {
+		if scaled := base << attempt; scaled > 0 && scaled < maxBackoff {
+			d = scaled
+		}
+	}
+	//nolint:gosec // G404: jitter only spreads retry backoff to avoid thundering-herd re-promotion; not security-sensitive.
+	jitter := time.Duration(rand.Int64N(int64(d/5))) - d/10 // ±10%
+	return d + jitter
 }
 
 // reportStatus writes a status update for the synthetic worker using a
