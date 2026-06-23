@@ -42,6 +42,15 @@ func sandboxEnv(name string) string {
 //     test ./...` run on a developer laptop).
 //   - $CHAT_SANDBOX_TEST_IMAGE set, or the default published image
 //     reachable.
+//
+// COVERAGE NOTE: this test is NOT exercised by any CI lane. The fast `go` job
+// masks podman (container tests skip) and runs as non-root, the e2e-live lane
+// also runs rootless/non-root, and FLEET_SANDBOX_HARDENED_TEST is set nowhere in
+// the repo — so one of the guards below always trips. The systemd hardening
+// posture it pins is therefore validated by OPERATOR / MANUAL runs only (as root
+// on a systemd host with FLEET_SANDBOX_HARDENED_TEST=1). Do not read a green CI
+// as evidence this contract still holds; re-run it by hand after touching
+// container.go's podmanArgs or deploy/fleet.service hardening.
 func TestSandboxUnderSystemdHardening(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("hardening test runs on linux only")

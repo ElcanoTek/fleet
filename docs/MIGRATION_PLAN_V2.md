@@ -1,15 +1,21 @@
 # Fleet Migration Plan v2 — One process, one runtime, one frontend on a single host
 
-**Author:** Lead Architect · **Date:** 2026-06-21 · **Status:** LOCKED — supersedes v1, for execution
+**Author:** Lead Architect · **Date:** 2026-06-21 · **Status:** SHIPPED — this migration is COMPLETE (historical plan; the code is canonical)
 **Module:** `github.com/ElcanoTek/fleet` (single Go module) · **Target:** one `fleet` process on a single host
 
-This plan supersedes v1. It carries v1's verified facts forward and rewrites every place where the nine LOCKED decisions + the five authoritative analyses change the design. Where v2 is silent, v1 still holds (canonical module path `github.com/ElcanoTek/fleet`, Go 1.26.4, chat's URL-form DSN builder, the two-incompatible-`users`-tables fact, etc.).
+> **Reading note (post-migration).** This is the historical migration *plan*,
+> retained for architectural rationale, not a live to-do list. The migration has
+> shipped. Where any forward-looking note here (e.g. §1's control-plane claim, or
+> §9 "Remaining open decisions") disagrees with the code, **the code is
+> canonical.** For current architecture start from the README and `AGENTS.md`.
+
+This plan carries v1's verified facts forward and rewrites every place where the nine LOCKED decisions + the five authoritative analyses change the design.
 
 ---
 
 ## 1. What changed from v1
 
-- **No remote runners. gig is deleted as a repo.** v1 kept gig external (its own `go.mod`, runs on remote runners, talks HTTP). v2 folds gig **into** fleet as an in-process worker pool at `internal/runner`, and **deletes the entire runner HTTP control plane** (`/register`, `/tasks/pending`, `/status`, `/logs`, `/nodes/heartbeat`). Everything runs in the one `fleet` process.
+- **No remote runners. gig is deleted as a repo.** v1 kept gig external (its own `go.mod`, runs on remote runners, talks HTTP). v2 folds gig **into** fleet as an in-process worker pool at `internal/runner`. (Correction vs as-shipped: the `/register` + `/nodes/*` routes were NOT fully removed — they survive as vestigial single-host lease plumbing backing ONE synthetic worker node; `/tasks/pending`, `/status`, `/logs` are gone. See `docs/openapi.yaml`.) Everything runs in the one `fleet` process.
 - **ONE agent runtime, not two drivers behind seams.** v1 §6 kept `interactive/` and `scheduled/` as separate drivers sharing only primitives, and explicitly deferred "loop body in agentcore?" as open decision #13. v2 RESOLVES it: a **single run loop** `agentcore.Run(ctx, Mode, RunConfig, deps)`. Cutlass's outer enforcement loop is the base; chat is the 1-round special case (a `CanFinish`-always-true policy). `agent/` becomes ONE package.
 - **ONE container execution model for both modes.** v1 preserved chat's Podman sandbox AND cutlass's direct `exec.CommandContext`, leaving "should cutlass containerize?" out of scope. v2 RESOLVES it: the **hybrid per-turn/per-exec-burst ephemeral container over a persistent per-session workspace** (chat's `sandbox.Pool`) is the SINGLE backend for both modes. Cutlass's direct-exec bash/python and **cutlass's runtime Containerfile are ELIMINATED**.
 - **target_node_name is gone; replaced by per-task MCP + credential-account selection.** v1's orchestrator task form still carried `target_node_name`. v2 drops both node columns and adds a per-task MCP selection (`{server, account}` list) modeled directly on chat's per-conversation opt-in — the SAME mechanism for interactive and scheduled.

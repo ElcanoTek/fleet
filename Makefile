@@ -3,7 +3,7 @@
 all: build
 
 help:
-	@echo "fleet — the Elcano Mega Box monorepo"
+	@echo "fleet — build/test/lint targets"
 	@echo "  make build       compile-check ./... AND emit ./fleet + ./fleet-admin"
 	@echo "  make bins        emit ./fleet + ./fleet-admin only (no full compile-check)"
 	@echo "  make compile     go build ./...   (compile-check every package; no artifacts)"

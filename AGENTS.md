@@ -38,9 +38,10 @@ cd web && npm ci && npm run lint && npm run test && npm run build
 cd web && npx playwright test --project=mocked     # mocked e2e
 ```
 
-CI mirrors all of this — Go build/vet/lint/test, web lint/test/build, Playwright
-(mocked **and** live, against a real backend + sandbox), and a gitleaks secret
-scan. **Every job must be green before merge.** Tests are deterministic without a
+CI mirrors all of this — Go build/vet/lint/test (including a `-race` lane) plus a
+`govulncheck` dependency-CVE scan, web lint/test/build, Playwright (mocked **and**
+live, against a real backend + sandbox), and a gitleaks secret scan. **Every job
+must be green before merge.** Tests are deterministic without a
 live model: use the fake-LLM seam (`internal/fakellm` via `OPENROUTER_BASE_URL`),
 never a real key.
 
