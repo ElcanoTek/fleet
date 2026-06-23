@@ -30,7 +30,8 @@ import (
 
 const (
 	// defaultImageGenModel is the model the tool uses when the agent doesn't
-	// pass `model` and CHAT_IMAGE_MODEL isn't set. Nano Banana Pro
+	// pass `model` and FLEET_IMAGE_MODEL (legacy: CHAT_IMAGE_MODEL) isn't set.
+	// Nano Banana Pro
 	// (Gemini 3 Pro Image Preview) is Google's flagship image-generation
 	// model — best real-world grounding, supports 2K/4K and aspect-ratio
 	// controls, ~$0.14/image as of 2026-05. For cheaper drafts the agent
