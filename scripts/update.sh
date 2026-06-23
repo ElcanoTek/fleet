@@ -157,6 +157,8 @@ else
           FLEET_UPDATE_BASE_SHA="$before_sha" \
           FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" \
           FLEET_SERVICE_NAME="$SERVICE_NAME" \
+          FLEET_INSTALL_DIR="$INSTALL_DIR" \
+          FLEET_UPDATE_BRANCH="$BRANCH_OVERRIDE" \
           bash "$SRC_DIR/scripts/update.sh"
       fi
     fi

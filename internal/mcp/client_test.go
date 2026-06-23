@@ -185,6 +185,8 @@ func (f *fakeTransport) Call(_ context.Context, method string, params interface{
 	return json.RawMessage(`{"content":[{"type":"text","text":"ok"}]}`), nil
 }
 
+func (f *fakeTransport) Notify(_ context.Context, _ string, _ interface{}) error { return nil }
+
 func (f *fakeTransport) Close() error { return nil }
 
 func newRoutingClient() (*Client, map[string]*fakeTransport) {

@@ -188,7 +188,16 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 			return fantasy.NewTextErrorResponse(msg), nil
 		}
 	}
-	return g.inner.Run(ctx, params)
+	resp, err := g.inner.Run(ctx, params)
+	if g.policy != nil {
+		// Record the outcome so policies that gate on tool RESULTS observe native
+		// tool calls (bash/python/task_tracker/...), not just the MCP and
+		// delegating tools. Without this the scheduled task-tracker finish gate
+		// (latestTaskTracker.Seen) never fired in production. A transport error or
+		// an is-error response counts as a failed call.
+		g.policy.RecordToolResult(name, params.Input, resp.Content, err == nil && !resp.IsError)
+	}
+	return resp, err
 }
 
 // sanitizeSchemaProperties deep-copies a JSON-schema "properties" map and strips

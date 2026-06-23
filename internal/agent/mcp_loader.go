@@ -203,7 +203,3 @@ func (a *Agent) mcpBases() map[string]agentcore.MCPServerBase {
 	}
 	return bases
 }
-
-// ensure creds stays referenced (BindMCPSelection uses it transitively; this
-// keeps the import meaningful for readers tracing the credential path).
-var _ = creds.ApplyClientSuffix

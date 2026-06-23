@@ -235,7 +235,14 @@ func (m *Manager) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.storagePath, data, 0600)
+	// Write to a sibling temp file then atomically rename, so a crash mid-write
+	// can't leave a torn api_keys.json that fails to deserialize and wedges
+	// startup (NewManager would refuse to load it).
+	tmp := m.storagePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, m.storagePath)
 }
 
 func (m *Manager) logAudit(entry AuditLogEntry) {

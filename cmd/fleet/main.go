@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -37,6 +38,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/runner"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
@@ -125,7 +127,12 @@ func run() error {
 		agentLimiter.Total(), agentLimiter.SchedulableSlots(), agentLimiter.Total()-agentLimiter.SchedulableSlots())
 
 	// ── DB pools (both self-migrate on open) ──
-	chatStore, err := store.Open(chatDSN(cfg))
+	chatDB := chatDSN(cfg)
+	schedDB := schedDSN()
+	if err := ensureDistinctDatabases(chatDB, schedDB); err != nil {
+		return err
+	}
+	chatStore, err := store.Open(chatDB)
 	if err != nil {
 		return fmt.Errorf("open chat DB: %w", err)
 	}
@@ -133,11 +140,11 @@ func run() error {
 	log.Printf("chat DB connected + migrated")
 
 	schedStorage := storage.New()
-	if err := schedStorage.Initialize(schedDSN()); err != nil {
+	if err := schedStorage.Initialize(schedDB); err != nil {
 		return fmt.Errorf("open sched DB: %w", err)
 	}
 	defer schedStorage.Close()
-	schedStorage.SetTimezone(timezone(cfg))
+	schedStorage.SetTimezone(timezone())
 	log.Printf("sched DB connected + migrated")
 
 	// Notes store + the live provider/proposer wired into BOTH drivers.
@@ -186,7 +193,7 @@ func run() error {
 		RegistrationToken: os.Getenv("REGISTRATION_TOKEN"),
 		Version:           "fleet",
 		DataDir:           cfg.DataDir,
-		Timezone:          timezone(cfg),
+		Timezone:          timezone(),
 		ElcanoCookieName:  "elcano_auth",
 	}
 	h := handlers.New(hcfg, schedStorage, keyMgr)
@@ -218,7 +225,7 @@ func run() error {
 	orchHandler := buildOrchestratorMux(h, notesHandlers)
 
 	// ── scheduler ticker (promote scheduled→pending + recover leases) ──
-	sch := scheduler.New(schedStorage, timezone(cfg))
+	sch := scheduler.New(schedStorage, timezone())
 	sch.Start()
 	defer sch.Stop()
 
@@ -273,6 +280,18 @@ func run() error {
 		RuntimeFlavor:            scheduledFlavor,
 		AllowUngovernedScheduled: allowUngovernedScheduled,
 	})
+	// Reclaim sandbox containers orphaned by a PRIOR crash before building the
+	// pool: they run `--detach --rm` under conmon, so a non-graceful exit leaves
+	// them holding host RAM/PIDs across systemd restarts. Best-effort — log and
+	// continue if podman is absent (e.g. mock/dev) or the sweep fails.
+	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if n, err := sandbox.PruneOrphanedContainers(pruneCtx, "podman"); err != nil {
+		log.Printf("startup: prune orphaned sandbox containers: %v", err)
+	} else if n > 0 {
+		log.Printf("startup: pruned %d orphaned sandbox container(s) from a prior run", n)
+	}
+	pruneCancel()
+
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{Limiter: agentLimiter})
 	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 
@@ -443,11 +462,43 @@ func schedDSN() string {
 	return ""
 }
 
-func timezone(_ *config.Config) string {
+func timezone() string {
 	if v := strings.TrimSpace(os.Getenv("FLEET_TIMEZONE")); v != "" {
 		return v
 	}
 	return "UTC"
+}
+
+// ensureDistinctDatabases fails fast when the chat and sched DSNs resolve to the
+// SAME database. The two layers use structurally incompatible `users` schemas
+// and different migration runners, so sharing one DB corrupts startup — an
+// operator who set only DATABASE_URL (a documented fallback for both) would
+// otherwise hit a confusing low-level migration error. Best-effort: compares the
+// host+dbname of the URL form (the form the docs use); a key=value DSN is left
+// to the drivers.
+func ensureDistinctDatabases(chatDSN, schedDSN string) error {
+	if strings.TrimSpace(schedDSN) == "" {
+		schedDSN = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	}
+	c := dbIdentity(chatDSN)
+	if c != "" && c == dbIdentity(schedDSN) {
+		return fmt.Errorf("chat and sched must use SEPARATE databases (incompatible users schemas + migration runners) but both resolve to %q; set distinct FLEET_CHAT_DATABASE_URL and FLEET_SCHED_DATABASE_URL", c)
+	}
+	return nil
+}
+
+// dbIdentity returns host:port/dbname for a postgres URL DSN, or "" when the DSN
+// is not a parseable URL.
+func dbIdentity(dsn string) string {
+	dsn = strings.TrimSpace(dsn)
+	if dsn == "" {
+		return ""
+	}
+	u, err := url.Parse(dsn)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Host + u.Path
 }
 
 func addrOr(addr, def string) string {

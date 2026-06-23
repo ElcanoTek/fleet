@@ -82,6 +82,7 @@ var allowedEnvVars = map[string]bool{
 
 	// ── LLM (shared) ──
 	"OPENROUTER_API_KEY":          true,
+	"OPENROUTER_BASE_URL":         true,
 	"CHAT_MAX_ITERATIONS":         true,
 	"CHAT_MAX_COST_USD":           true,
 	"CHAT_MAX_TOTAL_TOKENS":       true,
@@ -177,6 +178,9 @@ var allowedEnvVars = map[string]bool{
 	"CHAT_WORKSPACE_ROOT":          true,
 	"FLEET_SANDBOX_IMAGE":          true,
 	"FLEET_SANDBOX_RUNTIME":        true,
+	"FLEET_SANDBOX_MEMORY":         true,
+	"FLEET_SANDBOX_CPUS":           true,
+	"FLEET_SANDBOX_PIDS":           true,
 	"FLEET_WORKSPACE_ROOT":         true,
 	"CHAT_LOCKDOWN_ONLY":           true,
 	"CHAT_LOCKDOWN_ALLOWED_MODELS": true,
@@ -360,8 +364,13 @@ type Config struct {
 	AdminEmails []string
 
 	// ── sandbox ──
-	SandboxImage          string
-	SandboxRuntime        string
+	SandboxImage   string
+	SandboxRuntime string
+	// Per-container cgroup caps (empty/0 → sandbox defaults: 512m / 1.0 / 128).
+	// Operators size these to the host the docs told them to provision.
+	SandboxMemory         string
+	SandboxCPUs           string
+	SandboxPids           int
 	WorkspaceRoot         string
 	LockdownOnly          bool
 	LockdownAllowedModels []string
@@ -481,6 +490,9 @@ func Load(envFile string) (*Config, error) {
 		// ── sandbox ──
 		SandboxImage:          getenvFleet("SANDBOX_IMAGE"),
 		SandboxRuntime:        getenvFleet("SANDBOX_RUNTIME"),
+		SandboxMemory:         getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:           getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:           getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
 		WorkspaceRoot:         getenvFleet("WORKSPACE_ROOT"),
 		LockdownOnly:          getenvBool("CHAT_LOCKDOWN_ONLY", false),
 		LockdownAllowedModels: splitLockdownModels(os.Getenv("CHAT_LOCKDOWN_ALLOWED_MODELS")),
@@ -749,9 +761,10 @@ func getEnvOrDefault(key, defaultValue string) string {
 }
 
 func getEnvOrDefaultInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		var result int
-		if _, err := fmt.Sscanf(value, "%d", &result); err == nil {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		// strconv (not Sscanf) so trailing garbage like "12abc" is REJECTED and
+		// falls back to the default, rather than being silently parsed as 12.
+		if result, err := strconv.Atoi(value); err == nil {
 			return result
 		}
 	}
@@ -759,9 +772,8 @@ func getEnvOrDefaultInt(key string, defaultValue int) int {
 }
 
 func getEnvOrDefaultFloat(key string, defaultValue float64) float64 {
-	if value := os.Getenv(key); value != "" {
-		var result float64
-		if _, err := fmt.Sscanf(value, "%f", &result); err == nil {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		if result, err := strconv.ParseFloat(value, 64); err == nil {
 			return result
 		}
 	}

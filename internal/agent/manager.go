@@ -312,6 +312,9 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		Image:            cfg.SandboxImage,
 		WorkspaceHostDir: workspaceRoot,
 		Runtime:          cfg.SandboxRuntime,
+		MemoryLimit:      cfg.SandboxMemory, // empty → sandbox default (512m)
+		CPULimit:         cfg.SandboxCPUs,   // empty → sandbox default (1.0)
+		PidsLimit:        cfg.SandboxPids,   // 0 → sandbox default (128)
 		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
 		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot),
 	}
@@ -650,11 +653,17 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 	}
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
 	reason := "cancelled"
-	if ctxErr != nil {
+	switch {
+	case res.StoppedByBudget:
+		// A per-turn cost/token ceiling fired — not a user Stop. Surface it
+		// distinctly so the UI can say "budget reached" instead of "cancelled".
+		reason = "cost_ceiling_reached"
+	case ctxErr != nil:
 		reason = ctxErr.Error()
 	}
 	sink.Emit("turn.cancelled", map[string]any{
 		"reason":                  reason,
+		"budget_reached":          res.StoppedByBudget,
 		"cost_usd":                usage.CostUSD,
 		"prompt_tokens":           usage.PromptTokens,
 		"prompt_tokens_last_step": usage.LastStepInputTokens,

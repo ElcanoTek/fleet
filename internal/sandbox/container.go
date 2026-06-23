@@ -286,6 +286,9 @@ func (c *containerImpl) start(ctx context.Context) error {
 		// to a subuid the chat user can't write to next turn).
 		"--userns=keep-id:uid=1000,gid=1000",
 		fmt.Sprintf("--memory=%s", c.cfg.MemoryLimit),
+		// --memory-swap == --memory disables the swap escape: without it a
+		// process on a swap-enabled host can exceed the RSS cap via swap.
+		fmt.Sprintf("--memory-swap=%s", c.cfg.MemoryLimit),
 		fmt.Sprintf("--cpus=%s", c.cfg.CPULimit),
 		fmt.Sprintf("--pids-limit=%d", c.cfg.PidsLimit),
 		// Tmpfs for the directories Python / IPython / matplotlib
@@ -475,7 +478,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	if err := c.ensureBridge(ctx); err != nil {
+	if err := c.ensureBridge(); err != nil {
 		return PythonResult{}, fmt.Errorf("start python bridge in container: %w", err)
 	}
 
@@ -582,7 +585,7 @@ func (c *containerImpl) bridgeStderrSuffix() string {
 // ensureBridge starts the bridge inside the container on first call.
 // Subsequent calls are a no-op as long as the exec session is still
 // healthy.
-func (c *containerImpl) ensureBridge(ctx context.Context) error {
+func (c *containerImpl) ensureBridge() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -625,7 +628,6 @@ func (c *containerImpl) ensureBridge(ctx context.Context) error {
 	// up before we can write. 100ms covers the common case; if the
 	// bridge isn't ready, the first ReadBytes will just wait.
 	time.Sleep(100 * time.Millisecond)
-	_ = ctx // reserved for future cancellation hooks
 	return nil
 }
 
@@ -659,11 +661,15 @@ func (c *containerImpl) close() {
 	}
 }
 
+// containerNamePrefix is the shared prefix for every sandbox container name. It
+// is the handle the boot-time orphan sweep (PruneOrphanedContainers) filters on.
+const containerNamePrefix = "chat-sandbox-"
+
 // generateContainerName returns "chat-sandbox-<16 hex chars>". Random
 // suffix avoids collisions when multiple sandboxes are spawned in
 // parallel by the warm pool.
 func generateContainerName() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
-	return "chat-sandbox-" + hex.EncodeToString(b[:])
+	return containerNamePrefix + hex.EncodeToString(b[:])
 }

@@ -896,5 +896,3 @@ func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolNa
 
 // ── helper on Manager: expose the MCP client to the approval path ──
 // (added via a small method on Manager in agent/agent.go)
-
-var _ = mcp.Tool{}

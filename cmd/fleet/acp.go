@@ -90,7 +90,7 @@ func runACP() error {
 		return fmt.Errorf("open sched DB: %w", err)
 	}
 	defer schedStorage.Close()
-	schedStorage.SetTimezone(timezone(cfg))
+	schedStorage.SetTimezone(timezone())
 	notesProvider := &notesAdapter{store: sched.NewStore(schedStorage.DB())}
 
 	// ── interactive engine (the SAME concrete turnEngine the server drives) ──
@@ -120,7 +120,7 @@ func runACP() error {
 	mgr.SetRuntimes(bundle.Runtimes(), bundle.DefaultRuntime(), nativeAgentImage)
 
 	// Resolve the ingress turn config from the environment + bundle defaults.
-	model := acpModel(cfg)
+	model := acpModel()
 	if model == "" {
 		return fmt.Errorf("no ingress model: set FLEET_ACP_MODEL (or LLM_DEFAULT_MODEL) to the OpenRouter slug `fleet acp` should drive")
 	}
@@ -165,6 +165,7 @@ func runACP() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	//nolint:gosec // G706: model/runtime/principal/sandbox_image are operator-configured (env + bundle), rendered with %s/%q in one Printf — not request input and not a log-injection vector.
 	log.Printf("ready on stdio (model=%s runtime=%q lockdown=%t principal=%s sandbox_image=%q)",
 		model, runtime, lockdown, principal, cfg.SandboxImage)
 	select {
@@ -176,9 +177,9 @@ func runACP() error {
 	return nil
 }
 
-// acpModel resolves the OpenRouter slug ingress turns drive. FLEET_ACP_MODEL
-// wins; else LLM_DEFAULT_MODEL (the same env the server reads for its default).
-func acpModel(_ *config.Config) string {
+// acpModel resolves the OpenRouter slug ingress turns drive: FLEET_ACP_MODEL
+// wins, else the legacy LLM_DEFAULT_MODEL fallback.
+func acpModel() string {
 	if v := strings.TrimSpace(os.Getenv("FLEET_ACP_MODEL")); v != "" {
 		return v
 	}

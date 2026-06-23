@@ -32,6 +32,12 @@ func RunMigrations(conn *sql.DB) error {
 		return fmt.Errorf("failed to create migrate instance: %w", err)
 	}
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		var dirty migrate.ErrDirty
+		if errors.As(err, &dirty) {
+			return fmt.Errorf("sched migrations are DIRTY at version %d — a previous migration failed mid-run, "+
+				"so the process refuses to start. Inspect the DB, then force the last-good version with "+
+				"`migrate force <version>` and restart: %w", dirty.Version, err)
+		}
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 	return nil
