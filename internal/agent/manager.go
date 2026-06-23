@@ -312,6 +312,9 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		Image:            cfg.SandboxImage,
 		WorkspaceHostDir: workspaceRoot,
 		Runtime:          cfg.SandboxRuntime,
+		MemoryLimit:      cfg.SandboxMemory, // empty → sandbox default (512m)
+		CPULimit:         cfg.SandboxCPUs,   // empty → sandbox default (1.0)
+		PidsLimit:        cfg.SandboxPids,   // 0 → sandbox default (128)
 		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
 		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot),
 	}
