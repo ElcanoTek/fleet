@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,6 +147,14 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	}
 	defer admin.Close()
 
+	// pg_dump refuses to dump a server newer than itself ("aborting because of
+	// server version mismatch"). That is an environment skew (e.g. a runner
+	// shipping client 16 against a server-18 service), not a code defect, so skip
+	// rather than fail when the major versions disagree.
+	if cm, sm, ok := pgMajorVersions(ctx, admin); ok && cm != sm {
+		t.Skipf("pg_dump major %d != server major %d; skipping round-trip (install a matching postgresql-client)", cm, sm)
+	}
+
 	// Fresh scratch DBs. DROP first in case a prior run left them behind.
 	for _, db := range []string{srcDB, dstDB} {
 		if _, err := admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+db); err != nil {
@@ -220,4 +230,41 @@ func firstBytes(b []byte, n int) []byte {
 
 func isPermissionError(err error) bool {
 	return err != nil && bytes.Contains([]byte(err.Error()), []byte("permission denied"))
+}
+
+// pgMajorVersions returns (pg_dump major, server major, ok). ok is false if
+// either could not be determined (in which case the caller should not skip on a
+// mismatch it cannot prove).
+func pgMajorVersions(ctx context.Context, db *sql.DB) (clientMajor, serverMajor int, ok bool) {
+	out, err := exec.CommandContext(ctx, "pg_dump", "--version").Output()
+	if err != nil {
+		return 0, 0, false
+	}
+	// e.g. "pg_dump (PostgreSQL) 16.14 (Ubuntu 16.14-1.pgdg24.04+1)"
+	fields := strings.Fields(string(out))
+	if len(fields) < 3 {
+		return 0, 0, false
+	}
+	cm := majorOf(fields[2])
+	// server_version_num is e.g. 180004 → major 18.
+	var num int
+	if err := db.QueryRowContext(ctx, "SHOW server_version_num").Scan(&num); err != nil {
+		return 0, 0, false
+	}
+	if cm == 0 || num == 0 {
+		return 0, 0, false
+	}
+	return cm, num / 10000, true
+}
+
+// majorOf parses the leading integer of a version string like "16.14" → 16.
+func majorOf(v string) int {
+	if i := strings.IndexByte(v, '.'); i >= 0 {
+		v = v[:i]
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return 0
+	}
+	return n
 }
