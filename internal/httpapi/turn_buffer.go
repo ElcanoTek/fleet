@@ -168,6 +168,15 @@ func (b *turnBuffer) runPersister() {
 }
 
 // Emit implements agent.EventSink. Assigns a monotonic id, appends to
+// subscriberCount returns the number of live subscribers. Test-only barrier
+// helper: tests poll it (instead of a fixed sleep) to wait until Attach
+// goroutines have registered before Emit.
+func (b *turnBuffer) subscriberCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.subscribers)
+}
+
 // the log, and non-blocking-sends to every live subscriber. Subscribers
 // whose channel is full are evicted — they can reattach and replay
 // from their Last-Event-ID. Must NOT block; fantasy's streaming
