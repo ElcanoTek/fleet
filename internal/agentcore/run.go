@@ -155,6 +155,13 @@ type Result struct {
 	// Entries / FinalText / usage are still returned.
 	Cancelled bool
 
+	// StoppedByBudget is true when the run ended because a per-turn cost/token
+	// ceiling fired (ErrCostCeilingExceeded), not a caller cancel. It is set
+	// alongside Cancelled on the budget path so the driver can tell the user
+	// "budget reached" apart from "stopped by user" while still persisting the
+	// partial transcript.
+	StoppedByBudget bool
+
 	// Usage is the accumulated token + cost accounting for the whole run.
 	Usage RunUsage
 }
@@ -260,7 +267,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			// what the model produced before the cancel. The interactive driver
 			// uses Cancelled to emit turn.cancelled instead of turn.error.
 			//nolint:nilerr // intentional: a cancelled context is a clean stop, not a failure; returning nil error is the contract so the driver persists partial work and emits turn.cancelled.
-			return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
+			return cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), nil
 		}
 
 		// Rebuild on MCP-server dirty (cutlass mcp_load_servers path).
@@ -286,7 +293,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			// the interactive Stop path persists partial work.
 			if ctx.Err() != nil {
 				//nolint:nilerr // intentional: ctx cancellation that surfaced as a stream error is a clean stop; returning nil error is the contract so the Stop path persists partial work.
-				return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
+				return cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), nil
 			}
 			// A cost/token ceiling hit is a clean STOP, not a failure: the
 			// budget-guarded PrepareStep aborted before the next paid completion.
@@ -294,7 +301,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			// partial-result contract as a cancel) so the budget bounds the run
 			// without erroring the turn.
 			if errors.Is(serr, ErrCostCeilingExceeded) {
-				return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
+				res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round)
+				res.StoppedByBudget = true
+				return res, nil
 			}
 			return Result{}, serr
 		}
@@ -373,7 +382,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 // cancelledResult builds the partial Result returned when the run's ctx was
 // cancelled mid-flight. It carries whatever transcript + usage accumulated so
 // the driver can persist the partial work (chat's Stop semantics).
-func cancelledResult(_ context.Context, sink *streamSink, orch *orchestrationState, label string, activeModel fantasy.LanguageModel, swapped bool, round int) Result {
+func cancelledResult(sink *streamSink, orch *orchestrationState, label string, activeModel fantasy.LanguageModel, swapped bool, round int) Result {
 	entries, text := sink.snapshot()
 	final := strings.TrimSpace(text)
 	if final != "" {
