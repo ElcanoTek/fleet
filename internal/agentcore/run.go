@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -285,6 +286,14 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			// the interactive Stop path persists partial work.
 			if ctx.Err() != nil {
 				//nolint:nilerr // intentional: ctx cancellation that surfaced as a stream error is a clean stop; returning nil error is the contract so the Stop path persists partial work.
+				return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
+			}
+			// A cost/token ceiling hit is a clean STOP, not a failure: the
+			// budget-guarded PrepareStep aborted before the next paid completion.
+			// Finish gracefully with the transcript accumulated so far (same
+			// partial-result contract as a cancel) so the budget bounds the run
+			// without erroring the turn.
+			if errors.Is(serr, ErrCostCeilingExceeded) {
 				return cancelledResult(ctx, sink, usageOrch, label, activeModel, swappedToFallback, round), nil
 			}
 			return Result{}, serr

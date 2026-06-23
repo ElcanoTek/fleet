@@ -195,6 +195,30 @@ func newRoundState(e *engine, orch *orchestrationState, maxTokens int64) *roundS
 	return &roundState{engine: e, orch: orch, maxTokens: maxTokens}
 }
 
+// ErrCostCeilingExceeded is returned by the budget-guarded PrepareStep to abort
+// the stream BEFORE the next paid LLM completion once the run's cost/token
+// ceiling is met. The run loop catches it and finishes GRACEFULLY with the
+// transcript accumulated so far (it is a clean stop, not a failure) — the same
+// way a ctx-cancellation is handled. This is the hard backstop behind the
+// soft BeforeToolCall nudge: a model that ignores the nudge (or emits prose with
+// no tool call) is still bounded by the budget, matching cutlass's prepareStep
+// checkBudget. Sentinel so the loop can errors.Is it.
+var ErrCostCeilingExceeded = errors.New("cost/token ceiling exceeded")
+
+// budgetGuardedStep wraps a PrepareStep with a pre-completion ceiling check.
+// When the orchestration's ceiling is already met it returns ErrCostCeilingExceeded
+// so fantasy aborts before the next completion; otherwise it defers to inner.
+func budgetGuardedStep(orch *orchestrationState, inner fantasy.PrepareStepFunction) fantasy.PrepareStepFunction {
+	return func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+		if orch != nil {
+			if blocked, msg := orch.checkCeilings(); blocked {
+				return ctx, fantasy.PrepareStepResult{}, fmt.Errorf("%w: %s", ErrCostCeilingExceeded, msg)
+			}
+		}
+		return inner(ctx, opts)
+	}
+}
+
 // stepStopConditions turns the configured per-round step cap into a fantasy
 // stop condition. Zero (or negative) means "no cap" — loop until the model
 // stops on its own (bounded by the per-turn timeout + cost ceiling). This is
@@ -274,6 +298,6 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			}
 			return nil
 		},
-		PrepareStep: promptCachingStep(modelSlug, WithCacheEnvPrefix(r.engine.envPrefix)),
+		PrepareStep: budgetGuardedStep(r.orch, promptCachingStep(modelSlug, WithCacheEnvPrefix(r.engine.envPrefix))),
 	})
 }
