@@ -36,6 +36,12 @@ type engine struct {
 	// temperature + maxRetries plumbing for the round stream.
 	temperature float64
 
+	// maxIterations caps the agent steps within a single round's stream (0 = no
+	// cap). Wired into AgentStreamCall.StopWhen via stepStopConditions so a model
+	// that never stops calling tools is bounded by the configured budget rather
+	// than only the per-turn timeout + cost ceiling.
+	maxIterations int
+
 	// compactionSummarizer, when set, produces the summary message for a
 	// force-compaction. When nil a deterministic placeholder is used.
 	compactionSummarizer func(ctx context.Context, droppable []fantasy.Message) fantasy.Message
@@ -189,6 +195,19 @@ func newRoundState(e *engine, orch *orchestrationState, maxTokens int64) *roundS
 	return &roundState{engine: e, orch: orch, maxTokens: maxTokens}
 }
 
+// stepStopConditions turns the configured per-round step cap into a fantasy
+// stop condition. Zero (or negative) means "no cap" — loop until the model
+// stops on its own (bounded by the per-turn timeout + cost ceiling). This is
+// what wires CHAT_MAX_ITERATIONS / a task's max_iterations into the loop; before
+// it, the value was read into config but never applied, so a model that never
+// stopped calling tools ran unbounded within a round.
+func stepStopConditions(maxIterations int) []fantasy.StopCondition {
+	if maxIterations <= 0 {
+		return nil
+	}
+	return []fantasy.StopCondition{fantasy.StepCountIs(maxIterations)}
+}
+
 // stream drives one fantasy stream call for the round, wiring the resilience
 // retry budget, usage accounting, the prompt-cache prepare step, AND the full
 // streaming bridge: text / reasoning / tool-call / tool-result callbacks forward
@@ -209,6 +228,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		Temperature:     &temp,
 		ProviderOptions: r.engine.providerOptions(modelSlug),
 		MaxRetries:      &maxRetries,
+		StopWhen:        stepStopConditions(r.engine.maxIterations),
 		OnRetry:         r.engine.onRetry,
 		OnTextDelta: func(_, text string) error {
 			if sink != nil {

@@ -347,7 +347,13 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	}
 
 	// Scheduled policy: audit gating + finish enforcement (agentcore) + verifier.
-	inner := agentcore.NewScheduledPolicy(a.logSession, a.maxIterations)
+	var maxCostUSD float64
+	var maxTotalTokens int
+	if a.config != nil {
+		maxCostUSD = a.config.MaxCostUSD
+		maxTotalTokens = a.config.MaxTotalTokens
+	}
+	inner := agentcore.NewScheduledPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTotalTokens)
 	if a.noteProposer != nil {
 		inner.SetNoteProposer(a.noteProposer)
 	}
@@ -401,6 +407,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         temp,
 		MaxCompletionTokens: maxTokens,
+		MaxIterations:       a.maxIterations,
 		Allowlist:           allow,
 		OptionalServers:     optional,
 		Selection:           a.selection(),

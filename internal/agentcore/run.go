@@ -35,6 +35,13 @@ type RunConfig struct {
 	// MaxCompletionTokens caps a single completion's output (defaults to
 	// DefaultMaxCompletionTokens when zero).
 	MaxCompletionTokens int
+	// MaxIterations caps the number of agent STEPS (tool-call/model round-trips)
+	// within a single round's fantasy stream. 0 = no cap (loop until the model
+	// stops on its own, bounded only by the per-turn timeout + cost ceiling).
+	// Wired into the stream's StopWhen so a model that never stops calling tools
+	// is bounded by the configured budget. Per-round (each enforcement round gets
+	// a fresh step budget), matching the legacy chat/cutlass per-turn cap.
+	MaxIterations int
 	// Allowlist is the per-server tool allowlist (Gate-2).
 	Allowlist mcpAllowlist
 	// OptionalServers is the authoritative catalog of Optional servers.
@@ -186,6 +193,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		envPrefix:            cfg.EnvPrefix,
 		compactionSummarizer: deps.CompactionSummarizer,
 		usageReporter:        deps.UsageReporter,
+		maxIterations:        cfg.MaxIterations,
 	}
 
 	systemPrompt, messages, label, err := deps.Input.Prompt(ctx)

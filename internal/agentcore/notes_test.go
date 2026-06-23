@@ -110,7 +110,7 @@ func TestCheckNoteProposal_InvalidArgs(t *testing.T) {
 // is wired into the scheduled Policy's BeforeToolCall chain (BOTH modes), via
 // SetNoteProposer.
 func TestScheduledPolicyInterceptsProposeNote(t *testing.T) {
-	p := NewScheduledPolicy(NewLogSession(), 50)
+	p := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
 	fp := &fakeNoteProposer{id: "sp-1"}
 	p.SetNoteProposer(fp)
 	blocked, msg := p.BeforeToolCall("propose_note", "call-1", `{"slug":"s","title":"t","body":"b"}`)

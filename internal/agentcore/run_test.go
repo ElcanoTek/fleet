@@ -113,7 +113,7 @@ func TestInteractivePolicy_CanFinish_AlwaysRound1(t *testing.T) {
 // continues. We cap the model to stop so the loop terminates once the audit
 // state is satisfied (set directly after round 0).
 func TestScheduledPolicy_LoopsUntilAuditClears(t *testing.T) {
-	policy := NewScheduledPolicy(NewLogSession(), 50)
+	policy := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
 	round := int32(0)
 	model := &mockModel{
 		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
