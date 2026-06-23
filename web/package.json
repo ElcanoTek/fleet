@@ -12,12 +12,10 @@
     "test:e2e": "playwright test",
     "test:e2e:mocked": "playwright test --project=mocked",
     "test:e2e:live": "E2E_LIVE=1 playwright test --project=live",
-    "test:e2e:live:real": "E2E_LIVE=1 playwright test --project=live",
     "test:e2e:canary": "E2E_CANARY=1 playwright test --project=canary",
     "test:all": "npm run test && npm run test:e2e"
   },
   "dependencies": {
-    "@types/react-syntax-highlighter": "^15.5.13",
     "geist": "^1.7.2",
     "next": "16.2.9",
     "react": "19.2.7",
@@ -33,6 +31,7 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^26",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.2",
