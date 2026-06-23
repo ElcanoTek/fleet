@@ -32,13 +32,14 @@
 # its own base digest. This generic flavor is what fleet builds on-box when a
 # deployment uses the default bundle (or any bundle that doesn't override it).
 #
-# Base pinned by DIGEST (not :latest) for reproducible, audit-stable builds:
-# the same bytes build the same image regardless of when the upstream
-# fedora-minimal:latest tag moves. Refresh deliberately by re-pulling
-# fedora-minimal:latest and updating the digest below. Clients pin their OWN
-# base digest in their own bundle's Containerfile.
+# Base tracks fedora-minimal:latest, so every on-box rebuild picks up the current
+# upstream security patches with no manual digest bumps — the right default for a
+# self-hosted box you rebuild deliberately (bootstrap/update build this image).
+# If you instead want byte-for-byte reproducible, audit-stable builds, pin a
+# digest here (FROM registry.fedoraproject.org/fedora-minimal@sha256:<digest>);
+# each client bundle's own Containerfile can make that choice independently.
 
-FROM registry.fedoraproject.org/fedora-minimal@sha256:44f3e90b32a35832753f5533f838576d142d164207aa8b10d179178beb608af8
+FROM registry.fedoraproject.org/fedora-minimal:latest
 
 # Python stack via Fedora RPMs rather than pip. Fedora rebuilds the
 # native packages against whatever python3 it ships, which sidesteps

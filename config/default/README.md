@@ -70,8 +70,9 @@ servers, and use skills only from sources you trust.
 
 Agent tool calls (`bash`, `run_python`) execute inside a hardened, rootless
 container. That image is a **per-client bundle artifact**, not a fleet-global
-one — each bundle ships its own `sandbox/Containerfile` flavor (and pins its own
-base-image **digest** for reproducibility; see this bundle's
+one — each bundle ships its own `sandbox/Containerfile` flavor (whose base tracks
+`fedora-minimal:latest`, so on-box rebuilds pick up current patches — pin a digest
+there if you want byte-for-byte reproducible builds; see this bundle's
 `sandbox/Containerfile`).
 
 The manifest's `sandbox:` block declares it:

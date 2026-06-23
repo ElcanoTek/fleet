@@ -342,36 +342,43 @@ proxies, server-side over loopback, to the two Go backends the single process
 boots (chat on `127.0.0.1:8080`, orchestrator on `:8000`). Caddy fronts the web
 app with TLS; the backends stay loopback-only.
 
-> **Single-host by design.** The concurrency cap is a per-process semaphore and
-> scheduled-task crash recovery uses single-owner database leases — both assume
-> one running process. fleet scales **vertically** (a bigger host), not by
-> running multiple replicas. Kubernetes shops: see
-> [Deploying on Kubernetes](#deploying-on-kubernetes) — the model is the same
-> (a single-replica, node-pinned workload), and a plain VM is often the simpler
-> choice.
+> **Single-host by design.** Scheduled-task crash recovery uses single-owner
+> database leases and the worker-pool concurrency cap is a per-process semaphore —
+> both assume one running process. fleet scales **vertically**: put it on a
+> bigger box, not more replicas. One well-specced server goes a long way (see the
+> sizing table below).
 
 ### Choosing a host (sizing)
 
 The dominant cost is the **execution sandbox**: each concurrently-running agent
 holds one rootless-Podman container (the ~1.3 GB Python/IPython image) doing the
 agent's bash/`run_python` work. Model inference is **remote** (OpenRouter), so
-you are sizing for sandbox CPU/RAM and image+workspace disk, not GPUs. Size the
-host to your concurrency cap (`FLEET_MAX_CONCURRENT_AGENTS`, default **4** —
-shared across interactive chat *and* scheduled tasks):
+you are sizing for sandbox CPU/RAM and image+workspace disk, not GPUs — which is
+exactly why fleet goes so far on a single box: one well-specced server runs an
+org's worth of concurrent agents.
 
-| Concurrent agents | vCPU | RAM   | Disk  | Who it's for                          |
-| ----------------- | ---- | ----- | ----- | ------------------------------------- |
-| 2                 | 2    | 8 GB  | 40 GB | trial / a couple of users             |
-| 4 (default)       | 4    | 16 GB | 80 GB | a small team                          |
-| 8                 | 8    | 32 GB | 120 GB| a busy team / steady scheduled load   |
-| 16                | 16   | 64 GB | 200 GB| heavy concurrent + scheduled workloads|
+`FLEET_MAX_CONCURRENT_AGENTS` (default **8**) caps simultaneous **scheduled
+tasks**, and the sandbox warm pool scales with it (up to 8 pre-warmed).
+Interactive chat turns are **not** gated by this cap — each takes a sandbox on
+demand, bounded only by host resources — so size the host for your expected
+**peak concurrent agents across chat *and* scheduled tasks**:
+
+| Concurrent agents | vCPU | RAM    | Disk   | Who it's for                              |
+| ----------------- | ---- | ------ | ------ | ----------------------------------------- |
+| 2                 | 2    | 8 GB   | 40 GB  | trial / a couple of users                 |
+| 8 (default)       | 8    | 32 GB  | 120 GB | a team / steady scheduled load            |
+| 16                | 16   | 64 GB  | 200 GB | a busy team, heavy concurrent + scheduled |
+| 32                | 32   | 128 GB | 400 GB | a department running agents all day       |
+| 64                | 64   | 256 GB | 800 GB | a large org on one big box                |
 
 Rule of thumb: a **~2 vCPU / 6 GB base** (the Go process + web app + local
 Postgres) plus **~1 vCPU and ~1.5–3 GB RAM per concurrent agent**, and disk for
 the sandbox image (~1.5 GB) + the Podman overlay store + your persistent
 per-conversation workspaces. Heavy `pandas`/`matplotlib` workloads push RAM per
-agent up; bump the cap and the host together (keep the warm pool `≤` the cap).
-External managed Postgres lowers the host's base footprint.
+agent up. A single large server (**32–64 cores, 128–256 GB RAM** — a few thousand
+dollars of dedicated hardware) comfortably runs an org's worth of agents; raise
+`FLEET_MAX_CONCURRENT_AGENTS` and the host together. External managed Postgres
+lowers the host's base footprint.
 
 ### Quick start (one host)
 
@@ -441,7 +448,7 @@ does (and the manual path if you'd rather run each piece yourself):
    make build                              # → ./fleet AND ./fleet-admin
    # The sandbox image is a per-client BUNDLE artifact (build-on-box by default):
    # the Containerfile lives in the bundle at <bundle>/sandbox/Containerfile and
-   # each client ships + digest-pins its own flavor. Build the bundle's sandbox:
+   # each client ships its own flavor. Build the bundle's sandbox:
    FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh   # → the manifest's tag (podman)
    #   (defaults to config/default → localhost/fleet-sandbox:latest)
    cd web && npm ci && npm run build       # Next production build
@@ -453,9 +460,10 @@ does (and the manual path if you'd rather run each piece yourself):
    and skips the build. fleet resolves the ref from the bundle
    (`clientconfig.Sandbox().ResolvedImageRef()` — `image` if set, else `tag`); an
    explicit `FLEET_SANDBOX_IMAGE` env var still overrides. fleet never builds at
-   process startup — this deploy step (or the client's registry push) does.
-   Reproducibility comes from the digest-pinned base each bundle's Containerfile
-   owns.
+   process startup — this deploy step (or the client's registry push) does. Each
+   bundle's Containerfile owns its base image: the shipped defaults track
+   `fedora-minimal:latest` so on-box rebuilds pick up current patches — pin a
+   digest there if you need byte-for-byte reproducible builds.
 
 3. **systemd** — run the single binary under `deploy/fleet.service` (it
    `EnvironmentFile`s the 0600 env file, `Restart=always`, drains the worker
@@ -495,17 +503,6 @@ does (and the manual path if you'd rather run each piece yourself):
 
 See `deploy/fleet.service` and `deploy/Caddyfile` for the full annotated knob
 list (listener addresses, admin/registration tokens, data dir, timezone).
-
-### Deploying on Kubernetes
-
-If you run everything on Kubernetes, fleet can live there too — but it's a
-**VM-shaped workload**: a single-replica, node-pinned StatefulSet (the
-concurrency cap and crash-recovery leases assume one process), and the pod must
-run nested rootless Podman for the sandbox (cleanly via a **sysbox** node pool,
-or a privileged-namespace fallback). A dedicated VM is often the simpler choice.
-See **[`docs/DEPLOY-KUBERNETES.md`](docs/DEPLOY-KUBERNETES.md)** for the
-architecture, reference manifests, the node-local-graphroot storage gotcha, and
-a validation checklist.
 
 ## Operating fleet
 
@@ -657,7 +654,8 @@ runbook, a cron example, and the round-trip verification procedure.
 ### Where the sandbox build fits
 
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its
-own `sandbox/Containerfile` (digest-pinned base). `bootstrap` builds it on the
+own `sandbox/Containerfile` (base tracks `fedora-minimal:latest`; pin a digest
+for reproducibility). `bootstrap` builds it on the
 box by default (auditable supply chain); `update` rebuilds it only when the
 Containerfile changed; `status` verifies the resolved image runs. Registry
 publish stays opt-in — set `sandbox.image` in the bundle manifest to a prebuilt
@@ -702,9 +700,9 @@ standards. Our thanks to the teams and communities behind them:
   containers. Every agent tool call (`bash`, `run_python`, MCP) executes inside a
   rootless-Podman sandbox; there is no trusted fast path that skips it.
 - **[Fedora](https://fedoraproject.org)** — `fedora-minimal`
-  (`registry.fedoraproject.org/fedora-minimal`) is the slim, **digest-pinned**
-  base image for the default sandbox: a small attack surface and reproducible
-  builds, with RPM-sourced Python rather than runtime `pip`.
+  (`registry.fedoraproject.org/fedora-minimal`) is the slim base image for the
+  default sandbox: a small attack surface and current security patches on every
+  on-box rebuild, with RPM-sourced Python rather than runtime `pip`.
 - **[Model Context Protocol](https://modelcontextprotocol.io)** and its SDKs —
   the open standard fleet speaks (stdio + HTTP) to reach tools and data through a
   credential-brokered MCP catalog.
