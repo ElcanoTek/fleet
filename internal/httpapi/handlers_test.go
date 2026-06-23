@@ -72,6 +72,20 @@ func serverFixture(t *testing.T) *Server {
 // isMember back to nil to exercise the real store.IsUser path.
 func allowAllMembers(context.Context, string) (bool, error) { return true, nil }
 
+// concreteStore returns the Postgres store behind a DB-backed fixture. Server
+// holds the chatStore interface (so the always-on tests can inject an in-memory
+// fake), but serverFixture/mockServer always wire a real *store.Store, so the
+// DB-gated tests that need concrete-only methods (CreateUser, MarkRunningTurns-
+// Errored) recover it through this assertion.
+func (s *Server) concreteStore(t *testing.T) *store.Store {
+	t.Helper()
+	st, ok := s.store.(*store.Store)
+	if !ok {
+		t.Fatalf("fixture store is %T, not *store.Store", s.store)
+	}
+	return st
+}
+
 // seedUser provisions a chat user so requests authenticating as that email
 // clear membershipMiddleware. Idempotent: a duplicate insert is ignored so
 // callers needn't track which emails the fixture already seeded.

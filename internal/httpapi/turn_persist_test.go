@@ -58,7 +58,7 @@ func TestPersister_BackfillHealsDropsUnderLatency(t *testing.T) {
 
 	ctx, cc := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cc()
-	slow := &slowPersister{Store: s.store, delay: 40 * time.Millisecond}
+	slow := &slowPersister{Store: s.concreteStore(t), delay: 40 * time.Millisecond}
 	if err := buf.attachPersister(ctx, slow); err != nil {
 		t.Fatalf("attachPersister: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestPersister_LossyWhenBackfillFails(t *testing.T) {
 	// Every InsertTurnEvents fails: the live flush fails (→ needsBackfill) AND the
 	// Finish backfill fails (→ lossy). FinishTurn itself is a different statement
 	// (delegated to the real store), so the turn still seals.
-	failing := &slowPersister{Store: s.store, failInserts: true}
+	failing := &slowPersister{Store: s.concreteStore(t), failInserts: true}
 	if err := buf.attachPersister(ctx, failing); err != nil {
 		t.Fatalf("attachPersister: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestCrashRecovery_MarksRunningTurnsErrored(t *testing.T) {
 		t.Fatalf("InsertTurnEvents: %v", err)
 	}
 
-	stranded, err := s.store.MarkRunningTurnsErrored(t.Context())
+	stranded, err := s.concreteStore(t).MarkRunningTurnsErrored(t.Context())
 	if err != nil {
 		t.Fatalf("MarkRunningTurnsErrored: %v", err)
 	}

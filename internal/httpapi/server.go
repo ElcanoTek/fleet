@@ -31,7 +31,7 @@ import (
 type Server struct {
 	cfg           *config.Config
 	agent         turnEngine
-	store         *store.Store
+	store         chatStore
 	sharedToken   string
 	rate          *rateLimiter
 	hasUsers      atomic.Bool
@@ -106,7 +106,7 @@ func (e inflightEntry) IsRunning() bool {
 // in mock mode and in tests that exercise only the DB-backed, mock-turn, or
 // auth paths — the live turn path short-circuits before touching it. cmd/fleet
 // (P6b) supplies the concrete engine implementation.
-func New(cfg *config.Config, mgr turnEngine, st *store.Store, opts ...Option) *Server {
+func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Server {
 	s := &Server{
 		cfg:         cfg,
 		agent:       mgr,
