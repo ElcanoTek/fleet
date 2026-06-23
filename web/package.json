@@ -10,8 +10,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:live": "CHAT_E2E_LIVE=1 playwright test",
+    "test:e2e:mocked": "playwright test --project=mocked",
+    "test:e2e:live": "E2E_LIVE=1 playwright test --project=live",
     "test:e2e:live:real": "E2E_LIVE=1 playwright test --project=live",
+    "test:e2e:canary": "E2E_CANARY=1 playwright test --project=canary",
     "test:all": "npm run test && npm run test:e2e"
   },
   "dependencies": {

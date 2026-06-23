@@ -72,14 +72,17 @@ npm run build
 cd web
 npx playwright install --with-deps chromium
 
-# Mocked suite — deterministic, no backend; this is the CI gate:
-npx playwright test --project=chromium
+# Mocked suite — deterministic, no backend; the fast CI lane:
+npx playwright test --project=mocked   # or: npm run test:e2e:mocked
 
-# Live suite — requires a real Go backend; see web/e2e/README.md.
+# Live suite — boots the real stack (Postgres + Go + Podman), fakes only the
+# LLM; see web/e2e/live/README.md:
+npm run test:e2e:live
 ```
 
 The mocked suite route-intercepts every backend call, so it runs on a bare
-runner with no database, podman, or API keys. The live suite is local-only.
+runner with no database, podman, or API keys. The live suite boots the whole
+real stack and runs in CI too (the `e2e-live` job) — it is not local-only.
 
 ## Continuous integration
 
