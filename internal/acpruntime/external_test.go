@@ -368,3 +368,18 @@ func TestExternalRunArgs_WorkspacePosture(t *testing.T) {
 		t.Fatalf("no workspace: must NOT bind any host volume, got: %v", scratch)
 	}
 }
+
+// TestExternalRunArgs_NetworkPosture is the regression guard for #85: a
+// `network: none` flavor (NoNetwork=true) seals the container's network
+// namespace; other postures leave default egress (no --network flag — model_only
+// is firewall-enforced, not sealed here).
+func TestExternalRunArgs_NetworkPosture(t *testing.T) {
+	sealed := strings.Join(NewExternalRuntime(ExternalConfig{Image: "img", NoNetwork: true}).runArgs(), " ")
+	if !strings.Contains(sealed, "--network=none") {
+		t.Fatalf("NoNetwork=true must seal the namespace with --network=none, got: %s", sealed)
+	}
+	open := strings.Join(NewExternalRuntime(ExternalConfig{Image: "img"}).runArgs(), " ")
+	if strings.Contains(open, "--network") {
+		t.Fatalf("default posture must NOT pass a --network flag, got: %s", open)
+	}
+}

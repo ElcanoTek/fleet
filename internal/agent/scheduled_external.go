@@ -112,6 +112,8 @@ func (a *Agent) runScheduledExternal(ctx context.Context, task string) error {
 		// to an external agent (the containment-tier invariant, identical to
 		// interactive-external).
 		ProviderEnv: providerEnv(flavor.ModelEnv),
+		// Seal the network namespace when the flavor declares `network: none`.
+		NoNetwork: flavor.Network == clientconfig.RuntimeNetworkNone,
 	})
 
 	res, err := rt.Run(ctx, task, acpruntime.ExternalDeps{
