@@ -31,8 +31,8 @@
 //	fleet runs python, re-calls →
 //	turn 2 → Step 2 (final assistant text).
 //
-// Steps can also inject failures (429/500/malformed/timeout) for resilience
-// coverage. When no marker matches, DefaultScenario is used.
+// A step can also inject an error status (429/500) to exercise fleet's
+// retry/backoff path. When no marker matches, DefaultScenario is used.
 //
 // For the common "give this conversation a distinct, predictable reply" case
 // there is a lighter seam than a scenario: an "[[echo:TEXT]]" marker makes every
@@ -66,13 +66,6 @@ const (
 	// StepStatus replies with a non-2xx HTTP status (e.g. 429, 500) before any
 	// streaming, exercising fleet's retry/backoff path.
 	StepStatus StepKind = "status"
-	// StepMalformed streams a body that is not valid SSE/JSON, exercising the
-	// parser's error handling.
-	StepMalformed StepKind = "malformed"
-	// StepTimeout sleeps past any reasonable client deadline without writing a
-	// terminal chunk, exercising fleet's timeout handling. The sleep is bounded
-	// by the request context so the server never leaks a goroutine.
-	StepTimeout StepKind = "timeout"
 )
 
 // ToolCall is one assistant tool invocation to emit in a StepToolCalls.
@@ -99,8 +92,8 @@ type Step struct {
 	Status int
 	// StatusBody is the optional response body for StepStatus.
 	StatusBody string
-	// Delay sleeps before the step responds (StepTimeout uses it as the sleep
-	// duration; other kinds may use it to simulate latency).
+	// Delay sleeps before the step responds (StepStatus and the streaming steps
+	// use it to simulate latency).
 	Delay time.Duration
 }
 
@@ -260,25 +253,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			bodyText = fmt.Sprintf(`{"error":{"message":"fake-llm injected %d","type":"server_error","code":%d}}`, code, code)
 		}
 		_, _ = io.WriteString(w, bodyText)
-		return
-	case StepMalformed:
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		// Not valid SSE/JSON: a bare data line with garbage and no terminator.
-		_, _ = io.WriteString(w, "data: {not-json[[[\n\n")
-		flush(w)
-		return
-	case StepTimeout:
-		d := step.Delay
-		if d == 0 {
-			d = 60 * time.Second
-		}
-		// Begin a stream then stall; bounded by the request context so we never
-		// leak. fleet's per-call deadline fires first.
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		flush(w)
-		sleepCtx(r, d)
 		return
 	case StepToolCalls:
 		if !req.Stream {

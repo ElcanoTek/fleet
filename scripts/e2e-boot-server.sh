@@ -250,51 +250,89 @@ ensure_sandbox() {
   log "sandbox: probe OK"
 }
 
+# build_acp_image_if_stale IMAGE CONTAINERFILE SRCDIR LOGBASE — (re)build IMAGE
+# when it is absent, when FLEET_ACP_E2E_REBUILD=1, or when any build input
+# (SRCDIR, the Containerfile, or go.mod) is newer than the cached image. A stale
+# local image would silently test OLD agent code — a real footgun: it fails
+# confusingly, or false-passes on an additive change. On any inspect/find error
+# we keep the existing image, so this can never make the boot stricter than
+# before. (Deep transitive deps aren't tracked; FLEET_ACP_E2E_REBUILD=1 forces a
+# rebuild.)
+build_acp_image_if_stale() {
+  local image="$1" containerfile="$2" srcdir="$3" logbase="$4"
+  shift 4
+  # Any remaining args are extra `podman build` flags (e.g. --build-arg).
+  command -v podman >/dev/null 2>&1 || die "podman is required for the ACP e2e"
+  local need_build=0 reason=""
+  if ! podman image exists "$image" 2>/dev/null; then
+    need_build=1 reason="not present"
+  elif [[ "${FLEET_ACP_E2E_REBUILD:-}" == "1" ]]; then
+    need_build=1 reason="FLEET_ACP_E2E_REBUILD=1"
+  else
+    local created
+    created="$(podman image inspect "$image" --format '{{.Created}}' 2>/dev/null || true)"
+    if [[ -n "$created" ]] && [[ -n "$(find "$srcdir" "$containerfile" \
+        "$REPO_ROOT/go.mod" -newermt "$created" -print -quit 2>/dev/null)" ]]; then
+      need_build=1 reason="source newer than image"
+    fi
+  fi
+  if [[ "$need_build" == "1" ]]; then
+    log "$logbase: building image $image ($reason)"
+    podman build "$@" -f "$containerfile" -t "$image" "$REPO_ROOT" \
+      >>"$LOG_DIR/$logbase-build.log" 2>&1 \
+      || die "$logbase image build failed (see $LOG_DIR/$logbase-build.log)"
+  fi
+}
+
 # ── 3b. ensure the external ACP example-agent image + drive it end-to-end ──
-# The plan's live external proof: fleet's ExternalRuntime drives the coder-SDK-
-# shaped, credential-free ACP example agent (cmd/acp-example-agent) over real
+# The external proof: fleet's ExternalRuntime drives the coder-SDK-shaped,
+# credential-free ACP example agent (cmd/acp-example-agent) over real
 # podman-stdio — a turn streams + a permission request is handled (allow +
 # default-deny). This is the GENERIC external path Claude Code / Goose ride. We
 # build the image and run the Go live test (TestExternalPodmanE2E) as part of the
 # live suite so it can never silently rot.
 FLEET_ACP_EXTERNAL_E2E_IMAGE="${FLEET_ACP_EXTERNAL_E2E_IMAGE:-localhost/fleet-acp-example-agent:latest}"
 ensure_acp_example_agent() {
-  command -v podman >/dev/null 2>&1 || die "podman is required for the external ACP e2e"
-  local need_build=0 reason=""
-  if ! podman image exists "$FLEET_ACP_EXTERNAL_E2E_IMAGE" 2>/dev/null; then
-    need_build=1 reason="not present"
-  elif [[ "${FLEET_ACP_E2E_REBUILD:-}" == "1" ]]; then
-    need_build=1 reason="FLEET_ACP_E2E_REBUILD=1"
-  else
-    # Rebuild a STALE image: if any build input is newer than the image, the
-    # cached image predates a source change and the e2e would silently test old
-    # agent code (a real footgun — a stale local image fails confusingly or, if
-    # the change is additive, false-passes). On any inspect/find error we fall
-    # back to the existing image, so this can never make the boot stricter than
-    # before. (Deep transitive deps aren't tracked; FLEET_ACP_E2E_REBUILD=1
-    # forces a rebuild.)
-    local created
-    created="$(podman image inspect "$FLEET_ACP_EXTERNAL_E2E_IMAGE" --format '{{.Created}}' 2>/dev/null || true)"
-    if [[ -n "$created" ]] && [[ -n "$(find \
-        "$REPO_ROOT/cmd/acp-example-agent" \
-        "$REPO_ROOT/config/default/sandbox/Containerfile.acp-example-agent" \
-        "$REPO_ROOT/go.mod" -newermt "$created" -print -quit 2>/dev/null)" ]]; then
-      need_build=1 reason="source newer than image"
-    fi
-  fi
-  if [[ "$need_build" == "1" ]]; then
-    log "acp-example-agent: building image $FLEET_ACP_EXTERNAL_E2E_IMAGE ($reason)"
-    podman build -f "$REPO_ROOT/config/default/sandbox/Containerfile.acp-example-agent" \
-      -t "$FLEET_ACP_EXTERNAL_E2E_IMAGE" "$REPO_ROOT" \
-      >>"$LOG_DIR/acp-example-agent-build.log" 2>&1 \
-      || die "acp-example-agent image build failed (see $LOG_DIR/acp-example-agent-build.log)"
-  fi
+  build_acp_image_if_stale "$FLEET_ACP_EXTERNAL_E2E_IMAGE" \
+    "$REPO_ROOT/config/default/sandbox/Containerfile.acp-example-agent" \
+    "$REPO_ROOT/cmd/acp-example-agent" "acp-example-agent"
   log "acp-example-agent: driving the external ACP path end-to-end (fleet ↔ example agent over podman-stdio)"
   FLEET_ACP_EXTERNAL_E2E_IMAGE="$FLEET_ACP_EXTERNAL_E2E_IMAGE" \
     go test ./internal/acpruntime/ -count=1 -run 'TestExternalPodmanE2E' \
     >>"$LOG_DIR/acp-external-e2e.log" 2>&1 \
     || die "external ACP e2e FAILED — fleet could not drive the example agent (see $LOG_DIR/acp-external-e2e.log)"
   log "acp-example-agent: external ACP e2e OK"
+}
+
+# ── 3c. ensure the native-agent image + run the native ACP podman e2e ──
+# The native client proof: fleet's ClientRuntime spawns the native-agent image
+# (cmd/fleet-native-agent) over podman-stdio; the in-container agent runs a real
+# agentcore.Run loop, issues a governed bash tool call delegated back over
+# `_fleet/tool`, and — critically — proves the #2 non-negotiable invariant: an
+# MCP tool call succeeds via the HOST broker while NO MCP credential ever enters
+# the container (TestPodmanE2E_*NoCredsInContainer). The in-container agent
+# reaches the host-side fake LLM at host.containers.internal, which podman maps
+# to the host in BOTH rootful (bridge gateway) and rootless (pasta/slirp4netns)
+# networking — verified on rootless pasta — so this gate holds on the CI runner's
+# rootless podman as well as locally. Set FLEET_ACP_E2E_HOST_IP to override.
+FLEET_ACP_NATIVE_E2E_IMAGE="${FLEET_ACP_E2E_IMAGE:-localhost/fleet-native-agent:latest}"
+ensure_native_agent() {
+  # The native-agent image extends the sandbox base (Containerfile.native-agent's
+  # SANDBOX_BASE arg, default localhost/fleet-sandbox:latest). Pass the RESOLVED
+  # sandbox image so the build works when the live stack uses a non-local tag
+  # (e.g. CI pulls ghcr.io/elcanotek/sandbox:latest) — otherwise the hardcoded
+  # default base is absent locally and podman tries to pull "localhost/...".
+  build_acp_image_if_stale "$FLEET_ACP_NATIVE_E2E_IMAGE" \
+    "$REPO_ROOT/config/default/sandbox/Containerfile.native-agent" \
+    "$REPO_ROOT/cmd/fleet-native-agent" "native-agent" \
+    --build-arg "SANDBOX_BASE=$FLEET_SANDBOX_IMAGE"
+  log "native-agent: driving the native ACP path end-to-end (credentials stay host-side)"
+  FLEET_ACP_E2E_IMAGE="$FLEET_ACP_NATIVE_E2E_IMAGE" \
+  FLEET_ACP_E2E_HOST_IP="${FLEET_ACP_E2E_HOST_IP:-host.containers.internal}" \
+    go test ./internal/acpruntime/ -count=1 -run 'TestPodmanE2E' \
+    >>"$LOG_DIR/acp-native-e2e.log" 2>&1 \
+    || die "native ACP e2e FAILED — fleet could not drive the native agent or a credential leaked into the container (see $LOG_DIR/acp-native-e2e.log)"
+  log "native-agent: native ACP e2e OK (incl. no-creds-in-container proof)"
 }
 
 # ── 4. start fake-llm (skipped in canary mode) ──
@@ -410,6 +448,7 @@ main() {
   build_binaries
   ensure_sandbox
   ensure_acp_example_agent
+  ensure_native_agent
   start_fake_llm
   start_fleet
   seed_users
