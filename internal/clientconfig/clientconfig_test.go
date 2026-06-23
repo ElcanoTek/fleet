@@ -3,6 +3,7 @@ package clientconfig
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -394,5 +395,48 @@ agent_policy:
 	}
 	if !b.AgentPolicy().AllowUngovernedScheduledAgents {
 		t.Error("agent_policy.allow_ungoverned_scheduled_agents=true must plumb through to AgentPolicy()")
+	}
+}
+
+// TestValidateMCPArgPaths is the regression guard for #90: a stdio server whose
+// relative script arg is missing from the bundle is flagged at load time (so a
+// misspelled/absent mcp/*.py is caught, not left as a silent runtime launch
+// failure), while a present script + the shipped generic bundle report none.
+func TestValidateMCPArgPaths(t *testing.T) {
+	root := repoRoot(t)
+	// The shipped generic bundle must be clean.
+	def, err := Load(filepath.Join(root, "config", "default"))
+	if err != nil {
+		t.Fatalf("load config/default: %v", err)
+	}
+	if probs := def.ValidateMCPArgPaths(); len(probs) != 0 {
+		t.Fatalf("config/default should have no MCP arg-path problems, got: %v", probs)
+	}
+
+	// A bundle referencing a present vs a missing script.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "mcp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mcp", "present.py"), []byte("# ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "branding: {}\n" +
+		"mcp_servers:\n" +
+		"  - name: good\n    type: stdio\n    command: python3\n    args: [\"mcp/present.py\"]\n" +
+		"  - name: bad\n    type: stdio\n    command: python3\n    args: [\"mcp/missing.py\"]\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load synthetic bundle: %v", err)
+	}
+	probs := b.ValidateMCPArgPaths()
+	if len(probs) != 1 {
+		t.Fatalf("expected exactly 1 problem (the missing script), got %d: %v", len(probs), probs)
+	}
+	if !strings.Contains(probs[0], "missing.py") || !strings.Contains(probs[0], `"bad"`) {
+		t.Fatalf("problem should name the bad server + missing script, got: %s", probs[0])
 	}
 }
