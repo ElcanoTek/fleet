@@ -1,4 +1,4 @@
-// Command fleet is THE Mega Box binary. It boots, in ONE process:
+// Command fleet is THE single fleet process. It boots, in ONE process:
 //
 //   - the chat HTTP/SSE server (httpapi) on :8080, driven by the concrete
 //     interactive turnEngine (agent.Manager over agentcore.Run);
@@ -48,7 +48,7 @@ import (
 
 func main() {
 	// Subcommand dispatch. With no args (or any non-subcommand arg) fleet boots
-	// THE Mega Box server (run). `fleet acp` instead runs fleet AS an ACP AGENT
+	// THE fleet server (run). `fleet acp` instead runs fleet AS an ACP AGENT
 	// over stdio (P-ACP-3 ingress): an external editor launches it and drives
 	// fleet's OWN governed pipeline. The ingress path deliberately does NOT boot
 	// the HTTP servers / scheduler / worker pool — it is a single-process stdio

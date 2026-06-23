@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/bootstrap.sh — Mega Box DB + credential-store bootstrap for fleet.
+# scripts/bootstrap.sh — fleet DB + credential-store bootstrap for fleet.
 #
 # Merges chat's + moc's bootstrap into ONE script with a --postgres=local|external
 # branch (default local). It provisions the ONE cluster, TWO databases (chat +
