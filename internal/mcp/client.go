@@ -625,7 +625,7 @@ func NewStdioTransport(command string, args []string, env map[string]string) (*S
 // /opt/fleet/client bundle checkout — see internal/clientconfig).
 func NewStdioTransportInDir(command string, args []string, env map[string]string, dir string) (*StdioTransport, error) {
 	cmd := exec.Command(command, args...) //nolint:noctx,gosec // MCP server command comes from trusted config and is intentionally long-running
-	cmd.Dir = dir // empty => inherit the caller's cwd (exec.Command's default)
+	cmd.Dir = dir                         // empty => inherit the caller's cwd (exec.Command's default)
 
 	// Set environment variables with extended PATH for uvx, npx, etc.
 	homedir, err := os.UserHomeDir()
