@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -275,7 +277,26 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
-	return mux
+	return recoverMiddleware(mux)
+}
+
+// recoverMiddleware converts a panic in a SYNCHRONOUS chat handler into a 500
+// rather than letting it crash the single-host process. (The detached turn
+// goroutine has its own recovery; see runTurnAsync.) This mirrors the chi
+// middleware.Recoverer the orchestrator router already uses.
+func recoverMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+					panic(rec) // a deliberate abort is the server's to handle
+				}
+				log.Printf("panic in chat handler: %v\n%s", rec, debug.Stack())
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
@@ -1255,6 +1276,14 @@ func (s *Server) runTurnAsync(
 	// first to release any resources the agent still holds.
 	defer s.finishTurn(conv.ID, turnToken)
 	defer turnCancel()
+	// This goroutine is intentionally detached from the HTTP request, so an
+	// unrecovered panic here would crash the whole single-host process. Recover
+	// so a panic fails only THIS turn. Registered after the cleanup defers, so it
+	// runs FIRST on unwind: emit a terminal error, then turnCancel + finishTurn
+	// seal the buffer and the user sees an error instead of a stuck "Thinking…".
+	defer safe.Recover("httpapi.runTurnAsync", func(any) {
+		buf.Emit("turn.error", map[string]any{"message": "the turn ended unexpectedly due to an internal error"})
+	})
 
 	// Mock mode: short-circuit the LLM loop with a scripted stream for
 	// Playwright + CI. Skips history replay + provider call entirely.

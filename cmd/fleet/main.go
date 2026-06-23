@@ -37,6 +37,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/runner"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
@@ -273,6 +274,18 @@ func run() error {
 		RuntimeFlavor:            scheduledFlavor,
 		AllowUngovernedScheduled: allowUngovernedScheduled,
 	})
+	// Reclaim sandbox containers orphaned by a PRIOR crash before building the
+	// pool: they run `--detach --rm` under conmon, so a non-graceful exit leaves
+	// them holding host RAM/PIDs across systemd restarts. Best-effort — log and
+	// continue if podman is absent (e.g. mock/dev) or the sweep fails.
+	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if n, err := sandbox.PruneOrphanedContainers(pruneCtx, "podman"); err != nil {
+		log.Printf("startup: prune orphaned sandbox containers: %v", err)
+	} else if n > 0 {
+		log.Printf("startup: pruned %d orphaned sandbox container(s) from a prior run", n)
+	}
+	pruneCancel()
+
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{Limiter: agentLimiter})
 	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 

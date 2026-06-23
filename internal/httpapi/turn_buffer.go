@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -109,6 +110,7 @@ func (b *turnBuffer) attachPersister(ctx context.Context, p eventSinkPersister) 
 // persistCh is closed.
 func (b *turnBuffer) runPersister() {
 	defer b.persistWG.Done()
+	defer safe.Recover("httpapi.turn_buffer.persister", nil)
 
 	const (
 		flushInterval  = 50 * time.Millisecond

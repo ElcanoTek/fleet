@@ -19,6 +19,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // ClientRuntime is fleet's ACP CLIENT. It spawns a sandboxed ACP agent over
@@ -328,6 +329,7 @@ func (p *agentProc) teardown() {
 		_ = syscall.Kill(pgid, syscall.SIGTERM)
 		done := make(chan struct{})
 		go func() {
+			defer safe.Recover("acpruntime.processWait", nil)
 			_, _ = p.cmd.Process.Wait()
 			close(done)
 		}()

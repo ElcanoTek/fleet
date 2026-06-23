@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -48,14 +49,20 @@ func (s *Scheduler) Start() {
 func (s *Scheduler) Stop() { close(s.stop) }
 
 func (s *Scheduler) runLoop() {
+	defer safe.Recover("scheduler.runLoop", nil)
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			s.ProcessScheduledTasks()
-			s.RecoverExpiredLeases()
+			// Recover per tick so a panic in task promotion or lease recovery
+			// fails only that tick — it must never kill the loop or the process.
+			func() {
+				defer safe.Recover("scheduler.tick", nil)
+				s.ProcessScheduledTasks()
+				s.RecoverExpiredLeases()
+			}()
 		case <-s.stop:
 			return
 		}
