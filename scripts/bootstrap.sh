@@ -144,6 +144,21 @@ upsert_env() {
 
 step "fleet bootstrap (postgres=${POSTGRES_MODE}, dry-run=${DRY_RUN})"
 
+# ── system dependencies: the build + runtime + sandbox toolchain ──
+# So `git clone … && bash scripts/bootstrap.sh …` provisions a BARE box end to
+# end (the chat/moc experience): Go (build the binary), Node (build/run the web
+# app), podman (the execution sandbox), python3 + pip (host-side Python MCP
+# servers), plus git/curl/jq/gcc. Postgres-server is installed per-mode below
+# (local only). Non-Fedora hosts: install these yourself, then re-run.
+step "Installing system dependencies (build + runtime + sandbox toolchain)"
+FLEET_DEPS=(git curl jq golang nodejs python3 python3-pip gcc podman)
+if command -v dnf >/dev/null 2>&1; then
+  run dnf install -y "${FLEET_DEPS[@]}"
+  [[ "$DRY_RUN" == "1" ]] || ok "system dependencies present (${FLEET_DEPS[*]})"
+else
+  warn "dnf not found — skipping dependency install. Ensure these are present before continuing: ${FLEET_DEPS[*]}"
+fi
+
 # ── credential env file (0600) ──
 step "Ensuring credential env file ${ENV_FILE} (0600)"
 if [[ "$DRY_RUN" == "1" ]]; then

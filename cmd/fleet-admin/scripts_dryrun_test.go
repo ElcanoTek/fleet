@@ -63,6 +63,9 @@ func runScriptDryRun(t *testing.T, script string, args ...string) string {
 func TestBootstrapDryRunSmoke(t *testing.T) {
 	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local", "--enable-service")
 	for _, want := range []string{
+		"Installing system dependencies", // the build+runtime+sandbox toolchain step (bare-box turnkey)
+		"golang",                         // Go must be installed to build the binary
+		"podman",                         // podman must be installed for the sandbox
 		"client bundle manifest found",
 		"pg_hba",                                 // the scram-sha-256 loopback rewrite step (#78)
 		"Building + installing the fleet binary", // the binary build+install step (#71)

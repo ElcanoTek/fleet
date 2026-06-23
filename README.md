@@ -91,11 +91,11 @@ tested in this repository:
   flavor as a sandboxed subprocess and owns the host-side governance seam (tool
   execution, MCP calls, policy/audit, observer events). The native flavor
   (`cmd/fleet-native-agent`) wraps fleet's own run loop as an ACP agent; external
-  agents (Claude Code, Goose, …) plug in the same way. fleet is also an ACP
-  **agent**: `fleet acp` lets an editor (Zed, Neovim) drive fleet's own governed
-  pipeline over stdio ([ingress](internal/acpingress)). See
+  agents (Claude Code, Goose, …) plug in the same way. See
   [`internal/acpruntime`](internal/acpruntime) and
-  [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md).
+  [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md). _(Advanced/optional: fleet can
+  also run **as** an ACP agent so an editor drives it — see
+  [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md). Not needed for the web app.)_
 - **MCP — Model Context Protocol.** A merged Go MCP client (stdio + HTTP) drives
   the tools and data sources in the deployment's MCP catalog. See
   [`internal/mcp`](internal/mcp).
@@ -167,13 +167,16 @@ deployment at it.
 
 fleet is an ACP client: besides its own loop it can drive **other coding agents**
 (Claude Code, Goose, …) as selectable, sandboxed flavors you pick per chat or per
-scheduled task. It is also an ACP **agent** — `fleet acp` lets an editor (Zed,
-Neovim) drive fleet's own governed pipeline over stdio. See
-**[`docs/USING-AGENTS.md`](docs/USING-AGENTS.md)** for the flavor model, how to add
-an external agent to a client bundle, the permission UI, the governance tiers
-(stated honestly), a worked example, and the "drive fleet from your editor over
-ACP" ingress guide. Read the governance and data-residency sections before
-enabling an external agent.
+scheduled task. See **[`docs/USING-AGENTS.md`](docs/USING-AGENTS.md)** for the
+flavor model, how to add an external agent to a client bundle, the permission UI,
+the governance tiers (stated honestly), and a worked example. Read the governance
+and data-residency sections before enabling an external agent.
+
+> **Advanced/optional — driving fleet *from* an editor (ACP ingress).** fleet can
+> also expose *itself* as an ACP agent (`fleet acp`) so an editor (Zed, Neovim)
+> drives its governed pipeline over stdio. This is a developer convenience, **not**
+> part of the web chat/orchestrator product — most deployments never use it. The
+> setup lives at the end of [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md).
 
 ## Development
 
@@ -214,6 +217,21 @@ backends the single process boots (chat on `127.0.0.1:8080`, orchestrator on
 browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet: chat :8080 + orchestrator :8000
 ```
 
+**Quick start (bare Fedora/RHEL box).** Clone the repo and run the bootstrap
+script — it installs the toolchain (Go, Node, podman, python3), provisions
+Postgres, builds + installs the binary, and installs the systemd units:
+
+```
+sudo dnf install -y git
+git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src
+sudo bash /opt/fleet/src/scripts/bootstrap.sh --postgres=local --enable-service
+```
+
+The first run is always the **shell script** — `fleet-admin` doesn't exist until
+it's built. Once installed, `fleet-admin bootstrap`/`update`/`status` wrap the
+same scripts for day-2 ops. The numbered steps below break down what bootstrap
+does (and the manual path if you'd rather run each piece yourself):
+
 1. **Bootstrap** the databases + the 0600 credential env file (one cluster, two
    DBs; never runs app migrations — each service self-migrates on first start):
 
@@ -221,11 +239,13 @@ browser ──TLS──▶ Caddy ──▶ Next web app (:3000) ──▶ fleet:
    scripts/bootstrap.sh --postgres=local      # or --postgres=external
    ```
 
-   bootstrap writes the two `FLEET_*_DATABASE_URL`s and `FLEET_CLIENT_CONFIG_DIR`
-   into the env file for you; you then add `OPENROUTER_API_KEY`, the bundle's MCP
-   connector credentials, and any MCP account secrets
-   (`fleet-admin mcp account set ...`). See **Operating fleet** below for the full
-   bootstrap → update → status lifecycle (`fleet-admin bootstrap` wraps this).
+   bootstrap installs the build/runtime/sandbox toolchain (Go, Node, podman,
+   python3 — skipped on non-dnf hosts), then writes the two
+   `FLEET_*_DATABASE_URL`s and `FLEET_CLIENT_CONFIG_DIR` into the env file for
+   you; you then add `OPENROUTER_API_KEY`, the bundle's MCP connector
+   credentials, and any MCP account secrets (`fleet-admin mcp account set ...`).
+   See **Operating fleet** below for the full bootstrap → update → status
+   lifecycle (`fleet-admin bootstrap` wraps this).
 
 2. **Build** the binary, the sandbox image, and the web app:
 
