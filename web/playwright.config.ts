@@ -133,7 +133,7 @@ export default defineConfig({
   },
 
   // Projects are mode-scoped so a run only ever contains the matching suite:
-  //   default          → the mocked "chromium" project (the fast CI layer),
+  //   default          → the "mocked" project (the fast CI layer),
   //   E2E_LIVE=1        → the real-backend "live" project.
   // This keeps `--project=live` from silently running against the mocked server
   // (and vice-versa): the live project simply isn't present unless E2E_LIVE=1.
@@ -155,7 +155,10 @@ export default defineConfig({
         ]
       : [
           {
-            name: "chromium",
+            // Named "mocked" to match the suite's vocabulary (mocked/live/canary)
+            // and the documented `--project=mocked` invocation; it pins the
+            // deterministic e2e/mocked suite as the default CI lane.
+            name: "mocked",
             testDir: "./e2e/mocked",
             use: { ...devices["Desktop Chrome"] },
           },

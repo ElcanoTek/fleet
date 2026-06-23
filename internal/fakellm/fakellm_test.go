@@ -71,6 +71,36 @@ func TestFakeLLM_TextTurn(t *testing.T) {
 	}
 }
 
+func TestFakeLLM_Echo(t *testing.T) {
+	// An "[[echo:TEXT]]" marker streams back exactly TEXT, turn-independently and
+	// without a registered scenario — the deterministic, distinct-reply seam the
+	// live conversation-management specs use to give each chat its own title.
+	srv := fakellm.New()
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	provider := newProvider(t, ts.URL)
+	model, err := provider.LanguageModel(context.Background(), "anthropic/claude-opus-4.8")
+	if err != nil {
+		t.Fatalf("language model: %v", err)
+	}
+
+	agent := fantasy.NewAgent(model)
+	res, err := agent.Generate(context.Background(), fantasy.AgentCall{
+		Prompt: "make a chat [[echo:Keep this chat]]",
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	got := strings.TrimSpace(res.Response.Content.Text())
+	if got != "Keep this chat" {
+		t.Fatalf("echo: got %q, want exactly %q", got, "Keep this chat")
+	}
+	if srv.Hits("__echo__") < 1 {
+		t.Fatalf("echo: expected the echo path to be hit, got %d", srv.Hits("__echo__"))
+	}
+}
+
 func TestFakeLLM_ToolLoop(t *testing.T) {
 	// turn 0 → call the "echo" tool; turn 1 → final text. Proves the full
 	// multi-turn loop works over the real wire: the fake emits a tool_call,
