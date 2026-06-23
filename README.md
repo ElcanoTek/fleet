@@ -378,6 +378,26 @@ they need root/sudo; systemctl's own permission error surfaces via the exit code
 `logs` reads the journal (usually permitted unprivileged) and exits non-zero if
 the unit isn't installed.
 
+### backup · restore — disaster recovery
+
+fleet keeps every conversation in the **chat** DB and every scheduled task in the
+**sched** DB. Both are backed up and restored per-database with `pg_dump -Fc` /
+`pg_restore` (one custom-format dump file each — the two DBs have independent
+DSNs, so a single cluster-wide dump would not fit the credential model):
+
+```
+fleet-admin backup                          # dump BOTH DBs into the cwd (fleet-<db>-<UTC>.dump)
+fleet-admin backup --db=chat --out /backups # dump just chat into /backups
+fleet-admin restore --db=sched FILE.dump    # restore one DB (--clean --if-exists; overwrites it)
+```
+
+`backup` prints each dump path on stdout (scriptable for a cron job). `restore`
+is deliberately single-DB — it overwrites a live database, so the target is named
+explicitly (no `--db=all`). Connection params, including the password, are passed
+to the child processes through the environment, never argv. See
+**[`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md)** for the full recovery
+runbook, a cron example, and the round-trip verification procedure.
+
 ### Where the sandbox build fits
 
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its
