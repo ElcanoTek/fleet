@@ -1,5 +1,5 @@
 // Copyright (c) 2025 ElcanoTek
-// All rights reserved. This is a private repository.
+// SPDX-License-Identifier: MIT
 
 // Package handlers provides HTTP handlers for the sched API.
 package handlers
