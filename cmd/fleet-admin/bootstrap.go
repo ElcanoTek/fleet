@@ -21,10 +21,8 @@ func cmdBootstrap(argv []string) int {
 		return errf(5, "scripts/bootstrap.sh not found (run from the repo root or set FLEET_ROOT)")
 	}
 	args := append([]string{script}, argv...)
-	// Default --postgres=local when not specified, matching the script default.
-	if !hasFlag(argv, "--postgres") {
-		args = append(args, "--postgres=local")
-	}
+	// scripts/bootstrap.sh already defaults POSTGRES_MODE=local, so forward argv
+	// verbatim (like cmdUpdate) rather than injecting a second default here.
 	// Run under a signal-cancelled context so Ctrl-C / SIGTERM tears the
 	// provisioning script down instead of orphaning it.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -62,15 +60,6 @@ func findScript(name string) string {
 		}
 	}
 	return ""
-}
-
-func hasFlag(argv []string, name string) bool {
-	for _, a := range argv {
-		if a == name || strings.HasPrefix(a, name+"=") {
-			return true
-		}
-	}
-	return false
 }
 
 func asExit(err error, target **exec.ExitError) bool {
