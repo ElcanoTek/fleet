@@ -133,6 +133,7 @@ func run(argv []string) error {
 		ServerSpecs:          scheduledrun.BuildMCPSpecs(cfg),
 		PersonasDir:          bundle.PersonasDir,
 		ProtocolsDir:         bundle.ProtocolsDir,
+		SkillsDir:            bundle.SkillsDir,
 		SystemPromptsDir:     bundle.SystemPromptsDir,
 		ChatSystemPromptFile: "chat.md",
 		// No NotesProvider/NoteProposer: the one-shot harness has no sched DB, so

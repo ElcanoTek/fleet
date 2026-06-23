@@ -52,14 +52,15 @@ them.
   MCP call, so secrets never travel into the sandbox or the model's context.
 
 - **Reusable workflows and shared, preconfigured tools.** Personas, protocols
-  (playbooks), the MCP catalog, branding, and model defaults all come from a
-  pluggable **client-config bundle** (see below). Standardize your team's agent
-  setups once; roll your own as needed.
+  (playbooks), skills (packaged capabilities), the MCP catalog, branding, and
+  model defaults all come from a pluggable **client-config bundle** (see below).
+  Standardize your team's agent setups once; roll your own as needed.
 
-- **Standards-compliant.** fleet implements two open protocols, both shipped and
+- **Standards-compliant.** fleet is built on open standards, all shipped and
   tested (see [Standards](#standards)): **ACP** (Agent Client Protocol) to drive
-  the native and external agents, and **MCP** (Model Context Protocol) for
-  tools and data.
+  the native and external agents, **MCP** (Model Context Protocol) for tools and
+  data, and the open **Agent Skills** format for packaged, on-demand
+  capabilities.
 
 - **MIT-licensed and observable.** The whole platform is open source. The agent
   runtime emits structured observer events for every turn — tool calls, results,
@@ -78,8 +79,8 @@ how they line up against those three concerns.
 
 A setup that worked once but can't be reproduced isn't something you can
 delegate. fleet makes an agent's configuration an **artifact, not a vibe**: the
-system prompt, personas, protocols (playbooks), connected MCP tools, and model
-defaults all live in a versioned **client-config bundle** (a plain git repo — see
+system prompt, personas, protocols (playbooks), skills, connected MCP tools, and
+model defaults all live in a versioned **client-config bundle** (a plain git repo — see
 below). The setup that worked is the setup that runs again next time, for the
 next person, on a schedule. And because every turn emits structured **observer
 events** — each tool call, its result, token usage, cost, and any enforcement
@@ -174,19 +175,23 @@ tested in this repository:
 - **MCP — Model Context Protocol.** A merged Go MCP client (stdio + HTTP) drives
   the tools and data sources in the deployment's MCP catalog. See
   [`internal/mcp`](internal/mcp).
+- **Agent Skills.** The client-config bundle's `skills/` directory holds packaged,
+  on-demand agent capabilities in the open
+  [Agent Skills format](https://github.com/anthropics/skills) — a `SKILL.md` per
+  skill (`name` + `description` frontmatter) plus optional bundled scripts and
+  reference files. fleet loads them with **progressive disclosure**: only each
+  skill's name, description, and path enter the system prompt; the agent reads the
+  full `SKILL.md` and runs any bundled scripts on demand, inside the same
+  rootless sandbox every other tool call uses. See
+  [`internal/clientconfig`](internal/clientconfig) (the loader + the `ReadSkills`
+  parser) and the shipped [`config/default/skills`](config/default/skills)
+  example. _(Design rationale: Anthropic's
+  [Equipping agents for the real world with Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills).)_
 
 The orchestrator HTTP API is published as an OpenAPI 3.1 contract at
 [`docs/openapi.yaml`](docs/openapi.yaml); a CI test
 (`cmd/fleet/openapi_drift_test.go`) keeps its routes + auth schemes in lockstep
 with the shipped router (it does not gate body schemas).
-
-### Roadmap (not yet shipped)
-
-Items here are aspirational and **not** current capabilities — do not rely on
-them:
-
-- **Skills** — packaged, shareable agent capabilities beyond the current
-  persona/protocol bundle.
 
 ## Repository layout
 
@@ -204,7 +209,7 @@ internal/
   agent/          input sources, observers, policies, finalize (interactive + scheduled)
   runner/         in-process capped worker pool (the old "gig", folded in)
   creds/          MCP credential-account store (host-side credential broker)
-  clientconfig/   loads the pluggable CLIENT BUNDLE (branding, MCP catalog, prompts, ...)
+  clientconfig/   loads the pluggable CLIENT BUNDLE (branding, MCP catalog, prompts, skills, ...)
   mcp/            merged Go MCP client (stdio + HTTP)
   sandbox/        the single execution backend (ephemeral container over a persistent workspace)
   tools/          native agent tools (bash, python, ...)
@@ -228,15 +233,16 @@ from `FLEET_CLIENT_CONFIG_DIR` (default `config/default`, a generic bundle with
 neutral branding and no MCP connectors). A real deployment points the variable
 at a checked-out client repo whose `manifest.yaml` supplies the branding, model
 defaults, MCP-server catalog, empty-state cards, and agent tool policy, and
-whose `system_prompts/`, `personas/`, `protocols/`, and `mcp/` directories
-supply the prompts, personas, playbooks, and Python MCP servers. See
+whose `system_prompts/`, `personas/`, `protocols/`, `skills/`, and `mcp/`
+directories supply the prompts, personas, playbooks, Agent Skills, and Python
+MCP servers. See
 [`config/default/README.md`](config/default/README.md) and
 [`internal/clientconfig/clientconfig.go`](internal/clientconfig/clientconfig.go)
 for the bundle contract.
 
 This is how you make fleet yours: package your team's reusable agent setups —
-the personas, the playbooks, the connected MCP tools — into a bundle and point a
-deployment at it.
+the personas, the playbooks, the skills, the connected MCP tools — into a bundle
+and point a deployment at it.
 
 **Choosing a bundle:**
 
@@ -266,6 +272,7 @@ inside fleet's database or binary:
 - **`system_prompts/`** — base prompts for chat and tasks
 - **`personas/`** — reusable agent profiles
 - **`protocols/`** — playbooks your agents follow
+- **`skills/`** — packaged [Agent Skills](#standards) (`SKILL.md` + bundled scripts)
 - **`mcp/`** — your MCP connectors (+ `requirements.txt`)
 - **`manifest.yaml`** — MCP catalog, tool policy, model defaults, runtime
   flavors, sandbox block

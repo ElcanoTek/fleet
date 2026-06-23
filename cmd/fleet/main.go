@@ -111,6 +111,7 @@ func run() error {
 	personasDir := bundle.PersonasDir
 	protocolsDir := bundle.ProtocolsDir
 	systemPromptsDir := bundle.SystemPromptsDir
+	skillsDir := bundle.SkillsDir
 
 	// ── DB pools (both self-migrate on open) ──
 	chatStore, err := store.Open(chatDSN(cfg))
@@ -139,6 +140,7 @@ func run() error {
 		ServerSpecs:          serverSpecs,
 		PersonasDir:          personasDir,
 		ProtocolsDir:         protocolsDir,
+		SkillsDir:            skillsDir,
 		SystemPromptsDir:     systemPromptsDir,
 		ChatSystemPromptFile: "chat.md",
 		NotesProvider:        notesProvider,

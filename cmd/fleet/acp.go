@@ -99,6 +99,7 @@ func runACP() error {
 		ServerSpecs:          scheduledrun.BuildMCPSpecs(cfg),
 		PersonasDir:          bundle.PersonasDir,
 		ProtocolsDir:         bundle.ProtocolsDir,
+		SkillsDir:            bundle.SkillsDir,
 		SystemPromptsDir:     bundle.SystemPromptsDir,
 		ChatSystemPromptFile: "chat.md",
 		NotesProvider:        notesProvider,
