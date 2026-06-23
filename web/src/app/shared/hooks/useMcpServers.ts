@@ -1,13 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 import { orchestratorApi, type McpServer } from "@/app/shared/lib/orchestratorApi";
+import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 
 // useMcpServers loads the Optional-MCP catalog (server names, tool counts, and
 // per-server credential-account names — never secret values). Feeds the shared
 // <McpServerPicker> in the orchestrator task form. The same catalog shape is
 // produced by chat's GET /api/mcp-servers for the conversation-toolbar instance
 // of the picker, so the component is genuinely reused across both views.
+//
+// Built on the shared useCancellableFetch hook so the cancelled-ref guard and
+// the lone setState-after-await live in one audited place — this hook no longer
+// needs its own react-hooks/set-state-in-effect suppression.
 
 export type UseMcpServers = {
   servers: McpServer[];
@@ -17,28 +22,13 @@ export type UseMcpServers = {
 };
 
 export function useMcpServers(enabled = true): UseMcpServers {
-  const [servers, setServers] = useState<McpServer[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { data, loading, error, reload } = useCancellableFetch(
+    useCallback(async () => (await orchestratorApi.mcpServers()).servers ?? [], []),
+    [],
+    { enabled },
+  );
 
-  const reload = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await orchestratorApi.mcpServers();
-      setServers(res.servers ?? []);
-    } catch (err) {
-      setError((err as Error).message);
-      setServers([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reload sets a load flag then fetches
-    if (enabled) void reload();
-  }, [enabled, reload]);
-
-  return { servers, loading, error, reload };
+  // Preserve the previous contract: servers is always an array (never null),
+  // including before the first load and after a failed fetch.
+  return { servers: data ?? [], loading, error, reload };
 }
