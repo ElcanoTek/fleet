@@ -1281,9 +1281,10 @@ func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (in
 			assigned_node_id = NULL,
 			lease_owner = NULL,
 			lease_expires_at = NULL,
-			started_at = NULL
+			started_at = NULL,
+			attempt_count = attempt_count + 1
 		WHERE status IN ($2, $3, $4)
-		AND lease_expires_at < $5`,
+		AND (lease_expires_at < $5 OR lease_expires_at IS NULL)`,
 		string(models.TaskStatusPending),
 		string(models.TaskStatusLeased),
 		string(models.TaskStatusRunning),
