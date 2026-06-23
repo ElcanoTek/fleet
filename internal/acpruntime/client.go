@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -175,7 +176,7 @@ func (r *ClientRuntime) Run(ctx context.Context, spec RunSpec, promptText string
 	// path — ctx → SIGTERM → SIGKILL → reap. We never trust --rm alone.
 	defer proc.teardown()
 
-	cl := &hostClient{deps: deps}
+	cl := &hostClient{deps: deps, maxCostUSD: spec.MaxCostUSD, maxTotalTokens: spec.MaxTotalTokens}
 	conn := acp.NewClientSideConnection(cl, proc.stdin, bufio.NewReader(proc.stdout))
 
 	initCtx, cancelInit := context.WithTimeout(ctx, r.cfg.StartTimeout)
@@ -211,14 +212,26 @@ func (r *ClientRuntime) Run(ctx context.Context, spec RunSpec, promptText string
 	if err != nil {
 		return Result{}, fmt.Errorf("marshal prompt meta: %w", err)
 	}
-	promptResp, err := conn.Prompt(ctx, acp.PromptRequest{
+	// Cancellable prompt ctx so the host-side ceiling backstop can tear the run
+	// down independently of the in-container soft gate (#87).
+	promptCtx, cancelPrompt := context.WithCancelCause(ctx)
+	defer cancelPrompt(nil)
+	cl.mu.Lock()
+	cl.cancel = cancelPrompt
+	cl.mu.Unlock()
+	promptResp, err := conn.Prompt(promptCtx, acp.PromptRequest{
 		SessionId: sess.SessionId,
 		Prompt:    []acp.ContentBlock{acp.TextBlock(promptText)},
 		Meta:      map[string]any{MetaKeyPromptMeta: json.RawMessage(metaJSON)},
 	})
 	if err != nil {
-		// A ctx-cancellation is a clean stop: return the partial transcript +
-		// whatever usage accrued so the driver persists what streamed before cancel.
+		// Host ceiling backstop fired: a clean stop, not a failure — return the
+		// transcript + the (over-ceiling) usage so the driver records it honestly.
+		if errors.Is(context.Cause(promptCtx), ErrHostCeilingBackstop) {
+			return Result{FinalText: cl.finalText(), Cancelled: true, Usage: cl.usageSnapshot()}, nil
+		}
+		// A caller ctx-cancellation is also a clean stop: return the partial
+		// transcript + whatever usage accrued so the driver persists what streamed.
 		if ctx.Err() != nil {
 			return Result{FinalText: cl.finalText(), Cancelled: true, Usage: cl.usageSnapshot()}, nil
 		}
@@ -335,10 +348,28 @@ func (p *agentProc) teardown() {
 type hostClient struct {
 	deps Deps
 
-	mu    sync.Mutex
-	final strings.Builder
-	usage agentcore.RunUsage
+	// Host-side defensive ceiling backstop (#87): the in-container policy enforces
+	// the ceiling as a soft in-loop gate against the agent's self-reported usage,
+	// which is the same trust model as the in-process path. As INDEPENDENT
+	// defense-in-depth across the container boundary, the host also re-checks the
+	// usage it reconciles over `_fleet/event` against these (spec-supplied)
+	// ceilings and HARD-cancels the run if a buggy/compromised agent overshoots.
+	// 0 = unlimited.
+	maxCostUSD     float64
+	maxTotalTokens int
+
+	mu      sync.Mutex
+	final   strings.Builder
+	usage   agentcore.RunUsage
+	cancel  context.CancelCauseFunc // cancels the prompt ctx when the backstop trips
+	tripped bool                    // so the backstop cancels exactly once
 }
+
+// ErrHostCeilingBackstop is the cancel cause when the host-side defensive
+// ceiling backstop tears down a native-acp run (the agent overshot the
+// spec-supplied cost/token ceiling that the in-container soft gate should have
+// enforced). A clean stop, not a run failure.
+var ErrHostCeilingBackstop = errors.New("host ceiling backstop: agent exceeded the cost/token ceiling")
 
 // usageSnapshot returns the accumulated usage the agent reported over
 // `_fleet/event`. Safe to call after the run completes.
@@ -554,7 +585,6 @@ func (c *hostClient) handleEvent(params json.RawMessage) (any, error) {
 // the max on each field — but ACP notifications preserve order, so the last wins.
 func (c *hostClient) accumulateUsage(payload map[string]any) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.usage = agentcore.RunUsage{
 		PromptTokens:        intFromPayload(payload, usageKeyPromptTokens),
 		LastStepInputTokens: intFromPayload(payload, usageKeyLastStepInputTokens),
@@ -562,6 +592,33 @@ func (c *hostClient) accumulateUsage(payload map[string]any) {
 		CachedTokens:        intFromPayload(payload, usageKeyCachedTokens),
 		CacheCreationTokens: intFromPayload(payload, usageKeyCacheCreationTokens),
 		CostUSD:             floatFromPayload(payload, usageKeyCostUSD),
+	}
+	// Independent host-side backstop: if the agent's own reconciled usage crosses
+	// the spec ceiling and the in-container soft gate hasn't stopped it, hard-cancel
+	// the run. Uncached-token formula mirrors orchestration.checkCeilings.
+	trip := false
+	if !c.tripped && c.cancel != nil {
+		if c.maxCostUSD > 0 && c.usage.CostUSD >= c.maxCostUSD {
+			trip = true
+		}
+		if c.maxTotalTokens > 0 {
+			if total := c.usage.PromptTokens - c.usage.CachedTokens + c.usage.CompletionTokens; total >= c.maxTotalTokens {
+				trip = true
+			}
+		}
+		if trip {
+			c.tripped = true
+		}
+	}
+	cancel := c.cancel
+	costNow := c.usage.CostUSD
+	c.mu.Unlock()
+
+	if trip {
+		log.Printf("native-acp: host ceiling backstop tripped (cost=$%.4f/%.2f, tokens cap=%d) — cancelling run",
+			costNow, c.maxCostUSD, c.maxTotalTokens)
+		c.deps.Observer.Observe("governance", map[string]any{"host_ceiling_backstop": true})
+		cancel(ErrHostCeilingBackstop)
 	}
 }
 
