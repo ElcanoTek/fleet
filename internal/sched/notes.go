@@ -15,9 +15,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/google/uuid"
 
@@ -415,7 +416,9 @@ func nullableStr(s string) *string {
 }
 
 func isUniqueViolation(err error) bool {
-	// pgconn.PgError 23505 is unique_violation; match by string to avoid pulling
-	// the pgconn type into this package's API surface.
-	return err != nil && strings.Contains(err.Error(), "23505")
+	// 23505 is unique_violation. Match the typed pgconn error (pgconn is already
+	// a transitive dep used by the db layer) rather than substring-scanning the
+	// message, which can false-positive when "23505" appears in a note slug/body.
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
