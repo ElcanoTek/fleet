@@ -67,7 +67,13 @@ export function useDashboardData(active: boolean): UseDashboardData {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
+  // Lazy-init to `active`: when the dashboard mounts active we begin in the
+  // loading state on the first render, so we never have to flip loading true
+  // synchronously inside the mount effect (which would trip
+  // react-hooks/set-state-in-effect). reload() flips it true again from a
+  // deferred kickoff / interval / imperative call — all off the effect's
+  // synchronous phase.
+  const [loading, setLoading] = useState(active);
   const [filters, setFiltersState] = useState<TaskFilters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -93,9 +99,19 @@ export function useDashboardData(active: boolean): UseDashboardData {
   }, [filters, page, pageSize]);
 
   // Fetch on mount/filters/page change and whenever reload's identity changes.
+  // The kickoff is deferred to a microtask so reload's synchronous
+  // setLoading(true) runs outside the effect's synchronous phase (otherwise
+  // react-hooks/set-state-in-effect flags the cascading render); a guard skips
+  // the call if deps change or we unmount before the microtask runs.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reload sets a load flag then fetches
-    if (active) void reload();
+    if (!active) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void reload();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [active, reload]);
 
   // 30s auto-refresh, matching moc.

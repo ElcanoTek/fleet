@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { LogSession, Task } from "@/app/shared/lib/orchestratorApi";
+import type { Task } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { stripAnsiCodes } from "@/app/shared/lib/format";
+import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 
 // LogViewer — the task log modal. React port of moc modals.js openLogModal().
 // moc rendered logs with marked + DOMPurify + highlight.js; per the migration
@@ -18,35 +19,25 @@ export type LogViewerProps = {
 };
 
 export function LogViewer({ task, onClose }: LogViewerProps) {
-  const [session, setSession] = useState<LogSession | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!task) return;
-    let cancelled = false;
-    /* eslint-disable react-hooks/set-state-in-effect -- one-shot load flags before fetch */
-    setSession(null);
-    setLoading(true);
-    setError(null);
-    /* eslint-enable react-hooks/set-state-in-effect */
-    orchestratorApi
-      .taskLogs(task.id)
-      .then((s) => {
-        if (!cancelled) setSession(s);
-      })
-      .catch((err) => {
-        if (!cancelled) setError((err as Error).message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [task]);
-
   if (!task) return null;
+  // Key the inner body on the task id so switching tasks remounts the fetch
+  // hook — that reproduces the old "reset session to null then refetch on task
+  // change" behavior cleanly, without a manual reset effect.
+  return <LogViewerBody key={task.id} task={task} onClose={onClose} />;
+}
+
+function LogViewerBody({ task, onClose }: { task: Task; onClose: () => void }) {
+  // The shared hook owns the cancelled-ref guard and the lone setState after
+  // the await, so this component no longer needs its own one-shot load-flag
+  // setState-in-effect disable.
+  const {
+    data: session,
+    loading,
+    error,
+  } = useCancellableFetch(
+    useCallback(() => orchestratorApi.taskLogs(task.id), [task.id]),
+    [task.id],
+  );
 
   return (
     <div className="modal-overlay is-open" role="dialog" aria-modal="true" aria-label="Task Logs">

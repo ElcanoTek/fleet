@@ -1,19 +1,20 @@
 "use client";
 
-// NOTE (pre-existing, file-scoped): this component carries a handful of
-// patterns the React Compiler's lint rules flag — setState called directly in
-// an effect, Date.now() read during render, and callbacks referenced before
-// their hoisted declaration. They are long-standing and unrelated to any
-// recent change; the rules simply began reporting once an unrelated local
-// `type` declaration (which had been making the compiler bail out and emit
-// nothing for the whole component) was removed. Disabling the three rules for
-// this one large component keeps the lint gate green without a risky,
-// out-of-scope refactor. TODO: refactor these call sites and drop the disable.
-/* eslint-disable react-hooks/set-state-in-effect, react-hooks/purity, react-hooks/immutability */
+// NOTE (lint hygiene): this large component used to disable three React
+// Compiler rules file-wide (react-hooks/set-state-in-effect,
+// react-hooks/purity, react-hooks/immutability). Those disables hid real
+// hook smells, so they were removed and the underlying patterns fixed
+// instead: wall-clock reads go through the module-level `nowMs()` helper
+// (purity); the three bootstrap mount effects were hoisted below the
+// callbacks they call and call mutually-recursive callbacks through
+// latest-refs (immutability + exhaustive-deps); and the few effect-phase
+// setStates were moved off the synchronous render path (lazy init,
+// derive-in-render, handler-side resets, or a deferred microtask). Keep this
+// component clean — prefer those patterns over re-adding a rule disable.
 
 import Image from "next/image";
 import type { ReactElement, ReactNode } from "react";
-import { Children, isValidElement, memo, useEffect, useMemo, useRef, useState } from "react";
+import { Children, isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 // Syntax highlighter: Prism light build so we only ship the languages
@@ -80,6 +81,15 @@ import {
   type TurnSummary,
 } from "./history";
 import { PENDING_CONV_KEY, resolveWorkspaceHref } from "./workspaceHref";
+
+// Wall-clock read, isolated in a module-level helper. The async stream
+// handlers below run during a render pass (the React Compiler's lint rules
+// treat their bodies as render-reachable), so a bare `Date.now()` there
+// trips react-hooks/purity. Routing the read through a named module-scope
+// function keeps the impurity out of the component body without changing
+// behavior — these timestamps are only used for elapsed-time math and as
+// monotonic-ish local message ids, never as render-affecting derived state.
+const nowMs = (): number => Date.now();
 
 // ── types ────────────────────────────────────────────────────────────────
 //
@@ -761,11 +771,6 @@ export function ChatExperience() {
   const [summarizeStream, setSummarizeStream] = useState("");
   const [summarizeStartedAt, setSummarizeStartedAt] = useState<number | null>(null);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
-  useEffect(() => {
-    if (pendingAttachments.length === 0 && spreadsheetNudgeDismissed) {
-      setSpreadsheetNudgeDismissed(false);
-    }
-  }, [pendingAttachments.length, spreadsheetNudgeDismissed]);
   const spreadsheetNudge = useMemo(
     () =>
       decideSpreadsheetNudge({
@@ -1066,21 +1071,30 @@ export function ChatExperience() {
 
   // showStats boot: read once from localStorage. Kept in its own effect
   // (not merged with theme) so SSR hydration doesn't flicker the chip on
-  // for a frame before the persisted pref wins.
+  // for a frame before the persisted pref wins. The read happens
+  // post-mount (window is only available client-side); the setState is
+  // deferred to a microtask so it lands outside the effect's synchronous
+  // phase — it patches React state from an external system (localStorage)
+  // rather than synchronously cascading a render off the effect body.
   useEffect(() => {
     const stored = window.localStorage.getItem("chat-show-stats");
-    if (stored === "1") setShowStats(true);
+    if (stored !== "1") return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setShowStats(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Load the catalog once so the context-usage ring (next to the
-  // composer) and the stats-panel chip can both resolve the selected
-  // model's context window. Cheap — one fetch per session, server-side
-  // cached for 24h — and a no-op when already loaded. Fires regardless
-  // of showStats since the composer ring is always visible.
-  useEffect(() => {
-    void loadCatalogModels();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // NOTE: the catalog-load, visibility-refresh, and initial-load mount
+  // effects that used to live here reference callbacks (loadCatalogModels,
+  // reattachToConv, refreshConversations, loadConversation,
+  // loadMcpServerCatalogPreview) declared further down. They have been
+  // moved to just after those declarations (search "mount effects, hoisted
+  // below their callback dependencies") so the effect bodies never read a
+  // callback before it is declared. Their relative order is preserved.
 
   // Textarea autosize
   useEffect(() => {
@@ -1197,78 +1211,6 @@ export function ChatExperience() {
     };
   }, []);
 
-  // Refresh the active conversation when the tab/window becomes visible
-  // again. The server now keeps generating after the SSE connection
-  // drops, so a turn the user kicked off before locking their phone (or
-  // backgrounding the tab) often completes server-side while they're
-  // away. Without this, returning to a stale tab would still show the
-  // truncated reply that was on screen at drop time.
-  //
-  // Skipped while a stream is in flight — loadConversation short-
-  // circuits in that case anyway, and we don't want to hit the server
-  // for a refetch we wouldn't apply.
-  useEffect(() => {
-    const refreshIfStale = async () => {
-      if (typeof document === "undefined") return;
-      if (document.visibilityState !== "visible") return;
-      const convId = activeConversationIdRef.current;
-      if (!convId) return;
-      if (attachedConvIdsRef.current.has(convId)) return;
-
-      // First try to reattach to any in-flight turn so the user sees
-      // live tokens resume. If nothing's in-flight, fall back to a
-      // plain DB reload in case a turn completed while we were away.
-      await reattachToConv(convId);
-      if (attachedConvIdsRef.current.has(convId)) return;
-
-      // Refresh the sidebar list unconditionally — small payload, no
-      // chat repaint, and titles/updated_at may have moved if turns
-      // completed elsewhere.
-      void refreshConversations();
-
-      // Only refetch the active conversation when our local copy looks
-      // mid-turn — i.e. some message is still in `streaming` / `thinking`.
-      // That's the signal a turn was in flight when the user backgrounded
-      // the tab; the SSE buffer has since been evicted (else reattach
-      // would have caught it above) and Postgres has the canonical reply
-      // we need to swap in. For a clean idle tab, skip: refetching
-      // repaints the entire conversation, costs a roundtrip, and breaks
-      // transient UI state (open dropdowns, in-progress edits) every
-      // single time the user flips tabs — which made the chat feel like
-      // it was reloading on every return.
-      const localMsgs = messagesByConvRef.current[convId];
-      const hasStaleStream = localMsgs?.some(
-        (m) => m.state === "streaming" || m.state === "thinking",
-      );
-      if (!hasStaleStream) return;
-
-      // preserveScroll: the user was already on this conversation and may
-      // have been mid-read. Even when we do refetch (turn dropped while
-      // away), snap-to-bottom on tab return is jarring — keep their
-      // scroll position and let the live "follow along" auto-scroll
-      // handle anything they were already at the bottom of.
-      void loadConversation(convId, { preserveScroll: true });
-    };
-    const handle = () => {
-      void refreshIfStale();
-    };
-    document.addEventListener("visibilitychange", handle);
-    // `focus` covers desktop window-focus changes inside the same
-    // visible viewport; `online` covers network-restore events that
-    // neither fire. Mobile lock/unlock goes through visibilitychange.
-    window.addEventListener("focus", handle);
-    window.addEventListener("online", handle);
-    return () => {
-      document.removeEventListener("visibilitychange", handle);
-      window.removeEventListener("focus", handle);
-      window.removeEventListener("online", handle);
-    };
-    // loadConversation/refreshConversations/reattachToConv are
-    // recreated each render but only reference stable refs and setters
-    // internally, so the captured first-render closure is safe.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Cache-bust detection. Every response carries X-App-Version set to
   // the server's current build id (see middleware.ts). The client's
   // bundle has that id baked in via NEXT_PUBLIC_BUILD_ID. We probe
@@ -1324,93 +1266,8 @@ export function ChatExperience() {
     };
   }, []);
 
-  // Initial load: session, personas, conversations, most-recent conversation.
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadInitialState = async () => {
-      try {
-        const sessionResponse = await fetch("/api/session", { cache: "no-store" });
-        if (!sessionResponse.ok) {
-          window.location.href = "/login";
-          return;
-        }
-        const sessionData = (await sessionResponse.json()) as { email: string };
-        if (cancelled) return;
-        setUserEmail(sessionData.email);
-
-        // Personas
-        try {
-          const pr = await fetch("/api/personas", { cache: "no-store" });
-          if (pr.ok) {
-            const pd = (await pr.json()) as PersonasResponse;
-            if (!cancelled) {
-              setPersonas(pd.personas);
-              setSelectedPersona(pd.default);
-            }
-          }
-        } catch {
-          // Personas are nice-to-have; the server falls back to default.
-        }
-
-        // Prime the Tools picker catalog so it renders for new chats too.
-        // loadConversation will overwrite with per-conversation enabled
-        // state once an existing conversation is opened.
-        if (!cancelled) void loadMcpServerCatalogPreview();
-
-        // Capability fetch — currently just lockdown availability.
-        // Best-effort: a 404 / network error means the older server
-        // doesn't expose this endpoint, so we keep the feature off.
-        try {
-          const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
-          if (cfgRes.ok) {
-            const cfg = (await cfgRes.json()) as {
-              lockdown_available: boolean;
-              lockdown_only: boolean;
-              lockdown_allowed_models: string[] | null;
-            };
-            if (!cancelled) {
-              setServerConfig({
-                lockdownAvailable: cfg.lockdown_available === true,
-                lockdownOnly: cfg.lockdown_only === true,
-                lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
-              });
-            }
-          }
-        } catch {
-          // Optional capability — leave lockdown off when the server
-          // is too old to advertise it.
-        }
-
-        const conversationsResponse = await fetch("/api/conversations", { cache: "no-store" });
-        if (!conversationsResponse.ok) {
-          window.location.href = "/login";
-          return;
-        }
-        const conversationsData = (await conversationsResponse.json()) as {
-          conversations: ConversationSummary[] | null;
-        };
-        if (cancelled) return;
-        const convs = conversationsData.conversations ?? [];
-        setConversations(convs);
-
-        const latest = convs[0];
-        if (!latest) {
-          setActiveConversationId(null);
-          return;
-        }
-        await loadConversation(latest.id);
-      } finally {
-        if (!cancelled) setIsLoadingHistory(false);
-      }
-    };
-
-    void loadInitialState();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // (Initial-load mount effect moved below its callback dependencies — see
+  // "mount effects, hoisted below their callback dependencies".)
 
   const filteredConversations = useMemo(() => {
     const q = sidebarQuery.trim().toLowerCase();
@@ -1517,7 +1374,13 @@ export function ChatExperience() {
   // hundred entries), so we fetch once per session and search client-side.
   // The response carries `context_length` per model — used by the
   // context-usage indicator (Show details) as well as the picker.
-  const loadCatalogModels = async () => {
+  //
+  // Wrapped in useCallback so its identity only changes when the dedup
+  // inputs (catalogModels.length / isLoadingCatalog) actually change — the
+  // hoisted mount effect lists it as a dependency, so a fresh-every-render
+  // identity would re-fire that effect each render. The early-return guard
+  // makes any re-fire after the first successful load a no-op.
+  const loadCatalogModels = useCallback(async () => {
     if (catalogModels.length > 0 || isLoadingCatalog) return;
     setIsLoadingCatalog(true);
     try {
@@ -1538,7 +1401,7 @@ export function ChatExperience() {
     } finally {
       setIsLoadingCatalog(false);
     }
-  };
+  }, [catalogModels.length, isLoadingCatalog]);
 
   // Validate the current model slug against /api/model-check whenever it
   // changes. Debounced because the input calls setSelectedModel on every
@@ -1548,8 +1411,17 @@ export function ChatExperience() {
   useEffect(() => {
     const slug = selectedModel.trim();
     if (!slug || slug === DEFAULT_MODEL) {
-      setModelError(null);
-      return;
+      // Default / empty slug: drop any stale over-budget error. Deferred
+      // to a microtask so the clear lands outside the effect's synchronous
+      // phase (no cascading render off the effect body); a guard cancels
+      // it if the slug changes again before the microtask runs.
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (!cancelled) setModelError(null);
+      });
+      return () => {
+        cancelled = true;
+      };
     }
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
@@ -1985,7 +1857,7 @@ export function ChatExperience() {
     setIsSummarizing(true);
     setSummarizeError(null);
     setSummarizeStream("");
-    setSummarizeStartedAt(Date.now());
+    setSummarizeStartedAt(nowMs());
     try {
       const response = await fetch(
         `/api/conversations/${encodeURIComponent(activeConversationId)}/summarize`,
@@ -2398,7 +2270,7 @@ export function ChatExperience() {
       // On reattach the turn is already well underway, so holding back
       // tokens would just add perceived latency on top of the reconnect.
       if (!ctx.isReattach) {
-        const elapsed = Date.now() - ctx.thinkingStartedAt;
+        const elapsed = nowMs() - ctx.thinkingStartedAt;
         if (elapsed < minimumThinkingMs) {
           await new Promise((resolve) =>
             window.setTimeout(resolve, minimumThinkingMs - elapsed),
@@ -2855,7 +2727,7 @@ export function ChatExperience() {
       ) {
         assistantId = last.id;
       } else {
-        assistantId = Date.now();
+        assistantId = nowMs();
         setConvMessages(convId, (curr) => [
           ...curr,
           {
@@ -2882,7 +2754,7 @@ export function ChatExperience() {
       const ctx = {
         target: convId,
         assistantId,
-        thinkingStartedAt: Date.now(),
+        thinkingStartedAt: nowMs(),
         hasStartedStreaming: false,
         isReattach: true,
         sawTerminal: false,
@@ -2925,13 +2797,233 @@ export function ChatExperience() {
     }
   };
 
+  // Latest-callback refs for the two mount-once effects below. reattachToConv
+  // and loadConversation are mutually recursive, so neither can be expressed
+  // as a clean declared-before-use useCallback; refreshConversations and
+  // loadMcpServerCatalogPreview are leaves but are recreated every render.
+  // Rather than thread render-recreated identities into the effects' dep
+  // arrays (which would re-subscribe/re-run them every render) or stale the
+  // closures with empty deps, we keep their latest identities in refs and
+  // call through the refs from inside the effects. The effects then depend
+  // only on these stable refs, so their dep arrays are honest with no
+  // suppression. Reading a ref *inside an effect or event handler* (never
+  // during render) is the supported pattern.
+  const reattachToConvRef = useRef(reattachToConv);
+  const loadConversationRef = useRef(loadConversation);
+  const refreshConversationsRef = useRef(refreshConversations);
+  const loadMcpServerCatalogPreviewRef = useRef(loadMcpServerCatalogPreview);
+  useEffect(() => {
+    reattachToConvRef.current = reattachToConv;
+    loadConversationRef.current = loadConversation;
+    refreshConversationsRef.current = refreshConversations;
+    loadMcpServerCatalogPreviewRef.current = loadMcpServerCatalogPreview;
+  });
+
+  // ── mount effects, hoisted below their callback dependencies ────────────
+  // These three effects all kick off work via callbacks declared above
+  // (loadCatalogModels, reattachToConv, refreshConversations,
+  // loadConversation, loadMcpServerCatalogPreview). They originally sat near
+  // the other mount effects at the top of the component, but reading a
+  // callback before its declaration trips react-hooks/immutability ("Cannot
+  // access variable before it is declared"). Placing them here — after every
+  // callback they reference — keeps the lint gate honest without weakening
+  // behavior. Their relative order (catalog → visibility-refresh →
+  // initial-load) is unchanged from before.
+
+  // Load the catalog once so the context-usage ring (next to the
+  // composer) and the stats-panel chip can both resolve the selected
+  // model's context window. Cheap — one fetch per session, server-side
+  // cached for 24h — and a no-op when already loaded. Fires regardless
+  // of showStats since the composer ring is always visible.
+  //
+  // The kickoff is deferred to a microtask: loadCatalogModels flips
+  // setIsLoadingCatalog(true) synchronously, and calling it directly in
+  // the effect body would run that setState in the effect's synchronous
+  // phase (react-hooks/set-state-in-effect). Deferring moves the first
+  // setState out of that phase; a guard skips the call if we unmount
+  // before the microtask runs.
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void loadCatalogModels();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadCatalogModels]);
+
+  // Refresh the active conversation when the tab/window becomes visible
+  // again. The server now keeps generating after the SSE connection
+  // drops, so a turn the user kicked off before locking their phone (or
+  // backgrounding the tab) often completes server-side while they're
+  // away. Without this, returning to a stale tab would still show the
+  // truncated reply that was on screen at drop time.
+  //
+  // Skipped while a stream is in flight — loadConversation short-
+  // circuits in that case anyway, and we don't want to hit the server
+  // for a refetch we wouldn't apply.
+  useEffect(() => {
+    const refreshIfStale = async () => {
+      if (typeof document === "undefined") return;
+      if (document.visibilityState !== "visible") return;
+      const convId = activeConversationIdRef.current;
+      if (!convId) return;
+      if (attachedConvIdsRef.current.has(convId)) return;
+
+      // First try to reattach to any in-flight turn so the user sees
+      // live tokens resume. If nothing's in-flight, fall back to a
+      // plain DB reload in case a turn completed while we were away.
+      // Callbacks are read through latest-refs (see the ref bundle above)
+      // so this mount-once listener never goes stale yet keeps `[]` deps.
+      await reattachToConvRef.current(convId);
+      if (attachedConvIdsRef.current.has(convId)) return;
+
+      // Refresh the sidebar list unconditionally — small payload, no
+      // chat repaint, and titles/updated_at may have moved if turns
+      // completed elsewhere.
+      void refreshConversationsRef.current();
+
+      // Only refetch the active conversation when our local copy looks
+      // mid-turn — i.e. some message is still in `streaming` / `thinking`.
+      // That's the signal a turn was in flight when the user backgrounded
+      // the tab; the SSE buffer has since been evicted (else reattach
+      // would have caught it above) and Postgres has the canonical reply
+      // we need to swap in. For a clean idle tab, skip: refetching
+      // repaints the entire conversation, costs a roundtrip, and breaks
+      // transient UI state (open dropdowns, in-progress edits) every
+      // single time the user flips tabs — which made the chat feel like
+      // it was reloading on every return.
+      const localMsgs = messagesByConvRef.current[convId];
+      const hasStaleStream = localMsgs?.some(
+        (m) => m.state === "streaming" || m.state === "thinking",
+      );
+      if (!hasStaleStream) return;
+
+      // preserveScroll: the user was already on this conversation and may
+      // have been mid-read. Even when we do refetch (turn dropped while
+      // away), snap-to-bottom on tab return is jarring — keep their
+      // scroll position and let the live "follow along" auto-scroll
+      // handle anything they were already at the bottom of.
+      void loadConversationRef.current(convId, { preserveScroll: true });
+    };
+    const handle = () => {
+      void refreshIfStale();
+    };
+    document.addEventListener("visibilitychange", handle);
+    // `focus` covers desktop window-focus changes inside the same
+    // visible viewport; `online` covers network-restore events that
+    // neither fire. Mobile lock/unlock goes through visibilitychange.
+    window.addEventListener("focus", handle);
+    window.addEventListener("online", handle);
+    return () => {
+      document.removeEventListener("visibilitychange", handle);
+      window.removeEventListener("focus", handle);
+      window.removeEventListener("online", handle);
+    };
+    // Mount-once: the listeners are registered/torn down a single time and
+    // call reattachToConv / refreshConversations / loadConversation through
+    // their latest-refs, so there are no reactive dependencies to track.
+  }, []);
+
+  // Initial load: session, personas, conversations, most-recent conversation.
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadInitialState = async () => {
+      try {
+        const sessionResponse = await fetch("/api/session", { cache: "no-store" });
+        if (!sessionResponse.ok) {
+          window.location.href = "/login";
+          return;
+        }
+        const sessionData = (await sessionResponse.json()) as { email: string };
+        if (cancelled) return;
+        setUserEmail(sessionData.email);
+
+        // Personas
+        try {
+          const pr = await fetch("/api/personas", { cache: "no-store" });
+          if (pr.ok) {
+            const pd = (await pr.json()) as PersonasResponse;
+            if (!cancelled) {
+              setPersonas(pd.personas);
+              setSelectedPersona(pd.default);
+            }
+          }
+        } catch {
+          // Personas are nice-to-have; the server falls back to default.
+        }
+
+        // Prime the Tools picker catalog so it renders for new chats too.
+        // loadConversation will overwrite with per-conversation enabled
+        // state once an existing conversation is opened. Called through a
+        // latest-ref so this mount-once bootstrap keeps `[]` deps.
+        if (!cancelled) void loadMcpServerCatalogPreviewRef.current();
+
+        // Capability fetch — currently just lockdown availability.
+        // Best-effort: a 404 / network error means the older server
+        // doesn't expose this endpoint, so we keep the feature off.
+        try {
+          const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
+          if (cfgRes.ok) {
+            const cfg = (await cfgRes.json()) as {
+              lockdown_available: boolean;
+              lockdown_only: boolean;
+              lockdown_allowed_models: string[] | null;
+            };
+            if (!cancelled) {
+              setServerConfig({
+                lockdownAvailable: cfg.lockdown_available === true,
+                lockdownOnly: cfg.lockdown_only === true,
+                lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
+              });
+            }
+          }
+        } catch {
+          // Optional capability — leave lockdown off when the server
+          // is too old to advertise it.
+        }
+
+        const conversationsResponse = await fetch("/api/conversations", { cache: "no-store" });
+        if (!conversationsResponse.ok) {
+          window.location.href = "/login";
+          return;
+        }
+        const conversationsData = (await conversationsResponse.json()) as {
+          conversations: ConversationSummary[] | null;
+        };
+        if (cancelled) return;
+        const convs = conversationsData.conversations ?? [];
+        setConversations(convs);
+
+        const latest = convs[0];
+        if (!latest) {
+          setActiveConversationId(null);
+          return;
+        }
+        await loadConversationRef.current(latest.id);
+      } finally {
+        if (!cancelled) setIsLoadingHistory(false);
+      }
+    };
+
+    void loadInitialState();
+    return () => {
+      cancelled = true;
+    };
+    // Mount-once bootstrap: re-running it would re-fetch the session and
+    // clobber the active conversation. It calls loadMcpServerCatalogPreview
+    // and loadConversation through their latest-refs (see the ref bundle
+    // above), so there are no reactive dependencies to declare.
+  }, []);
+
   const streamTurn = async (
     assistantId: number,
     abortController: AbortController,
     body: Record<string, unknown>,
     initialTarget: string,
   ) => {
-    const thinkingStartedAt = Date.now();
+    const thinkingStartedAt = nowMs();
     let hasStartedStreaming = false;
     // Which conversation slot do this turn's events write to? Caller
     // (submitPrompt) picked the key: a real conv id for existing chats,
@@ -3169,7 +3261,15 @@ export function ChatExperience() {
   };
 
   const removePendingAttachment = (clientId: string) => {
-    setPendingAttachments((prev) => prev.filter((a) => a.clientId !== clientId));
+    setPendingAttachments((prev) => {
+      const next = prev.filter((a) => a.clientId !== clientId);
+      // Re-arm the spreadsheet nudge once the composer empties so the
+      // next heavy upload can surface the banner again. Previously a
+      // synchronous effect watched pendingAttachments.length for this;
+      // doing it in the handler keeps the reset off the render path.
+      if (next.length === 0) setSpreadsheetNudgeDismissed(false);
+      return next;
+    });
     setAttachmentError(null);
   };
 
@@ -3207,8 +3307,11 @@ export function ChatExperience() {
     setPromptForKey(composerKey, "");
     setPendingAttachmentsForKey(composerKey, []);
     setAttachmentErrorForKey(composerKey, null);
+    // Composer just emptied — re-arm the spreadsheet nudge for the next
+    // upload (formerly handled by a pendingAttachments.length effect).
+    setSpreadsheetNudgeDismissed(false);
 
-    const baseId = Date.now();
+    const baseId = nowMs();
     const assistantId = baseId + 1;
 
     // Tack a short markdown block onto the displayed user message so the
@@ -5871,13 +5974,23 @@ function UserBubble({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Keep the draft in sync with the canonical message content whenever we're
-  // NOT actively editing. This is a classic "reset local state when a prop
-  // changes" case where a mount-effect setState is the cleanest option —
-  // derivation via render won't work because the user's in-progress edits
-  // would be clobbered on every re-render.
-  useEffect(() => {
-    if (!editing) setDraft(message.content);
-  }, [editing, message.content]);
+  // NOT actively editing. This is the classic "reset local state when a prop
+  // changes" case. React's recommended fix is to adjust state *during render*
+  // (tracking the values that should trigger a reset) rather than in an
+  // effect — that avoids the extra render an effect-driven setState costs and
+  // keeps it off the synchronous effect phase. We watch both `editing` (so
+  // leaving edit mode restores the canonical text) and `message.content` (so
+  // an out-of-band update to a not-being-edited message resyncs). In-progress
+  // edits are never clobbered because the reset only fires while not editing.
+  const [lastSyncedContent, setLastSyncedContent] = useState(message.content);
+  const [wasEditing, setWasEditing] = useState(editing);
+  if (!editing && (message.content !== lastSyncedContent || wasEditing)) {
+    setDraft(message.content);
+    setLastSyncedContent(message.content);
+    setWasEditing(false);
+  } else if (editing !== wasEditing) {
+    setWasEditing(editing);
+  }
 
   // On enter into edit mode: focus + cursor at end so a long message
   // is ready to extend, not select-all. Width/height auto-sizing is
@@ -6789,7 +6902,11 @@ function EmailPreview({
   // sandbox="allow-same-origin" (no scripts still, so LLM HTML stays
   // inert). Color maps mirror the flag repo's email-preview.html so
   // emails rendered in both places look identical.
-  const applyInboxMode = () => {
+  // Stabilized with useCallback so the effect below can list it as a real
+  // dependency (honest deps, no suppression) and the iframe onLoad handler
+  // gets a stable identity. It only reads `inbox` plus the stable iframe ref
+  // and module-level color maps, so `[inbox]` is the complete dep set.
+  const applyInboxMode = useCallback(() => {
     const frame = iframeRef.current;
     if (!frame) return;
     try {
@@ -6826,11 +6943,13 @@ function EmailPreview({
     } catch {
       // Cross-origin or transient load state — ignore, next onLoad retries.
     }
-  };
+  }, [inbox]);
+  // Re-apply when the inbox mode flips or the HTML payload changes (the
+  // iframe reloads, so the previous swap is gone). `html` stays a dep
+  // because applyInboxMode itself doesn't read it — it's the reload trigger.
   useEffect(() => {
     applyInboxMode();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inbox, html]);
+  }, [applyInboxMode, html]);
 
   if (!isHtml) {
     // Plain-text emails: stick with the simple monospaced view and

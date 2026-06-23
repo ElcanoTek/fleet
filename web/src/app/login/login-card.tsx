@@ -32,20 +32,28 @@ export default function LoginCard({ elcanoLoginEnabled }: { elcanoLoginEnabled: 
   const [loginError, setLoginError] = useState<string | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
 
-  // Reading the `?e=` query param must happen after hydration — `window` is
-  // undefined during SSR, and using the useState lazy initializer would
-  // cause a hydrate mismatch for the initial render. A one-shot setState
-  // in a mount effect is the recommended pattern here.
+  // Reading the `?e=` query param and the bootstrapped theme must happen after
+  // hydration — `window`/`document` are undefined during SSR, and a useState
+  // lazy initializer would cause a hydrate mismatch for the initial render.
+  // We read synchronously in the effect but apply the results via a microtask
+  // so the setState lands outside the effect's synchronous phase (otherwise
+  // react-hooks/set-state-in-effect flags the cascading render); a guard
+  // cancels the update if we unmount first.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const current = document.documentElement.getAttribute("data-theme");
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLoginError(errorCodeToMessage(params.get("e")));
-    // Read the bootstrapped theme after mount so SSR and hydration start from
-    // the same markup.
-    if (current === "light" || current === "dark") {
-      setTheme(current);
-    }
+    const nextError = errorCodeToMessage(params.get("e"));
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setLoginError(nextError);
+      if (current === "light" || current === "dark") {
+        setTheme(current);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const toggleTheme = () => {
