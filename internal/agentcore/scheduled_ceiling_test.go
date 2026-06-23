@@ -1,8 +1,11 @@
 package agentcore
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"charm.land/fantasy"
 )
 
 // TestScheduledPolicy_EnforcesCostCeiling is the regression guard for #75: a
@@ -59,5 +62,43 @@ func TestStepStopConditions(t *testing.T) {
 	}
 	if got := stepStopConditions(100); len(got) != 1 {
 		t.Fatalf("stepStopConditions(100): got %d conditions, want exactly 1", len(got))
+	}
+}
+
+// TestCeiling_HardAbortBeforeNextCompletion is the regression guard for #82: when
+// the run's accumulated usage crosses the ceiling, the budget-guarded PrepareStep
+// aborts BEFORE the next paid completion and the run finishes GRACEFULLY with the
+// partial transcript — it does NOT keep stepping until maxEnforcementRounds.
+func TestCeiling_HardAbortBeforeNextCompletion(t *testing.T) {
+	// 10-token ceiling; the audit is NEVER satisfied, so without the hard abort
+	// the loop would run to maxEnforcementRounds and return an error.
+	policy := NewScheduledPolicy(NewLogSession(), 50, 0, 10)
+	model := &mockModel{
+		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+			return func(yield func(fantasy.StreamPart) bool) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "t", Delta: "working"})
+				yield(fantasy.StreamPart{
+					Type:         fantasy.StreamPartTypeFinish,
+					FinishReason: fantasy.FinishReasonStop,
+					Usage:        fantasy.Usage{InputTokens: 50, OutputTokens: 10}, // > the 10-token ceiling
+				})
+			}, nil
+		},
+	}
+	res, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+		Input:    stubInput{system: "sys", user: "go", label: "sched"},
+		Observer: &captureObserver{},
+		Policy:   policy,
+		Executor: &stubExecutor{},
+		Model:    model,
+	})
+	if err != nil {
+		t.Fatalf("ceiling hit should finish gracefully, got error: %v", err)
+	}
+	if res.Rounds >= maxEnforcementRounds {
+		t.Fatalf("run hit the round cap (%d) instead of aborting on the ceiling — hard abort not engaged", res.Rounds)
+	}
+	if res.FinalText == "" {
+		t.Error("graceful ceiling stop should still return the partial transcript")
 	}
 }
