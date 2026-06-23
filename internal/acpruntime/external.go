@@ -252,16 +252,16 @@ func (r *ExternalRuntime) Run(ctx context.Context, promptText string, deps Exter
 
 	initCtx, cancelInit := context.WithTimeout(ctx, r.cfg.StartTimeout)
 	defer cancelInit()
-	// We still advertise fs + terminal so a generic external agent that DOES try
-	// to delegate gets a host-governed surface; a self-executing agent simply
-	// won't call them. The trust posture (containment) is independent of the
-	// advertised capabilities.
+	// Advertise ONLY capabilities we actually honor. externalClient rejects
+	// fs/read_text_file, fs/write_text_file, and every terminal/* method with
+	// MethodNotFound, so advertising them would promise a spec-compliant external
+	// agent (Claude Code, Goose) a surface that fails mid-turn. Containment (the
+	// trust posture) is independent of these flags. When a host-governed
+	// fs/terminal surface is genuinely wired here, flip the flag on in the SAME
+	// change that implements the handlers.
 	initResp, err := conn.Initialize(initCtx, acp.InitializeRequest{
-		ProtocolVersion: acp.ProtocolVersionNumber,
-		ClientCapabilities: acp.ClientCapabilities{
-			Fs:       acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
-			Terminal: true,
-		},
+		ProtocolVersion:    acp.ProtocolVersionNumber,
+		ClientCapabilities: acp.ClientCapabilities{},
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("initialize external agent: %w", err)
