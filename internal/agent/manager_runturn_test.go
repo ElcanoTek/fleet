@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/fakellm"
 )
@@ -85,6 +87,9 @@ func newFakeLLMManager(t *testing.T, fake *fakellm.Server) *Manager {
 		ProtocolsDir:     filepath.Join(dir, "protocols"),
 		SkillsDir:        filepath.Join(dir, "skills"),
 		SystemPromptsDir: filepath.Join(dir, "system_prompts"),
+		// Exercise the admission path on every fake-LLM turn (never saturated at 4
+		// slots, so it must be transparent — and the slot must be released after).
+		Limiter: admission.New(4, 1),
 	})
 	if err != nil {
 		t.Fatalf("agent.New: %v", err)
@@ -143,6 +148,39 @@ func TestManagerRunTurn_TextOnly(t *testing.T) {
 	}
 	if res.NewHistory[0].Role != "user" {
 		t.Errorf("first history entry role = %q, want user", res.NewHistory[0].Role)
+	}
+	// The admission slot the turn held must be released once it returns.
+	if n := mgr.limiter.InFlight(); n != 0 {
+		t.Errorf("limiter still holds %d slot(s) after the turn; release leaked", n)
+	}
+}
+
+// TestManagerRunTurn_AtCapacity verifies the interactive admission gate: when the
+// shared limiter has no free slot, RunTurn waits briefly then returns ErrAtCapacity
+// (which the HTTP layer surfaces as a clean turn.error) rather than hanging or
+// over-subscribing the box. Uses a bare Manager — RunTurn rejects before it touches
+// the model/sandbox, so no fake-LLM harness is needed.
+func TestManagerRunTurn_AtCapacity(t *testing.T) {
+	lim := admission.New(1, 0) // one slot, no reserve
+	held, ok := lim.AcquireInteractive(context.Background().Done())
+	if !ok {
+		t.Fatal("setup: could not take the only slot")
+	}
+	defer held()
+
+	orig := interactiveAdmitWait
+	interactiveAdmitWait = 20 * time.Millisecond // don't make the test wait the real 5s
+	defer func() { interactiveAdmitWait = orig }()
+
+	mgr := &Manager{config: &config.Config{PersonaDefault: "generic"}, limiter: lim}
+
+	start := time.Now()
+	_, err := mgr.RunTurn(context.Background(), TurnInput{UserMessage: "hi"}, &recordingSink{})
+	if !errors.Is(err, ErrAtCapacity) {
+		t.Fatalf("RunTurn on a full box: got err=%v, want ErrAtCapacity", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("RunTurn blocked %v before rejecting; should give up after ~interactiveAdmitWait", elapsed)
 	}
 }
 

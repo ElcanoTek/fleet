@@ -30,6 +30,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
@@ -113,6 +114,16 @@ func run() error {
 	systemPromptsDir := bundle.SystemPromptsDir
 	skillsDir := bundle.SkillsDir
 
+	// Shared box-wide admission limiter: bounds TOTAL in-flight agent turns
+	// (interactive chat + scheduled tasks) to FLEET_MAX_CONCURRENT_AGENTS, with a
+	// slice reserved for interactive chat so background tasks can never starve it.
+	// Handed to BOTH the interactive Manager and the scheduled worker pool so the
+	// cap is genuinely box-wide.
+	agentLimiter := admission.New(cfg.MaxConcurrentAgents, admission.DefaultReserved(cfg.MaxConcurrentAgents))
+	//nolint:gosec // G706 false positive: all args are ints rendered with %d (no CR/LF can forge a log line); derived from operator-set FLEET_MAX_CONCURRENT_AGENTS, not request input.
+	log.Printf("admission: total=%d scheduled_max=%d interactive_reserved=%d",
+		agentLimiter.Total(), agentLimiter.SchedulableSlots(), agentLimiter.Total()-agentLimiter.SchedulableSlots())
+
 	// ── DB pools (both self-migrate on open) ──
 	chatStore, err := store.Open(chatDSN(cfg))
 	if err != nil {
@@ -143,6 +154,7 @@ func run() error {
 		SkillsDir:            skillsDir,
 		SystemPromptsDir:     systemPromptsDir,
 		ChatSystemPromptFile: "chat.md",
+		Limiter:              agentLimiter, // shared box-wide cap; interactive turns admitted through it
 		NotesProvider:        notesProvider,
 		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
 	})
@@ -261,8 +273,8 @@ func run() error {
 		RuntimeFlavor:            scheduledFlavor,
 		AllowUngovernedScheduled: allowUngovernedScheduled,
 	})
-	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{})
-	log.Printf("worker pool: cap=%d", pool.Cap())
+	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{Limiter: agentLimiter})
+	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 
 	// ── boot listeners ──
 	chatAddr := addrOr(cfg.Addr, ":8080")

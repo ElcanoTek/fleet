@@ -10,6 +10,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
@@ -122,6 +123,13 @@ type Manager struct {
 	runtimes         []clientconfig.Runtime
 	defaultRuntime   string
 	nativeAgentImage string
+
+	// limiter is the SHARED process-wide admission governor (interactive +
+	// scheduled). RunTurn admits each chat turn through it so the box-wide
+	// concurrency cap bounds chat too, with reserved headroom keeping chat ahead
+	// of background work. Nil disables admission (the one-shot cutlass harness and
+	// tests, where there is nothing to contend with).
+	limiter *admission.Limiter
 }
 
 // SetRuntimes configures the runtime-flavor catalog + the native-agent image the
