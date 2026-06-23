@@ -659,11 +659,15 @@ func (c *containerImpl) close() {
 	}
 }
 
+// containerNamePrefix is the shared prefix for every sandbox container name. It
+// is the handle the boot-time orphan sweep (PruneOrphanedContainers) filters on.
+const containerNamePrefix = "chat-sandbox-"
+
 // generateContainerName returns "chat-sandbox-<16 hex chars>". Random
 // suffix avoids collisions when multiple sandboxes are spawned in
 // parallel by the warm pool.
 func generateContainerName() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
-	return "chat-sandbox-" + hex.EncodeToString(b[:])
+	return containerNamePrefix + hex.EncodeToString(b[:])
 }
