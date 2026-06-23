@@ -37,6 +37,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -95,7 +96,7 @@ func runACP() error {
 	// ── interactive engine (the SAME concrete turnEngine the server drives) ──
 	mgr, err := agent.New(agent.ManagerOptions{
 		Config:               cfg,
-		ServerSpecs:          buildMCPSpecs(cfg),
+		ServerSpecs:          scheduledrun.BuildMCPSpecs(cfg),
 		PersonasDir:          bundle.PersonasDir,
 		ProtocolsDir:         bundle.ProtocolsDir,
 		SystemPromptsDir:     bundle.SystemPromptsDir,
