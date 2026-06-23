@@ -277,7 +277,27 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
-	return recoverMiddleware(mux)
+	return recoverMiddleware(bodyLimitMiddleware(mux))
+}
+
+// maxJSONBodyBytes caps non-upload request bodies on the chat server, matching
+// the orchestrator's MaxJSONBodySize (both servers boot in the same process). A
+// chat message plus attachment METADATA (the bytes go through /attachments,
+// which sets its own multipart cap) fits comfortably; this just removes a
+// post-auth single-request OOM lever on the single-host box.
+const maxJSONBodyBytes = 1 << 20 // 1 MB
+
+func bodyLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch:
+			// /attachments has its own (larger) multipart cap; don't double-limit.
+			if !strings.HasPrefix(r.URL.Path, "/attachments") {
+				r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // recoverMiddleware converts a panic in a SYNCHRONOUS chat handler into a 500
@@ -1736,5 +1756,3 @@ func truncateForTitle(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
-
-var _ = fmt.Sprintf // keep fmt in imports for future error formatting
