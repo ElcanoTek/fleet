@@ -37,6 +37,7 @@ package clientconfig
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -330,6 +331,12 @@ func Load(dir string) (*Bundle, error) {
 	if err := b.validate(); err != nil {
 		return nil, err
 	}
+	// Warn (don't fail) on stdio script-path args that don't resolve under the
+	// bundle — a misspelled/missing `mcp/foo.py` would otherwise only surface as
+	// a silent connector launch failure at runtime.
+	for _, p := range b.ValidateMCPArgPaths() {
+		log.Printf("clientconfig: warning: %s", p)
+	}
 	return b, nil
 }
 
@@ -476,6 +483,48 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 		out[s.Name] = sc
 	}
 	return out
+}
+
+// scriptExtensions are the arg suffixes ValidateMCPArgPaths treats as a script
+// file path that must resolve under the bundle dir.
+var scriptExtensions = map[string]bool{
+	".py": true, ".js": true, ".mjs": true, ".cjs": true, ".ts": true, ".sh": true, ".rb": true,
+}
+
+// ValidateMCPArgPaths checks that every stdio server's relative script-path args
+// (args ending in a known script extension, e.g. `mcp/foo.py`) resolve to a file
+// under the bundle dir. It returns one human-readable problem per missing path;
+// an empty slice means all paths resolve. This catches the deploy-time failure
+// where a bundle ships `args: ["mcp/foo.py"]` but the file is absent or
+// misspelled — the MCP subprocess would otherwise just fail to launch at runtime
+// (see internal/mcp cmd.Dir). It is checked for ALL stdio servers regardless of
+// the credential enable-gate, since a missing script is a defect whether or not
+// the connector's creds happen to be set. Load logs any problems as warnings; a
+// CI test asserts the shipped bundle returns none.
+func (b *Bundle) ValidateMCPArgPaths() []string {
+	bundleDir := b.Dir
+	if abs, err := filepath.Abs(b.Dir); err == nil {
+		bundleDir = abs
+	}
+	var problems []string
+	for i := range b.MCPCatalog {
+		s := &b.MCPCatalog[i]
+		if s.Type == "http" {
+			continue
+		}
+		for _, arg := range s.Args {
+			if filepath.IsAbs(arg) || !scriptExtensions[strings.ToLower(filepath.Ext(arg))] {
+				continue
+			}
+			p := filepath.Join(bundleDir, arg)
+			if info, err := os.Stat(p); err != nil || info.IsDir() {
+				problems = append(problems, fmt.Sprintf(
+					"mcp_servers[%q]: script arg %q does not resolve to a file under the bundle (looked for %s)",
+					s.Name, arg, p))
+			}
+		}
+	}
+	return problems
 }
 
 // AgentPolicy returns the bundle's agent tool-behavior policy (defensively
