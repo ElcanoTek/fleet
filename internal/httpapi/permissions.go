@@ -131,6 +131,22 @@ func (s *Server) handlePermissionDecision(w http.ResponseWriter, r *http.Request
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Owner-scoped, like every other conversation route: confirm the caller owns
+	// this conversation before resolving its pending permission request.
+	// Otherwise a member who learns another user's convID + a guessable perm-N
+	// requestID could force-allow/deny that user's blocked external-agent action,
+	// defeating the human-in-the-loop gate. (The permission registry is keyed
+	// only on convID+requestID with no user binding, so there is no SQL backstop
+	// here — the explicit Get is the gate.)
+	conv, err := s.store.Get(r.Context(), userFromCtx(r.Context()), convID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conv == nil {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
 	var req struct {
 		Allowed  bool   `json:"allowed"`
 		OptionID string `json:"option_id"`
