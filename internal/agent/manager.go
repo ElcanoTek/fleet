@@ -650,11 +650,17 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 	}
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
 	reason := "cancelled"
-	if ctxErr != nil {
+	switch {
+	case res.StoppedByBudget:
+		// A per-turn cost/token ceiling fired — not a user Stop. Surface it
+		// distinctly so the UI can say "budget reached" instead of "cancelled".
+		reason = "cost_ceiling_reached"
+	case ctxErr != nil:
 		reason = ctxErr.Error()
 	}
 	sink.Emit("turn.cancelled", map[string]any{
 		"reason":                  reason,
+		"budget_reached":          res.StoppedByBudget,
 		"cost_usd":                usage.CostUSD,
 		"prompt_tokens":           usage.PromptTokens,
 		"prompt_tokens_last_step": usage.LastStepInputTokens,
