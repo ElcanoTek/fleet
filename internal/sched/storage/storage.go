@@ -113,7 +113,11 @@ func (s *Storage) Close() error { return s.db.Close() }
 func (s *Storage) DB() *db.Database { return s.db }
 
 // LeaseDuration is the fixed lease window for a claimed task. Kept identical to
-// moc's value so the lease/recovery tests carry over unchanged.
+// moc's value so the lease/recovery tests carry over unchanged. Intentionally a
+// hardcoded constant rather than an operator knob: on a single-box, vertically
+// scaled deployment a configurable lease window earns nothing, and the runner's
+// renew ticker already keeps the lease fresh well inside this window. Revisit
+// only if long-running scheduled agents ever need a wider window.
 const LeaseDuration = 5 * time.Minute
 
 // Node operations

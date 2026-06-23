@@ -5,8 +5,7 @@
 //
 // Notes live in the sched DB (migration 015). Agents cannot write notes
 // directly; they propose edits via the propose_note tool and admins curate
-// (publish / reject) them. See scratchpad NOTES_WIKI_SPEC.md and
-// docs/MIGRATION_PLAN_V2.md §6.
+// (publish / reject) them.
 package sched
 
 import (
