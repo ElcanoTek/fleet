@@ -154,10 +154,6 @@ A single `fleet` process runs, on one box:
 both executing their tool calls inside the **same** rootless-Podman sandbox, and
 both driven by **one** unified agent runtime (`internal/agentcore`).
 
-This repository consolidates what used to live across five repositories
-(`chat`, `moc`, `cutlass`, `gig`, `sandbox`). `lifeline` remains an external
-per-developer coding MCP and is not vendored here.
-
 ## Standards
 
 fleet is built on open protocols. We list only what is actually implemented and
