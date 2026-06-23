@@ -22,7 +22,7 @@ them.
 ## Why fleet
 
 - **Any agent, any model.** fleet is an [ACP](#standards) client: alongside its
-  own native agent loop it can drive **any ACP-compliant AI agents** (Claude Code,
+  own native agent loop it can drive **any ACP-compliant AI agent** (Claude Code,
   Goose, …) as selectable, sandboxed "flavors" you pick per chat or per
   scheduled task. You can also choose the **best model for each task** rather than hard-wiring one vendor.
 
