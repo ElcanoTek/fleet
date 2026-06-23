@@ -11,9 +11,9 @@
 #
 # This image is a PER-CLIENT CONFIG-BUNDLE artifact, the same as the execution
 # sandbox: it extends the bundle's own sandbox base so the toolchain the loop
-# advertises matches what the host actually runs. The base is pinned by the
-# sibling sandbox/Containerfile (digest-pinned there); we build FROM the local
-# tag that build produces so the lineage stays in one place.
+# advertises matches what the host actually runs. The base is the sibling
+# sandbox/Containerfile (which tracks fedora-minimal:latest); we build FROM the
+# local tag that build produces so the lineage stays in one place.
 #
 # Build (build-on-box default):
 #   scripts/build-native-agent-image.sh
