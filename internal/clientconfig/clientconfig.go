@@ -469,6 +469,7 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 			Type:          s.Type,
 			Enabled:       true,
 			ToolAllowlist: append([]string(nil), s.Tools...),
+			AccountVars:   append([]string(nil), s.AccountVars...),
 		}
 		switch s.Type {
 		case "http":

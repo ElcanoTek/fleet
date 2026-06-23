@@ -3,6 +3,8 @@ package agent
 import (
 	"slices"
 	"sort"
+
+	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
 // OptionalServerInfo is the catalog-row shape returned by MCPServerCatalog.
@@ -29,6 +31,10 @@ type OptionalServerInfo struct {
 	// the initial `enabled` value; per-conversation state still wins once a
 	// conversation has persisted its opt-in list.
 	EnabledByDefault bool `json:"enabled_by_default,omitempty"`
+	// Accounts are the provisioned credential-seat names for this server (from
+	// the `<VAR>_<ACCOUNT>` suffix scan over AccountVars). Names only — never
+	// secret values. Empty when the server has no named accounts provisioned.
+	Accounts []string `json:"accounts,omitempty"`
 }
 
 // buildOptionalServerMetadata snapshots the Optional-server subset of the
@@ -50,6 +56,9 @@ func (m *Manager) buildOptionalServerMetadata(specs map[string]MCPServerSpec) []
 			Description:      spec.Description,
 			Beta:             spec.Beta,
 			EnabledByDefault: spec.EnabledByDefault,
+			// Provisioned credential-account seats (names only) so the picker can
+			// surface which accounts back this server. Nil when none are set.
+			Accounts: creds.AccountsFor(spec.AccountVars),
 			// Empty (not nil) so JSON renders `[]` instead of `null`
 			// when the underlying MCP fails to start. The picker calls
 			// `.join()` on this client-side; null would crash the render.

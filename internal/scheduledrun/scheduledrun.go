@@ -362,6 +362,7 @@ func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 			URL:           sc.URL,
 			Headers:       sc.Headers,
 			ToolAllowlist: sc.ToolAllowlist,
+			AccountVars:   sc.AccountVars,
 		}
 	}
 	return out

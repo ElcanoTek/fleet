@@ -556,6 +556,8 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 			// Separate group so adding this longer key doesn't re-align
 			// the block above.
 			"enabled_by_default": info.EnabledByDefault,
+			// Provisioned credential-account seat names (never secret values).
+			"accounts": info.Accounts,
 		})
 	}
 	writeJSON(w, map[string]any{"servers": servers})

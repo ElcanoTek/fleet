@@ -326,6 +326,15 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 					Messages:     messages,
 					Observer:     deps.Observer,
 					SystemPrompt: systemPrompt,
+					// Meter a recovery model call into the SAME run accounting as
+					// the main loop, so the cost chip isn't undercounted. Capability
+					// closure over usageOrch — the state never escapes Run, and this
+					// field is set unconditionally (not a mode branch).
+					RecordUsage: func(u fantasy.Usage, md fantasy.ProviderMetadata) {
+						if usageOrch != nil {
+							usageOrch.updateUsage(u, md)
+						}
+					},
 				})
 				if ferr != nil {
 					log.Printf("finalize hook error: %v", ferr)

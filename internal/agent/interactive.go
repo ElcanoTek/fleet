@@ -530,6 +530,14 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 			}
 			return nil
 		},
+		// Meter this recovery call into the run's accounting so its tokens/cost
+		// are not invisible to the cost chip (#83). Nil-safe.
+		OnStepFinish: func(step fantasy.StepResult) error {
+			if in.RecordUsage != nil {
+				in.RecordUsage(step.Usage, step.ProviderMetadata)
+			}
+			return nil
+		},
 	})
 	if err != nil {
 		return "", err
@@ -563,6 +571,14 @@ func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.Fi
 			sb.WriteString(text)
 			if in.Observer != nil {
 				in.Observer.Observe("text.delta", map[string]any{"text": text})
+			}
+			return nil
+		},
+		// Meter this recovery call into the run's accounting so its tokens/cost
+		// are not invisible to the cost chip (#83). Nil-safe.
+		OnStepFinish: func(step fantasy.StepResult) error {
+			if in.RecordUsage != nil {
+				in.RecordUsage(step.Usage, step.ProviderMetadata)
 			}
 			return nil
 		},

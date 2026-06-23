@@ -84,7 +84,11 @@ fleet owns execution end to end:
 - **Usage & cost.** The `native-acp` agent makes the LLM calls inside its
   container and reports each step's token/cost over `_fleet/event`; the host
   accumulates it and enforces the same cost/token ceilings (shipped in the run
-  spec, enforced in-loop) as in-process.
+  spec, enforced in-loop) as in-process. As **defense-in-depth across the
+  container boundary**, the host *also* re-checks that reconciled usage against
+  the spec ceilings itself and **hard-cancels the run** if a buggy or
+  compromised agent overshoots — so the ceiling does not rely solely on the
+  in-container soft gate.
 - **Blast radius.** Tool calls run in fleet's own hardened per-turn sandbox.
 - **Lockdown.** Lockdown bounds *tool execution*, not the model call. Tool calls
   already execute host-side in fleet's per-turn sandbox, so a lockdown turn hands
