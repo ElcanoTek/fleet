@@ -59,11 +59,10 @@ linters:
       # the stream-error classifiers), so a default IS the exhaustive handling.
       default-signifies-exhaustive: true
     gocyclo:
-      # Raise from the default 30 -> 25? No — RAISE the ceiling: the agent
-      # turn-loop / task-validation / atomic-status-update functions are
-      # legitimately branchy state machines. 25 would flag more, not fewer; the
-      # intent is to keep gocyclo ON but tolerate the few genuinely-complex
-      # functions (currently topping out at 33). Set the cap above them.
+      # A few functions are legitimately branchy state machines (the agent
+      # turn-loop, task validation, atomic status updates). Keep gocyclo ON but
+      # set the cap just above them so it flags genuinely new complexity, not
+      # these.
       min-complexity: 35
     nolintlint:
       # Every //nolint must carry an explanation and name the specific

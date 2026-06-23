@@ -157,6 +157,19 @@ jobs:
       - name: go test
         run: go test -p 1 ./... -count=1
 
+      - name: go test -race
+        # fleet's correctness rests on in-process coordination (the worker pool,
+        # SSE fan-out, single-owner DB leases, the admission semaphore). The race
+        # detector is the gate for that whole class of bug; it reuses the same
+        # Postgres service as the plain test step above.
+        run: go test -race -p 1 ./... -count=1
+
+      - name: govulncheck (dependency CVEs)
+        # Call-graph-aware scan of the (broad, fast-moving) dependency tree for
+        # known vulnerabilities reachable from fleet's code. gosec covers SAST and
+        # gitleaks covers secrets; nothing else gates on vulnerable dependencies.
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   web:
     name: Web lint / test / build
     runs-on: ubuntu-latest

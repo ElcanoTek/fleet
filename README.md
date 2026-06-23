@@ -78,7 +78,7 @@ how they line up against those three concerns.
 ### Can it do the job — reproducibly?
 
 A setup that worked once but can't be reproduced isn't something you can
-delegate. fleet makes an agent's configuration an **artifact, not a vibe**: the
+delegate. fleet makes an agent's configuration a **versioned artifact**: the
 system prompt, personas, protocols (playbooks), skills, connected MCP tools, and
 model defaults all live in a versioned **client-config bundle** (a plain git repo — see
 below). The setup that worked is the setup that runs again next time, for the
@@ -280,7 +280,7 @@ Those are versioned files you control, and fleet reaches agents and tools over
 version it in git, fork it per team, share it across orgs, or point it at another
 ACP/MCP-capable platform. Moving off fleet doesn't mean starting over — you keep
 the bundle, and the wire protocols are not fleet-specific. The assets are yours
-and the protocols are open, which is what keeps adoption low-regret: you can
+and the protocols are open, which keeps adoption low-risk: you can
 start on real work without betting that you can never leave.
 
 The public template

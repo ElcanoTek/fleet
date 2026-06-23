@@ -47,7 +47,7 @@ components:
     bearerToken:
       type: http
       scheme: bearer
-      description: A user token from the username/password login path (Authorization：Bearer).
+      description: A user token from the username/password login path (Authorization: Bearer).
     elcanoAuthCookie:
       type: apiKey
       in: cookie
@@ -193,7 +193,7 @@ paths:
 
   /register:
     post:
-      summary: Register a worker node.
+      summary: Register a worker node. (Internal single-host lease plumbing — fleet runs ONE synthetic worker node in-process; this is not a multi-runner feature.)
       security: [{ registrationToken: [] }]
       requestBody:
         content:
