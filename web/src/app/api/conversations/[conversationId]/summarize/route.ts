@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import { chatServerFetch } from "@/app/lib/chatServer";
+import { chatServerProxy } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
 
 export const runtime = "nodejs";
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
   }
   const { conversationId } = await context.params;
   const body = await request.text();
-  const upstream = await chatServerFetch(
+  const { upstream, error } = await chatServerProxy(
     session.email,
     `/conversations/${encodeURIComponent(conversationId)}/summarize`,
     {
@@ -45,6 +45,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       body: body.length > 0 ? body : "{}",
     },
   );
+  if (error) return error;
   // Stream upstream body straight through. text/event-stream needs the
   // body to flow chunk-by-chunk; reading it via .text() would buffer
   // the whole summary and defeat the streaming UX.

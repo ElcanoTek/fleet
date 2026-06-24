@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import { chatServerFetch } from "@/app/lib/chatServer";
+import { chatServerProxy } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
 
 export const runtime = "nodejs";
@@ -25,11 +25,12 @@ export async function POST(req: NextRequest, context: RouteContext) {
   }
   const { conversationId, approvalId } = await context.params;
   const body = await req.text();
-  const upstream = await chatServerFetch(
+  const { upstream, error } = await chatServerProxy(
     session.email,
     `/conversations/${encodeURIComponent(conversationId)}/approvals/${encodeURIComponent(approvalId)}`,
     { method: "POST", body },
   );
+  if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text, {
     status: upstream.status,

@@ -2,6 +2,7 @@
 // capability flags through to the browser and gates on a session.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NextResponse } from "next/server";
 
 const getServerSessionMock = vi.fn();
 const chatServerFetchMock = vi.fn();
@@ -9,8 +10,23 @@ const chatServerFetchMock = vi.fn();
 vi.mock("@/app/lib/auth", () => ({
   getServerSession: (...args: unknown[]) => getServerSessionMock(...args),
 }));
+// chatServerProxy is the route's new boundary; the mock replicates its contract
+// over chatServerFetchMock (args forwarded verbatim) and returns a clean 502
+// when the fetch rejects.
 vi.mock("@/app/lib/chatServer", () => ({
   chatServerFetch: (...args: unknown[]) => chatServerFetchMock(...args),
+  chatServerProxy: async (...args: unknown[]) => {
+    try {
+      return { upstream: await chatServerFetchMock(...args) };
+    } catch (err) {
+      return {
+        error: NextResponse.json(
+          { error: `chat-server unreachable: ${(err as Error).message}` },
+          { status: 502 },
+        ),
+      };
+    }
+  },
 }));
 
 import { GET } from "./route";
@@ -56,5 +72,13 @@ describe("GET /api/server-config", () => {
     const res = await GET();
     expect(res.status).toBe(500);
     expect(await res.text()).toBe("upstream boom");
+  });
+
+  it("returns a clean 502 when chat-server is unreachable", async () => {
+    chatServerFetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    const res = await GET();
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toMatch(/chat-server unreachable/);
   });
 });

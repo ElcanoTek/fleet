@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import { chatServerFetch } from "@/app/lib/chatServer";
+import { chatServerProxy } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
 
 export const runtime = "nodejs";
@@ -16,11 +16,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { conversationId } = await context.params;
-  const upstream = await chatServerFetch(
+  const { upstream, error } = await chatServerProxy(
     session.email,
     `/conversations/${encodeURIComponent(conversationId)}/cancel`,
     { method: "POST" },
   );
+  if (error) return error;
   if (upstream.status === 204) {
     return NextResponse.json({ ok: true });
   }

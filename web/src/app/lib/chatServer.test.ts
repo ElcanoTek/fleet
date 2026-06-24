@@ -1,5 +1,11 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { chatServerFetch, getChatServerBase, getSharedToken, chatServerHeaders } from "./chatServer";
+import {
+  chatServerFetch,
+  chatServerProxy,
+  getChatServerBase,
+  getSharedToken,
+  chatServerHeaders,
+} from "./chatServer";
 
 describe("chatServer.ts", () => {
   const originalEnv = process.env;
@@ -109,6 +115,38 @@ describe("chatServer.ts", () => {
     it("throws if token is missing", async () => {
       delete process.env.CHAT_SERVER_TOKEN;
       await expect(chatServerFetch("user@example.com", "/api/test")).rejects.toThrow("Missing required environment variable: CHAT_SERVER_TOKEN");
+    });
+  });
+
+  describe("chatServerProxy", () => {
+    beforeEach(() => {
+      process.env.CHAT_SERVER_URL = "http://chat.example.com";
+      process.env.CHAT_SERVER_TOKEN = "test-token";
+    });
+
+    it("returns the raw upstream Response on success (body unread, forwarded verbatim)", async () => {
+      const upstream = new Response("payload", { status: 200 });
+      fetchMock.mockResolvedValue(upstream);
+      const result = await chatServerProxy("user@example.com", "/api/test", { method: "GET" });
+      expect(result.error).toBeUndefined();
+      expect(result.upstream).toBe(upstream);
+      expect(result.upstream!.bodyUsed).toBe(false);
+    });
+
+    it("forwards a non-2xx upstream as success (not an error)", async () => {
+      fetchMock.mockResolvedValue(new Response("nope", { status: 403 }));
+      const result = await chatServerProxy("user@example.com", "/api/test");
+      expect(result.error).toBeUndefined();
+      expect(result.upstream!.status).toBe(403);
+    });
+
+    it("returns a clean 502 when the fetch rejects (chat-server unreachable)", async () => {
+      fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+      const result = await chatServerProxy("user@example.com", "/api/test");
+      expect(result.upstream).toBeUndefined();
+      expect(result.error!.status).toBe(502);
+      const body = await result.error!.json();
+      expect(body.error).toMatch(/chat-server unreachable: ECONNREFUSED/);
     });
   });
 });
