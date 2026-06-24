@@ -70,17 +70,15 @@ func match(pattern, name string) bool {
 
 // Storage provides persistent storage for nodes and tasks.
 type Storage struct {
-	db                   *db.Database
-	nodeHeartbeatTimeout time.Duration
-	location             *time.Location
+	db       *db.Database
+	location *time.Location
 }
 
 // New creates a new Storage instance.
 func New() *Storage {
 	return &Storage{
-		db:                   db.New(),
-		nodeHeartbeatTimeout: 5 * time.Minute,
-		location:             time.UTC,
+		db:       db.New(),
+		location: time.UTC,
 	}
 }
 
@@ -244,17 +242,6 @@ func (s *Storage) UpdateNodeHeartbeat(nodeID uuid.UUID, status models.NodeStatus
 	return node, nil
 }
 
-// GetStaleNodes gets nodes that haven't sent a heartbeat recently.
-func (s *Storage) GetStaleNodes() ([]*models.Node, error) {
-	cutoff := time.Now().UTC().Add(-s.nodeHeartbeatTimeout)
-	return s.db.GetStaleNodes(context.Background(), cutoff)
-}
-
-// GetIdleNodes gets all idle nodes.
-func (s *Storage) GetIdleNodes() ([]*models.Node, error) {
-	return s.db.GetIdleNodes(context.Background())
-}
-
 // Task operations
 
 // AddTask adds a new task.
@@ -334,73 +321,9 @@ func (s *Storage) ClaimNextPendingTask(ctx context.Context, leaseOwner string) (
 	return s.db.ClaimNextPendingTask(ctx, leaseOwner, LeaseDuration)
 }
 
-// AssignTaskToNode atomically leases a pending task to a node. Retained for the
-// crash-recovery test substrate (the synthetic worker uses a node row as its
-// lease owner); the production claim path is ClaimNextPendingTask.
-func (s *Storage) AssignTaskToNode(taskID uuid.UUID, nodeID uuid.UUID) (*models.Task, error) {
-	ctx := context.Background()
-	tx, err := s.db.BeginTx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
-	// the error paths the function already returns the underlying error, and a
-	// rollback failure in a defer can't be surfaced — so the result is
-	// intentionally ignored.
-	defer func() { _ = tx.Rollback() }()
-
-	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-	if task.Status != models.TaskStatusPending {
-		return nil, nil
-	}
-
-	node, err := s.db.GetNodeForUpdate(ctx, tx, nodeID)
-	if err != nil {
-		return nil, err
-	}
-
-	task.Status = models.TaskStatusLeased
-	task.AssignedNodeID = &nodeID
-	leaseOwner := nodeID.String()
-	task.LeaseOwner = &leaseOwner
-	expiresAt := now.Add(LeaseDuration)
-	task.LeaseExpiresAt = &expiresAt
-
-	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
-		return nil, err
-	}
-
-	node.Status = models.NodeStatusBusy
-	node.CurrentTaskID = &task.ID
-	if err := s.db.UpdateNodeTx(ctx, tx, node); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return task, nil
-}
-
 // GetNodeByName gets a node by its name.
 func (s *Storage) GetNodeByName(name string) (*models.Node, error) {
 	return s.db.GetNodeByName(context.Background(), name)
-}
-
-// MarkStaleNodesOffline marks stale nodes offline (task recovery is separate).
-func (s *Storage) MarkStaleNodesOffline() (int, int, error) {
-	ctx := context.Background()
-	cutoff := time.Now().UTC().Add(-s.nodeHeartbeatTimeout)
-	nodesMarked, _, err := s.db.MarkStaleNodesOfflineBatch(ctx, cutoff)
-	if err != nil {
-		return 0, 0, err
-	}
-	return nodesMarked, 0, nil
 }
 
 // RecoverExpiredLeases resets tasks with expired leases back to pending.
@@ -413,9 +336,6 @@ func (s *Storage) RecoverExpiredLeasesWithContext(ctx context.Context) (int, err
 	now := time.Now().UTC()
 	return s.db.RecoverExpiredLeases(ctx, now)
 }
-
-// TimeoutRunningTasks is a no-op (runtime enforcement is in the agent loop).
-func (s *Storage) TimeoutRunningTasks() (int, error) { return 0, nil }
 
 // GetRunningTasks gets all currently running tasks.
 func (s *Storage) GetRunningTasks() ([]*models.Task, error) {
@@ -439,7 +359,7 @@ func (s *Storage) GetDashboardStats() (*models.DashboardStats, error) {
 
 // GetDashboardStatsForUser gets statistics scoped to a user's permissions.
 func (s *Storage) GetDashboardStatsForUser(userID *uuid.UUID, scopes []string) (*models.DashboardStats, error) {
-	return s.db.GetDashboardStatsForUser(context.Background(), userID, scopes, MatchGlob)
+	return s.db.GetDashboardStatsForUser(context.Background(), userID, scopes)
 }
 
 // Log operations

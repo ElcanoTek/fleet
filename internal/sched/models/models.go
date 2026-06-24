@@ -118,7 +118,6 @@ type TaskStatus string
 const (
 	TaskStatusPending   TaskStatus = "pending"
 	TaskStatusScheduled TaskStatus = "scheduled"
-	TaskStatusAssigned  TaskStatus = "assigned"
 	TaskStatusLeased    TaskStatus = "leased"
 	TaskStatusRunning   TaskStatus = "running"
 	TaskStatusAnalyzing TaskStatus = "analyzing"
