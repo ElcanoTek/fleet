@@ -14,6 +14,7 @@ package scheduledrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -131,8 +133,47 @@ func (r *Runner) buildBaseSystemPrompt() string {
 	return sb.String()
 }
 
+// sandboxTaker is the subset of *sandbox.Pool that a scheduled run uses to
+// acquire an execution sandbox. It is an interface so the take-decision
+// (sealed-by-default vs. egress opt-in) is unit-testable without spinning a
+// real podman container.
+type sandboxTaker interface {
+	// Take returns a warm, network-ENABLED sandbox (the interactive default).
+	Take() (*sandbox.Sandbox, func(), error)
+	// TakeContainer cold-starts a fresh sandbox with egress SEALED
+	// (--network=none) — the lockdown boundary.
+	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
+}
+
+// takeTaskSandbox acquires the bash/run_python execution sandbox for a
+// scheduled task. By default (task.AllowNetwork == false) it seals outbound
+// egress via TakeContainer (--network=none), matching the interactive lockdown
+// path — an unattended task can otherwise fetch arbitrary URLs, pip install,
+// SSRF host-local services, or exfiltrate with no human on the loop. A task
+// opts into egress by setting AllowNetwork, which draws from the shared warm
+// pool (Take).
+//
+// The sealed path fails CLOSED on a real container error — it does not silently
+// downgrade to egress-on. The single exception is ErrContainerUnavailable,
+// which means there is no container backend at all (a host-mode / mock pool —
+// e.g. the cutlass dev one-shot or tests without podman): a host sandbox has no
+// network namespace to seal, so sealing is not applicable and we fall back to
+// the host take. This is not a production downgrade — buildSandboxPool requires
+// a container image outside mock mode, so a real deployment always seals here.
+func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task) (*sandbox.Sandbox, func(), error) {
+	if task.AllowNetwork {
+		return pool.Take()
+	}
+	sb, cleanup, err := pool.TakeContainer(ctx)
+	if errors.Is(err, sandbox.ErrContainerUnavailable) {
+		return pool.Take()
+	}
+	return sb, cleanup, err
+}
+
 // Run executes one task to completion and returns the converted session log. It
 // satisfies runner.TaskRunner.
+
 func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession, error) {
 	// Resolve the task's model (falls back to the configured task model).
 	modelSlug := r.cfg.TaskModel
@@ -157,9 +198,11 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 		}
 	}
 
-	// Take a sandbox from the shared warm pool (the SAME boundary interactive
-	// turns use). Scheduled runs are not lockdown; a per-exec-burst container.
-	sb, cleanup, err := r.mgr.SandboxPool().Take()
+	// Acquire the execution sandbox for this task. Scheduled runs are
+	// network-SEALED by default (--network=none, same as interactive lockdown)
+	// because unattended runs have no human on the loop; a task opts into
+	// outbound egress only via its AllowNetwork field. See takeTaskSandbox.
+	sb, cleanup, err := takeTaskSandbox(ctx, r.mgr.SandboxPool(), task)
 	if err != nil {
 		return nil, fmt.Errorf("take sandbox: %w", err)
 	}

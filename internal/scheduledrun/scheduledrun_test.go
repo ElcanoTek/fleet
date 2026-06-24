@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -194,4 +195,66 @@ func TestScheduledRunner_UnknownServerFailsFast(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected unknown-server error for selection referencing an unconfigured server")
 	}
+}
+
+// recordingTaker is a fake sandboxTaker that records which acquisition method
+// takeTaskSandbox invoked, without spinning a real podman container.
+type recordingTaker struct {
+	tookWarm   bool // Take() — warm pool, network ENABLED
+	tookSealed bool // TakeContainer() — cold start, --network=none
+	// containerUnavailable makes TakeContainer report ErrContainerUnavailable,
+	// modeling a host-mode / mock pool with no container backend.
+	containerUnavailable bool
+}
+
+func (rt *recordingTaker) Take() (*sandbox.Sandbox, func(), error) {
+	rt.tookWarm = true
+	return nil, func() {}, nil
+}
+
+func (rt *recordingTaker) TakeContainer(_ context.Context) (*sandbox.Sandbox, func(), error) {
+	rt.tookSealed = true
+	if rt.containerUnavailable {
+		return nil, func() {}, sandbox.ErrContainerUnavailable
+	}
+	return nil, func() {}, nil
+}
+
+// TestTakeTaskSandbox_NetworkPosture is the #145 acceptance test: a scheduled
+// task defaults to a network-SEALED sandbox (TakeContainer, --network=none) and
+// only an explicit AllowNetwork opt-in draws the warm, network-enabled pool.
+func TestTakeTaskSandbox_NetworkPosture(t *testing.T) {
+	t.Run("default seals egress", func(t *testing.T) {
+		rt := &recordingTaker{}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookSealed || rt.tookWarm {
+			t.Fatalf("default task must take the SEALED container (--network=none); got warm=%v sealed=%v", rt.tookWarm, rt.tookSealed)
+		}
+	})
+
+	t.Run("AllowNetwork opts into egress", func(t *testing.T) {
+		rt := &recordingTaker{}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookWarm || rt.tookSealed {
+			t.Fatalf("AllowNetwork task must take the WARM pool (egress on); got warm=%v sealed=%v", rt.tookWarm, rt.tookSealed)
+		}
+	})
+
+	t.Run("host-mode pool falls back to host take", func(t *testing.T) {
+		// No container backend (host/mock pool): TakeContainer reports
+		// ErrContainerUnavailable. Sealing is not applicable to a host sandbox,
+		// so the default task must fall back to the host Take rather than error —
+		// this is the cutlass dev-one-shot / no-podman path.
+		rt := &recordingTaker{containerUnavailable: true}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}); err != nil {
+			t.Fatalf("takeTaskSandbox should fall back, not error, when no container backend: %v", err)
+		}
+		if !rt.tookSealed || !rt.tookWarm {
+			t.Fatalf("host-mode default must try sealed then fall back to warm; got warm=%v sealed=%v", rt.tookWarm, rt.tookSealed)
+		}
+	})
 }

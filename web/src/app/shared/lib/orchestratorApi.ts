@@ -29,6 +29,7 @@ export type Task = {
   max_iterations?: number | null;
   mcp_selection?: MCPChoice[];
   instruction_self_improve?: boolean;
+  allow_network?: boolean;
   status?: string;
   created_by?: string;
   created_by_username?: string;
@@ -46,6 +47,7 @@ export type TaskCreate = {
   max_iterations?: number;
   mcp_selection?: MCPChoice[];
   instruction_self_improve?: boolean;
+  allow_network?: boolean;
   scheduled_for?: string;
   recurrence?: string;
   files?: string[];

@@ -56,6 +56,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
   const [maxIterSelect, setMaxIterSelect] = useState("");
   const [maxIterCustom, setMaxIterCustom] = useState("");
   const [captainsLog, setCaptainsLog] = useState(false);
+  const [allowNetwork, setAllowNetwork] = useState(false);
 
   // The NEW per-task MCP selection (replaces target_node_name).
   const [mcpSelection, setMcpSelection] = useState<MCPChoice[]>([]);
@@ -113,6 +114,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
     if (fallbackModel) taskData.fallback_model = fallbackModel;
     if (maxIterations) taskData.max_iterations = Number.parseInt(maxIterations, 10);
     if (captainsLog) taskData.instruction_self_improve = true;
+    if (allowNetwork) taskData.allow_network = true;
     if (mcpSelection.length > 0) taskData.mcp_selection = mcpSelection;
     if (scheduledFor) {
       try {
@@ -414,6 +416,19 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                       </label>
                       <div className="advanced-setting-meta">
                         Captain&apos;s Log — persistent agent memory and self-improvement PRs.
+                      </div>
+                    </div>
+                    <div className="advanced-switch-row">
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={allowNetwork}
+                          onChange={(e) => setAllowNetwork(e.target.checked)}
+                        />
+                        <span className="toggle-slider" />
+                      </label>
+                      <div className="advanced-setting-meta">
+                        Allow network egress — let this task&apos;s sandbox reach the internet (off = sealed, <code>--network=none</code>).
                       </div>
                     </div>
                   </div>
