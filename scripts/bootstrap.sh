@@ -16,7 +16,7 @@
 #   scripts/bootstrap.sh --postgres=local            # dnf+initdb+pg_hba+\gexec, sslmode=disable
 #   scripts/bootstrap.sh --postgres=external         # validate DSNs with SELECT 1, sslmode=require
 #   scripts/bootstrap.sh --postgres=local --dry-run  # print the plan, touch nothing
-#   scripts/bootstrap.sh --client-config <git-url|path>   # check out / point at a client bundle
+#   scripts/bootstrap.sh --client-config <git-url[#<sha-or-tag>]|path>   # check out / point at a client bundle
 #   scripts/bootstrap.sh --enable-service            # systemctl enable --now fleet at the end
 #
 # End-to-end flow (every run): ensure 0600 env file → ensure the client bundle is
@@ -33,9 +33,13 @@
 #
 # Flags:
 #   --postgres=local|external  provisioning mode (default local).
-#   --client-config <url|path> a git URL (cloned to a stable location) or an
+#   --client-config <git-url[#<sha-or-tag>]|path>
+#                              a git URL (cloned to a stable location) or an
 #                              existing path (pointed at directly). Sets
-#                              FLEET_CLIENT_CONFIG_DIR in the env file.
+#                              FLEET_CLIENT_CONFIG_DIR in the env file. An
+#                              optional #<sha-or-tag> pins the checkout to that
+#                              ref (recorded under the state dir) so `update`
+#                              advances only to it instead of tracking HEAD.
 #   --enable-service           systemctl enable --now the fleet unit at the end.
 #   --dry-run                  print the plan; touch nothing.
 #
@@ -82,7 +86,7 @@ while [[ $# -gt 0 ]]; do
     --enable-service)    ENABLE_SERVICE=1 ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,57p' "$0"; exit 0 ;;
+      sed -n '2,65p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -180,7 +184,16 @@ fi
 if [[ -n "$CLIENT_CONFIG_ARG" ]]; then
   step "Resolving client config (--client-config ${CLIENT_CONFIG_ARG})"
   if [[ "$CLIENT_CONFIG_ARG" == *://* || "$CLIENT_CONFIG_ARG" == *@*:* ]]; then
-    # Looks like a git URL (scheme:// or scp-style git@host:path).
+    # Looks like a git URL (scheme:// or scp-style git@host:path). An optional
+    # trailing `#<sha-or-tag>` pins the checkout to that exact ref. A URL
+    # fragment is invalid in a clone URL, so '#' is an unambiguous pin delimiter
+    # here — and we split it ONLY in the URL branch, never for a path (a path
+    # could legitimately contain '#').
+    CLIENT_CONFIG_REF=""
+    if [[ "$CLIENT_CONFIG_ARG" == *#* ]]; then
+      CLIENT_CONFIG_REF="${CLIENT_CONFIG_ARG##*#}"
+      CLIENT_CONFIG_ARG="${CLIENT_CONFIG_ARG%#*}"
+    fi
     CHECKOUT="${FLEET_CLIENT_CONFIG_CHECKOUT:-/opt/fleet/client}"
     if [[ "$DRY_RUN" != "1" && -z "${FLEET_CLIENT_CONFIG_CHECKOUT:-}" ]]; then
       # Fall back to a repo-local checkout when /opt is not writable.
@@ -193,14 +206,41 @@ if [[ -n "$CLIENT_CONFIG_ARG" ]]; then
       die "git is required to clone a --client-config URL (install git or pass a path)"
     fi
     if [[ "$DRY_RUN" == "1" ]]; then
-      info "[dry-run] would clone/pull ${CLIENT_CONFIG_ARG} into ${CHECKOUT}"
+      if [[ -n "$CLIENT_CONFIG_REF" ]]; then
+        info "[dry-run] would clone ${CLIENT_CONFIG_ARG} into ${CHECKOUT} and checkout pinned ref ${CLIENT_CONFIG_REF}"
+      else
+        info "[dry-run] would clone/pull ${CLIENT_CONFIG_ARG} into ${CHECKOUT}"
+      fi
     elif [[ -d "${CHECKOUT}/.git" ]]; then
-      info "client config already cloned at ${CHECKOUT} — pulling latest"
-      git -C "$CHECKOUT" pull --ff-only --quiet || warn "git pull failed in ${CHECKOUT} (leaving existing checkout)"
+      if [[ -n "$CLIENT_CONFIG_REF" ]]; then
+        info "client config already cloned at ${CHECKOUT} — fetching + pinning to ${CLIENT_CONFIG_REF}"
+        git -C "$CHECKOUT" fetch --quiet --tags origin || warn "git fetch failed in ${CHECKOUT}"
+        git -C "$CHECKOUT" checkout --quiet "$CLIENT_CONFIG_REF" || die "git checkout ${CLIENT_CONFIG_REF} failed in ${CHECKOUT}"
+      else
+        info "client config already cloned at ${CHECKOUT} — pulling latest"
+        git -C "$CHECKOUT" pull --ff-only --quiet || warn "git pull failed in ${CHECKOUT} (leaving existing checkout)"
+      fi
     else
       run mkdir -p "$(dirname "$CHECKOUT")"
       git clone --quiet "$CLIENT_CONFIG_ARG" "$CHECKOUT" || die "git clone ${CLIENT_CONFIG_ARG} failed"
+      if [[ -n "$CLIENT_CONFIG_REF" ]]; then
+        # Full clone then checkout, so a 40-char SHA works as uniformly as a tag
+        # (a bare `clone --branch <sha>` cannot resolve a raw commit).
+        git -C "$CHECKOUT" checkout --quiet "$CLIENT_CONFIG_REF" || die "git checkout ${CLIENT_CONFIG_REF} failed in ${CHECKOUT}"
+      fi
       ok "cloned client config into ${CHECKOUT}"
+    fi
+    # Persist the pin to the state dir so `update` re-applies it without sourcing
+    # the env file (update.sh reads from the inherited env / state file, not the
+    # 0600 env file). A no-pin bootstrap clears any stale pin so the checkout
+    # returns to branch-tracking on the next update.
+    if [[ "$DRY_RUN" != "1" ]]; then
+      STATE_DIR="${FLEET_STATE_DIR:-$REPO_ROOT/.fleet-state}"
+      if [[ -n "$CLIENT_CONFIG_REF" ]]; then
+        mkdir -p "$STATE_DIR" && printf '%s\n' "$CLIENT_CONFIG_REF" > "$STATE_DIR/client-config.pin"
+      else
+        rm -f "$STATE_DIR/client-config.pin" 2>/dev/null || true
+      fi
     fi
     CLIENT_CONFIG_DIR="$CHECKOUT"
   else
