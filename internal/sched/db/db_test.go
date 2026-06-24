@@ -253,6 +253,40 @@ func TestTaskMCPSelectionRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTaskAllowNetworkRoundTrip proves the per-task network-egress toggle (#145)
+// persists: an opt-in task round-trips AllowNetwork=true, and the default seals
+// to false (the --network=none posture).
+func TestTaskAllowNetworkRoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	open := &models.Task{ID: uuid.New(), Prompt: "egress", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC(), AllowNetwork: true}
+	if err := db.AddTask(ctx, open); err != nil {
+		t.Fatalf("Failed to add task: %v", err)
+	}
+	gotOpen, err := db.GetTask(ctx, open.ID)
+	if err != nil {
+		t.Fatalf("Failed to get task: %v", err)
+	}
+	if !gotOpen.AllowNetwork {
+		t.Errorf("AllowNetwork = false, want true (opt-in must persist)")
+	}
+
+	// The default is the sealed posture: AllowNetwork=false survives the round-trip.
+	sealed := &models.Task{ID: uuid.New(), Prompt: "sealed", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC()}
+	if err := db.AddTask(ctx, sealed); err != nil {
+		t.Fatalf("Failed to add sealed task: %v", err)
+	}
+	gotSealed, err := db.GetTask(ctx, sealed.ID)
+	if err != nil {
+		t.Fatalf("Failed to get sealed task: %v", err)
+	}
+	if gotSealed.AllowNetwork {
+		t.Errorf("AllowNetwork = true, want false (default must be sealed)")
+	}
+}
+
 func TestGetTasksCompletedToday(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
