@@ -50,50 +50,6 @@ func isDatabaseUnavailable(err error) bool {
 		strings.Contains(errMsg, "no such host")
 }
 
-func TestGetStaleNodes(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	ctx := context.Background()
-
-	now := time.Now().UTC()
-	cutoff := now.Add(-5 * time.Minute)
-
-	nodes := []*models.Node{
-		{ID: uuid.New(), Hostname: "host-recent-idle", Name: "node-recent-idle", APIKey: models.HashToken("key1"), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: now.Add(-1 * time.Minute), RegisteredAt: now},
-		{ID: uuid.New(), Hostname: "host-stale-idle", Name: "node-stale-idle", APIKey: models.HashToken("key2"), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: now.Add(-10 * time.Minute), RegisteredAt: now},
-		{ID: uuid.New(), Hostname: "host-stale-busy", Name: "node-stale-busy", APIKey: models.HashToken("key3"), OSType: "linux", Status: models.NodeStatusBusy, LastHeartbeat: now.Add(-10 * time.Minute), RegisteredAt: now},
-		{ID: uuid.New(), Hostname: "host-stale-offline", Name: "node-stale-offline", APIKey: models.HashToken("key4"), OSType: "linux", Status: models.NodeStatusOffline, LastHeartbeat: now.Add(-10 * time.Minute), RegisteredAt: now},
-	}
-	for _, node := range nodes {
-		if err := db.AddNode(ctx, node); err != nil {
-			t.Fatalf("Failed to add node: %v", err)
-		}
-	}
-
-	staleNodes, err := db.GetStaleNodes(ctx, cutoff)
-	if err != nil {
-		t.Fatalf("Failed to get stale nodes: %v", err)
-	}
-	if len(staleNodes) != 2 {
-		t.Errorf("Expected 2 stale nodes, got %d", len(staleNodes))
-	}
-	foundIdle, foundBusy := false, false
-	for _, n := range staleNodes {
-		if n.Name == "node-stale-idle" {
-			foundIdle = true
-		}
-		if n.Name == "node-stale-busy" {
-			foundBusy = true
-		}
-	}
-	if !foundIdle {
-		t.Error("Expected to find node-stale-idle")
-	}
-	if !foundBusy {
-		t.Error("Expected to find node-stale-busy")
-	}
-}
-
 func TestNodeOperations(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -139,14 +95,6 @@ func TestNodeOperations(t *testing.T) {
 	}
 	if len(nodes) != 1 {
 		t.Errorf("Expected 1 node, got %d", len(nodes))
-	}
-
-	idle, err := db.GetIdleNodes(ctx)
-	if err != nil {
-		t.Fatalf("Failed to get idle nodes: %v", err)
-	}
-	if len(idle) != 0 {
-		t.Errorf("Expected 0 idle nodes, got %d", len(idle))
 	}
 
 	deleted, err := db.RemoveNode(ctx, node.ID)

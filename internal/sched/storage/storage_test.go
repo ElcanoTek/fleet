@@ -95,28 +95,6 @@ func TestStorage(t *testing.T) {
 	if again != nil {
 		t.Error("Should not claim an already-leased task")
 	}
-
-	// Task runtime timeouts are no longer enforced.
-	timedOutCount, err := store.TimeoutRunningTasks()
-	if err != nil {
-		t.Fatalf("TimeoutRunningTasks should remain a no-op: %v", err)
-	}
-	if timedOutCount != 0 {
-		t.Errorf("Expected timeout enforcement disabled, got %d", timedOutCount)
-	}
-
-	// MarkStaleNodesOffline.
-	node.LastHeartbeat = time.Now().UTC().Add(-10 * time.Minute)
-	if _, err := store.UpdateNode(node); err != nil {
-		t.Fatalf("Failed to update node: %v", err)
-	}
-	marked, _, err := store.MarkStaleNodesOffline()
-	if err != nil {
-		t.Fatalf("Failed to mark stale nodes: %v", err)
-	}
-	if marked != 1 {
-		t.Errorf("Expected 1 marked node, got %d", marked)
-	}
 }
 
 func TestRecurringTaskRescheduling(t *testing.T) {

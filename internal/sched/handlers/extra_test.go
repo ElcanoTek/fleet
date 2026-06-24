@@ -354,7 +354,7 @@ func TestGetLogsWithUserAuth(t *testing.T) {
 	}
 
 	// Assign task to node
-	task.Status = models.TaskStatusAssigned
+	task.Status = models.TaskStatusRunning
 	task.AssignedNodeID = &node.ID
 	store.UpdateTask(task)
 
