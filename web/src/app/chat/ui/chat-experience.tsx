@@ -45,7 +45,7 @@ import {
   shouldShowDegradationCaption,
   type ContextUsage,
 } from "@/app/lib/contextUsage";
-import { parseSseChunk, type ServerEvent } from "@/app/lib/sse";
+import { parseSseChunk, stepStreamDedup, type ServerEvent } from "@/app/lib/sse";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import { LoadingLogo } from "./LoadingLogo";
 import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
@@ -2622,32 +2622,23 @@ export function ChatExperience() {
           continue;
         }
 
-        // Turn boundary detection. SSE event IDs are monotonic WITHIN
-        // a turn but reset to 1 for each new turn — so we must clear
-        // the idempotency guard every time the server reports a
-        // different turn_id for this conv. Without this, a fresh
-        // turn's id=1 gets dropped as "already applied" against the
-        // prior turn's final id.
-        if (event.event === "turn.started") {
-          const p = payload as { turn_id?: string };
-          if (p.turn_id && currentTurnIdByConvRef.current[ctx.target] !== p.turn_id) {
-            currentTurnIdByConvRef.current[ctx.target] = p.turn_id;
-            lastEventIdByConvRef.current[ctx.target] = 0;
-          }
+        // Turn-boundary reset + monotonic id dedup. SSE event IDs are
+        // monotonic WITHIN a turn but reset to 1 for each new turn, so a
+        // `turn.started` with a new turn_id clears the idempotency guard
+        // (otherwise the fresh turn's id=1 is dropped against the prior turn's
+        // final id), and any already-applied id is dropped (the reattach replay
+        // overlap). This is the pure stepStreamDedup reducer (tested in
+        // sse.test.ts); the two ref maps persist its per-conv state.
+        const prev = {
+          lastEventId: lastEventIdByConvRef.current[ctx.target] ?? 0,
+          currentTurnId: currentTurnIdByConvRef.current[ctx.target],
+        };
+        const { state, drop } = stepStreamDedup(prev, event, payload);
+        if (state.currentTurnId !== undefined) {
+          currentTurnIdByConvRef.current[ctx.target] = state.currentTurnId;
         }
-
-        // Idempotency guard — drops any event id we've already applied
-        // for this conv + turn. Critical on reattach: the server's
-        // replay slice overlaps what we saw on the original POST
-        // stream until the disconnect point.
-        if (event.id !== undefined) {
-          const eid = Number(event.id);
-          if (Number.isFinite(eid)) {
-            const last = lastEventIdByConvRef.current[ctx.target] ?? 0;
-            if (eid <= last) continue;
-            lastEventIdByConvRef.current[ctx.target] = eid;
-          }
-        }
+        lastEventIdByConvRef.current[ctx.target] = state.lastEventId;
+        if (drop) continue;
 
         await applyStreamEvent(event, payload, ctx);
       }
