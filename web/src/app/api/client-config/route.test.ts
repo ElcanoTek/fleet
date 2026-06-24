@@ -2,6 +2,7 @@
 // and verbatim passthrough of the chat-server's /client-config JSON.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NextResponse } from "next/server";
 
 const getServerSessionMock = vi.fn();
 const chatServerFetchMock = vi.fn();
@@ -9,8 +10,25 @@ const chatServerFetchMock = vi.fn();
 vi.mock("@/app/lib/auth", () => ({
   getServerSession: (...args: unknown[]) => getServerSessionMock(...args),
 }));
+// chatServerProxy is the route's new boundary. The mock faithfully replicates
+// its contract over chatServerFetchMock (forwarding args verbatim, so the
+// call-args assertions still hold) — returning { upstream } on success and a
+// clean 502 { error } when the fetch rejects (chat-server unreachable). The
+// trivial real implementation is the same shape.
 vi.mock("@/app/lib/chatServer", () => ({
   chatServerFetch: (...args: unknown[]) => chatServerFetchMock(...args),
+  chatServerProxy: async (...args: unknown[]) => {
+    try {
+      return { upstream: await chatServerFetchMock(...args) };
+    } catch (err) {
+      return {
+        error: NextResponse.json(
+          { error: `chat-server unreachable: ${(err as Error).message}` },
+          { status: 502 },
+        ),
+      };
+    }
+  },
 }));
 
 import { GET } from "./route";
@@ -67,5 +85,13 @@ describe("GET /api/client-config", () => {
     const res = await GET();
     expect(res.status).toBe(403);
     expect(await res.text()).toBe("not_a_member");
+  });
+
+  it("returns a clean 502 when chat-server is unreachable", async () => {
+    chatServerFetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    const res = await GET();
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.error).toMatch(/chat-server unreachable/);
   });
 });

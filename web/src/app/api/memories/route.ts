@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import { chatServerFetch } from "@/app/lib/chatServer";
+import { chatServerProxy } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
 
 export const runtime = "nodejs";
@@ -9,7 +9,8 @@ export async function GET() {
   const session = await getServerSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const upstream = await chatServerFetch(session.email, "/memories", { method: "GET" });
+  const { upstream, error } = await chatServerProxy(session.email, "/memories", { method: "GET" });
+  if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text, {
     status: upstream.status,
@@ -25,10 +26,11 @@ export async function POST(request: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const bodyText = await request.text();
-  const upstream = await chatServerFetch(session.email, "/memories", {
+  const { upstream, error } = await chatServerProxy(session.email, "/memories", {
     method: "POST",
     body: bodyText,
   });
+  if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text, {
     status: upstream.status,

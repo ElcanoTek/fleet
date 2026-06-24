@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import { chatServerFetch } from "@/app/lib/chatServer";
+import { chatServerProxy } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
 
 export const runtime = "nodejs";
@@ -10,7 +10,8 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const upstream = await chatServerFetch(session.email, "/conversations", { method: "GET" });
+  const { upstream, error } = await chatServerProxy(session.email, "/conversations", { method: "GET" });
+  if (error) return error;
   return passthrough(upstream);
 }
 
@@ -23,10 +24,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const body = await request.text();
-  const upstream = await chatServerFetch(session.email, "/conversations", {
+  const { upstream, error } = await chatServerProxy(session.email, "/conversations", {
     method: "POST",
     body,
   });
+  if (error) return error;
   return passthrough(upstream);
 }
 
@@ -39,9 +41,10 @@ export async function DELETE(request: NextRequest) {
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const upstream = await chatServerFetch(session.email, "/conversations", {
+  const { upstream, error } = await chatServerProxy(session.email, "/conversations", {
     method: "DELETE",
   });
+  if (error) return error;
   return passthrough(upstream);
 }
 
