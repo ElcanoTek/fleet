@@ -92,9 +92,6 @@ type orchestrationState struct {
 	CachedTokens        int
 	CacheCreationTokens int
 	CostUSD             float64
-
-	// ── max iterations (informational; the loop owns the real cap) ──
-	maxIterations int
 }
 
 // pendingCriticalAction tracks a critical tool call blocked by audit gating.
@@ -120,14 +117,15 @@ type MemoryProposer interface {
 
 // newOrchestrationState matches cutlass's constructor signature (the one the
 // lifted parity tests call). The interactive driver layers on ceilings +
-// approval hooks via the setters below.
-func newOrchestrationState(logSession *LogSession, maxIterations int) *orchestrationState {
+// approval hooks via the setters below. The trailing int param is retained for
+// that signature parity only — the real iteration cap flows via the engine
+// (RunConfig.MaxIterations), so the value passed here is ignored.
+func newOrchestrationState(logSession *LogSession, _ int) *orchestrationState {
 	return &orchestrationState{
 		sentEmailFingerprints:       make(map[string]struct{}),
 		committedCriticalActions:    make(map[string]int),
 		criticalToolFailureAttempts: make(map[string]int),
 		logSession:                  logSession,
-		maxIterations:               maxIterations,
 		repeatGuardNoun:             repeatGuardNounFinishTask,
 	}
 }

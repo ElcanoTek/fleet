@@ -12,7 +12,6 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
-	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // pipePair returns one half of a duplex io.Pipe.
@@ -633,5 +632,3 @@ func nonStreamingEvents(events []string) []string {
 	}
 	return out
 }
-
-var _ = agentcore.ModeInteractive

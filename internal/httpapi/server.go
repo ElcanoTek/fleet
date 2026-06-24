@@ -482,13 +482,17 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// No-bundle fallback branding flows through the SAME source of truth a sparse
+	// manifest uses (clientconfig.applyBrandingDefaults), so the no-bundle and
+	// sparse-bundle UIs cannot drift.
+	d := clientconfig.DefaultBranding()
 	resp := clientConfigResponse{
 		Branding: clientConfigBranding{
-			AppName:          "Fleet",
-			LoginTitle:       "Welcome aboard.",
-			LoginTagline:     "Sign in to your workspace and pick up where you left off.",
-			ShareTitle:       "Fleet — your team's AI workspace",
-			ShareDescription: "An AI workspace with real tool use.",
+			AppName:          d.AppName,
+			LoginTitle:       d.LoginTitle,
+			LoginTagline:     d.LoginTagline,
+			ShareTitle:       d.ShareTitle,
+			ShareDescription: d.ShareDescription,
 		},
 		EmptyState: clientConfigEmptyState{
 			Cards:         []map[string]any{},

@@ -83,6 +83,7 @@ var allowedEnvVars = map[string]bool{
 	// ── LLM (shared) ──
 	"OPENROUTER_API_KEY":          true,
 	"OPENROUTER_BASE_URL":         true,
+	"FLEET_OPENROUTER_BASE_URL":   true,
 	"CHAT_MAX_ITERATIONS":         true,
 	"CHAT_MAX_COST_USD":           true,
 	"CHAT_MAX_TOTAL_TOKENS":       true,
