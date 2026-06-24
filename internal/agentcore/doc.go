@@ -1,2 +1,3 @@
-// Package agentcore is part of the fleet monorepo. See docs/MIGRATION_PLAN_V2.md.
+// Package agentcore is the fleet monorepo's single unified agent run loop. See
+// README.md and AGENTS.md for the architecture.
 package agentcore
