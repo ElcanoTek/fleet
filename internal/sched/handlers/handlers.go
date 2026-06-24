@@ -1302,6 +1302,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		SetMCPSelection:        tc.MCPSelection != nil,
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
+		AllowNetwork:           tc.AllowNetwork,
 		ScheduledFor:           tc.ScheduledFor,
 		Recurrence:             tc.Recurrence,
 		Files:                  tc.Files,

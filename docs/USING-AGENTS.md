@@ -243,6 +243,21 @@ A bundle that wants to keep scheduled work fully governed simply does not point
 `FLEET_SCHEDULED_RUNTIME` at an external flavor — external scheduled runs remain
 the containment tier and are opt-in (see the next section).
 
+#### Scheduled execution sandboxes are network-SEALED by default
+
+A scheduled task's `bash` / `run_python` execution sandbox runs with **no
+outbound network egress** (`--network=none`) by default — the same seal the
+interactive lockdown path applies. Unattended runs have no human on the loop, so
+the safe posture is the default: a scheduled task cannot fetch arbitrary URLs,
+`pip install`, reach host-local services, or exfiltrate unless you opt it in.
+
+To let a specific task's sandbox reach the network, set `allow_network: true`
+on the task (the **Allow network egress** toggle in the task-create form, or the
+`allow_network` field on `POST /tasks`). The default is `false` (sealed); the
+opt-in is per-task, so one task needing egress does not open up the rest. This
+governs only the execution sandbox's `--network`; it never affects credential
+brokering, which always stays host-side.
+
 #### Scheduled-external is FAIL-CLOSED and off by default
 
 Pointing `FLEET_SCHEDULED_RUNTIME` at an **external** (`type: acp` /

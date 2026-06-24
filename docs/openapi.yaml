@@ -82,6 +82,7 @@ components:
         mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
         priority: { type: integer }
         instruction_self_improve: { type: boolean }
+        allow_network: { type: boolean, default: false, description: "Allow this scheduled task's execution sandbox outbound network egress. Default false seals it with --network=none, matching the interactive lockdown path." }
         scheduled_for: { type: string, format: date-time }
         recurrence: { type: string, description: "5-field cron expression" }
         files: { type: array, items: { type: string } }
@@ -96,6 +97,7 @@ components:
         max_iterations: { type: integer }
         mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
         priority: { type: integer }
+        allow_network: { type: boolean, description: "Whether this task's execution sandbox is allowed outbound network egress (default false = sealed)." }
         status: { type: string, enum: [scheduled, pending, running, completed, failed, cancelled] }
         created_at: { type: string, format: date-time }
         scheduled_for: { type: string, format: date-time }
