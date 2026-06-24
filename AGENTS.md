@@ -16,8 +16,7 @@ agent runtime (`internal/agentcore`). Every agent tool call — bash, Python, fi
 I/O, MCP — executes inside a rootless-Podman sandbox; tools and data are reached
 through an MCP catalog whose credentials are brokered host-side; and other coding
 agents (Claude Code, Goose, …) can be driven as sandboxed flavors over ACP. See
-the README "Architecture at a glance" and
-[`docs/MIGRATION_PLAN_V2.md`](docs/MIGRATION_PLAN_V2.md) for the full picture.
+the README "Architecture at a glance" for the full picture.
 
 ## Build · test · lint (run before opening any PR)
 
@@ -101,7 +100,6 @@ that breaks one is wrong even if tests pass.
 
 - **Driving / adding other agents** (ACP flavors, governance tiers, permission
   model): [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md)
-- **Architecture + the phased migration plan:**
-  [`docs/MIGRATION_PLAN_V2.md`](docs/MIGRATION_PLAN_V2.md)
+- **Architecture overview:** [`README.md`](README.md) ("Architecture at a glance")
 - **Contributor workflow + CI gates:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Reporting a vulnerability:** [`SECURITY.md`](SECURITY.md)

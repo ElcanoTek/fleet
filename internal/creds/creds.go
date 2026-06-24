@@ -16,7 +16,7 @@
 //
 // Credentials produced here are injected into MCP subprocesses host-side via
 // cmd.Env only; they never reach the sandbox container and never appear on
-// argv. See docs/MIGRATION_PLAN_V2.md §6.
+// argv.
 package creds
 
 import (

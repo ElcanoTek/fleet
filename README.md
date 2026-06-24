@@ -218,9 +218,6 @@ config/default/   the GENERIC client bundle baked into the repo (runs bare),
                   image is a per-client bundle artifact (build-on-box default)
 ```
 
-See [`docs/MIGRATION_PLAN_V2.md`](docs/MIGRATION_PLAN_V2.md) for the architecture
-and the phased migration plan.
-
 ## The client-config bundle
 
 fleet ships **no** client-specific content. It loads a **client config bundle**

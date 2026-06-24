@@ -4,8 +4,7 @@
 // verbatim so the crash-recovery substrate (leases, RecoverExpiredLeases) and
 // its tests carry over unchanged. The one schema change vs moc: per-task node
 // routing (target_node_*) is replaced by a per-task MCP + credential-account
-// selection (MCPSelection), modeled on chat's per-conversation opt-in. See
-// docs/MIGRATION_PLAN_V2.md §6.
+// selection (MCPSelection), modeled on chat's per-conversation opt-in.
 package models
 
 import (
