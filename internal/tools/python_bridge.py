@@ -18,7 +18,11 @@ client = None
 
 IOPUB_POLL_SECONDS = 0.25
 DEFAULT_EXECUTION_TIMEOUT_SECONDS = 300
-MAX_CAPTURE_BYTES = int(os.environ.get("CUTLASS_PYTHON_CAPTURE_BYTES", "131072"))
+# Max bytes captured per stream (stdout/stderr/result). Compile-time constant:
+# the bridge runs inside the sandbox via `podman exec` with no --env forwarding
+# (see internal/sandbox/container.go), so a host-side override would never reach
+# this process. Change in-image only — it is not a host env knob.
+MAX_CAPTURE_BYTES = 131072  # 128 KiB
 
 # Module-level so cleanup() can delete it on exit/signal. Only the bridge
 # process itself ever reads this file — the kernel writes it, the client

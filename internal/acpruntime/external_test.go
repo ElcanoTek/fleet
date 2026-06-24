@@ -2,7 +2,6 @@ package acpruntime
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"strings"
 	"sync"
@@ -333,8 +332,6 @@ func assertPermissionResolved(t *testing.T, obs *recordingObserver, wantAllowed 
 	}
 	t.Fatalf("no permission.resolved event observed; events=%v", obs.events)
 }
-
-var _ = json.Marshal
 
 // TestExternalRunArgs_WorkspacePosture is the regression guard for #81: the
 // containment sandbox exposes the conversation workspace READ-ONLY when a
