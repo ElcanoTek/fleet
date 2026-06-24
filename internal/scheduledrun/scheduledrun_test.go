@@ -202,6 +202,9 @@ func TestScheduledRunner_UnknownServerFailsFast(t *testing.T) {
 type recordingTaker struct {
 	tookWarm   bool // Take() — warm pool, network ENABLED
 	tookSealed bool // TakeContainer() — cold start, --network=none
+	// containerUnavailable makes TakeContainer report ErrContainerUnavailable,
+	// modeling a host-mode / mock pool with no container backend.
+	containerUnavailable bool
 }
 
 func (rt *recordingTaker) Take() (*sandbox.Sandbox, func(), error) {
@@ -211,6 +214,9 @@ func (rt *recordingTaker) Take() (*sandbox.Sandbox, func(), error) {
 
 func (rt *recordingTaker) TakeContainer(_ context.Context) (*sandbox.Sandbox, func(), error) {
 	rt.tookSealed = true
+	if rt.containerUnavailable {
+		return nil, func() {}, sandbox.ErrContainerUnavailable
+	}
 	return nil, func() {}, nil
 }
 
@@ -235,6 +241,20 @@ func TestTakeTaskSandbox_NetworkPosture(t *testing.T) {
 		}
 		if !rt.tookWarm || rt.tookSealed {
 			t.Fatalf("AllowNetwork task must take the WARM pool (egress on); got warm=%v sealed=%v", rt.tookWarm, rt.tookSealed)
+		}
+	})
+
+	t.Run("host-mode pool falls back to host take", func(t *testing.T) {
+		// No container backend (host/mock pool): TakeContainer reports
+		// ErrContainerUnavailable. Sealing is not applicable to a host sandbox,
+		// so the default task must fall back to the host Take rather than error —
+		// this is the cutlass dev-one-shot / no-podman path.
+		rt := &recordingTaker{containerUnavailable: true}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}); err != nil {
+			t.Fatalf("takeTaskSandbox should fall back, not error, when no container backend: %v", err)
+		}
+		if !rt.tookSealed || !rt.tookWarm {
+			t.Fatalf("host-mode default must try sealed then fall back to warm; got warm=%v sealed=%v", rt.tookWarm, rt.tookSealed)
 		}
 	})
 }
