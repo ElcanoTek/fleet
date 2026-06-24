@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   orchestratorApi,
   type DashboardStats,
@@ -77,11 +77,20 @@ export function useDashboardData(active: boolean): UseDashboardData {
   const [filters, setFiltersState] = useState<TaskFilters>(EMPTY_FILTERS);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  // Monotonic id stamped on each reload so a superseded (slower, older) reload
+  // cannot overwrite newer state — see reload().
+  const runIdRef = useRef(0);
 
   // reload depends on the current filters/page/size, so it changes when they
   // do. The effects below re-run on that identity change, which is exactly the
   // "refetch when filters move" behavior — no refs needed.
   const reload = useCallback(async () => {
+    // Monotonic run-id supersession: a slower earlier reload (e.g. the prior
+    // search term) must not overwrite the newer one's results. Each call claims
+    // the next id; after the awaits, a call whose id is no longer current bails
+    // out and writes nothing — including not flipping loading off for the run
+    // that superseded it.
+    const runId = ++runIdRef.current;
     setLoading(true);
     const qs = buildTaskQuery(filters, page, pageSize);
     const results = await Promise.allSettled([
@@ -89,6 +98,7 @@ export function useDashboardData(active: boolean): UseDashboardData {
       orchestratorApi.nodes(),
       orchestratorApi.tasks(qs),
     ]);
+    if (runId !== runIdRef.current) return;
     if (results[0].status === "fulfilled") setStats(results[0].value);
     if (results[1].status === "fulfilled") setNodes(results[1].value.data ?? []);
     if (results[2].status === "fulfilled") {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import { chatServerFetch } from "@/app/lib/chatServer";
+import { chatServerProxy } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
 
 export const runtime = "nodejs";
@@ -17,11 +17,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
   }
   const { conversationId } = await context.params;
   const body = await request.text();
-  const upstream = await chatServerFetch(
+  const { upstream, error } = await chatServerProxy(
     session.email,
     `/conversations/${encodeURIComponent(conversationId)}/pin`,
     { method: "POST", body },
   );
+  if (error) return error;
   if (upstream.status === 204) {
     return NextResponse.json({ ok: true });
   }

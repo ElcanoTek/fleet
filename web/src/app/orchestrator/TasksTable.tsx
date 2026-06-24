@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
 import { formatDate, truncate } from "@/app/shared/lib/format";
@@ -57,6 +58,34 @@ export function TasksTable({
   onPageSize,
   onOpenLogs,
 }: TasksTableProps) {
+  // Debounce ONLY the search box. The status/createdBy selects, the
+  // scheduledOnly checkbox, and the stat-card quick filters all call onFilters
+  // and must stay instant — so the search input is locally controlled and
+  // propagates to onFilters ~300ms after typing settles. queryDraft is the
+  // live input value; lastPropagated tracks the value we last pushed up so an
+  // EXTERNAL reset (Clear button → filters.query="") re-seeds the box without
+  // a mid-typing echo clobbering it.
+  const [queryDraft, setQueryDraft] = useState(filters.query);
+  const lastPropagated = useRef(filters.query);
+
+  useEffect(() => {
+    if (queryDraft === filters.query) return;
+    const t = setTimeout(() => {
+      lastPropagated.current = queryDraft;
+      onFilters({ query: queryDraft });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [queryDraft, filters.query, onFilters]);
+
+  useEffect(() => {
+    // Re-seed the draft only when filters.query changed externally (not from our
+    // own debounced push), e.g. clearFilters() — never clobber active typing.
+    if (filters.query !== lastPropagated.current) {
+      lastPropagated.current = filters.query;
+      setQueryDraft(filters.query);
+    }
+  }, [filters.query]);
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const start = total > 0 ? Math.min((page - 1) * pageSize + 1, total) : 0;
   const end = Math.min(page * pageSize, total);
@@ -96,8 +125,8 @@ export function TasksTable({
             className="filter-input"
             placeholder="Search prompt or ID..."
             aria-label="Search tasks"
-            value={filters.query}
-            onChange={(e) => onFilters({ query: e.target.value })}
+            value={queryDraft}
+            onChange={(e) => setQueryDraft(e.target.value)}
           />
         </div>
         <div className="filter-group filter-group-toggle">
