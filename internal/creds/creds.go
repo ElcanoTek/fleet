@@ -24,9 +24,29 @@ import (
 	"strings"
 )
 
+// accountSeparatorFolder maps the separators an operator might type in an
+// account name to the single canonical underscore, so `client-a`, `client a`,
+// and `client_a` all name ONE credential seat.
+var accountSeparatorFolder = strings.NewReplacer("-", "_", " ", "_")
+
+// CanonicalAccount folds account-name separators (hyphen, space) to underscore
+// so `client-a`, `client a`, and `client_a` resolve to a single credential
+// seat rather than forking two. It does NOT change case: the env-key
+// convention is <VAR>_<UPPER(account)> at rest and [AccountsFor] lowercases for
+// display, so this composes with the existing case fold rather than fighting
+// it. It is idempotent (underscore is never a replacement source), so layered
+// calls across the write, consume, discovery, and variant-naming paths are
+// safe.
+func CanonicalAccount(account string) string {
+	return accountSeparatorFolder.Replace(strings.TrimSpace(account))
+}
+
 // ApplyClientSuffix returns a copy of env with each var overridden by its
 // `_<UPPER(account)>` variant when that variant is set in the process
-// environment. The second return value is the count of vars that were
+// environment. The account name is canonicalized first ([CanonicalAccount]:
+// hyphen/space folded to underscore) so `client-a` and `client_a` resolve to
+// the same `_CLIENT_A` variant rather than forking two seats. The second
+// return value is the count of vars that were
 // actually overridden — callers use it to detect "account requested but no
 // suffixed vars are set" and fail loudly rather than silently shipping
 // bare credentials into the wrong account.
@@ -52,7 +72,7 @@ func ApplyClientSuffix(env map[string]string, account string) (map[string]string
 		}
 		return out, 0
 	}
-	suffix := "_" + strings.ToUpper(account)
+	suffix := "_" + strings.ToUpper(CanonicalAccount(account))
 	overrides := 0
 	for k, v := range env {
 		if override := os.Getenv(k + suffix); override != "" {
@@ -74,7 +94,8 @@ func ApplyClientSuffix(env map[string]string, account string) (map[string]string
 // a non-empty value, so an account whose key was provisioned and later cleared
 // does not appear as an available account. Each baseVar is matched
 // case-insensitively against the `<VAR>_` prefix; the captured suffix is
-// lowercased so `Client_A`, `CLIENT_A`, and `client_a` collapse to one seat.
+// separator-folded ([CanonicalAccount]) and lowercased so `Client_A`,
+// `CLIENT_A`, `client_a`, and `client-a` all collapse to one seat.
 func AccountsFor(baseVars []string) []string {
 	seen := make(map[string]struct{})
 	var accounts []string
@@ -94,7 +115,7 @@ func AccountsFor(baseVars []string) []string {
 			if !ok || rest == "" {
 				continue
 			}
-			account := strings.ToLower(rest)
+			account := strings.ToLower(CanonicalAccount(rest))
 			if _, dup := seen[account]; dup {
 				break
 			}
