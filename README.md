@@ -739,11 +739,6 @@ standards. Our thanks to the teams and communities behind them:
 - **[OpenRouter](https://openrouter.ai)** — unified, provider-agnostic model
   routing that backs fleet's "any model, the right one per task" design.
 
-Special thanks to the Red Hat **containers** ecosystem (Podman, Fedora), the
-**Charmbracelet** community, and everyone advancing open agent standards —
-**ACP**, **MCP**, and **Agent Skills** — whose work makes secure, portable, and
-interoperable agent runtimes possible.
-
 ## License
 
 fleet is released under the [MIT License](LICENSE).
