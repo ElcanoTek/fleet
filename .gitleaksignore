@@ -22,8 +22,8 @@ internal/agentcore/mcp_fastio_response_test.go:jwt:117
 
 # fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithQuotedEnvFromPodman
 # (double-quote-stripping test).
-internal/config/config_test.go:generic-api-key:946
+internal/config/config_test.go:generic-api-key:996
 
 # fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithSingleQuotedEnvFromPodman
 # (single-quote-stripping test).
-internal/config/config_test.go:generic-api-key:964
+internal/config/config_test.go:generic-api-key:1014
