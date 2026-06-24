@@ -198,6 +198,22 @@ func TestBrandingDefaultsForSparseManifest(t *testing.T) {
 	}
 }
 
+// TestDefaultBranding locks the exported no-bundle branding helper to the SAME
+// defaults a sparse manifest gets (one source of truth — the HTTP no-bundle
+// fallback builds from this rather than a divergent hardcoded literal, #134).
+func TestDefaultBranding(t *testing.T) {
+	d := DefaultBranding()
+	if d.AppName != "Fleet" {
+		t.Errorf("DefaultBranding AppName = %q, want Fleet", d.AppName)
+	}
+	if d.ShareTitle != "Fleet" {
+		t.Errorf("DefaultBranding ShareTitle = %q, want Fleet (= AppName)", d.ShareTitle)
+	}
+	if d.LoginTitle == "" || d.ShareDescription == "" {
+		t.Errorf("DefaultBranding left a field empty: %+v", d)
+	}
+}
+
 func TestMCPCatalogEnableGateAndEnv(t *testing.T) {
 	dir := t.TempDir()
 	manifest := `

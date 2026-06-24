@@ -6,8 +6,6 @@ import (
 	"sync"
 	"testing"
 
-	"charm.land/fantasy"
-
 	"github.com/ElcanoTek/fleet/internal/acpruntime"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
@@ -331,5 +329,3 @@ func sessionLogContains(a *Agent, substr string) bool {
 	}
 	return false
 }
-
-var _ = fantasy.NewUserMessage
