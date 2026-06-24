@@ -233,11 +233,10 @@ func (db *Database) CanNodeAccessFile(ctx context.Context, nodeID uuid.UUID, fil
 		SELECT EXISTS (
 			SELECT 1 FROM tasks
 			WHERE assigned_node_id = $1
-			AND status IN ($2, $3, $4)
-			AND files ? $5
+			AND status IN ($2, $3)
+			AND files ? $4
 		)`,
 		nodeID,
-		string(models.TaskStatusAssigned),
 		string(models.TaskStatusRunning),
 		string(models.TaskStatusAnalyzing),
 		filename,
@@ -501,29 +500,6 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 	}
 	affected, _ := result.RowsAffected()
 	return affected > 0, nil
-}
-
-// GetStaleNodes gets nodes that haven't sent a heartbeat since the cutoff.
-func (db *Database) GetStaleNodes(ctx context.Context, cutoff time.Time) ([]*models.Node, error) {
-	rows, err := db.conn.QueryContext(ctx,
-		"SELECT "+nodeColumns+" FROM nodes WHERE last_heartbeat < $1 AND status != $2",
-		cutoff, string(models.NodeStatusOffline))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return db.rowsToNodes(rows)
-}
-
-// GetIdleNodes gets all idle nodes.
-func (db *Database) GetIdleNodes(ctx context.Context) ([]*models.Node, error) {
-	rows, err := db.conn.QueryContext(ctx,
-		"SELECT "+nodeColumns+" FROM nodes WHERE status = $1", string(models.NodeStatusIdle))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return db.rowsToNodes(rows)
 }
 
 // Task operations
@@ -893,9 +869,8 @@ func (db *Database) ClaimNextPendingTask(ctx context.Context, leaseOwner string,
 func (db *Database) GetRunningTasks(ctx context.Context) ([]*models.Task, error) {
 	rows, err := db.conn.QueryContext(ctx, `
 		SELECT `+taskColumns+` FROM tasks
-		WHERE status IN ($1, $2, $3, $4)`,
+		WHERE status IN ($1, $2, $3)`,
 		string(models.TaskStatusRunning),
-		string(models.TaskStatusAssigned),
 		string(models.TaskStatusAnalyzing),
 		string(models.TaskStatusLeased))
 	if err != nil {
@@ -958,13 +933,12 @@ func (db *Database) GetDashboardStats(ctx context.Context) (*models.DashboardSta
 	err = db.conn.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE status = $1) as pending_tasks,
-			COUNT(*) FILTER (WHERE status IN ($2, $3, $4, $9)) as running_tasks,
-			COUNT(*) FILTER (WHERE status = $5 AND completed_at BETWEEN $6 AND $7) as completed_today,
-			COUNT(*) FILTER (WHERE status = $8 AND completed_at BETWEEN $6 AND $7) as failed_today
+			COUNT(*) FILTER (WHERE status IN ($2, $3, $8)) as running_tasks,
+			COUNT(*) FILTER (WHERE status = $4 AND completed_at BETWEEN $5 AND $6) as completed_today,
+			COUNT(*) FILTER (WHERE status = $7 AND completed_at BETWEEN $5 AND $6) as failed_today
 		FROM tasks`,
 		string(models.TaskStatusPending),
 		string(models.TaskStatusRunning),
-		string(models.TaskStatusAssigned),
 		string(models.TaskStatusAnalyzing),
 		string(models.TaskStatusSuccess),
 		todayStart,
@@ -981,8 +955,8 @@ func (db *Database) GetDashboardStats(ctx context.Context) (*models.DashboardSta
 // GetDashboardStatsForUser gets stats scoped to a user's permissions. Scopes are
 // glob patterns matched against node names. Tasks are visible when created by
 // the user or untargeted (mcp_selection-based tasks carry no node target, so all
-// non-creator tasks fall under the untargeted branch). matchFunc is unused.
-func (db *Database) GetDashboardStatsForUser(ctx context.Context, userID *uuid.UUID, scopes []string, _ func(pattern, name string) bool) (*models.DashboardStats, error) {
+// non-creator tasks fall under the untargeted branch).
+func (db *Database) GetDashboardStatsForUser(ctx context.Context, userID *uuid.UUID, scopes []string) (*models.DashboardStats, error) {
 	if len(scopes) == 0 {
 		return db.GetDashboardStats(ctx)
 	}
@@ -1021,26 +995,25 @@ func (db *Database) GetDashboardStatsForUser(ctx context.Context, userID *uuid.U
 	args = append(args,
 		string(models.TaskStatusPending),   // $1
 		string(models.TaskStatusRunning),   // $2
-		string(models.TaskStatusAssigned),  // $3
-		string(models.TaskStatusAnalyzing), // $4
-		string(models.TaskStatusSuccess),   // $5
-		todayStart,                         // $6
-		todayEnd,                           // $7
-		string(models.TaskStatusError),     // $8
-		string(models.TaskStatusLeased),    // $9
+		string(models.TaskStatusAnalyzing), // $3
+		string(models.TaskStatusSuccess),   // $4
+		todayStart,                         // $5
+		todayEnd,                           // $6
+		string(models.TaskStatusError),     // $7
+		string(models.TaskStatusLeased),    // $8
 	)
 	whereClause := "TRUE" // all tasks are untargeted → visible to any scoped user
 	if userID != nil {
-		args = append(args, *userID) // $10
+		args = append(args, *userID) // $9
 		whereClause = fmt.Sprintf("(created_by = $%d OR TRUE)", len(args))
 	}
 
 	query := fmt.Sprintf(`
 		SELECT
 			COUNT(*) FILTER (WHERE status = $1) as pending_tasks,
-			COUNT(*) FILTER (WHERE status IN ($2, $3, $4, $9)) as running_tasks,
-			COUNT(*) FILTER (WHERE status = $5 AND completed_at BETWEEN $6 AND $7) as completed_today,
-			COUNT(*) FILTER (WHERE status = $8 AND completed_at BETWEEN $6 AND $7) as failed_today
+			COUNT(*) FILTER (WHERE status IN ($2, $3, $8)) as running_tasks,
+			COUNT(*) FILTER (WHERE status = $4 AND completed_at BETWEEN $5 AND $6) as completed_today,
+			COUNT(*) FILTER (WHERE status = $7 AND completed_at BETWEEN $5 AND $6) as failed_today
 		FROM tasks
 		WHERE %s`, whereClause)
 
@@ -1257,24 +1230,6 @@ func (db *Database) UpdateNodeTx(ctx context.Context, tx *sql.Tx, node *models.N
 		node.RegisteredAt,
 	)
 	return err
-}
-
-// MarkStaleNodesOfflineBatch marks all stale nodes as offline in one UPDATE.
-func (db *Database) MarkStaleNodesOfflineBatch(ctx context.Context, cutoff time.Time) (nodesMarked int, nodeIDsWithTasks []uuid.UUID, err error) {
-	result, err := db.conn.ExecContext(ctx, `
-		UPDATE nodes SET
-			status = $1,
-			current_task_id = NULL
-		WHERE last_heartbeat < $2
-		AND status != $1`,
-		string(models.NodeStatusOffline),
-		cutoff,
-	)
-	if err != nil {
-		return 0, nil, err
-	}
-	affected, _ := result.RowsAffected()
-	return int(affected), nil, nil
 }
 
 // RecoverExpiredLeases resets tasks with expired leases back to pending. This is
