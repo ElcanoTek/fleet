@@ -530,6 +530,56 @@ func TestGetEnvOrDefault(t *testing.T) {
 	}
 }
 
+// TestGetEnvOrDefaultIntFloat_RejectTrailingGarbage proves the strconv-based
+// parsers reject trailing garbage (the #134 fix: "12abc"/"0.3xyz" must fall back
+// to the default, not silently parse as 12/0.3 the way fmt.Sscanf did), while
+// accepting clean values with surrounding whitespace.
+func TestGetEnvOrDefaultIntFloat_RejectTrailingGarbage(t *testing.T) {
+	t.Run("int", func(t *testing.T) {
+		t.Setenv("TEST_INT", "12abc")
+		if got := getEnvOrDefaultInt("TEST_INT", 7); got != 7 {
+			t.Errorf("trailing garbage: got %d, want default 7", got)
+		}
+		t.Setenv("TEST_INT", "  12  ")
+		if got := getEnvOrDefaultInt("TEST_INT", 7); got != 12 {
+			t.Errorf("trimmed value: got %d, want 12", got)
+		}
+		os.Unsetenv("TEST_INT")
+		if got := getEnvOrDefaultInt("TEST_INT", 7); got != 7 {
+			t.Errorf("unset: got %d, want default 7", got)
+		}
+	})
+	t.Run("float", func(t *testing.T) {
+		t.Setenv("TEST_FLOAT", "0.3xyz")
+		if got := getEnvOrDefaultFloat("TEST_FLOAT", 1.5); got != 1.5 {
+			t.Errorf("trailing garbage: got %v, want default 1.5", got)
+		}
+		t.Setenv("TEST_FLOAT", " 0.3 ")
+		if got := getEnvOrDefaultFloat("TEST_FLOAT", 1.5); got != 0.3 {
+			t.Errorf("trimmed value: got %v, want 0.3", got)
+		}
+	})
+}
+
+// TestLoad_AllowsFleetOpenRouterBaseURL proves the canonical-prefixed fake-LLM
+// seam (FLEET_OPENROUTER_BASE_URL) survives the .env allowlist (#134) so a dev
+// pointing at the fake LLM via .env.local is honored rather than silently
+// dropped and sent to real OpenRouter.
+func TestLoad_AllowsFleetOpenRouterBaseURL(t *testing.T) {
+	isolateEnv(t)
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	localPath := filepath.Join(dir, ".env.local")
+	_ = os.WriteFile(localPath, []byte(`FLEET_OPENROUTER_BASE_URL="http://127.0.0.1:9/v1"`+"\n"), 0o600)
+	if _, err := Load(localPath); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := os.Getenv("FLEET_OPENROUTER_BASE_URL"); got != "http://127.0.0.1:9/v1" {
+		t.Errorf("FLEET_OPENROUTER_BASE_URL dropped by allowlist: %q", got)
+	}
+}
+
 func TestLoadEnvFileWithQuotes(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()

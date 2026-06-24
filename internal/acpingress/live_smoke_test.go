@@ -21,7 +21,6 @@ import (
 	"charm.land/fantasy"
 	acp "github.com/coder/acp-go-sdk"
 
-	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
@@ -79,5 +78,3 @@ func setupLive(t *testing.T, lm fantasy.LanguageModel) *wired {
 	})
 	return &wired{agent: ia, editor: editor, client: clientConn, store: st, runner: runner}
 }
-
-var _ = agent.TurnInput{}

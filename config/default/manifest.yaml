@@ -102,10 +102,6 @@ branding:
   share_title: "Fleet — your team's AI workspace"
   share_description: "Persistent multi-turn conversations with real tool use across files, data, and the web."
 
-models:
-  default_core: "google/gemini-3.5-flash"
-  default_max: "anthropic/claude-sonnet-4.5"
-
 # No client MCP servers in the generic bundle: the catalog is empty so fleet
 # runs without any credentialed connectors. A client bundle declares its own
 # mcp_servers[] here (see /root/elcano-config/manifest.yaml for a full example).

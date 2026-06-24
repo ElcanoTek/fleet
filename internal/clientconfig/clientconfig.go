@@ -181,9 +181,12 @@ type Branding struct {
 	ShareDescription string `yaml:"share_description"`
 }
 
-// Models carries the default model tiers. Informational/advisory — the running
-// config still resolves the operative model from env + per-turn slug. Exposed
-// so the bundle is self-describing and the web can show sensible defaults.
+// Models carries advisory default model-tier hints a bundle may declare so its
+// manifest is self-describing. It is NOT consumed by the running config and NOT
+// exposed to the web — the operative model defaults are the agentcore.Default*
+// constants, resolved from env + the per-turn slug. The field (and its `models:`
+// manifest block) is retained only so the strict decoder still loads bundles
+// that declare one; do not treat it as a live model-selection knob.
 type Models struct {
 	DefaultCore string `yaml:"default_core"`
 	DefaultMax  string `yaml:"default_max"`
@@ -368,6 +371,17 @@ func applyBrandingDefaults(br *Branding) {
 	if br.ShareDescription == "" {
 		br.ShareDescription = "An AI workspace with real tool use."
 	}
+}
+
+// DefaultBranding returns the neutral generic branding strings fleet renders
+// when no client bundle is wired. It is the SAME source of truth
+// applyBrandingDefaults uses for a sparse manifest, so the no-bundle and
+// sparse-bundle UIs match (one source of truth rather than a hardcoded literal
+// in the HTTP layer).
+func DefaultBranding() Branding {
+	var b Branding
+	applyBrandingDefaults(&b)
+	return b
 }
 
 // resolveSandbox turns the manifest's sandbox: block into a resolved Sandbox.
