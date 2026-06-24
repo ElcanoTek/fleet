@@ -72,6 +72,11 @@ type MCPServerBase struct {
 //   - named account with ZERO overrides → error (the refusal guard).
 //   - HTTP server + named account → error (HTTP rejects variants).
 func resolveMCPVariant(server string, base MCPServerBase, account string) (name string, env map[string]string, err error) {
+	// Canonicalize the account name (separators folded to underscore) so the env
+	// overlay, the refusal message, and the registration name all agree with the
+	// <VAR>_<UPPER(account)> env key the credential store writes — `client-a` and
+	// `client_a` resolve to one seat, never two.
+	account = creds.CanonicalAccount(account)
 	if base.HTTPURL != "" {
 		if account != "" {
 			return "", nil, fmt.Errorf("server %q is HTTP and does not support account variants (requested account %q)", server, account)

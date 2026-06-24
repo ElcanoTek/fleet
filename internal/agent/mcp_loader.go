@@ -130,6 +130,10 @@ func (a *Agent) loadMCPServers(ctx context.Context, names []string, account stri
 	if a.mcpClient == nil {
 		return fantasy.NewTextErrorResponse("no MCP client configured"), nil
 	}
+	// Canonicalize once so regName, the loadedServers tracking key, and the name
+	// BindMCPSelection registers (server_<CanonicalAccount>) all agree — `client-a`
+	// and `client_a` must not double-load as two distinct servers.
+	account = creds.CanonicalAccount(account)
 
 	bases := a.mcpBases()
 	var loadedNow []string

@@ -547,7 +547,10 @@ FLEET_ENV_FILE=/etc/fleet/fleet.env            # so config.Load reads this same 
 You then add `OPENROUTER_API_KEY`, any listener/admin tokens, the client
 bundle's MCP connector credentials, and per-account MCP secrets
 (`fleet-admin mcp account set <server> <account> --secret KEY=-`, value via
-stdin — never on argv).
+stdin — never on argv). Account names are **canonicalized**: hyphens and spaces
+fold to underscore and case is ignored, so `client-a`, `client_a`, and
+`Client_A` all resolve to one credential seat (`<VAR>_CLIENT_A`). Use distinct
+base words — not separator tricks — to keep seats apart.
 
 ### The client-config checkout
 
