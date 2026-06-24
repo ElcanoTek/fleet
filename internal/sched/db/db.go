@@ -528,7 +528,7 @@ func (db *Database) GetIdleNodes(ctx context.Context) ([]*models.Node, error) {
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network"
 
 // AddTask adds or updates a task.
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
@@ -538,8 +538,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			priority, instruction_self_improve, status, assigned_node_id, agent_session_id,
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
-			attempt_count, max_retries
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+			attempt_count, max_retries, allow_network
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -563,7 +563,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			lease_owner = EXCLUDED.lease_owner,
 			lease_expires_at = EXCLUDED.lease_expires_at,
 			attempt_count = EXCLUDED.attempt_count,
-			max_retries = EXCLUDED.max_retries`,
+			max_retries = EXCLUDED.max_retries,
+			allow_network = EXCLUDED.allow_network`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -588,6 +589,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.LeaseExpiresAt,
 		task.AttemptCount,
 		task.MaxRetries,
+		task.AllowNetwork,
 	)
 	return err
 }
@@ -632,6 +634,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		leaseExpiresAt         sql.NullTime
 		attemptCount           int
 		maxRetries             int
+		allowNetwork           bool
 	)
 
 	err := scanner.Scan(
@@ -639,7 +642,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&priority, &instructionSelfImprove, &status, &assignedNodeID, &agentSessionID,
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
-		&attemptCount, &maxRetries,
+		&attemptCount, &maxRetries, &allowNetwork,
 	)
 	if err != nil {
 		return nil, err
@@ -656,6 +659,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		CreatedBy:              createdBy,
 		AttemptCount:           attemptCount,
 		MaxRetries:             maxRetries,
+		AllowNetwork:           allowNetwork,
 	}
 	if model.Valid {
 		task.Model = &model.String
@@ -1187,7 +1191,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			fallback_model = $21,
 			max_iterations = $22,
 			attempt_count = $23,
-			max_retries = $24
+			max_retries = $24,
+			allow_network = $25
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1213,6 +1218,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.MaxIterations,
 		task.AttemptCount,
 		task.MaxRetries,
+		task.AllowNetwork,
 	)
 	return err
 }

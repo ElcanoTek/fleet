@@ -25,6 +25,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -133,6 +134,33 @@ func (r *Runner) buildBaseSystemPrompt() string {
 
 // Run executes one task to completion and returns the converted session log. It
 // satisfies runner.TaskRunner.
+// sandboxTaker is the subset of *sandbox.Pool that a scheduled run uses to
+// acquire an execution sandbox. It is an interface so the take-decision
+// (sealed-by-default vs. egress opt-in) is unit-testable without spinning a
+// real podman container.
+type sandboxTaker interface {
+	// Take returns a warm, network-ENABLED sandbox (the interactive default).
+	Take() (*sandbox.Sandbox, func(), error)
+	// TakeContainer cold-starts a fresh sandbox with egress SEALED
+	// (--network=none) — the lockdown boundary.
+	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
+}
+
+// takeTaskSandbox acquires the bash/run_python execution sandbox for a
+// scheduled task. By default (task.AllowNetwork == false) it seals outbound
+// egress via TakeContainer (--network=none), matching the interactive lockdown
+// path — an unattended task can otherwise fetch arbitrary URLs, pip install,
+// SSRF host-local services, or exfiltrate with no human on the loop. A task
+// opts into egress by setting AllowNetwork, which draws from the shared warm
+// pool (Take). The sealed default fails closed: if the container cannot be
+// acquired the error propagates rather than silently falling back to egress-on.
+func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task) (*sandbox.Sandbox, func(), error) {
+	if task.AllowNetwork {
+		return pool.Take()
+	}
+	return pool.TakeContainer(ctx)
+}
+
 func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession, error) {
 	// Resolve the task's model (falls back to the configured task model).
 	modelSlug := r.cfg.TaskModel
@@ -157,9 +185,11 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 		}
 	}
 
-	// Take a sandbox from the shared warm pool (the SAME boundary interactive
-	// turns use). Scheduled runs are not lockdown; a per-exec-burst container.
-	sb, cleanup, err := r.mgr.SandboxPool().Take()
+	// Acquire the execution sandbox for this task. Scheduled runs are
+	// network-SEALED by default (--network=none, same as interactive lockdown)
+	// because unattended runs have no human on the loop; a task opts into
+	// outbound egress only via its AllowNetwork field. See takeTaskSandbox.
+	sb, cleanup, err := takeTaskSandbox(ctx, r.mgr.SandboxPool(), task)
 	if err != nil {
 		return nil, fmt.Errorf("take sandbox: %w", err)
 	}

@@ -217,6 +217,11 @@ type TaskCreate struct {
 	// MaxRetries is the number of ADDITIONAL whole-task attempts after the first
 	// when a run fails cleanly with a transient error. 0 (default) = no retries.
 	MaxRetries *int `json:"max_retries,omitempty"`
+	// AllowNetwork lets THIS scheduled task's bash/run_python execution sandbox
+	// keep outbound egress. The default (false) seals the sandbox with
+	// --network=none, matching the interactive lockdown path; egress is an
+	// explicit opt-in for the tasks that genuinely need it.
+	AllowNetwork bool `json:"allow_network,omitempty"`
 }
 
 // Task represents a task to be executed by a worker.
@@ -229,20 +234,23 @@ type Task struct {
 	MCPSelection           MCPSelection `json:"mcp_selection"`
 	Priority               int          `json:"priority"`
 	InstructionSelfImprove bool         `json:"instruction_self_improve,omitempty"`
-	Status                 TaskStatus   `json:"status"`
-	AssignedNodeID         *uuid.UUID   `json:"assigned_node_id,omitempty"`
-	AgentSessionID         *string      `json:"agent_session_id,omitempty"`
-	CreatedAt              time.Time    `json:"created_at"`
-	StartedAt              *time.Time   `json:"started_at,omitempty"`
-	CompletedAt            *time.Time   `json:"completed_at,omitempty"`
-	Result                 *string      `json:"result,omitempty"`
-	ErrorMessage           *string      `json:"error_message,omitempty"`
-	ScheduledFor           *time.Time   `json:"scheduled_for,omitempty"`
-	Recurrence             string       `json:"recurrence,omitempty"`
-	CreatedBy              *uuid.UUID   `json:"created_by,omitempty"`
-	Files                  []string     `json:"files,omitempty"`
-	LeaseOwner             *string      `json:"lease_owner,omitempty"`
-	LeaseExpiresAt         *time.Time   `json:"lease_expires_at,omitempty"`
+	// AllowNetwork controls whether this task's execution sandbox keeps outbound
+	// egress. Default false seals it (--network=none); see TaskCreate.AllowNetwork.
+	AllowNetwork   bool       `json:"allow_network,omitempty"`
+	Status         TaskStatus `json:"status"`
+	AssignedNodeID *uuid.UUID `json:"assigned_node_id,omitempty"`
+	AgentSessionID *string    `json:"agent_session_id,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	Result         *string    `json:"result,omitempty"`
+	ErrorMessage   *string    `json:"error_message,omitempty"`
+	ScheduledFor   *time.Time `json:"scheduled_for,omitempty"`
+	Recurrence     string     `json:"recurrence,omitempty"`
+	CreatedBy      *uuid.UUID `json:"created_by,omitempty"`
+	Files          []string   `json:"files,omitempty"`
+	LeaseOwner     *string    `json:"lease_owner,omitempty"`
+	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
 	// AttemptCount is how many times this task has been re-queued after a clean,
 	// transient failure (0 on the first run). MaxRetries caps it: the task may run
 	// up to MaxRetries+1 times before a failure is terminal.
@@ -268,6 +276,7 @@ func NewTask(tc TaskCreate) *Task {
 		MCPSelection:           tc.MCPSelection,
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
+		AllowNetwork:           tc.AllowNetwork,
 		Status:                 status,
 		CreatedAt:              time.Now().UTC(),
 		ScheduledFor:           tc.ScheduledFor,
