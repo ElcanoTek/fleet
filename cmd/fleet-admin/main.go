@@ -112,6 +112,9 @@ Users, credentials, notes:
   fleet-admin mcp account set <server> <account> --secret KEY=-   (value via stdin)
   fleet-admin mcp account list <server>
   fleet-admin mcp account del <server> <account>
+    (account names are canonicalized: hyphen/space fold to underscore and case
+     is ignored, so client-a, client_a, and Client_A name ONE seat — use
+     distinct base words, not separators, to keep seats apart)
   fleet-admin notes set <slug> --title "..."  (body via stdin)
   fleet-admin notes get <slug>
   fleet-admin notes list [--all]

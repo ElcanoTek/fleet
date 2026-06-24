@@ -152,3 +152,55 @@ func TestAccountsFor_NoAccounts(t *testing.T) {
 		t.Fatalf("AccountsFor with no suffixed vars = %v, want empty", got)
 	}
 }
+
+// TestCanonicalAccount verifies separator folding (hyphen, space → underscore)
+// without case change, idempotency, and surrounding-whitespace trim.
+func TestCanonicalAccount(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"client-a", "client_a"},
+		{"client a", "client_a"},
+		{"client_a", "client_a"}, // already canonical → no-op
+		{"Client-A", "Client_A"}, // case is preserved
+		{"  client-a  ", "client_a"},
+		{"a-b c", "a_b_c"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := CanonicalAccount(c.in); got != c.want {
+			t.Errorf("CanonicalAccount(%q) = %q, want %q", c.in, got, c.want)
+		}
+		// Idempotent: folding the result again changes nothing.
+		if again := CanonicalAccount(CanonicalAccount(c.in)); again != c.want {
+			t.Errorf("CanonicalAccount not idempotent for %q: %q", c.in, again)
+		}
+	}
+}
+
+// TestAccountsFor_FoldsSeparators is the #146 acceptance test: a hyphen-style
+// and an underscore-style suffix for the SAME account collapse to one seat
+// rather than forking two.
+func TestAccountsFor_FoldsSeparators(t *testing.T) {
+	t.Setenv("OPENX_API_KEY_CLIENT_A", "k1")
+	t.Setenv("OPENX_API_KEY_CLIENT-A", "k2") // hyphen spelling of the same seat
+
+	got := AccountsFor([]string{"OPENX_API_KEY"})
+	want := []string{"client_a"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AccountsFor with `_CLIENT_A` and `_CLIENT-A` = %v, want one account %v", got, want)
+	}
+}
+
+// TestApplyClientSuffix_FoldsSeparatorAccount proves the hyphen spelling of an
+// account resolves to the underscore-suffixed seat at consume time.
+func TestApplyClientSuffix_FoldsSeparatorAccount(t *testing.T) {
+	t.Setenv("OPENX_API_KEY_CLIENT_A", "client-a-key")
+	base := map[string]string{"OPENX_API_KEY": "default-key"}
+
+	out, overrides := ApplyClientSuffix(base, "client-a") // hyphen spelling
+	if overrides != 1 {
+		t.Fatalf("overrides = %d, want 1 (hyphen account must resolve to the _CLIENT_A seat)", overrides)
+	}
+	if out["OPENX_API_KEY"] != "client-a-key" {
+		t.Errorf("OPENX_API_KEY = %q, want %q", out["OPENX_API_KEY"], "client-a-key")
+	}
+}

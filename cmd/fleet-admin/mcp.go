@@ -14,8 +14,11 @@ import (
 // account store over the 0600 env file. Values are read from stdin (never argv);
 // list never prints values.
 //
-// Account secrets are stored as suffixed env keys: <VAR>_<UPPER(account)>. This
-// is the same convention creds.ApplyClientSuffix overlays at run time.
+// Account secrets are stored as suffixed env keys: <VAR>_<UPPER(account)>. The
+// account name is canonicalized first (creds.CanonicalAccount: hyphen/space
+// folded to underscore), so `client-a` and `client_a` write the SAME key and
+// never fork two seats. This is the same convention creds.ApplyClientSuffix
+// overlays at run time.
 func cmdMCP(argv []string) int {
 	if len(argv) < 1 || argv[0] != "account" {
 		return errf(1, "usage: fleet-admin mcp account set|list|del")
@@ -38,7 +41,8 @@ func cmdMCP(argv []string) int {
 	}
 }
 
-// mcpAccountSet writes <VAR>_<UPPER(account)>=<stdin> into the env file. The
+// mcpAccountSet writes <VAR>_<UPPER(account)>=<stdin> into the env file, with
+// the account name canonicalized (separators folded to underscore). The
 // --secret flag carries KEY=- where "-" means "read the value from stdin".
 func mcpAccountSet(argv []string) int {
 	fs := flag.NewFlagSet("mcp account set", flag.ContinueOnError)
@@ -71,7 +75,7 @@ func mcpAccountSet(argv []string) int {
 	if val == "" {
 		return errf(1, "empty secret value")
 	}
-	suffixed := key + "_" + strings.ToUpper(account)
+	suffixed := key + "_" + strings.ToUpper(creds.CanonicalAccount(account))
 	path := envFilePath(*envFile)
 	if err := creds.SetEnvKey(path, suffixed, val); err != nil {
 		return errf(5, "write %s: %v", path, err)
@@ -147,7 +151,7 @@ func mcpAccountDel(argv []string) int {
 	if err != nil {
 		return errf(5, "read %s: %v", path, err)
 	}
-	wantSuffix := "_" + strings.ToUpper(account)
+	wantSuffix := "_" + strings.ToUpper(creds.CanonicalAccount(account))
 
 	// Collect candidate keys ending in _<ACCOUNT>, keyed by their base VAR.
 	type cand struct{ key, baseVar string }

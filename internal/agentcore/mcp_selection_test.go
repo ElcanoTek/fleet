@@ -68,6 +68,24 @@ func TestRunConfig_MCPBinding_NamedAccount(t *testing.T) {
 			t.Errorf("refusal error should explain the refusal, got: %v", err)
 		}
 	})
+
+	t.Run("hyphen account folds to the underscore seat (#146)", func(t *testing.T) {
+		// The seat is provisioned with the underscore spelling; selecting it with
+		// the hyphen spelling must resolve to the SAME seat and register under the
+		// folded name, not fork a second.
+		t.Setenv("XANDR_API_KEY_CLIENT_A", "client-a-key")
+
+		name, env, err := resolveMCPVariant("xandr", base, "client-a")
+		if err != nil {
+			t.Fatalf("hyphen account with an underscore-suffixed override should not error: %v", err)
+		}
+		if name != "xandr_client_a" {
+			t.Errorf("variant name = %q, want xandr_client_a (separator folded)", name)
+		}
+		if env["XANDR_API_KEY"] != "client-a-key" {
+			t.Errorf("XANDR_API_KEY = %q, want the client_a override (hyphen resolved to the _CLIENT_A seat)", env["XANDR_API_KEY"])
+		}
+	})
 }
 
 // TestMCPBinding_HTTPRejectsAccountVariant asserts HTTP (fast_io) servers reject
