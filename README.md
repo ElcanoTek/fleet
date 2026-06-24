@@ -68,11 +68,9 @@ them.
 
 ## Built for trust: governed, auditable delegation
 
-The questions anyone asks before handing real work to an agent are simple: *can
-it do the job, should I trust it with this, and am I comfortable giving up
-control?* fleet is built to answer each one with a mechanism you can point at —
-not a promise. The pieces below are described in [Why fleet](#why-fleet); here is
-how they line up against those three concerns.
+Delegating real work to an agent raises three concerns: can it do the job, can
+you trust it with this task, and are you comfortable handing over control. fleet
+answers each with a concrete mechanism, organized below.
 
 ### Can it do the job — reproducibly?
 
@@ -84,7 +82,7 @@ below). The setup that worked is the setup that runs again next time, for the
 next person, on a schedule. And because every turn emits structured **observer
 events** — each tool call, its result, token usage, cost, and any enforcement
 nudge — streamed live over SSE in the chat UI, you judge the work from its actual
-trace, not a black-box final answer.
+trace, not just a final answer.
 
 ### Should I trust it with this task?
 
@@ -130,7 +128,11 @@ matter.
   broker injects them only when it runs a delegated MCP call, so they never enter
   the sandbox, the agent container, the model's context, or the logs. They live
   in a `0600` env file managed through `fleet-admin`, with per-MCP multi-account
-  seats. The agent uses your connectors without ever holding their keys.
+  seats. The agent uses your connectors without ever holding their keys. This
+  isolation is about the *sandbox*; the client-config bundle's own host-side MCP
+  servers **do** receive these brokered credentials by design — so treat write
+  access to the bundle repo as production access (see
+  [`SECURITY.md`](SECURITY.md), "The client-config bundle is root-equivalent").
 - **A human stays on the loop.** Sensitive actions raise an **allow / deny** card
   in the chat UI and block the turn until someone answers. It is **default-deny**
   on timeout, and there is **no "approve all"** — every request is decided on its
@@ -138,10 +140,9 @@ matter.
   external flavors on the scheduler are off by default and deny anything
   sensitive rather than proceed unsupervised.
 
-The throughline: fleet turns black-box delegation into **bounded, auditable
-autonomy** — reproducible setups, a live and replayable record, limits that fire,
-isolated credentials, and human checkpoints on the actions that matter. You
-delegate to a process you can watch, cap, and stop.
+Together these make delegation something you can watch, cap, and stop:
+reproducible setups, a live and replayable record, limits that fire, isolated
+credentials, and human checkpoints on the actions that matter.
 
 ## Architecture at a glance
 
@@ -252,8 +253,14 @@ and point a deployment at it.
   into the clone URL or configure git's credential store on the box (see the
   quick start below). The token never needs write or any other scope.
 
-`bootstrap --client-config <git-url|path>` clones (or points at) the bundle and
-keeps it fast-forwarded on `update`; see **Deploy** and **Operating fleet**.
+`bootstrap --client-config <git-url[#<sha-or-tag>]|path>` clones (or points at)
+the bundle. Without a pin it tracks the branch and `update` fast-forwards it;
+with a `#<sha-or-tag>` pin, `update` advances the checkout only to that ref, so
+a bundle change is a deliberate operator action rather than a silent pull — the
+same digest-pinning discipline the registry-published `sandbox.image` already
+supports. Because the bundle is built and run host-side under the fleet service
+identity (see [`SECURITY.md`](SECURITY.md)), pin it in production. See **Deploy**
+and **Operating fleet**.
 
 ## No lock-in: your agent IP is portable
 
@@ -557,11 +564,17 @@ base words — not separator tricks — to keep seats apart.
 fleet ships **no** client content; it loads a **client config bundle** from
 `FLEET_CLIENT_CONFIG_DIR` (default `config/default`, the generic bundle). A real
 deployment checks out a client repo and points the variable at it. `bootstrap
---client-config <git-url|path>` automates this: a **git URL** is cloned to a
-stable location (`/opt/fleet/client`, or `./.fleet-client` when `/opt` is not
-writable) and `update` keeps it fast-forwarded; a **path** is pointed at
-directly. Either way the resolved dir is written to `FLEET_CLIENT_CONFIG_DIR` in
-the env file. The bundle also owns the **sandbox** — see below.
+--client-config <git-url[#<sha-or-tag>]|path>` automates this: a **git URL** is
+cloned to a stable location (`/opt/fleet/client`, or `./.fleet-client` when
+`/opt` is not writable); a **path** is pointed at directly. Either way the
+resolved dir is written to `FLEET_CLIENT_CONFIG_DIR` in the env file. An
+unpinned URL tracks the remote default branch and `update` fast-forwards it; a
+`#<sha-or-tag>` pin (recorded under the state dir, so `update` re-applies it
+without sourcing the env file) makes `update` advance only to that exact ref —
+or repin at update time with `update --pin <ref>`. Set
+`FLEET_CLIENT_CONFIG_VERIFY=1` to additionally `git verify-tag`/`verify-commit`
+the pinned ref (fail-closed) when a signing key / allowed-signers is configured.
+The bundle also owns the **sandbox** — see below.
 
 ### bootstrap — provision a box
 

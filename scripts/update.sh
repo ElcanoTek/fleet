@@ -21,6 +21,11 @@
 #                          which has no separate checkout to pull, so its pull is
 #                          skipped)
 #   --service <name>       systemd unit to restart (env FLEET_SERVICE_NAME, default fleet)
+#   --pin <sha-or-tag>     advance the client bundle ONLY to this ref instead of
+#                          tracking its branch (env FLEET_CLIENT_CONFIG_PIN; else
+#                          the pin bootstrap persisted under the state dir). Set
+#                          FLEET_CLIENT_CONFIG_VERIFY=1 to verify-tag/-commit the
+#                          ref (fail-closed) when a signing key is configured.
 #   --no-pull              skip git fetch/ff; just rebuild the current checkout(s)
 #   --branch <name>        override the branch fast-forwarded in SRC_DIR (env FLEET_UPDATE_BRANCH)
 #   --yes / -y             skip the confirm prompt (env FLEET_UPDATE_YES=1)
@@ -48,6 +53,14 @@ INSTALL_DIR="${FLEET_INSTALL_DIR:-}"
 NO_PULL="${FLEET_UPDATE_NO_PULL:-0}"
 ASSUME_YES="${FLEET_UPDATE_YES:-0}"
 BRANCH_OVERRIDE="${FLEET_UPDATE_BRANCH:-}"
+# Client-config bundle pin: an explicit env/flag pin wins; otherwise the pin
+# bootstrap persisted under the state dir is used (update.sh does NOT source the
+# 0600 env file, so the state file is the durable bootstrap→update channel).
+# When set, the bundle checkout advances ONLY to this ref instead of tracking
+# the remote default branch. FLEET_CLIENT_CONFIG_VERIFY=1 additionally
+# verify-tag/verify-commit the ref (fail-closed) when a signing key is set up.
+CLIENT_CONFIG_PIN="${FLEET_CLIENT_CONFIG_PIN:-}"
+CLIENT_CONFIG_VERIFY="${FLEET_CLIENT_CONFIG_VERIFY:-}"
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -62,6 +75,8 @@ while [[ $# -gt 0 ]]; do
     --install-dir=*)  INSTALL_DIR="${1#*=}" ;;
     --branch)         shift; [[ $# -gt 0 ]] || { echo "error: --branch needs a name" >&2; exit 1; }; BRANCH_OVERRIDE="$1" ;;
     --branch=*)       BRANCH_OVERRIDE="${1#*=}" ;;
+    --pin)            shift; [[ $# -gt 0 ]] || { echo "error: --pin needs a sha-or-tag" >&2; exit 1; }; CLIENT_CONFIG_PIN="$1" ;;
+    --pin=*)          CLIENT_CONFIG_PIN="${1#*=}" ;;
     --no-pull)        NO_PULL=1 ;;
     --yes|-y)         ASSUME_YES=1 ;;
     --dry-run)        DRY_RUN=1 ;;
@@ -70,6 +85,14 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+# Fall back to the bootstrap-persisted pin (state file) when none was passed
+# explicitly. SRC_DIR is final here, so the state dir resolves the same way it
+# did at bootstrap time.
+if [[ -z "$CLIENT_CONFIG_PIN" ]]; then
+  _pin_file="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}/client-config.pin"
+  [[ -f "$_pin_file" ]] && CLIENT_CONFIG_PIN="$(tr -d '[:space:]' < "$_pin_file")"
+fi
 
 if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
   c_reset=$'\033[0m'; c_dim=$'\033[2m'; c_red=$'\033[0;31m'
@@ -156,6 +179,8 @@ else
         exec env FLEET_UPDATE_NO_PULL=1 FLEET_UPDATE_YES=1 \
           FLEET_UPDATE_BASE_SHA="$before_sha" \
           FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" \
+          FLEET_CLIENT_CONFIG_PIN="$CLIENT_CONFIG_PIN" \
+          FLEET_CLIENT_CONFIG_VERIFY="$CLIENT_CONFIG_VERIFY" \
           FLEET_SERVICE_NAME="$SERVICE_NAME" \
           FLEET_INSTALL_DIR="$INSTALL_DIR" \
           FLEET_UPDATE_BRANCH="$BRANCH_OVERRIDE" \
@@ -174,7 +199,33 @@ elif [[ ! -d "$CLIENT_DIR/.git" ]]; then
 elif [[ "$NO_PULL" == "1" ]]; then
   info "rebuild-only mode — skipping client-config pull."
 elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would: git -C ${CLIENT_DIR} pull --ff-only"
+  if [[ -n "$CLIENT_CONFIG_PIN" ]]; then
+    info "[dry-run] pinned: would git -C ${CLIENT_DIR} fetch --tags && checkout ${CLIENT_CONFIG_PIN}"
+  else
+    info "[dry-run] would: git -C ${CLIENT_DIR} pull --ff-only"
+  fi
+elif [[ -n "$CLIENT_CONFIG_PIN" ]]; then
+  # Pinned: advance ONLY to the configured ref (a deliberate operator action),
+  # never a silent fast-forward to whatever HEAD became.
+  git config --global --add safe.directory "$CLIENT_DIR" 2>/dev/null || true
+  if ! git -C "$CLIENT_DIR" fetch --quiet --tags origin; then
+    warn "git fetch failed in ${CLIENT_DIR} — checking out the pinned ref from the existing objects"
+  fi
+  if [[ -n "$CLIENT_CONFIG_VERIFY" ]]; then
+    # Opt-in supply-chain verification: fail CLOSED if the pinned tag/commit is
+    # not validly signed (requires a configured signing key / allowed-signers).
+    if git -C "$CLIENT_DIR" verify-tag "$CLIENT_CONFIG_PIN" 2>/dev/null \
+      || git -C "$CLIENT_DIR" verify-commit "$CLIENT_CONFIG_PIN" 2>/dev/null; then
+      ok "verified signature on pinned ref ${CLIENT_CONFIG_PIN}"
+    else
+      die "FLEET_CLIENT_CONFIG_VERIFY is set but ${CLIENT_CONFIG_PIN} is not a validly signed tag/commit — refusing to advance the bundle"
+    fi
+  fi
+  if git -C "$CLIENT_DIR" checkout --quiet "$CLIENT_CONFIG_PIN"; then
+    ok "client config pinned to ${CLIENT_CONFIG_PIN} (${CLIENT_DIR})"
+  else
+    warn "could not check out pinned ref ${CLIENT_CONFIG_PIN} in ${CLIENT_DIR} — leaving the existing checkout"
+  fi
 else
   git config --global --add safe.directory "$CLIENT_DIR" 2>/dev/null || true
   if git -C "$CLIENT_DIR" pull --ff-only --quiet; then
