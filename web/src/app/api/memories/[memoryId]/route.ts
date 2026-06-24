@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import { chatServerFetch } from "@/app/lib/chatServer";
+import { chatServerProxy } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
 
 export const runtime = "nodejs";
@@ -16,10 +16,11 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
   const { memoryId } = await params;
   const bodyText = await request.text();
-  const upstream = await chatServerFetch(session.email, `/memories/${encodeURIComponent(memoryId)}`, {
+  const { upstream, error } = await chatServerProxy(session.email, `/memories/${encodeURIComponent(memoryId)}`, {
     method: "PATCH",
     body: bodyText,
   });
+  if (error) return error;
   const text = await upstream.text();
   return new NextResponse(text, {
     status: upstream.status,
@@ -35,9 +36,10 @@ export async function DELETE(request: NextRequest, { params }: Params) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { memoryId } = await params;
-  const upstream = await chatServerFetch(session.email, `/memories/${encodeURIComponent(memoryId)}`, {
+  const { upstream, error } = await chatServerProxy(session.email, `/memories/${encodeURIComponent(memoryId)}`, {
     method: "DELETE",
   });
+  if (error) return error;
   if (upstream.status === 204) return new NextResponse(null, { status: 204 });
 
   const text = await upstream.text();
