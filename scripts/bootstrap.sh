@@ -18,6 +18,7 @@
 #   scripts/bootstrap.sh --postgres=local --dry-run  # print the plan, touch nothing
 #   scripts/bootstrap.sh --client-config <git-url[#<sha-or-tag>]|path>   # check out / point at a client bundle
 #   scripts/bootstrap.sh --enable-service            # systemctl enable --now fleet at the end
+#   scripts/bootstrap.sh --enable-web [--domain fleet.example.com]  # build + serve the web tier (TLS via Caddy with --domain)
 #
 # End-to-end flow (every run): ensure 0600 env file → ensure the client bundle is
 # in place (--client-config) → build the sandbox image from the bundle → provision
@@ -41,10 +42,17 @@
 #                              ref (recorded under the state dir) so `update`
 #                              advances only to it instead of tracking HEAD.
 #   --enable-service           systemctl enable --now the fleet unit at the end.
+#   --enable-web               build + deploy the Next.js web tier and enable
+#                              fleet-web (implies --enable-service). Email+password
+#                              login against the bundle's chat users.
+#   --domain <fqdn>            with --enable-web: front it with Caddy + automatic
+#                              TLS for <fqdn> (installs Caddy, opens 80/443).
 #   --dry-run                  print the plan; touch nothing.
 #
 # Env knobs (all optional; sensible local defaults):
-#   FLEET_ENV_FILE          credential env file to write/refresh (default .env.local)
+#   FLEET_ENV_FILE          credential env file to write/refresh (default: /etc/fleet/fleet.env
+#                           under --enable-service — matches deploy/fleet.service —
+#                           else .env.local for local/dev runs)
 #   FLEET_CLIENT_CONFIG_DIR client config bundle dir (default ./config/default —
 #                           the generic bundle baked into the repo). Point at a
 #                           checked-out client repo (e.g. /opt/fleet/client) for a
@@ -63,6 +71,8 @@
 #   FLEET_CHAT_DATABASE_URL external chat DSN (external mode)
 #   FLEET_SCHED_DATABASE_URL external sched DSN (external mode)
 #   FLEET_DB_SUPERUSER_URL  external superuser DSN for opt-in role/db creation
+#   FLEET_WEB_APP_NAME      web UI app name (--enable-web; default Fleet)
+#   FLEET_ACME_EMAIL        Let's Encrypt account email for Caddy (--domain; optional)
 set -euo pipefail
 
 # Resolve this script's repo root so --enable-service can build + install the
@@ -75,6 +85,8 @@ POSTGRES_MODE="local"
 DRY_RUN=0
 CLIENT_CONFIG_ARG=""
 ENABLE_SERVICE=0
+ENABLE_WEB=0
+WEB_DOMAIN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -84,9 +96,12 @@ while [[ $# -gt 0 ]]; do
     --client-config)     shift; [[ $# -gt 0 ]] || { echo "error: --client-config needs a git-url|path" >&2; exit 1; }; CLIENT_CONFIG_ARG="$1" ;;
     --client-config=*)   CLIENT_CONFIG_ARG="${1#*=}" ;;
     --enable-service)    ENABLE_SERVICE=1 ;;
+    --enable-web)        ENABLE_WEB=1; ENABLE_SERVICE=1 ;;  # web proxies to the backend → enable it too
+    --domain)            shift; [[ $# -gt 0 ]] || { echo "error: --domain needs an FQDN" >&2; exit 1; }; WEB_DOMAIN="$1" ;;
+    --domain=*)          WEB_DOMAIN="${1#*=}" ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,65p' "$0"; exit 0 ;;
+      sed -n '2,73p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -104,7 +119,18 @@ info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 
-ENV_FILE="${FLEET_ENV_FILE:-.env.local}"
+# Env file default: an explicit FLEET_ENV_FILE always wins. Otherwise, under
+# --enable-service (the systemd path) default to /etc/fleet/fleet.env — the path
+# deploy/fleet.service EnvironmentFiles — so the documented one-command deploy
+# writes credentials where the unit actually reads them (not a stray ./.env.local
+# the service can't see under ProtectHome). Plain local/dev runs keep .env.local.
+if [[ -n "${FLEET_ENV_FILE:-}" ]]; then
+  ENV_FILE="$FLEET_ENV_FILE"
+elif [[ "$ENABLE_SERVICE" == "1" ]]; then
+  ENV_FILE="/etc/fleet/fleet.env"
+else
+  ENV_FILE=".env.local"
+fi
 CLIENT_CONFIG_DIR="${FLEET_CLIENT_CONFIG_DIR:-config/default}"
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 CHAT_DB_NAME="${CHAT_DB_NAME:-chat}"
@@ -146,6 +172,164 @@ upsert_env() {
   mv -f "$tmp" "$ENV_FILE"
 }
 
+# ── dedicated service-user + rootless-Podman helpers (systemd/--enable-service) ──
+# deploy/fleet.service runs as a FIXED system user (User=fleet), NOT DynamicUser:
+# the execution sandbox is rootless Podman, which a transient DynamicUser cannot
+# drive (no /etc/subuid range, no HOME). These helpers provision that user and its
+# rootless-Podman prerequisites so the unit's sandbox actually runs.
+SERVICE_USER="fleet"          # MUST match deploy/fleet.service (User=/Group=fleet)
+SERVICE_HOME="/var/lib/fleet" # MUST match the unit's StateDirectory / HOME
+
+setup_service_user() {
+  if ! id "$SERVICE_USER" >/dev/null 2>&1; then
+    useradd --system --home-dir "$SERVICE_HOME" --shell /usr/sbin/nologin --no-create-home "$SERVICE_USER"
+    ok "created service user ${SERVICE_USER}"
+  else
+    info "service user ${SERVICE_USER} present"
+  fi
+  # subuid/subgid ranges — rootless Podman maps container uids/gids into these.
+  grep -q "^${SERVICE_USER}:" /etc/subuid || echo "${SERVICE_USER}:100000:65536" >> /etc/subuid
+  grep -q "^${SERVICE_USER}:" /etc/subgid || echo "${SERVICE_USER}:100000:65536" >> /etc/subgid
+  # HOME (rootless image store lives at ~/.local/share/containers) + runtime dir.
+  install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$SERVICE_HOME"
+  install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "/run/${SERVICE_USER}"
+  install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "${SERVICE_HOME}/.config/containers"
+  # cgroupfs avoids needing a systemd user D-Bus session (absent for a system
+  # service / non-login user, which otherwise fails with "sd-bus call: Access
+  # denied ... interactive authentication"); file events backend avoids journald perms.
+  cat > "${SERVICE_HOME}/.config/containers/containers.conf" <<'CONF'
+[engine]
+cgroup_manager = "cgroupfs"
+events_logger = "file"
+CONF
+  # chown the WHOLE .config tree: `install -d` leaves the intermediate ~/.config
+  # root-owned, and rootless Podman refuses to start if $HOME/.config is not owned
+  # by the calling user ("path .../.config exists and it is not owned by the
+  # current user"), which fails the build/run below.
+  chown -R "$SERVICE_USER":"$SERVICE_USER" "${SERVICE_HOME}/.config"
+  ok "rootless Podman configured for ${SERVICE_USER} (subuid/subgid + HOME + cgroupfs)"
+}
+
+# sandbox_manifest_tag MANIFEST — read the bundle's sandbox.tag (the on-box image
+# name); mirrors build-sandbox-image.sh's default. Used to build into the service
+# user's rootless store.
+sandbox_manifest_tag() {
+  local f="$1" t
+  t="$(awk '
+    /^sandbox:[[:space:]]*$/ { b=1; next }
+    /^[^[:space:]]/          { b=0 }
+    b && /^[[:space:]]+tag:/ { sub("^[[:space:]]+tag:[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
+  ' "$f" 2>/dev/null)"
+  printf '%s' "${t:-localhost/fleet-sandbox:latest}"
+}
+
+# ── web-tier helpers (--enable-web) ──────────────────────────────────────────
+gen_secret() { head -c "${1:-32}" /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c "${1:-32}"; }
+
+# ensure_env_secret KEY LEN — set KEY=<random> in $ENV_FILE only when ABSENT, so
+# re-runs never rotate a shared secret (rotating FLEET_SERVER_TOKEN would 403 the
+# web↔backend link; rotating APP_SESSION_SECRET would log everyone out).
+ensure_env_secret() {
+  local key="$1" len="${2:-32}"
+  [[ -f "$ENV_FILE" ]] && grep -q "^${key}=" "$ENV_FILE" && return 0
+  upsert_env "$key" "$(gen_secret "$len")"
+}
+
+# deploy_web_tier — build + run the Next.js web tier, and (with --domain) front it
+# with Caddy TLS. Self-contained email+password login against the bundle's chat
+# users (fleet-admin chat user add ...); the external Elcano SSO stays disabled
+# unless AUTH_SIGNING_PUBKEY is set. The only client-specific input is --domain.
+deploy_web_tier() {
+  local web_src="$REPO_ROOT/web" web_dst="/opt/fleet/web" web_env="/etc/fleet/fleet-web.env"
+  local origin app_name build_id
+  [[ -n "$WEB_DOMAIN" ]] && origin="https://$WEB_DOMAIN" || origin="http://localhost:3000"
+  app_name="${FLEET_WEB_APP_NAME:-Fleet}"
+  build_id="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo prod)"
+
+  [[ -d "$web_src" ]] || { warn "no web/ in the checkout — skipping web tier."; return; }
+  command -v npm >/dev/null 2>&1 || { warn "npm not found — skipping web tier (install nodejs)."; return; }
+
+  # Shared secrets the web↔backend link needs; generate-if-absent then load them
+  # into the already-started backend.
+  step "Web tier: ensuring shared secrets in ${ENV_FILE} + reloading backend"
+  ensure_env_secret FLEET_SERVER_TOKEN 32
+  ensure_env_secret ADMIN_API_KEY 32
+  systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+
+  step "Web tier: building the Next.js app (origin=${origin})"
+  if ( cd "$web_src" && NEXT_PUBLIC_PUBLIC_ORIGIN="$origin" NEXT_PUBLIC_APP_NAME="$app_name" \
+        NEXT_PUBLIC_BUILD_ID="$build_id" sh -c 'npm ci && npm run build' ); then
+    ok "web app built"
+  else
+    warn "web build failed — skipping the rest of the web tier."; return
+  fi
+
+  install -d "$web_dst" && cp -a "$web_src/." "$web_dst/" && ok "deployed web app → ${web_dst}"
+
+  # Write the 0600 web env. Chat/orchestrator tokens mirror the backend env;
+  # APP_SESSION_SECRET is generate-if-absent (rotating it logs everyone out).
+  local chat_token admin_token app_secret
+  chat_token="$(grep '^FLEET_SERVER_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+  admin_token="$(grep '^ADMIN_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+  if [[ -f "$web_env" ]] && grep -q '^APP_SESSION_SECRET=' "$web_env"; then
+    app_secret="$(grep '^APP_SESSION_SECRET=' "$web_env" | cut -d= -f2-)"
+  else
+    app_secret="$(gen_secret 48)"
+  fi
+  install -D -m 0600 /dev/null "$web_env"
+  {
+    printf 'CHAT_SERVER_URL=%s\n'         "http://127.0.0.1:8080"
+    printf 'CHAT_SERVER_TOKEN=%s\n'       "$chat_token"
+    printf 'ORCHESTRATOR_SERVER_URL=%s\n' "http://127.0.0.1:8000"
+    printf 'ORCHESTRATOR_SERVER_TOKEN=%s\n' "$admin_token"
+    printf 'APP_SESSION_SECRET=%s\n'      "$app_secret"
+    printf 'PORT=%s\n'                    "3000"
+    printf 'NODE_ENV=%s\n'                "production"
+    printf 'NEXT_PUBLIC_PUBLIC_ORIGIN=%s\n' "$origin"
+    printf 'NEXT_PUBLIC_APP_NAME=%s\n'    "$app_name"
+    printf 'NEXT_PUBLIC_BUILD_ID=%s\n'    "$build_id"
+  } > "$web_env"
+  chmod 0600 "$web_env"; ok "wrote ${web_env} (0600)"
+
+  systemctl daemon-reload || true
+  if systemctl enable --now fleet-web >/dev/null 2>&1; then
+    ok "fleet-web enabled + started (Next.js on :3000)"
+  else
+    warn "could not enable/start fleet-web — check: journalctl -u fleet-web -n 50"
+  fi
+
+  if [[ -z "$WEB_DOMAIN" ]]; then
+    info "no --domain → web is loopback-only on :3000; front it with your own TLS proxy for a public URL."
+    return
+  fi
+  step "Web tier: Caddy TLS reverse proxy for ${WEB_DOMAIN}"
+  if command -v dnf >/dev/null 2>&1 && ! command -v caddy >/dev/null 2>&1; then
+    dnf install -y caddy >/dev/null 2>&1 || warn "dnf install caddy failed — install Caddy manually."
+  fi
+  command -v caddy >/dev/null 2>&1 || { warn "caddy not found — skipping TLS front (web still on :3000)."; return; }
+  install -d /etc/caddy
+  {
+    [[ -n "${FLEET_ACME_EMAIL:-}" ]] && printf '{\n\temail %s\n}\n\n' "$FLEET_ACME_EMAIL"
+    printf '%s {\n\tencode zstd gzip\n\treverse_proxy 127.0.0.1:3000 {\n\t\tflush_interval -1\n\t\ttransport http {\n\t\t\tread_timeout 30m\n\t\t}\n\t}\n}\n' "$WEB_DOMAIN"
+  } > /etc/caddy/Caddyfile
+  if command -v firewall-cmd >/dev/null 2>&1; then
+    firewall-cmd --add-service=http --add-service=https --permanent >/dev/null 2>&1 || true
+    firewall-cmd --reload >/dev/null 2>&1 || true
+  fi
+  # A fresh `dnf install caddy` creates /var/lib/caddy (the caddy user's cert/account
+  # storage). Ensure it exists when caddy was already installed but its storage dir is
+  # missing — otherwise caddy fails ACME with "mkdir /var/lib/caddy: permission denied".
+  if id caddy >/dev/null 2>&1 && [[ ! -d /var/lib/caddy ]]; then
+    install -d -o caddy -g caddy -m 0700 /var/lib/caddy
+  fi
+  systemctl enable --now caddy >/dev/null 2>&1 || true
+  if systemctl is-active caddy >/dev/null 2>&1; then
+    ok "caddy serving https://${WEB_DOMAIN} (Let's Encrypt; requires inbound 80/443 reachable)"
+  else
+    warn "caddy not active — check: journalctl -u caddy -n 50"
+  fi
+}
+
 step "fleet bootstrap (postgres=${POSTGRES_MODE}, dry-run=${DRY_RUN})"
 
 # ── system dependencies: the build + runtime + sandbox toolchain ──
@@ -163,13 +347,27 @@ else
   warn "dnf not found — skipping dependency install. Ensure these are present before continuing: ${FLEET_DEPS[*]}"
 fi
 
+# ── dedicated service user + rootless-Podman setup (--enable-service path) ──
+# Done early (before the sandbox build) because the image is built INTO this
+# user's rootless store and the unit runs as it.
+if [[ "$ENABLE_SERVICE" == "1" ]]; then
+  step "Provisioning the ${SERVICE_USER} service user + rootless Podman (the sandbox runs under it)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would create user ${SERVICE_USER} (+subuid/subgid), HOME ${SERVICE_HOME}, /run/${SERVICE_USER}, and ~/.config/containers/containers.conf (cgroupfs)"
+  elif command -v useradd >/dev/null 2>&1; then
+    setup_service_user
+  else
+    warn "useradd not found — create the '${SERVICE_USER}' user + subuid/subgid + cgroupfs containers.conf manually (see deploy/fleet.service)."
+  fi
+fi
+
 # ── credential env file (0600) ──
 step "Ensuring credential env file ${ENV_FILE} (0600)"
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would create ${ENV_FILE} (0600) if missing"
 else
   if [[ ! -f "$ENV_FILE" ]]; then
-    install -m 0600 /dev/null "$ENV_FILE"
+    install -D -m 0600 /dev/null "$ENV_FILE"
     ok "created ${ENV_FILE} (0600)"
   else
     chmod 0600 "$ENV_FILE"
@@ -266,6 +464,21 @@ else
   warn "FLEET_CLIENT_CONFIG_DIR points at a valid bundle (a dir with manifest.yaml)."
 fi
 
+# ── bundle ownership for the rootless sandbox (--enable-service path) ──
+# The sandbox bind-mounts bundle dirs (protocols/ personas/ skills/ system_prompts/)
+# into the container with SELinux relabeling (:Z); the rootless service user can
+# only relabel files it OWNS. Chown the CHECKOUT to the service user — skip the
+# in-repo default bundle (chowning the repo would be wrong, and the service can't
+# read a bundle under /root anyway given ProtectHome).
+if [[ "$ENABLE_SERVICE" == "1" && "$DRY_RUN" != "1" && -d "$CLIENT_CONFIG_DIR" \
+      && "$CLIENT_CONFIG_DIR" != "config/default" && "$CLIENT_CONFIG_DIR" != "$REPO_ROOT"/* ]]; then
+  if chown -R "$SERVICE_USER":"$SERVICE_USER" "$CLIENT_CONFIG_DIR"; then
+    ok "bundle ${CLIENT_CONFIG_DIR} owned by ${SERVICE_USER} (so rootless :Z relabel is permitted)"
+  else
+    warn "could not chown ${CLIENT_CONFIG_DIR} to ${SERVICE_USER} — sandbox :Z relabel may fail (EPERM)."
+  fi
+fi
+
 # resolve_sandbox_image MANIFEST — print the bundle's resolved sandbox.image, the
 # SAME way the Go loader (internal/clientconfig) does: extract the scalar under
 # the sandbox: block, then interpolate a bare ${VAR:-default} / ${VAR} reference
@@ -311,11 +524,42 @@ elif [[ ! -f "$SANDBOX_CONTAINERFILE" ]]; then
   warn "no ${SANDBOX_CONTAINERFILE} — bundle ships no sandbox Containerfile; set sandbox.image or add one."
 elif ! command -v podman >/dev/null 2>&1; then
   warn "podman not found — skipping sandbox build (install podman, then run scripts/build-sandbox-image.sh)."
+elif [[ "$ENABLE_SERVICE" == "1" ]] && id "$SERVICE_USER" >/dev/null 2>&1; then
+  # systemd path: build INTO the service user's rootless image store, so the
+  # User=fleet unit finds the image (root's rootful store is a separate namespace).
+  SANDBOX_TAG="$(sandbox_manifest_tag "${CLIENT_CONFIG_DIR}/manifest.yaml")"
+  info "building as ${SERVICE_USER} (rootless) → ${SANDBOX_TAG}"
+  if runuser -u "$SERVICE_USER" -- sh -c "cd '${SERVICE_HOME}' && HOME='${SERVICE_HOME}' XDG_RUNTIME_DIR='/run/${SERVICE_USER}' podman build -t '${SANDBOX_TAG}' -f '${SANDBOX_CONTAINERFILE}' '${CLIENT_CONFIG_DIR}/sandbox'"; then
+    ok "sandbox image ${SANDBOX_TAG} built into ${SERVICE_USER}'s rootless store"
+  else
+    warn "rootless sandbox build (as ${SERVICE_USER}) failed — fleet will have no runnable sandbox image."
+  fi
 else
   if FLEET_CLIENT_CONFIG_DIR="${CLIENT_CONFIG_DIR}" "$(dirname "$0")/build-sandbox-image.sh"; then
     ok "sandbox image built from ${SANDBOX_CONTAINERFILE}"
   else
     warn "sandbox image build failed — run scripts/build-sandbox-image.sh manually before starting fleet."
+  fi
+fi
+
+# ── host-side MCP server Python deps (the active bundle's requirements) ──
+# fleet runs the bundle's MCP servers host-side as `python3 <bundle>/mcp/*.py`, so
+# their Python deps must be importable by the system python3 the service user runs.
+# Generic: installs whatever THIS bundle's mcp/requirements.txt lists (no
+# bundle-specific package names here). --break-system-packages is for Fedora's
+# PEP-668 externally-managed python; harmless to drop on other distros.
+if [[ "$ENABLE_SERVICE" == "1" && -f "${CLIENT_CONFIG_DIR}/mcp/requirements.txt" ]]; then
+  step "Installing the bundle's host-side MCP Python deps (${CLIENT_CONFIG_DIR}/mcp/requirements.txt)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would run: python3 -m pip install --break-system-packages -r ${CLIENT_CONFIG_DIR}/mcp/requirements.txt"
+  elif command -v python3 >/dev/null 2>&1; then
+    if python3 -m pip install --break-system-packages -r "${CLIENT_CONFIG_DIR}/mcp/requirements.txt"; then
+      ok "bundle MCP Python deps installed (host-side servers can start)"
+    else
+      warn "pip install of ${CLIENT_CONFIG_DIR}/mcp/requirements.txt failed — host-side MCP servers may not start."
+    fi
+  else
+    warn "python3 not found — install ${CLIENT_CONFIG_DIR}/mcp/requirements.txt manually."
   fi
 fi
 
@@ -442,6 +686,7 @@ upsert_env FLEET_ENV_FILE "$ENV_FILE"
 if [[ "$DRY_RUN" != "1" ]]; then
   ok "wrote FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL / FLEET_CLIENT_CONFIG_DIR / FLEET_ENV_FILE"
   info "remember to add OPENROUTER_API_KEY and the bundle's MCP connector credentials."
+  info "if the bundle's default persona differs from 'assistant', set PERSONA_DEFAULT=<persona> in ${ENV_FILE}."
 fi
 
 # ── optionally build + install the binary + unit, then enable + start it ──
@@ -491,8 +736,27 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
     else
       warn "could not enable/start ${SERVICE_NAME} — check: journalctl -u ${SERVICE_NAME} -n 50"
     fi
-    info "web tier: build it (cd web && npm ci && npm run build), deploy to /opt/fleet/web,"
-    info "          fill /etc/fleet/fleet-web.env, then: systemctl enable --now fleet-web"
+    if [[ "$ENABLE_WEB" != "1" ]]; then
+      info "web tier: re-run with --enable-web [--domain <fqdn>] to build + serve it,"
+      info "          or by hand (cd web && npm ci && npm run build → /opt/fleet/web, fill fleet-web.env, enable fleet-web)."
+    fi
+  fi
+fi
+
+# ── web tier + Caddy TLS (opt-in via --enable-web / --domain) ──
+if [[ "$ENABLE_WEB" == "1" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    step "Web tier (--enable-web): plan"
+    info "[dry-run] would ensure FLEET_SERVER_TOKEN + ADMIN_API_KEY in ${ENV_FILE} (generate-if-absent) + reload backend."
+    if [[ -n "$WEB_DOMAIN" ]]; then
+      info "[dry-run] would build web/ for https://${WEB_DOMAIN} → /opt/fleet/web, write fleet-web.env, enable fleet-web, install Caddy + open 80/443."
+    else
+      info "[dry-run] would build web/ for http://localhost:3000 → /opt/fleet/web, write fleet-web.env, enable fleet-web (loopback only; no --domain → no Caddy)."
+    fi
+  elif ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl not found — skipping --enable-web (no systemd on this box)."
+  else
+    deploy_web_tier
   fi
 fi
 

@@ -416,13 +416,26 @@ sudo git clone https://github.com/ElcanoTek/fleet.git /opt/fleet/src
 # 3. Bootstrap. Point --client-config at your bundle (a git URL or a path);
 #    omit it to run bare on config/default, or use the public template
 #    https://github.com/ElcanoTek/example-config to start from.
+#    Under --enable-service the script writes credentials to /etc/fleet/fleet.env
+#    (the path the systemd unit reads) by default.
 sudo bash /opt/fleet/src/scripts/bootstrap.sh \
   --postgres=local --enable-service \
   --client-config https://github.com/ElcanoTek/example-config.git
 
+#    …or stand up the full browser-facing stack (Next.js web UI + Caddy TLS) in
+#    ONE command — swap --enable-service for --enable-web --domain <your-domain>:
+# sudo bash /opt/fleet/src/scripts/bootstrap.sh \
+#   --postgres=local --enable-web --domain fleet.example.com \
+#   --client-config https://github.com/ElcanoTek/example-config.git
+
 # 4. Add your OpenRouter key + connector secrets to the env file, then restart.
 sudo "$EDITOR" /etc/fleet/fleet.env       # set OPENROUTER_API_KEY=… (+ MCP creds)
+#    If the bundle's default persona isn't "assistant", also set
+#    PERSONA_DEFAULT=<persona> here (e.g. PERSONA_DEFAULT=victoria).
 sudo fleet-admin restart
+#    With --enable-web, also (re)start the web unit: it BindsTo fleet.service, so
+#    it stays down until the backend is healthy (i.e. until the key is set).
+# sudo systemctl restart fleet-web
 ```
 
 > **The read-only token.** A private bundle repo needs read access at clone
@@ -493,6 +506,26 @@ does (and the manual path if you'd rather run each piece yourself):
 
    (`fleet-admin bootstrap --enable-service` automates this build → install →
    unit-install → enable from a source checkout — see **Operating fleet** below.)
+
+   > **One command for the web tier + TLS.** `bootstrap.sh --enable-web
+   > [--domain <fqdn>]` automates everything in the rest of this section: it
+   > builds the Next app into `/opt/fleet/web`, writes the 0600
+   > `/etc/fleet/fleet-web.env` (generating `APP_SESSION_SECRET` and mirroring
+   > `CHAT_SERVER_TOKEN`/`ORCHESTRATOR_SERVER_TOKEN` from the backend env), enables
+   > `fleet-web`, and with `--domain` installs Caddy + opens 80/443 for automatic
+   > TLS. The manual steps below are the by-hand equivalent.
+   >
+   > **Login model.** The web app authenticates two ways: a **self-contained
+   > email + password** path (`POST /api/auth/login` → backend `/auth/verify` →
+   > bcrypt against the chat user store; HMAC session signed with
+   > `APP_SESSION_SECRET`) — add users via `fleet-admin chat user add` — and an
+   > optional Elcano **SSO** cookie path that is **disabled unless
+   > `AUTH_SIGNING_PUBKEY` is set**. A stand-alone deploy needs no external auth
+   > service; users just log in with email + password.
+   >
+   > **`fleet-web` BindsTo `fleet`.** It stays down until the backend is healthy
+   > (i.e. until `OPENROUTER_API_KEY` is set), so after a first `--enable-web`
+   > bootstrap: set the key, `fleet-admin restart`, then `systemctl start fleet-web`.
 
    Run the Next web app as its own supervised unit (`deploy/fleet-web.service` —
    it `npm run start`s the built app on port 3000), wiring
@@ -583,8 +616,14 @@ fleet-admin bootstrap --postgres=local                     # dnf+initdb+pg_hba+\
 fleet-admin bootstrap --postgres=external                  # validate the DSNs with SELECT 1, sslmode=require
 fleet-admin bootstrap --client-config <git-url|path>       # check out / point at a client bundle
 fleet-admin bootstrap --enable-service                     # systemctl enable --now the fleet unit at the end
+fleet-admin bootstrap --enable-web [--domain <fqdn>]       # also build+enable the web tier (+ Caddy TLS with --domain); implies --enable-service
 fleet-admin bootstrap --dry-run                            # print the plan; touch nothing
 ```
+
+Under `--enable-service` (and `--enable-web`, which implies it) the credential env
+file defaults to `/etc/fleet/fleet.env` — the path `deploy/fleet.service` reads —
+so the one-command deploy writes secrets where the unit picks them up. Set
+`FLEET_ENV_FILE` to override; plain local/dev runs still default to `.env.local`.
 
 End to end, every run: ensure the 0600 env file → resolve the client bundle
 (`--client-config`) → **build the sandbox image from the bundle** (calls
@@ -630,6 +669,16 @@ migrations), the **sandbox image is present + runnable** (a throwaway
 process resolves it — `FLEET_SANDBOX_IMAGE` env wins, else the bundle's
 `ResolvedImageRef()`), and the systemd unit state when a unit is installed.
 DSN passwords are redacted in the output.
+
+> **Sandbox check + the dedicated service user.** The systemd unit runs `fleet`
+> as a dedicated **`fleet`** user with **rootless Podman** (its own subuid range +
+> image store), so the sandbox image lives in *that* user's store. `fleet-admin
+> status` run as **root** therefore reports the sandbox image as not runnable
+> (root's Podman can't see it) even though the service runs it fine — a false
+> negative. Verify the sandbox as the service user instead, e.g.
+> `sudo -u fleet env XDG_RUNTIME_DIR=/run/fleet podman run --rm <ref> true`, or
+> just confirm a chat turn executes a `run_python` tool call. Use `--no-sandbox`
+> to skip the check when running `status` as root.
 
 ### service lifecycle — restart · stop · logs
 
