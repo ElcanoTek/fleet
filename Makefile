@@ -31,14 +31,17 @@ bins:
 	go build -o ./fleet ./cmd/fleet
 	go build -o ./fleet-admin ./cmd/fleet-admin
 
+# Tests run WITH the fleet_host_executor tag so the host-mode fixtures + MockMode
+# tests compile. The release binary (`make build`/`bins`) is built WITHOUT it, so
+# the unsandboxed host executor never ships (#159).
 test:
-	go test -p 1 ./...
+	go test -p 1 -tags fleet_host_executor ./...
 
 test-race:
-	go test -race -p 1 ./...
+	go test -race -p 1 -tags fleet_host_executor ./...
 
 test-cover:
-	go test -cover -p 1 ./...
+	go test -cover -p 1 -tags fleet_host_executor ./...
 
 lint: lint-go
 
