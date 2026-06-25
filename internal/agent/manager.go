@@ -278,6 +278,15 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		BridgeScript: tools.PythonBridgeScript(),
 	}
 	if cfg.MockMode {
+		// MockMode runs ModeHost (unsandboxed, os/exec). That executor is only
+		// compiled in with -tags fleet_host_executor (#159); fail closed at boot in
+		// a release binary so a stray FLEET_MOCK_MODE in production can never run
+		// agent tool calls unsandboxed on the host.
+		if !sandbox.HostExecutorCompiledIn() {
+			return nil, fmt.Errorf(
+				"FLEET_MOCK_MODE is set but the host executor is not compiled into this binary; " +
+					"it is gated behind -tags fleet_host_executor (tests/dev only) and must not run in production")
+		}
 		poolCfg.Size = 0
 		poolCfg.Mode = sandbox.ModeHost
 		log.Printf("sandbox: mock mode — tool calls are stubbed by e2e harness")

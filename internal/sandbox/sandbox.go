@@ -173,6 +173,13 @@ type impl interface {
 	close()
 }
 
+// HostExecutorCompiledIn reports whether the unsandboxed host executor (ModeHost,
+// host.go) was compiled into this binary — true only with the
+// `fleet_host_executor` build tag (tests/dev). A release build returns false, so
+// callers (e.g. the MockMode path) can fail closed instead of running agent tool
+// calls unsandboxed on the host. See host.go / host_disabled.go (#159).
+func HostExecutorCompiledIn() bool { return hostExecutorCompiledIn }
+
 // Mode reports the backend in use. Useful for tests and for log lines
 // that want to disambiguate which path the turn ran through.
 func (s *Sandbox) ModeName() string {

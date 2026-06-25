@@ -137,6 +137,11 @@ run:
   timeout: 5m
   tests: true
   go: "1.26.4"
+  # Lint the host-executor-enabled build so host.go (gated behind this tag, #159)
+  # is covered. The release build excludes it; `go build ./...` in CI compile-checks
+  # that untagged path. CI and local `golangci-lint run` agree because both read this.
+  build-tags:
+    - fleet_host_executor
 
 severity:
   default: error
