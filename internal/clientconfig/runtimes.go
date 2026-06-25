@@ -2,12 +2,60 @@ package clientconfig
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"strings"
 )
 
-// Runtime flavors. fleet drives each flavor as an ACP agent (Plan v4); the
-// native-inprocess flavor is the fast in-process path kept as the default + the
-// parity oracle.
+// EnvEnableInprocessLoop is the operator opt-in that keeps the native-inprocess
+// flavor selectable. Default OFF (#159): the in-process loop runs in the fleet
+// process and shares its address space — and thus the host-held MCP credentials
+// — so it is NOT a credential-isolation boundary. With it off, native-inprocess
+// is dropped from the selectable catalog and rejected server-side, and the
+// containerized-loop native-acp is the default. With it on, native-inprocess
+// returns for dev/test/trusted-local + the parity oracle.
+const EnvEnableInprocessLoop = "FLEET_ENABLE_INPROCESS_LOOP"
+
+// inprocessLoopEnabled reports the operator opt-in (default false).
+func inprocessLoopEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvEnableInprocessLoop))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// gateInprocessLoop drops native-inprocess from the selectable flavor set unless
+// the operator opted in (EnvEnableInprocessLoop) — or it is the ONLY flavor (a
+// bundle that ships nothing else cannot have its sole option removed). Removing
+// it here makes Runtimes(), Runtime(), and DefaultRuntime() all exclude it with
+// no per-call logic, so the picker hides it and every server-side gate rejects
+// it. Applied once at Load, after resolveRuntimes.
+func gateInprocessLoop(rts []Runtime) []Runtime {
+	if inprocessLoopEnabled() {
+		return rts
+	}
+	kept := make([]Runtime, 0, len(rts))
+	for _, rt := range rts {
+		if rt.Name == RuntimeNativeInprocess {
+			continue
+		}
+		kept = append(kept, rt)
+	}
+	if len(kept) == 0 {
+		log.Printf("clientconfig: %s is off but native-inprocess is the only runtime flavor; keeping it selectable", EnvEnableInprocessLoop)
+		return rts
+	}
+	if len(kept) != len(rts) {
+		log.Printf("clientconfig: native-inprocess loop gated off (set %s=1 to re-enable for dev/test/parity)", EnvEnableInprocessLoop)
+	}
+	return kept
+}
+
+// Runtime flavors. fleet drives each flavor as an ACP agent (Plan v4). The
+// DEFAULT is the containerized-loop native-acp (#159); the native-inprocess
+// flavor is the fast in-process path (parity oracle), gated off by default
+// behind EnvEnableInprocessLoop.
 const (
 	// RuntimeNativeInprocess runs today's direct in-process agentcore.Run loop.
 	// The fast path (dev/test/trusted-local) and the parity oracle.
@@ -85,20 +133,20 @@ type Runtime struct {
 type runtimesManifest map[string]Runtime
 
 // defaultRuntimes is the built-in flavor set used when the manifest declares no
-// `runtimes:` block: native-inprocess (default + parity oracle) and native-acp
-// (sandboxed, image resolved from the sandbox/native-agent lineage). A bundle
+// `runtimes:` block: native-acp (the default; sandboxed loop) and native-inprocess
+// (the parity oracle, gated off by default — see gateInprocessLoop). A bundle
 // overrides this with its own block.
 func defaultRuntimes() []Runtime {
 	return []Runtime{
 		{
 			Name: RuntimeNativeInprocess, Type: RuntimeTypeNativeInprocess,
-			DisplayName: "Native (in-process)", Default: true,
+			DisplayName: "Native (in-process)",
 			Description: "Fast in-process loop. Dev/test/trusted-local; the parity oracle.",
 		},
 		{
 			Name: RuntimeNativeACP, Type: RuntimeTypeNativeACP,
 			Image: "localhost/fleet-native-agent:latest", Network: RuntimeNetworkRestricted,
-			DisplayName: "Native (sandboxed)",
+			DisplayName: "Native (sandboxed)", Default: true,
 			Description: "Native loop wrapped as a sandboxed ACP agent. Fully governed.",
 		},
 	}
