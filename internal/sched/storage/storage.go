@@ -528,6 +528,7 @@ type TaskEdit struct {
 	Priority               int
 	InstructionSelfImprove bool
 	AllowNetwork           bool
+	RuntimeFlavor          string
 	ScheduledFor           *time.Time
 	Recurrence             string
 	Files                  []string
@@ -570,6 +571,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
 	task.AllowNetwork = edit.AllowNetwork
+	task.RuntimeFlavor = edit.RuntimeFlavor
 	task.ScheduledFor = edit.ScheduledFor
 	task.Recurrence = edit.Recurrence
 	if edit.SetFiles {

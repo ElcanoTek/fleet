@@ -221,6 +221,12 @@ type TaskCreate struct {
 	// --network=none, matching the interactive lockdown path; egress is an
 	// explicit opt-in for the tasks that genuinely need it.
 	AllowNetwork bool `json:"allow_network,omitempty"`
+	// RuntimeFlavor is the per-task runtime-flavor override (the Operations
+	// Center agent picker), mirroring chat's per-conversation flavor. Empty =
+	// use the bundle's global scheduled runtime. An unknown name falls back to
+	// the global default at dispatch; an EXTERNAL flavor still routes through the
+	// fail-closed scheduled-external gate (allow_ungoverned_scheduled_agents).
+	RuntimeFlavor string `json:"runtime_flavor,omitempty"`
 }
 
 // Task represents a task to be executed by a worker.
@@ -235,7 +241,10 @@ type Task struct {
 	InstructionSelfImprove bool         `json:"instruction_self_improve,omitempty"`
 	// AllowNetwork controls whether this task's execution sandbox keeps outbound
 	// egress. Default false seals it (--network=none); see TaskCreate.AllowNetwork.
-	AllowNetwork   bool       `json:"allow_network,omitempty"`
+	AllowNetwork bool `json:"allow_network,omitempty"`
+	// RuntimeFlavor is the per-task runtime-flavor override; empty = the bundle's
+	// global scheduled runtime. See TaskCreate.RuntimeFlavor.
+	RuntimeFlavor  string     `json:"runtime_flavor,omitempty"`
 	Status         TaskStatus `json:"status"`
 	AssignedNodeID *uuid.UUID `json:"assigned_node_id,omitempty"`
 	AgentSessionID *string    `json:"agent_session_id,omitempty"`
@@ -276,6 +285,7 @@ func NewTask(tc TaskCreate) *Task {
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
+		RuntimeFlavor:          tc.RuntimeFlavor,
 		Status:                 status,
 		CreatedAt:              time.Now().UTC(),
 		ScheduledFor:           tc.ScheduledFor,
