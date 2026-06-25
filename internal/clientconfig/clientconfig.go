@@ -179,6 +179,24 @@ type Branding struct {
 	LoginTagline     string `yaml:"login_tagline"`
 	ShareTitle       string `yaml:"share_title"`
 	ShareDescription string `yaml:"share_description"`
+	// Colors lets a bundle theme the actual web UI (not just text) by overriding
+	// the CSS custom properties globals.css defines. Served as a render-blocking
+	// stylesheet by httpapi's /theme.css so the shell — including the pre-auth
+	// login page — paints in the client's palette with no flash. An absent block
+	// emits nothing and the built-in defaults stand. See BrandColors.
+	Colors BrandColors `yaml:"colors"`
+}
+
+// BrandColors holds per-mode palette overrides. Light and Dark are keyed by a
+// stable token name (e.g. "primary", "accent", "background") that httpapi maps
+// to the corresponding --color-* custom property; unknown keys are ignored and
+// values are validated at render time, so a sparse or typo'd block degrades to
+// the defaults rather than breaking the UI. Maps (not a struct) keep the strict
+// manifest decoder from rejecting a bundle that lists a token fleet doesn't yet
+// theme.
+type BrandColors struct {
+	Light map[string]string `yaml:"light"`
+	Dark  map[string]string `yaml:"dark"`
 }
 
 // Models carries advisory default model-tier hints a bundle may declare so its
