@@ -55,6 +55,14 @@ type Options struct {
 	// flavor as a scheduled task. Off → scheduled-external is a loud error at
 	// dispatch (fail-closed).
 	AllowUngovernedScheduled bool
+
+	// ResolveRuntime resolves a per-task runtime-flavor name (the Operations
+	// Center picker) to its bundle descriptor. nil disables per-task overrides
+	// (every task uses the global Runtime/RuntimeFlavor). An unknown name falls
+	// back to the global default; the resolved descriptor still flows through the
+	// fail-closed scheduled-external gate, so a per-task external flavor cannot
+	// bypass AllowUngovernedScheduled.
+	ResolveRuntime func(name string) (clientconfig.Runtime, bool)
 }
 
 // Runner executes claimed scheduled tasks in-process through the unified runtime
@@ -86,6 +94,7 @@ type Runner struct {
 	runtimeFlavor    clientconfig.Runtime
 
 	allowUngovernedScheduled bool
+	resolveRuntime           func(name string) (clientconfig.Runtime, bool)
 }
 
 // New builds a Runner. The base system prompt + persona are read once at
@@ -104,6 +113,7 @@ func New(opts Options) *Runner {
 		nativeAgentImage:         opts.NativeAgentImage,
 		runtimeFlavor:            opts.RuntimeFlavor,
 		allowUngovernedScheduled: opts.AllowUngovernedScheduled,
+		resolveRuntime:           opts.ResolveRuntime,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -225,6 +235,21 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	}
 	defer mcpCleanup()
 
+	// Per-task runtime-flavor override (the Operations Center agent picker). An
+	// empty/unknown flavor leaves the bundle's global scheduled runtime in place.
+	// The resolved descriptor flows into agent.Options.RuntimeFlavor unchanged, so
+	// a per-task EXTERNAL flavor is still gated by the fail-closed
+	// scheduled-external path (AllowUngovernedScheduled) — the picker cannot
+	// bypass governance.
+	runtime, runtimeFlavor := r.runtime, r.runtimeFlavor
+	if want := strings.TrimSpace(task.RuntimeFlavor); want != "" && r.resolveRuntime != nil {
+		if rt, ok := r.resolveRuntime(want); ok {
+			runtime, runtimeFlavor = rt.Name, rt
+		} else {
+			log.Printf("scheduled task %s: runtime flavor %q not in bundle catalog; using global default %q", task.ID, want, r.runtime)
+		}
+	}
+
 	a := agent.NewAgent(agent.Options{
 		Config:                   r.cfg,
 		Model:                    model,
@@ -237,9 +262,9 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 		Sandbox:                  sb,
 		NotesProvider:            r.notesProvider,
 		NoteProposer:             r.noteProposer,
-		Runtime:                  r.runtime,
+		Runtime:                  runtime,
 		NativeAgentImage:         r.nativeAgentImage,
-		RuntimeFlavor:            r.runtimeFlavor,
+		RuntimeFlavor:            runtimeFlavor,
 		AllowUngovernedScheduled: r.allowUngovernedScheduled,
 		MCPSelection:             taskMCPSelection(task),
 	})
