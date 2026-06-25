@@ -133,11 +133,16 @@ jobs:
           fi
           echo "podman is not on PATH (container sandbox tests will skip)"
 
-      - name: go build
+      - name: go build (release config — host executor must NOT be compiled in)
+        # No fleet_host_executor tag: this is the shipped binary. It compile-checks
+        # the release path, proving the unsandboxed host executor (host.go) is fenced
+        # out and host_disabled.go's stub stands in (#159).
         run: go build ./...
 
       - name: go vet
-        run: go vet ./...
+        # Tagged so host.go (gated behind fleet_host_executor) is vetted too. Tests
+        # + the host fixtures only compile with the tag.
+        run: go vet -tags fleet_host_executor ./...
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
@@ -155,14 +160,16 @@ jobs:
           only-new-issues: false
 
       - name: go test
-        run: go test -p 1 ./... -count=1
+        # Tagged: compiles the host-mode fixtures + MockMode tests. The release
+        # binary above is built untagged; here we exercise the full suite (#159).
+        run: go test -p 1 -tags fleet_host_executor ./... -count=1
 
       - name: go test -race
         # fleet's correctness rests on in-process coordination (the worker pool,
         # SSE fan-out, single-owner DB leases, the admission semaphore). The race
         # detector is the gate for that whole class of bug; it reuses the same
         # Postgres service as the plain test step above.
-        run: go test -race -p 1 ./... -count=1
+        run: go test -race -p 1 -tags fleet_host_executor ./... -count=1
 
       - name: govulncheck (dependency CVEs)
         # Call-graph-aware scan of the (broad, fast-moving) dependency tree for
@@ -377,7 +384,11 @@ jobs:
         run: |
           set -euo pipefail
           tests='TestContainerWorkspaceSamePathCoherence|TestContainerReadOnlyMountsSamePath|TestContainerWorkspaceSurvivesConcurrentMount|TestContainerBashSamePath'
-          go test -run "$tests" -v -count=1 ./internal/sandbox 2>&1 | tee sandbox-invariants.log
+          # -tags fleet_host_executor: these are container-mode invariant tests,
+          # but they share the sandbox test package with the host-mode fixtures
+          # that are now gated behind this tag (#159) — the package won't COMPILE
+          # without it (the tests would read as "absent" and trip the guard below).
+          go test -tags fleet_host_executor -run "$tests" -v -count=1 ./internal/sandbox 2>&1 | tee sandbox-invariants.log
           for tc in \
             TestContainerWorkspaceSamePathCoherence \
             TestContainerReadOnlyMountsSamePath \

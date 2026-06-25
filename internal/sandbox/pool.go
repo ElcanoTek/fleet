@@ -223,8 +223,10 @@ func (p *Pool) newSandbox(ctx context.Context) (*Sandbox, error) {
 	case ModeHost:
 		// Test-only fixture path. agent.go forbids ModeHost in
 		// production; this branch only fires when sandbox_test.go
-		// constructs a pool directly with ModeHost.
-		return NewHost(p.cfg.BridgeScript), nil
+		// constructs a pool directly with ModeHost. newHostSandbox is the
+		// real host executor only with -tags fleet_host_executor; a release
+		// build's stub returns an error here (#159).
+		return newHostSandbox(p.cfg.BridgeScript)
 	default:
 		return nil, ErrContainerUnavailable
 	}
