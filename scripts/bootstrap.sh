@@ -146,6 +146,57 @@ upsert_env() {
   mv -f "$tmp" "$ENV_FILE"
 }
 
+# ── dedicated service-user + rootless-Podman helpers (systemd/--enable-service) ──
+# deploy/fleet.service runs as a FIXED system user (User=fleet), NOT DynamicUser:
+# the execution sandbox is rootless Podman, which a transient DynamicUser cannot
+# drive (no /etc/subuid range, no HOME). These helpers provision that user and its
+# rootless-Podman prerequisites so the unit's sandbox actually runs.
+SERVICE_USER="fleet"          # MUST match deploy/fleet.service (User=/Group=fleet)
+SERVICE_HOME="/var/lib/fleet" # MUST match the unit's StateDirectory / HOME
+
+setup_service_user() {
+  if ! id "$SERVICE_USER" >/dev/null 2>&1; then
+    useradd --system --home-dir "$SERVICE_HOME" --shell /usr/sbin/nologin --no-create-home "$SERVICE_USER"
+    ok "created service user ${SERVICE_USER}"
+  else
+    info "service user ${SERVICE_USER} present"
+  fi
+  # subuid/subgid ranges — rootless Podman maps container uids/gids into these.
+  grep -q "^${SERVICE_USER}:" /etc/subuid || echo "${SERVICE_USER}:100000:65536" >> /etc/subuid
+  grep -q "^${SERVICE_USER}:" /etc/subgid || echo "${SERVICE_USER}:100000:65536" >> /etc/subgid
+  # HOME (rootless image store lives at ~/.local/share/containers) + runtime dir.
+  install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$SERVICE_HOME"
+  install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "/run/${SERVICE_USER}"
+  install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "${SERVICE_HOME}/.config/containers"
+  # cgroupfs avoids needing a systemd user D-Bus session (absent for a system
+  # service / non-login user, which otherwise fails with "sd-bus call: Access
+  # denied ... interactive authentication"); file events backend avoids journald perms.
+  cat > "${SERVICE_HOME}/.config/containers/containers.conf" <<'CONF'
+[engine]
+cgroup_manager = "cgroupfs"
+events_logger = "file"
+CONF
+  # chown the WHOLE .config tree: `install -d` leaves the intermediate ~/.config
+  # root-owned, and rootless Podman refuses to start if $HOME/.config is not owned
+  # by the calling user ("path .../.config exists and it is not owned by the
+  # current user"), which fails the build/run below.
+  chown -R "$SERVICE_USER":"$SERVICE_USER" "${SERVICE_HOME}/.config"
+  ok "rootless Podman configured for ${SERVICE_USER} (subuid/subgid + HOME + cgroupfs)"
+}
+
+# sandbox_manifest_tag MANIFEST — read the bundle's sandbox.tag (the on-box image
+# name); mirrors build-sandbox-image.sh's default. Used to build into the service
+# user's rootless store.
+sandbox_manifest_tag() {
+  local f="$1" t
+  t="$(awk '
+    /^sandbox:[[:space:]]*$/ { b=1; next }
+    /^[^[:space:]]/          { b=0 }
+    b && /^[[:space:]]+tag:/ { sub("^[[:space:]]+tag:[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
+  ' "$f" 2>/dev/null)"
+  printf '%s' "${t:-localhost/fleet-sandbox:latest}"
+}
+
 step "fleet bootstrap (postgres=${POSTGRES_MODE}, dry-run=${DRY_RUN})"
 
 # ── system dependencies: the build + runtime + sandbox toolchain ──
@@ -163,13 +214,27 @@ else
   warn "dnf not found — skipping dependency install. Ensure these are present before continuing: ${FLEET_DEPS[*]}"
 fi
 
+# ── dedicated service user + rootless-Podman setup (--enable-service path) ──
+# Done early (before the sandbox build) because the image is built INTO this
+# user's rootless store and the unit runs as it.
+if [[ "$ENABLE_SERVICE" == "1" ]]; then
+  step "Provisioning the ${SERVICE_USER} service user + rootless Podman (the sandbox runs under it)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would create user ${SERVICE_USER} (+subuid/subgid), HOME ${SERVICE_HOME}, /run/${SERVICE_USER}, and ~/.config/containers/containers.conf (cgroupfs)"
+  elif command -v useradd >/dev/null 2>&1; then
+    setup_service_user
+  else
+    warn "useradd not found — create the '${SERVICE_USER}' user + subuid/subgid + cgroupfs containers.conf manually (see deploy/fleet.service)."
+  fi
+fi
+
 # ── credential env file (0600) ──
 step "Ensuring credential env file ${ENV_FILE} (0600)"
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would create ${ENV_FILE} (0600) if missing"
 else
   if [[ ! -f "$ENV_FILE" ]]; then
-    install -m 0600 /dev/null "$ENV_FILE"
+    install -D -m 0600 /dev/null "$ENV_FILE"
     ok "created ${ENV_FILE} (0600)"
   else
     chmod 0600 "$ENV_FILE"
@@ -266,6 +331,21 @@ else
   warn "FLEET_CLIENT_CONFIG_DIR points at a valid bundle (a dir with manifest.yaml)."
 fi
 
+# ── bundle ownership for the rootless sandbox (--enable-service path) ──
+# The sandbox bind-mounts bundle dirs (protocols/ personas/ skills/ system_prompts/)
+# into the container with SELinux relabeling (:Z); the rootless service user can
+# only relabel files it OWNS. Chown the CHECKOUT to the service user — skip the
+# in-repo default bundle (chowning the repo would be wrong, and the service can't
+# read a bundle under /root anyway given ProtectHome).
+if [[ "$ENABLE_SERVICE" == "1" && "$DRY_RUN" != "1" && -d "$CLIENT_CONFIG_DIR" \
+      && "$CLIENT_CONFIG_DIR" != "config/default" && "$CLIENT_CONFIG_DIR" != "$REPO_ROOT"/* ]]; then
+  if chown -R "$SERVICE_USER":"$SERVICE_USER" "$CLIENT_CONFIG_DIR"; then
+    ok "bundle ${CLIENT_CONFIG_DIR} owned by ${SERVICE_USER} (so rootless :Z relabel is permitted)"
+  else
+    warn "could not chown ${CLIENT_CONFIG_DIR} to ${SERVICE_USER} — sandbox :Z relabel may fail (EPERM)."
+  fi
+fi
+
 # resolve_sandbox_image MANIFEST — print the bundle's resolved sandbox.image, the
 # SAME way the Go loader (internal/clientconfig) does: extract the scalar under
 # the sandbox: block, then interpolate a bare ${VAR:-default} / ${VAR} reference
@@ -311,11 +391,42 @@ elif [[ ! -f "$SANDBOX_CONTAINERFILE" ]]; then
   warn "no ${SANDBOX_CONTAINERFILE} — bundle ships no sandbox Containerfile; set sandbox.image or add one."
 elif ! command -v podman >/dev/null 2>&1; then
   warn "podman not found — skipping sandbox build (install podman, then run scripts/build-sandbox-image.sh)."
+elif [[ "$ENABLE_SERVICE" == "1" ]] && id "$SERVICE_USER" >/dev/null 2>&1; then
+  # systemd path: build INTO the service user's rootless image store, so the
+  # User=fleet unit finds the image (root's rootful store is a separate namespace).
+  SANDBOX_TAG="$(sandbox_manifest_tag "${CLIENT_CONFIG_DIR}/manifest.yaml")"
+  info "building as ${SERVICE_USER} (rootless) → ${SANDBOX_TAG}"
+  if runuser -u "$SERVICE_USER" -- sh -c "cd '${SERVICE_HOME}' && HOME='${SERVICE_HOME}' XDG_RUNTIME_DIR='/run/${SERVICE_USER}' podman build -t '${SANDBOX_TAG}' -f '${SANDBOX_CONTAINERFILE}' '${CLIENT_CONFIG_DIR}/sandbox'"; then
+    ok "sandbox image ${SANDBOX_TAG} built into ${SERVICE_USER}'s rootless store"
+  else
+    warn "rootless sandbox build (as ${SERVICE_USER}) failed — fleet will have no runnable sandbox image."
+  fi
 else
   if FLEET_CLIENT_CONFIG_DIR="${CLIENT_CONFIG_DIR}" "$(dirname "$0")/build-sandbox-image.sh"; then
     ok "sandbox image built from ${SANDBOX_CONTAINERFILE}"
   else
     warn "sandbox image build failed — run scripts/build-sandbox-image.sh manually before starting fleet."
+  fi
+fi
+
+# ── host-side MCP server Python deps (the active bundle's requirements) ──
+# fleet runs the bundle's MCP servers host-side as `python3 <bundle>/mcp/*.py`, so
+# their Python deps must be importable by the system python3 the service user runs.
+# Generic: installs whatever THIS bundle's mcp/requirements.txt lists (no
+# bundle-specific package names here). --break-system-packages is for Fedora's
+# PEP-668 externally-managed python; harmless to drop on other distros.
+if [[ "$ENABLE_SERVICE" == "1" && -f "${CLIENT_CONFIG_DIR}/mcp/requirements.txt" ]]; then
+  step "Installing the bundle's host-side MCP Python deps (${CLIENT_CONFIG_DIR}/mcp/requirements.txt)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would run: python3 -m pip install --break-system-packages -r ${CLIENT_CONFIG_DIR}/mcp/requirements.txt"
+  elif command -v python3 >/dev/null 2>&1; then
+    if python3 -m pip install --break-system-packages -r "${CLIENT_CONFIG_DIR}/mcp/requirements.txt"; then
+      ok "bundle MCP Python deps installed (host-side servers can start)"
+    else
+      warn "pip install of ${CLIENT_CONFIG_DIR}/mcp/requirements.txt failed — host-side MCP servers may not start."
+    fi
+  else
+    warn "python3 not found — install ${CLIENT_CONFIG_DIR}/mcp/requirements.txt manually."
   fi
 fi
 
@@ -442,6 +553,7 @@ upsert_env FLEET_ENV_FILE "$ENV_FILE"
 if [[ "$DRY_RUN" != "1" ]]; then
   ok "wrote FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL / FLEET_CLIENT_CONFIG_DIR / FLEET_ENV_FILE"
   info "remember to add OPENROUTER_API_KEY and the bundle's MCP connector credentials."
+  info "if the bundle's default persona differs from 'assistant', set PERSONA_DEFAULT=<persona> in ${ENV_FILE}."
 fi
 
 # ── optionally build + install the binary + unit, then enable + start it ──
