@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -38,6 +39,40 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 		// Check admin API key first
 		if h.verifyAdminKey(r) {
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Next-proxy header-trust path (#157). The Next.js layer is the SOLE
+		// client of this backend: it verifies the user's session cookie, then
+		// forwards the identity as X-User-Email guarded by the shared
+		// X-Orchestrator-Server-Token (the chat-server token; see Config.SharedToken).
+		// This is what lets a /chat-cookie user open the Operations Center without
+		// a second (moc bearer) login. The token is impersonation-load-bearing, so
+		// this is fail-closed: a PRESENT-but-wrong token is rejected outright (no
+		// fall-through to the weaker scoped-key/bearer/cookie paths). Only an ABSENT
+		// token continues to those direct-client paths below. Mirrors chat-server's
+		// authMiddleware (shared token + X-User-Email, then the membership gate).
+		if tok := r.Header.Get("X-Orchestrator-Server-Token"); tok != "" {
+			if subtle.ConstantTimeCompare([]byte(tok), []byte(h.config.SharedToken)) != 1 {
+				writeError(w, http.StatusForbidden, "Forbidden")
+				return
+			}
+			email := strings.ToLower(strings.TrimSpace(r.Header.Get("X-User-Email")))
+			if email == "" {
+				writeError(w, http.StatusBadRequest, "missing X-User-Email")
+				return
+			}
+			user, err := h.lookupMember(r.Context(), email)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				writeError(w, http.StatusInternalServerError, "Membership check failed")
+				return
+			}
+			if user == nil {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
+				return
+			}
+			ctx := context.WithValue(r.Context(), userContextKey, user)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 

@@ -43,6 +43,18 @@ type Config struct {
 	DataDir           string
 	Timezone          string
 
+	// SharedToken is the chat-server shared secret (CHAT_SERVER_TOKEN), reused as
+	// the orchestrator's channel authenticator. The Next.js proxy — the SOLE
+	// client of this backend — verifies the user's session cookie, then forwards
+	// the resolved identity as X-User-Email guarded by this token in
+	// X-Orchestrator-Server-Token. This is what lets a /chat-cookie user reach the
+	// Operations Center without a second (moc bearer) login (#157). Reused rather
+	// than a distinct secret because both backends run in ONE process and the
+	// trust boundary is identical; it is impersonation-load-bearing, so the
+	// orchestrator MUST stay bound to 127.0.0.1. Empty is impossible in
+	// production (config.Validate makes FLEET_SERVER_TOKEN fatal-if-empty).
+	SharedToken string
+
 	// Elcano unified auth (scoped tier). ElcanoPubKey is the Ed25519 public
 	// key the server verifies the elcano_auth cookie with; nil disables the
 	// cookie path (the button renders but every cookie fails closed). See
