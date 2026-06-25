@@ -26,12 +26,16 @@ them.
   Goose, …) as selectable, sandboxed "flavors" you pick per chat or per
   scheduled task. You can also choose the **best model for each task** rather than hard-wiring one vendor.
 
-- **Sandboxed by default.** Tool calls — bash, Python, file I/O, MCP calls —
-  execute inside an ephemeral, rootless-Podman container over a persistent
-  per-conversation workspace. **Even the native agent runs in the sandbox**: its
-  loop runs inside the container and delegates every execution back to the host,
-  so it has no privileged local executor. There is no "trusted" fast path that
-  skips the sandbox.
+- **Sandboxed by default.** Every tool call — bash, Python, file I/O, MCP —
+  executes inside an ephemeral, rootless-Podman container over a persistent
+  per-conversation workspace. There is **no fast path that skips the tool
+  sandbox**, on any runtime flavor. Where the agent's *orchestration loop* runs
+  depends on the flavor: `native-inprocess` (the default) runs the loop in the
+  fleet process and routes each tool call into the sandbox; `native-acp` wraps
+  the **whole loop** inside the sandbox as an ACP agent that holds no local
+  executor and delegates every call back to the host. Both keep tool execution
+  sandboxed and policy host-side; `native-acp` additionally containerizes the
+  loop. (Sub-issue tracked in #159.)
 
 - **Cost-controlled.** Each turn runs against configurable per-task cost and
   token **ceilings**, with usage and cost accounting tracked as the agent works.
@@ -117,9 +121,10 @@ matter.
 
 - **The agent has no direct power.** Every tool call — bash, Python, file I/O,
   MCP — runs inside an ephemeral rootless-Podman sandbox over a persistent
-  per-conversation workspace; even the native agent runs inside it and delegates
-  execution back to the host, so there is no trusted fast path. External agents
-  are contained further (`--read-only`, `--cap-drop=ALL`, scrubbed env,
+  per-conversation workspace, with no fast path that skips it; the host enforces
+  all policy regardless of flavor. The `native-acp` flavor goes further and runs
+  the agent's loop itself inside the sandbox, delegating execution back to the
+  host. External agents are contained further (`--read-only`, `--cap-drop=ALL`, scrubbed env,
   model-only egress). Containment bounds what an external agent can *do on your
   host* — it does **not** stop a self-executing agent from transmitting what it
   *reads* to its own model endpoint, so prefer the native flavors for sensitive
