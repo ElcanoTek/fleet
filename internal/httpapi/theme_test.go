@@ -25,7 +25,7 @@ func TestRenderThemeCSS_EmitsValidTokensInStableOrder(t *testing.T) {
 	// Declared in themeTokenOrder order (primary before accent before background),
 	// not map-iteration order.
 	pi, ai, bi := strings.Index(css, "--color-primary:"), strings.Index(css, "--color-accent:"), strings.Index(css, "--color-bg:")
-	if !(pi >= 0 && ai > pi && bi > ai) {
+	if pi < 0 || ai <= pi || bi <= ai {
 		t.Errorf("tokens out of stable order: primary=%d accent=%d bg=%d in %q", pi, ai, bi, css)
 	}
 	if strings.Contains(css, `data-theme="light"`) {
