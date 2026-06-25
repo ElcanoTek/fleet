@@ -279,6 +279,9 @@ func run() error {
 		NativeAgentImage:         nativeAgentImage,
 		RuntimeFlavor:            scheduledFlavor,
 		AllowUngovernedScheduled: allowUngovernedScheduled,
+		// Resolve a task's per-task runtime-flavor override (Operations Center
+		// picker) against the same bundle catalog the chat picker uses.
+		ResolveRuntime: bundle.Runtime,
 	})
 	// Reclaim sandbox containers orphaned by a PRIOR crash before building the
 	// pool: they run `--detach --rm` under conmon, so a non-graceful exit leaves
