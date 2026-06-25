@@ -19,12 +19,15 @@ export function getOrchestratorBase() {
   return (process.env.ORCHESTRATOR_SERVER_URL ?? defaultBase).replace(/\/+$/, "");
 }
 
-// The shared token mirrors chat's CHAT_SERVER_TOKEN: present so an
-// elcano-cookie request (which carries no moc bearer) can still be trusted by
-// the orchestrator. Optional — when unset, cookie requests rely on X-User-Email
-// alone (single-box trust, like chat).
+// The shared token that proves a cookie-path request came from THIS Next layer
+// (which has already verified the user's session). The orchestrator backend
+// trusts the forwarded X-User-Email only when this token matches (#157), exactly
+// as chat-server trusts X-Chat-Server-Token. It is the SAME secret chat uses:
+// fleet runs both backends in one process with one config, so reusing
+// CHAT_SERVER_TOKEN avoids a second secret with no security benefit. A distinct
+// ORCHESTRATOR_SERVER_TOKEN still wins if explicitly set.
 export function getOrchestratorSharedToken(): string | undefined {
-  return process.env.ORCHESTRATOR_SERVER_TOKEN || undefined;
+  return process.env.ORCHESTRATOR_SERVER_TOKEN || process.env.CHAT_SERVER_TOKEN || undefined;
 }
 
 export type OrchestratorAuth =
