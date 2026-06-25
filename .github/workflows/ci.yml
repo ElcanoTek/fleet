@@ -384,7 +384,11 @@ jobs:
         run: |
           set -euo pipefail
           tests='TestContainerWorkspaceSamePathCoherence|TestContainerReadOnlyMountsSamePath|TestContainerWorkspaceSurvivesConcurrentMount|TestContainerBashSamePath'
-          go test -run "$tests" -v -count=1 ./internal/sandbox 2>&1 | tee sandbox-invariants.log
+          # -tags fleet_host_executor: these are container-mode invariant tests,
+          # but they share the sandbox test package with the host-mode fixtures
+          # that are now gated behind this tag (#159) — the package won't COMPILE
+          # without it (the tests would read as "absent" and trip the guard below).
+          go test -tags fleet_host_executor -run "$tests" -v -count=1 ./internal/sandbox 2>&1 | tee sandbox-invariants.log
           for tc in \
             TestContainerWorkspaceSamePathCoherence \
             TestContainerReadOnlyMountsSamePath \
