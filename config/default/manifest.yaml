@@ -56,17 +56,23 @@ sandbox:
 # below need not exist in this generic bundle — a real XYZ-config bundle pins its
 # own digests and supplies the model creds; this block documents the wiring.
 runtimes:
+  # native-acp (containerized loop) is the DEFAULT (#159): the whole agent loop
+  # runs inside the sandbox and delegates execution back to the host, so it holds
+  # no privileged local executor and never shares the fleet process's address
+  # space with host-held MCP credentials. native-inprocess (loop in the fleet
+  # process) is gated behind FLEET_ENABLE_INPROCESS_LOOP=1 (default off) — off, it
+  # is dropped from the selectable catalog and rejected server-side.
   native-inprocess:
     type: native-inprocess
     display_name: "Native (in-process)"
-    description: "Fast in-process loop. Dev/test/trusted-local; the parity oracle."
-    default: true
+    description: "Fast in-process loop. Dev/test/trusted-local; the parity oracle. Gated by FLEET_ENABLE_INPROCESS_LOOP."
   native-acp:
     type: native-acp
     image: "${FLEET_NATIVE_AGENT_IMAGE:-localhost/fleet-native-agent:latest}"
     network: restricted
     display_name: "Native (sandboxed)"
     description: "Native loop wrapped as a sandboxed ACP agent. Fully governed."
+    default: true
   # Claude Code as an external ACP agent, wired via the claude-agent-acp bridge
   # (https://github.com/zed-industries/claude-code-acp) baked into the provider
   # image. Self-executes in a locked sandbox; fleet contains + observes. The

@@ -334,6 +334,11 @@ func Load(dir string) (*Bundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("client config manifest %s: %w", manifestPath, err)
 	}
+	// Gate the unsandboxed-LOOP native-inprocess flavor behind the operator
+	// opt-in (#159): off by default, it is removed from the selectable set so the
+	// containerized-loop native-acp is the default and the in-process loop is not
+	// reachable from any picker or server-side path.
+	runtimes = gateInprocessLoop(runtimes)
 
 	b := &Bundle{
 		Dir:               abs,
