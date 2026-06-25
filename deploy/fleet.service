@@ -47,11 +47,28 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# WorkingDirectory holds the binary + data dir. The client bundle's
-# system_prompts/ personas/ protocols/ skills/ mcp/ are resolved from
-# FLEET_CLIENT_CONFIG_DIR (set in fleet.env), NOT from here.
-WorkingDirectory=/opt/fleet
+# Run with the working directory set to the systemd-managed StateDirectory
+# (/var/lib/fleet — auto-created AND chowned to the fleet service user). cmd/fleet
+# defaults its writable paths CWD-RELATIVE (./data, ./workspace,
+# ./data/attachments/uploads, …); anchoring the CWD here lands them all in a
+# writable, user-owned location in one stroke. Under the shipped
+# WorkingDirectory=/opt/fleet those paths resolved under /opt, which
+# ProtectSystem=strict makes read-only — so the process died at namespace setup
+# (status=226/NAMESPACE) or with "mkdir …: read-only file system". The binary
+# (ExecStart, absolute) and the client bundle (FLEET_CLIENT_CONFIG_DIR, absolute,
+# supplying system_prompts/ personas/ protocols/ skills/ mcp/) do not depend on the CWD.
+WorkingDirectory=/var/lib/fleet
 EnvironmentFile=/etc/fleet/fleet.env
+# systemd reads EnvironmentFile= as root and injects every key into the process
+# environment, so the process already holds the full credential set. cmd/fleet
+# ALSO calls config.Load(os.Getenv("FLEET_ENV_FILE")), which would re-open the
+# 0600 root-owned secrets file — but the unprivileged fleet service user cannot
+# read it (open: permission denied, which config.Load treats as fatal). Unset it for
+# the process so config.Load skips the now-redundant re-read and trusts the
+# injected env; the secrets file stays root-only (defense in depth). systemd
+# applies UnsetEnvironment= after Environment=/EnvironmentFile=, so this is
+# deterministic regardless of directive order.
+UnsetEnvironment=FLEET_ENV_FILE
 ExecStart=/opt/fleet/fleet
 Restart=always
 RestartSec=5s
@@ -59,15 +76,47 @@ RestartSec=5s
 KillSignal=SIGTERM
 TimeoutStopSec=45s
 
-# Hardening — the box only needs to bind its ports, reach Postgres, and write
-# its data dir. Loosen DATA_DIR / ReadWritePaths if you relocate the data dir.
-DynamicUser=yes
+# ── Service identity + rootless-Podman sandbox ──
+# Runs as a DEDICATED fixed system user, NOT DynamicUser. The execution sandbox is
+# rootless Podman, which a transient DynamicUser cannot drive: it has no
+# /etc/subuid range and no HOME, so `podman run` fails ("stat /.config", then a
+# newuidmap mapping error). scripts/bootstrap.sh creates the `fleet` user with
+# subuid/subgid ranges and builds the sandbox image INTO this user's rootless image
+# store, so the running service finds and runs it.
+User=fleet
+Group=fleet
+# HOME holds the rootless Podman image store (~/.local/share/containers) — point it
+# at the persistent StateDirectory. XDG_RUNTIME_DIR holds per-container runtime
+# state; RuntimeDirectory= creates /run/fleet (0700, owned by fleet) on start.
+Environment=HOME=/var/lib/fleet
+Environment=XDG_RUNTIME_DIR=/run/fleet
+RuntimeDirectory=fleet
+RuntimeDirectoryMode=0700
+# crun manages cgroups for the sandbox containers. Delegate=yes hands the service a
+# writable cgroup subtree so the cgroupfs manager (set in the fleet user's
+# ~/.config/containers/containers.conf, created by bootstrap) applies per-container
+# limits without needing a systemd user D-Bus session.
+Delegate=yes
+
+# Hardening. StateDirectory=fleet provides /var/lib/fleet (auto-created + chowned to
+# fleet, persistent, read-write) — it is HOME, the data dir, and the workspace root
+# (all CWD-relative under WorkingDirectory above).
 StateDirectory=fleet
-NoNewPrivileges=yes
+StateDirectoryMode=0700
+# NoNewPrivileges MUST be off: rootless Podman invokes newuidmap/newgidmap, whose
+# file capabilities (cap_setuid/cap_setgid) NoNewPrivileges would neutralize,
+# breaking uid/gid mapping. Untrusted agent code is still confined by the SANDBOX's
+# own flags (--cap-drop=ALL, --security-opt=no-new-privileges, read-only rootfs).
+NoNewPrivileges=no
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/opt/fleet/data /var/lib/fleet
+# /var/lib/fleet: the StateDirectory (HOME + image store + data + workspace).
+# /opt/fleet/client: the sandbox mounts bundle dirs (protocols/ personas/ skills/
+# system_prompts/) with SELinux relabeling (:Z), so Podman must be able to write
+# their security.selinux xattr — which ProtectSystem=strict otherwise blocks
+# (EROFS). bootstrap chowns the bundle to fleet so rootless relabel is permitted.
+ReadWritePaths=/var/lib/fleet /opt/fleet/client
 
 [Install]
 WantedBy=multi-user.target
