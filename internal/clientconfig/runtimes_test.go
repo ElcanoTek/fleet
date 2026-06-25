@@ -8,6 +8,10 @@ import (
 
 func TestDefaultBundleRuntimes(t *testing.T) {
 	t.Setenv("FLEET_SANDBOX_IMAGE", "")
+	// Enable the in-process loop so the FULL catalog is present for the shape
+	// assertions below; the gated (production-default) behavior is covered by
+	// TestRuntimesInprocessGating.
+	t.Setenv("FLEET_ENABLE_INPROCESS_LOOP", "1")
 	b, err := Load(filepath.Join(repoRoot(t), "config", "default"))
 	if err != nil {
 		t.Fatalf("load default bundle: %v", err)
@@ -16,12 +20,12 @@ func TestDefaultBundleRuntimes(t *testing.T) {
 	if len(rts) != 4 {
 		t.Fatalf("default runtimes = %d, want 4 (native-inprocess, native-acp, claude-code, goose)", len(rts))
 	}
-	// native-inprocess is first (canonical order) and the default.
+	// native-inprocess is first (canonical order); native-acp is the default (#159).
 	if rts[0].Name != RuntimeNativeInprocess {
 		t.Errorf("runtimes[0] = %q, want %q", rts[0].Name, RuntimeNativeInprocess)
 	}
-	if b.DefaultRuntime() != RuntimeNativeInprocess {
-		t.Errorf("DefaultRuntime() = %q, want %q", b.DefaultRuntime(), RuntimeNativeInprocess)
+	if b.DefaultRuntime() != RuntimeNativeACP {
+		t.Errorf("DefaultRuntime() = %q, want %q (native-acp is the default per #159)", b.DefaultRuntime(), RuntimeNativeACP)
 	}
 	acp, ok := b.Runtime(RuntimeNativeACP)
 	if !ok {
@@ -76,19 +80,66 @@ func TestRuntimesAbsentBlockDefaults(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("branding: {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Flag on: the built-in set has both flavors; native-acp is the default (#159).
+	t.Setenv("FLEET_ENABLE_INPROCESS_LOOP", "1")
 	b, err := Load(dir)
 	if err != nil {
 		t.Fatalf("load minimal bundle: %v", err)
 	}
-	if got := b.DefaultRuntime(); got != RuntimeNativeInprocess {
-		t.Errorf("DefaultRuntime() = %q, want native-inprocess fallback", got)
+	if got := b.DefaultRuntime(); got != RuntimeNativeACP {
+		t.Errorf("DefaultRuntime() = %q, want native-acp", got)
 	}
 	if len(b.Runtimes()) != 2 {
-		t.Errorf("absent block should yield 2 default runtimes, got %d", len(b.Runtimes()))
+		t.Errorf("absent block should yield 2 default runtimes (flag on), got %d", len(b.Runtimes()))
 	}
 }
 
+// TestRuntimesInprocessGating covers the #159 default-flip + operator gate: with
+// the in-process loop OFF (production default) native-inprocess is dropped from
+// the selectable catalog and native-acp is the default; turning it on restores
+// the flavor (dev/test/parity).
+func TestRuntimesInprocessGating(t *testing.T) {
+	write := func(t *testing.T) string {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("branding: {}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	t.Run("off (default): native-inprocess gated out, native-acp default", func(t *testing.T) {
+		t.Setenv("FLEET_ENABLE_INPROCESS_LOOP", "")
+		b, err := Load(write(t))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if _, ok := b.Runtime(RuntimeNativeInprocess); ok {
+			t.Error("native-inprocess must NOT be selectable when the loop is gated off")
+		}
+		if b.DefaultRuntime() != RuntimeNativeACP {
+			t.Errorf("DefaultRuntime() = %q, want native-acp", b.DefaultRuntime())
+		}
+		for _, rt := range b.Runtimes() {
+			if rt.Name == RuntimeNativeInprocess {
+				t.Error("native-inprocess leaked into the catalog")
+			}
+		}
+	})
+
+	t.Run("on: native-inprocess selectable again", func(t *testing.T) {
+		t.Setenv("FLEET_ENABLE_INPROCESS_LOOP", "1")
+		b, err := Load(write(t))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if _, ok := b.Runtime(RuntimeNativeInprocess); !ok {
+			t.Error("native-inprocess must be selectable when the loop is enabled")
+		}
+	})
+}
+
 func TestRuntimesExternalACPShape(t *testing.T) {
+	t.Setenv("FLEET_ENABLE_INPROCESS_LOOP", "1") // keep native-inprocess for the canonical-order assertion
 	dir := t.TempDir()
 	manifest := `
 runtimes:

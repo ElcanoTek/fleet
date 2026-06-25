@@ -61,12 +61,13 @@ that breaks one is wrong even if tests pass.
 - **The sandbox is mandatory.** Every agent tool call (bash, Python, file I/O,
   MCP) runs inside the rootless-Podman sandbox — there is **no** fast path that
   skips it, on any flavor, and the host enforces all policy. What differs by
-  flavor is where the *orchestration loop* runs: `native-inprocess` (the default
-  + parity oracle) runs it in the fleet process; `native-acp` wraps the whole
-  loop inside the sandbox as an ACP agent that holds no privileged local executor
-  and delegates execution back to the host. Do not claim the loop is always
-  containerized — it is not on the default flavor (see #159, which tracks making
-  `native-acp` the default + gating the in-process loop).
+  flavor is where the *orchestration loop* runs: `native-acp` (the **default**)
+  wraps the whole loop inside the sandbox as an ACP agent that holds no privileged
+  local executor and delegates execution back to the host; `native-inprocess`
+  (loop in the fleet process — the fast dev/test/parity lane) is **off by default**
+  and re-enabled only with `FLEET_ENABLE_INPROCESS_LOOP=1`. So the default loop is
+  containerized; the in-process loop is an explicit, operator-gated opt-in and is
+  NOT a credential-isolation boundary (it shares the process's host-held creds).
 - **Credentials stay host-side.** MCP/connector credentials are brokered on the
   host and **never** enter the sandbox, the agent container, the model context, or
   logs. Never ship a secret into a container or print one.

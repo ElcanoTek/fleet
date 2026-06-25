@@ -364,6 +364,12 @@ start_fleet() {
     default_model="anthropic/claude-opus-4.8"
     log "fleet: booting chat :$CHAT_PORT + orchestrator :$ORCH_PORT (LLM → fake)"
   fi
+  # The fake LLM runs on the host (127.0.0.1); a native-acp agent runs in a
+  # container and can't reach 127.0.0.1-on-host, so the UI + scheduled live lanes
+  # use the in-process loop (FLEET_DEFAULT_RUNTIME/FLEET_SCHEDULED_RUNTIME =
+  # native-inprocess, with FLEET_ENABLE_INPROCESS_LOOP=1 to make it selectable).
+  # Tool calls still run in the real podman sandbox; native-acp's containerized
+  # loop is covered by the Go TestPodmanE2E (which uses host.containers.internal).
   FLEET_CLIENT_CONFIG_DIR="$REPO_ROOT/config/default" \
   FLEET_SERVER_ADDR="127.0.0.1:$CHAT_PORT" \
   FLEET_ORCHESTRATOR_ADDR="127.0.0.1:$ORCH_PORT" \
@@ -381,6 +387,9 @@ start_fleet() {
   FLEET_TITLE_MODEL="$default_model" \
   CUTLASS_TASK_MODEL="$default_model" \
   FLEET_TIMEZONE="UTC" \
+  FLEET_ENABLE_INPROCESS_LOOP="1" \
+  FLEET_DEFAULT_RUNTIME="native-inprocess" \
+  FLEET_SCHEDULED_RUNTIME="native-inprocess" \
     "$BIN_DIR/fleet" >"$LOG_DIR/fleet.log" 2>&1 &
   PIDS+=("$!")
   wait_http "http://127.0.0.1:$CHAT_PORT/healthz" 90 "fleet chat"
