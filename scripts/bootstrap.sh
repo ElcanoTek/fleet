@@ -18,6 +18,7 @@
 #   scripts/bootstrap.sh --postgres=local --dry-run  # print the plan, touch nothing
 #   scripts/bootstrap.sh --client-config <git-url[#<sha-or-tag>]|path>   # check out / point at a client bundle
 #   scripts/bootstrap.sh --enable-service            # systemctl enable --now fleet at the end
+#   scripts/bootstrap.sh --enable-web [--domain fleet.example.com]  # build + serve the web tier (TLS via Caddy with --domain)
 #
 # End-to-end flow (every run): ensure 0600 env file → ensure the client bundle is
 # in place (--client-config) → build the sandbox image from the bundle → provision
@@ -41,6 +42,11 @@
 #                              ref (recorded under the state dir) so `update`
 #                              advances only to it instead of tracking HEAD.
 #   --enable-service           systemctl enable --now the fleet unit at the end.
+#   --enable-web               build + deploy the Next.js web tier and enable
+#                              fleet-web (implies --enable-service). Email+password
+#                              login against the bundle's chat users.
+#   --domain <fqdn>            with --enable-web: front it with Caddy + automatic
+#                              TLS for <fqdn> (installs Caddy, opens 80/443).
 #   --dry-run                  print the plan; touch nothing.
 #
 # Env knobs (all optional; sensible local defaults):
@@ -63,6 +69,8 @@
 #   FLEET_CHAT_DATABASE_URL external chat DSN (external mode)
 #   FLEET_SCHED_DATABASE_URL external sched DSN (external mode)
 #   FLEET_DB_SUPERUSER_URL  external superuser DSN for opt-in role/db creation
+#   FLEET_WEB_APP_NAME      web UI app name (--enable-web; default Fleet)
+#   FLEET_ACME_EMAIL        Let's Encrypt account email for Caddy (--domain; optional)
 set -euo pipefail
 
 # Resolve this script's repo root so --enable-service can build + install the
@@ -75,6 +83,8 @@ POSTGRES_MODE="local"
 DRY_RUN=0
 CLIENT_CONFIG_ARG=""
 ENABLE_SERVICE=0
+ENABLE_WEB=0
+WEB_DOMAIN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -84,9 +94,12 @@ while [[ $# -gt 0 ]]; do
     --client-config)     shift; [[ $# -gt 0 ]] || { echo "error: --client-config needs a git-url|path" >&2; exit 1; }; CLIENT_CONFIG_ARG="$1" ;;
     --client-config=*)   CLIENT_CONFIG_ARG="${1#*=}" ;;
     --enable-service)    ENABLE_SERVICE=1 ;;
+    --enable-web)        ENABLE_WEB=1; ENABLE_SERVICE=1 ;;  # web proxies to the backend → enable it too
+    --domain)            shift; [[ $# -gt 0 ]] || { echo "error: --domain needs an FQDN" >&2; exit 1; }; WEB_DOMAIN="$1" ;;
+    --domain=*)          WEB_DOMAIN="${1#*=}" ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,65p' "$0"; exit 0 ;;
+      sed -n '2,73p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -195,6 +208,113 @@ sandbox_manifest_tag() {
     b && /^[[:space:]]+tag:/ { sub("^[[:space:]]+tag:[[:space:]]*",""); sub(/[[:space:]]+#.*$/,""); gsub(/^["'\'']|["'\'']$/,""); print; exit }
   ' "$f" 2>/dev/null)"
   printf '%s' "${t:-localhost/fleet-sandbox:latest}"
+}
+
+# ── web-tier helpers (--enable-web) ──────────────────────────────────────────
+gen_secret() { head -c "${1:-32}" /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c "${1:-32}"; }
+
+# ensure_env_secret KEY LEN — set KEY=<random> in $ENV_FILE only when ABSENT, so
+# re-runs never rotate a shared secret (rotating FLEET_SERVER_TOKEN would 403 the
+# web↔backend link; rotating APP_SESSION_SECRET would log everyone out).
+ensure_env_secret() {
+  local key="$1" len="${2:-32}"
+  [[ -f "$ENV_FILE" ]] && grep -q "^${key}=" "$ENV_FILE" && return 0
+  upsert_env "$key" "$(gen_secret "$len")"
+}
+
+# deploy_web_tier — build + run the Next.js web tier, and (with --domain) front it
+# with Caddy TLS. Self-contained email+password login against the bundle's chat
+# users (fleet-admin chat user add ...); the external Elcano SSO stays disabled
+# unless AUTH_SIGNING_PUBKEY is set. The only client-specific input is --domain.
+deploy_web_tier() {
+  local web_src="$REPO_ROOT/web" web_dst="/opt/fleet/web" web_env="/etc/fleet/fleet-web.env"
+  local origin app_name build_id
+  [[ -n "$WEB_DOMAIN" ]] && origin="https://$WEB_DOMAIN" || origin="http://localhost:3000"
+  app_name="${FLEET_WEB_APP_NAME:-Fleet}"
+  build_id="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo prod)"
+
+  [[ -d "$web_src" ]] || { warn "no web/ in the checkout — skipping web tier."; return; }
+  command -v npm >/dev/null 2>&1 || { warn "npm not found — skipping web tier (install nodejs)."; return; }
+
+  # Shared secrets the web↔backend link needs; generate-if-absent then load them
+  # into the already-started backend.
+  step "Web tier: ensuring shared secrets in ${ENV_FILE} + reloading backend"
+  ensure_env_secret FLEET_SERVER_TOKEN 32
+  ensure_env_secret ADMIN_API_KEY 32
+  systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+
+  step "Web tier: building the Next.js app (origin=${origin})"
+  if ( cd "$web_src" && NEXT_PUBLIC_PUBLIC_ORIGIN="$origin" NEXT_PUBLIC_APP_NAME="$app_name" \
+        NEXT_PUBLIC_BUILD_ID="$build_id" sh -c 'npm ci && npm run build' ); then
+    ok "web app built"
+  else
+    warn "web build failed — skipping the rest of the web tier."; return
+  fi
+
+  install -d "$web_dst" && cp -a "$web_src/." "$web_dst/" && ok "deployed web app → ${web_dst}"
+
+  # Write the 0600 web env. Chat/orchestrator tokens mirror the backend env;
+  # APP_SESSION_SECRET is generate-if-absent (rotating it logs everyone out).
+  local chat_token admin_token app_secret
+  chat_token="$(grep '^FLEET_SERVER_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+  admin_token="$(grep '^ADMIN_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+  if [[ -f "$web_env" ]] && grep -q '^APP_SESSION_SECRET=' "$web_env"; then
+    app_secret="$(grep '^APP_SESSION_SECRET=' "$web_env" | cut -d= -f2-)"
+  else
+    app_secret="$(gen_secret 48)"
+  fi
+  install -D -m 0600 /dev/null "$web_env"
+  {
+    printf 'CHAT_SERVER_URL=%s\n'         "http://127.0.0.1:8080"
+    printf 'CHAT_SERVER_TOKEN=%s\n'       "$chat_token"
+    printf 'ORCHESTRATOR_SERVER_URL=%s\n' "http://127.0.0.1:8000"
+    printf 'ORCHESTRATOR_SERVER_TOKEN=%s\n' "$admin_token"
+    printf 'APP_SESSION_SECRET=%s\n'      "$app_secret"
+    printf 'PORT=%s\n'                    "3000"
+    printf 'NODE_ENV=%s\n'                "production"
+    printf 'NEXT_PUBLIC_PUBLIC_ORIGIN=%s\n' "$origin"
+    printf 'NEXT_PUBLIC_APP_NAME=%s\n'    "$app_name"
+    printf 'NEXT_PUBLIC_BUILD_ID=%s\n'    "$build_id"
+  } > "$web_env"
+  chmod 0600 "$web_env"; ok "wrote ${web_env} (0600)"
+
+  systemctl daemon-reload || true
+  if systemctl enable --now fleet-web >/dev/null 2>&1; then
+    ok "fleet-web enabled + started (Next.js on :3000)"
+  else
+    warn "could not enable/start fleet-web — check: journalctl -u fleet-web -n 50"
+  fi
+
+  if [[ -z "$WEB_DOMAIN" ]]; then
+    info "no --domain → web is loopback-only on :3000; front it with your own TLS proxy for a public URL."
+    return
+  fi
+  step "Web tier: Caddy TLS reverse proxy for ${WEB_DOMAIN}"
+  if command -v dnf >/dev/null 2>&1 && ! command -v caddy >/dev/null 2>&1; then
+    dnf install -y caddy >/dev/null 2>&1 || warn "dnf install caddy failed — install Caddy manually."
+  fi
+  command -v caddy >/dev/null 2>&1 || { warn "caddy not found — skipping TLS front (web still on :3000)."; return; }
+  install -d /etc/caddy
+  {
+    [[ -n "${FLEET_ACME_EMAIL:-}" ]] && printf '{\n\temail %s\n}\n\n' "$FLEET_ACME_EMAIL"
+    printf '%s {\n\tencode zstd gzip\n\treverse_proxy 127.0.0.1:3000 {\n\t\tflush_interval -1\n\t\ttransport http {\n\t\t\tread_timeout 30m\n\t\t}\n\t}\n}\n' "$WEB_DOMAIN"
+  } > /etc/caddy/Caddyfile
+  if command -v firewall-cmd >/dev/null 2>&1; then
+    firewall-cmd --add-service=http --add-service=https --permanent >/dev/null 2>&1 || true
+    firewall-cmd --reload >/dev/null 2>&1 || true
+  fi
+  # A fresh `dnf install caddy` creates /var/lib/caddy (the caddy user's cert/account
+  # storage). Ensure it exists when caddy was already installed but its storage dir is
+  # missing — otherwise caddy fails ACME with "mkdir /var/lib/caddy: permission denied".
+  if id caddy >/dev/null 2>&1 && [[ ! -d /var/lib/caddy ]]; then
+    install -d -o caddy -g caddy -m 0700 /var/lib/caddy
+  fi
+  systemctl enable --now caddy >/dev/null 2>&1 || true
+  if systemctl is-active caddy >/dev/null 2>&1; then
+    ok "caddy serving https://${WEB_DOMAIN} (Let's Encrypt; requires inbound 80/443 reachable)"
+  else
+    warn "caddy not active — check: journalctl -u caddy -n 50"
+  fi
 }
 
 step "fleet bootstrap (postgres=${POSTGRES_MODE}, dry-run=${DRY_RUN})"
@@ -603,8 +723,27 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
     else
       warn "could not enable/start ${SERVICE_NAME} — check: journalctl -u ${SERVICE_NAME} -n 50"
     fi
-    info "web tier: build it (cd web && npm ci && npm run build), deploy to /opt/fleet/web,"
-    info "          fill /etc/fleet/fleet-web.env, then: systemctl enable --now fleet-web"
+    if [[ "$ENABLE_WEB" != "1" ]]; then
+      info "web tier: re-run with --enable-web [--domain <fqdn>] to build + serve it,"
+      info "          or by hand (cd web && npm ci && npm run build → /opt/fleet/web, fill fleet-web.env, enable fleet-web)."
+    fi
+  fi
+fi
+
+# ── web tier + Caddy TLS (opt-in via --enable-web / --domain) ──
+if [[ "$ENABLE_WEB" == "1" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    step "Web tier (--enable-web): plan"
+    info "[dry-run] would ensure FLEET_SERVER_TOKEN + ADMIN_API_KEY in ${ENV_FILE} (generate-if-absent) + reload backend."
+    if [[ -n "$WEB_DOMAIN" ]]; then
+      info "[dry-run] would build web/ for https://${WEB_DOMAIN} → /opt/fleet/web, write fleet-web.env, enable fleet-web, install Caddy + open 80/443."
+    else
+      info "[dry-run] would build web/ for http://localhost:3000 → /opt/fleet/web, write fleet-web.env, enable fleet-web (loopback only; no --domain → no Caddy)."
+    fi
+  elif ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl not found — skipping --enable-web (no systemd on this box)."
+  else
+    deploy_web_tier
   fi
 fi
 
