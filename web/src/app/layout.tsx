@@ -95,6 +95,16 @@ export default function RootLayout({
     >
       <head>
         <Script src="/scripts/theme.js" strategy="beforeInteractive" />
+        {/* Brand palette from the client-config bundle (branding.colors),
+            served by chat-server as a render-blocking stylesheet. Its
+            html:root[data-theme=…] rules out-specify globals.css, so the shell —
+            including the pre-auth login page — paints in the client's colors
+            with no flash. Empty (a no-op) when the bundle declares no colors.
+            Deliberately a runtime <link>, not build-bundled CSS: the palette is
+            resolved from the manifest at request time, which next/font-style
+            CSS handling can't express — hence the rule suppression. */}
+        {/* eslint-disable-next-line @next/next/no-css-tags */}
+        <link rel="stylesheet" href="/api/theme" />
       </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
