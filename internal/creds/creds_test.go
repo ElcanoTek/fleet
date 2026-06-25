@@ -204,3 +204,49 @@ func TestApplyClientSuffix_FoldsSeparatorAccount(t *testing.T) {
 		t.Errorf("OPENX_API_KEY = %q, want %q", out["OPENX_API_KEY"], "client-a-key")
 	}
 }
+
+// TestAccountsFor_NeverLeaksSecretValues is a credential-hygiene guard (#159
+// Track 3): the account CATALOG derived from os.Environ must surface account
+// NAMES only, never the secret VALUES. A regression that returned values (or
+// serialized the environ) would put connector secrets in the web UI's
+// account picker and audit log — the "credentials never enter the model
+// context / logs" invariant. (ApplyClientSuffix legitimately carries the value
+// in the spawned subprocess env; that is the one place a value belongs.)
+func TestAccountsFor_NeverLeaksSecretValues(t *testing.T) {
+	const secret = "sk-superSecretValue-DO-NOT-LEAK"
+	t.Setenv("PROVIDER_API_KEY", secret)
+	t.Setenv("PROVIDER_API_KEY_ACME", secret+"-acme")
+	t.Setenv("PROVIDER_API_KEY_BETACORP", secret+"-beta")
+
+	accounts := AccountsFor([]string{"PROVIDER_API_KEY"})
+	for _, a := range accounts {
+		if a == "" {
+			continue
+		}
+		// Account names are derived suffixes (e.g. "acme"), never the value.
+		if contains(a, secret) || a == secret {
+			t.Fatalf("AccountsFor leaked a secret value in an account name: %q", a)
+		}
+	}
+	// The catalog is the suffixes, lowercased/canonicalized — confirm shape.
+	got := append([]string(nil), accounts...)
+	sort.Strings(got)
+	want := []string{"acme", "betacorp"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("AccountsFor = %v, want %v", got, want)
+	}
+}
+
+// contains reports whether sub is a substring of s (avoids importing strings
+// just for the guard above).
+func contains(s, sub string) bool {
+	if sub == "" {
+		return false
+	}
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
