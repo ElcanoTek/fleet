@@ -195,6 +195,10 @@ func run() error {
 		DataDir:           cfg.DataDir,
 		Timezone:          timezone(),
 		ElcanoCookieName:  "elcano_auth",
+		// Reuse the chat shared token so the Next proxy's X-User-Email path is
+		// trusted by the orchestrator too (#157). cfg.SharedToken is guaranteed
+		// non-empty by config.Validate.
+		SharedToken: cfg.SharedToken,
 	}
 	h := handlers.New(hcfg, schedStorage, keyMgr)
 	// Wire the orchestrator's read-only Optional-MCP catalog + credential-account
