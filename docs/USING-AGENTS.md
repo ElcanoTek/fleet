@@ -38,13 +38,22 @@ Each has a `type`:
 | `native-acp`       | fleet's own loop, wrapped as a sandboxed ACP agent (`fleet-native-agent`) | host (delegated back over ACP)        | **Fully governed**     |
 | `acp` (external)   | a **third-party** agent (Claude Code / Goose) in its own sandbox          | inside the agent's sandbox (self-run) | **Containment** tier   |
 
+- **`native-acp`** is the **default** flavor (#159). It is the exact same loop
+  and the exact same governance as `native-inprocess` — the loop just runs inside
+  a container and delegates every `bash`/`run_python` call back to the host, where
+  fleet applies full policy/audit/notes/credential-injection. fleet is the parent;
+  the agent cannot self-execute. Because the loop runs in its own container it
+  never shares the fleet process's address space — and thus never the host-held
+  MCP credentials (it holds only the model-endpoint key).
 - **`native-inprocess`** is the fast path and the parity oracle: today's
-  in-process loop. Best for dev/test/trusted-local.
-- **`native-acp`** is the recommended *sandboxed production* flavor. It is the
-  exact same loop and the exact same governance as `native-inprocess` — the loop
-  just runs inside a container and delegates every `bash`/`run_python` call back
-  to the host, where fleet applies full policy/audit/notes/credential-injection.
-  fleet is the parent; the agent cannot self-execute.
+  in-process loop, best for dev/test/trusted-local. It is **off by default** —
+  re-enable it with `FLEET_ENABLE_INPROCESS_LOOP=1`, which also drops it from the
+  selectable catalog and rejects it server-side when unset. ⚠️ Its loop runs *in
+  the fleet process*, so it shares an address space with the host-held MCP
+  credentials: it is **not** a credential-isolation boundary. Use it only for
+  trusted-local/dev/parity; for isolation use the default `native-acp`. (A
+  follow-up tracks moving the credential broker out-of-process so even this lane
+  delegates credentials — see #159.)
 - **`acp` (external)** drives a *different vendor's* agent. That agent
   **self-executes inside its own locked sandbox** — it does not hand its tool
   calls back to fleet. This is a fundamentally different and weaker trust

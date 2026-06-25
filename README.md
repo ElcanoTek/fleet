@@ -29,13 +29,13 @@ them.
 - **Sandboxed by default.** Every tool call — bash, Python, file I/O, MCP —
   executes inside an ephemeral, rootless-Podman container over a persistent
   per-conversation workspace. There is **no fast path that skips the tool
-  sandbox**, on any runtime flavor. Where the agent's *orchestration loop* runs
-  depends on the flavor: `native-inprocess` (the default) runs the loop in the
-  fleet process and routes each tool call into the sandbox; `native-acp` wraps
-  the **whole loop** inside the sandbox as an ACP agent that holds no local
-  executor and delegates every call back to the host. Both keep tool execution
-  sandboxed and policy host-side; `native-acp` additionally containerizes the
-  loop. (Sub-issue tracked in #159.)
+  sandbox**, on any runtime flavor. The **default** flavor is `native-acp`: it
+  wraps the agent's *whole orchestration loop* inside the sandbox as an ACP agent
+  that holds no privileged local executor and delegates every call back to the
+  host — so the loop never shares the fleet process's address space (or its
+  host-held MCP credentials). The legacy `native-inprocess` flavor (loop in the
+  fleet process, tools still sandboxed) is the fast dev/test/parity lane and is
+  **off by default** — an operator re-enables it with `FLEET_ENABLE_INPROCESS_LOOP=1`.
 
 - **Cost-controlled.** Each turn runs against configurable per-task cost and
   token **ceilings**, with usage and cost accounting tracked as the agent works.
