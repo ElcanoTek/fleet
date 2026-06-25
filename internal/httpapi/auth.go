@@ -46,6 +46,23 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// tokenOnlyMiddleware enforces the shared-secret but NOT a user identity. It is
+// for deployment-wide, non-secret, non-user-scoped data the pre-auth UI needs —
+// today only /theme.css, the brand palette that themes the login page before a
+// session exists. Only the trusted Next.js layer holds the token, so the
+// browser still cannot reach chat-server directly; dropping the X-User-Email
+// requirement is what lets the un-authenticated login page request it.
+func (s *Server) tokenOnlyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tok := r.Header.Get("X-Chat-Server-Token")
+		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.sharedToken)) != 1 {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // userFromCtx pulls the authenticated email out of the request context.
 func userFromCtx(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyUser).(string)

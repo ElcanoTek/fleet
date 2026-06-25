@@ -101,6 +101,23 @@ branding:
   login_tagline: "Sign in to your workspace and pick up where you left off."
   share_title: "Fleet — your team's AI workspace"
   share_description: "Persistent multi-turn conversations with real tool use across files, data, and the web."
+  # Optional: theme the actual web UI (not just the text above) by overriding
+  # globals.css custom properties per light/dark mode. Served as a
+  # render-blocking stylesheet (chat-server /theme.css) so the shell — including
+  # the pre-auth login page — paints in these colors with no flash. Omit the
+  # block (as this generic bundle does) to keep the built-in palette. Themable
+  # tokens: primary, primary_hover, secondary, accent, background, surface_1,
+  # surface_2, text_primary, text_secondary, text_muted, border. Values are hex
+  # or rgb()/rgba()/hsl()/hsla(); anything else is ignored and falls back.
+  # colors:
+  #   dark:
+  #     primary: "#7272ab"
+  #     accent: "#9da7ef"
+  #     background: "#1a0b1e"
+  #   light:
+  #     primary: "#5f5f97"
+  #     accent: "#7c84d6"
+  #     background: "#f4f6fb"
 
 # No client MCP servers in the generic bundle: the catalog is empty so fleet
 # runs without any credentialed connectors. A client bundle declares its own

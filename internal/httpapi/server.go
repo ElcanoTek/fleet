@@ -274,6 +274,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/mcp-servers", auth(member(http.HandlerFunc(s.listMCPServerCatalog))))
 	mux.Handle("/server-config", auth(member(http.HandlerFunc(s.serverConfig))))
 	mux.Handle("/client-config", auth(member(http.HandlerFunc(s.clientConfigHandler))))
+	// /theme.css themes the shell (incl. the pre-auth login page) from the
+	// bundle palette, so it is token-gated but identity-less — see themeCSS.
+	mux.Handle("/theme.css", s.tokenOnlyMiddleware(http.HandlerFunc(s.themeCSS)))
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
