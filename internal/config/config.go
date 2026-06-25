@@ -338,6 +338,15 @@ type Config struct {
 	// flavor.
 	ScheduledRuntime string
 
+	// DefaultRuntime overrides the INTERACTIVE default runtime flavor (the one a
+	// new conversation uses when it has no explicit choice) without editing the
+	// bundle manifest. Empty = the bundle's declared default (native-acp post-#159).
+	// Resolved against the bundle's (gated) catalog at boot; an unknown/gated value
+	// is ignored. Mirrors ScheduledRuntime. Used e.g. by the e2e harness to run the
+	// UI lane on native-inprocess (the fake LLM lives on the host, unreachable from
+	// a native-acp container) with FLEET_ENABLE_INPROCESS_LOOP=1.
+	DefaultRuntime string
+
 	InputDir   string
 	InputFiles []string
 
@@ -474,6 +483,7 @@ func Load(envFile string) (*Config, error) {
 		TaskMaxIterations: getEnvOrDefaultInt("CUTLASS_TASK_MAX_ITERATIONS", 0),
 		LLMTemperature:    getEnvOrDefaultFloat("CUTLASS_TEMPERATURE", 0.3),
 		ScheduledRuntime:  getenvFleet("SCHEDULED_RUNTIME"),
+		DefaultRuntime:    getenvFleet("DEFAULT_RUNTIME"),
 
 		// ── attachments / uploads (generic infra) ──
 		EmailAttachmentDir: getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),
