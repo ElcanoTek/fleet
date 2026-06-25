@@ -50,7 +50,9 @@
 #   --dry-run                  print the plan; touch nothing.
 #
 # Env knobs (all optional; sensible local defaults):
-#   FLEET_ENV_FILE          credential env file to write/refresh (default .env.local)
+#   FLEET_ENV_FILE          credential env file to write/refresh (default: /etc/fleet/fleet.env
+#                           under --enable-service — matches deploy/fleet.service —
+#                           else .env.local for local/dev runs)
 #   FLEET_CLIENT_CONFIG_DIR client config bundle dir (default ./config/default —
 #                           the generic bundle baked into the repo). Point at a
 #                           checked-out client repo (e.g. /opt/fleet/client) for a
@@ -117,7 +119,18 @@ info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 
-ENV_FILE="${FLEET_ENV_FILE:-.env.local}"
+# Env file default: an explicit FLEET_ENV_FILE always wins. Otherwise, under
+# --enable-service (the systemd path) default to /etc/fleet/fleet.env — the path
+# deploy/fleet.service EnvironmentFiles — so the documented one-command deploy
+# writes credentials where the unit actually reads them (not a stray ./.env.local
+# the service can't see under ProtectHome). Plain local/dev runs keep .env.local.
+if [[ -n "${FLEET_ENV_FILE:-}" ]]; then
+  ENV_FILE="$FLEET_ENV_FILE"
+elif [[ "$ENABLE_SERVICE" == "1" ]]; then
+  ENV_FILE="/etc/fleet/fleet.env"
+else
+  ENV_FILE=".env.local"
+fi
 CLIENT_CONFIG_DIR="${FLEET_CLIENT_CONFIG_DIR:-config/default}"
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 CHAT_DB_NAME="${CHAT_DB_NAME:-chat}"
