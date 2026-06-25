@@ -75,8 +75,8 @@ func main() {
 // degrading to the in-process loop, which would run uncontained on a deploy that
 // believes it is containerized. Native-inprocess defaults (operator opted in via
 // FLEET_ENABLE_INPROCESS_LOOP) need no image and pass through.
-func preflightDefaultRuntimeImage(cfg *config.Config, bundle *clientconfig.Bundle) error {
-	def, ok := bundle.Runtime(bundle.DefaultRuntime())
+func preflightDefaultRuntimeImage(cfg *config.Config, bundle *clientconfig.Bundle, defaultRuntime string) error {
+	def, ok := bundle.Runtime(defaultRuntime)
 	if !ok || strings.TrimSpace(def.Image) == "" {
 		return nil // in-process default (no image) — nothing to verify
 	}
@@ -210,9 +210,22 @@ func run() error {
 	if acpRT, ok := bundle.Runtime(clientconfig.RuntimeNativeACP); ok {
 		nativeAgentImage = acpRT.Image
 	}
-	mgr.SetRuntimes(bundle.Runtimes(), bundle.DefaultRuntime(), nativeAgentImage)
+	// The interactive default is the bundle's declared default (native-acp
+	// post-#159); FLEET_DEFAULT_RUNTIME overrides it against the gated catalog
+	// (an unknown/gated value is ignored). Mirrors the scheduled resolution.
+	defaultRuntime := bundle.DefaultRuntime()
+	if want := strings.TrimSpace(cfg.DefaultRuntime); want != "" {
+		if _, ok := bundle.Runtime(want); ok {
+			defaultRuntime = want
+		} else {
+			//nolint:gosec // G706: FLEET_DEFAULT_RUNTIME is operator-set env, not request input.
+			log.Printf("FLEET_DEFAULT_RUNTIME %q not found/selectable in bundle; using default %s", want, defaultRuntime)
+		}
+	}
+	mgr.SetRuntimes(bundle.Runtimes(), defaultRuntime, nativeAgentImage)
+	//nolint:gosec // G706: defaultRuntime is a bundle/operator-env flavor name, not request input.
 	log.Printf("runtimes: default=%s flavors=%d native_agent_image=%q",
-		bundle.DefaultRuntime(), len(bundle.Runtimes()), nativeAgentImage)
+		defaultRuntime, len(bundle.Runtimes()), nativeAgentImage)
 
 	// Fail-closed preflight (#159): when the DEFAULT flavor is container-backed
 	// (native-acp / external acp), its agent image must already exist in the
@@ -222,7 +235,7 @@ func run() error {
 	// the in-process loop: that would run uncontained on a deploy that believes it
 	// is containerized. Skipped in MockMode (tests have no container runtime).
 	if !cfg.MockMode {
-		if err := preflightDefaultRuntimeImage(cfg, bundle); err != nil {
+		if err := preflightDefaultRuntimeImage(cfg, bundle, defaultRuntime); err != nil {
 			return err
 		}
 	}
