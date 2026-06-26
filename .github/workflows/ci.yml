@@ -115,14 +115,14 @@ jobs:
         # GitHub's ubuntu-latest runner ships podman, but building the ~1.3GB
         # default-bundle sandbox image (config/default/sandbox/Containerfile) per
         # unit-test run would dominate this fast lint/test job — the real sandbox
-        # is exercised in the e2e-live job, which builds/pulls it. So the
+        # is exercised in the e2e-live job, which builds it. So the
         # podman-gated integration tests in internal/sandbox are skipped here by
         # masking podman. They gate on
         # exec.LookPath("podman"): when podman is absent they cleanly t.Skip,
-        # but when present they attempt a real `podman pull` and t.Fatalf on
-        # failure. Masking the binary makes LookPath fail so every container
-        # test skips. The host-backend sandbox tests (bash/python3 via os/exec)
-        # still run normally.
+        # but when present they need the local sandbox image
+        # (localhost/fleet-sandbox:latest) and t.Fatalf if it is absent. Masking
+        # the binary makes LookPath fail so every container test skips. The
+        # host-backend sandbox tests (bash/python3 via os/exec) still run normally.
         run: |
           if command -v podman >/dev/null 2>&1; then
             sudo mv "$(command -v podman)" "$(command -v podman).disabled"
@@ -292,10 +292,11 @@ jobs:
       # The boot script creates the fleet_e2e_chat + fleet_e2e_sched DBs on this
       # admin DSN (the service container's superuser has CREATEDB).
       E2E_DATABASE_DSN: postgres://fleet:fleet@127.0.0.1:5432/postgres?sslmode=disable
-      # Sandbox image: pulled from GHCR when published (see publish-sandbox-image.yml),
-      # else built locally from the default bundle (config/default/sandbox/Containerfile)
-      # by the boot script. Resolved into FLEET_SANDBOX_IMAGE below.
-      SANDBOX_IMAGE_GHCR: ghcr.io/elcanotek/sandbox:latest
+      # Sandbox image: built locally from the default client bundle
+      # (config/default/sandbox/Containerfile, a vanilla fedora-minimal base) by
+      # the step below and resolved into FLEET_SANDBOX_IMAGE. fleet's core pulls
+      # no vendor-published image; the per-client registry-publish path is opt-in
+      # from a client's own bundle repo (see internal/clientconfig Sandbox()).
       SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
 
     steps:
@@ -343,25 +344,19 @@ jobs:
           pasta --version 2>/dev/null | head -1 || true
           psql --version
 
-      - name: Resolve sandbox image (pull from GHCR, else build locally)
+      - name: Build the sandbox image from the default bundle
         id: sandbox
-        # PULL is preferred (the 1.3GB image is published by publish-sandbox-image.yml).
-        # If the package isn't available yet (e.g. a PR before the first publish),
-        # fall back to a LOCAL build from the default bundle
-        # (config/default/sandbox/Containerfile) so the gate is green regardless.
-        # GHCR pull is best-effort and unauthenticated for a public package;
-        # private packages would need a login step, but the fallback build keeps
-        # the job working.
+        # fleet's core depends on NO vendor-published sandbox image: build the
+        # generic default-bundle flavor on the runner from
+        # config/default/sandbox/Containerfile (a vanilla fedora-minimal base),
+        # exactly as a deployment box does. The ~1.3GB build is the cost of a
+        # self-contained, registry-independent gate. A client that prefers a
+        # prebuilt image publishes it from its own bundle repo and sets
+        # sandbox.image in its manifest — that path is out of scope for core CI.
         run: |
           set -euo pipefail
-          if podman pull "$SANDBOX_IMAGE_GHCR" >/dev/null 2>&1; then
-            echo "Pulled $SANDBOX_IMAGE_GHCR from GHCR"
-            echo "image=$SANDBOX_IMAGE_GHCR" >> "$GITHUB_OUTPUT"
-          else
-            echo "GHCR pull failed/unavailable; building sandbox image locally from the default bundle"
-            IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
-            echo "image=$SANDBOX_IMAGE_LOCAL" >> "$GITHUB_OUTPUT"
-          fi
+          IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
+          echo "image=$SANDBOX_IMAGE_LOCAL" >> "$GITHUB_OUTPUT"
 
       - name: Assert sandbox isolation invariants (always-on, real rootless podman)
         # The project's #1 non-negotiable invariant (AGENTS.md): every agent tool
@@ -377,8 +372,8 @@ jobs:
         # false green, which is the precise gap this lane closes (issue #34). We
         # require an explicit `--- PASS` for each named test and fail on any
         # `--- SKIP`. FLEET_SANDBOX_TEST_IMAGE points the tests at the SAME image
-        # the live stack resolved (GHCR pull or local build), so the assertion
-        # holds whether or not the published image was available.
+        # the live stack uses (the locally-built default-bundle sandbox), so the
+        # assertion runs against the real rootless-podman image.
         env:
           FLEET_SANDBOX_TEST_IMAGE: ${{ steps.sandbox.outputs.image }}
         run: |
