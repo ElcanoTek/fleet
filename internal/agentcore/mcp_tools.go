@@ -77,7 +77,7 @@ type toolBuildConfig struct {
 // names). policy is the seam both modes feed.
 func buildFantasyTools(
 	nativeTools []fantasy.AgentTool,
-	mcpClient *mcp.Client,
+	mcpServerTools []mcp.ServerTool,
 	broker MCPBroker,
 	allow mcpAllowlist,
 	policy Policy,
@@ -85,11 +85,11 @@ func buildFantasyTools(
 	optIn map[string]bool,
 	cfg toolBuildConfig,
 ) ([]fantasy.AgentTool, error) {
-	// mcpClient supplies the tool CATALOG (discovery); broker is the seam each
-	// tool's CALL routes through (the in-process localMCPBroker by default, or an
-	// injected out-of-process broker — issue #167). They are deliberately
-	// separate: where a call runs is decoupled from where the catalog is read.
-	mcpServerTools := mcpClient.GetAllTools()
+	// mcpServerTools is the tool CATALOG (discovery, as data); broker is the seam
+	// each tool's CALL routes through (the in-process localMCPBroker by default, or
+	// an injected out-of-process broker — issue #167). They are deliberately
+	// separate: where a call runs is decoupled from where the catalog is read, so
+	// the broker can own the client while the loop just advertises what it fetched.
 	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+len(cfg.preGatedTools)+1)
 
 	for _, t := range nativeTools {

@@ -97,10 +97,16 @@ type Deps struct {
 	// MCPBroker, when non-nil, is the seam MCP tool CALLS route through, replacing
 	// the default in-process localMCPBroker built over MCPClient. It exists so the
 	// credential boundary can move out of process (issue #167): inject an
-	// out-of-process broker client here and calls run there while MCPClient still
-	// serves discovery (moving discovery to the broker is a later step). Nil keeps
-	// the in-process behavior — calls run directly against MCPClient.
+	// out-of-process broker client here and calls run there. Nil keeps the
+	// in-process behavior — calls run directly against MCPClient.
 	MCPBroker MCPBroker
+
+	// MCPCatalog, when non-nil, is the tool catalog the loop advertises, replacing
+	// MCPClient.GetAllTools(). Paired with MCPBroker it lets the broker be the SOLE
+	// owner of the credentialed client — the main process advertises the catalog it
+	// fetched from the broker (ListTools) without holding a client of its own, so
+	// MCP servers are not double-spawned. Nil = discover from MCPClient as before.
+	MCPCatalog []mcp.ServerTool
 
 	// NotesProvider supplies the admin-curated knowledge base injected into the
 	// system prompt for BOTH modes. Nil = no notes section. The DRIVERS read it
@@ -246,9 +252,16 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	if broker == nil {
 		broker = NewLocalMCPBroker(mcpClient, hints)
 	}
+	// The catalog is data, sourced either from an injected list (broker mode) or
+	// the local client. Decoupling it from the client lets the broker own the
+	// client without the main process double-spawning servers just to discover.
+	catalog := deps.MCPCatalog
+	if catalog == nil {
+		catalog = mcpClient.GetAllTools()
+	}
 	toolCfg.preGatedTools = cfg.PreGatedTools
 	buildTools := func() ([]fantasy.AgentTool, error) {
-		return buildFantasyTools(cfg.NativeTools, mcpClient, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
+		return buildFantasyTools(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
 	}
 
 	fantasyTools, err := buildTools()
