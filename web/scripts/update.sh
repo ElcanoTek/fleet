@@ -292,8 +292,8 @@ services_down=1
 #
 #   1. Security: image updates ride along with `chat update` instead of
 #      sitting stale until the operator remembers to rerun
-#      `chat sandbox default`. The ghcr.io/elcanotek/sandbox image
-#      pulls in dnf-managed CVE patches whenever it's rebuilt.
+#      `chat sandbox default`. The sandbox image pulls in dnf-managed
+#      CVE patches whenever it's rebuilt.
 #   2. Determinism: the smoke test in step 4/4 exercises the image that
 #      just landed — not whatever the operator pulled last week.
 #   3. Cache warming: the post-restart Pool.fill triggers podman's

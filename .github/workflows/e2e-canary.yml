@@ -69,9 +69,9 @@ jobs:
 
     env:
       E2E_DATABASE_DSN: postgres://fleet:fleet@127.0.0.1:5432/postgres?sslmode=disable
-      # Sandbox image: pulled from GHCR when published, else built locally from
-      # the default bundle (config/default/sandbox/Containerfile) by the script.
-      SANDBOX_IMAGE_GHCR: ghcr.io/elcanotek/sandbox:latest
+      # Sandbox image: built locally from the default client bundle
+      # (config/default/sandbox/Containerfile, a vanilla fedora-minimal base) by
+      # the step below. fleet's core pulls no vendor-published image.
       SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
 
     steps:
@@ -105,16 +105,15 @@ jobs:
           command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
           command -v psql   >/dev/null 2>&1 || sudo apt-get install -y -qq postgresql-client
 
-      - name: Resolve sandbox image (pull from GHCR, else build locally)
+      - name: Build the sandbox image from the default bundle
         id: sandbox
+        # Build the generic default-bundle sandbox on the runner from
+        # config/default/sandbox/Containerfile — fleet's core depends on no
+        # vendor-published image.
         run: |
           set -euo pipefail
-          if podman pull "$SANDBOX_IMAGE_GHCR" >/dev/null 2>&1; then
-            echo "image=$SANDBOX_IMAGE_GHCR" >> "$GITHUB_OUTPUT"
-          else
-            IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
-            echo "image=$SANDBOX_IMAGE_LOCAL" >> "$GITHUB_OUTPUT"
-          fi
+          IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
+          echo "image=$SANDBOX_IMAGE_LOCAL" >> "$GITHUB_OUTPUT"
 
       - name: Boot live stack against a REAL model + run the canary project
         working-directory: web

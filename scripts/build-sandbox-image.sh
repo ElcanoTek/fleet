@@ -29,7 +29,7 @@
 # Usage:
 #   scripts/build-sandbox-image.sh                 # → manifest sandbox.tag (default localhost/fleet-sandbox:latest)
 #   scripts/build-sandbox-image.sh v1              # → <image-name>:v1
-#   IMAGE_NAME=ghcr.io/elcanotek/sandbox scripts/build-sandbox-image.sh
+#   IMAGE_NAME=ghcr.io/your-org/sandbox scripts/build-sandbox-image.sh   # tag for a client's own registry
 #   FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client scripts/build-sandbox-image.sh   # build a client bundle's sandbox
 set -euo pipefail
 

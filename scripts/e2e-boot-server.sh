@@ -320,8 +320,8 @@ ensure_native_agent() {
   # The native-agent image extends the sandbox base (Containerfile.native-agent's
   # SANDBOX_BASE arg, default localhost/fleet-sandbox:latest). Pass the RESOLVED
   # sandbox image so the build works when the live stack uses a non-local tag
-  # (e.g. CI pulls ghcr.io/elcanotek/sandbox:latest) — otherwise the hardcoded
-  # default base is absent locally and podman tries to pull "localhost/...".
+  # (e.g. a client bundle that pins a prebuilt sandbox.image) — otherwise the
+  # hardcoded default base is absent locally and podman tries to pull "localhost/...".
   build_acp_image_if_stale "$FLEET_ACP_NATIVE_E2E_IMAGE" \
     "$REPO_ROOT/config/default/sandbox/Containerfile.native-agent" \
     "$REPO_ROOT/cmd/fleet-native-agent" "native-agent" \

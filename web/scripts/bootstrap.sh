@@ -684,7 +684,7 @@ install -m 0755 "$APP_DIR/deploy/chat-cli" "$CLI_PATH"
 # Skipped in DRY_RUN — rootless podman doesn't nest cleanly inside the
 # dry-run's own podman container, and the goal of dry-run is to exercise
 # the install logic itself, not the runtime container path.
-SANDBOX_IMAGE="${CHAT_SANDBOX_IMAGE:-ghcr.io/elcanotek/sandbox:latest}"
+SANDBOX_IMAGE="${CHAT_SANDBOX_IMAGE:-localhost/fleet-sandbox:latest}"
 SANDBOX_MODE="default"
 if [[ "$DRY_RUN" == "1" ]]; then
   info "DRY_RUN: skipping sandbox image pull (would pull $SANDBOX_IMAGE)"

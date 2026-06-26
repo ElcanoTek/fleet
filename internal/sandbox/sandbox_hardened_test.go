@@ -17,6 +17,14 @@ func sandboxEnv(name string) string {
 	return os.Getenv("CHAT_SANDBOX_" + name)
 }
 
+// defaultHardenedTestImage is the sandbox image used when
+// FLEET_SANDBOX_TEST_IMAGE (or the legacy CHAT_SANDBOX_TEST_IMAGE) is unset.
+// It's the generic build-on-box artifact the default client bundle produces
+// (scripts/build-sandbox-image.sh → config/default/sandbox/Containerfile).
+// fleet's core ships no vendor-published image, so this is a local-only tag
+// (no implicit registry pull); set the env var to point elsewhere.
+const defaultHardenedTestImage = "localhost/fleet-sandbox:latest"
+
 // TestSandboxUnderSystemdHardening is the regression net for production
 // outage class: the sandbox unit-tests above run as root with no systemd
 // wrapper, so a podman flag that ONLY breaks under chat-server.service's
@@ -40,8 +48,9 @@ func sandboxEnv(name string) string {
 //     by allocating a chat user + linger if missing, and pulls a real
 //     OCI image, neither of which we want to trigger from a casual `go
 //     test ./...` run on a developer laptop).
-//   - $CHAT_SANDBOX_TEST_IMAGE set, or the default published image
-//     reachable.
+//   - the sandbox image present locally: the build-on-box default
+//     (localhost/fleet-sandbox:latest, built by scripts/build-sandbox-image.sh)
+//     or whatever FLEET_SANDBOX_TEST_IMAGE points at.
 //
 // COVERAGE NOTE: this test is NOT exercised by any CI lane. The fast `go` job
 // masks podman (container tests skip) and runs as non-root, the e2e-live lane
@@ -89,7 +98,7 @@ func TestSandboxUnderSystemdHardening(t *testing.T) {
 
 	image := sandboxEnv("TEST_IMAGE")
 	if image == "" {
-		image = "ghcr.io/elcanotek/sandbox:latest"
+		image = defaultHardenedTestImage
 	}
 
 	// Mirror the hardening profile from deploy/chat-server.service. If a
@@ -185,7 +194,7 @@ func TestSandboxUnderRestrictSUIDSGIDFails(t *testing.T) {
 
 	image := sandboxEnv("TEST_IMAGE")
 	if image == "" {
-		image = "ghcr.io/elcanotek/sandbox:latest"
+		image = defaultHardenedTestImage
 	}
 
 	// Force a fresh ID-mapped layer copy by purging any cached one. The
