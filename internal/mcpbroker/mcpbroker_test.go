@@ -33,9 +33,19 @@ type fakeBroker struct {
 	release       chan struct{} // if non-nil, block until closed or ctx cancels
 	started       chan struct{} // closed (once) when a call begins
 	startedOnce   sync.Once
+
+	// discovery doubles
+	tools             []ToolDescriptor
+	accounts          []string
+	listErr           error
+	lastAccountServer string
+	lastBaseVars      []string
 }
 
-var _ agentcore.MCPBroker = (*fakeBroker)(nil)
+var (
+	_ agentcore.MCPBroker = (*fakeBroker)(nil)
+	_ Backend             = (*fakeBroker)(nil)
+)
 
 func (b *fakeBroker) CallMCP(ctx context.Context, server, tool string, args map[string]any) (string, bool, error) {
 	b.mu.Lock()
@@ -68,13 +78,25 @@ func (b *fakeBroker) observedCtxErr() error {
 	return b.ctxErr
 }
 
+func (b *fakeBroker) ListTools(context.Context) ([]ToolDescriptor, error) {
+	return b.tools, b.listErr
+}
+
+func (b *fakeBroker) ListAccounts(_ context.Context, server string, baseVars []string) ([]string, error) {
+	b.mu.Lock()
+	b.lastAccountServer = server
+	b.lastBaseVars = baseVars
+	b.mu.Unlock()
+	return b.accounts, b.listErr
+}
+
 // loopback wires a Client and a Server over an in-memory net.Pipe (no real
 // process), serving against broker. The returned cleanup closes both ends and
 // waits for the server loop to exit.
-func loopback(t *testing.T, broker agentcore.MCPBroker) *Client {
+func loopback(t *testing.T, backend Backend) *Client {
 	t.Helper()
 	cConn, sConn := net.Pipe()
-	srv := NewServer(broker)
+	srv := NewServer(backend)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = srv.Serve(ctx, sConn); close(done) }()
@@ -201,6 +223,42 @@ func TestClient_Ping(t *testing.T) {
 	client := loopback(t, &fakeBroker{})
 	if err := client.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping err: %v", err)
+	}
+}
+
+func TestClientServer_ListTools(t *testing.T) {
+	client := loopback(t, &fakeBroker{tools: []ToolDescriptor{
+		{Server: "deal_sheet", Tool: "lookup", Description: "d", InputSchema: map[string]any{"type": "object"}},
+		{Server: "email", Tool: "send"},
+	}})
+
+	got, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(got) != 2 || got[0].Server != "deal_sheet" || got[0].Tool != "lookup" || got[1].Tool != "send" {
+		t.Fatalf("ListTools = %+v, want the catalog round-tripped", got)
+	}
+	if got[0].InputSchema["type"] != "object" {
+		t.Fatalf("InputSchema lost on the wire: %+v", got[0].InputSchema)
+	}
+}
+
+func TestClientServer_ListAccounts(t *testing.T) {
+	fake := &fakeBroker{accounts: []string{"client_a", "client_b"}}
+	client := loopback(t, fake)
+
+	got, err := client.ListAccounts(context.Background(), "magnite_mcp", []string{"MAGNITE_USERNAME", "MAGNITE_PASSWORD"})
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	if len(got) != 2 || got[0] != "client_a" || got[1] != "client_b" {
+		t.Fatalf("ListAccounts = %v, want the names round-tripped", got)
+	}
+	// The server (broker) is the one that resolves accounts, so it must receive the
+	// target server + base vars.
+	if fake.lastAccountServer != "magnite_mcp" || len(fake.lastBaseVars) != 2 {
+		t.Fatalf("broker got (server=%q, baseVars=%v), want them forwarded", fake.lastAccountServer, fake.lastBaseVars)
 	}
 }
 
