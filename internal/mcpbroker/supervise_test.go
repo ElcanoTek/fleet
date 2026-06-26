@@ -14,8 +14,7 @@ import (
 // framework output ever reaches the stream the parent decodes.
 func TestMain(m *testing.M) {
 	if os.Getenv("MCPBROKER_TEST_CHILD") == "1" {
-		_ = NewServer(&fakeBroker{echoTagAsText: true}).
-			Serve(context.Background(), &stdioConn{r: os.Stdin, w: os.Stdout})
+		_ = ServeStdio(context.Background(), &fakeBroker{echoTagAsText: true})
 		os.Exit(0)
 	}
 	os.Exit(m.Run())

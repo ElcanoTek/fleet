@@ -173,21 +173,15 @@ type ManagerOptions struct {
 // registers the native tool set, and builds the per-turn sandbox warm pool.
 // No language model is preloaded — each turn's model is resolved lazily from the
 // slug the frontend sends.
-func New(opts ManagerOptions) (*Manager, error) {
-	cfg := opts.Config
-	if cfg == nil {
-		return nil, fmt.Errorf("config required")
-	}
-
-	resolver, err := agentcore.NewModelResolver(cfg.OpenRouterAPIKey, agentcore.DefaultProviderHeaders)
-	if err != nil {
-		return nil, err
-	}
-
+// BuildMCPClient registers every enabled server in specs onto a fresh MCP client,
+// credentialed host-side via each spec's Env (stdio) or Headers (HTTP), and returns
+// it. A server that fails to connect is logged and skipped so the rest still
+// register. It is shared by the interactive Manager and the out-of-process broker
+// (fleet mcp-broker) so both connect the catalog identically — one credential path,
+// not two (issue #167).
+func BuildMCPClient(specs map[string]MCPServerSpec) *mcp.Client {
 	client := mcp.NewClient()
-	allow := mcpAllowlist{}
-	optional := mcpOptionalSet{}
-	for name, spec := range opts.ServerSpecs {
+	for name, spec := range specs {
 		if !spec.Enabled {
 			continue
 		}
@@ -206,13 +200,40 @@ func New(opts ManagerOptions) (*Manager, error) {
 			log.Printf("warn: MCP %s failed to connect: %v", name, addErr)
 			continue
 		}
+		log.Printf("MCP %s connected (%d tools available, optional=%v)", name, len(client.GetAllTools()), spec.Optional)
+	}
+	return client
+}
+
+func New(opts ManagerOptions) (*Manager, error) {
+	cfg := opts.Config
+	if cfg == nil {
+		return nil, fmt.Errorf("config required")
+	}
+
+	resolver, err := agentcore.NewModelResolver(cfg.OpenRouterAPIKey, agentcore.DefaultProviderHeaders)
+	if err != nil {
+		return nil, err
+	}
+
+	// Connect the catalog (credentialed host-side). The SAME builder backs the
+	// out-of-process broker (fleet mcp-broker), so both register servers
+	// identically — there is no second, divergent credential path (issue #167).
+	client := BuildMCPClient(opts.ServerSpecs)
+	// Gating metadata (per-server allowlist + Optional flag) is pure spec data,
+	// independent of the live connection.
+	allow := mcpAllowlist{}
+	optional := mcpOptionalSet{}
+	for name, spec := range opts.ServerSpecs {
+		if !spec.Enabled {
+			continue
+		}
 		if len(spec.ToolAllowlist) > 0 {
 			allow[name] = spec.ToolAllowlist
 		}
 		if spec.Optional {
 			optional[name] = true
 		}
-		log.Printf("MCP %s connected (%d tools available, optional=%v)", name, len(client.GetAllTools()), spec.Optional)
 	}
 
 	pool, err := buildSandboxPool(cfg, opts.PersonasDir, opts.ProtocolsDir, opts.SystemPromptsDir, opts.SkillsDir)

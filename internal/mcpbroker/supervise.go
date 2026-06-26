@@ -1,13 +1,23 @@
 package mcpbroker
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
 	"time"
 )
+
+// ServeStdio runs a Server for backend over THIS process's stdin/stdout — the child
+// side of SpawnClient. Protocol frames ride stdin/stdout; the broker must send all
+// logs to stderr so it never corrupts the frame stream. It returns when the parent
+// closes the pipe (EOF) or ctx is cancelled.
+func ServeStdio(ctx context.Context, backend Backend) error {
+	return NewServer(backend).Serve(ctx, &stdioConn{r: os.Stdin, w: os.Stdout})
+}
 
 // teardownGrace is how long a spawned broker has to exit after its stdin is closed
 // and it is SIGTERMed, before it is SIGKILLed.
