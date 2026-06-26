@@ -87,6 +87,38 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
+// ListTools returns the broker's discovered tool catalog — the public catalog the
+// main process advertises to the loop once the broker (not the main process) owns
+// the credentialed client.
+func (c *Client) ListTools(ctx context.Context) ([]ToolDescriptor, error) {
+	resp, err := c.roundtrip(ctx, request{ID: c.nextID.Add(1), Method: methodListTools})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Err != "" {
+		return nil, errors.New(resp.Err)
+	}
+	return resp.Tools, nil
+}
+
+// ListAccounts returns the account names provisioned for server (resolved by the
+// broker against its environment from the seat's base var names).
+func (c *Client) ListAccounts(ctx context.Context, server string, baseVars []string) ([]string, error) {
+	resp, err := c.roundtrip(ctx, request{
+		ID:       c.nextID.Add(1),
+		Method:   methodListAccounts,
+		Server:   server,
+		BaseVars: baseVars,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Err != "" {
+		return nil, errors.New(resp.Err)
+	}
+	return resp.Accounts, nil
+}
+
 // Close tears down the reader and fails outstanding calls, then closes the conn.
 func (c *Client) Close() error {
 	c.fail(errClientClosed)
