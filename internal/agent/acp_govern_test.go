@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ElcanoTek/fleet/internal/acpruntime"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
@@ -96,15 +95,11 @@ func TestStageBroker_UnwiredSurfaceFailsClosed(t *testing.T) {
 	}
 }
 
-// TestMCPBroker_TypeContract is a light wiring check that the host-side native-acp
-// broker — now agentcore.NewLocalMCPBroker, the SAME implementation the in-process
-// loop uses (issue #167) — satisfies the acpruntime.MCPBroker seam (an alias of
-// agentcore.MCPBroker). The full host-side credentialed round-trip (execution +
-// cred isolation) is proved in acpruntime's TestACPGovern_MCPDelegatedHostSide,
-// which drives a real broker over the ACP pipe.
-func TestMCPBroker_TypeContract(_ *testing.T) {
-	var _ acpruntime.MCPBroker = agentcore.NewLocalMCPBroker(nil, agentcore.DefaultRemediationHints)
-}
+// (The native-acp host broker is agentcore.NewLocalMCPBroker, whose return type IS
+// the MCPBroker seam — and acpruntime.MCPBroker aliases it — so interface
+// satisfaction is compile-guaranteed by buildACPHostGovernance's assignment; the
+// concrete-type assertion lives in agentcore. The host-side round-trip is proved
+// in acpruntime's TestACPGovern_MCPDelegatedHostSide.)
 
 // TestBuildACPHostGovernance_ScheduledWiresNoteOnly proves the shared host-side
 // governance builder wires the SCHEDULED seam set correctly: only the note

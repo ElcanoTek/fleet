@@ -54,6 +54,10 @@ type localMCPBroker struct {
 	hints  RemediationHints
 }
 
+// localMCPBroker is the concrete in-process MCPBroker; assert the contract here,
+// in its home package (both flavors and the out-of-process broker depend on it).
+var _ MCPBroker = (*localMCPBroker)(nil)
+
 // NewLocalMCPBroker returns the in-process MCPBroker that runs calls directly
 // against client. hints configures the fast.io inline-base64 upload pre-guard
 // (callers that have no specific remediation context pass DefaultRemediationHints).
