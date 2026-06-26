@@ -85,6 +85,10 @@ func buildFantasyTools(
 	cfg toolBuildConfig,
 ) ([]fantasy.AgentTool, error) {
 	mcpServerTools := mcpClient.GetAllTools()
+	// One broker backs every in-process MCP tool in this build. It is the seam
+	// the call routes through; today it wraps the host-side credentialed client,
+	// but mcpTool no longer touches the client directly (issue #167).
+	broker := NewLocalMCPBroker(mcpClient, cfg.remediationHints)
 	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+len(cfg.preGatedTools)+1)
 
 	for _, t := range nativeTools {
@@ -115,11 +119,10 @@ func buildFantasyTools(
 			continue
 		}
 		allTools = append(allTools, &mcpTool{
-			serverName:       st.ServerName,
-			tool:             st.Tool,
-			mcpClient:        mcpClient,
-			policy:           policy,
-			remediationHints: cfg.remediationHints,
+			serverName: st.ServerName,
+			tool:       st.Tool,
+			broker:     broker,
+			policy:     policy,
 		})
 		mcpRegistered++
 	}
@@ -246,13 +249,18 @@ func sanitizeSchemaValue(v any) any {
 
 // mcpTool wraps an MCP server tool as a fantasy.AgentTool (crush pattern).
 // Named mcp_<server>_<tool> to avoid collisions across servers.
+//
+// The actual call runs through the MCPBroker seam (not a direct *mcp.Client),
+// so where the connector credentials live is decoupled from where this loop runs
+// (see MCPBroker). mcpTool owns the per-call FRAMING — policy gate, arg parse,
+// timeout, isError→error mapping, result recording — while the broker owns the
+// call itself (guard, transport, flatten, fast.io trim).
 type mcpTool struct {
-	serverName       string
-	tool             mcp.Tool
-	mcpClient        *mcp.Client
-	policy           Policy
-	remediationHints RemediationHints
-	providerOptions  fantasy.ProviderOptions
+	serverName      string
+	tool            mcp.Tool
+	broker          MCPBroker
+	policy          Policy
+	providerOptions fantasy.ProviderOptions
 }
 
 func (m *mcpTool) Name() string {
@@ -299,37 +307,22 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
 
-	// Block oversized inline base64 uploads to fast.io before they hit the wire.
-	if ok, hint := rejectFastIOInlineBase64Upload(toolName, args, m.remediationHints); !ok {
-		m.record(toolName, params.Input, hint, false)
-		return fantasy.NewTextErrorResponse(hint), nil
-	}
-
+	// The broker owns the call itself — the fast.io inline-upload guard, the
+	// transport against the credentialed client, the content flatten, and the
+	// fast.io response trim. mcpTool keeps only the per-call framing.
 	callCtx, cancel := context.WithTimeout(ctx, toolCallTimeout)
 	defer cancel()
-	result, err := m.mcpClient.CallToolOn(callCtx, m.serverName, m.tool.Name, args)
+	resultText, isErr, err := m.broker.CallMCP(callCtx, m.serverName, m.tool.Name, args)
 	if err != nil {
 		m.record(toolName, params.Input, "", false)
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("Error calling %s: %v", toolName, err)), nil
 	}
 
-	var sb strings.Builder
-	for _, block := range result.Content {
-		if block.Type == "text" {
-			sb.WriteString(block.Text)
-			sb.WriteString("\n")
-		}
-	}
-	resultText := sb.String()
-
-	if m.serverName == mcpServerFastIO {
-		resultText = trimFastIOResponse(resultText)
-	}
-
 	// Map MCP isError to a fantasy error response so both the LLM and the log
 	// know the call failed (per MCP 2025-06-18 spec, tool-level errors arrive as
-	// a successful JSON-RPC response with isError=true).
-	if result.IsError {
+	// a successful JSON-RPC response with isError=true). The fast.io guard above
+	// also surfaces through this path (it returns isError=true with the hint text).
+	if isErr {
 		errText := resultText
 		if errText == "" {
 			errText = fmt.Sprintf("MCP tool %s returned isError=true with no text content", toolName)
