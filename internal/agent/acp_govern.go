@@ -1,9 +1,7 @@
 package agent
 
 import (
-	"context"
 	"slices"
-	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/acpruntime"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -22,46 +20,12 @@ import (
 // This is the same set of seams the in-process path uses, applied to the
 // agent's delegated calls — so native-acp governs identically.
 
-// mcpBroker implements acpruntime.MCPBroker by running the delegated call against
-// the host's per-task credentialed mcp.Client. The credentials live in the
-// client's server subprocess env (bound host-side via BindMCPSelection / the
-// manager's startup wiring); they are applied at THIS call, never shipped into
-// the agent container.
-type mcpBroker struct {
-	client *mcp.Client
-}
-
-var _ acpruntime.MCPBroker = (*mcpBroker)(nil)
-
-// CallMCP runs server.tool host-side and returns the flattened text content + the
-// isError bit, mirroring the in-process mcpTool's result rendering (incl. the
-// fast.io inline-upload pre-guard + response trimming) so the agent sees an
-// identical result. Credentials live in the client's server subprocess env (bound
-// host-side); they are applied at THIS call, never shipped into the container.
-func (b *mcpBroker) CallMCP(ctx context.Context, server, tool string, args map[string]any) (string, bool, error) {
-	fullName := "mcp_" + server + "_" + tool
-	// fast.io inline-base64 pre-guard: reject oversized inline uploads before the
-	// wire, exactly as the in-process mcpTool does.
-	if ok, hint := agentcore.RejectFastIOInlineBase64Upload(fullName, args, agentcore.DefaultRemediationHints); !ok {
-		return hint, true, nil
-	}
-	result, err := b.client.CallToolOn(ctx, server, tool, args)
-	if err != nil {
-		return "", false, err
-	}
-	var sb strings.Builder
-	for _, block := range result.Content {
-		if block.Type == "text" {
-			sb.WriteString(block.Text)
-			sb.WriteString("\n")
-		}
-	}
-	resultText := sb.String()
-	if server == agentcore.MCPServerFastIO {
-		resultText = agentcore.TrimFastIOResponse(resultText)
-	}
-	return resultText, result.IsError, nil
-}
+// The host-side MCP broker for native-acp is agentcore.NewLocalMCPBroker (wired in
+// buildACPHostGovernance below): it runs each delegated call against the per-task
+// credentialed mcp.Client, applying credentials at THIS call, never shipping them
+// into the agent container. It is the SAME implementation the in-process mcpTool
+// uses, so both flavors render an identical result through one seam (issue #167) —
+// no second MCP-call path to drift.
 
 // stageBroker implements acpruntime.StageBroker by forwarding to the real
 // host-side stagers (ApprovalStager / MemoryProposer / NoteProposer) the
@@ -167,7 +131,11 @@ func buildACPHostGovernance(
 
 	g.MCPDescriptors = buildMCPDescriptors(client, allow, optionalServers, selection)
 	if len(g.MCPDescriptors) > 0 && client != nil {
-		g.MCPBroker = &mcpBroker{client: client}
+		// The SAME in-process broker the native-inprocess loop uses — one seam,
+		// one result rendering. DefaultRemediationHints because the host broker
+		// has no per-conversation remediation context (parity with the prior
+		// dedicated broker, which also used the defaults).
+		g.MCPBroker = agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints)
 	}
 
 	g.StagingWired = stagers.approval != nil || stagers.memory != nil
