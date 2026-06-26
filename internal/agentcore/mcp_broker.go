@@ -1,0 +1,79 @@
+package agentcore
+
+import (
+	"context"
+	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/mcp"
+)
+
+// MCPBroker is the ONE seam every flavor's MCP tool invocation funnels through.
+// It runs a single MCP server.tool call and returns the flattened text content,
+// the MCP tool-level isError bit (per the 2025-06-18 spec a tool-level failure is
+// a successful JSON-RPC response with isError=true, NOT a transport error), and a
+// transport error (distinct from isError).
+//
+// Both runtime flavors route MCP through this interface:
+//
+//   - native-inprocess: agentcore's mcpTool.Run → MCPBroker (the localMCPBroker
+//     below, wrapping the host-side credentialed *mcp.Client);
+//   - native-acp: the agent container's delegating tool → `_fleet/mcp` →
+//     the host handler → MCPBroker (acpruntime.MCPBroker is an alias of this type).
+//
+// Keeping a single interface is what lets the credential boundary — WHO actually
+// holds the connector secrets and spawns the MCP subprocesses — move behind the
+// seam (e.g. into a separate broker process, issue #167) without touching the
+// agent loop or either flavor's tool wiring. "In-process" then means only where
+// the loop runs, not where the secrets live.
+type MCPBroker interface {
+	// CallMCP runs server.tool with args and returns the flattened text, the
+	// tool-level isError bit, and a transport error (distinct from isError).
+	CallMCP(ctx context.Context, server, tool string, args map[string]any) (text string, isError bool, err error)
+}
+
+// localMCPBroker is the in-process MCPBroker: it runs the delegated call directly
+// against a host-side credentialed *mcp.Client. The connector credentials live in
+// that client's stdio-server subprocess env (bound host-side via BindMCPSelection
+// / the manager's startup wiring) or its HTTP headers; they are applied at THIS
+// call, never shipped to the model or into the agent container.
+//
+// This is the single home of the call → flatten → fast.io guard/trim → isError
+// rendering that the in-process mcpTool and the native-acp host broker previously
+// duplicated. Both now share it, so the two flavors render an identical result.
+type localMCPBroker struct {
+	client *mcp.Client
+	hints  RemediationHints
+}
+
+// NewLocalMCPBroker returns the in-process MCPBroker that runs calls directly
+// against client. hints configures the fast.io inline-base64 upload pre-guard
+// (callers that have no specific remediation context pass DefaultRemediationHints).
+func NewLocalMCPBroker(client *mcp.Client, hints RemediationHints) MCPBroker {
+	return &localMCPBroker{client: client, hints: hints}
+}
+
+func (b *localMCPBroker) CallMCP(ctx context.Context, server, tool string, args map[string]any) (string, bool, error) {
+	fullName := "mcp_" + server + "_" + tool
+	// fast.io inline-base64 pre-guard: reject oversized inline uploads before they
+	// hit the wire. A blocked upload is surfaced to the agent as a tool-level error
+	// (isError=true) carrying the remediation hint — same shape a real isError takes.
+	if ok, hint := rejectFastIOInlineBase64Upload(fullName, args, b.hints); !ok {
+		return hint, true, nil
+	}
+	result, err := b.client.CallToolOn(ctx, server, tool, args)
+	if err != nil {
+		return "", false, err
+	}
+	var sb strings.Builder
+	for _, block := range result.Content {
+		if block.Type == "text" {
+			sb.WriteString(block.Text)
+			sb.WriteString("\n")
+		}
+	}
+	resultText := sb.String()
+	if server == mcpServerFastIO {
+		resultText = trimFastIOResponse(resultText)
+	}
+	return resultText, result.IsError, nil
+}
