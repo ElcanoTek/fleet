@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ElcanoTek/fleet/internal/acpruntime"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // TestBuildMCPDescriptors_NilClient confirms the descriptor builder is nil-safe
@@ -95,14 +95,11 @@ func TestStageBroker_UnwiredSurfaceFailsClosed(t *testing.T) {
 	}
 }
 
-// TestMCPBroker_TypeContract is a light wiring check that mcpBroker satisfies the
-// acpruntime.MCPBroker interface. The full host-side credentialed round-trip
-// (host-side execution + cred isolation) is proved in acpruntime's
-// TestACPGovern_MCPDelegatedHostSide, which drives a real broker over the ACP pipe.
-func TestMCPBroker_TypeContract(_ *testing.T) {
-	var _ acpruntime.MCPBroker = (*mcpBroker)(nil)
-	_ = context.Background()
-}
+// (The native-acp host broker is agentcore.NewLocalMCPBroker, whose return type IS
+// the MCPBroker seam — and acpruntime.MCPBroker aliases it — so interface
+// satisfaction is compile-guaranteed by buildACPHostGovernance's assignment; the
+// concrete-type assertion lives in agentcore. The host-side round-trip is proved
+// in acpruntime's TestACPGovern_MCPDelegatedHostSide.)
 
 // TestBuildACPHostGovernance_ScheduledWiresNoteOnly proves the shared host-side
 // governance builder wires the SCHEDULED seam set correctly: only the note
@@ -177,12 +174,13 @@ func TestBuildACPHostGovernance_NoStagersInert(t *testing.T) {
 }
 
 // TestMCPBroker_FastIOInlineUploadRejectedHostSide proves the host broker applies
-// the SAME fast.io inline-base64 pre-guard the in-process mcpTool applies: an
-// oversized inline upload is rejected BEFORE the wire (the client is never
-// reached, so a nil client is safe here), with the rejection surfaced as a
-// tool-level error — identical to the in-process path.
+// the fast.io inline-base64 pre-guard: an oversized inline upload is rejected
+// BEFORE the wire (the client is never reached, so a nil client is safe here),
+// with the rejection surfaced as a tool-level error. Since the host broker is now
+// agentcore.NewLocalMCPBroker — the SAME implementation the in-process mcpTool
+// calls — this is by construction identical to the in-process path.
 func TestMCPBroker_FastIOInlineUploadRejectedHostSide(t *testing.T) {
-	b := &mcpBroker{client: nil} // guard fires before any client call
+	b := agentcore.NewLocalMCPBroker(nil, agentcore.DefaultRemediationHints) // guard fires before any client call
 	bigPayload := strings.Repeat("A", 64*1024)
 	text, isErr, err := b.CallMCP(context.Background(), "fast_io", "upload", map[string]any{
 		"action":         "stream_upload",

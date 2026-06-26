@@ -107,11 +107,12 @@ type Deps struct {
 // credentialed client. The host (agent driver) wires an implementation backed by
 // the bound mcp.Client; the cred-isolation invariant lives here — credentials are
 // applied host-side at this call, never shipped into the agent container.
-type MCPBroker interface {
-	// CallMCP runs server.tool with args and returns the flattened text, the
-	// isError bit, and a transport error (distinct from a tool-level isError).
-	CallMCP(ctx context.Context, server, tool string, args map[string]any) (text string, isError bool, err error)
-}
+//
+// It is an alias of agentcore.MCPBroker so the native-acp delegation path and the
+// in-process loop share ONE seam (issue #167): the same interface the in-process
+// mcpTool calls, so the credential boundary behind it can move (e.g. into a
+// separate broker process) without forking a second MCP-call path.
+type MCPBroker = agentcore.MCPBroker
 
 // StageBroker stages a host-side approval / memory / note proposal. The host
 // wires an implementation backed by the real ApprovalStager / MemoryProposer /
