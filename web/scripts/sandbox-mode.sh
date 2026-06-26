@@ -28,7 +28,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/opt/chat}"
 APP_USER="${APP_USER:-chat}"
 ENV_FILE="$APP_DIR/.env.local"
-DEFAULT_IMAGE="ghcr.io/elcanotek/sandbox:latest"
+DEFAULT_IMAGE="localhost/fleet-sandbox:latest"
 
 # Colors — TTY-gated, mirror of bootstrap.sh.
 if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
