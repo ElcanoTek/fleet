@@ -78,17 +78,18 @@ type toolBuildConfig struct {
 func buildFantasyTools(
 	nativeTools []fantasy.AgentTool,
 	mcpClient *mcp.Client,
+	broker MCPBroker,
 	allow mcpAllowlist,
 	policy Policy,
 	optionalServers mcpOptionalSet,
 	optIn map[string]bool,
 	cfg toolBuildConfig,
 ) ([]fantasy.AgentTool, error) {
+	// mcpClient supplies the tool CATALOG (discovery); broker is the seam each
+	// tool's CALL routes through (the in-process localMCPBroker by default, or an
+	// injected out-of-process broker — issue #167). They are deliberately
+	// separate: where a call runs is decoupled from where the catalog is read.
 	mcpServerTools := mcpClient.GetAllTools()
-	// One broker backs every in-process MCP tool in this build. It is the seam
-	// the call routes through; today it wraps the host-side credentialed client,
-	// but mcpTool no longer touches the client directly (issue #167).
-	broker := NewLocalMCPBroker(mcpClient, cfg.remediationHints)
 	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+len(cfg.preGatedTools)+1)
 
 	for _, t := range nativeTools {
