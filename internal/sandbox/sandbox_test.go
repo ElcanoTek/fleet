@@ -156,14 +156,13 @@ func TestPoolDisabledFallsThroughToColdStart(t *testing.T) {
 
 // defaultTestImage is the image our container integration tests use
 // when FLEET_SANDBOX_TEST_IMAGE (and the CHAT_SANDBOX_TEST_IMAGE
-// back-compat alias) are unset. It's the published artifact from
-// github.com/ElcanoTek/sandbox, suitable for tests on any box with
-// podman + outbound network to ghcr.io.
-//
-// Override the env var to point at a locally-built image during dev
-// (e.g. `localhost/fleet-sandbox:latest` after running
-// scripts/build-sandbox-image.sh).
-const defaultTestImage = "ghcr.io/elcanotek/sandbox:latest"
+// back-compat alias) are unset. It's the generic build-on-box artifact
+// the default client bundle produces — build it first with
+// `scripts/build-sandbox-image.sh` (config/default/sandbox/Containerfile,
+// a vanilla fedora-minimal base). fleet's core ships no vendor-published
+// sandbox image, so the default here is local-only (no implicit registry
+// pull); point FLEET_SANDBOX_TEST_IMAGE at another ref to override.
+const defaultTestImage = "localhost/fleet-sandbox:latest"
 
 // sandboxEnv reads the canonical FLEET_SANDBOX_* variable, falling back
 // to the legacy CHAT_SANDBOX_* name for back-compat.
@@ -183,8 +182,9 @@ func testImage() string {
 
 // TestContainerBashEcho is a podman-gated integration test. Skipped
 // when the platform is not linux or `podman` is not on PATH. Image
-// defaults to the published GHCR ref; override with
-// $CHAT_SANDBOX_TEST_IMAGE when iterating locally.
+// defaults to the locally-built default-bundle sandbox
+// (localhost/fleet-sandbox:latest); override with
+// $FLEET_SANDBOX_TEST_IMAGE when iterating locally.
 func TestContainerBashEcho(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("container backend tested on linux only")
