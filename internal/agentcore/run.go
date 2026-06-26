@@ -90,8 +90,17 @@ type Deps struct {
 
 	// MCPClient holds the registered (and credential-bound) MCP servers — the
 	// merged P1 client. May be nil when a run registers no MCP servers (a fresh
-	// empty client is used instead).
+	// empty client is used instead). It is also where the tool CATALOG is
+	// discovered (GetAllTools), independent of how calls are run (see MCPBroker).
 	MCPClient *mcp.Client
+
+	// MCPBroker, when non-nil, is the seam MCP tool CALLS route through, replacing
+	// the default in-process localMCPBroker built over MCPClient. It exists so the
+	// credential boundary can move out of process (issue #167): inject an
+	// out-of-process broker client here and calls run there while MCPClient still
+	// serves discovery (moving discovery to the broker is a later step). Nil keeps
+	// the in-process behavior — calls run directly against MCPClient.
+	MCPBroker MCPBroker
 
 	// NotesProvider supplies the admin-curated knowledge base injected into the
 	// system prompt for BOTH modes. Nil = no notes section. The DRIVERS read it
@@ -229,9 +238,17 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	if mcpClient == nil {
 		mcpClient = mcp.NewClient()
 	}
+	// Calls route through a broker seam; discovery (the catalog) comes from
+	// mcpClient. Default = the in-process localMCPBroker over the credentialed
+	// client. An injected deps.MCPBroker (e.g. an out-of-process broker, #167)
+	// takes over calls without changing the loop.
+	broker := deps.MCPBroker
+	if broker == nil {
+		broker = NewLocalMCPBroker(mcpClient, hints)
+	}
 	toolCfg.preGatedTools = cfg.PreGatedTools
 	buildTools := func() ([]fantasy.AgentTool, error) {
-		return buildFantasyTools(cfg.NativeTools, mcpClient, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
+		return buildFantasyTools(cfg.NativeTools, mcpClient, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
 	}
 
 	fantasyTools, err := buildTools()
