@@ -31,17 +31,26 @@ type MCPBroker interface {
 	CallMCP(ctx context.Context, server, tool string, args map[string]any) (text string, isError bool, err error)
 }
 
+// mcpCaller is the minimal client surface localMCPBroker needs: run a tool on a
+// named server. *mcp.Client satisfies it. Depending on the interface (not the
+// concrete client) keeps the flatten/isError rendering unit-testable and lets a
+// future out-of-process broker (issue #167) substitute an RPC-backed caller
+// without touching this code.
+type mcpCaller interface {
+	CallToolOn(ctx context.Context, server, tool string, args map[string]any) (*mcp.ToolResult, error)
+}
+
 // localMCPBroker is the in-process MCPBroker: it runs the delegated call directly
-// against a host-side credentialed *mcp.Client. The connector credentials live in
-// that client's stdio-server subprocess env (bound host-side via BindMCPSelection
-// / the manager's startup wiring) or its HTTP headers; they are applied at THIS
-// call, never shipped to the model or into the agent container.
+// against a host-side credentialed client. The connector credentials live in that
+// client's stdio-server subprocess env (bound host-side via BindMCPSelection / the
+// manager's startup wiring) or its HTTP headers; they are applied at THIS call,
+// never shipped to the model or into the agent container.
 //
 // This is the single home of the call → flatten → fast.io guard/trim → isError
 // rendering that the in-process mcpTool and the native-acp host broker previously
 // duplicated. Both now share it, so the two flavors render an identical result.
 type localMCPBroker struct {
-	client *mcp.Client
+	client mcpCaller
 	hints  RemediationHints
 }
 
