@@ -15,7 +15,7 @@
 #       --tmpfs=/home/sandbox/.ipython:rw,size=32m \
 #       --tmpfs=/home/sandbox/.cache:rw,size=32m \
 #       --volume=/path/to/workspace:/workspace:rw,Z \
-#       ghcr.io/elcanotek/sandbox:latest
+#       localhost/fleet-sandbox:latest
 #
 # /opt/bridge is a pre-created mount point for callers who want to
 # bind-mount an extra script into the container without touching the
