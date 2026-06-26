@@ -10,19 +10,31 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
-// Server answers mcpbroker requests by running each against a host-side
-// agentcore.MCPBroker — in production the credentialed localMCPBroker. It is the
-// end that holds the connector secrets and the MCP subprocesses; a Client in
-// another process reaches it over a connection. The Server adds no policy of its
-// own: it is a transport shell around the SAME MCPBroker the in-process loop uses,
-// which is the point (no second governed call path, issue #167).
-type Server struct {
-	broker agentcore.MCPBroker
+// Backend is what a Server serves: the credential-bearing MCP call seam plus the
+// read-only discovery the main process can no longer do for itself once the broker
+// owns the client — the tool catalog and the provisioned account names. The broker
+// process implements it over the real credentialed *mcp.Client + creds; tests fake
+// it. CallMCP is the SAME agentcore.MCPBroker the in-process loop uses (no second
+// governed call path, issue #167); discovery returns only public catalog data.
+type Backend interface {
+	agentcore.MCPBroker
+	// ListTools returns the discovered tool catalog (public shape, no credentials).
+	ListTools(ctx context.Context) ([]ToolDescriptor, error)
+	// ListAccounts returns the account names provisioned for server, resolved
+	// against the broker's environment from the seat's base var names.
+	ListAccounts(ctx context.Context, server string, baseVars []string) ([]string, error)
 }
 
-// NewServer returns a Server that dispatches calls to broker.
-func NewServer(broker agentcore.MCPBroker) *Server {
-	return &Server{broker: broker}
+// Server answers mcpbroker requests by running each against a Backend — the end
+// that holds the connector secrets and the MCP subprocesses. A Client in another
+// process reaches it over a connection.
+type Server struct {
+	backend Backend
+}
+
+// NewServer returns a Server that dispatches requests to backend.
+func NewServer(backend Backend) *Server {
+	return &Server{backend: backend}
 }
 
 // Serve reads requests from conn and answers them until conn closes, the decoder
@@ -105,8 +117,32 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 					mu.Unlock()
 					cancel()
 				}()
-				text, isErr, err := s.broker.CallMCP(callCtx, req.Server, req.Tool, req.Args)
+				text, isErr, err := s.backend.CallMCP(callCtx, req.Server, req.Tool, req.Args)
 				resp := response{ID: req.ID, Text: text, IsError: isErr}
+				if err != nil {
+					resp.Err = err.Error()
+				}
+				write(resp)
+			}(req)
+
+		case methodListTools:
+			wg.Add(1)
+			go func(req request) {
+				defer wg.Done()
+				tools, err := s.backend.ListTools(ctx)
+				resp := response{ID: req.ID, Tools: tools}
+				if err != nil {
+					resp.Err = err.Error()
+				}
+				write(resp)
+			}(req)
+
+		case methodListAccounts:
+			wg.Add(1)
+			go func(req request) {
+				defer wg.Done()
+				accounts, err := s.backend.ListAccounts(ctx, req.Server, req.BaseVars)
+				resp := response{ID: req.ID, Accounts: accounts}
 				if err != nil {
 					resp.Err = err.Error()
 				}

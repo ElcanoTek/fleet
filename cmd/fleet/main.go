@@ -62,6 +62,16 @@ func main() {
 		}
 		return
 	}
+	// `fleet mcp-broker` runs the out-of-process MCP credential broker over stdio
+	// (issue #167): it holds the connector secrets + MCP subprocesses and serves
+	// delegated MCP calls back to a parent fleet process. Like `acp`, it boots no
+	// HTTP servers / scheduler — it is a single-purpose stdio adapter.
+	if len(os.Args) > 1 && os.Args[1] == "mcp-broker" {
+		if err := runMCPBroker(); err != nil {
+			log.Fatalf("fleet mcp-broker: %v", err)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		log.Fatalf("fleet: %v", err)
 	}
