@@ -40,6 +40,7 @@ func runMCPBroker() error {
 
 	// The SAME builder the interactive Manager uses — one credential path.
 	client := agent.BuildMCPClient(scheduledrun.BuildMCPSpecs(cfg))
+	//nolint:gosec // G706 false positive: the only arg is an int tool count rendered with %d (no CR/LF can forge a log line); it is the size of the connected MCP catalog, not request input.
 	log.Printf("mcp-broker: serving %d MCP tools over stdio", len(client.GetAllTools()))
 
 	backend := &brokerBackend{
