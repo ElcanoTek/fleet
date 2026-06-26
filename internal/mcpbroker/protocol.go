@@ -37,7 +37,26 @@ const (
 	// the ID of the request to cancel (not a new request); it is fire-and-forget
 	// (no response is sent for a cancel).
 	methodCancel method = "cancel"
+	// methodListTools returns the discovered MCP tool catalog (server, tool,
+	// description, schema). Once the broker owns the credentialed client, the
+	// main process can no longer call GetAllTools locally, so it reads the catalog
+	// here. Carries no credentials.
+	methodListTools method = "list_tools"
+	// methodListAccounts returns the provisioned account names for a server (its
+	// Server + BaseVars name the seat). Account names are not secret; the broker
+	// resolves them against ITS environment (where the secrets live), so the main
+	// process need not hold them.
+	methodListAccounts method = "list_accounts"
 )
+
+// ToolDescriptor is one entry of the broker's tool catalog — the public shape of
+// an MCP tool (no credentials). It mirrors what GetAllTools yields in-process.
+type ToolDescriptor struct {
+	Server      string         `json:"server"`
+	Tool        string         `json:"tool"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"inputSchema,omitempty"`
+}
 
 // request is a client -> server frame. The server only ever decodes requests; the
 // client only ever decodes responses, so the two directions are separate types
@@ -50,9 +69,13 @@ type request struct {
 	Method method `json:"method"`
 	// Server / Tool / Args carry the methodCall payload. Credentials are NEVER on
 	// the wire — they live only in the broker process and are applied there.
+	// Server doubles as the target for methodListAccounts.
 	Server string         `json:"server,omitempty"`
 	Tool   string         `json:"tool,omitempty"`
 	Args   map[string]any `json:"args,omitempty"`
+	// BaseVars names the env-var bases of a server's credential seat, for
+	// methodListAccounts (the broker scans ITS env for <BASE>_<ACCOUNT> variants).
+	BaseVars []string `json:"baseVars,omitempty"`
 }
 
 // response is a server -> client frame answering a request by ID.
@@ -72,4 +95,8 @@ type response struct {
 	// back to a non-nil Go error on the client; an unknown method or a server-side
 	// failure to run the call lands here.
 	Err string `json:"err,omitempty"`
+	// Tools answers methodListTools; Accounts answers methodListAccounts. Both are
+	// public catalog data (no credentials).
+	Tools    []ToolDescriptor `json:"tools,omitempty"`
+	Accounts []string         `json:"accounts,omitempty"`
 }
