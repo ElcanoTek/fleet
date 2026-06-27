@@ -58,6 +58,11 @@ type engine struct {
 	// envPrefix selects the env-var family (resilience config, kill-switches).
 	envPrefix EnvPrefix
 
+	// requireCompactionOptIn, when set by the driver, gates proactive context
+	// compaction (#209) behind the FLEET_SCHEDULED_AUTO_COMPACT env var. It is
+	// driver-supplied data (scheduled sets it true), never a trunk Mode branch.
+	requireCompactionOptIn bool
+
 	// usageReporter, when set, is called after each step with the run's
 	// accumulated usage so a driver can ship it out-of-band (native-acp's
 	// per-step `_fleet/event` usage report). Nil in the in-process modes.
@@ -145,6 +150,180 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 	out = append(out, summary)
 	out = append(out, tail...)
 	e.consecutiveCompactions++
+	return out
+}
+
+// proactiveCompactResult reports what proactiveCompact did, so the run loop can
+// emit a fleet.context_compacted event with the right metadata.
+type proactiveCompactResult struct {
+	messages      []fantasy.Message
+	removedTurns  int  // how many old messages were summarized away
+	summaryTokens int  // estimated token size of the inserted summary
+	compacted     bool // false when there was nothing worth compacting
+}
+
+// proactiveCompact summarizes the OLDEST HALF of the conversation history BEFORE
+// the provider rejects an oversized prompt (#209), preserving the pinned head
+// and the recent half verbatim. It mirrors forceCompactMessageHistory's
+// head + summary + kept structure but, instead of reacting to a rejection with a
+// fixed 20-message tail, it drops the oldest 50% of the messages after the head.
+//
+// It uses the engine's compactionSummarizer when set, else the deterministic
+// placeholder (tagged with compactionSummaryPrefix, so the cache layer treats it
+// identically to a reactive summary). A clean proactive compaction RESETS
+// consecutiveCompactions: it is not a reactive resilience compaction and must not
+// count toward the ErrContextBudgetExhausted cap.
+func (e *engine) proactiveCompact(ctx context.Context, messages []fantasy.Message) proactiveCompactResult {
+	head := compactionHeadLen(messages)
+	active := messages[head:]
+	midpoint := len(active) / 2
+	// Nothing worth doing if there is fewer than one droppable message or the
+	// kept half would be empty.
+	if midpoint < 1 || len(active)-midpoint < 1 {
+		return proactiveCompactResult{messages: messages}
+	}
+	droppable := active[:midpoint]
+	keep := active[midpoint:]
+
+	var summary fantasy.Message
+	if e.compactionSummarizer != nil {
+		summary = e.compactionSummarizer(ctx, droppable)
+	} else {
+		summary = fantasy.NewUserMessage(fmt.Sprintf(
+			"%s] %d earlier messages were summarized to relieve context-window pressure before the prompt overflowed.",
+			compactionSummaryPrefix, len(droppable)))
+	}
+
+	out := make([]fantasy.Message, 0, head+1+len(keep))
+	out = append(out, messages[:head]...)
+	out = append(out, summary)
+	out = append(out, keep...)
+
+	// Proactive compaction is a clean reduction, not a reactive resilience
+	// compaction — reset the consecutive counter so it never trips
+	// ErrContextBudgetExhausted.
+	e.consecutiveCompactions = 0
+
+	return proactiveCompactResult{
+		messages:      out,
+		removedTurns:  len(droppable),
+		summaryTokens: estimateMessageTokens(summary),
+		compacted:     true,
+	}
+}
+
+// estimateMessageTokens gives a rough token count for a message by summing its
+// text-part lengths and dividing by 4 (the usual ~4-chars-per-token heuristic).
+// Used only for the fleet.context_compacted event metadata and the pre-first-step
+// pressure estimate (estimateMessagesTokens), never for billing.
+func estimateMessageTokens(m fantasy.Message) int {
+	chars := 0
+	for _, part := range m.Content {
+		if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
+			chars += len(tp.Text)
+		}
+	}
+	return chars / 4
+}
+
+// estimateMessagesTokens sums estimateMessageTokens across the whole history.
+// It is the pre-first-step fallback for the context-pressure check (#209): at
+// the top of a turn's first round no provider-reported per-call input size
+// exists yet (LastStepPromptTokens is 0), so a single-round interactive turn
+// that STARTS near the window would otherwise never be checked. This estimate
+// of the carried-over history fills that gap. It is deliberately a lower bound
+// (it omits the system prompt + tool schemas the provider also counts), so it
+// errs toward warning/compacting slightly late rather than spuriously early.
+func estimateMessagesTokens(messages []fantasy.Message) int {
+	total := 0
+	for _, m := range messages {
+		total += estimateMessageTokens(m)
+	}
+	return total
+}
+
+// contextPressureResult carries a pre-round context-pressure check's outcome
+// back to the run loop: the possibly-compacted history and the updated
+// warn-dedupe flag.
+type contextPressureResult struct {
+	messages []fantasy.Message
+	warned   bool
+}
+
+// checkContextPressure runs the #209 pre-round context-window pressure check:
+// it warns as the prompt nears the active model's window and, above the
+// compaction threshold, proactively summarizes the oldest history — BEFORE the
+// provider can reject an oversized request.
+//
+// The size signal is LastStepPromptTokens (the per-CALL input size, overwritten
+// each step), never the cumulative PromptTokens, which only grows and would
+// ratchet the trigger into a compaction spiral (see the session_log
+// token-semantics doc). Before a turn's first step it is 0, so we fall back to a
+// char-heuristic estimate of the carried-over history: that is what makes the
+// check fire on a single-round interactive turn that STARTS near the window, not
+// only on multi-round runs where a prior step reported real usage.
+//
+// A driver may gate compaction behind an opt-in (requireCompactionOptIn): an
+// unattended scheduled run must not silently rewrite its own transcript, so the
+// scheduled driver sets that flag and compaction only fires when
+// FLEET_SCHEDULED_AUTO_COMPACT is also set — otherwise the run only warns (event
+// + a session-log breadcrumb). This is driver-supplied data, NOT a trunk Mode
+// branch (see TestSeamPurity_NoModeBranchInTrunk). The `warned` in/out flag
+// dedupes the warning across rounds; a successful compaction relieves the
+// pressure and resets it.
+func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Message, activeModel fantasy.LanguageModel, sink *streamSink, warned bool) contextPressureResult {
+	out := contextPressureResult{messages: messages, warned: warned}
+	if activeModel == nil || e.logSession == nil {
+		return out
+	}
+	window := contextWindowForModel(activeModel.Model())
+	if window <= 0 {
+		return out
+	}
+	used := e.logSession.LastStepPromptTokens
+	if used <= 0 {
+		used = estimateMessagesTokens(messages)
+	}
+	if used <= 0 {
+		return out
+	}
+
+	pct := float64(used) / float64(window)
+	pressure := map[string]any{evtFieldUsedTokens: used, evtFieldWindowSize: window, evtFieldPct: pct}
+
+	switch {
+	case pct >= contextCompactionThreshold(e.envPrefix):
+		if e.requireCompactionOptIn && !e.envPrefix.lookupBool("SCHEDULED_AUTO_COMPACT") {
+			if !out.warned {
+				sink.emit(evtContextPressure, pressure)
+				e.logSession.AddMessage(roleUser, fmt.Sprintf(
+					"[context_pressure] used=%d window=%d pct=%.2f — set %s_SCHEDULED_AUTO_COMPACT=1 to enable proactive compaction",
+					used, window, pct, e.envPrefix.normalize()), nil, nil)
+				out.warned = true
+			}
+			return out
+		}
+		if res := e.proactiveCompact(ctx, messages); res.compacted {
+			out.messages = res.messages
+			out.warned = false
+			sink.emit(evtContextCompacted, map[string]any{
+				evtFieldRemovedTurns:  res.removedTurns,
+				evtFieldSummaryTokens: res.summaryTokens,
+			})
+		} else if !out.warned {
+			// Nothing compactible (e.g. one enormous message: head + a single
+			// active turn — proactiveCompact's documented no-op). Still surface
+			// the pressure so the worst case isn't silent; the reactive overflow
+			// path is the only backstop left.
+			sink.emit(evtContextPressure, pressure)
+			out.warned = true
+		}
+	case pct >= contextPressureWarnThreshold(e.envPrefix):
+		if !out.warned {
+			sink.emit(evtContextPressure, pressure)
+			out.warned = true
+		}
+	}
 	return out
 }
 

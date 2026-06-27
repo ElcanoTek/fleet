@@ -283,6 +283,41 @@ export type SummaryMeta = {
   costUsd?: number;
 };
 
+/**
+ * ContextPressureNotice is set on the in-flight assistant message when the
+ * prompt is approaching the model's context window (the server's
+ * `fleet.context_pressure` event, #209). Non-terminal and informational — the
+ * turn keeps streaming; the UI just surfaces a warning banner.
+ */
+export type ContextPressureNotice = {
+  usedTokens: number;
+  windowSize: number;
+  /** Fraction of the window used, 0–1. */
+  pct: number;
+};
+
+/**
+ * ContextCompactedNotice is set when the server proactively summarized the
+ * oldest history to make room (`fleet.context_compacted`, #209).
+ */
+export type ContextCompactedNotice = {
+  removedTurns: number;
+  summaryTokens: number;
+};
+
+/** JSON shape of a `fleet.context_pressure` SSE event. */
+export type ContextPressureEventPayload = {
+  used_tokens?: number;
+  window_size?: number;
+  pct?: number;
+};
+
+/** JSON shape of a `fleet.context_compacted` SSE event. */
+export type ContextCompactedEventPayload = {
+  removed_turns?: number;
+  summary_tokens?: number;
+};
+
 export type Message = {
   id: number;
   role: "assistant" | "user";
@@ -313,6 +348,10 @@ export type Message = {
   retrying?: RetryNotice;
   /** Set when the server asks the user to pick a different model. Terminal. */
   modelRequired?: ModelRequired;
+  /** Set when the prompt is nearing the model's context window (#209). Non-terminal. */
+  contextPressure?: ContextPressureNotice;
+  /** Set when older context was proactively summarized to make room (#209). Informational. */
+  contextCompacted?: ContextCompactedNotice;
 };
 
 /**
@@ -379,6 +418,42 @@ export function clearRetryNotice(message: Message): Message {
   if (!message.retrying) return message;
   const { retrying: _retrying, ...rest } = message;
   return rest;
+}
+
+/**
+ * applyContextPressure attaches a context-window pressure warning to a message.
+ * Pure so it can be unit-tested without the component tree.
+ */
+export function applyContextPressure(
+  message: Message,
+  payload: ContextPressureEventPayload,
+): Message {
+  return {
+    ...message,
+    contextPressure: {
+      usedTokens: typeof payload.used_tokens === "number" ? payload.used_tokens : 0,
+      windowSize: typeof payload.window_size === "number" ? payload.window_size : 0,
+      pct: typeof payload.pct === "number" ? payload.pct : 0,
+    },
+  };
+}
+
+/**
+ * applyContextCompacted records that older history was summarized to make room.
+ * A compaction relieves the pressure, so any prior pressure warning is cleared.
+ */
+export function applyContextCompacted(
+  message: Message,
+  payload: ContextCompactedEventPayload,
+): Message {
+  const { contextPressure: _cleared, ...rest } = message;
+  return {
+    ...rest,
+    contextCompacted: {
+      removedTurns: typeof payload.removed_turns === "number" ? payload.removed_turns : 0,
+      summaryTokens: typeof payload.summary_tokens === "number" ? payload.summary_tokens : 0,
+    },
+  };
 }
 
 /**
