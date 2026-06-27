@@ -297,25 +297,10 @@ func run() error {
 	// Health summary (#301): uptime + an injected scheduler worker/task provider
 	// (adapts the sched store's dashboard stats) so the chat-side endpoint can
 	// report a single-pane view without httpapi importing the sched packages.
-	workerStats := func(context.Context) (*httpapi.WorkerStats, error) {
-		ds, err := schedStorage.GetDashboardStats()
-		if err != nil {
-			return nil, err
-		}
-		return &httpapi.WorkerStats{
-			TotalNodes:     ds.TotalNodes,
-			ActiveNodes:    ds.ActiveNodes,
-			IdleNodes:      ds.IdleNodes,
-			QueuedTasks:    ds.PendingTasks,
-			RunningTasks:   ds.RunningTasks,
-			CompletedToday: ds.CompletedTasksToday,
-			FailedToday:    ds.FailedTasksToday,
-		}, nil
-	}
 	chatSrv := httpapi.New(cfg, mgr, chatStore,
 		httpapi.WithClientConfig(bundle),
 		httpapi.WithStartTime(startTime),
-		httpapi.WithWorkerStats(workerStats),
+		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
 	)
 
 	// ── orchestrator HTTP (sched/handlers) ──
@@ -795,6 +780,28 @@ func orchestratorAddr() string {
 }
 
 // ── graceful shutdown helpers (#278) ──
+
+// workerStatsProvider adapts the sched store's dashboard stats into the
+// httpapi.WorkerStats the admin health summary embeds (#301), keeping httpapi
+// free of any sched-package import. Extracted from run() to keep it within the
+// cyclomatic budget.
+func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*httpapi.WorkerStats, error) {
+	return func(context.Context) (*httpapi.WorkerStats, error) {
+		ds, err := schedStorage.GetDashboardStats()
+		if err != nil {
+			return nil, err
+		}
+		return &httpapi.WorkerStats{
+			TotalNodes:     ds.TotalNodes,
+			ActiveNodes:    ds.ActiveNodes,
+			IdleNodes:      ds.IdleNodes,
+			QueuedTasks:    ds.PendingTasks,
+			RunningTasks:   ds.RunningTasks,
+			CompletedToday: ds.CompletedTasksToday,
+			FailedToday:    ds.FailedTasksToday,
+		}, nil
+	}
+}
 
 // shutdownGrace resolves the graceful-shutdown grace period from
 // FLEET_SHUTDOWN_GRACE_SECONDS (config default 30). A non-positive value means

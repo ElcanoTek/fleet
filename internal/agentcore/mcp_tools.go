@@ -199,6 +199,16 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 	if resp.Content != "" {
 		resp.Content = toolRedactor().Redact(resp.Content)
 	}
+	// Output ceiling (#199): cap any single tool result before it enters the
+	// transcript so one oversized output can't overflow the context window (which
+	// otherwise triggers reactive compaction that drops the WRONG messages). Done
+	// after redaction (the cap counts the text that actually flows on) and before
+	// RecordToolResult (the policy + session log see the same bytes).
+	if ceil := maxToolOutputBytes(); ceil > 0 && len(resp.Content) > ceil {
+		orig := len(resp.Content)
+		resp.Content, _ = applyOutputCeiling(resp.Content, ceil)
+		log.Printf("agentcore: truncated %s output from %d to %d bytes (FLEET_MAX_TOOL_OUTPUT_BYTES)", name, orig, len(resp.Content))
+	}
 	if g.policy != nil {
 		// Record the outcome so policies that gate on tool RESULTS observe native
 		// tool calls (bash/python/task_tracker/...), not just the MCP and

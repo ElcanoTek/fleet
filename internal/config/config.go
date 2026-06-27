@@ -108,6 +108,7 @@ var allowedEnvVars = map[string]bool{
 	"LLM_MAX_TOKENS":              true,
 	"REASONING_ENABLED":           true,
 	"REASONING_EFFORT":            true,
+	"FLEET_MAX_TOOL_OUTPUT_BYTES": true,
 
 	// ── personas / protocols ──
 	"PERSONA_DEFAULT": true,
