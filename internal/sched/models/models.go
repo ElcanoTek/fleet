@@ -264,6 +264,10 @@ type Task struct {
 	// Timezone is the IANA timezone the cron Recurrence is evaluated in. Always
 	// present in responses ("UTC" for legacy/unset tasks). See TaskCreate.Timezone.
 	Timezone string `json:"timezone"`
+	// CreatedByKeyID is the scoped API key (if any) that submitted this task, set
+	// server-side at creation so the completion path can attribute cost back to
+	// the key for spending caps. Persisted; not settable by clients.
+	CreatedByKeyID *string `json:"created_by_key_id,omitempty"`
 	// NextRunAtLocal is ScheduledFor rendered in Timezone (RFC3339 with offset),
 	// populated at query time for display so callers need no client-side tz math.
 	// Not persisted; nil when the task has no scheduled_for.
@@ -434,6 +438,9 @@ type APIKeyCreate struct {
 	RateLimit           int      `json:"rate_limit"`
 	ExpiresInDays       *int     `json:"expires_in_days,omitempty"`
 	Description         string   `json:"description"`
+	// Spending caps (nil = unlimited).
+	MaxCostPerDayUSD   *float64 `json:"max_cost_per_day_usd,omitempty"`
+	MaxCostPerMonthUSD *float64 `json:"max_cost_per_month_usd,omitempty"`
 }
 
 // APIKeyResponse is the response model for API key operations.
@@ -449,6 +456,23 @@ type APIKeyResponse struct {
 	ExpiresAt           *time.Time `json:"expires_at,omitempty"`
 	Enabled             bool       `json:"enabled"`
 	Description         string     `json:"description"`
+	// Spending caps + live accumulators (nil cap = unlimited).
+	MaxCostPerDayUSD   *float64 `json:"max_cost_per_day_usd,omitempty"`
+	MaxCostPerMonthUSD *float64 `json:"max_cost_per_month_usd,omitempty"`
+	CostTodayUSD       float64  `json:"cost_today_usd"`
+	CostThisMonthUSD   float64  `json:"cost_this_month_usd"`
+}
+
+// APIKeySpending is the GET /keys/{id}/spending response: current spend vs caps
+// with the next reset instants.
+type APIKeySpending struct {
+	KeyID              string    `json:"key_id"`
+	CostTodayUSD       float64   `json:"cost_today_usd"`
+	MaxCostPerDayUSD   *float64  `json:"max_cost_per_day_usd,omitempty"`
+	CostThisMonthUSD   float64   `json:"cost_this_month_usd"`
+	MaxCostPerMonthUSD *float64  `json:"max_cost_per_month_usd,omitempty"`
+	DailyResetAt       time.Time `json:"daily_reset_at"`
+	MonthlyResetAt     time.Time `json:"monthly_reset_at"`
 }
 
 // APIKeyCreated is the response model when a new key is created.

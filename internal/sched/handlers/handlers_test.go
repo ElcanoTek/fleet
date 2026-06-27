@@ -109,6 +109,8 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 		r.Get("/keys", h.ListAPIKeys)
 		r.Get("/keys/audit", h.GetAuditLog)
 		r.Get("/keys/{key_id}", h.GetAPIKey)
+		r.Get("/keys/{key_id}/spending", h.GetKeySpending)
+		r.Post("/keys/{key_id}/reset-spending", h.ResetKeySpending)
 		r.Post("/keys/{key_id}/rotate", h.RotateAPIKey)
 		r.Post("/keys/{key_id}/revoke", h.RevokeAPIKey)
 		r.Delete("/keys/{key_id}", h.DeleteAPIKey)
@@ -184,6 +186,60 @@ func TestTaskTimezoneValidationAndScheduling(t *testing.T) {
 	}
 	if task.Timezone != "UTC" {
 		t.Errorf("default Timezone = %q, want UTC", task.Timezone)
+	}
+}
+
+func TestKeySpendingEndpoint(t *testing.T) {
+	r, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Create a key with a daily cap via the HTTP path.
+	body := `{"name":"ci-key","max_cost_per_day_usd":10.5}`
+	req := httptest.NewRequest("POST", "/keys", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-admin-key")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create key: status %d (%s)", w.Code, w.Body.String())
+	}
+	var created models.APIKeyCreated
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created key: %v", err)
+	}
+	if created.MaxCostPerDayUSD == nil || *created.MaxCostPerDayUSD != 10.5 {
+		t.Errorf("created key cap = %v, want 10.5", created.MaxCostPerDayUSD)
+	}
+
+	// Fetch its spending.
+	req = httptest.NewRequest("GET", "/keys/"+created.KeyID+"/spending", nil)
+	req.Header.Set("X-API-Key", "test-admin-key")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get spending: status %d (%s)", w.Code, w.Body.String())
+	}
+	var snap models.APIKeySpending
+	if err := json.NewDecoder(w.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode spending: %v", err)
+	}
+	if snap.KeyID != created.KeyID {
+		t.Errorf("spending key_id = %q, want %q", snap.KeyID, created.KeyID)
+	}
+	if snap.CostTodayUSD != 0 {
+		t.Errorf("fresh key CostTodayUSD = %v, want 0", snap.CostTodayUSD)
+	}
+	if snap.MaxCostPerDayUSD == nil || *snap.MaxCostPerDayUSD != 10.5 {
+		t.Errorf("spending cap = %v, want 10.5", snap.MaxCostPerDayUSD)
+	}
+
+	// Unknown key → 404.
+	req = httptest.NewRequest("GET", "/keys/key_nope/spending", nil)
+	req.Header.Set("X-API-Key", "test-admin-key")
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("unknown key spending: status %d, want 404", w.Code)
 	}
 }
 

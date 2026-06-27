@@ -795,6 +795,9 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		Files:         task.Files,
 	})
 	newTask.CreatedBy = task.CreatedBy
+	// Carry the originating API key forward so recurring task cost keeps counting
+	// against the key's spending caps.
+	newTask.CreatedByKeyID = task.CreatedByKeyID
 
 	if _, err := s.AddTaskWithContext(ctx, newTask); err != nil {
 		log.Printf("Error creating next recurring task for %s: %v", task.ID, err)

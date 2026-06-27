@@ -509,6 +509,30 @@ paths:
       security: [{ adminApiKey: [] }]
       responses:
         "200": { description: Deleted }
+  /keys/{key_id}/spending:
+    parameters:
+      - name: key_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Get an API key's current spend vs. daily/monthly caps.
+      security: [{ adminApiKey: [] }]
+      responses:
+        "200": { description: OK }
+        "404": { $ref: "#/components/responses/Error" }
+  /keys/{key_id}/reset-spending:
+    parameters:
+      - name: key_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Reset an API key's daily/monthly spend accumulators (operator override).
+      security: [{ adminApiKey: [] }]
+      responses:
+        "200": { description: Reset }
+        "404": { $ref: "#/components/responses/Error" }
   /keys/{key_id}/rotate:
     parameters:
       - name: key_id
