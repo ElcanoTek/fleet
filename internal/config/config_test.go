@@ -133,6 +133,29 @@ func TestLoad_ShutdownGraceOverride(t *testing.T) {
 	}
 }
 
+func TestLoad_SandboxDiskGB(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Default 0 → the sandbox layer applies its own default (5 GiB).
+	if cfg.SandboxDiskGB != 0 {
+		t.Errorf("SandboxDiskGB default: got %d, want 0 (sandbox-default sentinel)", cfg.SandboxDiskGB)
+	}
+
+	t.Setenv("FLEET_SANDBOX_DISK_GB", "20")
+	cfg, err = Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SandboxDiskGB != 20 {
+		t.Errorf("SandboxDiskGB override: got %d, want 20", cfg.SandboxDiskGB)
+	}
+}
+
 func TestLoad_TitleModelOverride(t *testing.T) {
 	isolateEnv(t)
 	chdir(t, t.TempDir())

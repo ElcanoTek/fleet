@@ -193,6 +193,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SANDBOX_MEMORY":         true,
 	"FLEET_SANDBOX_CPUS":           true,
 	"FLEET_SANDBOX_PIDS":           true,
+	"FLEET_SANDBOX_DISK_GB":        true,
 	"FLEET_WORKSPACE_ROOT":         true,
 	"CHAT_LOCKDOWN_ONLY":           true,
 	"CHAT_LOCKDOWN_ALLOWED_MODELS": true,
@@ -419,9 +420,13 @@ type Config struct {
 	SandboxRuntime string
 	// Per-container cgroup caps (empty/0 → sandbox defaults: 512m / 1.0 / 128).
 	// Operators size these to the host the docs told them to provision.
-	SandboxMemory         string
-	SandboxCPUs           string
-	SandboxPids           int
+	SandboxMemory string
+	SandboxCPUs   string
+	SandboxPids   int
+	// SandboxDiskGB caps each sandbox's writable disk usage, in GiB
+	// (FLEET_SANDBOX_DISK_GB). 0 → sandbox default (5); negative disables the
+	// quota. Stops an agent from filling the host disk (#216).
+	SandboxDiskGB         int
 	WorkspaceRoot         string
 	LockdownOnly          bool
 	LockdownAllowedModels []string
@@ -558,6 +563,7 @@ func Load(envFile string) (*Config, error) {
 		SandboxMemory:         getenvFleet("SANDBOX_MEMORY"),
 		SandboxCPUs:           getenvFleet("SANDBOX_CPUS"),
 		SandboxPids:           getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB:         getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
 		WorkspaceRoot:         getenvFleet("WORKSPACE_ROOT"),
 		LockdownOnly:          getenvBool("CHAT_LOCKDOWN_ONLY", false),
 		LockdownAllowedModels: splitLockdownModels(os.Getenv("CHAT_LOCKDOWN_ALLOWED_MODELS")),
