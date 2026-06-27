@@ -57,6 +57,20 @@ export function SearchBar({
     inputRef.current?.focus();
   }, []);
 
+  // Close on Escape via a window-level listener — focus-independent, so it fires
+  // even if focus has left the input (more robust than relying on the dialog's
+  // onKeyDown bubbling, which proved flaky under headless CI).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   // Debounced search: fire 300ms after the last keystroke (no Enter needed). All
   // state updates happen inside the timer/async callback, never synchronously in
   // the effect body.
