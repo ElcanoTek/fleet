@@ -50,6 +50,10 @@ type RunConfig struct {
 	// Selection is the per-run MCP selection; its server names form the Gate-1
 	// opt-in set.
 	Selection MCPSelection
+	// CredentialAllowlist scopes which (server, account) MCP pairs the run may
+	// call (Gate-3, #184). nil = no restriction (inherit global). Only the
+	// scheduled driver sets it today; the interactive driver leaves it nil.
+	CredentialAllowlist CredentialAllowlist
 	// RemediationHints configures the fast.io guard (defaults to
 	// DefaultRemediationHints, which exposes both remediation paths).
 	RemediationHints RemediationHints
@@ -265,6 +269,11 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	if broker == nil {
 		broker = NewLocalMCPBroker(mcpClient, hints)
 	}
+	// Gate-3 (#184): scope MCP calls to the task's permitted (server, account)
+	// pairs. nil allowlist = inherit global (no-op wrap). Applied at the broker
+	// seam — the single path every MCP call routes through — so the in-process
+	// and native-acp flavors enforce it identically.
+	broker = GateMCPBrokerWithAllowlist(broker, cfg.CredentialAllowlist)
 	// The catalog is data, sourced either from an injected list (broker mode) or
 	// the local client. Decoupling it from the client lets the broker own the
 	// client without the main process double-spawning servers just to discover.

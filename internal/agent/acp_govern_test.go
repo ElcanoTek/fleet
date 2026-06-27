@@ -110,7 +110,7 @@ func TestStageBroker_UnwiredSurfaceFailsClosed(t *testing.T) {
 // contract that scheduled native-acp stages notes — and only notes — host-side.
 func TestBuildACPHostGovernance_ScheduledWiresNoteOnly(t *testing.T) {
 	note := &recordingNoteProposer{}
-	gov := buildACPHostGovernance(nil, nil, nil, nil, acpStagers{note: note})
+	gov := buildACPHostGovernance(nil, nil, nil, nil, nil, acpStagers{note: note})
 
 	if gov.StagingWired {
 		t.Fatalf("scheduled wiring must NOT set StagingWired (approval/memory are interactive-only)")
@@ -149,7 +149,7 @@ func TestBuildACPHostGovernance_InteractiveWiresAllStagers(t *testing.T) {
 	appr := &recordingApprovalStager{}
 	mem := &recordingMemoryProposer{}
 	note := &recordingNoteProposer{}
-	gov := buildACPHostGovernance(nil, nil, nil, nil, acpStagers{approval: appr, memory: mem, note: note})
+	gov := buildACPHostGovernance(nil, nil, nil, nil, nil, acpStagers{approval: appr, memory: mem, note: note})
 
 	if !gov.StagingWired {
 		t.Fatalf("interactive wiring must set StagingWired when approval/memory are present")
@@ -166,7 +166,7 @@ func TestBuildACPHostGovernance_InteractiveWiresAllStagers(t *testing.T) {
 // seam inert when no stagers are wired (matching an in-process run with no stagers
 // — the agent reports "not wired" identically).
 func TestBuildACPHostGovernance_NoStagersInert(t *testing.T) {
-	gov := buildACPHostGovernance(nil, nil, nil, nil, acpStagers{})
+	gov := buildACPHostGovernance(nil, nil, nil, nil, nil, acpStagers{})
 	if gov.StagingWired || gov.NoteProposerWired || gov.StageBroker != nil {
 		t.Fatalf("no stagers → fully inert staging seam, got StagingWired=%v NoteProposerWired=%v broker=%v",
 			gov.StagingWired, gov.NoteProposerWired, gov.StageBroker)

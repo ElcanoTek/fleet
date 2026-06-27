@@ -504,7 +504,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist"
 
 // AddTask adds or updates a task.
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
@@ -515,8 +515,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id,
-			trigger_type
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+			trigger_type, credential_allowlist
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -545,7 +545,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			runtime_flavor = EXCLUDED.runtime_flavor,
 			timezone = EXCLUDED.timezone,
 			created_by_key_id = EXCLUDED.created_by_key_id,
-			trigger_type = EXCLUDED.trigger_type`,
+			trigger_type = EXCLUDED.trigger_type,
+			credential_allowlist = EXCLUDED.credential_allowlist`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -575,6 +576,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		taskTimezoneOrUTC(task.Timezone),
 		task.CreatedByKeyID,
 		triggerTypeOrCron(task.TriggerType),
+		marshalCredentialAllowlist(task.CredentialAllowlist),
 	)
 	return err
 }
@@ -616,6 +618,31 @@ func mcpSelectionOrEmpty(s models.MCPSelection) models.MCPSelection {
 	return s
 }
 
+// marshalCredentialAllowlist serializes the allowlist for the nullable JSONB
+// column, PRESERVING the nil-vs-empty distinction: nil → SQL NULL ("inherit
+// global"), a non-nil (possibly empty) list → its JSON ("[]" = deny all).
+func marshalCredentialAllowlist(al models.CredentialAllowlist) any {
+	if al == nil {
+		return nil
+	}
+	return marshalJSON(al)
+}
+
+// unmarshalCredentialAllowlist reads the nullable JSONB column back. A NULL/empty
+// column is nil ("inherit global"); "[]" decodes to a non-nil empty slice
+// ("deny all"), so the distinction round-trips.
+func unmarshalCredentialAllowlist(ns sql.NullString) models.CredentialAllowlist {
+	if !ns.Valid || ns.String == "" {
+		return nil
+	}
+	var result models.CredentialAllowlist
+	if err := json.Unmarshal([]byte(ns.String), &result); err != nil {
+		log.Printf("Warning: failed to unmarshal credential_allowlist: %v (input: %.100s)", err, ns.String)
+		return nil
+	}
+	return result
+}
+
 func nullableString(s string) *string {
 	if s == "" {
 		return nil
@@ -654,6 +681,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		timezone               sql.NullString
 		createdByKeyID         sql.NullString
 		triggerType            sql.NullString
+		credentialAllowlist    sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -662,7 +690,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &runtimeFlavor, &timezone, &createdByKeyID,
-		&triggerType,
+		&triggerType, &credentialAllowlist,
 	)
 	if err != nil {
 		return nil, err
@@ -699,6 +727,9 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	} else {
 		task.MCPSelection = models.MCPSelection{}
 	}
+	// NULL → nil (inherit global); "[]" → non-nil empty (deny all). The
+	// distinction is load-bearing for Gate-3, so do NOT coerce nil to empty.
+	task.CredentialAllowlist = unmarshalCredentialAllowlist(credentialAllowlist)
 	if agentSessionID.Valid {
 		task.AgentSessionID = &agentSessionID.String
 	}
@@ -1218,7 +1249,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			max_retries = $24,
 			allow_network = $25,
 			runtime_flavor = $26,
-			timezone = $27
+			timezone = $27,
+			credential_allowlist = $28
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1247,6 +1279,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.AllowNetwork,
 		nullableString(task.RuntimeFlavor),
 		taskTimezoneOrUTC(task.Timezone),
+		marshalCredentialAllowlist(task.CredentialAllowlist),
 	)
 	return err
 }

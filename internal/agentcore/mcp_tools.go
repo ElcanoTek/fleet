@@ -119,6 +119,11 @@ func buildFantasyTools(
 			mcpSkippedAllowlist++
 			continue
 		}
+		// Gate 3 (per-task credential allowlist, #184) is enforced at the MCPBroker
+		// seam (gateMCPBrokerWithAllowlist), not here — the broker is the single
+		// seam BOTH the in-process and native-acp MCP calls route through, so the
+		// allowlist holds on both flavors. The tool is advertised; a denied call is
+		// refused at dispatch with a governance message.
 		allTools = append(allTools, &mcpTool{
 			serverName: st.ServerName,
 			tool:       st.Tool,
