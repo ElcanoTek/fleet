@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -68,6 +69,11 @@ type chatStore interface {
 	LatestApprovalByTool(ctx context.Context, convID, toolName string) (*store.Approval, error)
 	SupersedePendingApprovals(ctx context.Context, convID, toolName string) (int64, error)
 	CountUserMessagesAfterTimestamp(ctx context.Context, convID string, ts int64) (int64, error)
+
+	// Health summary (#301): DB liveness + pool snapshot + chat-side LLM spend.
+	Ping(ctx context.Context) error
+	PoolStats() sql.DBStats
+	LLMUsageSince(ctx context.Context, since int64) (calls int64, costUSD float64, err error)
 
 	// Users (auth gate) + admin stats + sweeps.
 	IsUser(ctx context.Context, email string) (bool, error)

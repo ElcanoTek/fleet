@@ -95,6 +95,14 @@ type Server struct {
 	// before the goroutine launches, so Wait never races ahead of an Add.
 	activeTurns     sync.WaitGroup
 	activeTurnCount atomic.Int64
+
+	// Health-summary inputs (#301). startTime backs uptime; version is the build
+	// label; workerStats (optional) returns scheduler worker/task counts from the
+	// sched store — injected so httpapi stays sched-agnostic. nil → that section
+	// is reported null.
+	startTime   time.Time
+	version     string
+	workerStats func(context.Context) (*WorkerStats, error)
 }
 
 // reconnectCounter is a concurrency-safe tally of SSE reconnect outcomes.
@@ -213,6 +221,24 @@ type Option func(*Server)
 // serve the deployment's branding + chat empty-state to the web.
 func WithClientConfig(b *clientconfig.Bundle) Option {
 	return func(s *Server) { s.clientConfig = b }
+}
+
+// WithStartTime records the process start so the health summary (#301) can
+// report uptime.
+func WithStartTime(t time.Time) Option {
+	return func(s *Server) { s.startTime = t }
+}
+
+// WithVersion sets the build label reported by the health summary (#301).
+func WithVersion(v string) Option {
+	return func(s *Server) { s.version = v }
+}
+
+// WithWorkerStats injects a provider for scheduler worker/task counts (from the
+// sched store) so the health summary (#301) can include them without httpapi
+// importing the sched packages. nil leaves the workers/tasks section null.
+func WithWorkerStats(fn func(context.Context) (*WorkerStats, error)) Option {
+	return func(s *Server) { s.workerStats = fn }
 }
 
 // inflightEntry pairs the cancel-func for a turn with a unique token,
@@ -463,6 +489,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
+	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
 	return recoverMiddleware(bodyLimitMiddleware(mux))
 }
 
