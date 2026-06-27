@@ -867,6 +867,12 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 			return fmt.Errorf("credential_allowlist entries must name a server")
 		}
 	}
+	// Loop config (#179): a nil config is an ordinary one-shot task; a non-nil
+	// config must name an exit condition (the runner needs to know how to judge
+	// each iteration).
+	if tc.LoopConfig != nil && strings.TrimSpace(tc.LoopConfig.ExitCondition) == "" {
+		return fmt.Errorf("loop_config requires an exit_condition")
+	}
 	return nil
 }
 
@@ -1239,6 +1245,21 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 	}
 	localizeTask(task)
 
+	// For a looped task (#179), embed its per-iteration telemetry so a caller can
+	// see how many cycles ran and what each verification returned. Only queried
+	// for looped tasks — an ordinary one-shot task returns the bare Task as before.
+	if task.LoopConfig != nil {
+		iterations, ierr := h.storage.ListTaskIterations(r.Context(), taskID)
+		if ierr != nil {
+			log.Printf("Warning: failed to load task iterations: %v", ierr)
+		}
+		writeJSON(w, http.StatusOK, struct {
+			*models.Task
+			Iterations []*models.TaskIteration `json:"iterations"`
+		}{Task: task, Iterations: iterations})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, task)
 }
 
@@ -1482,6 +1503,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		SetMCPSelection:        tc.MCPSelection != nil,
 		CredentialAllowlist:    tc.CredentialAllowlist,
 		SetCredentialAllowlist: tc.CredentialAllowlist != nil,
+		LoopConfig:             tc.LoopConfig,
+		SetLoopConfig:          tc.LoopConfig != nil,
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,

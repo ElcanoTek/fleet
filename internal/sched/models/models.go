@@ -70,6 +70,62 @@ type CredentialAllowlistEntry struct {
 // JSONB column (NULL ⇒ nil) rather than coerced to an empty array.
 type CredentialAllowlist []CredentialAllowlistEntry
 
+// DefaultLoopMaxIterations bounds a loop whose config omits MaxIterations.
+const DefaultLoopMaxIterations = 5
+
+// LoopConfig, when non-nil, turns a scheduled task into an iterative
+// worker+verifier loop (#179). Each iteration runs the worker agent to
+// completion, then evaluates the exit condition; if it passes the loop
+// succeeds, if it fails and iterations remain the worker is re-run with the
+// prior output appended as context. nil = an ordinary one-shot task.
+type LoopConfig struct {
+	// MaxIterations caps the number of worker+verify cycles (<=0 →
+	// DefaultLoopMaxIterations).
+	MaxIterations int `json:"max_iterations"`
+	// ExitCondition selects the pass/fail evaluation for each iteration:
+	//   "shell:<cmd>" — run <cmd> in the task sandbox; exit 0 = pass
+	//   "llm"         — ask VerifierModel the VerifierPrompt; YES = pass
+	//   "regex:<pat>" — match <pat> against the last assistant message; match = pass
+	ExitCondition string `json:"exit_condition"`
+	// VerifierModel is the OpenRouter slug for the "llm" exit; empty → the task's
+	// fallback model.
+	VerifierModel string `json:"verifier_model,omitempty"`
+	// VerifierPrompt is the YES/NO prompt for the "llm" exit. The worker's last
+	// assistant message is appended as context automatically.
+	VerifierPrompt string `json:"verifier_prompt,omitempty"`
+	// TimeBudgetSeconds is an absolute wall-clock deadline across all iterations
+	// (0 = no deadline).
+	TimeBudgetSeconds int `json:"time_budget_seconds,omitempty"`
+	// MaxCostUSD caps the accumulated cost across all iterations, checked BEFORE
+	// each iteration (0 = no ceiling). Mirrors the per-run cost ceiling, applied
+	// across runs.
+	MaxCostUSD float64 `json:"max_cost_usd,omitempty"`
+}
+
+// Iteration status values recorded in task_iterations.status.
+const (
+	IterationStatusRunning = "running"
+	IterationStatusPassed  = "passed"
+	IterationStatusFailed  = "failed"
+	IterationStatusStopped = "stopped"
+)
+
+// TaskIteration is one worker+verify cycle of a looped task (#179), recorded for
+// per-iteration telemetry. It is the Go analogue of the task_iterations row.
+type TaskIteration struct {
+	ID                  uuid.UUID  `json:"id"`
+	TaskID              uuid.UUID  `json:"task_id"`
+	IterationNumber     int        `json:"iteration_number"`
+	StartedAt           time.Time  `json:"started_at"`
+	CompletedAt         *time.Time `json:"completed_at,omitempty"`
+	WorkerSessionID     string     `json:"worker_session_id,omitempty"`
+	ExitConditionResult string     `json:"exit_condition_result,omitempty"`
+	CostUSD             float64    `json:"cost_usd"`
+	PromptTokens        int64      `json:"prompt_tokens"`
+	CompletionTokens    int64      `json:"completion_tokens"`
+	Status              string     `json:"status"`
+}
+
 // User represents a system user.
 type User struct {
 	ID             uuid.UUID  `json:"id"`
@@ -268,12 +324,15 @@ type TaskCreate struct {
 	// CredentialAllowlist restricts which (server, account) pairs this task may
 	// call. nil inherits global (current behaviour); set an explicit list to
 	// enforce least-privilege credential scoping. See CredentialAllowlist.
-	CredentialAllowlist    CredentialAllowlist `json:"credential_allowlist"`
-	Priority               int                 `json:"priority"`
-	InstructionSelfImprove bool                `json:"instruction_self_improve,omitempty"`
-	ScheduledFor           *time.Time          `json:"scheduled_for,omitempty"`
-	Recurrence             string              `json:"recurrence,omitempty"`
-	Files                  []string            `json:"files,omitempty"`
+	CredentialAllowlist CredentialAllowlist `json:"credential_allowlist"`
+	// LoopConfig, when non-nil, turns this task into an iterative worker+verifier
+	// loop (#179). nil = ordinary one-shot task. See LoopConfig.
+	LoopConfig             *LoopConfig `json:"loop_config,omitempty"`
+	Priority               int         `json:"priority"`
+	InstructionSelfImprove bool        `json:"instruction_self_improve,omitempty"`
+	ScheduledFor           *time.Time  `json:"scheduled_for,omitempty"`
+	Recurrence             string      `json:"recurrence,omitempty"`
+	Files                  []string    `json:"files,omitempty"`
 	// MaxRetries is the number of ADDITIONAL whole-task attempts after the first
 	// when a run fails cleanly with a transient error. 0 (default) = no retries.
 	MaxRetries *int `json:"max_retries,omitempty"`
@@ -311,9 +370,12 @@ type Task struct {
 	MCPSelection  MCPSelection `json:"mcp_selection"`
 	// CredentialAllowlist restricts which (server, account) pairs this task may
 	// call. nil = inherit global. See TaskCreate.CredentialAllowlist.
-	CredentialAllowlist    CredentialAllowlist `json:"credential_allowlist"`
-	Priority               int                 `json:"priority"`
-	InstructionSelfImprove bool                `json:"instruction_self_improve,omitempty"`
+	CredentialAllowlist CredentialAllowlist `json:"credential_allowlist"`
+	// LoopConfig, when non-nil, runs this task as an iterative worker+verifier
+	// loop (#179). nil = ordinary one-shot. See LoopConfig.
+	LoopConfig             *LoopConfig `json:"loop_config,omitempty"`
+	Priority               int         `json:"priority"`
+	InstructionSelfImprove bool        `json:"instruction_self_improve,omitempty"`
 	// AllowNetwork controls whether this task's execution sandbox keeps outbound
 	// egress. Default false seals it (--network=none); see TaskCreate.AllowNetwork.
 	AllowNetwork bool `json:"allow_network,omitempty"`
@@ -389,6 +451,7 @@ func NewTask(tc TaskCreate) *Task {
 		MaxIterations:          tc.MaxIterations,
 		MCPSelection:           tc.MCPSelection,
 		CredentialAllowlist:    tc.CredentialAllowlist,
+		LoopConfig:             tc.LoopConfig,
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
