@@ -186,6 +186,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HealthResponse" }
+  /metrics:
+    get:
+      summary: Prometheus metrics (text exposition format). Admin-API-key gated.
+      security: [{ adminApiKey: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            text/plain:
+              schema: { type: string }
   /api/config:
     get:
       summary: Public dashboard config (branding, feature flags).

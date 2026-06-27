@@ -25,6 +25,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -1685,6 +1686,13 @@ func (s *Server) runTurnAsync(
 		Cancelled:           res.Cancelled,
 	}); err != nil {
 		log.Printf("RecordTurn: %v", err)
+	}
+	// Operational metrics (#176): cost + tokens by model, and a turn-timeout
+	// counter when the turn ended because its wall-clock deadline fired (as
+	// opposed to a user Stop, which cancels turnCtx without a deadline error).
+	metrics.RecordTurnUsage(res.Model, res.CostUSD, res.PromptTokens, res.CompletionTokens, res.CachedTokens)
+	if errors.Is(turnCtx.Err(), context.DeadlineExceeded) {
+		metrics.RecordTurnTimeout("interactive")
 	}
 
 	// First-turn auto-title: on the opening turn, summarize the exchange

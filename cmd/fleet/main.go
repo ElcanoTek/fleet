@@ -47,6 +47,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
+	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -447,6 +448,11 @@ func run() error {
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{Limiter: agentLimiter, DrainGrace: poolGrace})
 	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 
+	// Metrics gauges (#176): live in-flight turn counts + warm sandbox depth,
+	// evaluated at each /metrics scrape. Extracted to keep run() within the
+	// cyclomatic budget.
+	registerRuntimeMetrics(chatSrv.ActiveTurns, pool.ActiveTasks, mgr.SandboxPool())
+
 	// ── boot listeners ──
 	chatAddr := addrOr(cfg.Addr, ":8080")
 	orchAddr := orchestratorAddr()
@@ -592,6 +598,7 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 	// exactly what getClientIP() already expects.
 	r.Use(middleware.ClientIPFromXFF())
 	r.Use(middleware.Recoverer)
+	r.Use(orchestratorMetricsMiddleware) // #176: record request count + latency
 	r.Use(h.SecurityHeadersMiddleware)
 	r.Use(h.BodySizeLimitMiddleware)
 	r.Use(h.CSRFMiddleware)
@@ -609,6 +616,12 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 	// Admin-gated mutations.
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminAuthMiddleware)
+		// Prometheus scrape endpoint (#176) — admin-API-key gated like other
+		// sensitive reads; cost/token data must not be public.
+		r.Get("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+			_, _ = w.Write([]byte(metrics.Render()))
+		})
 		r.Delete("/nodes/{node_id}", h.UnregisterNode)
 		r.Post("/tasks/cleanup", h.CleanupHistory)
 		r.Post("/tasks/model", h.BulkSetTaskModel) // fleet-wide model re-assignment (admin-gated)
@@ -780,6 +793,34 @@ func orchestratorAddr() string {
 }
 
 // ── graceful shutdown helpers (#278) ──
+
+// registerRuntimeMetrics wires the pull-at-scrape gauges (#176): in-flight turn
+// counts (interactive/scheduled) and warm sandbox depth. Extracted from run() to
+// keep it within the cyclomatic budget.
+func registerRuntimeMetrics(activeTurns, activeTasks func() int, sandboxPool *sandbox.Pool) {
+	metrics.RegisterActiveAgents(activeTurns, activeTasks)
+	if sandboxPool != nil {
+		// Parked-and-ready containers (operationally interesting "how warm now"),
+		// not the configured target size.
+		metrics.RegisterSandboxPoolSize(func() int { _, avail := sandboxPool.Stats(); return avail })
+	}
+}
+
+// orchestratorMetricsMiddleware records per-request count + latency for the
+// Prometheus /metrics endpoint (#176), labeled by chi route pattern (so high-
+// cardinality path params don't explode the series), method, and status.
+func orchestratorMetricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+		route := chi.RouteContext(r.Context()).RoutePattern()
+		if route == "" {
+			route = "unmatched"
+		}
+		metrics.RecordHTTPRequest(route, r.Method, strconv.Itoa(ww.Status()), time.Since(start).Seconds())
+	})
+}
 
 // workerStatsProvider adapts the sched store's dashboard stats into the
 // httpapi.WorkerStats the admin health summary embeds (#301), keeping httpapi
