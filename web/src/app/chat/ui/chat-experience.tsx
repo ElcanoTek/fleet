@@ -51,6 +51,7 @@ import { LoadingLogo } from "./LoadingLogo";
 import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
 import { RuntimePicker } from "./RuntimePicker";
 import { PermissionCard } from "./PermissionCard";
+import { SearchBar } from "./SearchBar";
 import { getPill } from "./protocolPills";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import {
@@ -486,6 +487,8 @@ export function ChatExperience() {
     setUploadingConvs(new Set(uploadingConvsRef.current));
   };
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // searchOpen gates the Cmd/Ctrl+K full-text search palette (#308).
+  const [searchOpen, setSearchOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   // showStats gates the whole per-turn "details" block: the cost /
   // latency / tokens / model chip, the conversation-wide totals chip,
@@ -854,6 +857,36 @@ export function ChatExperience() {
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  // Global search shortcut (#308): Cmd/Ctrl+K opens the search palette; Cmd/Ctrl+F
+  // is an alternate binding, but only when the user isn't typing in a field (so it
+  // doesn't shadow the browser's in-page find while composing a message).
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      // Escape closes the palette. Handled HERE (top-level, always-mounted
+      // listener) rather than inside SearchBar so close is reliable regardless of
+      // focus or mount timing. setSearchOpen(false) is a no-op when already closed.
+      if (event.key === "Escape") {
+        setSearchOpen(false);
+        return;
+      }
+      if (!(event.metaKey || event.ctrlKey)) return;
+      const key = event.key.toLowerCase();
+      if (key !== "k" && key !== "f") return;
+      if (key === "f") {
+        const el = document.activeElement;
+        const typing =
+          el instanceof HTMLInputElement ||
+          el instanceof HTMLTextAreaElement ||
+          (el instanceof HTMLElement && el.isContentEditable);
+        if (typing) return;
+      }
+      event.preventDefault();
+      setSearchOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -3595,6 +3628,15 @@ export function ChatExperience() {
                   - lockdownAvailable && !lockdownOnly: both buttons.
                   - !lockdownAvailable: only the regular +button (no
                     sandbox image configured, lockdown unsupported). */}
+              <button
+                className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] sm:size-7"
+                type="button"
+                title="Search conversations (⌘K)"
+                aria-label="Search conversations"
+                onClick={() => setSearchOpen(true)}
+              >
+                <Icon name="search" className="size-4" />
+              </button>
               {!serverConfig.lockdownOnly ? (
                 <button
                   className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] sm:size-7"
@@ -3819,6 +3861,16 @@ export function ChatExperience() {
           type="button"
           onClick={() => setSidebarOpen(false)}
         />
+
+        {searchOpen ? (
+          <SearchBar
+            onClose={() => setSearchOpen(false)}
+            onSelect={(conversationId) => {
+              setSearchOpen(false);
+              void loadConversation(conversationId);
+            }}
+          />
+        ) : null}
 
         {confirmBulkDelete ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center px-4">

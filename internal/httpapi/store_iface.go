@@ -32,6 +32,10 @@ type chatStore interface {
 	SetRuntime(ctx context.Context, userEmail, convID, runtime string) error
 	UpdateTitle(ctx context.Context, userEmail, convID, title string) error
 
+	// Full-text search (#308): ranked title + message-content matches, scoped to
+	// the user and paginated; returns (results, total, error).
+	SearchConversations(ctx context.Context, userEmail, query string, limit, offset int) ([]store.SearchResult, int, error)
+
 	// History + summaries.
 	LoadHistory(ctx context.Context, convID string) ([]agent.HistoryEntry, error)
 	AppendHistory(ctx context.Context, convID string, entries []agent.HistoryEntry) error

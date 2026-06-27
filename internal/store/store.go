@@ -31,7 +31,17 @@ import (
 // migrations (see migrations.go + migrations/*.sql).
 type Store struct {
 	db *sql.DB
+	// searchEnabled gates full-text search index maintenance (#308): when false,
+	// AppendHistory skips writing message_search_content and the backfill is a
+	// no-op, so a high-write deployment can opt out of GIN index upkeep
+	// (FLEET_SEARCH_ENABLED=false). Defaults to true. Set via SetSearchEnabled.
+	searchEnabled bool
 }
+
+// SetSearchEnabled toggles full-text search index maintenance. cmd/fleet calls
+// this from config (FLEET_SEARCH_ENABLED) right after Open. Off → AppendHistory
+// stops populating message_search_content and BackfillSearchContent no-ops.
+func (s *Store) SetSearchEnabled(enabled bool) { s.searchEnabled = enabled }
 
 // Conversation is the list-item shape exposed to handlers.
 type Conversation struct {
@@ -97,7 +107,7 @@ func Open(dsn string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, searchEnabled: true}, nil
 }
 
 // Close the underlying database.
@@ -410,8 +420,38 @@ func (s *Store) AppendHistory(ctx context.Context, convID string, entries []agen
 		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d)", base, base+1, base+2, base+3, base+4)
 		args = append(args, convID, e.Role, e.Type, string(e.Content), now)
 	}
-	if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+	// RETURNING id (in VALUES order) so we can link the extracted FTS plaintext
+	// rows back to their messages. Postgres preserves multi-row INSERT order.
+	b.WriteString(" RETURNING id")
+	ids := make([]int64, 0, len(entries))
+	rows, err := tx.QueryContext(ctx, b.String(), args...)
+	if err != nil {
 		return err
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	// Close before the next statement on this tx (one active result set at a time).
+	_ = rows.Close()
+	if len(ids) != len(entries) {
+		return fmt.Errorf("AppendHistory: inserted %d messages but got %d ids", len(entries), len(ids))
+	}
+
+	// Full-text search index maintenance (#308): extract searchable plaintext from
+	// the just-inserted messages into message_search_content, in the same tx.
+	if s.searchEnabled {
+		if err := insertSearchContent(ctx, tx, convID, now, entries, ids); err != nil {
+			return err
+		}
 	}
 
 	if _, err := tx.ExecContext(ctx,
