@@ -56,6 +56,10 @@ type Options struct {
 	// dispatch (fail-closed).
 	AllowUngovernedScheduled bool
 
+	// IterationStore records per-iteration telemetry for looped tasks (#179). nil
+	// disables telemetry (the loop still runs); production wires the sched storage.
+	IterationStore IterationStore
+
 	// ResolveRuntime resolves a per-task runtime-flavor name (the Operations
 	// Center picker) to its bundle descriptor. nil disables per-task overrides
 	// (every task uses the global Runtime/RuntimeFlavor). An unknown name falls
@@ -95,6 +99,15 @@ type Runner struct {
 
 	allowUngovernedScheduled bool
 	resolveRuntime           func(name string) (clientconfig.Runtime, bool)
+
+	iterationStore IterationStore
+}
+
+// IterationStore records per-iteration telemetry for a looped task (#179). It is
+// the narrow subset of sched storage the loop runner needs; *storage.Storage
+// satisfies it. nil = telemetry disabled (the loop still runs).
+type IterationStore interface {
+	AddTaskIteration(ctx context.Context, it *models.TaskIteration) error
 }
 
 // New builds a Runner. The base system prompt + persona are read once at
@@ -114,6 +127,7 @@ func New(opts Options) *Runner {
 		runtimeFlavor:            opts.RuntimeFlavor,
 		allowUngovernedScheduled: opts.AllowUngovernedScheduled,
 		resolveRuntime:           opts.ResolveRuntime,
+		iterationStore:           opts.IterationStore,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -181,21 +195,37 @@ func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task) 
 	return sb, cleanup, err
 }
 
-// Run executes one task to completion and returns the converted session log. It
-// satisfies runner.TaskRunner.
-
+// Run executes one task and returns the converted session log. It satisfies
+// runner.TaskRunner. A task with no LoopConfig is a single worker pass (the
+// prior behaviour, byte-identical); a task WITH a LoopConfig (#179) runs the
+// worker+verify loop instead — see runWithLoop.
 func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession, error) {
+	if task.LoopConfig != nil {
+		return r.runWithLoop(ctx, task)
+	}
+	session, _, _, err := r.runWorker(ctx, task, "", nil)
+	return session, err
+}
+
+// runWorker executes ONE worker pass: it resolves the model, acquires the
+// sandbox + MCP, runs the agent to completion, and (when lc != nil) evaluates
+// the loop exit condition while the sandbox is still live. extraPrompt carries a
+// prior iteration's output forward as additional context (empty on the first /
+// only pass). It returns the session, whether the exit condition passed (always
+// true / unused when lc == nil), the exit-condition result label, and any run
+// error.
+func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt string, lc *models.LoopConfig) (*models.LogSession, bool, string, error) {
 	// Resolve the task's model (falls back to the configured task model).
 	modelSlug := r.cfg.TaskModel
 	if task.Model != nil && strings.TrimSpace(*task.Model) != "" {
 		modelSlug = strings.TrimSpace(*task.Model)
 	}
 	if modelSlug == "" {
-		return nil, fmt.Errorf("no model configured for scheduled task (set CUTLASS_TASK_MODEL or the task's model)")
+		return nil, false, "", fmt.Errorf("no model configured for scheduled task (set CUTLASS_TASK_MODEL or the task's model)")
 	}
 	model, err := r.mgr.Resolve(ctx, modelSlug)
 	if err != nil {
-		return nil, fmt.Errorf("resolve scheduled model %q: %w", modelSlug, err)
+		return nil, false, "", fmt.Errorf("resolve scheduled model %q: %w", modelSlug, err)
 	}
 	var fallback = model
 	if task.FallbackModel != nil && strings.TrimSpace(*task.FallbackModel) != "" {
@@ -214,7 +244,7 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	// outbound egress only via its AllowNetwork field. See takeTaskSandbox.
 	sb, cleanup, err := takeTaskSandbox(ctx, r.mgr.SandboxPool(), task)
 	if err != nil {
-		return nil, fmt.Errorf("take sandbox: %w", err)
+		return nil, false, "", fmt.Errorf("take sandbox: %w", err)
 	}
 	defer cleanup()
 
@@ -231,7 +261,7 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	// a concurrent task. A default-only / empty selection reuses the shared client.
 	mcpClient, mcpCleanup, err := r.bindTaskMCP(ctx, task)
 	if err != nil {
-		return nil, err
+		return nil, false, "", err
 	}
 	defer mcpCleanup()
 
@@ -283,12 +313,27 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 				"already performed by an earlier attempt; do not duplicate it.\n\n%s",
 			task.AttemptCount+1, task.Prompt)
 	}
+	// Loop context (#179): a prior iteration's output is fed forward so the worker
+	// can improve on it. Empty on the first / only pass.
+	if strings.TrimSpace(extraPrompt) != "" {
+		prompt = fmt.Sprintf(
+			"%s\n\n---\nA previous attempt did NOT pass verification. Its output follows; "+
+				"diagnose why it failed and produce a corrected result:\n---\n%s",
+			prompt, extraPrompt)
+	}
 	runErr := a.Execute(ctx, prompt)
 	session := convertLogSession(task, a.LogSession())
 	if runErr != nil {
-		return session, runErr
+		return session, false, "", runErr
 	}
-	return session, nil
+	if lc == nil {
+		// One-shot task: no exit condition to evaluate. "passed" is unused.
+		return session, true, "", nil
+	}
+	// Evaluate the loop exit condition while the sandbox is still live (the
+	// shell: form runs a command in it). model/fallback back the llm: form.
+	passed, result := r.evaluateExitCondition(ctx, lc, sb, session, fallback)
+	return session, passed, result, nil
 }
 
 // taskMCPSelection converts the task's persisted MCP selection into the

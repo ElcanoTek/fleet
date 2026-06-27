@@ -262,6 +262,16 @@ func (s *Storage) GetTask(taskID uuid.UUID) (*models.Task, error) {
 	return s.db.GetTask(context.Background(), taskID)
 }
 
+// AddTaskIteration upserts a per-iteration telemetry row for a looped task (#179).
+func (s *Storage) AddTaskIteration(ctx context.Context, it *models.TaskIteration) error {
+	return s.db.AddTaskIteration(ctx, it)
+}
+
+// ListTaskIterations returns a task's iterations in order.
+func (s *Storage) ListTaskIterations(ctx context.Context, taskID uuid.UUID) ([]*models.TaskIteration, error) {
+	return s.db.ListTaskIterations(ctx, taskID)
+}
+
 // GetAllTasks gets all tasks.
 func (s *Storage) GetAllTasks() ([]*models.Task, error) {
 	return s.db.GetAllTasks(context.Background())
@@ -545,6 +555,11 @@ type TaskEdit struct {
 	// with nil to revert to global inherit).
 	CredentialAllowlist    models.CredentialAllowlist
 	SetCredentialAllowlist bool
+	// LoopConfig + SetLoopConfig mirror the same pattern: the flag distinguishes
+	// "leave unchanged" from "replace" (including replacing with nil to disable
+	// the loop).
+	LoopConfig    *models.LoopConfig
+	SetLoopConfig bool
 }
 
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
@@ -579,6 +594,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	}
 	if edit.SetCredentialAllowlist {
 		task.CredentialAllowlist = edit.CredentialAllowlist
+	}
+	if edit.SetLoopConfig {
+		task.LoopConfig = edit.LoopConfig
 	}
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
@@ -827,6 +845,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		MaxIterations:       task.MaxIterations,
 		MCPSelection:        task.MCPSelection,
 		CredentialAllowlist: task.CredentialAllowlist,
+		LoopConfig:          task.LoopConfig,
 		Priority:            task.Priority,
 		ScheduledFor:        &nextTime,
 		Recurrence:          task.Recurrence,

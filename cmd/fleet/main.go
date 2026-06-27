@@ -421,6 +421,8 @@ func run() error {
 		NativeAgentImage:         nativeAgentImage,
 		RuntimeFlavor:            scheduledFlavor,
 		AllowUngovernedScheduled: allowUngovernedScheduled,
+		// Record per-iteration telemetry for looped tasks (#179).
+		IterationStore: schedStorage,
 		// Resolve a task's per-task runtime-flavor override (Operations Center
 		// picker) against the same bundle catalog the chat picker uses.
 		ResolveRuntime: bundle.Runtime,

@@ -380,6 +380,31 @@ fleet-admin sched task set-credentials <task_id> --allow github:client-a --allow
 fleet-admin sched task set-credentials <task_id> --clear   # revert to global inherit
 ```
 
+### Iterative verification loops
+
+A scheduled task with a `loop_config` (#179) runs as a bounded
+**worker → verify → retry** loop instead of a single pass: each iteration runs
+the worker agent to completion, evaluates an exit condition, and — if it fails
+and budget remains — re-runs the worker with the prior output fed forward, up to
+`max_iterations` (default 5). A task with no `loop_config` is an ordinary
+one-shot run (unchanged).
+
+The exit condition (each iteration is judged by exactly one):
+
+- `shell:<cmd>` — run `<cmd>` in the worker's sandbox; exit 0 = pass.
+- `regex:<pattern>` — match `<pattern>` against the worker's last assistant message.
+- `llm` — ask `verifier_model` (defaults to the task's fallback model) the
+  `verifier_prompt`; a reply beginning with `YES` = pass.
+
+Two ceilings stop a runaway loop, **checked before each iteration** so
+already-accrued cost counts: `max_cost_usd` (accumulated across iterations) and
+`time_budget_seconds` (absolute wall-clock). Each iteration is the **same
+governed worker pass** an ordinary scheduled task uses (the loop adds only the
+verify/retry control around `agentcore.Run`), so the sandbox, policy, audit, and
+cost gates apply per cycle — "governance is one core" holds. Per-iteration
+telemetry (status, exit result, cost, tokens) is recorded to `task_iterations`
+and embedded in the `GET /tasks/{id}` response for a looped task.
+
 ---
 
 ## The permission UI
