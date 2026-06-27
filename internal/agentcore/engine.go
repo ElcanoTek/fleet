@@ -28,6 +28,11 @@ type engine struct {
 	logSession *LogSession
 	onRetry    fantasy.OnRetryCallback
 
+	// healthRegistry tracks per-model circuit state across runs (#267). When the
+	// primary model's circuit is open the round skips straight to the fallback
+	// instead of burning attempts on a known-bad model. nil = disabled (no-op).
+	healthRegistry *ProviderHealthRegistry
+
 	// providerOptionsFn builds the per-stream OpenRouter ProviderOptions for the
 	// active model slug. Defaults to a reasoning-off pin-only build; drivers may
 	// override to add reasoning / long-context headers.

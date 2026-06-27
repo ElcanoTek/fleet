@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -30,9 +31,10 @@ import (
 // can assert history replay) and streams a fixed event vocabulary, returning the
 // turn's new history. It needs no model, sandbox, or network.
 type fakeEngine struct {
-	mu          sync.Mutex
-	lastHistory []agent.HistoryEntry
-	turns       int
+	mu             sync.Mutex
+	lastHistory    []agent.HistoryEntry
+	turns          int
+	providerHealth []agentcore.ModelHealth
 }
 
 func (f *fakeEngine) RunTurn(_ context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
@@ -69,6 +71,7 @@ func (f *fakeEngine) MCPClient() *mcp.Client                              { retu
 func (f *fakeEngine) SandboxPool() *sandbox.Pool                          { return nil }
 func (f *fakeEngine) MCPServerCatalog() []agent.OptionalServerInfo        { return nil }
 func (f *fakeEngine) ListPersonas() ([]string, error)                     { return nil, nil }
+func (f *fakeEngine) ProviderHealth() []agentcore.ModelHealth             { return f.providerHealth }
 
 // fakeChatStore is an in-memory chatStore. It embeds a nil *store.Store so it
 // satisfies the (wide) interface for free; only the handful of methods the
