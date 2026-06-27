@@ -110,8 +110,26 @@ func (s *Store) Close() error {
 // after a truncate is still a no-op on the second run.
 func (s *Store) TruncateAllForTest(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, memories, users RESTART IDENTITY CASCADE`)
+		`TRUNCATE TABLE conversations, memories, users, panic_events RESTART IDENTITY CASCADE`)
 	return err
+}
+
+// RecordPanic appends a recovered-panic row (#241). Called best-effort from the
+// safe.PanicEventWriter hook that cmd/fleet registers; failures are logged by the
+// caller, never propagated into the recovery path.
+func (s *Store) RecordPanic(ctx context.Context, location, message, stack string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO panic_events (ts, location, message, stack) VALUES ($1, $2, $3, $4)`,
+		time.Now().Unix(), location, message, stack,
+	)
+	return err
+}
+
+// CountPanics returns the number of recorded panic events (test/diagnostic helper).
+func (s *Store) CountPanics(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM panic_events`).Scan(&n)
+	return n, err
 }
 
 // CreateConversation inserts a new conversation and returns its generated ID.

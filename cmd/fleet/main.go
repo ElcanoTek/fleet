@@ -40,6 +40,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/runner"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -181,6 +182,17 @@ func run() error {
 	}
 	defer chatStore.Close()
 	log.Printf("chat DB connected + migrated")
+
+	// Persist every recovered panic (#241) to the chat DB's panic_events table so
+	// operators can query crashes even if stdout/journald lost the line. The hook
+	// is best-effort and bounded so it never stalls or re-panics inside recovery.
+	safe.PanicEventWriter = func(location, message string, stack []byte) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := chatStore.RecordPanic(ctx, location, message, string(stack)); err != nil {
+			log.Printf("panic event persist failed (location=%s): %v", location, err)
+		}
+	}
 
 	schedStorage := storage.New()
 	if err := schedStorage.Initialize(schedDB); err != nil {
@@ -399,15 +411,21 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Worker pool runs until ctx is cancelled, then drains.
+	// Worker pool runs until ctx is cancelled, then drains. Guarded so a panic in
+	// the pool loop is a contained, logged event — and poolDone still closes
+	// (deferred) so shutdown's <-poolDone can't hang.
 	poolDone := make(chan struct{})
 	go func() {
+		defer safe.Recover("cmd.pool.run", nil)
+		defer close(poolDone)
 		pool.Run(ctx)
-		close(poolDone)
 	}()
 
 	errCh := make(chan error, 2)
 	go func() {
+		// A panic in the serve loop triggers graceful shutdown (errCh) rather than
+		// crashing the process or hanging; handler panics are caught upstream.
+		defer safe.Recover("cmd.chat-server", func(any) { errCh <- fmt.Errorf("chat-server: panicked") })
 		// serveChat logs the listening line and terminates TLS when
 		// FLEET_TLS_MODE is manual/auto (default off = plain HTTP, unchanged).
 		if err := serveChat(chatServer, cfg); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -415,6 +433,7 @@ func run() error {
 		}
 	}()
 	go func() {
+		defer safe.Recover("cmd.orchestrator", func(any) { errCh <- fmt.Errorf("orchestrator: panicked") })
 		log.Printf("orchestrator listening on %s", orchAddr)
 		if err := orchServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("orchestrator: %w", err)

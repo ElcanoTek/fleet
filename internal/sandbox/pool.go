@@ -5,6 +5,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // Pool keeps a small number of pre-spawned sandboxes warm so the first
@@ -75,6 +77,7 @@ func NewPool(cfg PoolConfig) *Pool {
 	}
 	p.slots = make(chan *Sandbox, cfg.Size)
 	go func() {
+		defer safe.Recover("sandbox.pool.warm", nil)
 		for i := 0; i < cfg.Size; i++ {
 			p.fill()
 		}
@@ -134,11 +137,11 @@ func (p *Pool) Take() (*Sandbox, func(), error) {
 	select {
 	case sb := <-p.slots:
 		// Refill async so concurrent turns don't starve.
-		go p.fill()
+		safe.Go("sandbox.pool.fill", p.fill)
 		return sb, sb.Close, nil
 	default:
 		// Pool empty — cold-start. Replenish anyway.
-		go p.fill()
+		safe.Go("sandbox.pool.fill", p.fill)
 		sb, err := p.newSandbox(p.cfg.FillCtx)
 		if err != nil {
 			return nil, func() {}, err
