@@ -352,6 +352,34 @@ placeholder — the same hook the reactive `context_length_exceeded` recovery pa
 already uses, so a proactive compaction does not count toward the consecutive-
 compaction cap that guards against compaction loops.
 
+### Per-task credential allowlist (least-privilege MCP)
+
+A scheduled task's MCP selection (`mcp_selection`) controls *which servers* it
+sees; the **credential allowlist** (#184) additionally scopes *which
+`(server, account)` credential pairs* it may call — Gate-3, after the server
+opt-in (Gate-1) and per-server tool allowlist (Gate-2):
+
+- `credential_allowlist: null` (the default) → **inherit global**: any server in
+  `mcp_selection` is permitted (unchanged behaviour).
+- `credential_allowlist: []` → **deny all** MCP calls.
+- `credential_allowlist: [{"server":"github","account":"client-a"}, {"server":"sendgrid"}]`
+  → only those pairs. A `{"server":"sendgrid"}` entry (no account) matches **only
+  the default seat**; a named account must be enumerated explicitly.
+
+A call to a non-permitted pair is **denied before it executes**: the tool is
+advertised but every invocation returns a governance message to the model (a
+tool result, not a transport error) and records an audit entry
+(`credential_allowlist_denied`). The allowlist stores pair **names** only —
+credential values never enter the database (they live in the host env file; see
+[`internal/creds`](../internal/creds)).
+
+Set or clear it with the admin CLI (the task must be pending/scheduled):
+
+```sh
+fleet-admin sched task set-credentials <task_id> --allow github:client-a --allow sendgrid
+fleet-admin sched task set-credentials <task_id> --clear   # revert to global inherit
+```
+
 ---
 
 ## The permission UI

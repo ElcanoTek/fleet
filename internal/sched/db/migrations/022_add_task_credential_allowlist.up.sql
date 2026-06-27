@@ -1,0 +1,12 @@
+-- Per-task credential allowlist: which (server, account) MCP pairs a scheduled
+-- task is permitted to call. NULL means "inherit global" (the prior behaviour —
+-- any server in mcp_selection is permitted), so existing rows keep working
+-- unchanged. A non-null (possibly empty) array enforces least-privilege: an MCP
+-- call to a pair not on the list is denied before it executes.
+--
+-- TODO(security): credential_allowlist stores (server, account) pair NAMES only,
+-- not credential values. The values themselves never enter the database (they
+-- live in the process env file; see internal/creds). If account names are
+-- themselves sensitive, encrypt this column with the AES-256-GCM pattern used
+-- for project secrets (cf. Suna's apps/api/src/projects/secrets.ts).
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS credential_allowlist JSONB;

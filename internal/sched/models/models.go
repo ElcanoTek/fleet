@@ -49,6 +49,27 @@ type MCPChoice struct {
 // MCPSelection is the per-task list of chosen servers.
 type MCPSelection []MCPChoice
 
+// CredentialAllowlistEntry names one permitted (server, account) MCP pair for a
+// task. Account=="" means the default/shared seat only. Like MCPChoice it
+// mirrors agentcore.CredentialAllowlistEntry byte-for-byte at the JSON level so
+// a task's allowlist hands straight to the run loop's Gate-3, and is mirrored
+// here (rather than imported) to keep the sched data layer free of an agentcore
+// dependency.
+type CredentialAllowlistEntry struct {
+	Server  string `json:"server"`
+	Account string `json:"account,omitempty"`
+}
+
+// CredentialAllowlist is the per-task list of permitted (server, account) pairs.
+//
+//   - nil           → no restriction (inherit global; the prior behaviour).
+//   - non-nil empty → deny ALL MCP calls.
+//   - populated     → only the listed pairs are permitted.
+//
+// The nil-vs-empty distinction is load-bearing, so it is stored as a NULLABLE
+// JSONB column (NULL ⇒ nil) rather than coerced to an empty array.
+type CredentialAllowlist []CredentialAllowlistEntry
+
 // User represents a system user.
 type User struct {
 	ID             uuid.UUID  `json:"id"`
@@ -239,16 +260,20 @@ func NewNode(reg NodeRegistration) *Node {
 
 // TaskCreate is the request model for creating a new task.
 type TaskCreate struct {
-	Prompt                 string       `json:"prompt"`
-	Model                  *string      `json:"model,omitempty"`
-	FallbackModel          *string      `json:"fallback_model,omitempty"`
-	MaxIterations          *int         `json:"max_iterations,omitempty"`
-	MCPSelection           MCPSelection `json:"mcp_selection,omitempty"`
-	Priority               int          `json:"priority"`
-	InstructionSelfImprove bool         `json:"instruction_self_improve,omitempty"`
-	ScheduledFor           *time.Time   `json:"scheduled_for,omitempty"`
-	Recurrence             string       `json:"recurrence,omitempty"`
-	Files                  []string     `json:"files,omitempty"`
+	Prompt        string       `json:"prompt"`
+	Model         *string      `json:"model,omitempty"`
+	FallbackModel *string      `json:"fallback_model,omitempty"`
+	MaxIterations *int         `json:"max_iterations,omitempty"`
+	MCPSelection  MCPSelection `json:"mcp_selection,omitempty"`
+	// CredentialAllowlist restricts which (server, account) pairs this task may
+	// call. nil inherits global (current behaviour); set an explicit list to
+	// enforce least-privilege credential scoping. See CredentialAllowlist.
+	CredentialAllowlist    CredentialAllowlist `json:"credential_allowlist"`
+	Priority               int                 `json:"priority"`
+	InstructionSelfImprove bool                `json:"instruction_self_improve,omitempty"`
+	ScheduledFor           *time.Time          `json:"scheduled_for,omitempty"`
+	Recurrence             string              `json:"recurrence,omitempty"`
+	Files                  []string            `json:"files,omitempty"`
 	// MaxRetries is the number of ADDITIONAL whole-task attempts after the first
 	// when a run fails cleanly with a transient error. 0 (default) = no retries.
 	MaxRetries *int `json:"max_retries,omitempty"`
@@ -278,14 +303,17 @@ type TaskCreate struct {
 
 // Task represents a task to be executed by a worker.
 type Task struct {
-	ID                     uuid.UUID    `json:"id"`
-	Prompt                 string       `json:"prompt"`
-	Model                  *string      `json:"model,omitempty"`
-	FallbackModel          *string      `json:"fallback_model,omitempty"`
-	MaxIterations          *int         `json:"max_iterations,omitempty"`
-	MCPSelection           MCPSelection `json:"mcp_selection"`
-	Priority               int          `json:"priority"`
-	InstructionSelfImprove bool         `json:"instruction_self_improve,omitempty"`
+	ID            uuid.UUID    `json:"id"`
+	Prompt        string       `json:"prompt"`
+	Model         *string      `json:"model,omitempty"`
+	FallbackModel *string      `json:"fallback_model,omitempty"`
+	MaxIterations *int         `json:"max_iterations,omitempty"`
+	MCPSelection  MCPSelection `json:"mcp_selection"`
+	// CredentialAllowlist restricts which (server, account) pairs this task may
+	// call. nil = inherit global. See TaskCreate.CredentialAllowlist.
+	CredentialAllowlist    CredentialAllowlist `json:"credential_allowlist"`
+	Priority               int                 `json:"priority"`
+	InstructionSelfImprove bool                `json:"instruction_self_improve,omitempty"`
 	// AllowNetwork controls whether this task's execution sandbox keeps outbound
 	// egress. Default false seals it (--network=none); see TaskCreate.AllowNetwork.
 	AllowNetwork bool `json:"allow_network,omitempty"`
@@ -360,6 +388,7 @@ func NewTask(tc TaskCreate) *Task {
 		FallbackModel:          tc.FallbackModel,
 		MaxIterations:          tc.MaxIterations,
 		MCPSelection:           tc.MCPSelection,
+		CredentialAllowlist:    tc.CredentialAllowlist,
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
@@ -395,16 +424,17 @@ type StatusUpdate struct {
 
 // TaskAssignment is the task assignment carried to the worker.
 type TaskAssignment struct {
-	TaskID                 uuid.UUID    `json:"task_id"`
-	Prompt                 string       `json:"prompt"`
-	Model                  *string      `json:"model,omitempty"`
-	FallbackModel          *string      `json:"fallback_model,omitempty"`
-	MaxIterations          *int         `json:"max_iterations,omitempty"`
-	MCPSelection           MCPSelection `json:"mcp_selection,omitempty"`
-	InstructionSelfImprove bool         `json:"instruction_self_improve,omitempty"`
-	OrchestratorURL        string       `json:"orchestrator_url"`
-	Files                  []string     `json:"files,omitempty"`
-	FileChecksums          []string     `json:"file_checksums,omitempty"`
+	TaskID                 uuid.UUID           `json:"task_id"`
+	Prompt                 string              `json:"prompt"`
+	Model                  *string             `json:"model,omitempty"`
+	FallbackModel          *string             `json:"fallback_model,omitempty"`
+	MaxIterations          *int                `json:"max_iterations,omitempty"`
+	MCPSelection           MCPSelection        `json:"mcp_selection,omitempty"`
+	CredentialAllowlist    CredentialAllowlist `json:"credential_allowlist"`
+	InstructionSelfImprove bool                `json:"instruction_self_improve,omitempty"`
+	OrchestratorURL        string              `json:"orchestrator_url"`
+	Files                  []string            `json:"files,omitempty"`
+	FileChecksums          []string            `json:"file_checksums,omitempty"`
 }
 
 // NodeHeartbeat is the heartbeat from a node to indicate it's still alive.

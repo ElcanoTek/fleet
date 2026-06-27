@@ -267,6 +267,7 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 		RuntimeFlavor:            runtimeFlavor,
 		AllowUngovernedScheduled: r.allowUngovernedScheduled,
 		MCPSelection:             taskMCPSelection(task),
+		CredentialAllowlist:      taskCredentialAllowlist(task),
 	})
 
 	// On a retry (a prior attempt failed transiently and was re-queued), warn the
@@ -303,6 +304,21 @@ func taskMCPSelection(task *models.Task) agentcore.MCPSelection {
 		sel = append(sel, agentcore.MCPChoice{Server: c.Server, Account: c.Account})
 	}
 	return sel
+}
+
+// taskCredentialAllowlist converts the task's persisted credential allowlist
+// (#184) into the agentcore form the run loop's Gate-3 enforces. nil → nil
+// (inherit global); the nil-vs-empty distinction is preserved so an empty list
+// still denies all MCP calls.
+func taskCredentialAllowlist(task *models.Task) agentcore.CredentialAllowlist {
+	if task.CredentialAllowlist == nil {
+		return nil
+	}
+	al := make(agentcore.CredentialAllowlist, 0, len(task.CredentialAllowlist))
+	for _, e := range task.CredentialAllowlist {
+		al = append(al, agentcore.CredentialAllowlistEntry{Server: e.Server, Account: e.Account})
+	}
+	return al
 }
 
 // bindTaskMCP resolves the MCP client the scheduled run should use.

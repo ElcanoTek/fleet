@@ -125,6 +125,7 @@ func buildACPHostGovernance(
 	allow agentcore.MCPAllowlist,
 	optionalServers agentcore.MCPOptionalSet,
 	selection agentcore.MCPSelection,
+	credentialAllowlist agentcore.CredentialAllowlist,
 	stagers acpStagers,
 ) acpHostGovernance {
 	g := acpHostGovernance{}
@@ -134,8 +135,13 @@ func buildACPHostGovernance(
 		// The SAME in-process broker the native-inprocess loop uses — one seam,
 		// one result rendering. DefaultRemediationHints because the host broker
 		// has no per-conversation remediation context (parity with the prior
-		// dedicated broker, which also used the defaults).
-		g.MCPBroker = agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints)
+		// dedicated broker, which also used the defaults). Gate-3 (#184) wraps the
+		// broker so a denied (server, account) pair is refused HERE, at the host
+		// credential boundary, on the native-acp path exactly as in-process — a nil
+		// allowlist = inherit global (no-op wrap).
+		g.MCPBroker = agentcore.GateMCPBrokerWithAllowlist(
+			agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
+			credentialAllowlist)
 	}
 
 	g.StagingWired = stagers.approval != nil || stagers.memory != nil

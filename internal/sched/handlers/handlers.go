@@ -860,6 +860,13 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 			return fmt.Errorf("mcp_selection entries must name a server")
 		}
 	}
+	// Same for the credential allowlist (#184): a nil allowlist inherits global,
+	// but every explicit entry must name a server.
+	for _, entry := range tc.CredentialAllowlist {
+		if strings.TrimSpace(entry.Server) == "" {
+			return fmt.Errorf("credential_allowlist entries must name a server")
+		}
+	}
 	return nil
 }
 
@@ -1190,6 +1197,7 @@ func (h *Handlers) GetPendingTask(w http.ResponseWriter, r *http.Request) {
 		FallbackModel:          assignedTask.FallbackModel,
 		MaxIterations:          assignedTask.MaxIterations,
 		MCPSelection:           assignedTask.MCPSelection,
+		CredentialAllowlist:    assignedTask.CredentialAllowlist,
 		InstructionSelfImprove: assignedTask.InstructionSelfImprove,
 		OrchestratorURL:        h.config.OrchestratorURL,
 		Files:                  assignedTask.Files,
@@ -1472,6 +1480,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		MaxIterations:          tc.MaxIterations,
 		MCPSelection:           tc.MCPSelection,
 		SetMCPSelection:        tc.MCPSelection != nil,
+		CredentialAllowlist:    tc.CredentialAllowlist,
+		SetCredentialAllowlist: tc.CredentialAllowlist != nil,
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,

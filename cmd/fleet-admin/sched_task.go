@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -29,10 +30,10 @@ type taskExportEnvelope struct {
 	Tasks   []*models.Task `json:"tasks"`
 }
 
-// cmdSchedTask dispatches `fleet-admin sched task export|import|set-model`.
+// cmdSchedTask dispatches `fleet-admin sched task export|import|set-model|set-credentials`.
 func cmdSchedTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched task export|import|set-model")
+		return errf(1, "usage: fleet-admin sched task export|import|set-model|set-credentials")
 	}
 	switch argv[0] {
 	case "export":
@@ -41,9 +42,84 @@ func cmdSchedTask(argv []string) int {
 		return schedTaskImport(argv[1:])
 	case "set-model":
 		return schedTaskSetModel(argv[1:])
+	case "set-credentials":
+		return schedTaskSetCredentials(argv[1:])
 	default:
-		return errf(1, "unknown sched task subcommand %q (want export|import|set-model)", argv[0])
+		return errf(1, "unknown sched task subcommand %q (want export|import|set-model|set-credentials)", argv[0])
 	}
+}
+
+// allowFlag collects repeatable --allow values (server or server:account).
+type allowFlag []string
+
+func (a *allowFlag) String() string { return strings.Join(*a, ",") }
+func (a *allowFlag) Set(v string) error {
+	*a = append(*a, v)
+	return nil
+}
+
+// schedTaskSetCredentials sets (or clears) a task's per-task credential allowlist
+// (#184): which (server[:account]) MCP pairs the task may call. Each --allow is
+// `server` (default seat only) or `server:account`. --clear reverts the task to
+// global inherit (NULL). The task must still be editable (pending/scheduled).
+func schedTaskSetCredentials(argv []string) int {
+	fs := flag.NewFlagSet("sched task set-credentials", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	doClear := fs.Bool("clear", false, "clear the allowlist (revert to global inherit)")
+	var allows allowFlag
+	fs.Var(&allows, "allow", "permit a server[:account] pair (repeatable)")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		return errf(1, "usage: fleet-admin sched task set-credentials <task_id> --allow server[:account] ... | --clear")
+	}
+	taskID, err := uuid.Parse(strings.TrimSpace(rest[0]))
+	if err != nil {
+		return errf(1, "invalid task id %q: %v", rest[0], err)
+	}
+	if *doClear && len(allows) > 0 {
+		return errf(1, "--clear and --allow are mutually exclusive")
+	}
+	if !*doClear && len(allows) == 0 {
+		return errf(1, "provide at least one --allow server[:account], or --clear")
+	}
+
+	// --clear → nil (inherit global); otherwise a non-nil list of parsed entries.
+	var allowlist models.CredentialAllowlist
+	if !*doClear {
+		allowlist = models.CredentialAllowlist{}
+		for _, a := range allows {
+			server, account, _ := strings.Cut(a, ":")
+			server = strings.TrimSpace(server)
+			account = strings.TrimSpace(account)
+			if server == "" {
+				return errf(1, "--allow %q has no server", a)
+			}
+			allowlist = append(allowlist, models.CredentialAllowlistEntry{Server: server, Account: account})
+		}
+	}
+
+	st, code := openSchedStorage(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer st.Close()
+
+	updated, err := st.UpdateTaskCredentialAllowlist(context.Background(), taskID, allowlist)
+	if err != nil {
+		if errors.Is(err, storage.ErrTaskNotEditable) {
+			return errf(4, "task %s is no longer editable (must be pending or scheduled)", taskID)
+		}
+		return errf(5, "set credentials: %v", err)
+	}
+	if *doClear {
+		fmt.Fprintf(os.Stderr, "cleared credential allowlist on task %s (now inherits global)\n", updated.ID)
+	} else {
+		fmt.Fprintf(os.Stderr, "set credential allowlist on task %s (%d permitted pair(s))\n", updated.ID, len(updated.CredentialAllowlist))
+	}
+	return 0
 }
 
 // schedTaskSetModel bulk re-assigns the pinned model (and optional fallback)

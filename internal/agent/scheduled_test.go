@@ -192,7 +192,7 @@ func TestACPMCPClient_NoSelectionAdvertisesNoSurface(t *testing.T) {
 	if got := a.acpMCPClient(); got != nil {
 		t.Fatalf("no-selection task must advertise no MCP surface (nil client), got %v", got)
 	}
-	gov := buildACPHostGovernance(a.acpMCPClient(), nil, nil, a.mcpSelection, acpStagers{})
+	gov := buildACPHostGovernance(a.acpMCPClient(), nil, nil, a.mcpSelection, nil, acpStagers{})
 	if gov.MCPDescriptors != nil || gov.MCPBroker != nil {
 		t.Fatalf("no-selection task must yield no descriptors/broker, got descs=%v broker=%v",
 			gov.MCPDescriptors, gov.MCPBroker)

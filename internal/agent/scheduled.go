@@ -103,6 +103,10 @@ type Agent struct {
 	// in-loop load-on-demand) rather than inheriting whatever the shared client
 	// happens to hold — avoiding cross-task scope creep. Empty/nil = no MCP surface.
 	mcpSelection agentcore.MCPSelection
+
+	// credentialAllowlist scopes which (server, account) MCP pairs this task may
+	// call (Gate-3, #184). nil = inherit global; threaded into RunConfig.
+	credentialAllowlist agentcore.CredentialAllowlist
 }
 
 // Options configure a scheduled Agent.
@@ -152,6 +156,11 @@ type Options struct {
 	// servers); empty = no MCP surface. The in-process flavor ignores it (it uses
 	// load-on-demand via the loader tools).
 	MCPSelection agentcore.MCPSelection
+
+	// CredentialAllowlist scopes which (server, account) MCP pairs this task may
+	// call (Gate-3, #184). nil = inherit global. Threaded into RunConfig so the
+	// run loop denies any pair not on the list before the call is dispatched.
+	CredentialAllowlist agentcore.CredentialAllowlist
 }
 
 // NewAgent builds a scheduled driver from options. The session log is fresh.
@@ -183,6 +192,7 @@ func NewAgent(opts Options) *Agent {
 		runtimeFlavor:            opts.RuntimeFlavor,
 		allowUngovernedScheduled: opts.AllowUngovernedScheduled,
 		mcpSelection:             opts.MCPSelection,
+		credentialAllowlist:      opts.CredentialAllowlist,
 	}
 }
 
@@ -424,9 +434,12 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		// FLEET_SCHEDULED_AUTO_COMPACT (#209): without it, pressure only warns
 		// rather than silently rewriting the transcript.
 		RequireCompactionOptIn: true,
-		LoaderTools:            loaderTools,
-		NativeTools:            nativeTools,
-		ProviderHeaders:        agentcore.DefaultProviderHeaders,
+		// Per-task credential allowlist (#184): scope which (server, account) MCP
+		// pairs this task may call. nil = inherit global.
+		CredentialAllowlist: a.credentialAllowlist,
+		LoaderTools:         loaderTools,
+		NativeTools:         nativeTools,
+		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 	}
 
 	res, err := agentcore.Run(ctx, agentcore.ModeScheduled, cfg, deps)
@@ -549,7 +562,7 @@ func (a *Agent) runScheduledACP(ctx context.Context, task, systemPrompt string) 
 	// interactive-only) — matching the in-process scheduled policy. MCP descriptors
 	// carry NO credentials; the broker runs each call host-side against the
 	// per-task credentialed client.
-	gov := buildACPHostGovernance(mcpClient, allow, optional, a.mcpSelection, acpStagers{
+	gov := buildACPHostGovernance(mcpClient, allow, optional, a.mcpSelection, a.credentialAllowlist, acpStagers{
 		note: a.noteProposer,
 	})
 

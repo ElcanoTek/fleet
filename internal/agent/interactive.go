@@ -271,7 +271,9 @@ func runInteractiveTurnACP(ctx context.Context, tc TurnConfig, obs agentcore.Obs
 	// the SAME shared helper the scheduled driver uses so both modes broker MCP
 	// credentials and delegate staging identically. Interactive wires all three
 	// stagers (approval / memory / note); the descriptors carry no credentials.
-	gov := buildACPHostGovernance(tc.MCPClient, tc.Allowlist, tc.OptionalServers, tc.Selection, acpStagers{
+	// Interactive turns have no per-task credential allowlist (#184) — that is a
+	// scheduled-task scoping control — so pass nil (inherit global).
+	gov := buildACPHostGovernance(tc.MCPClient, tc.Allowlist, tc.OptionalServers, tc.Selection, nil, acpStagers{
 		approval: tc.ApprovalStager,
 		memory:   tc.MemoryProposer,
 		note:     tc.NoteProposer,
