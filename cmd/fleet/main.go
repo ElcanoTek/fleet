@@ -165,7 +165,7 @@ func run() error {
 	// Handed to BOTH the interactive Manager and the scheduled worker pool so the
 	// cap is genuinely box-wide.
 	agentLimiter := admission.New(cfg.MaxConcurrentAgents, admission.DefaultReserved(cfg.MaxConcurrentAgents))
-	//nolint:gosec // G706 false positive: all args are ints rendered with %d (no CR/LF can forge a log line); derived from operator-set FLEET_MAX_CONCURRENT_AGENTS, not request input.
+	// Args are ints (%d) from operator-set FLEET_MAX_CONCURRENT_AGENTS — no CR/LF, no log-injection vector.
 	log.Printf("admission: total=%d scheduled_max=%d interactive_reserved=%d",
 		agentLimiter.Total(), agentLimiter.SchedulableSlots(), agentLimiter.Total()-agentLimiter.SchedulableSlots())
 
@@ -229,12 +229,12 @@ func run() error {
 		if _, ok := bundle.Runtime(want); ok {
 			defaultRuntime = want
 		} else {
-			//nolint:gosec // G706: FLEET_DEFAULT_RUNTIME is operator-set env, not request input.
+			// want/defaultRuntime are operator-set env / bundle flavor names, not request input.
 			log.Printf("FLEET_DEFAULT_RUNTIME %q not found/selectable in bundle; using default %s", want, defaultRuntime)
 		}
 	}
 	mgr.SetRuntimes(bundle.Runtimes(), defaultRuntime, nativeAgentImage)
-	//nolint:gosec // G706: defaultRuntime is a bundle/operator-env flavor name, not request input.
+	// defaultRuntime is a bundle/operator-env flavor name, not request input.
 	log.Printf("runtimes: default=%s flavors=%d native_agent_image=%q",
 		defaultRuntime, len(bundle.Runtimes()), nativeAgentImage)
 
@@ -336,7 +336,7 @@ func run() error {
 			scheduledRuntime = rt.Name
 			scheduledFlavor = rt
 		} else {
-			//nolint:gosec // G706: FLEET_SCHEDULED_RUNTIME is operator-set env, not request input.
+			// want/scheduledRuntime are operator-set env / bundle flavor names, not request input.
 			log.Printf("FLEET_SCHEDULED_RUNTIME %q not found/selectable in bundle; using default %s", want, scheduledRuntime)
 		}
 	}
@@ -393,7 +393,7 @@ func run() error {
 	chatAddr := addrOr(cfg.Addr, ":8080")
 	orchAddr := orchestratorAddr()
 
-	chatServer := &http.Server{Addr: chatAddr, Handler: chatSrv.Routes(), ReadHeaderTimeout: 30 * time.Second}
+	chatServer := &http.Server{Addr: chatAddr, Handler: securityHeadersMiddleware(chatSrv.Routes(), tlsActive(cfg)), ReadHeaderTimeout: 30 * time.Second}
 	orchServer := &http.Server{Addr: orchAddr, Handler: orchHandler, ReadHeaderTimeout: 30 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -408,8 +408,9 @@ func run() error {
 
 	errCh := make(chan error, 2)
 	go func() {
-		log.Printf("chat-server listening on %s", chatAddr) //nolint:gosec // G706 false positive: chatAddr is an operator-configured bind address (env/flag), not request input.
-		if err := chatServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// serveChat logs the listening line and terminates TLS when
+		// FLEET_TLS_MODE is manual/auto (default off = plain HTTP, unchanged).
+		if err := serveChat(chatServer, cfg); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("chat-server: %w", err)
 		}
 	}()
