@@ -68,3 +68,19 @@ func (p EnvPrefix) lookupBool(suffix string) bool {
 	v, _ := strconv.ParseBool(p.lookup(suffix))
 	return v
 }
+
+// lookupFloatDefault parses the resolved value as a float64, returning def when
+// the var is unset or unparseable. Used for fractional thresholds (e.g. the
+// context-pressure ratios) where a bad value must fall back to a safe default
+// rather than collapse to zero.
+func (p EnvPrefix) lookupFloatDefault(suffix string, def float64) float64 {
+	raw := p.lookup(suffix)
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return def
+	}
+	return v
+}
