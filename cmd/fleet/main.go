@@ -191,6 +191,28 @@ func run() error {
 	defer chatStore.Close()
 	log.Printf("chat DB connected + migrated")
 
+	// Full-text search (#308): honor FLEET_SEARCH_ENABLED, then backfill the
+	// message-content index for any pre-FTS messages in the background so startup
+	// isn't blocked on a large walk. Idempotent + batched (see BackfillSearchContent).
+	chatStore.SetSearchEnabled(cfg.SearchEnabled)
+	if cfg.SearchEnabled {
+		safe.Go("store.fts-backfill", func() {
+			bfCtx, bfCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer bfCancel()
+			n, err := chatStore.BackfillSearchContent(bfCtx)
+			switch {
+			case err != nil:
+				//nolint:gosec // G706: err wraps internal DB/migration errors (not request input) and n is an int — neither can forge a log line.
+				log.Printf("search backfill: %v (after %d rows)", err, n)
+			case n > 0:
+				//nolint:gosec // G706: only an int count is formatted — no request-input string is logged.
+				log.Printf("search backfill: indexed %d pre-existing message(s)", n)
+			}
+		})
+	} else {
+		log.Printf("full-text search: DISABLED (FLEET_SEARCH_ENABLED=false)")
+	}
+
 	// Persist every recovered panic (#241) to the chat DB's panic_events table so
 	// operators can query crashes even if stdout/journald lost the line. The hook
 	// is best-effort and bounded so it never stalls or re-panics inside recovery.

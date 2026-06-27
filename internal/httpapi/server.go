@@ -450,6 +450,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/attachments", auth(member(http.HandlerFunc(s.postAttachments))))
 	mux.Handle("/conversations", auth(member(http.HandlerFunc(s.listOrCreateConversations))))
 	mux.Handle("/conversations/", auth(member(http.HandlerFunc(s.conversationByID))))
+	mux.Handle("/search", auth(member(http.HandlerFunc(s.search))))
 	mux.Handle("/memories", auth(member(http.HandlerFunc(s.memories))))
 	mux.Handle("/memories/", auth(member(http.HandlerFunc(s.memoryByID))))
 	mux.Handle("/personas", auth(member(http.HandlerFunc(s.listPersonas))))
