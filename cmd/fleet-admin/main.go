@@ -109,6 +109,7 @@ Users, credentials, notes:
   fleet-admin sched task export > tasks.json    (versioned JSON of scheduled tasks → stdout)
   fleet-admin sched task import < tasks.json     (recreate tasks from stdin; upsert on id)
   fleet-admin sched task set-model --model <slug> [--fallback-model <slug>] [--from-model <slug>] [--dry-run]
+  fleet-admin sched task set-credentials <task_id> --allow server[:account] ... | --clear   (per-task MCP credential allowlist)
   fleet-admin mcp account set <server> <account> --secret KEY=-   (value via stdin)
   fleet-admin mcp account list <server>
   fleet-admin mcp account del <server> <account>

@@ -540,6 +540,11 @@ type TaskEdit struct {
 	SetFiles bool
 	// SetMCPSelection distinguishes "leave mcp_selection unchanged" from "replace".
 	SetMCPSelection bool
+	// CredentialAllowlist + SetCredentialAllowlist mirror the MCPSelection pair:
+	// the flag distinguishes "leave unchanged" from "replace" (including replacing
+	// with nil to revert to global inherit).
+	CredentialAllowlist    models.CredentialAllowlist
+	SetCredentialAllowlist bool
 }
 
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
@@ -572,6 +577,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	if edit.SetMCPSelection {
 		task.MCPSelection = edit.MCPSelection
 	}
+	if edit.SetCredentialAllowlist {
+		task.CredentialAllowlist = edit.CredentialAllowlist
+	}
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
 	task.AllowNetwork = edit.AllowNetwork
@@ -591,6 +599,36 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 		task.Status = models.TaskStatusPending
 	}
 
+	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// UpdateTaskCredentialAllowlist replaces a task's credential allowlist (#184),
+// re-locking the row and re-checking it is still editable (pending/scheduled).
+// A nil allowlist reverts the task to global inherit; a non-nil (possibly empty)
+// list enforces least-privilege scoping. Returns ErrTaskNotEditable if the task
+// has left the editable state. Only this field is touched.
+func (s *Storage) UpdateTaskCredentialAllowlist(ctx context.Context, taskID uuid.UUID, allowlist models.CredentialAllowlist) (*models.Task, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
+		return nil, ErrTaskNotEditable
+	}
+
+	task.CredentialAllowlist = allowlist
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err
 	}
@@ -783,16 +821,17 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	nextTime := schedule.Next(now).UTC()
 
 	newTask := models.NewTask(models.TaskCreate{
-		Prompt:        task.Prompt,
-		Model:         task.Model,
-		FallbackModel: task.FallbackModel,
-		MaxIterations: task.MaxIterations,
-		MCPSelection:  task.MCPSelection,
-		Priority:      task.Priority,
-		ScheduledFor:  &nextTime,
-		Recurrence:    task.Recurrence,
-		Timezone:      task.Timezone,
-		Files:         task.Files,
+		Prompt:              task.Prompt,
+		Model:               task.Model,
+		FallbackModel:       task.FallbackModel,
+		MaxIterations:       task.MaxIterations,
+		MCPSelection:        task.MCPSelection,
+		CredentialAllowlist: task.CredentialAllowlist,
+		Priority:            task.Priority,
+		ScheduledFor:        &nextTime,
+		Recurrence:          task.Recurrence,
+		Timezone:            task.Timezone,
+		Files:               task.Files,
 	})
 	newTask.CreatedBy = task.CreatedBy
 	// Carry the originating API key forward so recurring task cost keeps counting
