@@ -49,6 +49,12 @@ type turnBuffer struct {
 	closed      bool
 	finishedAt  time.Time
 
+	// maxBytes caps the cumulative size of buffered event Data (0 = unlimited).
+	// When exceeded, the oldest events are evicted from the front (sliding
+	// window); totalBytes tracks the running sum so eviction is O(evicted).
+	maxBytes   int
+	totalBytes int
+
 	// Persister plumbing. persistCh is nil when no persister is
 	// configured (tests with no store). The goroutine drains this
 	// channel + a periodic tick; done signals it to flush and exit
@@ -79,6 +85,7 @@ func newTurnBuffer(convID, turnID string) *turnBuffer {
 		convID:      convID,
 		turnID:      turnID,
 		subscribers: make(map[uint64]chan bufferedEvent),
+		maxBytes:    sseMaxBytesPerTurn,
 	}
 }
 
@@ -192,9 +199,23 @@ func (b *turnBuffer) Emit(event string, payload any) {
 	if b.closed {
 		return
 	}
-	id := uint64(len(b.events)) + 1
+	// IDs are monotonic across the turn even after eviction: derive the next id
+	// from the last event (not len(events), which shrinks when the window slides).
+	var id uint64 = 1
+	if n := len(b.events); n > 0 {
+		id = b.events[n-1].ID + 1
+	}
 	ev := bufferedEvent{ID: id, Name: event, Data: data}
 	b.events = append(b.events, ev)
+	b.totalBytes += len(data)
+
+	// Sliding-window eviction: drop the oldest events once over the byte cap,
+	// always keeping at least the newest so a reconnecting client still gets
+	// something (plus a `reconnect` event describing the gap — see Attach).
+	for b.maxBytes > 0 && b.totalBytes > b.maxBytes && len(b.events) > 1 {
+		b.totalBytes -= len(b.events[0].Data)
+		b.events = b.events[1:]
+	}
 
 	for subID, ch := range b.subscribers {
 		select {
@@ -386,6 +407,18 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 	}
 	b.mu.Unlock()
 
+	// If the sliding window evicted events the client hadn't seen yet (the oldest
+	// surviving event is newer than its next-expected id), tell it up front so the
+	// UI can surface a non-intrusive "some events may be missing" notice. Omitted
+	// on a clean reconnect within the full buffer.
+	if lastEventID > 0 && len(replay) > 0 && replay[0].ID > lastEventID+1 {
+		missed := replay[0].ID - (lastEventID + 1)
+		if err := writeReconnectFrame(w, flusher, missed, replay[0].ID); err != nil {
+			b.unsubscribe(subID)
+			return err
+		}
+	}
+
 	// Pump replay.
 	for _, e := range replay {
 		if err := writeSSEFrame(w, flusher, e); err != nil {
@@ -400,6 +433,17 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 		return nil
 	}
 
+	// Idle keepalive: ping when no real event has been written for the heartbeat
+	// interval, resetting the timer on every real event so we only ping during
+	// genuine quiet. A nil channel (interval 0) never fires.
+	var hb *time.Ticker
+	var heartbeatC <-chan time.Time
+	if sseHeartbeatInterval > 0 {
+		hb = time.NewTicker(sseHeartbeatInterval)
+		defer hb.Stop()
+		heartbeatC = hb.C
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -411,6 +455,14 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 				return nil
 			}
 			if err := writeSSEFrame(w, flusher, ev); err != nil {
+				b.unsubscribe(subID)
+				return err
+			}
+			if hb != nil {
+				hb.Reset(sseHeartbeatInterval)
+			}
+		case <-heartbeatC:
+			if err := writeHeartbeat(w, flusher); err != nil {
 				b.unsubscribe(subID)
 				return err
 			}
@@ -446,6 +498,32 @@ func (b *turnBuffer) unsubscribe(id uint64) {
 // write error (client disconnect) propagates so Attach can unsubscribe.
 func writeSSEFrame(w http.ResponseWriter, flusher http.Flusher, e bufferedEvent) error {
 	if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", e.ID, e.Name, string(e.Data)); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+// writeReconnectFrame emits a synthetic `reconnect` event (no id line, so it
+// doesn't advance the client's Last-Event-ID) describing how many events the
+// sliding window dropped before the replay the client is about to receive.
+func writeReconnectFrame(w http.ResponseWriter, flusher http.Flusher, missed, resumedFromID uint64) error {
+	payload, _ := json.Marshal(map[string]any{
+		"type":            "reconnect",
+		"missed_events":   missed,
+		"resumed_from_id": resumedFromID,
+	})
+	if _, err := fmt.Fprintf(w, "event: reconnect\ndata: %s\n\n", payload); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+// writeHeartbeat emits an SSE comment frame. Comments keep the socket alive
+// without dispatching a client-visible message event.
+func writeHeartbeat(w http.ResponseWriter, flusher http.Flusher) error {
+	if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
 		return err
 	}
 	flusher.Flush()
