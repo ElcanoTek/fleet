@@ -668,6 +668,38 @@ paths:
         "200": { description: The file bytes }
         "404": { $ref: "#/components/responses/Error" }
 
+  /triggers/{slug}:
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Fire a webhook-triggered task run.
+      description: >-
+        Spawns a one-shot run cloned from the trigger's template task, with the
+        rendered prompt_template as the prompt. Authenticated SOLELY by the
+        per-trigger HMAC-SHA256 secret over the raw body (GitHub-compatible
+        X-Hub-Signature-256, or X-Fleet-Signature-256) — NOT the admin API key.
+        Unknown slug and bad signature both return 401 (indistinguishable) to
+        prevent slug enumeration.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "202":
+          description: Accepted — a run was enqueued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: { type: string, format: uuid }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+
   /auth/login:
     post:
       summary: Username/password login → user token.
