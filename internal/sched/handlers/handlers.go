@@ -868,10 +868,12 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 		}
 	}
 	// Loop config (#179): a nil config is an ordinary one-shot task; a non-nil
-	// config must name an exit condition (the runner needs to know how to judge
-	// each iteration).
-	if tc.LoopConfig != nil && strings.TrimSpace(tc.LoopConfig.ExitCondition) == "" {
-		return fmt.Errorf("loop_config requires an exit_condition")
+	// config must name a recognized, compilable exit condition — fail fast at
+	// creation rather than always-exhaust at runtime.
+	if tc.LoopConfig != nil {
+		if err := tc.LoopConfig.ValidateExitCondition(); err != nil {
+			return fmt.Errorf("loop_config: %w", err)
+		}
 	}
 	return nil
 }

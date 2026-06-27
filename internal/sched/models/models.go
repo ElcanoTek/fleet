@@ -11,6 +11,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -100,6 +103,30 @@ type LoopConfig struct {
 	// each iteration (0 = no ceiling). Mirrors the per-run cost ceiling, applied
 	// across runs.
 	MaxCostUSD float64 `json:"max_cost_usd,omitempty"`
+}
+
+// ValidateExitCondition checks the loop's exit condition is a recognized form
+// (shell:<cmd> / regex:<pattern> / llm) and that a regex: pattern compiles, so a
+// statically-unsatisfiable config is rejected at task creation rather than
+// burning the full iteration + cost budget only to always exhaust at runtime.
+func (lc *LoopConfig) ValidateExitCondition() error {
+	cond := strings.TrimSpace(lc.ExitCondition)
+	switch {
+	case cond == "llm":
+		return nil
+	case strings.HasPrefix(cond, "shell:"):
+		if strings.TrimSpace(strings.TrimPrefix(cond, "shell:")) == "" {
+			return fmt.Errorf("shell: exit_condition requires a command")
+		}
+		return nil
+	case strings.HasPrefix(cond, "regex:"):
+		if _, err := regexp.Compile(strings.TrimPrefix(cond, "regex:")); err != nil {
+			return fmt.Errorf("invalid regex exit_condition: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("exit_condition must be one of shell:<cmd>, regex:<pattern>, or llm (got %q)", lc.ExitCondition)
+	}
 }
 
 // Iteration status values recorded in task_iterations.status.

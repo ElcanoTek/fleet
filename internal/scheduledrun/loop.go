@@ -220,6 +220,10 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 	}
 	user := fmt.Sprintf("%s\n\n---\nWorker's final output:\n%s", prompt, lastAssistantMessage(session))
 
+	// The verifier is a single bounded YES/NO call per iteration. Its spend is NOT
+	// separately metered into the iteration cost / the across-iteration MaxCostUSD
+	// ceiling — matching #179's accounting model, which is the (dominant) worker
+	// session.Cost. The full worker pass (the cost that matters) is always counted.
 	vctx, cancel := context.WithTimeout(ctx, llmExitTimeout)
 	defer cancel()
 	verifyAgent := fantasy.NewAgent(verifier, fantasy.WithSystemPrompt(
