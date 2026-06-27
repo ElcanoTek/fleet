@@ -40,6 +40,17 @@ type APIKey struct {
 	Description         string              `json:"description"`
 	PreviousKeyHash     *string             `json:"previous_key_hash,omitempty"`
 	PreviousKeyExpires  *time.Time          `json:"previous_key_expires,omitempty"`
+
+	// Spending caps (nil = unlimited). Cost is accumulated from the LogSession of
+	// every task this key submitted; CheckBudget refuses new submissions once a
+	// cap is reached. Counters reset lazily at the UTC day/month boundary on the
+	// next access (no background goroutine).
+	MaxCostPerDayUSD   *float64  `json:"max_cost_per_day_usd,omitempty"`
+	MaxCostPerMonthUSD *float64  `json:"max_cost_per_month_usd,omitempty"`
+	CostTodayUSD       float64   `json:"cost_today_usd"`
+	CostThisMonthUSD   float64   `json:"cost_this_month_usd"`
+	CostDayResetAt     time.Time `json:"cost_day_reset_at"`   // UTC day the daily counter is current for
+	CostMonthResetAt   time.Time `json:"cost_month_reset_at"` // first of the UTC month the monthly counter is current for
 }
 
 // CanTargetNode checks if this key can target a node with the given name.
@@ -99,6 +110,10 @@ func (k *APIKey) ToResponse() models.APIKeyResponse {
 		ExpiresAt:           k.ExpiresAt,
 		Enabled:             k.Enabled,
 		Description:         k.Description,
+		MaxCostPerDayUSD:    k.MaxCostPerDayUSD,
+		MaxCostPerMonthUSD:  k.MaxCostPerMonthUSD,
+		CostTodayUSD:        k.CostTodayUSD,
+		CostThisMonthUSD:    k.CostThisMonthUSD,
 	}
 }
 
@@ -512,6 +527,131 @@ func (m *Manager) LookupKeyMeta(rawKey string) (keyID string, rateLimit int, ok 
 		return "", 0, false
 	}
 	return key.KeyID, key.RateLimit, true
+}
+
+// SetBudgets sets (or clears, when nil) a key's daily/monthly spending caps and
+// persists them. Used by the create/update handlers. Returns an error for an
+// unknown key.
+func (m *Manager) SetBudgets(keyID string, daily, monthly *float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key, ok := m.keys[keyID]
+	if !ok {
+		return fmt.Errorf("api key not found: %s", keyID)
+	}
+	key.MaxCostPerDayUSD = daily
+	key.MaxCostPerMonthUSD = monthly
+	return m.save()
+}
+
+// maybeResetSpendingLocked zeros a key's daily/monthly accumulators when their
+// UTC window has rolled over since the counter was last current. Lazy (no
+// background goroutine): called under m.mu by AccumulateCost / CheckBudget /
+// spending reads. Returns true when anything changed (so callers can persist).
+func maybeResetSpendingLocked(key *APIKey, now time.Time) bool {
+	changed := false
+	today := now.UTC().Truncate(24 * time.Hour)
+	if key.CostDayResetAt.Before(today) {
+		key.CostTodayUSD = 0
+		key.CostDayResetAt = today
+		changed = true
+	}
+	monthStart := time.Date(now.UTC().Year(), now.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+	if key.CostMonthResetAt.Before(monthStart) {
+		key.CostThisMonthUSD = 0
+		key.CostMonthResetAt = monthStart
+		changed = true
+	}
+	return changed
+}
+
+// AccumulateCost adds costUSD to a key's daily and monthly running totals
+// (resetting first if a window rolled over) and persists. No-op for an unknown
+// key or non-positive cost.
+func (m *Manager) AccumulateCost(keyID string, costUSD float64) {
+	if costUSD <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key, ok := m.keys[keyID]
+	if !ok {
+		return
+	}
+	maybeResetSpendingLocked(key, time.Now())
+	key.CostTodayUSD += costUSD
+	key.CostThisMonthUSD += costUSD
+	if err := m.save(); err != nil {
+		log.Printf("apikeys: failed to persist accumulated cost for key %s: %v", keyID, err)
+	}
+}
+
+// CheckBudget reports whether keyID may submit more work. It refuses once the
+// already-accumulated spend has reached a configured daily or monthly cap (task
+// cost is only known after completion, so this is a hard "already over" gate).
+// Returns nil for an unknown key (ValidateKey surfaces that) or one with no caps.
+func (m *Manager) CheckBudget(keyID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key, ok := m.keys[keyID]
+	if !ok {
+		return nil
+	}
+	if maybeResetSpendingLocked(key, time.Now()) {
+		if err := m.save(); err != nil {
+			log.Printf("apikeys: failed to persist spending reset for key %s: %v", keyID, err)
+		}
+	}
+	if key.MaxCostPerDayUSD != nil && key.CostTodayUSD >= *key.MaxCostPerDayUSD {
+		return fmt.Errorf("daily budget exceeded: spent $%.4f of $%.2f daily cap", key.CostTodayUSD, *key.MaxCostPerDayUSD)
+	}
+	if key.MaxCostPerMonthUSD != nil && key.CostThisMonthUSD >= *key.MaxCostPerMonthUSD {
+		return fmt.Errorf("monthly budget exceeded: spent $%.4f of $%.2f monthly cap", key.CostThisMonthUSD, *key.MaxCostPerMonthUSD)
+	}
+	return nil
+}
+
+// ResetSpending zeros a key's daily and monthly accumulators (operator override,
+// e.g. after a billing dispute) and persists. Returns an error for an unknown key.
+func (m *Manager) ResetSpending(keyID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key, ok := m.keys[keyID]
+	if !ok {
+		return fmt.Errorf("api key not found: %s", keyID)
+	}
+	now := time.Now().UTC()
+	key.CostTodayUSD = 0
+	key.CostThisMonthUSD = 0
+	key.CostDayResetAt = now.Truncate(24 * time.Hour)
+	key.CostMonthResetAt = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	return m.save()
+}
+
+// SpendingSnapshot returns a key's current spend vs caps with the next reset
+// instants, applying any pending lazy reset first. ok=false for an unknown key.
+func (m *Manager) SpendingSnapshot(keyID string) (snap models.APIKeySpending, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key, found := m.keys[keyID]
+	if !found {
+		return models.APIKeySpending{}, false
+	}
+	if maybeResetSpendingLocked(key, time.Now()) {
+		if err := m.save(); err != nil {
+			log.Printf("apikeys: failed to persist spending reset for key %s: %v", keyID, err)
+		}
+	}
+	now := time.Now().UTC()
+	return models.APIKeySpending{
+		KeyID:              key.KeyID,
+		CostTodayUSD:       key.CostTodayUSD,
+		MaxCostPerDayUSD:   key.MaxCostPerDayUSD,
+		CostThisMonthUSD:   key.CostThisMonthUSD,
+		MaxCostPerMonthUSD: key.MaxCostPerMonthUSD,
+		DailyResetAt:       now.Truncate(24*time.Hour).AddDate(0, 0, 1),
+		MonthlyResetAt:     time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0),
+	}, true
 }
 
 // LogAction logs an action performed with an API key.
