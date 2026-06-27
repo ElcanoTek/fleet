@@ -32,11 +32,17 @@ import (
 // Server wires the agent Manager + store + shared-secret auth into an
 // http.Handler that Next.js talks to.
 type Server struct {
-	cfg           *config.Config
-	agent         turnEngine
-	store         chatStore
-	sharedToken   string
-	rate          *ratelimit.Limiter
+	cfg         *config.Config
+	agent       turnEngine
+	store       chatStore
+	sharedToken string
+	rate        *ratelimit.Limiter
+	// concurrent caps simultaneous in-flight turns per user. nil disables it
+	// (rate limiting off, or FLEET_CHAT_RATE_LIMIT_CONCURRENT=0).
+	concurrent *ratelimit.ConcurrencyLimiter
+	// rateLimitHits tallies 429s by reason ("rpm"|"day"|"concurrent"). Pointer-held
+	// so a Server value stays copyable. A Prometheus surface is deferred to #176.
+	rateLimitHits *rateHitCounter
 	hasUsers      atomic.Bool
 	lastUserCheck atomic.Int64
 
@@ -111,13 +117,20 @@ func (e inflightEntry) IsRunning() bool {
 // (P6b) supplies the concrete engine implementation.
 func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Server {
 	s := &Server{
-		cfg:         cfg,
-		agent:       mgr,
-		store:       st,
-		sharedToken: cfg.SharedToken,
-		rate:        ratelimit.New(cfg.RatePerMinute, cfg.RatePerDay),
-		inflight:    make(map[string]inflightEntry),
-		permissions: newPermissionRegistry(),
+		cfg:           cfg,
+		agent:         mgr,
+		store:         st,
+		sharedToken:   cfg.SharedToken,
+		rateLimitHits: newRateHitCounter(),
+		inflight:      make(map[string]inflightEntry),
+		permissions:   newPermissionRegistry(),
+	}
+	// Rate limiting is a single master switch. When on, the RPM/day window and
+	// the per-user concurrent-turn cap are both live; when off, both limiters are
+	// nil and their (nil-safe) checks pass through.
+	if cfg.RateLimitEnabled {
+		s.rate = ratelimit.New(cfg.RatePerMinute, cfg.RatePerDay)
+		s.concurrent = ratelimit.NewConcurrencyLimiter(cfg.RateLimitConcurrent)
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -1224,6 +1237,16 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// Explicit cancellation (the Stop button) routes through
 	// POST /conversations/{id}/cancel, which fires the cancel func we
 	// register here.
+	// Concurrent-turn admission: cap simultaneous in-flight turns per user so one
+	// user can't hold every worker slot with parallel long turns. The slot is
+	// held for the turn GOROUTINE's lifetime (released in the goroutine below),
+	// not just this HTTP handler's — postChat returns as soon as the turn is
+	// launched, but the work continues in the background.
+	releaseSlot, admitted := s.admitConcurrentTurn(w, user)
+	if !admitted {
+		return
+	}
+
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	buf, turnID, turnToken := s.registerTurn(conv.ID, turnCancel)
 
@@ -1275,7 +1298,14 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// Run the turn in a goroutine so the buffer stays alive even if
 	// this HTTP response disconnects. turnCtx is intentionally NOT
 	// derived from r.Context(): the turn must outlive the HTTP request.
-	go s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, userMessage, history, memoryContents(memories), toAgentImageAttachments(imageAttachments)) //nolint:gosec // turnCtx lifetime is intentional, see comment above
+	go func() {
+		// Release the concurrent-turn slot when the turn actually completes, not
+		// when this HTTP handler returns (the turn outlives the request).
+		defer releaseSlot()
+		// turnCtx is intentionally NOT derived from r.Context() — the turn must
+		// outlive the HTTP request (see the comment above registerTurn).
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, userMessage, history, memoryContents(memories), toAgentImageAttachments(imageAttachments))
+	}()
 
 	// Attach this HTTP response as the initial subscriber. Blocks until
 	// the turn finishes or the client disconnects.

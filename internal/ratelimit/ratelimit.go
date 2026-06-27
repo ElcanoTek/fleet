@@ -11,7 +11,9 @@
 package ratelimit
 
 import (
+	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -130,6 +132,123 @@ func (l *Limiter) AllowN(key string, perMinute, perDay int) (bool, time.Duration
 	b.minuteTimestamps = append(b.minuteTimestamps, now)
 	b.dayTimestamps = append(b.dayTimestamps, now)
 	return true, 0
+}
+
+// Snapshot reports the per-minute limit, the remaining allowance, and the unix
+// time the minute window resets for key — WITHOUT recording a request. Used to
+// emit advisory X-RateLimit-* headers on a response. remaining is relative to
+// the configured per-minute bound; reset is now+60 when the window is empty,
+// else (oldest sample + 60).
+func (l *Limiter) Snapshot(key string) (limit, remaining int, reset int64) {
+	now := time.Now().Unix()
+	if l == nil || l.perMinute <= 0 {
+		return 0, 0, now + 60
+	}
+	limit = l.perMinute
+	reset = now + 60
+
+	l.mu.RLock()
+	b, ok := l.keys[key]
+	l.mu.RUnlock()
+	if !ok {
+		return limit, limit, reset
+	}
+
+	b.mu.Lock()
+	b.minuteTimestamps = dropBefore(b.minuteTimestamps, now-60)
+	used := len(b.minuteTimestamps)
+	if used > 0 {
+		reset = b.minuteTimestamps[0] + 60
+	}
+	b.mu.Unlock()
+
+	remaining = limit - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	return limit, remaining, reset
+}
+
+// ConcurrencyLimiter caps the number of simultaneously-active operations per
+// key (e.g. in-flight chat turns per user). Unlike Limiter it tracks live
+// occupancy, not a time window: callers Acquire before starting work and Release
+// when it completes. Safe for concurrent use.
+type ConcurrencyLimiter struct {
+	limit  int32
+	counts sync.Map // key → *atomic.Int32
+}
+
+// NewConcurrencyLimiter returns a limiter allowing up to limit concurrent
+// operations per key. A non-positive limit disables the cap (Acquire always
+// succeeds).
+func NewConcurrencyLimiter(limit int) *ConcurrencyLimiter {
+	// Clamp to a sane int32 range — limit is a small operator-set cap, never
+	// anywhere near the boundary, but bound the conversion explicitly so the
+	// overflow checker is satisfied.
+	if limit < 0 {
+		limit = 0
+	}
+	if limit > math.MaxInt32 {
+		limit = math.MaxInt32
+	}
+	return &ConcurrencyLimiter{limit: int32(limit)}
+}
+
+// Acquire reserves a slot for key, returning false when key is already at the
+// limit. A disabled limiter (limit <= 0) or nil receiver always succeeds.
+func (c *ConcurrencyLimiter) Acquire(key string) bool {
+	if c == nil || c.limit <= 0 {
+		return true
+	}
+	v, _ := c.counts.LoadOrStore(key, new(atomic.Int32))
+	counter := v.(*atomic.Int32)
+	for {
+		cur := counter.Load()
+		if cur >= c.limit {
+			return false
+		}
+		if counter.CompareAndSwap(cur, cur+1) {
+			return true
+		}
+	}
+}
+
+// Release frees a slot previously taken by Acquire. It never drops below zero.
+func (c *ConcurrencyLimiter) Release(key string) {
+	if c == nil || c.limit <= 0 {
+		return
+	}
+	if v, ok := c.counts.Load(key); ok {
+		counter := v.(*atomic.Int32)
+		for {
+			cur := counter.Load()
+			if cur <= 0 {
+				return
+			}
+			if counter.CompareAndSwap(cur, cur-1) {
+				return
+			}
+		}
+	}
+}
+
+// Active reports the current occupancy for key.
+func (c *ConcurrencyLimiter) Active(key string) int32 {
+	if c == nil {
+		return 0
+	}
+	if v, ok := c.counts.Load(key); ok {
+		return v.(*atomic.Int32).Load()
+	}
+	return 0
+}
+
+// Limit reports the configured per-key concurrency cap.
+func (c *ConcurrencyLimiter) Limit() int32 {
+	if c == nil {
+		return 0
+	}
+	return c.limit
 }
 
 // maybeSweep prunes buckets whose newest sample is older than the day window, at

@@ -167,8 +167,10 @@ var allowedEnvVars = map[string]bool{
 	// security model.
 
 	// ── rate limiting (chat) ──
-	"CHAT_RATE_PER_MIN": true,
-	"CHAT_RATE_PER_DAY": true,
+	"CHAT_RATE_PER_MIN":                true,
+	"CHAT_RATE_PER_DAY":                true,
+	"FLEET_CHAT_RATE_LIMIT_ENABLED":    true,
+	"FLEET_CHAT_RATE_LIMIT_CONCURRENT": true,
 
 	// ── admin ──
 	"ADMIN_EMAILS": true,
@@ -369,6 +371,14 @@ type Config struct {
 	// ── rate limit (interactive) ──
 	RatePerMinute int
 	RatePerDay    int
+	// RateLimitEnabled is the master switch for chat rate limiting
+	// (FLEET_CHAT_RATE_LIMIT_ENABLED, default true). When false, the RPM/day and
+	// concurrent-turn limits are all bypassed without zeroing each counter.
+	RateLimitEnabled bool
+	// RateLimitConcurrent caps simultaneous in-flight turns per user
+	// (FLEET_CHAT_RATE_LIMIT_CONCURRENT, default 5; 0 disables). Stops one user
+	// from holding every worker slot with parallel long turns.
+	RateLimitConcurrent int
 
 	// ── admin (interactive) ──
 	AdminEmails []string
@@ -492,8 +502,10 @@ func Load(envFile string) (*Config, error) {
 		TavilyAPIKey: stripQuotes(os.Getenv("TAVILY_API_KEY")),
 
 		// ── rate limit (interactive) ──
-		RatePerMinute: getenvInt("CHAT_RATE_PER_MIN", 40),
-		RatePerDay:    getenvInt("CHAT_RATE_PER_DAY", 2000),
+		RatePerMinute:       getenvInt("CHAT_RATE_PER_MIN", 40),
+		RatePerDay:          getenvInt("CHAT_RATE_PER_DAY", 2000),
+		RateLimitEnabled:    getenvBool("FLEET_CHAT_RATE_LIMIT_ENABLED", true),
+		RateLimitConcurrent: getenvInt("FLEET_CHAT_RATE_LIMIT_CONCURRENT", 5),
 
 		// ── admin ──
 		AdminEmails: splitEmails(os.Getenv("ADMIN_EMAILS")),
