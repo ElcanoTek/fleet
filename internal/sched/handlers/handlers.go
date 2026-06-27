@@ -836,6 +836,33 @@ func localizeTasks(tasks []*models.Task) {
 	}
 }
 
+// validateTaskRouting validates the task's targeting/routing fields: the runtime
+// flavor, the trigger type (#177), and the per-task MCP selection. Split out of
+// validateTaskCreate to keep that function under the gocyclo threshold.
+func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
+	// Reject a runtime-flavor the deployment doesn't offer (e.g. native-inprocess
+	// when the in-process loop is gated off, #159) up front rather than silently
+	// falling back to the default at dispatch.
+	if rf := strings.TrimSpace(tc.RuntimeFlavor); rf != "" && h.runtimeSelectable != nil && !h.runtimeSelectable(rf) {
+		return fmt.Errorf("runtime flavor %q is not available on this deployment", rf)
+	}
+
+	// Reject an unrecognized trigger type up front (#177). Empty defaults to
+	// "cron" in NewTask, so only a non-empty invalid value is an error.
+	if tc.TriggerType != "" && !tc.TriggerType.IsValid() {
+		return fmt.Errorf("trigger_type %q is not valid (want cron or webhook)", tc.TriggerType)
+	}
+
+	// Light validation of the per-task MCP selection: each chosen server must
+	// be named. Account is optional (empty means the default/shared seat).
+	for _, choice := range tc.MCPSelection {
+		if strings.TrimSpace(choice.Server) == "" {
+			return fmt.Errorf("mcp_selection entries must name a server")
+		}
+	}
+	return nil
+}
+
 func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 	tc.Prompt = strings.TrimSpace(tc.Prompt)
 	if tc.Prompt == "" {
@@ -848,19 +875,8 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 		return fmt.Errorf("prompt cannot exceed %d characters", taskPromptMaxLength)
 	}
 
-	// Reject a runtime-flavor the deployment doesn't offer (e.g. native-inprocess
-	// when the in-process loop is gated off, #159) up front rather than silently
-	// falling back to the default at dispatch.
-	if rf := strings.TrimSpace(tc.RuntimeFlavor); rf != "" && h.runtimeSelectable != nil && !h.runtimeSelectable(rf) {
-		return fmt.Errorf("runtime flavor %q is not available on this deployment", rf)
-	}
-
-	// Light validation of the per-task MCP selection: each chosen server must
-	// be named. Account is optional (empty means the default/shared seat).
-	for _, choice := range tc.MCPSelection {
-		if strings.TrimSpace(choice.Server) == "" {
-			return fmt.Errorf("mcp_selection entries must name a server")
-		}
+	if err := h.validateTaskRouting(tc); err != nil {
+		return err
 	}
 
 	if err := normalizeOptionalModel(&tc.Model, "model"); err != nil {

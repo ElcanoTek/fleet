@@ -266,6 +266,14 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Skip CSRF for webhook trigger endpoints (#177): authenticated by a
+		// per-trigger HMAC-SHA256 signature the external caller supplies, not a
+		// browser-auto-sent cookie, so they are not CSRF-vulnerable.
+		if strings.HasPrefix(r.URL.Path, "/triggers/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Cookie/session requests: verify the Origin matches our host. This is
 		// stateless (no token store, nothing to go stale on restart) and mirrors
 		// chat's CSRF defense: browsers always send Origin on cross-origin

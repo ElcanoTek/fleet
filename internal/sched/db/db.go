@@ -504,7 +504,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type"
 
 // AddTask adds or updates a task.
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
@@ -514,8 +514,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			priority, instruction_self_improve, status, assigned_node_id, agent_session_id,
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
-			attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+			attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id,
+			trigger_type
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -543,7 +544,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			allow_network = EXCLUDED.allow_network,
 			runtime_flavor = EXCLUDED.runtime_flavor,
 			timezone = EXCLUDED.timezone,
-			created_by_key_id = EXCLUDED.created_by_key_id`,
+			created_by_key_id = EXCLUDED.created_by_key_id,
+			trigger_type = EXCLUDED.trigger_type`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -572,8 +574,29 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		nullableString(task.RuntimeFlavor),
 		taskTimezoneOrUTC(task.Timezone),
 		task.CreatedByKeyID,
+		triggerTypeOrCron(task.TriggerType),
 	)
 	return err
+}
+
+// triggerTypeOrCron defends the NOT NULL trigger_type column against a
+// directly-constructed Task that bypassed NewTask, where the field would
+// otherwise be the empty string.
+func triggerTypeOrCron(t models.TriggerType) string {
+	if t == "" {
+		return string(models.TriggerTypeCron)
+	}
+	return string(t)
+}
+
+// triggerTypeOrCronStr normalizes a scanned trigger_type, defaulting an empty
+// value to "cron" (the column is NOT NULL DEFAULT 'cron', so this only guards
+// against a stray empty string).
+func triggerTypeOrCronStr(s string) string {
+	if s == "" {
+		return string(models.TriggerTypeCron)
+	}
+	return s
 }
 
 // taskTimezoneOrUTC defends the NOT NULL timezone column against a
@@ -630,6 +653,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		runtimeFlavor          sql.NullString
 		timezone               sql.NullString
 		createdByKeyID         sql.NullString
+		triggerType            sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -638,6 +662,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &runtimeFlavor, &timezone, &createdByKeyID,
+		&triggerType,
 	)
 	if err != nil {
 		return nil, err
@@ -657,6 +682,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		AllowNetwork:           allowNetwork,
 		RuntimeFlavor:          runtimeFlavor.String,
 		Timezone:               taskTimezoneOrUTC(timezone.String),
+		TriggerType:            models.TriggerType(triggerTypeOrCronStr(triggerType.String)),
 	}
 	if model.Valid {
 		task.Model = &model.String
@@ -744,6 +770,7 @@ func (db *Database) GetScheduledTasks(ctx context.Context, cutoff time.Time, lim
 		WHERE status = $1
 		AND scheduled_for IS NOT NULL
 		AND scheduled_for <= $2
+		AND trigger_type = 'cron'
 		ORDER BY scheduled_for ASC
 		LIMIT $3`,
 		string(models.TaskStatusScheduled), cutoff, limit)
