@@ -180,6 +180,7 @@ var allowedEnvVars = map[string]bool{
 	"CHAT_RATE_PER_DAY":                true,
 	"FLEET_CHAT_RATE_LIMIT_ENABLED":    true,
 	"FLEET_CHAT_RATE_LIMIT_CONCURRENT": true,
+	"FLEET_SEARCH_ENABLED":             true,
 
 	// ── admin ──
 	"ADMIN_EMAILS": true,
@@ -313,6 +314,12 @@ type Config struct {
 	DataDir         string
 	ConversationTTL int // days
 	UnpinnedCap     int // per-user
+
+	// SearchEnabled gates full-text search (#308): the GET /search endpoint plus
+	// the message-content index maintenance + startup backfill.
+	// FLEET_SEARCH_ENABLED, default true; set false to drop the GIN index upkeep
+	// on a write-heavy deployment (the endpoint then returns 404).
+	SearchEnabled bool
 
 	// DatabaseURL is the Postgres DSN. URL-form (url.UserPassword) DSN builder.
 	DatabaseURL string
@@ -508,6 +515,7 @@ func Load(envFile string) (*Config, error) {
 		DataDir:         getenvFleetDefault("DATA_DIR", "./data"),
 		ConversationTTL: getenvInt("CONVERSATION_TTL_DAYS", 14),
 		UnpinnedCap:     getenvInt("CONVERSATION_UNPINNED_CAP", 50),
+		SearchEnabled:   getenvBool("FLEET_SEARCH_ENABLED", true),
 		DatabaseURL:     buildDatabaseURL(),
 
 		// ── LLM (shared) ──
