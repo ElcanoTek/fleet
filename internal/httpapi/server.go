@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,7 +76,47 @@ type Server struct {
 	// agents: the rendezvous between the turn goroutine's blocked broker and the
 	// POST /conversations/{id}/permissions/{requestId} decision handler.
 	permissions *permissionRegistry
+
+	// sseReconnects tallies SSE reconnect outcomes (within_buffer | db_fallback |
+	// buffer_expired | no_content). Behind a pointer so a Server value stays
+	// copyable; a Prometheus surface is deferred to the metrics issue (#176).
+	sseReconnects *reconnectCounter
 }
+
+// reconnectCounter is a concurrency-safe tally of SSE reconnect outcomes.
+type reconnectCounter struct {
+	mu     sync.Mutex
+	counts map[string]int64
+}
+
+func newReconnectCounter() *reconnectCounter {
+	return &reconnectCounter{counts: map[string]int64{}}
+}
+
+func (c *reconnectCounter) inc(outcome string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.counts[outcome]++
+	c.mu.Unlock()
+}
+
+func (c *reconnectCounter) snapshot() map[string]int64 {
+	if c == nil {
+		return map[string]int64{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]int64, len(c.counts))
+	for k, v := range c.counts {
+		out[k] = v
+	}
+	return out
+}
+
+// SSEReconnectCounts returns a snapshot of SSE reconnect outcomes by label.
+func (s *Server) SSEReconnectCounts() map[string]int64 { return s.sseReconnects.snapshot() }
 
 // Option customizes a Server at construction.
 type Option func(*Server)
@@ -124,6 +165,7 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		rateLimitHits: newRateHitCounter(),
 		inflight:      make(map[string]inflightEntry),
 		permissions:   newPermissionRegistry(),
+		sseReconnects: newReconnectCounter(),
 	}
 	// Rate limiting is a single master switch. When on, the RPM/day window and
 	// the per-user concurrent-turn cap are both live; when off, both limiters are
@@ -135,6 +177,8 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 	for _, opt := range opts {
 		opt(s)
 	}
+	log.Printf("sse: buffer_duration=%s max_bytes_per_turn=%d heartbeat_interval=%s",
+		bufferRetainTTL, sseMaxBytesPerTurn, sseHeartbeatInterval)
 	return s
 }
 
@@ -153,11 +197,47 @@ func (s *Server) turnTimeout() time.Duration {
 	return defaultTurnExecutionTimeout
 }
 
-// bufferRetainTTL is how long a finished turn's event buffer stays in
-// the inflight map after completion. Long enough for a mobile client
-// that locked its screen mid-turn to return, reopen the tab, and see
-// the full replay.
-const bufferRetainTTL = 2 * time.Minute
+// bufferRetainTTL is how long a finished turn's event buffer stays in the
+// inflight map after completion — long enough for a client that dropped
+// mid-turn to return and replay from its Last-Event-ID. Default 15m covers the
+// p95 long interactive agent run; tune via FLEET_SSE_BUFFER_DURATION (e.g. 2m on
+// a memory-constrained box, 30m on beefy hardware).
+var bufferRetainTTL = envDuration("FLEET_SSE_BUFFER_DURATION", 15*time.Minute)
+
+// sseMaxBytesPerTurn caps a single turn's in-memory event buffer. Past it, the
+// oldest events are evicted (sliding window) so a chatty 15m turn can't grow
+// unbounded; a reconnecting client past the slide gets a `reconnect` event
+// describing the gap. 0 = unlimited. FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN.
+var sseMaxBytesPerTurn = envInt("FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN", 5<<20)
+
+// sseHeartbeatInterval is the idle keepalive cadence on an attached SSE stream,
+// keeping the TCP socket alive through mobile OS connection managers and proxy
+// read timeouts during quiet stretches (the model reasoning with no tool
+// output). 0 disables. FLEET_SSE_HEARTBEAT_INTERVAL.
+var sseHeartbeatInterval = envDuration("FLEET_SSE_HEARTBEAT_INTERVAL", 15*time.Second)
+
+// envDuration reads a time.ParseDuration-formatted env var, falling back to def
+// when unset or unparseable.
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+		log.Printf("config: %s is not a valid duration; using default %s", key, def)
+	}
+	return def
+}
+
+// envInt reads an integer env var, falling back to def when unset or unparseable.
+func envInt(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
+		log.Printf("config: %s is not a valid integer; using default %d", key, def)
+	}
+	return def
+}
 
 // registerTurn installs a fresh turnBuffer + cancel entry for convID.
 // Cancels + evicts any prior in-flight turn for the same conversation
@@ -1522,6 +1602,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	// If the client is asking about a different (older) turn than the one
 	// we currently have buffered, fall through to the DB lookup below.
 	if ok && entry.buf != nil && (requestedTurnID == "" || requestedTurnID == entry.turnID) {
+		s.sseReconnects.inc("within_buffer")
 		if err := entry.buf.Attach(r.Context(), lastEventID, w); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("stream Attach (user=%q conv=%q): %v", user, convID, err) //nolint:gosec // identifiers are %q-quoted
 		}
@@ -1531,6 +1612,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	// DB fallback. Needs an explicit turn_id so we know which row to
 	// look up — without one, the client should just reload history.
 	if requestedTurnID == "" {
+		s.sseReconnects.inc("no_content")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -1540,6 +1622,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 		return
 	}
 	if turn == nil || turn.ConversationID != convID {
+		s.sseReconnects.inc("no_content")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -1548,8 +1631,38 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// The in-memory buffer is gone (evicted after TTL, or wiped by a restart). If
+	// the turn already finished, the DB has the full event log including the
+	// terminal frame; tag this as buffer_expired and send a synthetic notice so
+	// the UI shows an inline "turn completed, refresh" rather than a blank stream.
+	// If it's still running, this is a best-effort frozen replay (no live channel).
+	outcome := "db_fallback"
+	if turn.FinishedAt.Valid {
+		outcome = "buffer_expired"
+	}
+	s.sseReconnects.inc(outcome)
 	if err := replayEventsFromDB(w, events); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("DB replay (user=%q conv=%q turn=%q): %v", user, convID, requestedTurnID, err) //nolint:gosec // identifiers are %q-quoted
+		return
+	}
+	if outcome == "buffer_expired" {
+		writeBufferExpiredFrame(w, requestedTurnID)
+	}
+}
+
+// writeBufferExpiredFrame emits a synthetic terminal SSE frame telling the
+// client the live buffer is gone but the turn finished — the UI can link to the
+// transcript via turn_id rather than showing a silently-blank turn. Best-effort:
+// flush errors (client already gone) are ignored.
+func writeBufferExpiredFrame(w http.ResponseWriter, turnID string) {
+	payload, _ := json.Marshal(map[string]any{
+		"type":    "buffer_expired",
+		"message": "Turn completed. Refresh to see the final result.",
+		"turn_id": turnID,
+	})
+	_, _ = fmt.Fprintf(w, "event: buffer_expired\ndata: %s\n\n", payload)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
 	}
 }
 
