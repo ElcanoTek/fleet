@@ -43,6 +43,13 @@ func (o *orchestrationState) checkBashSafety(toolName, toolCallID, rawInput stri
 		log.Printf("approval stage failed (bash): %v", err)
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s. Could not stage for user approval (%v).", reason, err)
 	}
+	switch id {
+	case PreApprovedSentinel:
+		// Session pre-approval (#300): run the command without a card.
+		return false, ""
+	case PreDeniedSentinel:
+		return true, fmt.Sprintf("APPROVAL_DENIED: %s — the user pre-denied bash for this conversation (session policy). Do NOT retry.", reason)
+	}
 	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s — staged for user approval (approval_id=%s). Do NOT retry. Summarize intent and wait for the user to click Approve.", reason, id)
 }
 

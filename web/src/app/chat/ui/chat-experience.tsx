@@ -6254,6 +6254,10 @@ function ApprovalCard({
   const [viewport, setViewport] = useState<PreviewViewport>("desktop");
   const [inbox, setInbox] = useState<PreviewInbox>("light");
   const [showRaw, setShowRaw] = useState(false);
+  // Batch approval (#300): when checked, the decision applies to every
+  // subsequent call to this tool in the conversation (approve-all / deny-all)
+  // so the agent isn't gated per call.
+  const [applyAll, setApplyAll] = useState(false);
 
   const resolve = async (approved: boolean) => {
     if (submitting || approval.status !== "pending" || !conversationId) return;
@@ -6264,7 +6268,7 @@ function ApprovalCard({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ approved }),
+          body: JSON.stringify({ approved, scope: applyAll ? "session" : "once" }),
         },
       );
       if (!response.ok) {
@@ -6440,8 +6444,8 @@ function ApprovalCard({
       ) : null}
 
       {approval.status === "pending" ? (
-        <div className="mt-3 flex items-center gap-2">
-          {isPreviewOnly ? (
+        isPreviewOnly ? (
+          <div className="mt-3 flex items-center gap-2">
             <button
               type="button"
               className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
@@ -6450,15 +6454,17 @@ function ApprovalCard({
             >
               {submitting === "send" ? "Dismissing…" : "Dismiss"}
             </button>
-          ) : (
-            <>
+          </div>
+        ) : (
+          <div className="mt-3 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
                 className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
                 disabled={submitting !== null}
                 onClick={() => void resolve(true)}
               >
-                {submitting === "send" ? "Sending…" : "Send"}
+                {submitting === "send" ? "Sending…" : applyAll ? "Send + allow all" : "Send"}
               </button>
               <button
                 type="button"
@@ -6466,11 +6472,24 @@ function ApprovalCard({
                 disabled={submitting !== null}
                 onClick={() => void resolve(false)}
               >
-                {submitting === "cancel" ? "Cancelling…" : "Cancel"}
+                {submitting === "cancel" ? "Cancelling…" : applyAll ? "Deny + block all" : "Cancel"}
               </button>
-            </>
-          )}
-        </div>
+            </div>
+            {/* Batch approval (#300): pre-approve/deny the rest of this tool's
+                calls for the conversation so the agent isn't gated per call. */}
+            <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
+              <input
+                type="checkbox"
+                data-testid="approval-apply-all"
+                checked={applyAll}
+                disabled={submitting !== null}
+                onChange={(e) => setApplyAll(e.target.checked)}
+                className="size-3.5 accent-[var(--color-primary)]"
+              />
+              Apply my choice to all {approval.tool.replace(/^mcp_[^_]+_/, "")} calls in this chat
+            </label>
+          </div>
+        )
       ) : approval.resultText ? (
         <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">{approval.resultText}</p>
       ) : null}

@@ -110,6 +110,20 @@ type ApprovalStager interface {
 	StageSuggestion(reason string) (approvalID, msg string, err error)
 }
 
+// Session pre-approval sentinels (#300): instead of a real approval ID, Stage
+// may return one of these to signal a session-scoped pre-decision the user made
+// earlier ("approve/deny all <tool> in this conversation"). They ride the normal
+// (string, error) return so they cross the ACP boundary unchanged — a bridged
+// native-acp stager forwards the returned string verbatim. The interactive gates
+// interpret them: pre-approved → let the tool run normally (no approval card);
+// pre-denied → block with a denial message (no card). An ApprovalStager that has
+// no session registry simply never returns them, so the gates fall through to the
+// normal stage-a-card path.
+const (
+	PreApprovedSentinel = "\x00fleet-session-preapproved\x00"
+	PreDeniedSentinel   = "\x00fleet-session-predenied\x00"
+)
+
 // MemoryProposer stages a memory proposal for user confirmation (interactive).
 type MemoryProposer interface {
 	Propose(content string) (proposalID string, err error)
@@ -265,6 +279,15 @@ func (o *orchestrationState) checkEmailSafety(toolName, toolCallID, rawInput str
 		if err != nil {
 			log.Printf("approval stage failed: %v", err)
 			return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage send for user approval (%v). Ask the user what to do.", err)
+		}
+		switch id {
+		case PreApprovedSentinel:
+			// Session pre-approval (#300): run the send without a card, but the
+			// per-turn limit + dedup checks above still applied.
+			o.sentEmailFingerprints[fp] = struct{}{}
+			return false, ""
+		case PreDeniedSentinel:
+			return true, fmt.Sprintf("APPROVAL_DENIED: the user pre-denied %s for this conversation (session policy). Do NOT retry; tell the user it was blocked by their own pre-approval setting.", toolName)
 		}
 		return true, fmt.Sprintf("APPROVAL_REQUIRED: this send_email call has been staged for explicit user approval "+
 			"(approval_id=%s). Do NOT retry. Summarize to the user what you would send and wait for them to click Send.", id)
