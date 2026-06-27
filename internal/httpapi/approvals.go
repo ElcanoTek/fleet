@@ -51,9 +51,30 @@ type approvalStager struct {
 	userEmail      string
 	sink           agent.EventSink
 	mcpClient      mcpToolCaller
+	// sessionRegistry holds per-conversation pre-approvals (#300). nil disables
+	// batch approval (every call stages a card, the prior behavior).
+	sessionRegistry *SessionApprovalRegistry
 }
 
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
+	// Session pre-approval (#300): if the user previously chose "approve/deny all
+	// <tool>" for this conversation, short-circuit the card by returning a
+	// sentinel the orchestration gate interprets — pre-approved → run the tool
+	// normally; pre-denied → block it. This runs before staging so a pre-approved
+	// tool never creates an approval row or emits a card.
+	if a.sessionRegistry != nil {
+		if p, ok := a.sessionRegistry.Match(a.conversationID, toolName, rawInput); ok {
+			a.sink.Emit("tool.auto_resolved", map[string]any{
+				"tool":    toolName,
+				"mode":    p.Mode,
+				"pattern": p.Pattern,
+			})
+			if p.Mode == "deny" {
+				return agentcore.PreDeniedSentinel, nil
+			}
+			return agentcore.PreApprovedSentinel, nil
+		}
+	}
 	// For email tools that accept content_file, inline the file bytes
 	// now. run_python writes to workspace/<convID>/, but the Go server
 	// and the sendgrid MCP process each have their own cwd, so a bare
@@ -570,6 +591,37 @@ func firstString(m map[string]any, keys ...string) string {
 type approvalRequest struct {
 	Approved bool   `json:"approved"`
 	Action   string `json:"action,omitempty"` // "switch_and_retry" | "switch_only" | "dismiss"
+	// Scope (#300) extends a one-off decision to the rest of the session:
+	// "" / "once" → just this call (default); "session" → all calls to this tool;
+	// "pattern" → calls whose args match Pattern ("argName=glob"). Combined with
+	// Approved: approve+session pre-approves, !approve+session pre-denies.
+	Scope   string `json:"scope,omitempty"`
+	Pattern string `json:"pattern,omitempty"`
+}
+
+// maybeRegisterSessionPolicy records a session-scoped pre-approval/denial (#300)
+// when the user picked a non-"once" scope on the approval card. In-memory only
+// (lost on restart, by design). Logged as the audit record (this POST has no
+// live SSE buffer to emit into — the staging turn has finished).
+func (s *Server) maybeRegisterSessionPolicy(convID, user, toolName string, req approvalRequest) {
+	scope := strings.TrimSpace(req.Scope)
+	if scope == "" || scope == "once" || s.sessionApprovals == nil {
+		return
+	}
+	mode := "approve"
+	if !req.Approved {
+		mode = "deny"
+	}
+	pattern := ""
+	switch {
+	case strings.HasPrefix(scope, "pattern:"):
+		pattern = strings.TrimSpace(strings.TrimPrefix(scope, "pattern:"))
+	case scope == "pattern":
+		pattern = strings.TrimSpace(req.Pattern)
+	}
+	s.sessionApprovals.Register(convID, toolName, SessionApprovalPolicy{Mode: mode, Pattern: pattern, CreatedAt: time.Now()})
+	//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF, so a request-supplied scope/pattern cannot forge a log line.
+	log.Printf("audit: %q pre-%s %q for conversation %q (scope=%q pattern=%q)", user, mode, toolName, convID, scope, pattern)
 }
 
 // approvalHandler runs the staged tool when the user approves, or marks it
@@ -640,6 +692,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		// of orphaning a second result row keyed off the approval id.
 		appendToolResultToHistory(r.Context(), s.store, convID, approval.ToolName,
 			resolutionCallID(approval), "User declined to send this email.", false)
+		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 		writeJSON(w, map[string]any{"status": "rejected"})
 		return
 	}
@@ -692,6 +745,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	isErr := toolErr != nil
 	appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
 		resolutionCallID(approval), resultText, isErr)
+	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 
 	writeJSON(w, map[string]any{
 		"status":      "approved",

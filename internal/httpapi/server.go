@@ -78,6 +78,10 @@ type Server struct {
 	// POST /conversations/{id}/permissions/{requestId} decision handler.
 	permissions *permissionRegistry
 
+	// sessionApprovals holds per-conversation batch pre-approvals (#300): in-memory,
+	// session-scoped policies consulted by approvalStager.Stage before staging a card.
+	sessionApprovals *SessionApprovalRegistry
+
 	// sseReconnects tallies SSE reconnect outcomes (within_buffer | db_fallback |
 	// buffer_expired | no_content). Behind a pointer so a Server value stays
 	// copyable; a Prometheus surface is deferred to the metrics issue (#176).
@@ -272,14 +276,15 @@ func (e inflightEntry) IsRunning() bool {
 // (P6b) supplies the concrete engine implementation.
 func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Server {
 	s := &Server{
-		cfg:           cfg,
-		agent:         mgr,
-		store:         st,
-		sharedToken:   cfg.SharedToken,
-		rateLimitHits: newRateHitCounter(),
-		inflight:      make(map[string]inflightEntry),
-		permissions:   newPermissionRegistry(),
-		sseReconnects: newReconnectCounter(),
+		cfg:              cfg,
+		agent:            mgr,
+		store:            st,
+		sharedToken:      cfg.SharedToken,
+		rateLimitHits:    newRateHitCounter(),
+		inflight:         make(map[string]inflightEntry),
+		permissions:      newPermissionRegistry(),
+		sessionApprovals: NewSessionApprovalRegistry(),
+		sseReconnects:    newReconnectCounter(),
 	}
 	// Rate limiting is a single master switch. When on, the RPM/day window and
 	// the per-user concurrent-turn cap are both live; when off, both limiters are
@@ -1614,12 +1619,13 @@ func (s *Server) runTurnAsync(
 		Runtime:                   conv.Runtime,
 		ImageAttachments:          imageAttachments,
 		ApprovalStager: &approvalStager{
-			ctx:            turnCtx,
-			store:          s.store,
-			conversationID: conv.ID,
-			userEmail:      user,
-			sink:           buf,
-			mcpClient:      s.agent.MCPClient(),
+			ctx:             turnCtx,
+			store:           s.store,
+			conversationID:  conv.ID,
+			userEmail:       user,
+			sink:            buf,
+			mcpClient:       s.agent.MCPClient(),
+			sessionRegistry: s.sessionApprovals,
 		},
 		MemoryProposer: &memoryProposer{
 			ctx:            turnCtx,
