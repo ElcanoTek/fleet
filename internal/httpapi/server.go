@@ -23,6 +23,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -35,7 +36,7 @@ type Server struct {
 	agent         turnEngine
 	store         chatStore
 	sharedToken   string
-	rate          *rateLimiter
+	rate          *ratelimit.Limiter
 	hasUsers      atomic.Bool
 	lastUserCheck atomic.Int64
 
@@ -114,7 +115,7 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		agent:       mgr,
 		store:       st,
 		sharedToken: cfg.SharedToken,
-		rate:        newRateLimiter(cfg.RatePerMinute, cfg.RatePerDay),
+		rate:        ratelimit.New(cfg.RatePerMinute, cfg.RatePerDay),
 		inflight:    make(map[string]inflightEntry),
 		permissions: newPermissionRegistry(),
 	}
