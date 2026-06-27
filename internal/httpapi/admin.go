@@ -19,12 +19,17 @@ type adminStats struct {
 }
 
 type userStat struct {
-	Email             string  `json:"email"`
-	ConversationCount int     `json:"conversation_count"`
-	PinnedCount       int     `json:"pinned_count"`
-	LastActivity      int64   `json:"last_activity"` // unix seconds
-	TotalCostUSD      float64 `json:"total_cost_usd"`
-	TotalTurns        int     `json:"total_turns"`
+	Email                    string  `json:"email"`
+	ConversationCount        int     `json:"conversation_count"`
+	PinnedCount              int     `json:"pinned_count"`
+	LastActivity             int64   `json:"last_activity"` // unix seconds
+	TotalCostUSD             float64 `json:"total_cost_usd"`
+	TotalTurns               int     `json:"total_turns"`
+	TotalCachedTokens        int64   `json:"total_cached_tokens"`
+	TotalCacheCreationTokens int64   `json:"total_cache_creation_tokens"`
+	// CacheHitRatePct is cached_tokens / prompt_tokens * 100 — the share of
+	// input tokens served from the prompt cache. 0 when no prompt tokens.
+	CacheHitRatePct float64 `json:"cache_hit_rate_pct"`
 }
 
 // isAdmin returns true when the authenticated user is in the ADMIN_EMAILS
@@ -69,13 +74,20 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 	}
 	users := make([]userStat, 0, len(stats))
 	for _, row := range stats {
+		var hitRate float64
+		if row.TotalPromptTokens > 0 {
+			hitRate = float64(row.TotalCachedTokens) / float64(row.TotalPromptTokens) * 100.0
+		}
 		users = append(users, userStat{
-			Email:             row.Email,
-			ConversationCount: row.ConversationCount,
-			PinnedCount:       row.PinnedCount,
-			LastActivity:      row.LastActivity,
-			TotalCostUSD:      row.TotalCostUSD,
-			TotalTurns:        row.TotalTurns,
+			Email:                    row.Email,
+			ConversationCount:        row.ConversationCount,
+			PinnedCount:              row.PinnedCount,
+			LastActivity:             row.LastActivity,
+			TotalCostUSD:             row.TotalCostUSD,
+			TotalTurns:               row.TotalTurns,
+			TotalCachedTokens:        row.TotalCachedTokens,
+			TotalCacheCreationTokens: row.TotalCacheCreationTokens,
+			CacheHitRatePct:          hitRate,
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -1393,14 +1393,15 @@ func (s *Server) runTurnAsync(
 	// A failed/errored turn doesn't reach this code path (we returned early
 	// above); cancelled turns DO, and are flagged for separate accounting.
 	if err := s.store.RecordTurn(persistCtx, store.TurnMetric{
-		ConversationID:   conv.ID,
-		UserEmail:        user,
-		CompletedAt:      time.Now().Unix(),
-		CostUSD:          res.CostUSD,
-		PromptTokens:     res.PromptTokens,
-		CompletionTokens: res.CompletionTokens,
-		CachedTokens:     res.CachedTokens,
-		Cancelled:        res.Cancelled,
+		ConversationID:      conv.ID,
+		UserEmail:           user,
+		CompletedAt:         time.Now().Unix(),
+		CostUSD:             res.CostUSD,
+		PromptTokens:        res.PromptTokens,
+		CompletionTokens:    res.CompletionTokens,
+		CachedTokens:        res.CachedTokens,
+		CacheCreationTokens: res.CacheCreationTokens,
+		Cancelled:           res.Cancelled,
 	}); err != nil {
 		log.Printf("RecordTurn: %v", err)
 	}

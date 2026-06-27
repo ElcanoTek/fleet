@@ -597,6 +597,15 @@ fold to underscore and case is ignored, so `client-a`, `client_a`, and
 `Client_A` all resolve to one credential seat (`<VAR>_CLIENT_A`). Use distinct
 base words — not separator tricks — to keep seats apart.
 
+Optional tuning knobs live in the same env file. `FLEET_DISABLE_PROMPT_CACHE=true`
+turns off Anthropic prompt-cache breakpoints; leave it unset to keep caching on
+(it serves repeated system-prompt tokens from cache at ~10% of input cost). The
+breakpoints are only ever emitted for `anthropic/`- and `google/`-prefixed model
+slugs — other providers are unaffected by the setting. Cache efficiency is
+visible per user in `/admin/stats` (`total_cached_tokens`,
+`total_cache_creation_tokens`, `cache_hit_rate_pct`). The legacy
+`CHAT_DISABLE_PROMPT_CACHE` / `CUTLASS_DISABLE_PROMPT_CACHE` aliases still work.
+
 ### The client-config checkout
 
 fleet ships **no** client content; it loads a **client config bundle** from

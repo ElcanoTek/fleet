@@ -746,14 +746,15 @@ func (s *Store) SecondMaxMessageIDForRole(ctx context.Context, convID, role stri
 
 // TurnMetric is a single completed-turn row for the admin dashboard.
 type TurnMetric struct {
-	ConversationID   string
-	UserEmail        string
-	CompletedAt      int64
-	CostUSD          float64
-	PromptTokens     int
-	CompletionTokens int
-	CachedTokens     int
-	Cancelled        bool
+	ConversationID      string
+	UserEmail           string
+	CompletedAt         int64
+	CostUSD             float64
+	PromptTokens        int
+	CompletionTokens    int
+	CachedTokens        int
+	CacheCreationTokens int
+	Cancelled           bool
 }
 
 // RecordTurn writes a turn_metrics row. Called once per completed turn
@@ -763,22 +764,25 @@ func (s *Store) RecordTurn(ctx context.Context, m TurnMetric) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO turn_metrics
 		   (conversation_id, user_email, completed_at, cost_usd,
-		    prompt_tokens, completion_tokens, cached_tokens, cancelled)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		    prompt_tokens, completion_tokens, cached_tokens, cache_creation_tokens, cancelled)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		m.ConversationID, m.UserEmail, m.CompletedAt,
-		m.CostUSD, m.PromptTokens, m.CompletionTokens, m.CachedTokens, m.Cancelled,
+		m.CostUSD, m.PromptTokens, m.CompletionTokens, m.CachedTokens, m.CacheCreationTokens, m.Cancelled,
 	)
 	return err
 }
 
 // AdminRow is one user's aggregated stats for the admin dashboard.
 type AdminRow struct {
-	Email             string
-	ConversationCount int
-	PinnedCount       int
-	LastActivity      int64
-	TotalCostUSD      float64
-	TotalTurns        int
+	Email                    string
+	ConversationCount        int
+	PinnedCount              int
+	LastActivity             int64
+	TotalCostUSD             float64
+	TotalTurns               int
+	TotalPromptTokens        int64
+	TotalCachedTokens        int64
+	TotalCacheCreationTokens int64
 }
 
 // AdminStats aggregates per-user metrics for the /admin page. One query
@@ -815,7 +819,12 @@ func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 	// Cost + turn counts from turn_metrics. Left-joining inside a single
 	// query would work too, but this is tidier and still 2 queries.
 	metricRows, err := s.db.QueryContext(ctx,
-		`SELECT user_email, COALESCE(SUM(cost_usd), 0), COUNT(*)
+		`SELECT user_email,
+		        COALESCE(SUM(cost_usd), 0),
+		        COUNT(*),
+		        COALESCE(SUM(prompt_tokens), 0),
+		        COALESCE(SUM(cached_tokens), 0),
+		        COALESCE(SUM(cache_creation_tokens), 0)
 		 FROM turn_metrics
 		 GROUP BY user_email`,
 	)
@@ -827,15 +836,21 @@ func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 		var email string
 		var cost float64
 		var turns int
-		if err := metricRows.Scan(&email, &cost, &turns); err != nil {
+		var promptTokens, cachedTokens, cacheCreationTokens int64
+		if err := metricRows.Scan(&email, &cost, &turns, &promptTokens, &cachedTokens, &cacheCreationTokens); err != nil {
 			return nil, err
 		}
 		if row, ok := byEmail[email]; ok {
 			row.TotalCostUSD = cost
 			row.TotalTurns = turns
+			row.TotalPromptTokens = promptTokens
+			row.TotalCachedTokens = cachedTokens
+			row.TotalCacheCreationTokens = cacheCreationTokens
 		} else {
 			byEmail[email] = &AdminRow{
 				Email: email, TotalCostUSD: cost, TotalTurns: turns,
+				TotalPromptTokens: promptTokens, TotalCachedTokens: cachedTokens,
+				TotalCacheCreationTokens: cacheCreationTokens,
 			}
 		}
 	}
