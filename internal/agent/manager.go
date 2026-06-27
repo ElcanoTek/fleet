@@ -262,6 +262,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		systemPromptsDir:     opts.SystemPromptsDir,
 		chatSystemPromptFile: chatPromptFile,
 		limiter:              opts.Limiter,
+		health:               agentcore.NewProviderHealthRegistry(),
 	}
 	m.mcpToolRoster = m.computeMCPToolRoster()
 	m.optionalServerMetadata = m.buildOptionalServerMetadata(opts.ServerSpecs)
@@ -601,6 +602,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		NativeAgentImage: m.nativeAgentImage,
 		Lockdown:         in.Lockdown,
 		PermissionBroker: in.PermissionBroker,
+		HealthRegistry:   m.health,
 	}
 
 	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink})

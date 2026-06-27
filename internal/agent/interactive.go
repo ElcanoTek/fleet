@@ -47,6 +47,10 @@ type TurnConfig struct {
 	FallbackModel fantasy.LanguageModel
 	Temperature   float64
 	MaxTokens     int
+	// HealthRegistry is the cross-turn provider circuit breaker (#267), owned by
+	// the Manager and passed on every turn so error frequency accumulates. nil
+	// disables the breaker (tests).
+	HealthRegistry *agentcore.ProviderHealthRegistry
 	// MaxIterations caps the agent steps in the turn's stream (0 = no cap).
 	// Wired into agentcore.RunConfig.MaxIterations → the stream's StopWhen.
 	MaxIterations int
@@ -185,6 +189,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		MCPClient:            tc.MCPClient,
 		Finalize:             buildInteractiveFinalize(tc),
 		CompactionSummarizer: buildInteractiveCompactionSummarizer(tc),
+		HealthRegistry:       tc.HealthRegistry,
 	}
 
 	cfg := agentcore.RunConfig{

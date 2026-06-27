@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
@@ -374,6 +375,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
+	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	return recoverMiddleware(bodyLimitMiddleware(mux))
 }
 
@@ -417,6 +419,23 @@ func recoverMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
+	// Surface LLM provider degradation (#267): if any model's circuit is open
+	// (sustained recent failures), report degraded so an operator/monitor sees it.
+	// Half-open (recovering) and closed are healthy.
+	if s.agent != nil {
+		for _, h := range s.agent.ProviderHealth() {
+			if h.State == agentcore.CircuitOpen.String() {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"status": "degraded",
+					"reason": "llm provider circuit open",
+					"model":  h.Slug,
+				})
+				return
+			}
+		}
+	}
 	_, _ = w.Write([]byte("ok"))
 }
 

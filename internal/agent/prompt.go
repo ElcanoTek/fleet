@@ -130,6 +130,21 @@ type Manager struct {
 	// of background work. Nil disables admission (the one-shot cutlass harness and
 	// tests, where there is nothing to contend with).
 	limiter *admission.Limiter
+
+	// health is the long-lived provider circuit breaker (#267): it accumulates
+	// per-model error frequency ACROSS interactive turns, so a degraded model is
+	// skipped straight to the fallback on later turns and operators can query
+	// per-model health. Passed into every interactive run's Deps.
+	health *agentcore.ProviderHealthRegistry
+}
+
+// ProviderHealth returns a snapshot of per-model circuit-breaker state for the
+// interactive engine (#267). nil-safe (returns nil before New wires it).
+func (m *Manager) ProviderHealth() []agentcore.ModelHealth {
+	if m == nil {
+		return nil
+	}
+	return m.health.Snapshot()
 }
 
 // SetRuntimes configures the runtime-flavor catalog + the native-agent image the

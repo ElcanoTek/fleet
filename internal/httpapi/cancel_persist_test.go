@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
@@ -56,6 +57,7 @@ func (f *fakeTurnEngine) MCPClient() *mcp.Client                              { 
 func (f *fakeTurnEngine) SandboxPool() *sandbox.Pool                          { return nil }
 func (f *fakeTurnEngine) MCPServerCatalog() []agent.OptionalServerInfo        { return nil }
 func (f *fakeTurnEngine) ListPersonas() ([]string, error)                     { return nil, nil }
+func (f *fakeTurnEngine) ProviderHealth() []agentcore.ModelHealth             { return nil }
 
 // TestChatCancel_PersistsPartialTurn pins the interactive cancel contract: when
 // a turn is stopped mid-flight (the Stop button → POST /cancel → turnCancel),

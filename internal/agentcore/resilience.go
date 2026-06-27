@@ -391,6 +391,15 @@ func providerErrStatus(err *fantasy.ProviderError) int {
 	return err.StatusCode
 }
 
+// streamErrorDesc is a short operator-facing description of a provider failure
+// for the circuit-breaker snapshot (the last_error field).
+func streamErrorDesc(providerErr *fantasy.ProviderError) string {
+	if status := providerErrStatus(providerErr); status != 0 {
+		return fmt.Sprintf("HTTP %d", status)
+	}
+	return "provider error"
+}
+
 // streamRoundOutcome bundles everything the loop needs back after a resilient
 // stream attempt, including state mutated during recovery.
 type streamRoundOutcome struct {
@@ -428,12 +437,26 @@ func (e *engine) streamRoundWithResilience(
 		)
 	}
 
+	// Circuit-breaker fast path: if the primary model's circuit is open (sustained
+	// recent failures accumulated across runs), skip straight to the fallback
+	// instead of burning this round's attempts on a known-bad model. Half-open is
+	// deliberately NOT skipped — that state exists to send exactly one probe.
+	if e != nil && !swappedToFallback && e.healthRegistry.State(activeModel.Model()) == CircuitOpen && canSwapFallback(e, activeModel, swappedToFallback) {
+		log.Printf("⚡ circuit open for %s; routing to fallback %s without a primary attempt", activeModel.Model(), e.fallbackModel.Model())
+		activeModel = e.fallbackModel
+		currentAgent = buildAgent(activeModel)
+		swappedToFallback = true
+	}
+
 	for attempt := 0; attempt < maxInnerEscalations; attempt++ {
 		rs := newRoundState(e, orch, maxTokens)
 		rs.sink = sink
 		result, err := rs.stream(ctx, currentAgent, activeModel, messages)
 
 		if err == nil {
+			if e != nil {
+				e.healthRegistry.RecordSuccess(activeModel.Model())
+			}
 			// A clean stream round is the "clean step in between" the
 			// consecutive-compaction contract is written against: reset the
 			// counter so the cap (maxConsecutiveCompactions) only trips on
@@ -459,6 +482,16 @@ func (e *engine) streamRoundWithResilience(
 		lastErr = err
 
 		class, providerErr := classifyStreamError(err)
+		// Feed genuine provider failures into the circuit breaker (#267) so error
+		// frequency accumulates across runs. Cancellation, the cost ceiling, and
+		// prompt-too-large are not provider-health signals, so they don't count.
+		if e != nil {
+			switch class {
+			case streamErrorRetryExhausted, streamErrorStreamBlip, streamErrorFatal:
+				e.healthRegistry.RecordError(activeModel.Model(), streamErrorDesc(providerErr))
+			default:
+			}
+		}
 		switch class {
 		case streamErrorNone:
 			return streamRoundOutcome{}, fmt.Errorf("unexpected stream state (class=none): %w", err)

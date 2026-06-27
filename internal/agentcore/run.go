@@ -141,6 +141,11 @@ type Deps struct {
 	// in-process path (which reads the counters directly off the orch). Nil in
 	// both in-process modes — they read usage from the orch at the end.
 	UsageReporter func(RunUsage)
+
+	// HealthRegistry, when set, is the cross-run provider circuit-breaker (#267).
+	// The interactive Manager owns one long-lived registry and passes it on every
+	// run so error accumulation persists across turns; nil disables the breaker.
+	HealthRegistry *ProviderHealthRegistry
 }
 
 // Result is the run outcome.
@@ -217,6 +222,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		compactionSummarizer: deps.CompactionSummarizer,
 		usageReporter:        deps.UsageReporter,
 		maxIterations:        cfg.MaxIterations,
+		healthRegistry:       deps.HealthRegistry,
 	}
 
 	systemPrompt, messages, label, err := deps.Input.Prompt(ctx)
