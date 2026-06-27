@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
@@ -53,6 +54,9 @@ type turnEngine interface {
 	// ListPersonas returns the available persona names (already implemented
 	// by agent.Manager).
 	ListPersonas() ([]string, error)
+	// ProviderHealth returns a snapshot of per-model circuit-breaker state for
+	// the LLM provider health endpoint + degraded /healthz (#267).
+	ProviderHealth() []agentcore.ModelHealth
 }
 
 // ErrModelSelectionRequired is the sentinel a turnEngine implementation returns
