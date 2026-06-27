@@ -157,6 +157,21 @@ func (p *Pool) Take() (*Sandbox, func(), error) {
 	}
 }
 
+// Stats reports the configured warm-pool size and how many sandboxes are
+// currently parked and ready (#301 health summary). A nil or unwarmed pool
+// (Size<=0, cold-start every Take) reports (0, 0).
+func (p *Pool) Stats() (size, available int) {
+	if p == nil {
+		return 0, 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.slots == nil {
+		return 0, 0
+	}
+	return p.cfg.Size, len(p.slots)
+}
+
 // Close reaps every remaining sandbox. Safe to call on a nil pool or to
 // call multiple times.
 func (p *Pool) Close() {

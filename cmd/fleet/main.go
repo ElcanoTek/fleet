@@ -119,6 +119,7 @@ func preflightDefaultRuntimeImage(cfg *config.Config, bundle *clientconfig.Bundl
 }
 
 func run() error {
+	startTime := time.Now() // process start, for the admin health summary uptime (#301)
 	// Load the client bundle first: it supplies the MCP catalog (built into
 	// cfg.MCPServers), the supporting-doc dirs, and branding/empty-state. Its
 	// manifest also tells us which connector env-var names to admit from the
@@ -293,7 +294,29 @@ func run() error {
 		}
 	}
 
-	chatSrv := httpapi.New(cfg, mgr, chatStore, httpapi.WithClientConfig(bundle))
+	// Health summary (#301): uptime + an injected scheduler worker/task provider
+	// (adapts the sched store's dashboard stats) so the chat-side endpoint can
+	// report a single-pane view without httpapi importing the sched packages.
+	workerStats := func(context.Context) (*httpapi.WorkerStats, error) {
+		ds, err := schedStorage.GetDashboardStats()
+		if err != nil {
+			return nil, err
+		}
+		return &httpapi.WorkerStats{
+			TotalNodes:     ds.TotalNodes,
+			ActiveNodes:    ds.ActiveNodes,
+			IdleNodes:      ds.IdleNodes,
+			QueuedTasks:    ds.PendingTasks,
+			RunningTasks:   ds.RunningTasks,
+			CompletedToday: ds.CompletedTasksToday,
+			FailedToday:    ds.FailedTasksToday,
+		}, nil
+	}
+	chatSrv := httpapi.New(cfg, mgr, chatStore,
+		httpapi.WithClientConfig(bundle),
+		httpapi.WithStartTime(startTime),
+		httpapi.WithWorkerStats(workerStats),
+	)
 
 	// ── orchestrator HTTP (sched/handlers) ──
 	keyMgr, err := apikeys.NewManager(filepath.Join(cfg.DataDir, "api_keys.json"), "")
