@@ -45,6 +45,32 @@ contributing, never commit real credentials — the generic `config/default`
 bundle ships with no connector secrets, and all deployment secrets live in an
 operator-managed `0600` env file outside the repo (see the README).
 
+## CSRF protection (cookie-authenticated routes)
+
+State-mutating orchestrator routes (`POST /tasks`, `POST /upload`, …) accept the
+shared `elcano_auth` session cookie. Cookie-authenticated requests are protected
+against cross-site request forgery by a **stateless Origin check**
+(`CSRFMiddleware`, applied globally before every route group): a mutating request
+on the cookie path must carry an `Origin` header whose host matches the server's
+(`X-Forwarded-Host` when behind a proxy, else `Host`). A missing, malformed, or
+cross-origin `Origin` is rejected with `403 Cross-origin request blocked`.
+
+Requests authenticated with `X-API-Key`, `X-Registration-Token`, or
+`Authorization: Bearer …` are **exempt** — browsers do not auto-attach custom
+headers cross-origin, so those paths are not CSRF-reachable.
+
+Two operator-facing contracts make this defense-in-depth complete:
+
+- **The auth service MUST set `SameSite=Lax` (or `Strict`) on the `elcano_auth`
+  cookie.** Fleet reads and deletes that cookie but does not mint it; `SameSite`
+  is the browser's first line of defense and blocks the overwhelming majority of
+  CSRF vectors before any server check runs. The Origin check is the backstop.
+- **Non-browser clients that authenticate with the `elcano_auth` cookie must set
+  `Origin` explicitly** on every `POST`/`PUT`/`DELETE`/`PATCH`, e.g.
+  `Origin: https://fleet.example.com`. Requests that omit it receive `403`.
+  Clients using `X-API-Key` / `X-Registration-Token` / `Authorization: Bearer`
+  are unaffected.
+
 ## The client-config bundle is root-equivalent
 
 A deployment's behavior comes from an external **client-config bundle** (a git
