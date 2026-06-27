@@ -681,8 +681,11 @@ paths:
         rendered prompt_template as the prompt. Authenticated SOLELY by the
         per-trigger HMAC-SHA256 secret over the raw body (GitHub-compatible
         X-Hub-Signature-256, or X-Fleet-Signature-256) — NOT the admin API key.
-        Unknown slug and bad signature both return 401 (indistinguishable) to
-        prevent slug enumeration.
+        Unknown slug and bad signature both return 401 (indistinguishable, with
+        equalized HMAC work) to prevent slug enumeration. A leaked secret lets a
+        caller inject the spawned run's prompt under the template's seat
+        (network/MCP/files); the sandbox remains the execution boundary. Rotate
+        with `fleet-admin sched trigger rotate`.
       security: []
       requestBody:
         content:

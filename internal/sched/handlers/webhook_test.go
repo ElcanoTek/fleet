@@ -182,4 +182,13 @@ func TestHandleWebhookTrigger_Integration(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("unknown slug: got status %d, want 401", rec.Code)
 	}
+
+	// 4) Malformed slug (uppercase) → 401 too (shape guard, no DB probe).
+	req = httptest.NewRequest(http.MethodPost, "/triggers/NOT-A-VALID-SLUG", bytes.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", sign(secret, body))
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("malformed slug: got status %d, want 401", rec.Code)
+	}
 }

@@ -15,6 +15,12 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS trigger_type TEXT NOT NULL DEFAULT 'c
 -- never the admin API key, so external services (GitHub, Slack, CI) can call the
 -- endpoint without ever seeing admin credentials. prompt_template is a Go
 -- text/template rendered against the decoded JSON payload before the run spawns.
+--
+-- NOTE: secret is stored PLAINTEXT by necessity — HMAC verification must
+-- recompute the MAC, so the key cannot be one-way-hashed at rest (unlike admin
+-- API keys, which are SHA-256-hashed). Rotate via `fleet-admin sched trigger
+-- rotate`. A future hardening pass could encrypt it at rest (see #184/Suna
+-- AES-256-GCM project secrets); the column is the natural place for that.
 CREATE TABLE IF NOT EXISTS task_triggers (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id         UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
