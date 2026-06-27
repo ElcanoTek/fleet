@@ -2,7 +2,6 @@ package agentcore
 
 import (
 	"fmt"
-	"regexp"
 	"sync"
 	"time"
 )
@@ -30,19 +29,15 @@ const (
 	statusUnknown = "unknown"
 )
 
-// secretPattern matches common secret patterns in free text
-// (KEY=value, TOKEN: value, Bearer token, …).
-var secretPattern = regexp.MustCompile(`(?i)((?:api[_-]?key|token|secret|password|authorization)[:\s=]+(?:bearer\s+)?)([^\s"',}{]{8,})`)
-
-// redactSecrets replaces secret values in text with [REDACTED].
-func redactSecrets(text string) string {
-	return secretPattern.ReplaceAllString(text, "${1}[REDACTED]")
-}
-
-// RedactSecrets is the exported form the scheduled driver's log writer uses to
-// scrub recoverable secrets before persisting the session log.
+// RedactSecrets scrubs recoverable secrets from text before it is persisted to
+// the session log or re-enters the model context. Backed by the shared
+// internal/redact Redactor (see redact.go) — the same scrubber the tool wrappers
+// and stream sink apply — so the scheduled and interactive paths agree. It now
+// covers vendor key prefixes (sk-/sk-ant-/sk-or-/ghp_/glpat-/AKIA), PEM blocks,
+// the JSON-quoted marker form ({"api_key":"…"}), and registered env-secret
+// literals, not just the old marker=value regex.
 func RedactSecrets(text string) string {
-	return redactSecrets(text)
+	return toolRedactor().Redact(text)
 }
 
 // LogSession tracks the execution session for logging.

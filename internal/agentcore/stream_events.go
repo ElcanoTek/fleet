@@ -153,6 +153,11 @@ func (s *streamSink) onToolCall(id, name, input string) {
 
 // onToolResult forwards (truncated) + records (full) a tool result.
 func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
+	// Backstop redaction for the observer/SSE + recorded-entry path. The tool
+	// wrappers already redact resp.Content, but pre-gated tools register verbatim
+	// and reach here directly — so scrub again before anything is recorded,
+	// streamed to the browser, or persisted to turn_events.
+	text = toolRedactor().Redact(text)
 	s.mu.Lock()
 	s.entries = append(s.entries, RunEntry{
 		Role: roleTool, Type: "tool_result",
