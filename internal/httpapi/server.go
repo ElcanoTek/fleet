@@ -410,8 +410,12 @@ func recoverMiddleware(next http.Handler) http.Handler {
 				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(rec) // a deliberate abort is the server's to handle
 				}
-				log.Printf("panic in chat handler: %v\n%s", rec, debug.Stack())
-				http.Error(w, "internal server error", http.StatusInternalServerError)
+				// Same structured emission + counter + hooks every recovered panic
+				// gets (#241), labeled with the request method+path for correlation.
+				safe.EmitPanic("httpapi.handler "+r.Method+" "+r.URL.Path, rec, debug.Stack())
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
 			}
 		}()
 		next.ServeHTTP(w, r)
