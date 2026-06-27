@@ -47,15 +47,24 @@ fleet-admin backup --db=sched --out /var/backups/fleet
 `--db` accepts `chat`, `sched`, or `all` (the default). The dump filename is
 `fleet-<db>-<UTC timestamp>.dump`, so successive backups never clobber one
 another. Each dump path is printed on **stdout** (the human-readable progress
-line goes to stderr), so a cron job can capture the paths:
+line goes to stderr), so a script can capture the paths.
+
+Every dump is **verified** immediately after it is written (`pg_restore --list`
+confirms it is a valid custom-format archive); a corrupt dump fails the run
+non-zero rather than reporting a false success.
+
+**Output directory** resolves to `--out`, else `FLEET_BACKUP_DIR`, else the
+current directory.
+
+**Retention pruning** — `--prune` deletes this tool's own dumps
+(`fleet-{chat,sched}-*.dump`) older than `FLEET_BACKUP_RETENTION_DAYS` (default
+30) from the output directory after a successful backup:
 
 ```sh
-# /etc/cron.daily/fleet-backup  (illustrative)
-set -euo pipefail
-out=/var/backups/fleet
-fleet-admin backup --db=all --out "$out" >/dev/null
-# prune dumps older than 30 days
-find "$out" -name 'fleet-*.dump' -mtime +30 -delete
+fleet-admin backup --db=all --out /var/backups/fleet --prune
+# backed up chat DB → …/fleet-chat-…dump (verified)
+# backed up sched DB → …/fleet-sched-…dump (verified)
+# pruned 3 old backup(s) older than 30 days
 ```
 
 ## Restore
@@ -72,6 +81,16 @@ Restore runs `pg_restore --clean --if-exists --no-owner --no-acl`: it drops the
 existing objects first, then recreates them from the dump, so it is idempotent
 over an already-migrated database and does not fail on role/grant mismatches when
 restoring into a differently-owned target (the common cross-box DR case).
+
+Because restore **overwrites a live database**, it first verifies the dump is a
+valid archive, then asks for confirmation on an interactive terminal:
+
+```
+WARNING: this will OVERWRITE the live chat database from …/fleet-chat-….dump. Continue? [y/N]:
+```
+
+Pass `--no-confirm` for scripted restores. In a non-interactive context (a pipe
+or CI) without `--no-confirm`, restore refuses rather than silently overwriting.
 
 **Stop the fleet service before restoring** so nothing writes mid-restore:
 
@@ -103,3 +122,46 @@ The automated round-trip test (`cmd/fleet-admin/backup_test.go`,
 seeds a sentinel row, runs the real `pg_dump` wrapper, restores into a fresh
 database with the real `pg_restore` wrapper, and asserts the row survives — so
 the backup *and* restore paths are exercised, not just the dump.
+
+## Scheduling daily backups
+
+A scheduled backup is a **host** operation — it runs `pg_dump` against the
+loopback Postgres and writes to a host directory. It is therefore driven by a
+**systemd timer** (or cron), **not** a Fleet scheduled task: a Fleet task runs an
+agent inside a network-isolated sandbox that cannot reach the host's Postgres or
+filesystem, so it is the wrong mechanism for a host backup.
+
+Install a daily timer (the unit reads the same env file as the fleet service, so
+the DSNs and `FLEET_BACKUP_DIR` / `FLEET_BACKUP_RETENTION_DAYS` resolve):
+
+```ini
+# /etc/systemd/system/fleet-backup.service
+[Unit]
+Description=fleet database backup
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/fleet/fleet.env
+ExecStart=/usr/local/bin/fleet-admin backup --db=all --prune
+```
+
+```ini
+# /etc/systemd/system/fleet-backup.timer
+[Unit]
+Description=Daily fleet database backup
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+systemctl daemon-reload && systemctl enable --now fleet-backup.timer
+```
+
+The `oneshot` service exits non-zero if any dump fails its integrity check, so a
+failed backup surfaces in `systemctl status fleet-backup` and the journal.

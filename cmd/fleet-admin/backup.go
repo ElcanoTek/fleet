@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -129,11 +132,90 @@ func backupFileName(db string, now time.Time) string {
 	return fmt.Sprintf("fleet-%s-%s.dump", db, now.UTC().Format("20060102T150405Z"))
 }
 
+// backupFilePattern matches the dump files this tool writes (fleet-{chat,sched}-*.dump),
+// so prune only ever deletes our own artifacts — never an unrelated file in the dir.
+var backupFilePattern = regexp.MustCompile(`^fleet-(chat|sched)-.*\.dump$`)
+
+// verifyDump confirms a freshly-written file is a valid pg custom-format archive
+// by listing its table of contents (pg_restore --list: no connection, no data
+// written). A corrupt dump fails here so a backup run never reports success on an
+// unrestorable file. Skipped (with a warning) when pg_restore is not on PATH.
+func verifyDump(ctx context.Context, path string) error {
+	if _, err := exec.LookPath("pg_restore"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: pg_restore not found; skipping integrity check of %s\n", path)
+		//nolint:nilerr // intentional: pg_restore absent = skip verification, not a verify failure.
+		return nil
+	}
+	//nolint:gosec // G204: fixed "pg_restore" binary; path is an operator-supplied path passed as a separate argv (no shell). --list is read-only (no connection, no writes).
+	cmd := exec.CommandContext(ctx, "pg_restore", "--list", path)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("integrity check failed for %s (not a valid pg custom-format archive): %w", path, err)
+	}
+	return nil
+}
+
+// pruneOldBackups removes this tool's dump files older than retentionDays from
+// dir. Returns the number removed. Pure os — no new dependency.
+func pruneOldBackups(dir string, retentionDays int) (int, error) {
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, fmt.Errorf("read backup dir: %w", err)
+	}
+	var pruned int
+	for _, e := range entries {
+		if e.IsDir() || !backupFilePattern.MatchString(e.Name()) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+			return pruned, fmt.Errorf("remove %s: %w", e.Name(), err)
+		}
+		pruned++
+	}
+	return pruned, nil
+}
+
+// backupDir resolves the output directory: the --out flag, else FLEET_BACKUP_DIR,
+// else ".". Lets an operator set a default location once in the env file.
+func backupDir(flagOut string) string {
+	if v := strings.TrimSpace(flagOut); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("FLEET_BACKUP_DIR")); v != "" {
+		return v
+	}
+	return "."
+}
+
+// retentionDays resolves the prune cutoff: FLEET_BACKUP_RETENTION_DAYS, else 30.
+func retentionDays() int {
+	if v := strings.TrimSpace(os.Getenv("FLEET_BACKUP_RETENTION_DAYS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 30
+}
+
+// isTerminal reports whether f is an interactive terminal (so the restore
+// confirmation prompt is only shown to a human, never in a pipe/CI). Uses the
+// char-device bit — no x/term dependency.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+}
+
 // cmdBackup handles `fleet-admin backup [--db=chat|sched|all] [--out DIR]`.
 func cmdBackup(argv []string) int {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	db := fs.String("db", "all", "which database to back up: chat|sched|all")
-	out := fs.String("out", ".", "output directory for the dump file(s)")
+	out := fs.String("out", "", "output directory for the dump file(s) (else FLEET_BACKUP_DIR, else .)")
+	prune := fs.Bool("prune", false, "after backing up, delete dumps older than FLEET_BACKUP_RETENTION_DAYS (default 30)")
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else FLEET_CHAT_DATABASE_URL / DATABASE_URL)")
 	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else FLEET_SCHED_DATABASE_URL / DATABASE_URL)")
 	if err := fs.Parse(argv); err != nil {
@@ -143,7 +225,8 @@ func cmdBackup(argv []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
-	if err := os.MkdirAll(*out, 0o750); err != nil {
+	outDir := backupDir(*out)
+	if err := os.MkdirAll(outDir, 0o750); err != nil {
 		return errf(1, "create out dir: %v", err)
 	}
 	ctx := context.Background()
@@ -153,12 +236,24 @@ func cmdBackup(argv []string) int {
 		if err != nil {
 			return errf(1, "%v", err)
 		}
-		path := filepath.Join(*out, backupFileName(name, now))
+		path := filepath.Join(outDir, backupFileName(name, now))
 		if err := runPgDump(ctx, dsn, path); err != nil {
 			return errf(5, "backup %s: %v", name, err)
 		}
-		fmt.Fprintf(os.Stderr, "backed up %s DB → %s\n", name, path)
+		// Always verify the freshly-written dump is restorable before reporting
+		// success — a silently-corrupt backup is worse than a loud failure.
+		if err := verifyDump(ctx, path); err != nil {
+			return errf(5, "%v", err)
+		}
+		fmt.Fprintf(os.Stderr, "backed up %s DB → %s (verified)\n", name, path)
 		fmt.Println(path)
+	}
+	if *prune {
+		n, err := pruneOldBackups(outDir, retentionDays())
+		if err != nil {
+			return errf(5, "prune: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "pruned %d old backup(s) older than %d days\n", n, retentionDays())
 	}
 	return 0
 }
@@ -169,6 +264,7 @@ func cmdBackup(argv []string) int {
 func cmdRestore(argv []string) int {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	db := fs.String("db", "", "which database to restore into: chat|sched (required)")
+	noConfirm := fs.Bool("no-confirm", false, "skip the interactive overwrite confirmation (for scripted restores)")
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else FLEET_CHAT_DATABASE_URL / DATABASE_URL)")
 	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else FLEET_SCHED_DATABASE_URL / DATABASE_URL)")
 	if err := fs.Parse(argv); err != nil {
@@ -189,7 +285,27 @@ func cmdRestore(argv []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
-	if err := runPgRestore(context.Background(), dsn, inPath); err != nil {
+	ctx := context.Background()
+	// Verify the archive is restorable before we drop the live DB's objects.
+	if err := verifyDump(ctx, inPath); err != nil {
+		return errf(5, "%v", err)
+	}
+	// Restore OVERWRITES the live database (--clean --if-exists). Confirm on a TTY
+	// unless --no-confirm; in a pipe/CI a confirmation can't be answered, so a
+	// non-TTY without --no-confirm is refused rather than silently proceeding.
+	if !*noConfirm {
+		if !isTerminal(os.Stdin) {
+			return errf(1, "refusing to overwrite the %s database without confirmation: pass --no-confirm for scripted restores", *db)
+		}
+		fmt.Fprintf(os.Stderr, "WARNING: this will OVERWRITE the live %s database from %s. Continue? [y/N]: ", *db, inPath)
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		if ans := strings.ToLower(strings.TrimSpace(line)); ans != "y" && ans != "yes" {
+			fmt.Fprintln(os.Stderr, "restore aborted")
+			return 1
+		}
+	}
+	if err := runPgRestore(ctx, dsn, inPath); err != nil {
 		return errf(5, "restore %s: %v", *db, err)
 	}
 	fmt.Fprintf(os.Stderr, "restored %s DB from %s\n", *db, inPath)
