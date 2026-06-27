@@ -77,3 +77,72 @@ func TestLimiter_PerMinuteAccessor(t *testing.T) {
 		t.Errorf("nil PerMinute() = %d, want 0", got)
 	}
 }
+
+func TestLimiter_Snapshot(t *testing.T) {
+	l := New(5, 0)
+	limit, remaining, _ := l.Snapshot("u")
+	if limit != 5 || remaining != 5 {
+		t.Fatalf("fresh snapshot = (%d,%d), want (5,5)", limit, remaining)
+	}
+	l.Allow("u")
+	l.Allow("u")
+	limit, remaining, reset := l.Snapshot("u")
+	if limit != 5 || remaining != 3 {
+		t.Errorf("after 2 calls: (%d,%d), want (5,3)", limit, remaining)
+	}
+	if reset <= 0 {
+		t.Errorf("reset should be a future unix time, got %d", reset)
+	}
+	// Snapshot must not itself consume budget.
+	if _, r2, _ := l.Snapshot("u"); r2 != 3 {
+		t.Errorf("snapshot consumed budget: remaining %d, want 3", r2)
+	}
+}
+
+func TestConcurrencyLimiter_AcquireRelease(t *testing.T) {
+	c := NewConcurrencyLimiter(2)
+	if !c.Acquire("u") {
+		t.Fatal("first acquire should succeed")
+	}
+	if !c.Acquire("u") {
+		t.Fatal("second acquire should succeed")
+	}
+	if c.Acquire("u") {
+		t.Fatal("third acquire should fail at limit 2")
+	}
+	if got := c.Active("u"); got != 2 {
+		t.Errorf("Active = %d, want 2", got)
+	}
+	c.Release("u")
+	if !c.Acquire("u") {
+		t.Fatal("acquire after release should succeed")
+	}
+	// Isolation: a different key has its own budget.
+	if !c.Acquire("other") {
+		t.Fatal("other key should have its own slots")
+	}
+}
+
+func TestConcurrencyLimiter_Disabled(t *testing.T) {
+	c := NewConcurrencyLimiter(0) // disabled
+	for i := 0; i < 100; i++ {
+		if !c.Acquire("u") {
+			t.Fatalf("disabled limiter blocked at %d", i)
+		}
+	}
+	var nilC *ConcurrencyLimiter
+	if !nilC.Acquire("u") {
+		t.Fatal("nil limiter should allow")
+	}
+}
+
+func TestConcurrencyLimiter_ReleaseNeverNegative(t *testing.T) {
+	c := NewConcurrencyLimiter(1)
+	c.Release("u") // release without acquire
+	if got := c.Active("u"); got != 0 {
+		t.Errorf("Active = %d, want 0 (release must not go negative)", got)
+	}
+	if !c.Acquire("u") {
+		t.Fatal("acquire after spurious release should still work")
+	}
+}
