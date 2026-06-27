@@ -51,6 +51,23 @@ const (
 	evtFieldInput = "input"
 	evtFieldText  = "text"
 	evtFieldIsErr = "is_err"
+
+	// Context-pressure event payload fields (#209).
+	evtFieldUsedTokens    = "used_tokens"
+	evtFieldWindowSize    = "window_size"
+	evtFieldPct           = "pct"
+	evtFieldRemovedTurns  = "removed_turns"
+	evtFieldSummaryTokens = "summary_tokens"
+)
+
+// Context-window pressure SSE event names (#209). Emitted from the enforcement
+// loop before a round's stream — a warning as the prompt nears the model's
+// context window, and an informational marker when older history is proactively
+// summarized to make room. The chat frontend renders each as a non-blocking
+// banner (see chat-experience.tsx).
+const (
+	evtContextPressure  = "fleet.context_pressure"
+	evtContextCompacted = "fleet.context_compacted"
 )
 
 // toolResultMaxStreamBytes bounds the tool-result text forwarded to the

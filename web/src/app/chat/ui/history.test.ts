@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyContextCompacted,
+  applyContextPressure,
   applyModelRequired,
   applyRetryNotice,
   cachedPercent,
@@ -477,6 +479,47 @@ describe("clearRetryNotice", () => {
     const withRetry = applyRetryNotice(assistantMessage(), { status_code: 429 });
     const cleared = clearRetryNotice(withRetry);
     expect(cleared.retrying).toBeUndefined();
+  });
+});
+
+describe("applyContextPressure", () => {
+  it("stamps the pressure fields from a snake_case payload", () => {
+    const out = applyContextPressure(assistantMessage(), {
+      used_tokens: 150000,
+      window_size: 200000,
+      pct: 0.75,
+    });
+    expect(out.contextPressure).toEqual({ usedTokens: 150000, windowSize: 200000, pct: 0.75 });
+  });
+
+  it("defaults missing fields to zero rather than throwing", () => {
+    const out = applyContextPressure(assistantMessage(), {});
+    expect(out.contextPressure).toEqual({ usedTokens: 0, windowSize: 0, pct: 0 });
+  });
+
+  it("is non-terminal — state, content, and reasoning are untouched", () => {
+    const out = applyContextPressure(
+      assistantMessage({ state: "streaming", content: "hi", reasoning: "thinking" }),
+      { pct: 0.8 },
+    );
+    expect(out.state).toBe("streaming");
+    expect(out.content).toBe("hi");
+    expect(out.reasoning).toBe("thinking");
+    expect(out.failed).toBeUndefined();
+  });
+});
+
+describe("applyContextCompacted", () => {
+  it("stamps the compaction fields and clears any prior pressure warning", () => {
+    const warned = applyContextPressure(assistantMessage(), { pct: 0.95 });
+    const out = applyContextCompacted(warned, { removed_turns: 12, summary_tokens: 4200 });
+    expect(out.contextCompacted).toEqual({ removedTurns: 12, summaryTokens: 4200 });
+    expect(out.contextPressure).toBeUndefined();
+  });
+
+  it("defaults missing fields to zero", () => {
+    const out = applyContextCompacted(assistantMessage(), {});
+    expect(out.contextCompacted).toEqual({ removedTurns: 0, summaryTokens: 0 });
   });
 });
 

@@ -55,6 +55,12 @@ type RunConfig struct {
 	RemediationHints RemediationHints
 	// IncludeConfirmAudit appends the scheduled confirm_audit tool.
 	IncludeConfirmAudit bool
+	// RequireCompactionOptIn gates proactive context compaction (#209) behind the
+	// FLEET_SCHEDULED_AUTO_COMPACT opt-in. The scheduled driver sets it so an
+	// unattended run never silently rewrites its own transcript — without the
+	// opt-in it only warns. Interactive leaves it false (compact freely). This is
+	// driver-supplied DATA, not a trunk Mode branch (see TestSeamPurity).
+	RequireCompactionOptIn bool
 	// LoaderTools are extra always-registered tools (scheduled mcp_list/load).
 	LoaderTools []fantasy.AgentTool
 	// NativeTools are the mode's native tools (bash/python via Executor, etc.).
@@ -212,17 +218,18 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	}
 
 	eng := &engine{
-		model:                deps.Model,
-		fallbackModel:        deps.FallbackModel,
-		resilience:           loadResilienceConfigFor(cfg.EnvPrefix),
-		logSession:           logSession,
-		onRetry:              newRetryLogger(logSession),
-		temperature:          cfg.Temperature,
-		envPrefix:            cfg.EnvPrefix,
-		compactionSummarizer: deps.CompactionSummarizer,
-		usageReporter:        deps.UsageReporter,
-		maxIterations:        cfg.MaxIterations,
-		healthRegistry:       deps.HealthRegistry,
+		model:                  deps.Model,
+		fallbackModel:          deps.FallbackModel,
+		resilience:             loadResilienceConfigFor(cfg.EnvPrefix),
+		logSession:             logSession,
+		onRetry:                newRetryLogger(logSession),
+		temperature:            cfg.Temperature,
+		envPrefix:              cfg.EnvPrefix,
+		compactionSummarizer:   deps.CompactionSummarizer,
+		usageReporter:          deps.UsageReporter,
+		maxIterations:          cfg.MaxIterations,
+		healthRegistry:         deps.HealthRegistry,
+		requireCompactionOptIn: cfg.RequireCompactionOptIn,
 	}
 
 	systemPrompt, messages, label, err := deps.Input.Prompt(ctx)
@@ -296,6 +303,12 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 
 	var finalResult *fantasy.AgentResult
 
+	// pressureWarned dedupes the context-pressure warning across rounds (#209):
+	// a multi-round run hovering above the warn threshold should surface ONE
+	// banner, not one per round. A successful proactive compaction relieves the
+	// pressure and resets it, so a later climb warns again.
+	pressureWarned := false
+
 	for round := 0; round < maxEnforcementRounds; round++ {
 		if ctx.Err() != nil {
 			// Caller cancelled (Stop / disconnect / timeout): return the partial
@@ -318,6 +331,14 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			}
 			log.Printf("🔌 MCP loaded-server set changed; fantasy agent rebuilt for round %d", round+1)
 		}
+
+		// Context-window pressure check (#209): warn — and, above the higher
+		// threshold, proactively compact — before the provider can reject an
+		// oversized prompt. The opt-in gate is carried as RunConfig data, so the
+		// trunk stays free of Mode branches. See engine.checkContextPressure.
+		pressure := eng.checkContextPressure(ctx, messages, activeModel, sink, pressureWarned)
+		messages = pressure.messages
+		pressureWarned = pressure.warned
 
 		orch := policyOrch(deps.Policy)
 		outcome, serr := eng.streamRoundWithResilience(

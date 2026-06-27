@@ -55,6 +55,8 @@ import { SearchBar } from "./SearchBar";
 import { getPill } from "./protocolPills";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import {
+  applyContextCompacted,
+  applyContextPressure,
   applyModelRequired,
   applyRetryNotice,
   cachedPercent,
@@ -69,6 +71,8 @@ import {
   toolIcon,
   type Approval,
   type ApprovalStatus,
+  type ContextCompactedEventPayload,
+  type ContextPressureEventPayload,
   type HistoryEntry,
   type MemoryProposal,
   type Message,
@@ -2292,6 +2296,20 @@ export function ChatExperience() {
     }
 
     if (event.event === "reasoning.end") {
+      return;
+    }
+
+    if (event.event === "fleet.context_pressure") {
+      patchAssistantMessage(ctx.target, ctx.assistantId, (m) =>
+        applyContextPressure(m, payload as ContextPressureEventPayload),
+      );
+      return;
+    }
+
+    if (event.event === "fleet.context_compacted") {
+      patchAssistantMessage(ctx.target, ctx.assistantId, (m) =>
+        applyContextCompacted(m, payload as ContextCompactedEventPayload),
+      );
       return;
     }
 
@@ -4590,6 +4608,29 @@ export function ChatExperience() {
                                       next attempt in {Math.max(1, Math.round(message.retrying.delayMs / 1000))}s
                                     </span>
                                   ) : null}
+                                </div>
+                              ) : null}
+
+                              {message.contextPressure ? (
+                                <div
+                                  className="flex items-center gap-2 rounded-[0.75rem] border border-[var(--color-warning-border)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem] text-[var(--color-text-secondary)]"
+                                  title={`${message.contextPressure.usedTokens.toLocaleString()} of ${message.contextPressure.windowSize.toLocaleString()} tokens`}
+                                >
+                                  <span className="inline-block size-1.5 shrink-0 rounded-full bg-[var(--color-warning)]" />
+                                  Conversation is {Math.round(message.contextPressure.pct * 100)}% full — consider
+                                  starting a new session for complex tasks.
+                                </div>
+                              ) : null}
+
+                              {message.contextCompacted ? (
+                                <div className="flex items-center gap-2 rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem] text-[var(--color-text-secondary)]">
+                                  <span className="inline-block size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]" />
+                                  Older context was summarized to make room
+                                  {message.contextCompacted.removedTurns > 0
+                                    ? ` (${message.contextCompacted.removedTurns} earlier ${
+                                        message.contextCompacted.removedTurns === 1 ? "message" : "messages"
+                                      }).`
+                                    : "."}
                                 </div>
                               ) : null}
 

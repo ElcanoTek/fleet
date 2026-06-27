@@ -47,6 +47,8 @@
   --color-success-border: color-mix(in srgb, #8fe7b8 45%, transparent);
   --color-danger: #e08080;
   --color-danger-border: color-mix(in srgb, #e08080 55%, transparent);
+  --color-warning: #e8c97a;
+  --color-warning-border: color-mix(in srgb, #e8c97a 50%, transparent);
   /* Syntax-highlighting palette for code blocks. Prism themes are
      rebuilt on top of these via CSS vars so code colors track
      light/dark automatically without a JS theme swap. */
@@ -135,6 +137,8 @@
   --color-success-border: color-mix(in srgb, #137b47 35%, transparent);
   --color-danger: #b02a2a;
   --color-danger-border: color-mix(in srgb, #b02a2a 35%, transparent);
+  --color-warning: #9a6a00;
+  --color-warning-border: color-mix(in srgb, #9a6a00 35%, transparent);
   --color-syntax-keyword: #7c3aed;
   --color-syntax-string: #0f7f3e;
   --color-syntax-number: #a85a00;

@@ -79,6 +79,44 @@ func contextWindowForModel(slug string) int {
 	return defaultModelContextWindow
 }
 
+const (
+	// defaultContextPressureWarnThreshold is the fraction of a model's context
+	// window at which the run loop emits a fleet.context_pressure warning (#209).
+	defaultContextPressureWarnThreshold = 0.75
+	// defaultContextCompactionThreshold is the fraction at which the run loop
+	// proactively compacts the oldest history and emits fleet.context_compacted.
+	defaultContextCompactionThreshold = 0.90
+)
+
+// contextPressureWarnThreshold resolves FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD
+// (with the CHAT_/CUTLASS_ aliases the EnvPrefix machinery already honors),
+// clamped to (0,1]. An unset, unparseable, or out-of-range value falls back to
+// the default.
+func contextPressureWarnThreshold(p EnvPrefix) float64 {
+	return clampFraction(
+		p.lookupFloatDefault("CONTEXT_PRESSURE_WARN_THRESHOLD", defaultContextPressureWarnThreshold),
+		defaultContextPressureWarnThreshold,
+	)
+}
+
+// contextCompactionThreshold resolves FLEET_CONTEXT_COMPACTION_THRESHOLD the
+// same way, clamped to (0,1].
+func contextCompactionThreshold(p EnvPrefix) float64 {
+	return clampFraction(
+		p.lookupFloatDefault("CONTEXT_COMPACTION_THRESHOLD", defaultContextCompactionThreshold),
+		defaultContextCompactionThreshold,
+	)
+}
+
+// clampFraction returns v when it lies in (0,1]; otherwise def. A misconfigured
+// threshold must not silently compact every round (≤0) or never fire (>1).
+func clampFraction(v, def float64) float64 {
+	if v <= 0 || v > 1 {
+		return def
+	}
+	return v
+}
+
 // observedContextWindows is the process-wide cache of context windows learned
 // from provider context-too-large errors (ground truth for the active slug).
 var observedContextWindows = struct {

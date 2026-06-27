@@ -420,9 +420,13 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		OptionalServers:     optional,
 		Selection:           a.selection(),
 		IncludeConfirmAudit: true,
-		LoaderTools:         loaderTools,
-		NativeTools:         nativeTools,
-		ProviderHeaders:     agentcore.DefaultProviderHeaders,
+		// Unattended runs gate proactive context compaction behind
+		// FLEET_SCHEDULED_AUTO_COMPACT (#209): without it, pressure only warns
+		// rather than silently rewriting the transcript.
+		RequireCompactionOptIn: true,
+		LoaderTools:            loaderTools,
+		NativeTools:            nativeTools,
+		ProviderHeaders:        agentcore.DefaultProviderHeaders,
 	}
 
 	res, err := agentcore.Run(ctx, agentcore.ModeScheduled, cfg, deps)

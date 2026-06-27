@@ -322,6 +322,36 @@ path does. So core governance — per-tool policy, audit, finish enforcement, MC
 credential brokering, note staging, usage/cost, **and the end-of-run verifier** —
 is at full parity; native-acp never silently finishes a scheduled run unverified.
 
+### Context-window pressure (proactive compaction)
+
+Before each round's model call the run loop compares the prompt size against the
+active model's context window (resolved by `contextWindowForModel` — observed
+provider ground truth, the live OpenRouter cache, then a static table) and acts
+**before** the provider rejects an oversized request, rather than only recovering
+after a `context_length_exceeded` error:
+
+| Env var | Default | Behavior at/above the fraction |
+|---|---|---|
+| `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | `0.75` | Emit a `fleet.context_pressure` SSE event (the chat UI shows a non-blocking "conversation is N% full" banner). |
+| `FLEET_CONTEXT_COMPACTION_THRESHOLD` | `0.90` | Proactively summarize the **oldest half** of the history (pinned head + recent half kept verbatim) and emit `fleet.context_compacted`. |
+
+Both honor the usual `CHAT_`/`CUTLASS_` prefix aliases, and a value outside
+`(0,1]` falls back to its default. The size signal is the **per-call** input
+size (`LastStepPromptTokens`), never the cumulative token total, so a long run
+does not ratchet the trigger into a compaction spiral; on a turn's first round —
+before any per-call size is known — it falls back to a char-heuristic estimate of
+the carried-over history so a single-round interactive turn that *starts* near
+the limit is still covered.
+
+**Scheduled safeguard.** Unattended runs must not silently rewrite their own
+transcript: in `ModeScheduled` the warn event still fires (and a breadcrumb is
+written to the session log), but proactive compaction is **off** unless the
+operator sets `FLEET_SCHEDULED_AUTO_COMPACT=1`. The summary uses the driver's
+`compactionSummarizer` (an LLM summary) when wired, else a deterministic
+placeholder — the same hook the reactive `context_length_exceeded` recovery path
+already uses, so a proactive compaction does not count toward the consecutive-
+compaction cap that guards against compaction loops.
+
 ---
 
 ## The permission UI
