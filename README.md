@@ -548,7 +548,25 @@ does (and the manual path if you'd rather run each piece yourself):
 
 4. **TLS** — `deploy/Caddyfile` reverse-proxies the public domain to the web app
    (SSE-aware: `flush_interval -1`, long read timeout). Point it at your domain
-   and `caddy run --config deploy/Caddyfile`.
+   and `caddy run --config deploy/Caddyfile`. This is the recommended path: the
+   Next.js app is the only public entrypoint, so Caddy (or Tailscale Serve, whose
+   `tsnet` CA provides HTTPS with no public port) terminates TLS in front of it
+   and the Go backends stay loopback.
+
+   For deployments that terminate TLS **directly at the Fleet chat process**
+   instead of a fronting proxy, the chat server can serve HTTPS itself via
+   `FLEET_TLS_MODE` (default `off`, no change):
+   - `manual` — `FLEET_TLS_CERT_FILE` + `FLEET_TLS_KEY_FILE` (TLS 1.2+); a port-80
+     listener 301-redirects to HTTPS.
+   - `auto` — Let's Encrypt via `golang.org/x/crypto/acme/autocert`:
+     `FLEET_TLS_DOMAIN` (required), `FLEET_TLS_ACME_DIR` (cert cache, default
+     `/var/lib/fleet/acme-cache`), `FLEET_TLS_ACME_EMAIL`. Ports 443 + 80 must be
+     publicly reachable for the HTTP-01 challenge; a private/loopback DNS result
+     is warned about at startup.
+
+   When TLS is active the chat responses carry HSTS +
+   `X-Content-Type-Options`/`X-Frame-Options`. The orchestrator stays loopback
+   HTTP — it is impersonation-load-bearing and must remain on 127.0.0.1.
 
 See `deploy/fleet.service` and `deploy/Caddyfile` for the full annotated knob
 list (listener addresses, admin/registration tokens, data dir, timezone).

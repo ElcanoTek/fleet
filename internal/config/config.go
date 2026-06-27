@@ -71,6 +71,15 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SERVER_TOKEN": true,
 	"FLEET_DATA_DIR":     true,
 
+	// ── TLS termination (chat server) ──
+	"FLEET_TLS_MODE":       true,
+	"FLEET_TLS_CERT_FILE":  true,
+	"FLEET_TLS_KEY_FILE":   true,
+	"FLEET_TLS_DOMAIN":     true,
+	"FLEET_TLS_ACME_DIR":   true,
+	"FLEET_TLS_ACME_EMAIL": true,
+	"FLEET_TLS_HTTP_ADDR":  true,
+
 	// ── database (chat) ──
 	"DATABASE_URL": true,
 	"DB_HOST":      true,
@@ -359,6 +368,20 @@ type Config struct {
 	// default bundle's catalog is empty. Nil/empty means "no MCP servers".
 	MCPServers map[string]MCPServerConfig
 
+	// ── TLS termination (chat server) ──
+	// The standard deployment fronts the Next.js app (the ONLY public entrypoint)
+	// with Caddy/Tailscale, which terminate TLS; the Go chat/orchestrator servers
+	// bind loopback. These knobs let an operator instead terminate TLS directly at
+	// the Fleet chat process. Default "off" — no behavior change. The orchestrator
+	// stays loopback HTTP (it is impersonation-load-bearing and MUST stay 127.0.0.1).
+	TLSMode      string // FLEET_TLS_MODE: off|manual|auto
+	TLSCertFile  string // FLEET_TLS_CERT_FILE (manual)
+	TLSKeyFile   string // FLEET_TLS_KEY_FILE (manual)
+	TLSDomain    string // FLEET_TLS_DOMAIN (auto)
+	TLSACMEDir   string // FLEET_TLS_ACME_DIR (auto cert cache)
+	TLSACMEEmail string // FLEET_TLS_ACME_EMAIL (auto account contact)
+	TLSHTTPAddr  string // FLEET_TLS_HTTP_ADDR: HTTP->HTTPS redirect + ACME challenge listener (default ":80")
+
 	// ── attachments / uploads (generic infra) ──
 	// EmailAttachmentDir is the host directory MCP tools write downloaded
 	// attachments to and where uploads are staged for the sandbox bind mount.
@@ -463,6 +486,15 @@ func Load(envFile string) (*Config, error) {
 		// ── transport (interactive) ──
 		Addr:        getenvFleetDefault("SERVER_ADDR", "127.0.0.1:8080"),
 		SharedToken: getenvFleet("SERVER_TOKEN"),
+
+		// ── TLS termination (chat server) ──
+		TLSMode:      strings.ToLower(strings.TrimSpace(getenvDefault("FLEET_TLS_MODE", "off"))),
+		TLSCertFile:  os.Getenv("FLEET_TLS_CERT_FILE"),
+		TLSKeyFile:   os.Getenv("FLEET_TLS_KEY_FILE"),
+		TLSDomain:    os.Getenv("FLEET_TLS_DOMAIN"),
+		TLSACMEDir:   getenvDefault("FLEET_TLS_ACME_DIR", "/var/lib/fleet/acme-cache"),
+		TLSACMEEmail: os.Getenv("FLEET_TLS_ACME_EMAIL"),
+		TLSHTTPAddr:  getenvDefault("FLEET_TLS_HTTP_ADDR", ":80"),
 
 		// ── data (interactive) ──
 		DataDir:         getenvFleetDefault("DATA_DIR", "./data"),
@@ -589,7 +621,30 @@ func (c *Config) Validate() error {
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL (or DB_HOST/DB_USER/DB_NAME parts) is required")
 	}
+	if err := c.validateTLS(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateTLS checks the chat-server TLS knobs (FLEET_TLS_MODE and friends).
+func (c *Config) validateTLS() error {
+	switch c.TLSMode {
+	case "", "off":
+		return nil
+	case "manual":
+		if c.TLSCertFile == "" || c.TLSKeyFile == "" {
+			return fmt.Errorf("FLEET_TLS_MODE=manual requires FLEET_TLS_CERT_FILE and FLEET_TLS_KEY_FILE")
+		}
+		return nil
+	case "auto":
+		if c.TLSDomain == "" {
+			return fmt.Errorf("FLEET_TLS_MODE=auto requires FLEET_TLS_DOMAIN")
+		}
+		return nil
+	default:
+		return fmt.Errorf("FLEET_TLS_MODE=%q is invalid (want off|manual|auto)", c.TLSMode)
+	}
 }
 
 // ValidateScheduled checks the one-shot scheduled (cutlass) required values and
