@@ -88,6 +88,11 @@ type Config struct {
 	PollInterval time.Duration
 	// LeaseRenewInterval is how often active leases are renewed. 0 → default.
 	LeaseRenewInterval time.Duration
+	// DrainGrace bounds how long Run waits, after its ctx is cancelled, for
+	// in-flight tasks to finish NATURALLY before force-cancelling them. 0 →
+	// defaultDrainGrace. A negative value means "force-cancel immediately" (no
+	// wait) — the fast SIGINT/dev-exit path; ForceCancel does the same on demand.
+	DrainGrace time.Duration
 }
 
 // Pool is the in-process capped worker pool.
@@ -104,6 +109,10 @@ type Pool struct {
 	pollInterval       time.Duration
 	leaseRenewInterval time.Duration
 
+	// drainGrace bounds the post-shutdown wait for in-flight tasks to finish
+	// naturally before they are force-cancelled (see Run / drainWithGrace).
+	drainGrace time.Duration
+
 	// leaseOwner identifies this process's synthetic in-box worker. A fixed
 	// per-process UUID so UpdateTaskStatusAtomic's lease-ownership check
 	// (lease_owner == owner) and RecoverExpiredLeases both work unchanged.
@@ -113,9 +122,20 @@ type Pool struct {
 	taskWG sync.WaitGroup
 
 	// active tracks tasks currently executing (by lease token) for lease renewal.
+	// mu also guards taskCancel.
 	mu     sync.Mutex
 	active map[uuid.UUID]uuid.UUID // task ID → per-claim lease token
+
+	// taskCancel cancels the context shared by all in-flight task executions. It
+	// is decoupled from Run's ctx so a shutdown signal stops NEW claims at once
+	// while letting running tasks finish up to drainGrace; it fires only when the
+	// grace period expires or ForceCancel is called. nil until Run installs it.
+	taskCancel context.CancelFunc
 }
+
+// defaultDrainGrace bounds the shutdown wait for in-flight tasks when Config
+// leaves DrainGrace unset.
+const defaultDrainGrace = 30 * time.Second
 
 // NewPool builds a pool over a storage layer and a task runner.
 func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
@@ -137,12 +157,19 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 	if renew <= 0 {
 		renew = defaultLeaseRenewInterval
 	}
+	// DrainGrace: 0 → default; a negative value is preserved (force-cancel
+	// immediately, no natural-completion wait) for the fast-exit path.
+	grace := cfg.DrainGrace
+	if grace == 0 {
+		grace = defaultDrainGrace
+	}
 	return &Pool{
 		store:              store,
 		runner:             runner,
 		limiter:            limiter,
 		pollInterval:       poll,
 		leaseRenewInterval: renew,
+		drainGrace:         grace,
 		leaseOwner:         uuid.New(),
 		active:             make(map[uuid.UUID]uuid.UUID),
 	}
@@ -176,6 +203,17 @@ func (p *Pool) LeaseOwner() uuid.UUID { return p.leaseOwner }
 // completes (taskWG drained), so callers run it in its own goroutine or as the
 // process's main loop.
 func (p *Pool) Run(ctx context.Context) {
+	// taskCtx is the parent context for in-flight task execution, decoupled from
+	// ctx: cancelling ctx (a shutdown signal) stops NEW claims immediately, but
+	// running tasks keep their context until the grace period expires — so a task
+	// finishing within drainGrace records its real outcome instead of being marked
+	// interrupted. taskCancel fires on grace expiry (below) or via ForceCancel.
+	taskCtx, taskCancel := context.WithCancel(context.Background())
+	defer taskCancel()
+	p.mu.Lock()
+	p.taskCancel = taskCancel
+	p.mu.Unlock()
+
 	renewTicker := time.NewTicker(p.leaseRenewInterval)
 	defer renewTicker.Stop()
 	go func() {
@@ -194,11 +232,17 @@ func (p *Pool) Run(ctx context.Context) {
 
 	// Poll immediately on startup rather than waiting a full interval.
 	for {
-		p.tryClaim(ctx)
+		p.tryClaim(ctx, taskCtx)
 		select {
 		case <-ctx.Done():
-			log.Println("runner: draining in-flight tasks...")
-			p.taskWG.Wait()
+			log.Printf("runner: draining in-flight tasks (grace %s)...", p.drainGrace)
+			if p.drainWithGrace(p.drainGrace) {
+				log.Println("runner: all in-flight tasks drained")
+			} else {
+				log.Printf("runner: grace period (%s) expired; force-cancelling in-flight tasks", p.drainGrace)
+				taskCancel()
+				p.taskWG.Wait()
+			}
 			log.Println("runner: shutdown complete")
 			return
 		case <-ticker.C:
@@ -206,12 +250,56 @@ func (p *Pool) Run(ctx context.Context) {
 	}
 }
 
+// drainWithGrace waits up to grace for the in-flight task WaitGroup to drain.
+// It returns true if the tasks drained in time, false if grace expired first
+// (the caller then force-cancels). A non-positive grace means "do not wait" —
+// force-cancel immediately (fast exit), returning false.
+func (p *Pool) drainWithGrace(grace time.Duration) bool {
+	if grace <= 0 {
+		return false
+	}
+	done := make(chan struct{})
+	go func() {
+		p.taskWG.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
+}
+
+// ForceCancel cancels the in-flight task context immediately, regardless of the
+// grace period — the fast-exit path (SIGINT / dev Ctrl-C / listener error).
+// In-flight tasks see ctx.Err() at their next checkpoint and exit. Safe to call
+// before Run installs the cancel (no-op) and idempotent afterwards.
+func (p *Pool) ForceCancel() {
+	p.mu.Lock()
+	c := p.taskCancel
+	p.mu.Unlock()
+	if c != nil {
+		c()
+	}
+}
+
+// ActiveTasks reports the number of tasks currently executing — the diagnostic
+// counter behind the SIGUSR1 status log.
+func (p *Pool) ActiveTasks() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.active)
+}
+
 // tryClaim acquires a scheduler slot from the shared limiter (non-blocking) and,
 // if one is free, claims and runs one pending task. The limiter is THE cap: when
 // the scheduler sub-cap is reached (or the box is full of interactive turns),
 // this poll is a no-op and the extra work stays pending. The drain-loop keeps
 // claiming while slots free up, so a single tick can launch up to the sub-cap.
-func (p *Pool) tryClaim(ctx context.Context) {
+func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 	for {
 		release, ok := p.limiter.TryAcquireScheduled() // acquire BEFORE claiming (non-blocking)
 		if !ok {
@@ -260,16 +348,20 @@ func (p *Pool) tryClaim(ctx context.Context) {
 					}
 				}
 			})
-			p.executeTask(ctx, task, token)
+			// Run on the decoupled taskCtx (not the claim ctx) so a shutdown lets
+			// this task finish naturally up to the grace period.
+			p.executeTask(taskCtx, task, token)
 		}(task, token, release)
 		// Loop to claim another task if a slot is still free (drains a burst).
 	}
 }
 
 // executeTask runs one claimed task in-process via the TaskRunner, then writes
-// its terminal status + log directly to storage. Status/log writes use a
-// background context so they still land during shutdown after ctx is cancelled.
-func (p *Pool) executeTask(ctx context.Context, task *models.Task, token uuid.UUID) {
+// its terminal status + log directly to storage. taskCtx is the decoupled
+// task-execution context (cancelled only on grace expiry / ForceCancel), NOT the
+// claim ctx; status/log writes use a background context so they still land during
+// shutdown after taskCtx is cancelled.
+func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uuid.UUID) {
 	start := time.Now()
 
 	// Report running (sets StartedAt + renews lease).
@@ -277,7 +369,7 @@ func (p *Pool) executeTask(ctx context.Context, task *models.Task, token uuid.UU
 		log.Printf("runner: failed to report running for task %s: %v", task.ID, err)
 	}
 
-	session, runErr := p.runner.Run(ctx, task)
+	session, runErr := p.runner.Run(taskCtx, task)
 
 	// If our lease was recovered out from under us (another claim now owns the
 	// task), do not clobber its state.
@@ -286,13 +378,16 @@ func (p *Pool) executeTask(ctx context.Context, task *models.Task, token uuid.UU
 		return
 	}
 
-	// Interrupted only when the run itself failed AND shutdown was in progress:
-	// a runner that returned cleanly finished its work even if ctx was cancelled
-	// mid-drain, so we record its real outcome (the drain waits for it).
-	interrupted := runErr != nil && ctx.Err() != nil
+	// Interrupted only when the run itself failed AND the task context was
+	// cancelled — which, with the decoupled taskCtx, happens ONLY when the
+	// shutdown grace period expired (or ForceCancel fired). A task that returns
+	// during the grace window keeps its full context and records its real outcome;
+	// a long task that outlasts the grace is force-cancelled here and re-queues via
+	// lease expiry on the next start.
+	interrupted := runErr != nil && taskCtx.Err() != nil
 	switch {
 	case interrupted:
-		msg := "Task interrupted: runner shut down before completion"
+		msg := "Task interrupted: server shutdown (grace period expired)"
 		if _, err := p.reportStatus(task.ID, models.TaskStatusError, msg); err != nil {
 			log.Printf("runner: failed to report interrupt for task %s: %v", task.ID, err)
 		}

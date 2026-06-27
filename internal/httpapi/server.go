@@ -82,6 +82,19 @@ type Server struct {
 	// buffer_expired | no_content). Behind a pointer so a Server value stays
 	// copyable; a Prometheus surface is deferred to the metrics issue (#176).
 	sseReconnects *reconnectCounter
+
+	// shuttingDown is set by BeginShutdown when the process starts draining: new
+	// POST /chat are rejected with 503 and /healthz reports 503 so a load balancer
+	// stops routing here. Detached turns already in flight keep running until the
+	// shutdown path drains them (DrainTurns) or force-cancels them.
+	shuttingDown atomic.Bool
+
+	// activeTurns tracks detached runTurnAsync goroutines so the shutdown path can
+	// block on them (DrainTurns). activeTurnCount mirrors it for the SIGUSR1
+	// diagnostic (sync.WaitGroup exposes no count). Both are incremented together,
+	// before the goroutine launches, so Wait never races ahead of an Add.
+	activeTurns     sync.WaitGroup
+	activeTurnCount atomic.Int64
 }
 
 // reconnectCounter is a concurrency-safe tally of SSE reconnect outcomes.
@@ -118,6 +131,80 @@ func (c *reconnectCounter) snapshot() map[string]int64 {
 
 // SSEReconnectCounts returns a snapshot of SSE reconnect outcomes by label.
 func (s *Server) SSEReconnectCounts() map[string]int64 { return s.sseReconnects.snapshot() }
+
+// ── graceful shutdown (#278) ───────────────────────────────────────────────
+
+// BeginShutdown marks the server as draining: new POST /chat are rejected with
+// 503 and /healthz reports 503 so a load balancer / readiness probe stops
+// routing new requests here. It also sends a one-shot `shutdown` SSE control
+// frame to every live stream subscriber so an attached client reconnects to a
+// healthy instance rather than waiting out the drain. Idempotent — only the
+// first call broadcasts.
+func (s *Server) BeginShutdown() {
+	if s.shuttingDown.Swap(true) {
+		return
+	}
+	s.broadcastShutdownFrame()
+}
+
+// broadcastShutdownFrame emits a transient `shutdown` SSE frame to every running
+// turn's live subscribers. Buffers are collected under inflightMu, then notified
+// outside it, so we never hold inflightMu while taking a buffer's own lock
+// (lock-ordering hygiene).
+func (s *Server) broadcastShutdownFrame() {
+	s.inflightMu.Lock()
+	bufs := make([]*turnBuffer, 0, len(s.inflight))
+	for _, e := range s.inflight {
+		if e.buf != nil && e.IsRunning() {
+			bufs = append(bufs, e.buf)
+		}
+	}
+	s.inflightMu.Unlock()
+	for _, b := range bufs {
+		b.broadcastControl("shutdown")
+	}
+}
+
+// DrainTurns blocks until all in-flight (detached) turn goroutines finish or ctx
+// (the shutdown grace deadline) fires. It returns true if the turns drained in
+// time, false if ctx expired first — the caller then force-cancels via
+// CancelInflightTurns.
+func (s *Server) DrainTurns(ctx context.Context) bool {
+	done := make(chan struct{})
+	go func() {
+		s.activeTurns.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// CancelInflightTurns fires the cancel func of every still-running turn so a
+// grace-expired shutdown stops detached turn goroutines: each turnCtx is
+// cancelled and agentcore exits at its next checkpoint. Returns the number of
+// turns cancelled.
+func (s *Server) CancelInflightTurns() int {
+	s.inflightMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(s.inflight))
+	for _, e := range s.inflight {
+		if e.IsRunning() {
+			cancels = append(cancels, e.cancel)
+		}
+	}
+	s.inflightMu.Unlock()
+	for _, c := range cancels {
+		c()
+	}
+	return len(cancels)
+}
+
+// ActiveTurns reports the number of in-flight detached turn goroutines — the
+// diagnostic counter behind the SIGUSR1 status log.
+func (s *Server) ActiveTurns() int { return int(s.activeTurnCount.Load()) }
 
 // Option customizes a Server at construction.
 type Option func(*Server)
@@ -423,6 +510,16 @@ func recoverMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
+	// Draining (#278): report 503 the moment graceful shutdown begins so a load
+	// balancer / readiness probe stops routing new traffic to this instance while
+	// it drains in-flight work. Checked first — a draining box is unready
+	// regardless of provider health.
+	if s.shuttingDown.Load() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "shutting_down"})
+		return
+	}
 	// Surface LLM provider degradation (#267): if any model's circuit is open
 	// (sustained recent failures), report degraded so an operator/monitor sees it.
 	// Half-open (recovering) and closed are healthy.
@@ -1202,6 +1299,12 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Draining (#278): once graceful shutdown begins, admit no new turns — the
+	// client should retry against a healthy instance. In-flight turns keep going.
+	if s.shuttingDown.Load() {
+		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	user := userFromCtx(r.Context())
 
 	var req chatRequest
@@ -1401,7 +1504,17 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// Run the turn in a goroutine so the buffer stays alive even if
 	// this HTTP response disconnects. turnCtx is intentionally NOT
 	// derived from r.Context(): the turn must outlive the HTTP request.
+	//
+	// Track the goroutine on activeTurns BEFORE launching it so graceful
+	// shutdown (DrainTurns) can block on it and Wait never races ahead of Add
+	// (#278). The counter mirrors the WaitGroup for the SIGUSR1 status log.
+	s.activeTurns.Add(1)
+	s.activeTurnCount.Add(1)
 	go func() {
+		defer func() {
+			s.activeTurnCount.Add(-1)
+			s.activeTurns.Done()
+		}()
 		// Release the concurrent-turn slot when the turn actually completes, not
 		// when this HTTP handler returns (the turn outlives the request).
 		defer releaseSlot()

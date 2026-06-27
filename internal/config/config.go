@@ -301,6 +301,14 @@ type Config struct {
 	Addr        string
 	SharedToken string
 
+	// ── process lifecycle ──
+	// ShutdownGraceSeconds bounds how long graceful shutdown (SIGTERM) waits for
+	// in-flight chat turns and scheduled tasks to finish before force-cancelling
+	// them. FLEET_SHUTDOWN_GRACE_SECONDS, default 30; 0 means no wait (force
+	// immediately). Pair with the systemd unit's TimeoutStopSec (> this value) so
+	// systemd sends SIGKILL only after fleet's own drain budget is spent.
+	ShutdownGraceSeconds int
+
 	// ── data (interactive) ──
 	DataDir         string
 	ConversationTTL int // days
@@ -507,6 +515,8 @@ func Load(envFile string) (*Config, error) {
 		MaxIterations:    getenvFleetInt("MAX_ITERATIONS", 300),
 		MaxCostUSD:       getenvFleetFloat("MAX_COST_USD", 50.0),
 		MaxTotalTokens:   getenvFleetInt("MAX_TOTAL_TOKENS", 10000000),
+
+		ShutdownGraceSeconds: getenvFleetInt("SHUTDOWN_GRACE_SECONDS", 30),
 
 		TurnTimeoutSeconds:  getenvFleetInt("TURN_TIMEOUT_SECONDS", 1800),
 		Temperature:         getenvFleetFloat("TEMPERATURE", 0.3),

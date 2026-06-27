@@ -244,6 +244,35 @@ func (b *turnBuffer) Emit(event string, payload any) {
 	}
 }
 
+// broadcastControl fans out a one-shot control frame (e.g. "shutdown") to all
+// live subscribers WITHOUT appending it to the replay buffer or the persistence
+// ledger — it is a transient hint, not part of the turn's event history. It
+// reuses the current highest event id so it never advances a client's
+// Last-Event-ID into a gap: a reconnect resumes exactly where it left off. A
+// sealed buffer has no subscribers, so this is a no-op there.
+func (b *turnBuffer) broadcastControl(name string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return
+	}
+	var id uint64
+	if n := len(b.events); n > 0 {
+		id = b.events[n-1].ID
+	}
+	ev := bufferedEvent{ID: id, Name: name, Data: []byte("{}")}
+	for subID, ch := range b.subscribers {
+		select {
+		case ch <- ev:
+		default:
+			// Slow subscriber — evict (mirrors Emit). They reattach and learn of
+			// the shutdown from /healthz 503 / the sealed buffer instead.
+			close(ch)
+			delete(b.subscribers, subID)
+		}
+	}
+}
+
 // markNeedsBackfill flags the turn for a full snapshot backfill on Finish. Used
 // by runPersister (which holds no lock); Emit sets the flag inline since it
 // already holds b.mu.

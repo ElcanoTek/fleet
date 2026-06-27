@@ -38,6 +38,7 @@
 #   # FLEET_SERVER_TOKEN=...                      # shared chat token (web sets CHAT_SERVER_TOKEN to match)
 #   # ADMIN_API_KEY=... / REGISTRATION_TOKEN=...  # orchestrator admin/registration
 #   # FLEET_TIMEZONE=UTC / FLEET_DATA_DIR=/var/lib/fleet
+#   # FLEET_SHUTDOWN_GRACE_SECONDS=30            # drain budget on SIGTERM (keep < TimeoutStopSec)
 
 [Unit]
 Description=fleet (chat + orchestrator + scheduler + worker pool)
@@ -46,7 +47,15 @@ After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]
-Type=simple
+# Type=notify: fleet emits sd_notify READY=1 once both listeners are bound (so
+# systemd — and anything ordered After=fleet — only sees it "started" when it can
+# actually serve) and READY=0/STOPPING=1 when it begins draining on SIGTERM. The
+# notify socket handling is a no-op if NOTIFY_SOCKET is unset, so the binary still
+# runs fine under Type=simple or outside systemd. TimeoutStartSec covers DB
+# self-migration + sandbox pool warm-up before READY=1.
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=120s
 # Run with the working directory set to the systemd-managed StateDirectory
 # (/var/lib/fleet — auto-created AND chowned to the fleet service user). cmd/fleet
 # defaults its writable paths CWD-RELATIVE (./data, ./workspace,
@@ -72,9 +81,14 @@ UnsetEnvironment=FLEET_ENV_FILE
 ExecStart=/opt/fleet/fleet
 Restart=always
 RestartSec=5s
-# Graceful shutdown: cmd/fleet drains the worker pool on SIGTERM (30s budget).
+# Graceful shutdown: on SIGTERM cmd/fleet stops admitting new work (/healthz → 503
+# so a load balancer drains it), then drains in-flight chat turns AND scheduled
+# tasks within FLEET_SHUTDOWN_GRACE_SECONDS (default 30) before force-cancelling
+# the stragglers and exiting 0. TimeoutStopSec MUST exceed that grace + listener
+# close so systemd sends SIGKILL only after fleet's own budget is spent; bump both
+# together for longer-running tasks. SIGINT (dev Ctrl-C) is the immediate path.
 KillSignal=SIGTERM
-TimeoutStopSec=45s
+TimeoutStopSec=60s
 
 # ── Service identity + rootless-Podman sandbox ──
 # Runs as a DEDICATED fixed system user, NOT DynamicUser. The execution sandbox is
