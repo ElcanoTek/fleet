@@ -270,6 +270,38 @@ func TestTaskRuntimeFlavorRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTaskTimezoneRoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	picked := &models.Task{ID: uuid.New(), Prompt: "tz", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC(), Timezone: "America/New_York"}
+	if err := db.AddTask(ctx, picked); err != nil {
+		t.Fatalf("Failed to add task: %v", err)
+	}
+	gotPicked, err := db.GetTask(ctx, picked.ID)
+	if err != nil {
+		t.Fatalf("Failed to get task: %v", err)
+	}
+	if gotPicked.Timezone != "America/New_York" {
+		t.Errorf("Timezone = %q, want %q (explicit timezone must persist)", gotPicked.Timezone, "America/New_York")
+	}
+
+	// A task constructed without a timezone (bypassing NewTask) defends to UTC so
+	// the NOT NULL column never sees an empty string and reads back as "UTC".
+	def := &models.Task{ID: uuid.New(), Prompt: "default", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC()}
+	if err := db.AddTask(ctx, def); err != nil {
+		t.Fatalf("Failed to add default task: %v", err)
+	}
+	gotDef, err := db.GetTask(ctx, def.ID)
+	if err != nil {
+		t.Fatalf("Failed to get default task: %v", err)
+	}
+	if gotDef.Timezone != "UTC" {
+		t.Errorf("Timezone = %q, want %q (missing timezone defaults to UTC)", gotDef.Timezone, "UTC")
+	}
+}
+
 func TestGetTasksCompletedToday(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

@@ -504,7 +504,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone"
 
 // AddTask adds or updates a task.
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
@@ -514,8 +514,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			priority, instruction_self_improve, status, assigned_node_id, agent_session_id,
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
-			attempt_count, max_retries, allow_network, runtime_flavor
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+			attempt_count, max_retries, allow_network, runtime_flavor, timezone
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -541,7 +541,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			attempt_count = EXCLUDED.attempt_count,
 			max_retries = EXCLUDED.max_retries,
 			allow_network = EXCLUDED.allow_network,
-			runtime_flavor = EXCLUDED.runtime_flavor`,
+			runtime_flavor = EXCLUDED.runtime_flavor,
+			timezone = EXCLUDED.timezone`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -568,8 +569,19 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.MaxRetries,
 		task.AllowNetwork,
 		nullableString(task.RuntimeFlavor),
+		taskTimezoneOrUTC(task.Timezone),
 	)
 	return err
+}
+
+// taskTimezoneOrUTC defends the NOT NULL timezone column against a
+// directly-constructed Task that bypassed NewTask (e.g. an internal caller),
+// where the field would otherwise be the empty string.
+func taskTimezoneOrUTC(tz string) string {
+	if tz == "" {
+		return "UTC"
+	}
+	return tz
 }
 
 func mcpSelectionOrEmpty(s models.MCPSelection) models.MCPSelection {
@@ -614,6 +626,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		maxRetries             int
 		allowNetwork           bool
 		runtimeFlavor          sql.NullString
+		timezone               sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -621,7 +634,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&priority, &instructionSelfImprove, &status, &assignedNodeID, &agentSessionID,
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
-		&attemptCount, &maxRetries, &allowNetwork, &runtimeFlavor,
+		&attemptCount, &maxRetries, &allowNetwork, &runtimeFlavor, &timezone,
 	)
 	if err != nil {
 		return nil, err
@@ -640,6 +653,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		MaxRetries:             maxRetries,
 		AllowNetwork:           allowNetwork,
 		RuntimeFlavor:          runtimeFlavor.String,
+		Timezone:               taskTimezoneOrUTC(timezone.String),
 	}
 	if model.Valid {
 		task.Model = &model.String
@@ -1170,7 +1184,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			attempt_count = $23,
 			max_retries = $24,
 			allow_network = $25,
-			runtime_flavor = $26
+			runtime_flavor = $26,
+			timezone = $27
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1198,6 +1213,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.MaxRetries,
 		task.AllowNetwork,
 		nullableString(task.RuntimeFlavor),
+		taskTimezoneOrUTC(task.Timezone),
 	)
 	return err
 }

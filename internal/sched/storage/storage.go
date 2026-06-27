@@ -531,7 +531,11 @@ type TaskEdit struct {
 	RuntimeFlavor          string
 	ScheduledFor           *time.Time
 	Recurrence             string
-	Files                  []string
+	// Timezone is the IANA timezone the cron Recurrence is evaluated in. The edit
+	// handler pre-fills it from the existing task when the caller omits it, so it
+	// is always a valid name here.
+	Timezone string
+	Files    []string
 	// SetFiles distinguishes "leave files unchanged" from "replace with Files".
 	SetFiles bool
 	// SetMCPSelection distinguishes "leave mcp_selection unchanged" from "replace".
@@ -574,6 +578,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.RuntimeFlavor = edit.RuntimeFlavor
 	task.ScheduledFor = edit.ScheduledFor
 	task.Recurrence = edit.Recurrence
+	if edit.Timezone != "" {
+		task.Timezone = edit.Timezone
+	}
 	if edit.SetFiles {
 		task.Files = edit.Files
 	}
@@ -760,8 +767,20 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		return
 	}
 
-	now := time.Now().In(s.location)
-	nextTime := schedule.Next(now)
+	// Evaluate the cron expression in the task's own timezone so a "9am" task
+	// fires at 9am local, not 9am UTC. Fall back to the server-global location
+	// (then UTC) if the stored name is somehow unloadable. The resulting instant
+	// is stored in UTC — scheduled_for is always an absolute UTC instant.
+	loc := s.location
+	if task.Timezone != "" {
+		if l, lerr := time.LoadLocation(task.Timezone); lerr == nil {
+			loc = l
+		} else {
+			log.Printf("Task %s has invalid timezone %q; using server timezone: %v", task.ID, task.Timezone, lerr)
+		}
+	}
+	now := time.Now().In(loc)
+	nextTime := schedule.Next(now).UTC()
 
 	newTask := models.NewTask(models.TaskCreate{
 		Prompt:        task.Prompt,
@@ -772,6 +791,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		Priority:      task.Priority,
 		ScheduledFor:  &nextTime,
 		Recurrence:    task.Recurrence,
+		Timezone:      task.Timezone,
 		Files:         task.Files,
 	})
 	newTask.CreatedBy = task.CreatedBy
