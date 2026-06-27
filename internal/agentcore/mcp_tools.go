@@ -193,6 +193,12 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 		}
 	}
 	resp, err := g.inner.Run(ctx, params)
+	// Scrub secrets from tool output at the choke point: the redacted text is what
+	// re-enters the model context next turn, what RecordToolResult/the policy sees,
+	// what the stream sink records, and what the session log persists.
+	if resp.Content != "" {
+		resp.Content = toolRedactor().Redact(resp.Content)
+	}
 	if g.policy != nil {
 		// Record the outcome so policies that gate on tool RESULTS observe native
 		// tool calls (bash/python/task_tracker/...), not just the MCP and
@@ -318,6 +324,9 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 		m.record(toolName, params.Input, "", false)
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("Error calling %s: %v", toolName, err)), nil
 	}
+	// Scrub secrets from MCP output before it is recorded, returned to the model,
+	// or streamed/persisted downstream.
+	resultText = toolRedactor().Redact(resultText)
 
 	// Map MCP isError to a fantasy error response so both the LLM and the log
 	// know the call failed (per MCP 2025-06-18 spec, tool-level errors arrive as
