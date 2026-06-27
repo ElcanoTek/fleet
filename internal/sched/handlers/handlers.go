@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 
+	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -46,6 +47,15 @@ type Config struct {
 	// to a new task whose create request omits one. Distinct from Timezone
 	// (FLEET_TIMEZONE, the server clock); empty defaults to "UTC".
 	DefaultTaskTimezone string
+
+	// Sliding-window rate limits for the high-cost orchestrator endpoints
+	// (POST /tasks, POST /upload), enforced by SchedRateLimitMiddleware.
+	// Per-key defaults; a key's own RateLimit (when > 0) overrides the
+	// per-minute cap for that key. 0 disables the corresponding window.
+	// FLEET_SCHED_RATE_LIMIT_PER_MINUTE / _PER_DAY / _GLOBAL_PER_MINUTE.
+	SchedRateLimitPerMinute       int // default 60
+	SchedRateLimitPerDay          int // default 500
+	SchedGlobalRateLimitPerMinute int // default 200; process-wide across all keys
 
 	// SharedToken is the chat-server shared secret (CHAT_SERVER_TOKEN), reused as
 	// the orchestrator's channel authenticator. The Next.js proxy — the SOLE
@@ -79,6 +89,19 @@ type Handlers struct {
 	regRateLimiter *rateLimiter
 	// Rate limiting for login
 	loginRateLimiter *rateLimiter
+
+	// Sliding-window limiters for the high-cost task endpoints (POST /tasks,
+	// POST /upload), shared implementation with the chat server
+	// (internal/ratelimit). taskKeyRL is per-API-key (or per-IP for cookie/bearer
+	// callers); taskGlobalRL is a single process-wide window. See
+	// ratelimit_middleware.go.
+	taskKeyRL    *ratelimit.Limiter
+	taskGlobalRL *ratelimit.Limiter
+	// taskRLCounter counts 429s emitted by SchedRateLimitMiddleware, by window
+	// ("global"|"minute"|"day"). Behind a pointer (like the caches above) so a
+	// Handlers value can still be copied. Surfaced via RateLimitExceededCounts; a
+	// Prometheus surface is deferred to the metrics issue (#176).
+	taskRLCounter *rateLimitCounter
 
 	// Cache for file checksums to avoid repeated disk I/O
 	checksumCache *checksumCache
@@ -290,7 +313,10 @@ func (rl *rateLimiter) Allow(ip string) bool {
 	return true
 }
 
-// New creates a new Handlers instance.
+// New creates a new Handlers instance. The sliding-window task limiters take
+// their bounds verbatim from cfg (0 disables a window) — cmd/fleet applies the
+// 60/min, 500/day, 200/min-global defaults when reading the env, so a zero here
+// means an operator (or test) explicitly disabled it.
 func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers {
 	return &Handlers{
 		config:           cfg,
@@ -298,6 +324,9 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 		apiKeys:          keyMgr,
 		regRateLimiter:   newRateLimiter(10, time.Minute), // 10 registrations per minute per IP
 		loginRateLimiter: newRateLimiter(20, time.Minute), // 20 logins per minute per IP
+		taskKeyRL:        ratelimit.New(cfg.SchedRateLimitPerMinute, cfg.SchedRateLimitPerDay),
+		taskGlobalRL:     ratelimit.New(cfg.SchedGlobalRateLimitPerMinute, 0),
+		taskRLCounter:    newRateLimitCounter(),
 		checksumCache:    newChecksumCache(),
 		statsCache:       newStatsCache(),
 	}

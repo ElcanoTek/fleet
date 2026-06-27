@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -264,7 +265,11 @@ func run() error {
 		DataDir:             cfg.DataDir,
 		Timezone:            timezone(),
 		DefaultTaskTimezone: defaultTaskTimezone(),
-		ElcanoCookieName:    "elcano_auth",
+		// Sliding-window rate limits for POST /tasks + /upload (0 disables a window).
+		SchedRateLimitPerMinute:       envIntDefault("FLEET_SCHED_RATE_LIMIT_PER_MINUTE", 60),
+		SchedRateLimitPerDay:          envIntDefault("FLEET_SCHED_RATE_LIMIT_PER_DAY", 500),
+		SchedGlobalRateLimitPerMinute: envIntDefault("FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE", 200),
+		ElcanoCookieName:              "elcano_auth",
 		// Reuse the chat shared token so the Next proxy's X-User-Email path is
 		// trusted by the orchestrator too (#157). cfg.SharedToken is guaranteed
 		// non-empty by config.Validate.
@@ -517,8 +522,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Post("/logs", h.SubmitLogs)
 	})
 
-	r.Post("/tasks", h.CreateTask)
-	r.Post("/upload", h.HandleUpload)
+	// The two high-cost endpoints carry the sliding-window rate limiter
+	// (per-API-key + global), so a runaway key can't flood the task queue or
+	// drain the LLM budget. The admin key bypasses it (see SchedRateLimitMiddleware).
+	r.With(h.SchedRateLimitMiddleware).Post("/tasks", h.CreateTask)
+	r.With(h.SchedRateLimitMiddleware).Post("/upload", h.HandleUpload)
 	r.Get("/files/{filename}", h.HandleDownload)
 	r.Post("/auth/login", h.Login)
 	r.Get("/auth/elcano-login", h.ElcanoLogin)
@@ -567,6 +575,17 @@ func defaultTaskTimezone() string {
 		return v
 	}
 	return "UTC"
+}
+
+// envIntDefault reads an integer env var, returning def when unset or
+// unparseable. An explicit "0" is honored (e.g. to disable a rate-limit window).
+func envIntDefault(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
+	}
+	return def
 }
 
 // ensureDistinctDatabases fails fast when the chat and sched DSNs resolve to the

@@ -494,6 +494,26 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 	return true, key, ""
 }
 
+// LookupKeyMeta resolves a raw key to its stable key ID and per-key rate-limit
+// override WITHOUT enforcing or mutating any rate-limit state — a read-only
+// helper for the orchestrator's sliding-window task limiter (#247), which keys
+// its window by the stable key ID and treats RateLimit (when > 0) as that key's
+// per-minute cap. Returns ok=false for unknown, disabled, or expired keys.
+func (m *Manager) LookupKeyMeta(rawKey string) (keyID string, rateLimit int, ok bool) {
+	keyHash := m.hashKey(rawKey)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, found := m.keyHashIndex[keyHash]
+	if !found {
+		return "", 0, false
+	}
+	key, found := m.keys[id]
+	if !found || !key.IsValid() {
+		return "", 0, false
+	}
+	return key.KeyID, key.RateLimit, true
+}
+
 // LogAction logs an action performed with an API key.
 func (m *Manager) LogAction(keyID, action, resourceType string, resourceID *string, details map[string]interface{}, ipAddress, userAgent *string, success bool, errorMessage *string) {
 	m.logAudit(AuditLogEntry{KeyID: keyID, Action: action, ResourceType: resourceType, ResourceID: resourceID, Details: details, IPAddress: ipAddress, UserAgent: userAgent, Success: success, ErrorMessage: errorMessage})
