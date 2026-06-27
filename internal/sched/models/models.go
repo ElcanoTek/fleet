@@ -137,6 +137,42 @@ func (s TaskStatus) IsValidReportedStatus() bool {
 	}
 }
 
+// TriggerType distinguishes how a task is fired (#177).
+type TriggerType string
+
+const (
+	// TriggerTypeCron is the default: the scheduler promotes the task when its
+	// scheduled_for / recurrence is due.
+	TriggerTypeCron TriggerType = "cron"
+	// TriggerTypeWebhook marks a TEMPLATE task that the cron engine never runs.
+	// It sits inert (status=scheduled, scheduled_for=NULL) until an authenticated
+	// POST /triggers/{slug} spawns a fresh one-shot run cloned from it.
+	TriggerTypeWebhook TriggerType = "webhook"
+)
+
+// IsValid reports whether t is a recognized trigger type.
+func (t TriggerType) IsValid() bool {
+	switch t {
+	case TriggerTypeCron, TriggerTypeWebhook:
+		return true
+	default:
+		return false
+	}
+}
+
+// TaskTrigger binds a URL-safe slug + HMAC-SHA256 secret to a template task so
+// external systems can spawn runs via POST /triggers/{slug} (#177). The secret
+// is the per-trigger webhook credential — never the admin API key.
+type TaskTrigger struct {
+	ID             uuid.UUID `json:"id"`
+	TaskID         uuid.UUID `json:"task_id"`
+	Slug           string    `json:"slug"`
+	Secret         string    `json:"secret"`
+	PromptTemplate string    `json:"prompt_template"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 // Permission represents available permissions for API keys.
 type Permission string
 
@@ -233,6 +269,11 @@ type TaskCreate struct {
 	// expression fires at the wall-clock time in THIS zone; the resulting
 	// scheduled_for instant is always stored in UTC.
 	Timezone string `json:"timezone,omitempty"`
+	// TriggerType selects how the task is fired (#177). Empty / "cron" is the
+	// default cron-cadence behavior. "webhook" makes this a template task the
+	// cron engine never runs: it sits inert until POST /triggers/{slug} spawns a
+	// run cloned from it.
+	TriggerType TriggerType `json:"trigger_type,omitempty"`
 }
 
 // Task represents a task to be executed by a worker.
@@ -283,12 +324,27 @@ type Task struct {
 	MaxRetries   int `json:"max_retries"`
 	// CreatedByUsername is populated at query time for display purposes (not persisted)
 	CreatedByUsername *string `json:"created_by_username,omitempty"`
+	// TriggerType is how this task is fired: "cron" (default) or "webhook". A
+	// webhook task is an inert template; see TaskCreate.TriggerType.
+	TriggerType TriggerType `json:"trigger_type"`
 }
 
 // NewTask creates a new Task with defaults.
 func NewTask(tc TaskCreate) *Task {
+	triggerType := tc.TriggerType
+	if triggerType == "" {
+		triggerType = TriggerTypeCron
+	}
+
 	status := TaskStatusPending
 	if tc.ScheduledFor != nil && tc.ScheduledFor.After(time.Now()) {
+		status = TaskStatusScheduled
+	}
+	// A webhook template is never run by the cron engine. Park it inert as a
+	// scheduled task with no scheduled_for: GetScheduledTasks requires
+	// scheduled_for IS NOT NULL, so it is never promoted; firing the webhook
+	// spawns a fresh cron-type run cloned from it.
+	if triggerType == TriggerTypeWebhook {
 		status = TaskStatusScheduled
 	}
 
@@ -315,6 +371,7 @@ func NewTask(tc TaskCreate) *Task {
 		Timezone:               tz,
 		Files:                  tc.Files,
 		MaxRetries:             derefOr(tc.MaxRetries, 0),
+		TriggerType:            triggerType,
 	}
 }
 

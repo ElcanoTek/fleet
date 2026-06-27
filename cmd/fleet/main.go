@@ -686,6 +686,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 	r.With(h.SchedRateLimitMiddleware).Post("/tasks", h.CreateTask)
 	r.With(h.SchedRateLimitMiddleware).Post("/upload", h.HandleUpload)
 	r.Get("/files/{filename}", h.HandleDownload)
+
+	// Webhook triggers (#177): authenticated by per-trigger HMAC-SHA256, NOT the
+	// admin API key, so external services (GitHub, Slack, CI) can fire tasks
+	// without admin credentials. Deliberately outside every auth group.
+	r.With(h.SchedRateLimitMiddleware).Post("/triggers/{slug}", h.HandleWebhookTrigger)
 	r.Post("/auth/login", h.Login)
 	r.Get("/auth/elcano-login", h.ElcanoLogin)
 	r.Post("/auth/logout", h.ElcanoLogout)
