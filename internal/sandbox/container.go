@@ -108,6 +108,24 @@ type ContainerConfig struct {
 	// PidsLimit defaults to 128 if zero.
 	PidsLimit int
 
+	// DiskLimitGB caps the container's writable disk usage, in GiB. Without it,
+	// an agent (`dd if=/dev/zero of=big`, or a runaway log) can fill the host
+	// disk and crash the whole box. 0 → default (5); a NEGATIVE value disables
+	// the quota (not recommended on production hosts). FLEET_SANDBOX_DISK_GB.
+	//
+	// Applied as `--storage-opt size=Ng` (a hard cap on TOTAL writable-layer
+	// bytes) when the storage driver supports project quotas — see
+	// StorageOptSupported — otherwise as `--ulimit fsize=N*GiB`, which caps the
+	// size of any SINGLE file (the common `dd` bomb) but not the running total.
+	DiskLimitGB int
+
+	// StorageOptSupported is set by the Pool from a one-time boot probe
+	// (ProbeStorageOptSupport): true when `podman run --storage-opt size` works
+	// on this host's storage driver + backing filesystem. It selects which disk
+	// quota mechanism start() applies (storage-opt vs the ulimit fallback). A
+	// zero value (false) is safe — it just uses the always-works ulimit path.
+	StorageOptSupported bool
+
 	// Runtime overrides the default OCI runtime — e.g. "runsc" for
 	// gVisor. Empty means use Podman's configured default (crun/runc).
 	Runtime string
@@ -184,10 +202,45 @@ func applyContainerDefaults(cfg ContainerConfig) ContainerConfig {
 	if cfg.PidsLimit == 0 {
 		cfg.PidsLimit = 128
 	}
+	if cfg.DiskLimitGB == 0 {
+		cfg.DiskLimitGB = defaultDiskLimitGB
+	}
 	if cfg.StartTimeout == 0 {
 		cfg.StartTimeout = defaultContainerStartTimeout
 	}
 	return cfg
+}
+
+// defaultDiskLimitGB is the writable-disk quota applied when DiskLimitGB is
+// unset (0). A negative DiskLimitGB disables the quota; this default keeps it ON
+// so the host disk can't be exhausted by an unbounded sandbox write.
+const defaultDiskLimitGB = 5
+
+// effectiveDiskGB resolves a configured DiskLimitGB to the value start() will
+// actually apply: 0 → the default; any other value (incl. negative = disabled)
+// is returned unchanged. Lets the Pool log the right number before the
+// per-container applyContainerDefaults runs.
+func effectiveDiskGB(n int) int {
+	if n == 0 {
+		return defaultDiskLimitGB
+	}
+	return n
+}
+
+// diskQuotaArgs returns the `podman run` flags that cap the container's writable
+// disk. With a quota-capable storage driver it uses `--storage-opt size`, a hard
+// cap on TOTAL writable-layer bytes; otherwise it falls back to `--ulimit fsize`,
+// which bounds the size of any SINGLE file (stopping the classic `dd` bomb) but
+// not the running total. A non-positive limit disables the quota (returns nil).
+func diskQuotaArgs(diskLimitGB int, storageOptSupported bool) []string {
+	if diskLimitGB <= 0 {
+		return nil
+	}
+	if storageOptSupported {
+		return []string{fmt.Sprintf("--storage-opt=size=%dg", diskLimitGB)}
+	}
+	// RLIMIT_FSIZE is in bytes; N GiB = N << 30.
+	return []string{fmt.Sprintf("--ulimit=fsize=%d", int64(diskLimitGB)<<30)}
 }
 
 // defaultContainerStartTimeout is exposed so callers (Pool.newSandbox,
@@ -335,6 +388,10 @@ func (c *containerImpl) start(ctx context.Context) error {
 		fmt.Sprintf("--volume=%s:/opt/bridge/bridge.py:ro,Z", c.bridgeScriptPath),
 		fmt.Sprintf("--workdir=%s", c.cfg.WorkspaceHostDir),
 	}
+	// Disk quota for the writable layer (#216): without it an agent can fill the
+	// host disk and crash the box. storage-opt (hard total cap) when the driver
+	// supports it, else ulimit fsize (per-file cap). See diskQuotaArgs.
+	args = append(args, diskQuotaArgs(c.cfg.DiskLimitGB, c.cfg.StorageOptSupported)...)
 	// Supporting-doc bind mounts — same-path so the personas/protocols/
 	// system_prompts symlinks tools/workspace.go drops into the per-
 	// conversation workspace resolve inside the container too. Read-only:
