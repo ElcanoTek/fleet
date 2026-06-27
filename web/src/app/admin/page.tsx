@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { HealthPanel } from "./HealthPanel";
 
 // The admin page is intentionally minimalist — a single table keyed on
 // user email. Power tools belong in real observability (Grafana, etc);
@@ -131,6 +132,8 @@ export default function AdminPage() {
             </Link>
           </div>
         </header>
+
+        <HealthPanel />
 
         {error ? (
           <div className="rounded-[0.95rem] border border-[#e08080] bg-[color-mix(in_srgb,#e08080_15%,transparent)] px-4 py-3 text-[0.875rem] text-[#e08080]">
