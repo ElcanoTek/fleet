@@ -504,7 +504,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config"
 
 // AddTask adds or updates a task.
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
@@ -515,8 +515,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id,
-			trigger_type, credential_allowlist
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
+			trigger_type, credential_allowlist, loop_config
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -546,7 +546,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			timezone = EXCLUDED.timezone,
 			created_by_key_id = EXCLUDED.created_by_key_id,
 			trigger_type = EXCLUDED.trigger_type,
-			credential_allowlist = EXCLUDED.credential_allowlist`,
+			credential_allowlist = EXCLUDED.credential_allowlist,
+			loop_config = EXCLUDED.loop_config`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -577,6 +578,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.CreatedByKeyID,
 		triggerTypeOrCron(task.TriggerType),
 		marshalCredentialAllowlist(task.CredentialAllowlist),
+		marshalLoopConfig(task.LoopConfig),
 	)
 	return err
 }
@@ -643,6 +645,28 @@ func unmarshalCredentialAllowlist(ns sql.NullString) models.CredentialAllowlist 
 	return result
 }
 
+// marshalLoopConfig serializes the optional loop config for the nullable JSONB
+// column: nil → SQL NULL (an ordinary one-shot task), non-nil → its JSON.
+func marshalLoopConfig(lc *models.LoopConfig) any {
+	if lc == nil {
+		return nil
+	}
+	return marshalJSON(lc)
+}
+
+// unmarshalLoopConfig reads the nullable loop_config column back. NULL/empty → nil.
+func unmarshalLoopConfig(ns sql.NullString) *models.LoopConfig {
+	if !ns.Valid || ns.String == "" {
+		return nil
+	}
+	var lc models.LoopConfig
+	if err := json.Unmarshal([]byte(ns.String), &lc); err != nil {
+		log.Printf("Warning: failed to unmarshal loop_config: %v (input: %.100s)", err, ns.String)
+		return nil
+	}
+	return &lc
+}
+
 func nullableString(s string) *string {
 	if s == "" {
 		return nil
@@ -682,6 +706,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		createdByKeyID         sql.NullString
 		triggerType            sql.NullString
 		credentialAllowlist    sql.NullString
+		loopConfig             sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -690,7 +715,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &runtimeFlavor, &timezone, &createdByKeyID,
-		&triggerType, &credentialAllowlist,
+		&triggerType, &credentialAllowlist, &loopConfig,
 	)
 	if err != nil {
 		return nil, err
@@ -730,6 +755,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	// NULL → nil (inherit global); "[]" → non-nil empty (deny all). The
 	// distinction is load-bearing for Gate-3, so do NOT coerce nil to empty.
 	task.CredentialAllowlist = unmarshalCredentialAllowlist(credentialAllowlist)
+	task.LoopConfig = unmarshalLoopConfig(loopConfig)
 	if agentSessionID.Valid {
 		task.AgentSessionID = &agentSessionID.String
 	}
@@ -1250,7 +1276,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			allow_network = $25,
 			runtime_flavor = $26,
 			timezone = $27,
-			credential_allowlist = $28
+			credential_allowlist = $28,
+			loop_config = $29
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1280,8 +1307,95 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		nullableString(task.RuntimeFlavor),
 		taskTimezoneOrUTC(task.Timezone),
 		marshalCredentialAllowlist(task.CredentialAllowlist),
+		marshalLoopConfig(task.LoopConfig),
 	)
 	return err
+}
+
+// ── task_iterations (looped-task telemetry, #179) ──
+
+const taskIterationColumns = "id, task_id, iteration_number, started_at, completed_at, worker_session_id, exit_condition_result, cost_usd, prompt_tokens, completion_tokens, status"
+
+// AddTaskIteration inserts or updates a per-iteration telemetry row (upsert on
+// id, so a row created at iteration start can be finalized at iteration end).
+func (db *Database) AddTaskIteration(ctx context.Context, it *models.TaskIteration) error {
+	if it.ID == uuid.Nil {
+		it.ID = uuid.New()
+	}
+	_, err := db.conn.ExecContext(ctx, `
+		INSERT INTO task_iterations (
+			id, task_id, iteration_number, started_at, completed_at, worker_session_id,
+			exit_condition_result, cost_usd, prompt_tokens, completion_tokens, status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (id) DO UPDATE SET
+			completed_at = EXCLUDED.completed_at,
+			worker_session_id = EXCLUDED.worker_session_id,
+			exit_condition_result = EXCLUDED.exit_condition_result,
+			cost_usd = EXCLUDED.cost_usd,
+			prompt_tokens = EXCLUDED.prompt_tokens,
+			completion_tokens = EXCLUDED.completion_tokens,
+			status = EXCLUDED.status`,
+		it.ID,
+		it.TaskID,
+		it.IterationNumber,
+		it.StartedAt,
+		it.CompletedAt,
+		nullableString(it.WorkerSessionID),
+		nullableString(it.ExitConditionResult),
+		it.CostUSD,
+		it.PromptTokens,
+		it.CompletionTokens,
+		it.Status,
+	)
+	return err
+}
+
+// ListTaskIterations returns a task's iterations in iteration_number order.
+func (db *Database) ListTaskIterations(ctx context.Context, taskID uuid.UUID) ([]*models.TaskIteration, error) {
+	rows, err := db.conn.QueryContext(ctx,
+		"SELECT "+taskIterationColumns+" FROM task_iterations WHERE task_id = $1 ORDER BY iteration_number", taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*models.TaskIteration
+	for rows.Next() {
+		it, serr := scanTaskIteration(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+func scanTaskIteration(scanner interface{ Scan(...interface{}) error }) (*models.TaskIteration, error) {
+	var (
+		it                  models.TaskIteration
+		completedAt         sql.NullTime
+		workerSessionID     sql.NullString
+		exitConditionResult sql.NullString
+		costUSD             sql.NullFloat64
+		promptTokens        sql.NullInt64
+		completionTokens    sql.NullInt64
+	)
+	if err := scanner.Scan(
+		&it.ID, &it.TaskID, &it.IterationNumber, &it.StartedAt, &completedAt,
+		&workerSessionID, &exitConditionResult, &costUSD, &promptTokens, &completionTokens, &it.Status,
+	); err != nil {
+		return nil, err
+	}
+	if completedAt.Valid {
+		t := completedAt.Time
+		it.CompletedAt = &t
+	}
+	it.WorkerSessionID = workerSessionID.String
+	it.ExitConditionResult = exitConditionResult.String
+	it.CostUSD = costUSD.Float64
+	it.PromptTokens = promptTokens.Int64
+	it.CompletionTokens = completionTokens.Int64
+	return &it, nil
 }
 
 // GetNodeForUpdate gets a node by ID with a row-level lock. Must be in a tx.
