@@ -14,6 +14,9 @@
 #       --tmpfs=/tmp:rw,size=128m \
 #       --tmpfs=/home/sandbox/.ipython:rw,size=32m \
 #       --tmpfs=/home/sandbox/.cache:rw,size=32m \
+#       --storage-opt=size=5g \           # writable-layer disk quota (#216);
+#                                         # falls back to --ulimit=fsize=5368709120
+#                                         # on drivers without project-quota support
 #       --volume=/path/to/workspace:/workspace:rw,Z \
 #       localhost/fleet-sandbox:latest
 #

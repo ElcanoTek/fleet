@@ -42,6 +42,12 @@ type Pool struct {
 	mu     sync.Mutex
 	slots  chan *Sandbox
 	closed bool
+
+	// storageProbeOnce caches the one-time --storage-opt support probe (#216) so
+	// the disk-quota mechanism (storage-opt vs the ulimit fallback) is decided
+	// once per process. The first container creation pays the probe cost.
+	storageProbeOnce sync.Once
+	storageOptOK     bool
 }
 
 // PoolConfig holds the knobs for a Pool. Mode picks the backend; in
@@ -102,6 +108,7 @@ func (p *Pool) TakeContainer(ctx context.Context) (*Sandbox, func(), error) {
 	}
 	cfg := p.cfg.Container
 	cfg.BridgeScript = p.cfg.BridgeScript
+	cfg.StorageOptSupported = p.storageOptSupported(ctx)
 	// Lockdown's distinguishing security guarantee: no network egress
 	// from inside bash/run_python. Non-lockdown chats (Pool.Take ->
 	// newSandbox) inherit the default rootless slirp4netns so routine
@@ -205,11 +212,33 @@ func (p *Pool) fill() {
 	}
 }
 
+// storageOptSupported probes once (cached) whether the host's storage driver
+// supports `--storage-opt size` disk quotas, logging which quota mechanism the
+// sandbox will use. Thread-safe; the first container creation pays the probe.
+func (p *Pool) storageOptSupported(ctx context.Context) bool {
+	p.storageProbeOnce.Do(func() {
+		gb := effectiveDiskGB(p.cfg.Container.DiskLimitGB)
+		if gb <= 0 {
+			// Quota disabled: no flag either way, so skip the probe container.
+			log.Printf("sandbox disk quota: DISABLED (FLEET_SANDBOX_DISK_GB<=0) — the host disk is unprotected from runaway sandbox writes")
+			return
+		}
+		p.storageOptOK = ProbeStorageOptSupport(ctx, p.cfg.Container.PodmanBinary, p.cfg.Container.Image)
+		if p.storageOptOK {
+			log.Printf("sandbox disk quota: storage-opt size=%dg — writable layer hard-capped (total usage bounded)", gb)
+		} else {
+			log.Printf("sandbox disk quota: storage-opt unsupported on this storage driver; falling back to ulimit fsize=%dGiB — caps any single file but NOT total disk use (use overlay+xfs(pquota)/btrfs for a hard cap)", gb)
+		}
+	})
+	return p.storageOptOK
+}
+
 func (p *Pool) newSandbox(ctx context.Context) (*Sandbox, error) {
 	switch p.cfg.Mode {
 	case ModeContainer:
 		cfg := p.cfg.Container
 		cfg.BridgeScript = p.cfg.BridgeScript
+		cfg.StorageOptSupported = p.storageOptSupported(ctx)
 		// resolveStartTimeout applies the same default NewContainer would
 		// apply internally. Without this, the OUTER context timeout is
 		// `0+5s = 5s` when StartTimeout isn't set explicitly, which
