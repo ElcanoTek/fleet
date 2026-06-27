@@ -29,6 +29,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -955,6 +956,7 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 		for i := 0; i < numWorkers; i++ {
 			wg.Add(1)
 			go func() {
+				defer safe.Recover("sched.handlers.checksum_worker", nil)
 				defer wg.Done()
 				for name := range workChan {
 					select {
@@ -1986,6 +1988,7 @@ func (h *Handlers) getFileChecksums(filenames []string) []string {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(fname string, idxs []int) {
+			defer safe.Recover("sched.handlers.checksum", nil)
 			defer wg.Done()
 			defer func() { <-sem }()
 

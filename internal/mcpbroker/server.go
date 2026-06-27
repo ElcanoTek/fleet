@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // Backend is what a Server serves: the credential-bearing MCP call seam plus the
@@ -110,6 +111,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			mu.Unlock()
 			wg.Add(1)
 			go func(req request) {
+				defer safe.Recover("mcpbroker.call", nil)
 				defer wg.Done()
 				defer func() {
 					mu.Lock()
@@ -128,6 +130,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		case methodListTools:
 			wg.Add(1)
 			go func(req request) {
+				defer safe.Recover("mcpbroker.list_tools", nil)
 				defer wg.Done()
 				tools, err := s.backend.ListTools(ctx)
 				resp := response{ID: req.ID, Tools: tools}
@@ -140,6 +143,7 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 		case methodListAccounts:
 			wg.Add(1)
 			go func(req request) {
+				defer safe.Recover("mcpbroker.list_accounts", nil)
 				defer wg.Done()
 				accounts, err := s.backend.ListAccounts(ctx, req.Server, req.BaseVars)
 				resp := response{ID: req.ID, Accounts: accounts}
