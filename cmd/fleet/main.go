@@ -11,7 +11,13 @@
 // It opens BOTH Postgres pools (store for chat, sched/db for sched), each
 // self-migrating on start, and wires the live sched-backed notes provider into
 // BOTH the interactive engine's Deps and the runner's scheduled-agent Deps.
-// Graceful shutdown drains the worker pool and closes the servers + pools.
+//
+// Graceful shutdown (#278) distinguishes SIGTERM (deployment restart) from SIGINT
+// (dev Ctrl-C): on SIGTERM it stops admitting new work (/healthz → 503 so a load
+// balancer drains it), then drains in-flight chat turns AND scheduled tasks within
+// FLEET_SHUTDOWN_GRACE_SECONDS before force-cancelling the stragglers and closing
+// the listeners; SIGINT is the immediate path. It emits sd_notify READY=1 /
+// STOPPING=1 (a no-op off systemd) and answers SIGUSR1 with an in-flight snapshot.
 package main
 
 import (
@@ -19,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,6 +34,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -398,7 +406,15 @@ func run() error {
 	}
 	pruneCancel()
 
-	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{Limiter: agentLimiter})
+	// Share the process shutdown grace with the pool so its in-flight-task drain
+	// uses the same budget as the chat-turn drain (#278). A non-positive grace
+	// (operator set FLEET_SHUTDOWN_GRACE_SECONDS=0) maps to a negative DrainGrace
+	// so the pool force-cancels immediately instead of substituting its default.
+	poolGrace := shutdownGrace(cfg)
+	if poolGrace <= 0 {
+		poolGrace = -1
+	}
+	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{Limiter: agentLimiter, DrainGrace: poolGrace})
 	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 
 	// ── boot listeners ──
@@ -408,8 +424,19 @@ func run() error {
 	chatServer := &http.Server{Addr: chatAddr, Handler: securityHeadersMiddleware(chatSrv.Routes(), tlsActive(cfg)), ReadHeaderTimeout: 30 * time.Second}
 	orchServer := &http.Server{Addr: orchAddr, Handler: orchHandler, ReadHeaderTimeout: 30 * time.Second}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	// Signal handling (#278) distinguishes deployment restart from dev Ctrl-C:
+	//   - SIGTERM → graceful: stop admitting, drain in-flight chat turns + tasks
+	//     within FLEET_SHUTDOWN_GRACE_SECONDS, then force-cancel the stragglers.
+	//   - SIGINT  → immediate: cancel everything now (the dev fast-exit path).
+	//   - SIGUSR1 → diagnostic: log current in-flight counts WITHOUT shutting down.
+	// ctx drives the claim loop / pool; cancelling it stops NEW work but (by
+	// design) does NOT touch detached chat turns or in-flight tasks — those drain
+	// through their own decoupled contexts so the grace period is meaningful.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCh := make(chan os.Signal, 4)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
+	defer signal.Stop(sigCh)
 
 	// Worker pool runs until ctx is cancelled, then drains. Guarded so a panic in
 	// the pool loop is a contained, logged event — and poolDone still closes
@@ -440,22 +467,88 @@ func run() error {
 		}
 	}()
 
-	select {
-	case <-ctx.Done():
-		log.Printf("fleet: shutdown signal received; draining...")
-	case err := <-errCh:
-		log.Printf("fleet: listener error: %v; shutting down", err)
-		stop()
+	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
+	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
+	grace := shutdownGrace(cfg)
+	//nolint:gosec // G706: grace is a time.Duration (digits+unit) derived from operator config, not request input — it cannot forge a log line.
+	log.Printf("fleet: shutdown grace = %s (FLEET_SHUTDOWN_GRACE_SECONDS)", grace)
+	sdNotify("READY=1")
+
+	// Block until a terminal signal / listener error decides graceful vs immediate,
+	// then drain. Extracted so run() stays within the cyclomatic budget.
+	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
+	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer)
+	return nil
+}
+
+// awaitShutdown blocks until a terminal signal or a fatal listener error,
+// returning whether shutdown should be graceful (SIGTERM — deployment restart)
+// or immediate (SIGINT — dev Ctrl-C — or a listener error). SIGUSR1 logs a
+// diagnostic in-flight snapshot and keeps waiting (no shutdown).
+func awaitShutdown(sigCh <-chan os.Signal, errCh <-chan error, chatSrv *httpapi.Server, pool *runner.Pool, lim *admission.Limiter) bool {
+	for {
+		select {
+		case sig := <-sigCh:
+			switch sig {
+			case syscall.SIGTERM:
+				log.Printf("fleet: SIGTERM received; beginning graceful shutdown")
+				return true
+			case syscall.SIGINT:
+				log.Printf("fleet: SIGINT received; shutting down immediately")
+				return false
+			case syscall.SIGUSR1:
+				//nolint:gosec // G706: only integer counters are formatted (%d) — no string from request input is logged, so no CR/LF log-line forgery is possible.
+				log.Printf("fleet: status — active_chat_turns=%d active_sched_tasks=%d admission_inflight=%d/%d",
+					chatSrv.ActiveTurns(), pool.ActiveTasks(), lim.InFlight(), lim.Total())
+			}
+		case err := <-errCh:
+			log.Printf("fleet: listener error: %v; shutting down", err)
+			return false
+		}
+	}
+}
+
+// performShutdown runs the drain sequence: stop admitting, drain in-flight chat
+// turns + scheduled tasks within the grace budget (force-cancelling stragglers),
+// then close the listeners. graceful=false is the fast path (cancel everything
+// now). cancel stops the claim loop / scheduler-fed pool.
+func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFunc, chatSrv *httpapi.Server, pool *runner.Pool, poolDone <-chan struct{}, chatServer, orchServer *http.Server) {
+	// Tell systemd we are stopping so it waits out the drain up to TimeoutStopSec.
+	sdNotify("STOPPING=1")
+	// Stop admitting new chat turns + flip /healthz to 503 (load balancers stop
+	// routing here) and notify attached SSE clients to reconnect elsewhere.
+	chatSrv.BeginShutdown()
+
+	if graceful {
+		// Stop the claim loop + scheduler-fed pool; in-flight tasks keep their
+		// decoupled context and drain within the pool's own grace budget (parallel).
+		cancel()
+		graceCtx, graceStop := context.WithTimeout(context.Background(), grace)
+		if chatSrv.DrainTurns(graceCtx) {
+			log.Printf("fleet: all in-flight chat turns drained within grace")
+		} else {
+			//nolint:gosec // G706: grace is a time.Duration (digits+unit) and n is an int count — neither can forge a log line; values are operator-config-derived, not request input.
+			log.Printf("fleet: grace period (%s) expired; force-cancelled %d in-flight chat turn(s)", grace, chatSrv.CancelInflightTurns())
+		}
+		graceStop()
+		<-poolDone // pool ran its own grace-bounded task drain in parallel
+	} else {
+		// Immediate path (SIGINT / listener error): cancel everything now.
+		cancel()
+		pool.ForceCancel()
+		if n := chatSrv.CancelInflightTurns(); n > 0 {
+			//nolint:gosec // G706: only an int count is formatted (%d) — no request-input string is logged, so no log-line forgery.
+			log.Printf("fleet: cancelled %d in-flight chat turn(s)", n)
+		}
+		<-poolDone
 	}
 
-	// Graceful shutdown: stop accepting, drain the pool, close servers + pools.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	_ = chatServer.Shutdown(shutdownCtx)
-	_ = orchServer.Shutdown(shutdownCtx)
-	<-poolDone // pool.Run drains taskWG before returning
+	// Close the HTTP listeners last: handlers have returned and detached work has
+	// drained or been cancelled, so Shutdown completes promptly. Each server gets
+	// the full grace budget and they close in parallel (not one off the other's
+	// remainder).
+	closeServers(grace, chatServer, orchServer)
 	log.Printf("fleet: shutdown complete")
-	return nil
 }
 
 // buildOrchestratorMux registers the orchestrator routes (chi), mirroring moc's
@@ -654,6 +747,63 @@ func orchestratorAddr() string {
 		return v
 	}
 	return ":8000"
+}
+
+// ── graceful shutdown helpers (#278) ──
+
+// shutdownGrace resolves the graceful-shutdown grace period from
+// FLEET_SHUTDOWN_GRACE_SECONDS (config default 30). A non-positive value means
+// "no wait" (force-cancel immediately) and is returned as 0.
+func shutdownGrace(cfg *config.Config) time.Duration {
+	if cfg == nil || cfg.ShutdownGraceSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(cfg.ShutdownGraceSeconds) * time.Second
+}
+
+// closeServers shuts the HTTP listeners down in parallel, each with the full
+// grace budget (a hung one can't eat the other's time), so both drain their
+// already-finishing connections without one starving the other. A non-positive
+// budget falls back to 30s so Shutdown still has a bounded deadline.
+func closeServers(grace time.Duration, servers ...*http.Server) {
+	budget := grace
+	if budget <= 0 {
+		budget = 30 * time.Second
+	}
+	var wg sync.WaitGroup
+	for _, srv := range servers {
+		wg.Add(1)
+		go func(s *http.Server) {
+			defer wg.Done()
+			defer safe.Recover("cmd.closeServers", nil)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), budget)
+			defer cancel()
+			_ = s.Shutdown(shutdownCtx)
+		}(srv)
+	}
+	wg.Wait()
+}
+
+// sdNotify sends one state line to systemd's notify socket (NOTIFY_SOCKET),
+// e.g. "READY=1" once listeners are bound and "STOPPING=1" when draining. It is
+// a no-op when the socket is unset (non-systemd / dev / tests) and best-effort
+// otherwise — no new dependency, errors are intentionally swallowed. Handles the
+// abstract-namespace form ('@' → leading NUL) systemd uses.
+func sdNotify(state string) {
+	sock := os.Getenv("NOTIFY_SOCKET")
+	if sock == "" {
+		return
+	}
+	name := sock
+	if strings.HasPrefix(name, "@") {
+		name = "\x00" + name[1:]
+	}
+	conn, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: name, Net: "unixgram"})
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_, _ = conn.Write([]byte(state))
 }
 
 // ── notes adapter: the sched-backed NotesProvider + NoteProposer ──

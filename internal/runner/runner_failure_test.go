@@ -149,12 +149,14 @@ func TestToolFailureMarksTaskFailed(t *testing.T) {
 }
 
 // TestInterruptedTaskPersistsTerminalOnShutdown pins the shutdown/cancel
-// persistence contract for a task that fails WHILE the pool is draining: when
-// the runner returns an error AND ctx is already cancelled, the pool records a
-// terminal `error` ("interrupted") and persists a log via the background
-// context — the terminal write must survive ctx cancellation rather than being
-// dropped. This complements TestGracefulDrain, which covers the clean-success
-// drain; here the run itself failed mid-shutdown.
+// persistence contract for a task that does NOT finish within the grace period
+// (#278): the pool force-cancels the decoupled task context when grace expires,
+// the runner returns ctx.Err(), and the pool records a terminal `error`
+// ("interrupted") + persists a log via the background context — the terminal
+// write must survive ctx cancellation rather than being dropped. A tiny
+// DrainGrace makes the force-cancel fire promptly. This complements
+// TestGracefulDrain (clean-success drain within grace); here the task outlasts
+// the grace and is force-cancelled.
 func TestInterruptedTaskPersistsTerminalOnShutdown(t *testing.T) {
 	store := newTestStore(t)
 	seedPending(t, store, 1)
@@ -162,17 +164,17 @@ func TestInterruptedTaskPersistsTerminalOnShutdown(t *testing.T) {
 	started := make(chan struct{})
 	runner := TaskRunnerFunc(func(ctx context.Context, _ *models.Task) (*models.LogSession, error) {
 		close(started)
-		<-ctx.Done() // run until shutdown cancels us, then fail
+		<-ctx.Done() // run until the grace period expires and we're force-cancelled
 		return nil, ctx.Err()
 	})
 
-	pool := NewPool(store, runner, Config{MaxConcurrentAgents: 1, PollInterval: 20 * time.Millisecond, LeaseRenewInterval: time.Hour})
+	pool := NewPool(store, runner, Config{MaxConcurrentAgents: 1, PollInterval: 20 * time.Millisecond, LeaseRenewInterval: time.Hour, DrainGrace: 50 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { pool.Run(ctx); close(done) }()
 
 	<-started // task is in-flight
-	cancel()  // begin shutdown; the runner returns ctx.Err()
+	cancel()  // begin shutdown; grace expires → task ctx cancelled → runner fails
 
 	select {
 	case <-done:

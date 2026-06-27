@@ -114,6 +114,23 @@ func TestLoad_DefaultsApply(t *testing.T) {
 	if cfg.TitleModel != DefaultTitleModel {
 		t.Errorf("TitleModel default: got %q, want %q", cfg.TitleModel, DefaultTitleModel)
 	}
+	if cfg.ShutdownGraceSeconds != 30 {
+		t.Errorf("ShutdownGraceSeconds default: got %d, want 30", cfg.ShutdownGraceSeconds)
+	}
+}
+
+func TestLoad_ShutdownGraceOverride(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+	t.Setenv("FLEET_SHUTDOWN_GRACE_SECONDS", "5")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ShutdownGraceSeconds != 5 {
+		t.Errorf("ShutdownGraceSeconds: got %d, want 5", cfg.ShutdownGraceSeconds)
+	}
 }
 
 func TestLoad_TitleModelOverride(t *testing.T) {
