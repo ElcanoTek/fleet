@@ -302,6 +302,38 @@ func TestTaskTimezoneRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTaskCreatedByKeyIDRoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	keyID := "key_abc123"
+	withKey := &models.Task{ID: uuid.New(), Prompt: "k", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC(), CreatedByKeyID: &keyID}
+	if err := db.AddTask(ctx, withKey); err != nil {
+		t.Fatalf("Failed to add task: %v", err)
+	}
+	got, err := db.GetTask(ctx, withKey.ID)
+	if err != nil {
+		t.Fatalf("Failed to get task: %v", err)
+	}
+	if got.CreatedByKeyID == nil || *got.CreatedByKeyID != keyID {
+		t.Errorf("CreatedByKeyID = %v, want %q", got.CreatedByKeyID, keyID)
+	}
+
+	// A task created without an API key leaves it NULL.
+	noKey := &models.Task{ID: uuid.New(), Prompt: "nokey", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC()}
+	if err := db.AddTask(ctx, noKey); err != nil {
+		t.Fatalf("Failed to add no-key task: %v", err)
+	}
+	gotNoKey, err := db.GetTask(ctx, noKey.ID)
+	if err != nil {
+		t.Fatalf("Failed to get no-key task: %v", err)
+	}
+	if gotNoKey.CreatedByKeyID != nil {
+		t.Errorf("CreatedByKeyID = %v, want nil", *gotNoKey.CreatedByKeyID)
+	}
+}
+
 func TestGetTasksCompletedToday(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

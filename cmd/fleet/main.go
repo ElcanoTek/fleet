@@ -474,6 +474,8 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Get("/keys", h.ListAPIKeys)
 		r.Get("/keys/audit", h.GetAuditLog)
 		r.Get("/keys/{key_id}", h.GetAPIKey)
+		r.Get("/keys/{key_id}/spending", h.GetKeySpending)
+		r.Post("/keys/{key_id}/reset-spending", h.ResetKeySpending)
 		r.Post("/keys/{key_id}/rotate", h.RotateAPIKey)
 		r.Post("/keys/{key_id}/revoke", h.RevokeAPIKey)
 		r.Delete("/keys/{key_id}", h.DeleteAPIKey)

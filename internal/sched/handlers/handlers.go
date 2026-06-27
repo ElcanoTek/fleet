@@ -683,6 +683,9 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	isAdmin := h.verifyAdminKey(r)
 
 	var creatorID *uuid.UUID
+	// creatorKeyID is the scoped API key that authorized this task (if any), used
+	// to attribute completion cost back to the key for spending caps.
+	var creatorKeyID *string
 
 	if !isAdmin {
 		// Check for scoped API key
@@ -692,6 +695,8 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 			valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil, nil)
 			if valid && key != nil {
 				isAdmin = true // Treat as authorized
+				keyID := key.KeyID
+				creatorKeyID = &keyID
 			}
 		}
 
@@ -743,8 +748,20 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Spending-cap pre-flight: refuse a key that has already reached its daily or
+	// monthly LLM budget. Task cost is only known after completion, so this gates
+	// on the already-accumulated spend.
+	if creatorKeyID != nil {
+		if err := h.apiKeys.CheckBudget(*creatorKeyID); err != nil {
+			w.Header().Set("Retry-After", "3600")
+			writeError(w, http.StatusTooManyRequests, err.Error())
+			return
+		}
+	}
+
 	task := models.NewTask(tc)
 	task.CreatedBy = creatorID
+	task.CreatedByKeyID = creatorKeyID
 
 	if _, err := h.storage.AddTask(task); err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create task")
@@ -1576,6 +1593,12 @@ func (h *Handlers) SubmitLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Attribute this run's LLM cost to the submitting API key (if any) for
+	// per-key spending caps.
+	if task.CreatedByKeyID != nil {
+		h.apiKeys.AccumulateCost(*task.CreatedByKeyID, submission.Session.Cost)
+	}
+
 	writeJSON(w, http.StatusOK, submission.Session)
 }
 
@@ -1640,6 +1663,14 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Apply optional spending caps (CreateKey keeps a stable signature; budgets
+	// are set in a follow-up so the field set can grow without churning callers).
+	if keyCreate.MaxCostPerDayUSD != nil || keyCreate.MaxCostPerMonthUSD != nil {
+		if err := h.apiKeys.SetBudgets(key.KeyID, keyCreate.MaxCostPerDayUSD, keyCreate.MaxCostPerMonthUSD); err != nil {
+			log.Printf("Warning: failed to set budgets on new key %s: %v", key.KeyID, err)
+		}
+	}
+
 	log.Printf("Created API key: %s (%s)", key.KeyID, key.Name)
 
 	resp := key.ToResponse()
@@ -1647,6 +1678,31 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		APIKeyResponse: resp,
 		APIKey:         rawKey,
 	})
+}
+
+// GetKeySpending handles GET /keys/{key_id}/spending — current spend vs caps
+// with next reset instants.
+func (h *Handlers) GetKeySpending(w http.ResponseWriter, r *http.Request) {
+	keyID := chi.URLParam(r, "key_id")
+	snap, ok := h.apiKeys.SpendingSnapshot(keyID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "API key not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+// ResetKeySpending handles POST /keys/{key_id}/reset-spending — operator
+// override that zeros a key's accumulators (admin-gated by the route group).
+func (h *Handlers) ResetKeySpending(w http.ResponseWriter, r *http.Request) {
+	keyID := chi.URLParam(r, "key_id")
+	if err := h.apiKeys.ResetSpending(keyID); err != nil {
+		writeError(w, http.StatusNotFound, "API key not found")
+		return
+	}
+	h.apiKeys.LogAction(keyID, "reset_spending", "api_key", &keyID, nil, nil, nil, true, nil)
+	snap, _ := h.apiKeys.SpendingSnapshot(keyID)
+	writeJSON(w, http.StatusOK, snap)
 }
 
 // ListAPIKeys handles GET /keys
