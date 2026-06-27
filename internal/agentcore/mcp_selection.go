@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -59,6 +60,10 @@ type MCPServerBase struct {
 	HTTPURL string
 	// HTTPHeaders are sent with each HTTP request (default seat only).
 	HTTPHeaders map[string]string
+	// Required marks a load-bearing server: if it fails to register, the run
+	// aborts. Best-effort servers (the default, Required=false) are skipped with a
+	// warning so one flaky server can't kill an otherwise-healthy run (#182).
+	Required bool
 }
 
 // resolveMCPVariant computes the per-run registration name + credentialed env
@@ -138,7 +143,11 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 		// HTTP servers register via headers (no env overlay, no account variants).
 		if base.HTTPURL != "" {
 			if err := client.AddHTTPServerWithHeaders(ctx, name, base.HTTPURL, base.HTTPHeaders); err != nil {
-				return registered, fmt.Errorf("register http server %q: %w", name, err)
+				if base.Required {
+					return registered, fmt.Errorf("register http server %q: %w", name, err)
+				}
+				log.Printf("mcp: skipping best-effort http server %q — failed to register: %v", name, err)
+				continue
 			}
 			registered = append(registered, name)
 			continue
@@ -147,8 +156,17 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 		// NewStdioTransport sets variantEnv on cmd.Env — credentials are never on
 		// argv and never enter the sandbox container. base.Dir pins the subprocess
 		// cwd to the bundle root so relative `mcp/*.py` args resolve.
+		//
+		// Graceful degradation (#182): a best-effort server that fails to start
+		// (transport error, bad command, init timeout) is logged and SKIPPED so the
+		// rest of the selection still registers and the run proceeds with the tools
+		// that did come up. A Required server still aborts the run.
 		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv, base.Dir); err != nil {
-			return registered, fmt.Errorf("register server %q: %w", name, err)
+			if base.Required {
+				return registered, fmt.Errorf("register server %q: %w", name, err)
+			}
+			log.Printf("mcp: skipping best-effort server %q — failed to register: %v", name, err)
+			continue
 		}
 		registered = append(registered, name)
 	}
