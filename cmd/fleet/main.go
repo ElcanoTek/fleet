@@ -258,12 +258,13 @@ func run() error {
 		return fmt.Errorf("apikeys manager: %w", err)
 	}
 	hcfg := handlers.Config{
-		AdminAPIKey:       os.Getenv("ADMIN_API_KEY"),
-		RegistrationToken: os.Getenv("REGISTRATION_TOKEN"),
-		Version:           "fleet",
-		DataDir:           cfg.DataDir,
-		Timezone:          timezone(),
-		ElcanoCookieName:  "elcano_auth",
+		AdminAPIKey:         os.Getenv("ADMIN_API_KEY"),
+		RegistrationToken:   os.Getenv("REGISTRATION_TOKEN"),
+		Version:             "fleet",
+		DataDir:             cfg.DataDir,
+		Timezone:            timezone(),
+		DefaultTaskTimezone: defaultTaskTimezone(),
+		ElcanoCookieName:    "elcano_auth",
 		// Reuse the chat shared token so the Next proxy's X-User-Email path is
 		// trusted by the orchestrator too (#157). cfg.SharedToken is guaranteed
 		// non-empty by config.Validate.
@@ -552,6 +553,17 @@ func schedDSN() string {
 
 func timezone() string {
 	if v := strings.TrimSpace(os.Getenv("FLEET_TIMEZONE")); v != "" {
+		return v
+	}
+	return "UTC"
+}
+
+// defaultTaskTimezone is the IANA timezone applied to a scheduled task created
+// without an explicit one. Distinct from FLEET_TIMEZONE (the server clock) so an
+// operator can set an org default for task scheduling without moving the system
+// clock. Empty defaults to "UTC", matching prior behaviour.
+func defaultTaskTimezone() string {
+	if v := strings.TrimSpace(os.Getenv("FLEET_DEFAULT_TIMEZONE")); v != "" {
 		return v
 	}
 	return "UTC"
