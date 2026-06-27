@@ -188,6 +188,51 @@ func TestRecurringTaskRescheduling(t *testing.T) {
 	}
 }
 
+// TestRecurringTaskPreservesTimezone verifies the recurrence chain keeps the
+// task's IANA timezone (so a "9am New York" task keeps firing at 9am New York
+// rather than reverting to the server-global zone). Server tz is deliberately
+// set to a DIFFERENT zone to prove the per-task value, not s.location, is used.
+func TestRecurringTaskPreservesTimezone(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetTimezone("UTC")
+
+	node := &models.Node{ID: uuid.New(), Hostname: "h", Name: "n", APIKey: "k", Status: models.NodeStatusIdle, OSType: "linux", LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
+	if _, err := store.AddNode(node); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+
+	const tz = "America/New_York"
+	task := &models.Task{ID: uuid.New(), Prompt: "tz recur", Status: models.TaskStatusPending, Priority: 5, Recurrence: "@daily", Timezone: tz, CreatedAt: time.Now().UTC()}
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	assigned, err := store.AssignTaskToNode(task.ID, node.ID)
+	if err != nil {
+		t.Fatalf("AssignTaskToNode: %v", err)
+	}
+	if _, err := store.UpdateTaskStatusAtomic(assigned.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusSuccess, Message: strPtr("done")}); err != nil {
+		t.Fatalf("UpdateTaskStatusAtomic: %v", err)
+	}
+
+	all, err := store.GetAllTasks()
+	if err != nil {
+		t.Fatalf("GetAllTasks: %v", err)
+	}
+	var next *models.Task
+	for _, tk := range all {
+		if tk.ID != task.ID {
+			next = tk
+			break
+		}
+	}
+	if next == nil {
+		t.Fatal("next recurrence not created")
+	}
+	if next.Timezone != tz {
+		t.Errorf("next occurrence Timezone = %q, want %q", next.Timezone, tz)
+	}
+}
+
 func TestUpdateNodeHeartbeatRenewsActiveTaskLease(t *testing.T) {
 	store, _ := newTestStore(t)
 

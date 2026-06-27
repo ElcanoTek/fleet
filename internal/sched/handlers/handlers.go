@@ -42,6 +42,10 @@ type Config struct {
 	Version           string
 	DataDir           string
 	Timezone          string
+	// DefaultTaskTimezone (FLEET_DEFAULT_TIMEZONE) is the IANA timezone applied
+	// to a new task whose create request omits one. Distinct from Timezone
+	// (FLEET_TIMEZONE, the server clock); empty defaults to "UTC".
+	DefaultTaskTimezone string
 
 	// SharedToken is the chat-server shared secret (CHAT_SERVER_TOKEN), reused as
 	// the orchestrator's channel authenticator. The Next.js proxy — the SOLE
@@ -719,6 +723,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, task.Prompt)
+	localizeTask(task)
 	writeJSON(w, http.StatusOK, task)
 }
 
@@ -734,6 +739,54 @@ func validateTaskLimits(tc *models.TaskCreate) error {
 		return fmt.Errorf("max_retries must be between 0 and 10")
 	}
 	return nil
+}
+
+// defaultTaskTimezone is the IANA timezone applied to a task created without an
+// explicit one. FLEET_DEFAULT_TIMEZONE, then "UTC".
+func (h *Handlers) defaultTaskTimezone() string {
+	if tz := strings.TrimSpace(h.config.DefaultTaskTimezone); tz != "" {
+		return tz
+	}
+	return "UTC"
+}
+
+// resolveTaskTimezone resolves and validates tc.Timezone — defaulting an empty
+// value to the server default — and writes the resolved name back to tc so it
+// persists with the task. Returns the loaded location for cron evaluation, or an
+// error when the name is not a valid IANA timezone.
+func (h *Handlers) resolveTaskTimezone(tc *models.TaskCreate) (*time.Location, error) {
+	tzName := strings.TrimSpace(tc.Timezone)
+	if tzName == "" {
+		tzName = h.defaultTaskTimezone()
+	}
+	loc, err := time.LoadLocation(tzName)
+	if err != nil {
+		return nil, fmt.Errorf("unknown timezone %q: must be a valid IANA timezone name (e.g. America/New_York)", tzName)
+	}
+	tc.Timezone = tzName
+	return loc, nil
+}
+
+// localizeTask populates NextRunAtLocal from ScheduledFor rendered in the task's
+// timezone (RFC3339 with offset), so callers can display local time without any
+// client-side timezone math. No-op when the task has no scheduled_for.
+func localizeTask(task *models.Task) {
+	if task == nil || task.ScheduledFor == nil {
+		return
+	}
+	loc, err := time.LoadLocation(task.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	local := task.ScheduledFor.In(loc).Format(time.RFC3339)
+	task.NextRunAtLocal = &local
+}
+
+// localizeTasks applies localizeTask across a slice (the list endpoints).
+func localizeTasks(tasks []*models.Task) {
+	for _, t := range tasks {
+		localizeTask(t)
+	}
 }
 
 func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
@@ -773,6 +826,14 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 		return err
 	}
 
+	// Resolve + validate the per-task timezone (writes the resolved name back to
+	// tc so it persists). The cron Recurrence is evaluated in this zone so a
+	// "9am" task fires at 9am local, not 9am UTC.
+	loc, err := h.resolveTaskTimezone(tc)
+	if err != nil {
+		return err
+	}
+
 	if tc.Recurrence != "" {
 		tc.Recurrence = strings.TrimSpace(tc.Recurrence)
 		if tc.Recurrence == "" {
@@ -784,9 +845,9 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 			}
 			// If no explicit scheduled_for was provided, set it to the next
 			// cron trigger time so the task waits instead of running immediately.
+			// scheduled_for is always stored as an absolute UTC instant.
 			if tc.ScheduledFor == nil {
-				now := time.Now().In(h.storage.Location())
-				next := schedule.Next(now)
+				next := schedule.Next(time.Now().In(loc)).UTC()
 				tc.ScheduledFor = &next
 			}
 		}
@@ -1017,6 +1078,7 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Warning: failed to populate creator usernames: %v", err)
 		// Continue without usernames - will fall back to UUID display on frontend
 	}
+	localizeTasks(tasks)
 
 	writeJSON(w, http.StatusOK, models.PaginatedResponse{
 		Data:   tasks,
@@ -1103,6 +1165,7 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 	if err := h.populateCreatedByUsernames(r.Context(), []*models.Task{task}); err != nil {
 		log.Printf("Warning: failed to populate creator username: %v", err)
 	}
+	localizeTask(task)
 
 	writeJSON(w, http.StatusOK, task)
 }
@@ -1291,6 +1354,13 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// On edit, an omitted timezone means "keep the task's current zone" — not
+	// "reset to the global default". Pre-fill from the existing task so
+	// validateTaskCreate validates/keeps it instead of defaulting.
+	if strings.TrimSpace(tc.Timezone) == "" {
+		tc.Timezone = task.Timezone
+	}
+
 	if err := h.validateTaskCreate(&tc); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1316,8 +1386,13 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			next := schedule.Next(time.Now().In(h.storage.Location()))
-			nextUTC := next.UTC()
+			// Evaluate the cron expression in the task's own timezone (validated
+			// above). scheduled_for is always stored as an absolute UTC instant.
+			loc, lerr := time.LoadLocation(tc.Timezone)
+			if lerr != nil {
+				loc = h.storage.Location()
+			}
+			nextUTC := schedule.Next(time.Now().In(loc)).UTC()
 			tc.ScheduledFor = &nextUTC
 		}
 	}
@@ -1339,6 +1414,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		RuntimeFlavor:          tc.RuntimeFlavor,
 		ScheduledFor:           tc.ScheduledFor,
 		Recurrence:             tc.Recurrence,
+		Timezone:               tc.Timezone,
 		Files:                  tc.Files,
 		SetFiles:               tc.Files != nil,
 	}
@@ -1355,6 +1431,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 
 	//nolint:gosec // G706: untrusted fields are sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper. updated.ID is a uuid.UUID.
 	log.Printf("Task updated: %s (prompt: %.50s...)", updated.ID, logSafe(updated.Prompt))
+	localizeTask(updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 

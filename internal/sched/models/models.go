@@ -227,6 +227,12 @@ type TaskCreate struct {
 	// the global default at dispatch; an EXTERNAL flavor still routes through the
 	// fail-closed scheduled-external gate (allow_ungoverned_scheduled_agents).
 	RuntimeFlavor string `json:"runtime_flavor,omitempty"`
+	// Timezone is the IANA timezone name (e.g. "America/New_York") used to
+	// evaluate Recurrence in the task owner's local time. Empty falls back to
+	// the server's FLEET_DEFAULT_TIMEZONE (then "UTC") at create time. The cron
+	// expression fires at the wall-clock time in THIS zone; the resulting
+	// scheduled_for instant is always stored in UTC.
+	Timezone string `json:"timezone,omitempty"`
 }
 
 // Task represents a task to be executed by a worker.
@@ -255,6 +261,13 @@ type Task struct {
 	ErrorMessage   *string    `json:"error_message,omitempty"`
 	ScheduledFor   *time.Time `json:"scheduled_for,omitempty"`
 	Recurrence     string     `json:"recurrence,omitempty"`
+	// Timezone is the IANA timezone the cron Recurrence is evaluated in. Always
+	// present in responses ("UTC" for legacy/unset tasks). See TaskCreate.Timezone.
+	Timezone string `json:"timezone"`
+	// NextRunAtLocal is ScheduledFor rendered in Timezone (RFC3339 with offset),
+	// populated at query time for display so callers need no client-side tz math.
+	// Not persisted; nil when the task has no scheduled_for.
+	NextRunAtLocal *string    `json:"next_run_at_local,omitempty"`
 	CreatedBy      *uuid.UUID `json:"created_by,omitempty"`
 	Files          []string   `json:"files,omitempty"`
 	LeaseOwner     *string    `json:"lease_owner,omitempty"`
@@ -275,6 +288,11 @@ func NewTask(tc TaskCreate) *Task {
 		status = TaskStatusScheduled
 	}
 
+	tz := tc.Timezone
+	if tz == "" {
+		tz = "UTC"
+	}
+
 	return &Task{
 		ID:                     uuid.New(),
 		Prompt:                 tc.Prompt,
@@ -290,6 +308,7 @@ func NewTask(tc TaskCreate) *Task {
 		CreatedAt:              time.Now().UTC(),
 		ScheduledFor:           tc.ScheduledFor,
 		Recurrence:             tc.Recurrence,
+		Timezone:               tz,
 		Files:                  tc.Files,
 		MaxRetries:             derefOr(tc.MaxRetries, 0),
 	}

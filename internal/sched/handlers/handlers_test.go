@@ -135,6 +135,58 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 	return r, store, cleanup
 }
 
+func TestTaskTimezoneValidationAndScheduling(t *testing.T) {
+	r, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/tasks", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "test-admin-key")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	// An unknown IANA timezone is rejected up front.
+	if w := post(`{"prompt":"Daily report run","timezone":"Not/AZone","recurrence":"0 9 * * *"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("invalid timezone: status = %d, want 400 (%s)", w.Code, w.Body.String())
+	}
+
+	// A valid timezone persists and drives scheduling; the next-run instant is in
+	// the future and a localized rendering is returned.
+	w := post(`{"prompt":"Daily report run","timezone":"America/New_York","recurrence":"0 9 * * *"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("valid timezone: status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var task models.Task
+	if err := json.NewDecoder(w.Body).Decode(&task); err != nil {
+		t.Fatalf("decode task: %v", err)
+	}
+	if task.Timezone != "America/New_York" {
+		t.Errorf("Timezone = %q, want America/New_York", task.Timezone)
+	}
+	if task.ScheduledFor == nil || !task.ScheduledFor.After(time.Now()) {
+		t.Errorf("ScheduledFor = %v, want a future instant", task.ScheduledFor)
+	}
+	if task.NextRunAtLocal == nil {
+		t.Error("NextRunAtLocal not populated")
+	}
+
+	// Omitting the timezone defaults to UTC.
+	w = post(`{"prompt":"No timezone given","recurrence":"0 9 * * *"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("default timezone: status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	task = models.Task{}
+	if err := json.NewDecoder(w.Body).Decode(&task); err != nil {
+		t.Fatalf("decode task: %v", err)
+	}
+	if task.Timezone != "UTC" {
+		t.Errorf("default Timezone = %q, want UTC", task.Timezone)
+	}
+}
+
 func isDatabaseUnavailable(err error) bool {
 	errMsg := err.Error()
 	return strings.Contains(errMsg, "failed to connect to database") ||
