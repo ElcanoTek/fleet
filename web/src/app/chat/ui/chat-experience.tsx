@@ -863,6 +863,13 @@ export function ChatExperience() {
   // doesn't shadow the browser's in-page find while composing a message).
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // Escape closes the palette. Handled HERE (top-level, always-mounted
+      // listener) rather than inside SearchBar so close is reliable regardless of
+      // focus or mount timing. setSearchOpen(false) is a no-op when already closed.
+      if (event.key === "Escape") {
+        setSearchOpen(false);
+        return;
+      }
       if (!(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
       if (key !== "k" && key !== "f") return;
