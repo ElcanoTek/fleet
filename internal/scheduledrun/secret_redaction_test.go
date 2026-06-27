@@ -48,22 +48,35 @@ func TestConvertLogSession_RedactsSecretsEndToEnd(t *testing.T) {
 
 const roleAssistant = "assistant"
 
-// TestRedactSecrets_MarkerlessBoundary documents (and locks) the CURRENT
-// coverage boundary of the redaction regex: it only fires after an
-// api_key/token/secret/password/authorization marker followed by a
-// [:\s=] separator. A secret embedded in markerless JSON (the marker is a
-// quoted key, so the separator is `"` which the regex does not accept) passes
-// through unredacted. This is a known limitation, asserted here so a future
-// tightening of secretPattern is a deliberate, test-visible change rather than a
-// silent behavior shift.
-func TestRedactSecrets_MarkerlessBoundary(t *testing.T) {
-	markerless := `{"some_value":"` + sentinel + `"}`
-	if got := agentcore.RedactSecrets(markerless); !strings.Contains(got, sentinel) {
-		t.Fatalf("redaction unexpectedly scrubbed a markerless value (regex was tightened?): %q -> %q", markerless, got)
+// TestRedactSecrets_ClosedGaps locks the WIDENED coverage of the redactor (#307,
+// internal/redact): the JSON-quoted marker form and vendor key prefixes that the
+// old marker-only regex let through are now scrubbed, while a genuinely
+// markerless, non-secret value is deliberately left alone (we scrub known shapes
+// and registered literals, not every long string).
+func TestRedactSecrets_ClosedGaps(t *testing.T) {
+	// Now-closed gap 1: a marker inside JSON ({"api_key":"..."}) — the separator
+	// is a quote, which the old regex rejected.
+	jsonMarker := `{"api_key":"` + sentinel + `"}`
+	if got := agentcore.RedactSecrets(jsonMarker); strings.Contains(got, sentinel) {
+		t.Errorf("JSON-marker secret survived: %q -> %q", jsonMarker, got)
 	}
-	// And the marker+separator form IS scrubbed, for contrast.
+
+	// Now-closed gap 2: vendor key prefixes are scrubbed by shape, with no marker.
+	vendor := "leaked sk-or-v1-0123456789abcdef0123456789abcdef in output"
+	if got := agentcore.RedactSecrets(vendor); strings.Contains(got, "sk-or-v1-0123456789abcdef0123456789abcdef") {
+		t.Errorf("vendor-prefix secret survived: %q -> %q", vendor, got)
+	}
+
+	// The marker+separator+Bearer form is still scrubbed.
 	marked := "authorization=Bearer " + sentinel
 	if got := agentcore.RedactSecrets(marked); strings.Contains(got, sentinel) {
-		t.Fatalf("marker+separator secret was not redacted: %q -> %q", marked, got)
+		t.Errorf("marker+Bearer secret was not redacted: %q -> %q", marked, got)
+	}
+
+	// Deliberate boundary: a markerless, non-secret-shaped value is NOT scrubbed —
+	// the redactor targets known shapes + registered literals, not arbitrary text.
+	benign := `{"some_value":"` + sentinel + `"}`
+	if got := agentcore.RedactSecrets(benign); !strings.Contains(got, sentinel) {
+		t.Errorf("a markerless non-secret value was over-redacted: %q -> %q", benign, got)
 	}
 }

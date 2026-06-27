@@ -736,8 +736,8 @@ func TestSessionLogCacheHitRate(t *testing.T) {
 }
 
 func TestRedactSecretsInLog(t *testing.T) {
-	input := "api_key=sk-or-v1-abc123def456789"
-	redacted := redactSecrets(input)
+	input := "api_key=sk-or-v1-abc123def456789abc123def456789ab"
+	redacted := RedactSecrets(input)
 	if strings.Contains(redacted, "abc123") {
 		t.Fatalf("secret not redacted: %s", redacted)
 	}
