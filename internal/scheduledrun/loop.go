@@ -36,9 +36,9 @@ type workerFunc func(ctx context.Context, extraPrompt string) (*models.LogSessio
 
 // runWithLoop drives the worker+verify loop for a task whose LoopConfig is set,
 // binding the live worker + telemetry sink to the testable runLoop core.
-func (r *Runner) runWithLoop(ctx context.Context, task *models.Task) (*models.LogSession, error) {
+func (r *Runner) runWithLoop(ctx context.Context, task *models.Task, wtPath string) (*models.LogSession, error) {
 	worker := func(c context.Context, extra string) (*models.LogSession, bool, string, error) {
-		return r.runWorker(c, task, extra, task.LoopConfig)
+		return r.runWorker(c, task, extra, task.LoopConfig, wtPath)
 	}
 	return runLoop(ctx, task.LoopConfig, task.ID, time.Now, worker, func(it *models.TaskIteration) {
 		r.recordIteration(ctx, it)

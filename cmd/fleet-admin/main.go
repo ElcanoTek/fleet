@@ -17,6 +17,7 @@
 //	fleet-admin mcp account set|list|del
 //	fleet-admin notes set|get|list|rm
 //	fleet-admin notes proposal publish|reject
+//	fleet-admin worktree list|prune [--workspace DIR] [--older-than DUR]
 //	fleet-admin backup  [--db=chat|sched|all] [--out DIR]
 //	fleet-admin restore  --db=chat|sched <dump-file>
 //
@@ -66,6 +67,8 @@ func dispatch(argv []string) int {
 		return cmdMCP(argv[1:])
 	case "notes":
 		return cmdNotes(argv[1:])
+	case "worktree":
+		return cmdWorktree(argv[1:])
 	case "backup":
 		return cmdBackup(argv[1:])
 	case "restore":
@@ -122,6 +125,11 @@ Users, credentials, notes:
   fleet-admin notes rm <slug>
   fleet-admin notes proposal publish <id> [--note "..."]
   fleet-admin notes proposal reject  <id> --reason "..."
+
+Git worktree isolation hygiene (#180; tasks with worktree_config enabled):
+  fleet-admin worktree list  [--workspace DIR]                       (git worktree list --porcelain)
+  fleet-admin worktree prune [--workspace DIR] [--older-than 24h] [--dry-run]
+    (git worktree prune + remove stale <workspace>/.fleet-worktrees/* dirs)
 
 Backup / restore (pg_dump -Fc / pg_restore; one dump file per DB):
   fleet-admin backup  [--db=chat|sched|all] [--out DIR]   (writes fleet-<db>-<stamp>.dump; prints each path)

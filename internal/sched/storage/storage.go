@@ -560,6 +560,11 @@ type TaskEdit struct {
 	// the loop).
 	LoopConfig    *models.LoopConfig
 	SetLoopConfig bool
+	// WorktreeConfig + SetWorktreeConfig mirror the same pattern: the flag
+	// distinguishes "leave unchanged" from "replace" (including replacing with
+	// nil to disable worktree isolation).
+	WorktreeConfig    *models.WorktreeConfig
+	SetWorktreeConfig bool
 }
 
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
@@ -597,6 +602,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	}
 	if edit.SetLoopConfig {
 		task.LoopConfig = edit.LoopConfig
+	}
+	if edit.SetWorktreeConfig {
+		task.WorktreeConfig = edit.WorktreeConfig
 	}
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
@@ -846,6 +854,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		MCPSelection:        task.MCPSelection,
 		CredentialAllowlist: task.CredentialAllowlist,
 		LoopConfig:          task.LoopConfig,
+		WorktreeConfig:      task.WorktreeConfig,
 		Priority:            task.Priority,
 		ScheduledFor:        &nextTime,
 		Recurrence:          task.Recurrence,

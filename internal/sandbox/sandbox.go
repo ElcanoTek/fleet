@@ -163,6 +163,31 @@ type Sandbox struct {
 
 	mu     sync.Mutex
 	closed bool
+	// defaultWorkingDir, when set, is the cwd applied to a RunBash /
+	// RunPython call that does not specify its own WorkingDir / WorkspaceDir.
+	// It is one of the two seams git-worktree isolation (#180) uses to scope a
+	// scheduled run into its per-run worktree (a subdirectory of the bind-mounted
+	// workspace root). This seam specifically covers the native-acp flavor: the
+	// in-container agent delegates bash/run_python to the host Executor, which
+	// drops the per-call working dir, so an empty WorkingDir arrives here and this
+	// default fills it. The in-process tool layer is scoped separately via
+	// tools.WithForcedWorkingDir, because its resolvers pre-fill a non-empty cwd
+	// (the process cwd) that this empty-only default would not override.
+	//
+	// Safe without a reset because a Sandbox is single-use: the pool hands each
+	// one out once and Close()s it after the turn (it is never returned to the
+	// pool and reused). A future pre-warm change that RECYCLES a taken sandbox
+	// MUST clear this on release, or one task's worktree would leak to the next.
+	defaultWorkingDir string
+}
+
+// SetDefaultWorkingDir sets the cwd applied to bash/python calls that don't
+// carry their own WorkingDir/WorkspaceDir. Used by the scheduled runner to bind
+// a per-run git worktree (#180). Pass "" to clear. Goroutine-safe.
+func (s *Sandbox) SetDefaultWorkingDir(dir string) {
+	s.mu.Lock()
+	s.defaultWorkingDir = dir
+	s.mu.Unlock()
 }
 
 // impl is the backend interface. Two concrete implementations live in
@@ -203,6 +228,9 @@ func (s *Sandbox) RunBash(ctx context.Context, req BashRequest) (BashResult, err
 		s.mu.Unlock()
 		return BashResult{}, ErrClosed
 	}
+	if req.WorkingDir == "" {
+		req.WorkingDir = s.defaultWorkingDir
+	}
 	s.mu.Unlock()
 	return s.impl.runBash(ctx, req)
 }
@@ -215,6 +243,9 @@ func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (PythonResul
 	if s.closed {
 		s.mu.Unlock()
 		return PythonResult{}, ErrClosed
+	}
+	if req.WorkspaceDir == "" {
+		req.WorkspaceDir = s.defaultWorkingDir
 	}
 	s.mu.Unlock()
 	return s.impl.runPython(ctx, req)

@@ -875,6 +875,12 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 			return fmt.Errorf("loop_config: %w", err)
 		}
 	}
+	// Worktree config (#180): a nil config shares the workspace; a non-nil
+	// enabled config must be internally consistent (valid branch prefix,
+	// non-negative cleanup delay) — fail fast at creation.
+	if err := tc.WorktreeConfig.Validate(); err != nil {
+		return fmt.Errorf("worktree_config: %w", err)
+	}
 	return nil
 }
 
@@ -1507,6 +1513,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		SetCredentialAllowlist: tc.CredentialAllowlist != nil,
 		LoopConfig:             tc.LoopConfig,
 		SetLoopConfig:          tc.LoopConfig != nil,
+		WorktreeConfig:         tc.WorktreeConfig,
+		SetWorktreeConfig:      tc.WorktreeConfig != nil,
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,

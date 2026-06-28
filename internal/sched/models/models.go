@@ -129,6 +129,70 @@ func (lc *LoopConfig) ValidateExitCondition() error {
 	}
 }
 
+// DefaultWorktreeBranchPrefix is the branch-name prefix used when a
+// WorktreeConfig leaves BranchPrefix empty. Per-run branches are
+// "<prefix><task_id>-<run_id>", deterministic and unique per run so concurrent
+// tasks on the same repo never collide.
+const DefaultWorktreeBranchPrefix = "fleet/task-"
+
+// WorktreeConfig, when non-nil with Enabled set, gives each scheduled run its
+// own git worktree + branch so concurrent tasks targeting the same repository
+// cannot corrupt each other's working tree (#180). The task's workspace must be
+// the root of a git repository.
+//
+// IMPORTANT (implementation note that the schema deliberately encodes): the
+// worktree is created as a SUBDIRECTORY of the workspace root, not at an
+// arbitrary /tmp path. A git worktree's .git is a file pointing back to
+// "<mainrepo>/.git/worktrees/<name>"; git only works if BOTH the worktree and
+// the main repo are reachable at their host absolute paths inside the sandbox.
+// The sandbox bind-mounts the workspace root at the same absolute path, so a
+// subdir of it satisfies that linkage; a standalone /tmp worktree would not.
+type WorktreeConfig struct {
+	// Enabled turns per-run worktree isolation on. A non-nil config with
+	// Enabled=false is an explicit "off" (distinct from nil = never configured),
+	// which lets an edit disable isolation without dropping other fields.
+	Enabled bool `json:"enabled"`
+	// BaseBranch is the ref the worktree branches from (e.g. "main"); empty =
+	// the repository's current HEAD.
+	BaseBranch string `json:"base_branch,omitempty"`
+	// BranchPrefix prefixes the per-run branch name; empty →
+	// DefaultWorktreeBranchPrefix.
+	BranchPrefix string `json:"branch_prefix,omitempty"`
+	// AutoCleanup removes the worktree (and its branch) after the run. When
+	// false the worktree is left in place for inspection / manual push, to be
+	// reclaimed later by `fleet-admin worktree prune`.
+	AutoCleanup bool `json:"auto_cleanup"`
+	// CleanupDelaySeconds delays the post-run `git worktree remove` by this many
+	// seconds (0 = remove immediately). Only consulted when AutoCleanup is set.
+	CleanupDelaySeconds int `json:"cleanup_delay_seconds,omitempty"`
+}
+
+// Validate checks the worktree config is internally consistent so a
+// statically-broken config is rejected at task creation rather than failing
+// every run. A nil/disabled config is always valid.
+func (wc *WorktreeConfig) Validate() error {
+	if wc == nil || !wc.Enabled {
+		return nil
+	}
+	if wc.CleanupDelaySeconds < 0 {
+		return fmt.Errorf("cleanup_delay_seconds must be >= 0")
+	}
+	// A branch prefix is interpolated into a git ref ("<prefix><uuid>-<run>"), so
+	// reject the common invalid forms up front: characters git forbids in ref
+	// components (space, ~, ^, :, ?, *, [, \), the "@{" sequence, the ".." and
+	// "//" sequences, and a ".lock" substring (a ref component may not end in
+	// .lock). This catches the misconfigurations that would otherwise fail the
+	// worktree-add at run time; git still makes the authoritative check.
+	if strings.ContainsAny(wc.BranchPrefix, " ~^:?*[\\") ||
+		strings.Contains(wc.BranchPrefix, "@{") ||
+		strings.Contains(wc.BranchPrefix, "..") ||
+		strings.Contains(wc.BranchPrefix, "//") ||
+		strings.Contains(wc.BranchPrefix, ".lock") {
+		return fmt.Errorf("branch_prefix is not a valid git ref-name fragment")
+	}
+	return nil
+}
+
 // Iteration status values recorded in task_iterations.status.
 const (
 	IterationStatusRunning = "running"
@@ -354,12 +418,16 @@ type TaskCreate struct {
 	CredentialAllowlist CredentialAllowlist `json:"credential_allowlist"`
 	// LoopConfig, when non-nil, turns this task into an iterative worker+verifier
 	// loop (#179). nil = ordinary one-shot task. See LoopConfig.
-	LoopConfig             *LoopConfig `json:"loop_config,omitempty"`
-	Priority               int         `json:"priority"`
-	InstructionSelfImprove bool        `json:"instruction_self_improve,omitempty"`
-	ScheduledFor           *time.Time  `json:"scheduled_for,omitempty"`
-	Recurrence             string      `json:"recurrence,omitempty"`
-	Files                  []string    `json:"files,omitempty"`
+	LoopConfig *LoopConfig `json:"loop_config,omitempty"`
+	// WorktreeConfig, when non-nil with Enabled, gives each run its own git
+	// worktree + branch for filesystem isolation (#180). nil = shared workspace
+	// (current behaviour). See WorktreeConfig.
+	WorktreeConfig         *WorktreeConfig `json:"worktree_config,omitempty"`
+	Priority               int             `json:"priority"`
+	InstructionSelfImprove bool            `json:"instruction_self_improve,omitempty"`
+	ScheduledFor           *time.Time      `json:"scheduled_for,omitempty"`
+	Recurrence             string          `json:"recurrence,omitempty"`
+	Files                  []string        `json:"files,omitempty"`
 	// MaxRetries is the number of ADDITIONAL whole-task attempts after the first
 	// when a run fails cleanly with a transient error. 0 (default) = no retries.
 	MaxRetries *int `json:"max_retries,omitempty"`
@@ -400,9 +468,12 @@ type Task struct {
 	CredentialAllowlist CredentialAllowlist `json:"credential_allowlist"`
 	// LoopConfig, when non-nil, runs this task as an iterative worker+verifier
 	// loop (#179). nil = ordinary one-shot. See LoopConfig.
-	LoopConfig             *LoopConfig `json:"loop_config,omitempty"`
-	Priority               int         `json:"priority"`
-	InstructionSelfImprove bool        `json:"instruction_self_improve,omitempty"`
+	LoopConfig *LoopConfig `json:"loop_config,omitempty"`
+	// WorktreeConfig, when non-nil with Enabled, runs each occurrence in its own
+	// git worktree + branch (#180). nil = shared workspace. See WorktreeConfig.
+	WorktreeConfig         *WorktreeConfig `json:"worktree_config,omitempty"`
+	Priority               int             `json:"priority"`
+	InstructionSelfImprove bool            `json:"instruction_self_improve,omitempty"`
 	// AllowNetwork controls whether this task's execution sandbox keeps outbound
 	// egress. Default false seals it (--network=none); see TaskCreate.AllowNetwork.
 	AllowNetwork bool `json:"allow_network,omitempty"`
@@ -479,6 +550,7 @@ func NewTask(tc TaskCreate) *Task {
 		MCPSelection:           tc.MCPSelection,
 		CredentialAllowlist:    tc.CredentialAllowlist,
 		LoopConfig:             tc.LoopConfig,
+		WorktreeConfig:         tc.WorktreeConfig,
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
