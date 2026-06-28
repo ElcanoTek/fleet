@@ -35,6 +35,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -473,13 +474,20 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 				task.ID, task.AttemptCount+1, when.Format(time.RFC3339))
 		}
 		p.submitLog(task, session, msg)
+	case runErr != nil && task.RetryPolicy.ShouldRetryClass(classifyFailure(runErr)):
+		// Transient failure class, but retries are exhausted (the requeue case above
+		// did not match because AttemptCount >= MaxRetries): route to the dead-letter
+		// queue (#253) instead of bare error, so the exhausted task is reviewable and
+		// replayable rather than indistinguishable from a one-off per-attempt error.
+		reason := fmt.Sprintf("retry budget exhausted after %d attempt(s): %v", task.AttemptCount+1, runErr)
+		p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", start)
 	case runErr != nil:
-		msg := "Task failed: " + runErr.Error()
-		if _, err := p.reportStatus(task.ID, models.TaskStatusError, msg); err != nil {
-			log.Printf("runner: failed to report error for task %s: %v", task.ID, err)
-		}
-		p.submitLog(task, session, msg)
-		log.Printf("runner: task %s failed after %v: %v", task.ID, time.Since(start).Round(time.Second), runErr)
+		// Non-retryable (deterministic) failure: there is no point retrying, so route
+		// straight to the dead-letter queue (#253). This replaces the prior bare-error
+		// terminal write — a deterministic config/validation failure now quarantines
+		// for review rather than silently erroring.
+		reason := "non-retryable failure: " + runErr.Error()
+		p.sendToDeadLetter(task, session, runErr, reason, "non_retryable", start)
 	default:
 		if _, err := p.reportStatus(task.ID, models.TaskStatusSuccess, "Task completed successfully"); err != nil {
 			log.Printf("runner: failed to report success for task %s: %v", task.ID, err)
@@ -537,6 +545,29 @@ func retryBackoff(attempt int, policy *models.RetryPolicy) time.Duration {
 	//nolint:gosec // G404: jitter only spreads retry backoff to avoid thundering-herd re-promotion; not security-sensitive.
 	jitter := time.Duration(rand.Int64N(int64(d/5))) - d/10 // ±10%
 	return d + jitter
+}
+
+// sendToDeadLetter routes a terminally-failed task to the dead-letter queue
+// (#253): it transitions the task to TaskStatusDeadLettered (recording the
+// failure reason + total attempt count), writes the run log, and increments the
+// DLQ metric labeled by the bounded reason class. If the storage transition fails
+// (e.g. the lease was recovered out from under us), it falls back to a plain
+// terminal error so the task never strands as running — preserving the
+// invariant that every finished run lands in SOME terminal state.
+func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, runErr error, reason, reasonClass string, start time.Time) {
+	attempts := task.AttemptCount + 1
+	if _, err := p.store.DeadLetterTaskWithContext(context.Background(), task.ID, p.leaseOwner, reason, attempts); err != nil {
+		log.Printf("runner: failed to dead-letter task %s: %v; falling back to error status", task.ID, err)
+		if _, rerr := p.reportStatus(task.ID, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
+			log.Printf("runner: failed to report fallback error for task %s: %v", task.ID, rerr)
+		}
+		p.submitLog(task, session, reason)
+		return
+	}
+	p.submitLog(task, session, reason)
+	metrics.RecordDeadLetterQueued(reasonClass)
+	log.Printf("runner: task %s dead-lettered (%s) after %v and %d attempt(s): %v",
+		task.ID, reasonClass, time.Since(start).Round(time.Second), attempts, runErr)
 }
 
 // reportStatus writes a status update for the synthetic worker using a

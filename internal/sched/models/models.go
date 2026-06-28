@@ -453,10 +453,19 @@ const (
 	TaskStatusSuccess   TaskStatus = "success"
 	TaskStatusError     TaskStatus = "error"
 	TaskStatusCancelled TaskStatus = "cancelled"
+	// TaskStatusDeadLettered is the dead-letter-queue terminal state (#253): a task
+	// that exhausted its retry budget on a transient failure, OR failed with a
+	// non-retryable error, is routed here instead of bare `error` so operators can
+	// review and replay it. It is distinct from `error`, which still covers
+	// per-attempt / interrupted / panicked failures that are NOT final. The runner
+	// is the ONLY writer of this status (workers cannot self-report it).
+	TaskStatusDeadLettered TaskStatus = "dead_lettered"
 )
 
 // IsValidReportedStatus reports whether s is a status a worker is allowed to
 // report for its own task. The orchestrator owns the rest of the lifecycle.
+// TaskStatusDeadLettered is intentionally excluded: only the runner's terminal
+// switch quarantines a task (#253), never a self-reporting worker.
 func (s TaskStatus) IsValidReportedStatus() bool {
 	switch s {
 	case TaskStatusLeased, TaskStatusRunning, TaskStatusAnalyzing, TaskStatusSuccess, TaskStatusError:
@@ -715,6 +724,17 @@ type Task struct {
 	// RetryPolicy customizes retry backoff + failure-class gating (#201). nil =
 	// legacy policy. See TaskCreate.RetryPolicy.
 	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
+	// DeadLetteredAt is when the task entered the dead-letter queue (#253), set by
+	// the runner alongside Status=dead_lettered. nil for tasks that never quarantined
+	// (cleared on replay). Persisted; set server-side, not settable by clients.
+	DeadLetteredAt *time.Time `json:"dead_lettered_at,omitempty"`
+	// DeadLetterReason is the final terminal-attempt failure message captured when
+	// the task was dead-lettered (#253). nil unless dead-lettered (cleared on replay).
+	DeadLetterReason *string `json:"dead_letter_reason,omitempty"`
+	// DeadLetterAttempts is the total number of attempts made before the task was
+	// dead-lettered (#253): AttemptCount+1 at quarantine time. 0 unless dead-lettered
+	// (cleared on replay).
+	DeadLetterAttempts int `json:"dead_letter_attempts,omitempty"`
 	// CreatedByUsername is populated at query time for display purposes (not persisted)
 	CreatedByUsername *string `json:"created_by_username,omitempty"`
 	// TriggerType is how this task is fired: "cron" (default) or "webhook". A

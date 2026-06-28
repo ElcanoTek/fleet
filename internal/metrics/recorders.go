@@ -16,6 +16,7 @@ const (
 	nameLogsArchived  = "fleet_sched_logs_archived_total"
 	nameLogsArchBytes = "fleet_sched_logs_archived_bytes_saved_total"
 	nameIPBlocked     = "fleet_ip_blocked_total"
+	nameDeadLettered  = "fleet_dead_letter_queued_total"
 
 	// Per-task sandbox resource telemetry (#263). These are last-write-wins
 	// gauges reflecting the most recently FINISHED sandbox run, deliberately
@@ -37,6 +38,22 @@ const (
 // "denylist" (explicitly blocked).
 func RecordIPBlocked(reason string) {
 	incCounter(nameIPBlocked, "Requests blocked by the IP access-control filter, by reason.",
+		[]string{"reason"}, []string{reason}, 1)
+}
+
+// RecordDeadLetterQueued counts one task routed to the dead-letter queue (#253),
+// labeled by the bounded reason class — "retry_exhausted" (a transient failure
+// that ran out of retries) or "non_retryable" (a deterministic failure quarantined
+// immediately). The label is deliberately a small fixed set rather than a per-task
+// name: a task-name label would grow the time-series set without bound (the
+// cardinality anti-pattern the #263 sandbox gauges call out). Per-task attribution
+// lives in the task row's dead_letter_reason + the DLQ listing, not the metrics
+// stream.
+func RecordDeadLetterQueued(reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	incCounter(nameDeadLettered, "Total tasks routed to the dead-letter queue, by reason class.",
 		[]string{"reason"}, []string{reason}, 1)
 }
 

@@ -19,7 +19,7 @@ import (
 // cmdSched dispatches `fleet-admin sched user|apikey|task|trigger ...`.
 func cmdSched(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched user|apikey|task|trigger ...")
+		return errf(1, "usage: fleet-admin sched user|apikey|task|trigger|dlq ...")
 	}
 	switch argv[0] {
 	case "user":
@@ -30,6 +30,8 @@ func cmdSched(argv []string) int {
 		return cmdSchedTask(argv[1:])
 	case "trigger":
 		return cmdSchedTrigger(argv[1:])
+	case "dlq":
+		return cmdSchedDLQ(argv[1:])
 	default:
 		return errf(1, "unknown sched subcommand %q", argv[0])
 	}

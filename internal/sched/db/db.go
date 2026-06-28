@@ -549,7 +549,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -590,8 +590,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, timezone, created_by_key_id,
 			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path,
-			allow_task_creation, allow_recurring_task_creation, created_by_task_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40)
+			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
+			dead_lettered_at, dead_letter_reason, dead_letter_attempts
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -631,7 +632,10 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			workspace_path = EXCLUDED.workspace_path,
 			allow_task_creation = EXCLUDED.allow_task_creation,
 			allow_recurring_task_creation = EXCLUDED.allow_recurring_task_creation,
-			created_by_task_id = EXCLUDED.created_by_task_id`,
+			created_by_task_id = EXCLUDED.created_by_task_id,
+			dead_lettered_at = EXCLUDED.dead_lettered_at,
+			dead_letter_reason = EXCLUDED.dead_letter_reason,
+			dead_letter_attempts = EXCLUDED.dead_letter_attempts`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -672,8 +676,30 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.AllowTaskCreation,
 		task.AllowRecurringTaskCreation,
 		createdByTaskIDValue(task.CreatedByTaskID),
+		task.DeadLetteredAt,
+		nullableString(deref(task.DeadLetterReason)),
+		deadLetterAttemptsValue(task.DeadLetterAttempts),
 	)
 	return err
+}
+
+// deref returns the pointed-to string, or "" for a nil pointer. Paired with
+// nullableString so a nil/empty DeadLetterReason persists as SQL NULL (#253).
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// deadLetterAttemptsValue maps the dead-letter attempt count (#253) to a nullable
+// column value: 0 (the not-quarantined sentinel) → SQL NULL, >0 → the int. Keeps
+// non-dead-lettered rows NULL in the column rather than a misleading 0.
+func deadLetterAttemptsValue(n int) any {
+	if n <= 0 {
+		return nil
+	}
+	return n
 }
 
 // workspacePathValue maps the optional per-run workspace path (#287) to a
@@ -862,6 +888,9 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		allowTaskCreation      bool
 		allowRecurringTaskCre  bool
 		createdByTaskID        sql.NullString
+		deadLetteredAt         sql.NullTime
+		deadLetterReason       sql.NullString
+		deadLetterAttempts     sql.NullInt64
 	)
 
 	err := scanner.Scan(
@@ -872,6 +901,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&attemptCount, &maxRetries, &allowNetwork, &timezone, &createdByKeyID,
 		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy, &sourceTaskID, &persona, &workspacePath,
 		&allowTaskCreation, &allowRecurringTaskCre, &createdByTaskID,
+		&deadLetteredAt, &deadLetterReason, &deadLetterAttempts,
 	)
 	if err != nil {
 		return nil, err
@@ -969,6 +999,15 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	}
 	if workspacePath.Valid && workspacePath.String != "" {
 		task.WorkspacePath = &workspacePath.String
+	}
+	if deadLetteredAt.Valid {
+		task.DeadLetteredAt = &deadLetteredAt.Time
+	}
+	if deadLetterReason.Valid {
+		task.DeadLetterReason = &deadLetterReason.String
+	}
+	if deadLetterAttempts.Valid {
+		task.DeadLetterAttempts = int(deadLetterAttempts.Int64)
 	}
 	return task, nil
 }
@@ -1173,6 +1212,25 @@ func (db *Database) GetRunningTasks(ctx context.Context) ([]*models.Task, error)
 func (db *Database) GetTasksByStatus(ctx context.Context, status models.TaskStatus) ([]*models.Task, error) {
 	rows, err := db.conn.QueryContext(ctx,
 		"SELECT "+taskColumns+" FROM tasks WHERE status = $1", string(status))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return db.rowsToTasks(rows)
+}
+
+// GetDeadLetteredTasks returns dead-lettered tasks (#253), ordered by when they
+// entered the queue (newest first) for the DLQ review listing. A non-positive
+// limit returns every matching row; otherwise limit/offset paginate. The partial
+// index on dead_lettered_at (migration 034) backs the ORDER BY.
+func (db *Database) GetDeadLetteredTasks(ctx context.Context, limit, offset int) ([]*models.Task, error) {
+	query := "SELECT " + taskColumns + " FROM tasks WHERE status = $1 ORDER BY dead_lettered_at DESC NULLS LAST"
+	args := []any{string(models.TaskStatusDeadLettered)}
+	if limit > 0 {
+		query += " LIMIT $2 OFFSET $3"
+		args = append(args, limit, offset)
+	}
+	rows, err := db.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1655,7 +1713,10 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			workspace_path = $35,
 			allow_task_creation = $36,
 			allow_recurring_task_creation = $37,
-			created_by_task_id = $38
+			created_by_task_id = $38,
+			dead_lettered_at = $39,
+			dead_letter_reason = $40,
+			dead_letter_attempts = $41
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1695,6 +1756,9 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.AllowTaskCreation,
 		task.AllowRecurringTaskCreation,
 		createdByTaskIDValue(task.CreatedByTaskID),
+		task.DeadLetteredAt,
+		nullableString(deref(task.DeadLetterReason)),
+		deadLetterAttemptsValue(task.DeadLetterAttempts),
 	)
 	return err
 }
