@@ -40,14 +40,30 @@ type Pool struct {
 	cfg PoolConfig
 
 	mu     sync.Mutex
-	slots  chan *Sandbox
+	slots  chan parkedSandbox
 	closed bool
+	// done is closed by Close to stop the TTL keeper goroutine. nil when no
+	// keeper runs (Size<=0 or WarmTTL<=0).
+	done chan struct{}
+
+	// nowFn is the clock the warm-TTL logic reads. Defaults to time.Now;
+	// overridden in tests to exercise reaping deterministically.
+	nowFn func() time.Time
 
 	// storageProbeOnce caches the one-time --storage-opt support probe (#216) so
 	// the disk-quota mechanism (storage-opt vs the ulimit fallback) is decided
 	// once per process. The first container creation pays the probe cost.
 	storageProbeOnce sync.Once
 	storageOptOK     bool
+}
+
+// parkedSandbox is a warm sandbox plus the time it was parked, so the TTL keeper
+// (#181) can reap containers that have sat idle past FLEET_SANDBOX_WARM_TTL —
+// long-idle warm containers may have been OOM-killed or had their cgroup frozen,
+// and handing one to a turn would fail the first tool call.
+type parkedSandbox struct {
+	sb       *Sandbox
+	parkedAt time.Time
 }
 
 // PoolConfig holds the knobs for a Pool. Mode picks the backend; in
@@ -68,6 +84,12 @@ type PoolConfig struct {
 	// FillCtx is the parent context the warming goroutines run under.
 	// Defaults to context.Background.
 	FillCtx context.Context
+
+	// WarmTTL bounds how long a warm sandbox may sit parked before it is reaped
+	// and replaced (FLEET_SANDBOX_WARM_TTL). Zero disables TTL reaping (warm
+	// containers live until taken or the pool is closed — the prior behaviour).
+	// A background keeper reaps on a ticker; Take also skips an over-TTL slot.
+	WarmTTL time.Duration
 }
 
 // NewPool returns a Pool of the given size. Pass Size <= 0 to disable
@@ -77,18 +99,37 @@ func NewPool(cfg PoolConfig) *Pool {
 	if cfg.FillCtx == nil {
 		cfg.FillCtx = context.Background()
 	}
-	p := &Pool{cfg: cfg}
+	p := &Pool{cfg: cfg, nowFn: time.Now}
 	if cfg.Size <= 0 {
 		return p
 	}
-	p.slots = make(chan *Sandbox, cfg.Size)
+	p.slots = make(chan parkedSandbox, cfg.Size)
 	go func() {
 		defer safe.Recover("sandbox.pool.warm", nil)
 		for i := 0; i < cfg.Size; i++ {
 			p.fill()
 		}
 	}()
+	// TTL keeper: reap warm containers that sit idle past WarmTTL so a long-idle
+	// pool doesn't serve dead containers. Only runs when a TTL is configured.
+	if cfg.WarmTTL > 0 {
+		p.done = make(chan struct{})
+		safe.Go("sandbox.pool.keeper", func() { p.keeper(p.done) })
+	}
 	return p
+}
+
+// now reads the pool's clock (time.Now in production; a fake in tests).
+func (p *Pool) now() time.Time {
+	if p.nowFn != nil {
+		return p.nowFn()
+	}
+	return time.Now()
+}
+
+// stale reports whether a parked sandbox has sat idle past WarmTTL.
+func (p *Pool) stale(ps parkedSandbox) bool {
+	return p.cfg.WarmTTL > 0 && p.now().Sub(ps.parkedAt) > p.cfg.WarmTTL
 }
 
 // TakeContainer always returns a fresh container-mode sandbox with
@@ -141,20 +182,39 @@ func (p *Pool) Take() (*Sandbox, func(), error) {
 		}
 		return sb, sb.Close, nil
 	}
-	select {
-	case sb := <-p.slots:
-		// Refill async so concurrent turns don't starve.
-		safe.Go("sandbox.pool.fill", p.fill)
-		return sb, sb.Close, nil
-	default:
-		// Pool empty — cold-start. Replenish anyway.
-		safe.Go("sandbox.pool.fill", p.fill)
-		sb, err := p.newSandbox(p.cfg.FillCtx)
-		if err != nil {
-			return nil, func() {}, err
+	for {
+		select {
+		case ps, ok := <-p.slots:
+			if !ok || ps.sb == nil {
+				// Channel closed (pool shutting down) — cold-start so the caller
+				// still gets a usable sandbox rather than a nil.
+				return p.coldStart()
+			}
+			// Every received slot — taken or reaped — gets one async refill so the
+			// pool returns to depth.
+			safe.Go("sandbox.pool.fill", p.fill)
+			if p.stale(ps) {
+				// Over-TTL: this warm container may be dead. Reap it and try the
+				// next parked one rather than hand out a likely-broken sandbox.
+				ps.sb.Close()
+				continue
+			}
+			return ps.sb, ps.sb.Close, nil
+		default:
+			// Pool empty (or only-stale just drained) — cold-start.
+			return p.coldStart()
 		}
-		return sb, sb.Close, nil
 	}
+}
+
+// coldStart constructs a fresh sandbox on the caller's goroutine (the no-warm-slot
+// path of Take).
+func (p *Pool) coldStart() (*Sandbox, func(), error) {
+	sb, err := p.newSandbox(p.cfg.FillCtx)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return sb, sb.Close, nil
 }
 
 // Stats reports the configured warm-pool size and how many sandboxes are
@@ -184,15 +244,18 @@ func (p *Pool) Close() {
 		return
 	}
 	p.closed = true
+	if p.done != nil {
+		close(p.done) // stop the TTL keeper before draining
+	}
 	if p.slots != nil {
 		close(p.slots)
 	}
 	p.mu.Unlock()
 
 	if p.slots != nil {
-		for sb := range p.slots {
-			if sb != nil {
-				sb.Close()
+		for ps := range p.slots {
+			if ps.sb != nil {
+				ps.sb.Close()
 			}
 		}
 	}
@@ -218,12 +281,101 @@ func (p *Pool) fill() {
 		return
 	}
 	select {
-	case p.slots <- sb:
+	case p.slots <- parkedSandbox{sb: sb, parkedAt: p.now()}:
 		p.mu.Unlock()
 	default:
 		// Pool full (concurrent fill won the race). Drop the spare.
 		p.mu.Unlock()
 		sb.Close()
+	}
+}
+
+// keeper reaps warm sandboxes that have sat idle past WarmTTL, on a ticker, so a
+// pool that is idle for a long stretch (no Take to lazily reap on) doesn't keep
+// serving stale containers. It exits when done is closed (by Close).
+func (p *Pool) keeper(done chan struct{}) {
+	interval := p.cfg.WarmTTL / 2
+	if interval <= 0 || interval > 30*time.Second {
+		interval = 30 * time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+			p.reapStale()
+		}
+	}
+}
+
+// reapStale drains the warm queue, re-parks the still-fresh sandboxes, and closes
+// the over-TTL ones (replacing each with a fresh fill). Fresh sandboxes are
+// re-parked BEFORE the slow container teardown so the window in which they are
+// out of the pool is minimal. Safe against a concurrent Take (each parked entry
+// is received by exactly one of them) and Close (re-park is guarded by p.closed).
+func (p *Pool) reapStale() {
+	if p.slots == nil {
+		return
+	}
+	var fresh, stale []parkedSandbox
+	for drained := false; !drained; {
+		select {
+		case ps, ok := <-p.slots:
+			if !ok {
+				// Channel closed by Close mid-tick. Stop draining; Close owns the
+				// teardown of anything still in the channel.
+				drained = true
+				break
+			}
+			if ps.sb == nil {
+				continue
+			}
+			if p.stale(ps) {
+				stale = append(stale, ps)
+			} else {
+				fresh = append(fresh, ps)
+			}
+		default:
+			drained = true
+		}
+	}
+	if len(fresh) == 0 && len(stale) == 0 {
+		return
+	}
+
+	// Re-park the fresh ones (fast), coordinated with Close exactly like fill.
+	p.mu.Lock()
+	closing := p.closed
+	if !closing {
+		for _, ps := range fresh {
+			select {
+			case p.slots <- ps:
+			default:
+				// Slot unexpectedly full (a concurrent fill refilled it); drop the
+				// spare rather than block. Closed outside the lock below.
+				stale = append(stale, ps)
+			}
+		}
+		fresh = nil
+	}
+	p.mu.Unlock()
+
+	// Pool is closing: don't re-park; Close drains what's in the channel, we close
+	// what we still hold. Either way, tear down the reaped/dropped containers
+	// (slow podman stop/rm) outside the lock, and replace each reaped slot.
+	toClose := stale
+	if closing {
+		toClose = append(toClose, fresh...)
+	}
+	for _, ps := range toClose {
+		ps.sb.Close()
+	}
+	if !closing {
+		for range stale {
+			safe.Go("sandbox.pool.fill", p.fill)
+		}
 	}
 }
 

@@ -196,6 +196,8 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SANDBOX_CPUS":           true,
 	"FLEET_SANDBOX_PIDS":           true,
 	"FLEET_SANDBOX_DISK_GB":        true,
+	"FLEET_SANDBOX_WARM_SIZE":      true,
+	"FLEET_SANDBOX_WARM_TTL":       true,
 	"FLEET_WORKSPACE_ROOT":         true,
 	"CHAT_LOCKDOWN_ONLY":           true,
 	"CHAT_LOCKDOWN_ALLOWED_MODELS": true,
@@ -434,7 +436,15 @@ type Config struct {
 	// SandboxDiskGB caps each sandbox's writable disk usage, in GiB
 	// (FLEET_SANDBOX_DISK_GB). 0 → sandbox default (5); negative disables the
 	// quota. Stops an agent from filling the host disk (#216).
-	SandboxDiskGB         int
+	SandboxDiskGB int
+	// SandboxWarmSize overrides the warm-pool depth (FLEET_SANDBOX_WARM_SIZE).
+	// 0 (default) derives it from MaxConcurrentAgents (clamped 2..8); a positive
+	// value pins the depth explicitly (#181).
+	SandboxWarmSize int
+	// SandboxWarmTTLSeconds bounds how long a warm container may sit idle before
+	// it is reaped and replaced (FLEET_SANDBOX_WARM_TTL, default 300). 0 disables
+	// TTL reaping (#181).
+	SandboxWarmTTLSeconds int
 	WorkspaceRoot         string
 	LockdownOnly          bool
 	LockdownAllowedModels []string
@@ -573,6 +583,8 @@ func Load(envFile string) (*Config, error) {
 		SandboxCPUs:           getenvFleet("SANDBOX_CPUS"),
 		SandboxPids:           getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
 		SandboxDiskGB:         getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+		SandboxWarmSize:       getenvFleetInt("SANDBOX_WARM_SIZE", 0),
+		SandboxWarmTTLSeconds: getenvFleetInt("SANDBOX_WARM_TTL", 300),
 		WorkspaceRoot:         getenvFleet("WORKSPACE_ROOT"),
 		LockdownOnly:          getenvBool("CHAT_LOCKDOWN_ONLY", false),
 		LockdownAllowedModels: splitLockdownModels(os.Getenv("CHAT_LOCKDOWN_ALLOWED_MODELS")),
