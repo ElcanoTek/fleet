@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { fetchClientSession } from "@/app/shared/lib/session";
+import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import {
   clearStoredToken,
   getStoredToken,
@@ -10,11 +10,9 @@ import {
 
 // useOrchestratorSession owns the orchestrator's TWO-path login state:
 //   - moc bearer  (username/password) → token in localStorage.
-//   - elcano cookie ("Use Elcano email") → no token; detected by the shared
-//     cookie-session probe (fetchClientSession → /api/session), the SAME source
-//     the chat view uses, so "signed in via cookie" means one thing app-wide.
-// The bearer half is orchestrator-specific and stays here; only the cookie half
-// is shared.
+//   - elcano cookie ("Use Elcano email") → no token; detected by probing
+//     /api/orchestrator/me, which succeeds for any valid credential.
+// Mirrors moc's auth-session.js isAuthenticated()/cookie-session probe.
 
 export type OrchestratorSession = {
   ready: boolean; // initial probe complete
@@ -42,12 +40,17 @@ export function useOrchestratorSession(): OrchestratorSession {
         }
         return;
       }
-      const session = await fetchClientSession();
-      if (!cancelled && session) {
-        setSignedIn(true);
-        setUsername(session.email);
+      try {
+        const me = await orchestratorApi.me();
+        if (!cancelled && me?.authenticated) {
+          setSignedIn(true);
+          setUsername(me.username);
+        }
+      } catch {
+        /* not signed in */
+      } finally {
+        if (!cancelled) setReady(true);
       }
-      if (!cancelled) setReady(true);
     })();
     return () => {
       cancelled = true;
