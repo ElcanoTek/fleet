@@ -22,7 +22,32 @@ type ctxKey int
 
 const (
 	ctxKeyConversationID ctxKey = iota + 1
+	ctxKeyForcedWorkingDir
 )
+
+// WithForcedWorkingDir returns a context carrying a per-run base working
+// directory that the bash / run_python / file tools resolve unscoped relative
+// paths against, taking precedence over the per-conversation workspace and the
+// process cwd (but NOT over an explicit per-call working_dir the model passes).
+//
+// This is the in-process seam for git worktree isolation (#180): the scheduled
+// runner sets it to the per-run worktree path so the agent's tool calls land in
+// the worktree. It is absent (and therefore a no-op) for every non-worktree run,
+// so existing behaviour is unchanged. The native-acp flavor scopes via the
+// host sandbox's default working dir instead (see Sandbox.SetDefaultWorkingDir),
+// since the in-container agent does not share this context.
+func WithForcedWorkingDir(ctx context.Context, dir string) context.Context {
+	return context.WithValue(ctx, ctxKeyForcedWorkingDir, dir)
+}
+
+// ForcedWorkingDirFromContext returns the per-run forced working directory, or
+// "" if none was set.
+func ForcedWorkingDirFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxKeyForcedWorkingDir).(string); ok {
+		return v
+	}
+	return ""
+}
 
 // WithConversationID returns a context carrying the per-turn
 // conversation id.
@@ -145,6 +170,14 @@ func resolveWorkspacePath(ctx context.Context, path string) string {
 	}
 	convID := ConversationIDFromContext(ctx)
 	if convID == "" {
+		// No per-conversation workspace (e.g. a scheduled run). If the run set a
+		// forced working dir (git worktree isolation, #180), resolve relative
+		// file-tool paths against it so file writes land in the same place the
+		// agent's bash/run_python calls do. Otherwise preserve legacy behavior
+		// (return unchanged → resolved against the process cwd).
+		if forced := ForcedWorkingDirFromContext(ctx); forced != "" {
+			return filepath.Join(forced, path)
+		}
 		return path
 	}
 	dir, err := EnsureWorkspaceDir(convID)

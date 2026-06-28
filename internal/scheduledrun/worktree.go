@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -27,11 +28,17 @@ import (
 // standalone /tmp worktree (which the original issue sketched) would break git
 // inside the container because the main repo would be unreachable.
 //
-// The run is scoped into the worktree via Sandbox.SetDefaultWorkingDir: every
-// otherwise-unscoped bash/python/file tool call defaults its cwd to the worktree
-// path. Because all flavors (in-process and native-acp's host-delegated calls)
-// funnel execution through the one per-run Sandbox host-side, this single seam
-// covers them uniformly.
+// Scoping the run into the worktree uses two complementary seams (see runWorker):
+//   - Sandbox.SetDefaultWorkingDir scopes the native-acp flavor — the in-container
+//     agent delegates bash/run_python to the host Executor, which drops the
+//     per-call working dir, so the sandbox default applies host-side.
+//   - tools.WithForcedWorkingDir scopes the in-process tool layer (bash,
+//     run_python, and the relative-path file tools), whose resolvers would
+//     otherwise default to the process cwd.
+// Together these cover bash, run_python, and the relative-path file tools on both
+// flavors. NOT covered: an agent that writes via the ACP-native fs/* capability
+// directly (a fallback the native agent does not use — it routes file ops through
+// bash/run_python); those host-side fs handlers are not redirected here.
 
 const (
 	// worktreeSubdir is the directory under the workspace root that holds per-run
@@ -144,11 +151,20 @@ func normalizePath(p string) (string, error) {
 	return filepath.Abs(p)
 }
 
+// excludeMu serializes the read-then-append on .git/info/exclude so concurrent
+// runs of different tasks against the same repo (the multi-task-same-repo
+// scenario this feature targets) cannot both read "absent" and append duplicate
+// lines. Same-process only — adequate because the scheduler runs all task
+// goroutines in one process.
+var excludeMu sync.Mutex
+
 // ensureWorktreeExcluded appends the worktree subdir to the repo's
 // .git/info/exclude (idempotent) so per-run worktrees never show up as untracked
 // noise in the main working tree's `git status`. This is a LOCAL exclude — it is
 // never committed and does not touch a tracked .gitignore.
 func ensureWorktreeExcluded(workspaceRoot string) error {
+	excludeMu.Lock()
+	defer excludeMu.Unlock()
 	excludePath := filepath.Join(workspaceRoot, ".git", "info", "exclude")
 	line := worktreeSubdir + "/"
 	if data, err := os.ReadFile(excludePath); err == nil { //nolint:gosec // path derived from the configured workspace root, not user input

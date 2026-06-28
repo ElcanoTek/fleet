@@ -177,11 +177,18 @@ func (wc *WorktreeConfig) Validate() error {
 	if wc.CleanupDelaySeconds < 0 {
 		return fmt.Errorf("cleanup_delay_seconds must be >= 0")
 	}
-	// A branch prefix is interpolated into a git ref; reject characters git
-	// forbids in ref components up front (space, ~, ^, :, ?, *, [, \, and the
-	// "@{" sequence) so the worktree-add never fails mid-run on a bad ref.
-	if strings.ContainsAny(wc.BranchPrefix, " ~^:?*[\\") || strings.Contains(wc.BranchPrefix, "@{") {
-		return fmt.Errorf("branch_prefix contains characters not allowed in a git ref name")
+	// A branch prefix is interpolated into a git ref ("<prefix><uuid>-<run>"), so
+	// reject the common invalid forms up front: characters git forbids in ref
+	// components (space, ~, ^, :, ?, *, [, \), the "@{" sequence, the ".." and
+	// "//" sequences, and a ".lock" substring (a ref component may not end in
+	// .lock). This catches the misconfigurations that would otherwise fail the
+	// worktree-add at run time; git still makes the authoritative check.
+	if strings.ContainsAny(wc.BranchPrefix, " ~^:?*[\\") ||
+		strings.Contains(wc.BranchPrefix, "@{") ||
+		strings.Contains(wc.BranchPrefix, "..") ||
+		strings.Contains(wc.BranchPrefix, "//") ||
+		strings.Contains(wc.BranchPrefix, ".lock") {
+		return fmt.Errorf("branch_prefix is not a valid git ref-name fragment")
 	}
 	return nil
 }

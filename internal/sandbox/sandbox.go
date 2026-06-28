@@ -165,12 +165,14 @@ type Sandbox struct {
 	closed bool
 	// defaultWorkingDir, when set, is the cwd applied to a RunBash /
 	// RunPython call that does not specify its own WorkingDir / WorkspaceDir.
-	// It is the seam git-worktree isolation (#180) uses to scope a scheduled
-	// run into its per-run worktree: the worktree is a subdirectory of the
-	// bind-mounted workspace root, and this default points every otherwise-
-	// unscoped tool call at it — uniformly across flavors, because every flavor
-	// (in-process and native-acp's host-delegated calls) funnels execution
-	// through this one per-run Sandbox host-side.
+	// It is one of the two seams git-worktree isolation (#180) uses to scope a
+	// scheduled run into its per-run worktree (a subdirectory of the bind-mounted
+	// workspace root). This seam specifically covers the native-acp flavor: the
+	// in-container agent delegates bash/run_python to the host Executor, which
+	// drops the per-call working dir, so an empty WorkingDir arrives here and this
+	// default fills it. The in-process tool layer is scoped separately via
+	// tools.WithForcedWorkingDir, because its resolvers pre-fill a non-empty cwd
+	// (the process cwd) that this empty-only default would not override.
 	//
 	// Safe without a reset because a Sandbox is single-use: the pool hands each
 	// one out once and Close()s it after the turn (it is never returned to the

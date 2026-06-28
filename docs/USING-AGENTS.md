@@ -440,11 +440,16 @@ sandbox. The sandbox bind-mounts the workspace root at the same absolute path, s
 a subdir of it satisfies that linkage — a lone `/tmp` worktree would break git
 inside the container because the main repo would be unmounted. The subdir is kept
 out of the main tree's `git status` via `.git/info/exclude` (a local, never-committed
-exclude). The run is scoped into the worktree by setting it as the run's default
-working directory on the per-run sandbox, so every otherwise-unscoped bash /
-run_python / file call lands there. This is enforced **host-side** on the one
-per-run sandbox, so it applies uniformly to both the in-process and `native-acp`
-(host-delegated) execution paths — no flavor gets a non-isolated fast path.
+exclude). The run is scoped into the worktree by two complementary host-side seams:
+the per-run sandbox's default working directory (which the `native-acp` default
+flavor's host-delegated bash/run_python calls inherit) and a per-run forced
+working directory threaded into the in-process tool layer. Together they scope
+**bash, run_python, and the relative-path file tools** into the worktree on both
+the in-process and `native-acp` paths — git operations (driven through bash, the
+point of the feature) are isolated on the production default flavor. The one
+uncovered path is an agent that writes through the ACP-native `fs/*` capability
+*directly* (a fallback the native agent does not use — it routes file ops through
+bash/run_python); those writes are not redirected into the worktree.
 
 **Cleanup.** With `auto_cleanup: true` the worktree and its branch are removed
 after the run (optionally after `cleanup_delay_seconds`); with `false` the branch

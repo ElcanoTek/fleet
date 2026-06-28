@@ -33,6 +33,9 @@ func TestWorktreeConfig_Validate(t *testing.T) {
 		{Enabled: true, BranchPrefix: "brk["},        // [ not allowed
 		{Enabled: true, BranchPrefix: "back\\slash"}, // \ not allowed
 		{Enabled: true, BranchPrefix: "at@{seq"},     // @{ sequence not allowed
+		{Enabled: true, BranchPrefix: "a..b"},        // ".." not allowed in a ref
+		{Enabled: true, BranchPrefix: "a//b"},        // "//" not allowed in a ref
+		{Enabled: true, BranchPrefix: "a.lock/"},     // ".lock" component not allowed
 	}
 	for i, wc := range invalid {
 		if err := wc.Validate(); err == nil {

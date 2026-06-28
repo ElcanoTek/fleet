@@ -213,15 +213,21 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	if err != nil {
 		return nil, fmt.Errorf("prepare worktree: %w", err)
 	}
+	// Cleanup is scheduled in a defer so its clock starts at run COMPLETION, never
+	// run start: the agent executes synchronously below (a loop can run for many
+	// minutes), and arming the delay timer up-front would let a delay shorter than
+	// the run delete the worktree out from under the live agent. With the defer,
+	// cleanup_delay_seconds is the post-run inspection window the docs promise.
+	// (A process crash before this defer leaves an orphan, reclaimed by
+	// `fleet-admin worktree prune`.)
 	if wc := task.WorktreeConfig; wc != nil && wc.Enabled && wc.AutoCleanup {
-		if wc.CleanupDelaySeconds > 0 {
-			// Detached timer so the run returns promptly; the worktree is reaped
-			// later. (Orphans from a process crash are reclaimed by
-			// `fleet-admin worktree prune`.)
-			time.AfterFunc(time.Duration(wc.CleanupDelaySeconds)*time.Second, wtCleanup)
-		} else {
-			defer wtCleanup()
-		}
+		defer func() {
+			if wc.CleanupDelaySeconds > 0 {
+				time.AfterFunc(time.Duration(wc.CleanupDelaySeconds)*time.Second, wtCleanup)
+			} else {
+				wtCleanup()
+			}
+		}()
 	}
 
 	if task.LoopConfig != nil {
@@ -285,14 +291,24 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	}
 	defer cleanup()
 
-	// Git worktree isolation (#180): scope every otherwise-unscoped tool call in
-	// this run into the per-run worktree. wtPath is non-empty only when the task
-	// enabled worktree isolation (prepared once per task in Run); the worktree is
-	// a subdir of the bind-mounted workspace root, reachable at the same absolute
-	// path inside the sandbox. This is flavor-agnostic: in-process and native-acp
-	// host-delegated calls both run on this one per-run Sandbox.
+	// Git worktree isolation (#180): scope this run's tool calls into the per-run
+	// worktree (prepared once per task in Run; a subdir of the bind-mounted
+	// workspace root, reachable at the same absolute path inside the sandbox).
+	// Two complementary seams cover both flavors:
+	//   - Sandbox.SetDefaultWorkingDir fills the cwd of any bash/run_python call
+	//     that arrives with an empty WorkingDir. This is what scopes the
+	//     native-acp flavor: the in-container agent's calls are delegated to the
+	//     host Executor, which drops the per-call WorkingDir, so the default
+	//     applies host-side.
+	//   - WithForcedWorkingDir scopes the IN-PROCESS tool layer (bash/run_python/
+	//     file tools), whose resolvers otherwise default an empty working dir to
+	//     the process cwd before the sandbox seam can fill it.
+	// Both are no-ops when wtPath == "" (non-worktree task), so behaviour there is
+	// unchanged.
 	if wtPath != "" {
 		sb.SetDefaultWorkingDir(wtPath)
+		ctx = tools.WithForcedWorkingDir(ctx, wtPath)
+		log.Printf("scheduled task %s: git worktree isolation active; tool calls scoped to %s", task.ID, wtPath)
 	}
 
 	turnTools := tools.NewTurnTools(sb)
