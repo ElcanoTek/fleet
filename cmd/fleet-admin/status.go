@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -36,7 +37,7 @@ func cmdStatus(argv []string) int {
 		return 1
 	}
 
-	r := &report{}
+	r := newReport()
 	r.head()
 
 	// 1. client bundle loads + validates.
@@ -202,29 +203,43 @@ func checkService(r *report, name string) {
 
 // ── small report accumulator ────────────────────────────────────────────────
 
+// report accumulates the ✓/✗ check lines and the failure count. The per-check
+// lines go to `out` and the header/summary lines to `summary`; newReport wires
+// both to the terminal (stdout/stderr) so `fleet-admin status` is unchanged.
+// `fleet diagnose` reuses the SAME check helpers by pointing both writers at an
+// in-memory buffer (see captureHealth in diagnose.go) — there is no second copy
+// of the health logic.
 type report struct {
-	failed int
+	failed  int
+	out     io.Writer
+	summary io.Writer
+}
+
+// newReport returns a report that prints check lines to stdout and the
+// header/summary to stderr — the original `fleet-admin status` behavior.
+func newReport() *report {
+	return &report{out: os.Stdout, summary: os.Stderr}
 }
 
 func (r *report) head() {
-	fmt.Fprintln(os.Stderr, "fleet-admin status — deployment health")
+	fmt.Fprintln(r.summary, "fleet-admin status — deployment health")
 }
 
-func (r *report) pass(label, detail string)     { fmt.Printf("✓ %-22s %s\n", label, detail) }
-func (r *report) skip(label, detail string)     { fmt.Printf("– %-22s %s\n", label, detail) }
-func (r *report) warnLine(label, detail string) { fmt.Printf("✓ %-22s %s\n", label, detail) }
+func (r *report) pass(label, detail string)     { fmt.Fprintf(r.out, "✓ %-22s %s\n", label, detail) }
+func (r *report) skip(label, detail string)     { fmt.Fprintf(r.out, "– %-22s %s\n", label, detail) }
+func (r *report) warnLine(label, detail string) { fmt.Fprintf(r.out, "✓ %-22s %s\n", label, detail) }
 func (r *report) fail(label, detail string) {
 	r.failed++
-	fmt.Printf("✗ %-22s %s\n", label, detail)
+	fmt.Fprintf(r.out, "✗ %-22s %s\n", label, detail)
 }
 
 func (r *report) finish() int {
-	fmt.Println()
+	fmt.Fprintln(r.out)
 	if r.failed == 0 {
-		fmt.Fprintln(os.Stderr, "✓ healthy — all required checks passed")
+		fmt.Fprintln(r.summary, "✓ healthy — all required checks passed")
 		return 0
 	}
-	fmt.Fprintf(os.Stderr, "✗ unhealthy — %d check(s) failed\n", r.failed)
+	fmt.Fprintf(r.summary, "✗ unhealthy — %d check(s) failed\n", r.failed)
 	return 6
 }
 
