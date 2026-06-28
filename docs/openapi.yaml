@@ -360,6 +360,68 @@ paths:
               schema: { $ref: "#/components/schemas/Task" }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/rerun:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Re-run a task once now (a new task copied from this one, optional overrides).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overrides:
+                  type: object
+                  properties:
+                    prompt: { type: string }
+                    model: { type: string }
+                    fallback_model: { type: string }
+                    max_iterations: { type: integer }
+                    priority: { type: integer }
+                    runtime_flavor: { type: string }
+                    allow_network: { type: boolean }
+                    description: { type: string }
+                    tags: { type: array, items: { type: string } }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/clone:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Clone a task (a new task copied from this one, preserving recurrence; optional overrides).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overrides:
+                  type: object
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /tasks/pending:
     get:
       summary: Lease the next pending task (worker protocol).

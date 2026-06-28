@@ -504,7 +504,16 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id"
+
+// sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
+// nullable column value: nil → SQL NULL, set → the UUID string.
+func sourceTaskIDValue(id *uuid.UUID) any {
+	if id == nil {
+		return nil
+	}
+	return id.String()
+}
 
 // marshalTags serializes task tags for the JSONB column, ALWAYS as a JSON array
 // (never the bare "null" marshalJSON emits for a nil slice) so the tags catalogue
@@ -525,8 +534,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id,
-			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
+			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -561,7 +570,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			worktree_config = EXCLUDED.worktree_config,
 			description = EXCLUDED.description,
 			tags = EXCLUDED.tags,
-			retry_policy = EXCLUDED.retry_policy`,
+			retry_policy = EXCLUDED.retry_policy,
+			source_task_id = EXCLUDED.source_task_id`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -597,6 +607,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		nullableString(task.Description),
 		marshalTags(task.Tags),
 		marshalRetryPolicy(task.RetryPolicy),
+		sourceTaskIDValue(task.SourceTaskID),
 	)
 	return err
 }
@@ -773,6 +784,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		description            sql.NullString
 		tags                   sql.NullString
 		retryPolicy            sql.NullString
+		sourceTaskID           sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -781,7 +793,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &runtimeFlavor, &timezone, &createdByKeyID,
-		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy,
+		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy, &sourceTaskID,
 	)
 	if err != nil {
 		return nil, err
@@ -824,6 +836,13 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	task.LoopConfig = unmarshalLoopConfig(loopConfig)
 	task.WorktreeConfig = unmarshalWorktreeConfig(worktreeConfig)
 	task.RetryPolicy = unmarshalRetryPolicy(retryPolicy)
+	if sourceTaskID.Valid && sourceTaskID.String != "" {
+		if sid, perr := uuid.Parse(sourceTaskID.String); perr == nil {
+			task.SourceTaskID = &sid
+		} else {
+			log.Printf("Warning: invalid source_task_id %q: %v", sourceTaskID.String, perr)
+		}
+	}
 	task.Description = description.String
 	if agentSessionID.Valid {
 		task.AgentSessionID = &agentSessionID.String
@@ -1353,7 +1372,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			worktree_config = $30,
 			description = $31,
 			tags = $32,
-			retry_policy = $33
+			retry_policy = $33,
+			source_task_id = $34
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1388,6 +1408,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		nullableString(task.Description),
 		marshalTags(task.Tags),
 		marshalRetryPolicy(task.RetryPolicy),
+		sourceTaskIDValue(task.SourceTaskID),
 	)
 	return err
 }
@@ -1661,6 +1682,9 @@ type TaskFilter struct {
 	// Tags, when non-empty, restricts to tasks carrying ALL of these tags
 	// (AND-semantics via jsonb containment) — #212.
 	Tags []string
+	// SourceTaskID, when set, restricts to tasks re-run/cloned from that source
+	// task — the lineage view (#270).
+	SourceTaskID *uuid.UUID
 	// Visibility filters for scoped users. With node targeting removed, scoped
 	// visibility reduces to "own tasks OR all untargeted tasks" (every task is
 	// untargeted now), so a scoped user with VisibleToScopes set sees all tasks.
@@ -1748,6 +1772,12 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 		// (contains) over the GIN index; the bind value is a JSON array string.
 		whereClauses = append(whereClauses, fmt.Sprintf("tags @> $%d::jsonb", argIndex))
 		args = append(args, marshalTags(filter.Tags))
+		argIndex++
+	}
+
+	if filter.SourceTaskID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("source_task_id = $%d", argIndex))
+		args = append(args, filter.SourceTaskID.String())
 		argIndex++
 	}
 
