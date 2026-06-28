@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import { useOrchestratorSession } from "@/app/shared/hooks/useOrchestratorSession";
 import { useDashboardData } from "@/app/shared/hooks/useDashboardData";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
 import { ToastProvider } from "@/app/shared/ui/Toast";
+import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
+import { NavToChat } from "@/app/shared/ui/CrossViewNav";
 import { OrchestratorLogin } from "./OrchestratorLogin";
 import { StatsGrid, type StatFilter } from "./StatsGrid";
 import { NodesTable } from "./NodesTable";
@@ -72,10 +73,11 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
             </div>
           </div>
           <div className="ds-app-header__actions">
+            {/* Shared shell theme switch — same light/dark control the chat
+                view and login card render, now available here too. */}
+            <ThemeToggle />
             {/* Cross-view navigation — same session gates both, so no re-login. */}
-            <Link href="/chat" className="btn btn-ghost" data-testid="nav-to-chat">
-              Go to Chat
-            </Link>
+            <NavToChat className="btn btn-ghost" />
             {session.signedIn ? (
               <>
                 <button

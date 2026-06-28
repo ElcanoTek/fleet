@@ -1,14 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-function Icon({ name, className }: { name: string; className?: string }) {
-  return (
-    <svg className={className} aria-hidden="true">
-      <use href={`/icons/core-icons.svg#${name}`} />
-    </svg>
-  );
-}
+import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 
 // errorCodeToMessage maps the `?e=` query param our login handler redirects
 // with to a human-readable message. We keep "invalid" deliberately vague
@@ -30,38 +23,26 @@ function errorCodeToMessage(code: string | null): string | null {
 // and never surfaces the Elcano brand.
 export default function LoginCard({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
 
-  // Reading the `?e=` query param and the bootstrapped theme must happen after
-  // hydration — `window`/`document` are undefined during SSR, and a useState
-  // lazy initializer would cause a hydrate mismatch for the initial render.
-  // We read synchronously in the effect but apply the results via a microtask
-  // so the setState lands outside the effect's synchronous phase (otherwise
-  // react-hooks/set-state-in-effect flags the cascading render); a guard
-  // cancels the update if we unmount first.
+  // Reading the `?e=` query param must happen after hydration — `window` is
+  // undefined during SSR, and a useState lazy initializer would cause a hydrate
+  // mismatch for the initial render. We read synchronously in the effect but
+  // apply the result via a microtask so the setState lands outside the effect's
+  // synchronous phase (otherwise react-hooks/set-state-in-effect flags the
+  // cascading render); a guard cancels the update if we unmount first. The
+  // theme is owned by the shared ThemeToggle (useTheme) below.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const current = document.documentElement.getAttribute("data-theme");
     const nextError = errorCodeToMessage(params.get("e"));
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
       setLoginError(nextError);
-      if (current === "light" || current === "dark") {
-        setTheme(current);
-      }
     });
     return () => {
       cancelled = true;
     };
   }, []);
-
-  const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    document.documentElement.setAttribute("data-theme", nextTheme);
-    window.localStorage.setItem("chat-theme-preference", nextTheme);
-    setTheme(nextTheme);
-  };
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-[var(--gradient-bg-home-signature)] px-6 py-10">
@@ -74,30 +55,7 @@ export default function LoginCard({ elcanoLoginEnabled }: { elcanoLoginEnabled: 
             </p>
           </div>
 
-          <button
-            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            aria-pressed={theme === "dark"}
-            className="inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-            type="button"
-            onClick={toggleTheme}
-          >
-            <span className="relative size-4" aria-hidden="true">
-              <Icon
-                name="sun"
-                className={[
-                  "absolute inset-0 size-4 transition duration-200",
-                  theme === "light" ? "rotate-0 scale-100 opacity-100" : "-rotate-12 scale-[0.86] opacity-0",
-                ].join(" ")}
-              />
-              <Icon
-                name="moon"
-                className={[
-                  "absolute inset-0 size-4 transition duration-200",
-                  theme === "dark" ? "rotate-0 scale-100 opacity-100" : "rotate-12 scale-[0.86] opacity-0",
-                ].join(" ")}
-              />
-            </span>
-          </button>
+          <ThemeToggle className="inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]" />
         </div>
 
         {loginError ? (
