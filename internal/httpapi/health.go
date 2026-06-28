@@ -43,6 +43,17 @@ type healthSandbox struct {
 	Available int `json:"available"`
 }
 
+// healthIPFilter surfaces the active IP access-control state (#314) so an
+// operator can confirm the filter from the admin dashboard without reading logs.
+// CIDR/IP entries are rendered as strings; Enabled mirrors the middleware's own
+// "any list set" activation rule.
+type healthIPFilter struct {
+	Enabled        bool     `json:"enabled"`
+	Allowlist      []string `json:"allowlist"`
+	Denylist       []string `json:"denylist"`
+	TrustedProxies []string `json:"trusted_proxies"`
+}
+
 type healthSummary struct {
 	FleetVersion        string         `json:"fleet_version"`
 	UptimeSeconds       int64          `json:"uptime_seconds"`
@@ -52,6 +63,7 @@ type healthSummary struct {
 	MCPServers          []healthMCP    `json:"mcp_servers"`
 	ConversationsActive int            `json:"conversations_active"`
 	Sandbox             *healthSandbox `json:"sandbox_pool"`
+	IPFilter            healthIPFilter `json:"ip_filter"`
 	MemoryMB            uint64         `json:"memory_mb"`
 	Goroutines          int            `json:"goroutines"`
 }
@@ -74,6 +86,17 @@ func (s *Server) handleHealthSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.startTime.IsZero() {
 		out.UptimeSeconds = int64(time.Since(s.startTime).Seconds())
+	}
+
+	// IP access-control state (#314): mirror the middleware's activation rule
+	// (any list set ⇒ enabled) and render the configured entries for the dashboard.
+	if s.cfg != nil {
+		out.IPFilter = healthIPFilter{
+			Enabled:        len(s.cfg.IPAllowlist) > 0 || len(s.cfg.IPDenylist) > 0,
+			Allowlist:      cidrStrings(s.cfg.IPAllowlist),
+			Denylist:       cidrStrings(s.cfg.IPDenylist),
+			TrustedProxies: ipStrings(s.cfg.TrustedProxies),
+		}
 	}
 
 	// DB liveness + pool snapshot.
