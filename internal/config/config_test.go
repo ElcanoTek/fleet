@@ -133,6 +133,65 @@ func TestLoad_ShutdownGraceOverride(t *testing.T) {
 	}
 }
 
+func TestLoad_LogSinkDefaultsOff(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Default OFF: no file set means the rotating file sink stays disabled and the
+	// process keeps logging to stderr exactly as before (journald rotates that).
+	if cfg.Log.File != "" {
+		t.Errorf("Log.File default: got %q, want empty (sink off)", cfg.Log.File)
+	}
+	// The size/age/backup/compress knobs still carry their defaults so an operator
+	// who later sets only FLEET_LOG_FILE gets sensible rotation.
+	if cfg.Log.MaxSizeMB != 100 {
+		t.Errorf("Log.MaxSizeMB default: got %d, want 100", cfg.Log.MaxSizeMB)
+	}
+	if cfg.Log.MaxAgeDays != 0 {
+		t.Errorf("Log.MaxAgeDays default: got %d, want 0", cfg.Log.MaxAgeDays)
+	}
+	if cfg.Log.MaxBackups != 7 {
+		t.Errorf("Log.MaxBackups default: got %d, want 7", cfg.Log.MaxBackups)
+	}
+	if !cfg.Log.Compress {
+		t.Error("Log.Compress default: want true")
+	}
+}
+
+func TestLoad_LogSinkOverrides(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+	t.Setenv("FLEET_LOG_FILE", "/var/log/fleet/fleet.log")
+	t.Setenv("FLEET_LOG_MAX_SIZE_MB", "50")
+	t.Setenv("FLEET_LOG_MAX_AGE_DAYS", "30")
+	t.Setenv("FLEET_LOG_MAX_BACKUPS", "3")
+	t.Setenv("FLEET_LOG_COMPRESS", "false")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Log.File != "/var/log/fleet/fleet.log" {
+		t.Errorf("Log.File: got %q", cfg.Log.File)
+	}
+	if cfg.Log.MaxSizeMB != 50 {
+		t.Errorf("Log.MaxSizeMB: got %d, want 50", cfg.Log.MaxSizeMB)
+	}
+	if cfg.Log.MaxAgeDays != 30 {
+		t.Errorf("Log.MaxAgeDays: got %d, want 30", cfg.Log.MaxAgeDays)
+	}
+	if cfg.Log.MaxBackups != 3 {
+		t.Errorf("Log.MaxBackups: got %d, want 3", cfg.Log.MaxBackups)
+	}
+	if cfg.Log.Compress {
+		t.Error("Log.Compress: want false after FLEET_LOG_COMPRESS=false")
+	}
+}
+
 func TestLoad_SandboxDiskGB(t *testing.T) {
 	isolateEnv(t)
 	chdir(t, t.TempDir())

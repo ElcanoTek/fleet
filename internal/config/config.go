@@ -145,6 +145,13 @@ var allowedEnvVars = map[string]bool{
 	"REASONING_EFFORT":             true,
 	"FLEET_MAX_TOOL_OUTPUT_BYTES":  true,
 
+	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
+	"FLEET_LOG_FILE":         true,
+	"FLEET_LOG_MAX_SIZE_MB":  true,
+	"FLEET_LOG_MAX_AGE_DAYS": true,
+	"FLEET_LOG_MAX_BACKUPS":  true,
+	"FLEET_LOG_COMPRESS":     true,
+
 	// ── personas / protocols ──
 	"PERSONA_DEFAULT": true,
 	"PERSONA":         true,
@@ -367,6 +374,18 @@ type DBPoolConfig struct {
 	ConnectTimeout  time.Duration // initial-ping timeout on open
 }
 
+// LogConfig holds the OPT-IN rotating-file sink for fleet's process log (#298).
+// The zero value (File == "") means the sink is OFF — the default — and the
+// process logs only to stderr (journald rotates that under the systemd unit).
+// These knobs apply ONLY when File is set.
+type LogConfig struct {
+	File       string // FLEET_LOG_FILE — empty disables the file sink (default)
+	MaxSizeMB  int    // FLEET_LOG_MAX_SIZE_MB — rotate at this size (default 100)
+	MaxAgeDays int    // FLEET_LOG_MAX_AGE_DAYS — delete rotated files older than this (0 = no age limit)
+	MaxBackups int    // FLEET_LOG_MAX_BACKUPS — keep this many rotated files (default 7)
+	Compress   bool   // FLEET_LOG_COMPRESS — gzip rotated files (default true)
+}
+
 // Config holds the union runtime configuration for fleet (interactive +
 // scheduled). Interactive-only fields are inert for scheduled runs and vice
 // versa.
@@ -510,6 +529,16 @@ type Config struct {
 	KeepRunsPerTask int
 	// CleanupHour is the UTC hour (0–23) the daily retention sweep runs. Default 4.
 	CleanupHour int
+
+	// ── process log file sink (#298) ──
+	// Log is the OPT-IN rotating-file sink for fleet's process log. Default OFF
+	// (LogFile empty): the process keeps writing to stderr exactly as before, which
+	// journald already rotates under the shipped systemd unit (ADR-0004). Set
+	// FLEET_LOG_FILE — typically a container/non-systemd deployment — to ALSO tee the
+	// standard log lines to a size/age/backup-rotated file. It rotates the existing
+	// log lines as-is; it does NOT convert them to structured JSON (slog migration
+	// #178 is separate).
+	Log LogConfig
 
 	// ── log archival (#272) ──
 	// LogArchiveAfterDays compresses (and optionally encrypts) the log payloads of
@@ -767,6 +796,17 @@ func Load(envFile string) (*Config, error) {
 		RunLogRetentionDays: getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),
 		KeepRunsPerTask:     getenvFleetInt("KEEP_RUNS_PER_TASK", 10),
 		CleanupHour:         getenvFleetInt("CLEANUP_HOUR", 4),
+
+		// ── process log file sink (#298) ── default OFF (LogFile empty): opt in
+		// with FLEET_LOG_FILE. The size/age/backup/compress knobs only apply once
+		// the file sink is on.
+		Log: LogConfig{
+			File:       getenvFleet("LOG_FILE"),
+			MaxSizeMB:  getenvFleetInt("LOG_MAX_SIZE_MB", 100),
+			MaxAgeDays: getenvFleetInt("LOG_MAX_AGE_DAYS", 0),
+			MaxBackups: getenvFleetInt("LOG_MAX_BACKUPS", 7),
+			Compress:   getenvFleetBool("LOG_COMPRESS", true),
+		},
 
 		// ── log archival (#272) ── default OFF (0): opt in deliberately.
 		LogArchiveAfterDays:     getenvFleetInt("LOG_ARCHIVE_AFTER_DAYS", 0),
