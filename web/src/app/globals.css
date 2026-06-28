@@ -583,6 +583,120 @@ button {
   color: var(--color-text-primary);
 }
 
+/* ── Unified-diff block (DiffBlock) ──────────────────────────────────────
+   Renders ```diff / ```patch fences (and auto-detected unified diffs) as a
+   coloured, line-by-line view. Shares the toolbar chrome with the plain
+   code-block path (.assistant-markdown-pre-toolbar) so the two read as a set.
+   Colours derive from the shared --color-success / --color-danger / -accent
+   tokens via color-mix, so they track both the dark and light themes; the
+   per-line gutter glyph (+/-/space) carries the same signal without colour,
+   keeping the view legible for colour-blind users and screen readers. */
+.diff-block-wrapper {
+  margin: 0.55rem 0;
+  max-width: 100%;
+  border-radius: 0.9rem;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-overlay-soft) 78%, transparent);
+  font-family: var(--font-code);
+}
+
+.diff-block-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Disabled forward-compat "Apply" placeholder (git-worktree apply, #180). */
+.diff-block-apply:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.diff-block-apply:disabled:hover {
+  color: var(--color-text-muted);
+  background: transparent;
+}
+
+.diff-block-body {
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  padding: 0.4rem 0;
+}
+
+.diff-line {
+  display: flex;
+  align-items: flex-start;
+  /* Let the body scroll horizontally as one row rather than wrapping, so the
+     gutter stays aligned and long lines don't reflow the column. */
+  width: max-content;
+  min-width: 100%;
+}
+
+.diff-gutter {
+  flex: 0 0 2ch;
+  width: 2ch;
+  text-align: center;
+  user-select: none;
+  color: var(--color-text-muted);
+  white-space: pre;
+}
+
+.diff-line-body {
+  flex: 1 1 auto;
+  white-space: pre;
+  padding-right: 1rem;
+  color: var(--color-text-primary);
+}
+
+.diff-line-addition {
+  background: color-mix(in srgb, var(--color-success) 16%, transparent);
+}
+
+.diff-line-addition .diff-gutter {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.diff-line-deletion {
+  background: color-mix(in srgb, var(--color-danger) 16%, transparent);
+}
+
+.diff-line-deletion .diff-gutter {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.diff-line-hunk {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.diff-line-hunk .diff-line-body {
+  color: var(--color-accent);
+  font-style: italic;
+}
+
+.diff-line-file-header {
+  padding: 0.25rem 0;
+}
+
+.diff-line-annotation .diff-line-body {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.diff-file-pill {
+  display: inline-block;
+  border-radius: 0.4rem;
+  padding: 0.05rem 0.45rem;
+  background: color-mix(in srgb, var(--color-overlay-strong) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+  font-family: var(--font-code-ui);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
 .assistant-markdown-strong {
   font-weight: 600;
   color: var(--color-text-primary);

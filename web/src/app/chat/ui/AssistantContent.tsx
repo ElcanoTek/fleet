@@ -14,6 +14,8 @@ import { Children, isValidElement, memo, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyButton } from "./ChatChips";
+import { DiffBlock } from "./DiffBlock";
+import { isUnifiedDiff } from "@/app/lib/diffUtils";
 import { PENDING_CONV_KEY, resolveWorkspaceHref } from "./workspaceHref";
 
 // ── markdown renderer ────────────────────────────────────────────────────
@@ -125,9 +127,18 @@ export function renderAssistantContent(
           // have it render. Anything else falls through to the default
           // <pre> styling, wrapped in a toolbar that exposes a copy
           // button and the language tag.
-          const codeChild = Children.toArray(children).find((c) =>
-            isValidElement(c) && typeof (c as ReactElement<{ className?: string }>).props.className === "string",
-          ) as ReactElement<{ className?: string; children?: ReactNode }> | undefined;
+          //
+          // A fenced code block renders <pre> with exactly one child element:
+          // the inner <code>. Grab that single element child rather than
+          // keying off a `language-*` className — react-markdown routes the
+          // <code> through our own `code` override (so its `type` is that
+          // override, not the string "code") and an untagged fence
+          // (` ``` `…` ``` `) carries no language class at all. We still need
+          // its text in both cases so isUnifiedDiff() can catch untagged diffs
+          // the agent emits.
+          const codeChild = Children.toArray(children).find((c) => isValidElement(c)) as
+            | ReactElement<{ className?: string; children?: ReactNode }>
+            | undefined;
           let language: string | null = null;
           let rawText = "";
           if (codeChild) {
@@ -139,6 +150,14 @@ export function renderAssistantContent(
               : Children.toArray(codeChild.props.children).join("");
             if (language === "html") {
               return <InlineHtmlPreview html={rawText.replace(/\n$/, "")} isStreaming={isStreaming} conversationId={conversationId} />;
+            }
+            // Render unified diffs as a coloured, gutter-marked diff view:
+            // either an explicit ```diff / ```patch fence, or a bare code
+            // block whose content matches the unified-diff shape (so agents
+            // that forget the language tag still get highlighting). Everything
+            // else falls through to the plain toolbar+<pre> path unchanged.
+            if (language === "diff" || language === "patch" || isUnifiedDiff(rawText)) {
+              return <DiffBlock raw={rawText} />;
             }
           }
           const copyText = rawText.replace(/\n$/, "");
