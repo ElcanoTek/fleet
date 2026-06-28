@@ -711,6 +711,14 @@ func resolveBashWorkingDir(ctx context.Context, requested string) (string, error
 	if requested != "" {
 		return requested, nil
 	}
+	// A per-run forced working dir (git worktree isolation, #180) takes
+	// precedence over the per-conversation workspace and the process cwd, so a
+	// scheduled run's bash calls land in its worktree. Absent for non-worktree
+	// runs, so behavior there is unchanged. An explicit per-call working_dir
+	// (handled above) still wins — the agent can always cd elsewhere.
+	if forced := ForcedWorkingDirFromContext(ctx); forced != "" {
+		return forced, nil
+	}
 	if convID := ConversationIDFromContext(ctx); convID != "" {
 		dir, err := EnsureWorkspaceDir(convID)
 		if err != nil {
