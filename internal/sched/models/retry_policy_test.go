@@ -8,7 +8,7 @@ func TestRetryPolicy_Validate(t *testing.T) {
 		{},
 		{Backoff: BackoffExponential, InitialDelaySeconds: 60, MaxDelaySeconds: 3600},
 		{Backoff: BackoffFixed, InitialDelaySeconds: 30, MaxDelaySeconds: 30},
-		{RetryOn: []string{FailureTransient, FailureTimeoutPlaceholder()}, NoRetryOn: []string{FailureCostCeiling}},
+		{RetryOn: []string{FailureTransient, FailureContextBudget}, NoRetryOn: []string{FailureCostCeiling}},
 	}
 	for i, rp := range valid {
 		if err := rp.Validate(); err != nil {
@@ -29,10 +29,6 @@ func TestRetryPolicy_Validate(t *testing.T) {
 		}
 	}
 }
-
-// FailureTimeoutPlaceholder returns a known class for the valid-list test (avoids
-// hardcoding a second class literal). Uses an existing recognized class.
-func FailureTimeoutPlaceholder() string { return FailureContextBudget }
 
 func TestRetryPolicy_ShouldRetryClass(t *testing.T) {
 	// nil policy: transient retries, nothing else (legacy behavior).
