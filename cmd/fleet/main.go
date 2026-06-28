@@ -344,6 +344,12 @@ func run() error {
 	// runs, always keeping the most recent KeepRunsPerTask per task. Off when
 	// RunLogRetentionDays<=0.
 	sch.SetRetention(cfg.RunLogRetentionDays, cfg.KeepRunsPerTask, cfg.CleanupHour)
+	// Log archival (#272): a daily sweep compresses (optionally encrypts) old
+	// terminal-task log payloads in place to shrink the sched DB. Off by default
+	// (LogArchiveAfterDays<=0). The optional encryption key is wired host-side onto
+	// the storage layer and never logged.
+	schedStorage.SetLogArchiveKey(cfg.LogArchiveEncryptionKey)
+	sch.SetLogArchival(cfg.LogArchiveAfterDays)
 	sch.Start()
 	defer sch.Stop()
 

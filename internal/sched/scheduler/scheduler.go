@@ -32,6 +32,12 @@ type Scheduler struct {
 	retentionDays int
 	keepPerTask   int
 	cleanupHour   int
+
+	// Automatic log archival (#272). archiveAfterDays<=0 disables the daily
+	// archival sweep (the conservative default); otherwise log payloads for
+	// terminal tasks older than archiveAfterDays are compressed (optionally
+	// encrypted) in place daily at cleanupHour:00 UTC. Reads stay transparent.
+	archiveAfterDays int
 }
 
 // SetRetention configures the automatic daily run-history pruning sweep (#252).
@@ -44,6 +50,15 @@ func (s *Scheduler) SetRetention(retentionDays, keepPerTask, hour int) {
 		hour = 4
 	}
 	s.cleanupHour = hour
+}
+
+// SetLogArchival configures the automatic daily log-archival sweep (#272). Call
+// before Start. archiveAfterDays<=0 leaves archival OFF (the conservative
+// default). The sweep runs on the same daily timer as the retention sweep
+// (cleanupHour). Archival is purely a storage optimization: reads inflate
+// archived payloads transparently, so it never changes what a caller sees.
+func (s *Scheduler) SetLogArchival(archiveAfterDays int) {
+	s.archiveAfterDays = archiveAfterDays
 }
 
 // New creates a new Scheduler.
@@ -74,17 +89,23 @@ func (s *Scheduler) runLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	// Daily retention sweep (#252): a timer that fires at the next cleanupHour:00
-	// UTC, then re-arms every 24h. Disabled (nil channel — never selected) when
-	// retention is off.
+	// Daily maintenance sweep: a timer that fires at the next cleanupHour:00 UTC,
+	// then re-arms every 24h. Runs the retention prune (#252) and the log-archival
+	// pass (#272). Disabled (nil channel — never selected) when BOTH are off.
 	var cleanupC <-chan time.Time
 	var cleanupTimer *time.Timer
-	if s.retentionDays > 0 {
+	if s.retentionDays > 0 || s.archiveAfterDays > 0 {
 		cleanupTimer = time.NewTimer(durationUntilHour(time.Now().UTC(), s.cleanupHour))
 		defer cleanupTimer.Stop()
 		cleanupC = cleanupTimer.C
+	}
+	if s.retentionDays > 0 {
 		log.Printf("scheduler: run-history retention ON (retention=%dd, keep=%d/task, sweep daily at %02d:00 UTC)",
 			s.retentionDays, s.keepPerTask, s.cleanupHour)
+	}
+	if s.archiveAfterDays > 0 {
+		log.Printf("scheduler: log archival ON (archive after %dd, sweep daily at %02d:00 UTC)",
+			s.archiveAfterDays, s.cleanupHour)
 	}
 
 	for {
@@ -101,6 +122,7 @@ func (s *Scheduler) runLoop() {
 			func() {
 				defer safe.Recover("scheduler.cleanup", nil)
 				s.runCleanup()
+				s.runLogArchival()
 			}()
 			cleanupTimer.Reset(24 * time.Hour)
 		case <-s.stop:
@@ -119,6 +141,26 @@ func (s *Scheduler) runCleanup() {
 	if n > 0 {
 		log.Printf("scheduler: pruned %d old task run(s) (retention=%dd, keep=%d/task)", n, s.retentionDays, s.keepPerTask)
 		metrics.RecordRunsPruned(n)
+	}
+}
+
+// runLogArchival performs one log-archival pass (#272), compressing (optionally
+// encrypting) terminal-task log payloads older than archiveAfterDays in place.
+// No-op when archival is off. Failures are logged and counted but never fatal —
+// the next daily sweep retries any rows it could not archive.
+func (s *Scheduler) runLogArchival() {
+	if s.archiveAfterDays <= 0 {
+		return
+	}
+	n, bytesSaved, err := s.storage.ArchiveOldLogs(context.Background(), s.archiveAfterDays)
+	if err != nil {
+		log.Printf("scheduler: log archival failed: %v", err)
+		metrics.RecordLogsArchived("error", 0, 0)
+		return
+	}
+	if n > 0 {
+		log.Printf("scheduler: archived %d task log(s), saved %d bytes (archive after %dd)", n, bytesSaved, s.archiveAfterDays)
+		metrics.RecordLogsArchived("ok", n, bytesSaved)
 	}
 }
 

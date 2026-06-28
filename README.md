@@ -50,6 +50,13 @@ them.
   `FLEET_KEEP_RUNS_PER_TASK` (default **10**) runs of each task regardless of age
   (so a task's last-known state is never lost). Set the retention to `0` to
   disable pruning; the sweep runs at `FLEET_CLEANUP_HOUR` UTC (default 04:00).
+  As a middle path that keeps the audit trail, an **optional** archival sweep
+  (off by default) gzip-compresses the log payloads of terminal tasks older than
+  `FLEET_LOG_ARCHIVE_AFTER_DAYS` **in place** in the scheduler DB — reads inflate
+  them transparently, so retrieval is unchanged. Set a base64 32-byte
+  `FLEET_LOG_ARCHIVE_ENCRYPTION_KEY` (held host-side, never logged) to also
+  AES-256-GCM encrypt the archived payloads. It runs on the same daily
+  `FLEET_CLEANUP_HOUR` timer; `0` (the default) leaves it off.
 
 - **Connected to your data and tools, wherever they live.** fleet speaks
   [MCP](#standards) and ships a per-deployment **MCP catalog**. Tasks select

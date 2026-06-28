@@ -18,7 +18,9 @@ package config
 
 import (
 	"bufio"
+	"encoding/base64"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -486,6 +488,17 @@ type Config struct {
 	// CleanupHour is the UTC hour (0–23) the daily retention sweep runs. Default 4.
 	CleanupHour int
 
+	// ── log archival (#272) ──
+	// LogArchiveAfterDays compresses (and optionally encrypts) the log payloads of
+	// terminal tasks older than this many days IN PLACE, on the same daily sweep as
+	// retention. Reads inflate archived payloads transparently. <=0 disables
+	// archival. Default 0 (OFF) — conservative; opt in deliberately.
+	LogArchiveAfterDays int
+	// LogArchiveEncryptionKey is the optional 32-byte AES-256-GCM key (decoded from
+	// the base64 FLEET_LOG_ARCHIVE_ENCRYPTION_KEY) used to encrypt archived log
+	// payloads. nil/empty = archives are gzip-only. Held host-side; never logged.
+	LogArchiveEncryptionKey []byte
+
 	InputDir   string
 	InputFiles []string
 
@@ -731,6 +744,10 @@ func Load(envFile string) (*Config, error) {
 		RunLogRetentionDays: getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),
 		KeepRunsPerTask:     getenvFleetInt("KEEP_RUNS_PER_TASK", 10),
 		CleanupHour:         getenvFleetInt("CLEANUP_HOUR", 4),
+
+		// ── log archival (#272) ── default OFF (0): opt in deliberately.
+		LogArchiveAfterDays:     getenvFleetInt("LOG_ARCHIVE_AFTER_DAYS", 0),
+		LogArchiveEncryptionKey: logArchiveEncryptionKey(),
 
 		// ── attachments / uploads (generic infra) ──
 		EmailAttachmentDir: getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),
@@ -1199,6 +1216,29 @@ func getenvFleetDefault(suffix, def string) string {
 		return v
 	}
 	return def
+}
+
+// logArchiveEncryptionKey decodes the optional base64 AES-256-GCM key for log
+// archival (#272) from FLEET_LOG_ARCHIVE_ENCRYPTION_KEY. It returns nil when the
+// key is unset (encryption off). A present-but-malformed or wrong-length key is
+// a misconfiguration: it logs a warning (WITHOUT the key material) and returns
+// nil so archival falls back to gzip-only rather than crashing or silently using
+// a bad key. The decoded bytes are never logged.
+func logArchiveEncryptionKey() []byte {
+	raw := getenvFleet("LOG_ARCHIVE_ENCRYPTION_KEY")
+	if raw == "" {
+		return nil
+	}
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		log.Printf("Warning: FLEET_LOG_ARCHIVE_ENCRYPTION_KEY is not valid base64; archives will be gzip-only (unencrypted)")
+		return nil
+	}
+	if len(key) != 32 {
+		log.Printf("Warning: FLEET_LOG_ARCHIVE_ENCRYPTION_KEY must decode to 32 bytes (got %d); archives will be gzip-only (unencrypted)", len(key))
+		return nil
+	}
+	return key
 }
 
 func getenvFleetInt(suffix string, def int) int {

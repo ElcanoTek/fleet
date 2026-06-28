@@ -9,11 +9,13 @@ const (
 	nameActiveAgents = "fleet_active_agents"
 	nameCostUSD      = "fleet_cost_usd_total"
 	//nolint:gosec // G101: this is a Prometheus metric NAME, not a credential — "token" refers to LLM tokens.
-	nameTokenUsage   = "fleet_token_usage_total"
-	nameSandboxPool  = "fleet_sandbox_pool_size"
-	nameTurnTimeouts = "fleet_turn_timeouts_total"
-	nameRunsPruned   = "fleet_sched_runs_pruned_total"
-	nameIPBlocked    = "fleet_ip_blocked_total"
+	nameTokenUsage    = "fleet_token_usage_total"
+	nameSandboxPool   = "fleet_sandbox_pool_size"
+	nameTurnTimeouts  = "fleet_turn_timeouts_total"
+	nameRunsPruned    = "fleet_sched_runs_pruned_total"
+	nameLogsArchived  = "fleet_sched_logs_archived_total"
+	nameLogsArchBytes = "fleet_sched_logs_archived_bytes_saved_total"
+	nameIPBlocked     = "fleet_ip_blocked_total"
 
 	// Per-task sandbox resource telemetry (#263). These are last-write-wins
 	// gauges reflecting the most recently FINISHED sandbox run, deliberately
@@ -44,6 +46,24 @@ func RecordRunsPruned(n int) {
 		return
 	}
 	incCounter(nameRunsPruned, "Total scheduled task runs deleted by the retention sweep.", nil, nil, float64(n))
+}
+
+// RecordLogsArchived records one log-archival sweep result (#272). On result
+// "ok" it adds n to the per-row archived counter and bytesSaved (uncompressed
+// minus stored) to the bytes-saved counter. On result "error" it counts one
+// failed pass. Both label the per-row counter by result so a dashboard can chart
+// success vs. failure.
+func RecordLogsArchived(result string, n int, bytesSaved int64) {
+	delta := n
+	if result == "error" {
+		delta = 1
+	}
+	incCounter(nameLogsArchived, "Total task logs archived by the log-archival sweep, by result.",
+		[]string{"result"}, []string{result}, float64(delta))
+	if bytesSaved > 0 {
+		incCounter(nameLogsArchBytes, "Total bytes saved by the log-archival sweep (uncompressed minus stored).",
+			nil, nil, float64(bytesSaved))
+	}
 }
 
 // RecordHTTPRequest records one served request: a count by route/method/status
