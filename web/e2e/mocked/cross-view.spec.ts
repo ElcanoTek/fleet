@@ -11,6 +11,7 @@ import { mockChatBoot } from "./_mocks";
 async function mockOrchestratorShell(page: Page) {
   await page.route("**/api/orchestrator/**", (r: Route) => {
     const path = new URL(r.request().url()).pathname.replace("/api/orchestrator", "");
+    if (path === "/me") return r.fulfill({ json: { authenticated: true, username: "e2e" } });
     if (path === "/stats")
       return r.fulfill({
         json: { total_nodes: 0, active_nodes: 0, pending_tasks: 0, running_tasks: 0 },
