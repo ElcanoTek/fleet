@@ -740,6 +740,12 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Lineage is server-authoritative (#277): created_by_task_id is set ONLY by
+	// the in-process create_task tool when a scheduled run spawns a follow-up. An
+	// external client must not be able to forge a spawn lineage, so clear any
+	// value it supplied on the public create path.
+	tc.CreatedByTaskID = nil
+
 	if err := h.validateTaskCreate(&tc); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

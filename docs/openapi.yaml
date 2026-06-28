@@ -83,6 +83,8 @@ components:
         priority: { type: integer }
         instruction_self_improve: { type: boolean }
         allow_network: { type: boolean, default: false, description: "Allow this scheduled task's execution sandbox outbound network egress. Default false seals it with --network=none, matching the interactive lockdown path." }
+        allow_task_creation: { type: boolean, default: false, description: "Grant this task's SCHEDULED runs the built-in create_task tool so they can enqueue follow-up tasks. Default false: the tool is never registered, so interactive/unprivileged runs cannot self-schedule (no privilege escalation)." }
+        allow_recurring_task_creation: { type: boolean, default: false, description: "Stricter, separately-toggled grant that additionally lets create_task set a cron recurrence on a spawned task. Meaningless without allow_task_creation; default false." }
         scheduled_for: { type: string, format: date-time }
         recurrence: { type: string, description: "5-field cron expression" }
         files: { type: array, items: { type: string } }
@@ -107,6 +109,9 @@ components:
         files: { type: array, items: { type: string } }
         created_by: { type: string, format: uuid }
         workspace_path: { type: string, description: "Host filesystem path of the per-run workspace directory the agent wrote into (#287). Present once the run begins; absent for tasks that never ran." }
+        allow_task_creation: { type: boolean, description: "Whether this task's scheduled runs may enqueue follow-up tasks via create_task (default false)." }
+        allow_recurring_task_creation: { type: boolean, description: "Whether create_task may set a cron recurrence on a task this one spawns (default false)." }
+        created_by_task_id: { type: string, format: uuid, description: "The task whose scheduled run spawned this one via create_task. Set server-side for lineage/audit; null for tasks not spawned by a task." }
       required: [id, prompt, status]
     WorkspaceEntry:
       type: object
