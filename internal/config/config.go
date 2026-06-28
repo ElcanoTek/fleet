@@ -19,6 +19,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -81,6 +82,11 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SERVER_ADDR":  true,
 	"FLEET_SERVER_TOKEN": true,
 	"FLEET_DATA_DIR":     true,
+
+	// ── IP access control (network-level allow/deny + trusted proxies) ──
+	"FLEET_IP_ALLOWLIST":    true,
+	"FLEET_IP_DENYLIST":     true,
+	"FLEET_TRUSTED_PROXIES": true,
 
 	// ── TLS termination (chat server) ──
 	"FLEET_TLS_MODE":       true,
@@ -341,6 +347,28 @@ type Config struct {
 	// ── transport (interactive) ──
 	Addr        string
 	SharedToken string
+
+	// ── IP access control (#314) ──
+	// Network-level allow/deny filtering applied by the httpapi ipFilter
+	// middleware as defense-in-depth in front of the shared-token auth. All three
+	// are EMPTY by default, which is fully backward compatible: no allowlist means
+	// every source IP is permitted, exactly as before.
+	//
+	// IPAllowlist is parsed from FLEET_IP_ALLOWLIST (comma-separated IPs/CIDRs).
+	// When non-empty, ONLY addresses matching an entry may reach Fleet; empty =
+	// allow all. Bare host addresses (e.g. 203.0.113.7) are coerced to /32 (IPv4)
+	// or /128 (IPv6).
+	IPAllowlist []*net.IPNet
+	// IPDenylist is parsed from FLEET_IP_DENYLIST (comma-separated IPs/CIDRs).
+	// Addresses matching an entry are ALWAYS blocked — deny overrides allow.
+	IPDenylist []*net.IPNet
+	// TrustedProxies is parsed from FLEET_TRUSTED_PROXIES (comma-separated IPs).
+	// Only when the immediate peer (r.RemoteAddr) is one of these does Fleet read
+	// the real client IP from X-Forwarded-For. Empty (the default) means
+	// X-Forwarded-For is NEVER consulted, so an untrusted client cannot spoof an
+	// allowlisted address via the header. Operators MUST explicitly opt in by
+	// naming their reverse-proxy (e.g. Caddy) IPs.
+	TrustedProxies []net.IP
 
 	// ── process lifecycle ──
 	// ShutdownGraceSeconds bounds how long graceful shutdown (SIGTERM) waits for
@@ -699,6 +727,22 @@ func Load(envFile string) (*Config, error) {
 		MockMode:              getenvFleetBool("MOCK_MODE", false),
 	}
 
+	// ── IP access control (#314) ──
+	// Parsed here (not in the struct literal) so a malformed entry is a FATAL
+	// startup error rather than being silently skipped — a silently-dropped
+	// allowlist entry could leave the instance more open than the operator
+	// intended. The returned error propagates up to cmd/fleet's log.Fatalf.
+	var ipErr error
+	if cfg.IPAllowlist, ipErr = parseCIDRList(getenvFleet("IP_ALLOWLIST")); ipErr != nil {
+		return nil, fmt.Errorf("FLEET_IP_ALLOWLIST: %w", ipErr)
+	}
+	if cfg.IPDenylist, ipErr = parseCIDRList(getenvFleet("IP_DENYLIST")); ipErr != nil {
+		return nil, fmt.Errorf("FLEET_IP_DENYLIST: %w", ipErr)
+	}
+	if cfg.TrustedProxies, ipErr = parseIPList(getenvFleet("TRUSTED_PROXIES")); ipErr != nil {
+		return nil, fmt.Errorf("FLEET_TRUSTED_PROXIES: %w", ipErr)
+	}
+
 	// ── personas / prompts (cutlass file-name normalization) ──
 	// Defaults are the generic bundle's names; a client bundle sets PERSONA /
 	// SYSTEM_PROMPT (and PERSONA_DEFAULT) to its own.
@@ -864,6 +908,69 @@ func splitLockdownModels(raw string) []string {
 		out = append(out, p)
 	}
 	return out
+}
+
+// parseCIDRList parses a comma-separated list of IPs/CIDRs into networks (#314).
+// A bare host address (no "/") is coerced to a single-host network (/32 for
+// IPv4, /128 for IPv6). An empty input returns a nil slice (no filter). A
+// malformed entry returns an error so the caller can fail startup loudly — a
+// silently-dropped allowlist entry could leave the instance wide open.
+func parseCIDRList(raw string) ([]*net.IPNet, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]*net.IPNet, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if strings.Contains(p, "/") {
+			_, network, err := net.ParseCIDR(p)
+			if err != nil {
+				return nil, fmt.Errorf("invalid CIDR %q: %w", p, err)
+			}
+			out = append(out, network)
+			continue
+		}
+		ip := net.ParseIP(p)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid IP address %q", p)
+		}
+		bits := 32
+		if ip.To4() == nil {
+			bits = 128
+		}
+		out = append(out, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	return out, nil
+}
+
+// parseIPList parses a comma-separated list of bare IP addresses into net.IPs
+// (#314), used for FLEET_TRUSTED_PROXIES. Empty input returns a nil slice. A
+// malformed entry returns an error so startup fails loudly rather than trusting
+// a proxy the operator never meant to name.
+func parseIPList(raw string) ([]net.IP, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]net.IP, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		ip := net.ParseIP(p)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid IP address %q", p)
+		}
+		out = append(out, ip)
+	}
+	return out, nil
 }
 
 // splitEmails parses a comma-separated ADMIN_EMAILS value, normalized.
