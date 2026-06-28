@@ -68,6 +68,23 @@ func TestLoad_DBPoolOverrides(t *testing.T) {
 	}
 }
 
+func TestLoad_AutoTitle(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+	if cfg, err := Load(""); err != nil {
+		t.Fatalf("Load: %v", err)
+	} else if !cfg.AutoTitle {
+		t.Error("AutoTitle should default to true")
+	}
+
+	t.Setenv("FLEET_AUTO_TITLE", "false")
+	if cfg, err := Load(""); err != nil {
+		t.Fatalf("Load: %v", err)
+	} else if cfg.AutoTitle {
+		t.Error("FLEET_AUTO_TITLE=false should disable AutoTitle")
+	}
+}
+
 func TestGetenvFleetDuration_FallbackOnBadValue(t *testing.T) {
 	isolateEnv(t)
 	// Target a knob with a NON-ZERO default (lifetime = 5m) so the fallback is

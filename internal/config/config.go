@@ -126,6 +126,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_MAX_TOTAL_TOKENS":       true,
 	"FLEET_TEMPERATURE":            true,
 	"FLEET_TITLE_MODEL":            true,
+	"FLEET_AUTO_TITLE":             true,
 	"FLEET_MAX_CONCURRENT_AGENTS":  true,
 	"FLEET_RUN_LOG_RETENTION_DAYS": true,
 	"FLEET_KEEP_RUNS_PER_TASK":     true,
@@ -389,6 +390,10 @@ type Config struct {
 	ReasoningEnabled   bool
 	ReasoningEffort    string
 	TitleModel         string
+	// AutoTitle gates the LLM auto-titler (#302). FLEET_AUTO_TITLE, default true.
+	// When false, a new conversation keeps its instant heuristic title and no
+	// title-model call is made (cost/latency escape hatch).
+	AutoTitle bool
 
 	// MaxConcurrentAgents is the configured concurrency cap (FLEET_MAX_CONCURRENT_AGENTS,
 	// default 8). It bounds simultaneous SCHEDULED tasks (the worker-pool semaphore)
@@ -643,6 +648,7 @@ func Load(envFile string) (*Config, error) {
 		ReasoningEnabled:    getenvBool("REASONING_ENABLED", true),
 		ReasoningEffort:     getenvDefault("REASONING_EFFORT", "medium"),
 		TitleModel:          getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
+		AutoTitle:           getenvFleetBool("AUTO_TITLE", true),
 		MaxConcurrentAgents: getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
 
 		// ── personas ──

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -194,6 +195,43 @@ func TestConversationsLifecycle(t *testing.T) {
 	w = do(t, h, http.MethodGet, "/conversations/"+conv.ID, nil, "u@x.com")
 	if w.Code != http.StatusNotFound {
 		t.Errorf("post-delete get: want 404 got %d", w.Code)
+	}
+}
+
+// TestConversationRename_LocksTitle proves POST /conversations/{id}/rename sets
+// title_locked (#302) so the background auto-titler can't later clobber the
+// user's chosen name.
+func TestConversationRename_LocksTitle(t *testing.T) {
+	s := serverFixture(t)
+	h := s.Routes()
+
+	w := do(t, h, http.MethodPost, "/conversations",
+		map[string]string{"title": "auto", "persona": "victoria"}, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: %d", w.Code)
+	}
+	var conv store.Conversation
+	_ = json.Unmarshal(w.Body.Bytes(), &conv)
+
+	if w = do(t, h, http.MethodPost, "/conversations/"+conv.ID+"/rename",
+		map[string]string{"title": "My Chosen Name"}, "u@x.com"); w.Code != http.StatusOK {
+		t.Fatalf("rename: %d body=%s", w.Code, w.Body.String())
+	}
+
+	w = do(t, h, http.MethodGet, "/conversations/"+conv.ID, nil, "u@x.com")
+	var getResp struct {
+		Conversation store.Conversation `json:"conversation"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if getResp.Conversation.Title != "My Chosen Name" || !getResp.Conversation.TitleLocked {
+		t.Errorf("after rename: title=%q locked=%v (want locked)", getResp.Conversation.Title, getResp.Conversation.TitleLocked)
+	}
+
+	// The auto-titler path is now refused for this conversation.
+	if err := s.store.UpdateTitle(context.Background(), "u@x.com", conv.ID, "robot"); !errors.Is(err, store.ErrTitleLocked) {
+		t.Errorf("auto-title after lock: want ErrTitleLocked, got %v", err)
 	}
 }
 
