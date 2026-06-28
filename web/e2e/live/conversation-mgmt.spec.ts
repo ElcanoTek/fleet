@@ -144,8 +144,9 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     await row.getByRole("button", { name: "Archive Filed away chat" }).click({ force: true });
     expect((await archiveResponse).status()).toBe(200);
 
-    // Gone from the main list; surfaced under a collapsed "Archived (1)" section.
-    const archivedToggle = bar.getByRole("button", { name: /Archived conversations \(1\)/i });
+    // Gone from the main list; surfaced under a collapsed "Archived" section.
+    // Match the toggle count-agnostically (the badge count is shared state).
+    const archivedToggle = bar.getByRole("button", { name: /Archived conversations/i });
     await expect(archivedToggle).toBeVisible({ timeout: 10_000 });
 
     // Server is the source of truth: it reports the chat as archived.
@@ -156,9 +157,10 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     const found = (archived.conversations ?? []).find((c) => c.title === "Filed away chat");
     expect(found?.archived_at).toBeTruthy();
 
-    // Expand the section and unarchive it.
+    // Expand the section and unarchive the specific row.
     await archivedToggle.click();
     const archivedRow = bar.locator("div.group").filter({ hasText: "Filed away chat" }).first();
+    await expect(archivedRow).toBeVisible({ timeout: 10_000 });
     await archivedRow.hover();
     const unarchiveResponse = page.waitForResponse(
       (res) =>
@@ -193,8 +195,9 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     expect((await archiveResponse).status()).toBe(200);
 
     // Expand the Archived section, then delete from it (the ghost-row regression).
-    await bar.getByRole("button", { name: /Archived conversations \(1\)/i }).click();
+    await bar.getByRole("button", { name: /Archived conversations/i }).click();
     const archivedRow = bar.locator("div.group").filter({ hasText: "Archived doomed" }).first();
+    await expect(archivedRow).toBeVisible({ timeout: 10_000 });
     await archivedRow.hover();
     await archivedRow.getByRole("button", { name: "Delete Archived doomed" }).click({ force: true });
     await page.getByRole("button", { name: /^delete$/i }).click();
