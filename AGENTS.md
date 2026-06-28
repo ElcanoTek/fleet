@@ -55,7 +55,10 @@ client bundle baked in so fleet runs bare).
 ## Non-negotiable invariants — do NOT weaken these
 
 These are the security and design guarantees the whole project rests on. A change
-that breaks one is wrong even if tests pass.
+that breaks one is wrong even if tests pass. The *why* behind several of them is
+recorded as Architecture Decision Records in [`docs/adr/`](docs/adr/) — a change
+that adds, weakens, or reverses an invariant must add or supersede an ADR in the
+same PR.
 
 - **The sandbox is mandatory.** The agent loop runs in the fleet process, but
   every agent tool call (bash, Python, file I/O, MCP) runs inside the
@@ -103,5 +106,7 @@ that breaks one is wrong even if tests pass.
   context compaction, MCP credential allowlist, the scheduled end-of-run
   verifier, git-worktree isolation): [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)
 - **Architecture overview:** [`README.md`](README.md) ("Architecture at a glance")
+- **Why the invariants are the way they are:** [`docs/adr/`](docs/adr/)
+  (Architecture Decision Records)
 - **Contributor workflow + CI gates:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Reporting a vulnerability:** [`SECURITY.md`](SECURITY.md)
