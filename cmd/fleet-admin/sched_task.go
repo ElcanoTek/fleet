@@ -46,9 +46,57 @@ func cmdSchedTask(argv []string) int {
 		return schedTaskSetCredentials(argv[1:])
 	case "set-description":
 		return schedTaskSetDescription(argv[1:])
+	case "tag":
+		return schedTaskTag(argv[1:])
 	default:
-		return errf(1, "unknown sched task subcommand %q (want export|import|set-model|set-credentials|set-description)", argv[0])
+		return errf(1, "unknown sched task subcommand %q (want export|import|set-model|set-credentials|set-description|tag)", argv[0])
 	}
+}
+
+// schedTaskTag adds and/or removes tags on a task (#212):
+//
+//	fleet-admin sched task tag <task_id> --add nightly --add prod --remove staging
+func schedTaskTag(argv []string) int {
+	fs := flag.NewFlagSet("sched task tag", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	var add, remove allowFlag
+	fs.Var(&add, "add", "tag to add (repeatable)")
+	fs.Var(&remove, "remove", "tag to remove (repeatable)")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		return errf(1, "usage: fleet-admin sched task tag <task_id> --add <tag> ... --remove <tag> ...")
+	}
+	taskID, err := uuid.Parse(strings.TrimSpace(rest[0]))
+	if err != nil {
+		return errf(1, "invalid task id %q: %v", rest[0], err)
+	}
+	if len(add) == 0 && len(remove) == 0 {
+		return errf(1, "provide at least one --add or --remove tag")
+	}
+	addTags, err := models.NormalizeAndValidateTags(add)
+	if err != nil {
+		return errf(1, "--add: %v", err)
+	}
+	removeTags, err := models.NormalizeAndValidateTags(remove)
+	if err != nil {
+		return errf(1, "--remove: %v", err)
+	}
+
+	st, code := openSchedStorage(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer st.Close()
+
+	updated, err := st.UpdateTaskTags(context.Background(), taskID, addTags, removeTags)
+	if err != nil {
+		return errf(5, "update tags: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "task %s now has %d tag(s): %s\n", updated.ID, len(updated.Tags), strings.Join(updated.Tags, ", "))
+	return 0
 }
 
 // schedTaskSetDescription sets a task's operator-documentation field (#281).

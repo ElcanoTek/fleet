@@ -193,6 +193,52 @@ func (wc *WorktreeConfig) Validate() error {
 	return nil
 }
 
+// Tag constraints (#212): keep tags human-typeable, URL-safe, and bounded so the
+// catalogue + filter stay cheap and the column can't be abused to bloat a row.
+const (
+	MaxTagLength    = 64
+	MaxTagsPerTask  = 20
+	tagAllowedChars = "abcdefghijklmnopqrstuvwxyz0123456789-."
+)
+
+// NormalizeAndValidateTags lowercases + trims each tag, drops blanks, deduplicates
+// (preserving first-seen order), and enforces the per-tag format (lowercase
+// alphanumeric plus '-' and '.', ≤MaxTagLength) and the ≤MaxTagsPerTask count. It
+// returns the cleaned slice (nil when empty) so callers persist a canonical form.
+func NormalizeAndValidateTags(tags []string) ([]string, error) {
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, raw := range tags {
+		t := strings.ToLower(strings.TrimSpace(raw))
+		if t == "" {
+			continue
+		}
+		if len(t) > MaxTagLength {
+			return nil, fmt.Errorf("tag %q exceeds %d characters", t, MaxTagLength)
+		}
+		for _, r := range t {
+			if !strings.ContainsRune(tagAllowedChars, r) {
+				return nil, fmt.Errorf("tag %q contains invalid character %q (allowed: a-z, 0-9, '-', '.')", t, r)
+			}
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	if len(out) > MaxTagsPerTask {
+		return nil, fmt.Errorf("too many tags: %d (max %d)", len(out), MaxTagsPerTask)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
 // Iteration status values recorded in task_iterations.status.
 const (
 	IterationStatusRunning = "running"
@@ -428,6 +474,10 @@ type TaskCreate struct {
 	ScheduledFor           *time.Time      `json:"scheduled_for,omitempty"`
 	Recurrence             string          `json:"recurrence,omitempty"`
 	Files                  []string        `json:"files,omitempty"`
+	// Tags are user-defined labels for organizing and filtering tasks (#212):
+	// lowercase alphanumeric + '-'/'.', ≤64 chars each, ≤20 per task. Normalized
+	// and validated at create/edit. nil/empty = untagged.
+	Tags []string `json:"tags,omitempty"`
 	// MaxRetries is the number of ADDITIONAL whole-task attempts after the first
 	// when a run fails cleanly with a transient error. 0 (default) = no retries.
 	MaxRetries *int `json:"max_retries,omitempty"`
@@ -510,6 +560,8 @@ type Task struct {
 	NextRunAtLocal *string    `json:"next_run_at_local,omitempty"`
 	CreatedBy      *uuid.UUID `json:"created_by,omitempty"`
 	Files          []string   `json:"files,omitempty"`
+	// Tags are user-defined organizing labels (#212). See TaskCreate.Tags.
+	Tags           []string   `json:"tags,omitempty"`
 	LeaseOwner     *string    `json:"lease_owner,omitempty"`
 	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
 	// AttemptCount is how many times this task has been re-queued after a clean,
@@ -569,6 +621,7 @@ func NewTask(tc TaskCreate) *Task {
 		Recurrence:             tc.Recurrence,
 		Timezone:               tz,
 		Files:                  tc.Files,
+		Tags:                   tc.Tags,
 		MaxRetries:             derefOr(tc.MaxRetries, 0),
 		TriggerType:            triggerType,
 	}

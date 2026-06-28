@@ -652,8 +652,12 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Get("/nodes", h.ListNodes)
 		r.Get("/nodes/{node_id}", h.GetNode)
 		r.Get("/tasks", h.ListTasks)
+		// /tasks/tags is registered before /tasks/{task_id} so the static segment
+		// wins over the wildcard (#212 tag catalogue).
+		r.Get("/tasks/tags", h.GetTagCatalogue)
 		r.Get("/tasks/{task_id}", h.GetTask)
 		r.Put("/tasks/{task_id}", h.UpdateTask)
+		r.Post("/tasks/{task_id}/tags", h.UpdateTaskTags)
 		r.Delete("/tasks/{task_id}", h.CancelTask)
 		r.Get("/logs/{task_id}", h.GetLogs)
 		r.Get("/stats", h.GetDashboardStats)

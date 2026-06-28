@@ -551,6 +551,11 @@ type TaskEdit struct {
 	Files    []string
 	// SetFiles distinguishes "leave files unchanged" from "replace with Files".
 	SetFiles bool
+	// Tags + SetTags mirror Files/SetFiles: the flag distinguishes "leave tags
+	// unchanged" from "replace with Tags" (#212). Tags here are already
+	// normalized/validated by the handler.
+	Tags    []string
+	SetTags bool
 	// SetMCPSelection distinguishes "leave mcp_selection unchanged" from "replace".
 	SetMCPSelection bool
 	// CredentialAllowlist + SetCredentialAllowlist mirror the MCPSelection pair:
@@ -621,6 +626,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	}
 	if edit.SetFiles {
 		task.Files = edit.Files
+	}
+	if edit.SetTags {
+		task.Tags = edit.Tags
 	}
 
 	if task.ScheduledFor != nil && task.ScheduledFor.After(time.Now().UTC()) {
@@ -694,6 +702,60 @@ func (s *Storage) UpdateTaskDescription(ctx context.Context, taskID uuid.UUID, d
 		return nil, err
 	}
 	return task, nil
+}
+
+// UpdateTaskTags atomically adds and removes tags on a task (#212), leaving all
+// other fields untouched. It runs under a row lock (GetTaskForUpdate) so
+// concurrent tag edits don't lose updates. `add` and `remove` are already
+// normalized by the caller; removal wins over add for any tag in both. The
+// resulting set is re-validated (count/format) before persisting. Unlike the
+// other targeted edits this is allowed in ANY status — tags are organizational
+// metadata, useful on running/completed tasks too.
+func (s *Storage) UpdateTaskTags(ctx context.Context, taskID uuid.UUID, add, remove []string) (*models.Task, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	removeSet := make(map[string]struct{}, len(remove))
+	for _, r := range remove {
+		removeSet[r] = struct{}{}
+	}
+	merged := make([]string, 0, len(task.Tags)+len(add))
+	for _, t := range task.Tags {
+		if _, drop := removeSet[t]; !drop {
+			merged = append(merged, t)
+		}
+	}
+	for _, a := range add {
+		if _, drop := removeSet[a]; !drop {
+			merged = append(merged, a)
+		}
+	}
+	normalized, err := models.NormalizeAndValidateTags(merged)
+	if err != nil {
+		return nil, err
+	}
+	task.Tags = normalized
+
+	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// ListTagCatalogue returns every distinct tag in use with its task count (#212).
+func (s *Storage) ListTagCatalogue(ctx context.Context) ([]db.TagCount, error) {
+	return s.db.GetTagCatalogue(ctx)
 }
 
 // UpdateTaskStatusAtomic updates a task's status atomically, verifying lease
@@ -893,6 +955,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		Recurrence:          task.Recurrence,
 		Timezone:            task.Timezone,
 		Files:               task.Files,
+		Tags:                task.Tags,
 	})
 	newTask.CreatedBy = task.CreatedBy
 	// Carry the originating API key forward so recurring task cost keeps counting
