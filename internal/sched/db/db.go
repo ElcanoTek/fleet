@@ -30,7 +30,19 @@ var ErrDuplicateNodeName = errors.New("node name already registered")
 // Database is the PostgreSQL database wrapper for the orchestrator.
 type Database struct {
 	conn *sql.DB
+
+	// archiveKey is the optional 32-byte AES-256-GCM key for log archival (#272).
+	// Held host-side and NEVER logged. nil = archives are gzip-only (no
+	// encryption). Set once via SetLogArchiveKey before the archival sweep runs.
+	archiveKey []byte
 }
+
+// SetLogArchiveKey configures the host-side AES-256-GCM key used to encrypt
+// archived log payloads (#272). A nil/empty key disables encryption (archives
+// are gzip-only). The key is held in memory only and never logged or persisted.
+// It must be exactly 32 bytes; a wrong length surfaces only when the archival
+// sweep or a read of an encrypted archive runs.
+func (db *Database) SetLogArchiveKey(key []byte) { db.archiveKey = key }
 
 // New creates a new Database instance.
 func New() *Database {
@@ -1303,36 +1315,67 @@ func (db *Database) GetDashboardStatsForUser(ctx context.Context, userID *uuid.U
 
 // Log operations
 
-// AddLog stores a log session for a task.
+// AddLog stores a log session for a task. The payload is always written live
+// (plaintext JSON in session_data); the archival columns are reset so a re-write
+// of a previously archived row returns it to the live, uncompressed state.
 func (db *Database) AddLog(ctx context.Context, taskID uuid.UUID, session *models.LogSession) error {
 	sessionJSON, err := json.Marshal(session)
 	if err != nil {
 		return err
 	}
 	_, err = db.conn.ExecContext(ctx, `
-		INSERT INTO logs (task_id, session_data) VALUES ($1, $2)
-		ON CONFLICT (task_id) DO UPDATE SET session_data = EXCLUDED.session_data`,
+		INSERT INTO logs (task_id, session_data, session_data_gz, session_compression)
+		VALUES ($1, $2, NULL, NULL)
+		ON CONFLICT (task_id) DO UPDATE SET
+			session_data = EXCLUDED.session_data,
+			session_data_gz = NULL,
+			session_compression = NULL`,
 		taskID, string(sessionJSON))
 	return err
 }
 
-// GetLog gets the log session for a task.
+// decodeLogRow turns one logs row into JSON bytes, transparently inflating (and
+// decrypting, when a key is configured) an archived payload (#272). Exactly one
+// of sessionData / gz is populated: a live row carries plaintext in sessionData
+// with an empty codec; an archived row carries bytes in gz with a non-empty
+// codec and a NULL sessionData.
+func (db *Database) decodeLogRow(sessionData *string, gz []byte, codec string) ([]byte, error) {
+	if codec != "" {
+		return decodeArchive(gz, db.archiveKey, codec)
+	}
+	if sessionData != nil {
+		return []byte(*sessionData), nil
+	}
+	return nil, errors.New("log row has neither live nor archived payload")
+}
+
+// GetLog gets the log session for a task, transparently inflating an archived
+// payload so callers see no difference between live and archived logs (#272).
 func (db *Database) GetLog(ctx context.Context, taskID uuid.UUID) (*models.LogSession, error) {
-	var sessionData string
-	err := db.conn.QueryRowContext(ctx, "SELECT session_data FROM logs WHERE task_id = $1", taskID).Scan(&sessionData)
+	var sessionData *string
+	var gz []byte
+	var codec sql.NullString
+	err := db.conn.QueryRowContext(ctx,
+		"SELECT session_data, session_data_gz, session_compression FROM logs WHERE task_id = $1",
+		taskID).Scan(&sessionData, &gz, &codec)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := db.decodeLogRow(sessionData, gz, codec.String)
 	if err != nil {
 		return nil, err
 	}
 	var session models.LogSession
-	if err := json.Unmarshal([]byte(sessionData), &session); err != nil {
+	if err := json.Unmarshal(raw, &session); err != nil {
 		return nil, err
 	}
 	return &session, nil
 }
 
-// GetAllLogs gets all stored log sessions.
+// GetAllLogs gets all stored log sessions, transparently inflating archived
+// payloads (#272).
 func (db *Database) GetAllLogs(ctx context.Context) (map[uuid.UUID]*models.LogSession, error) {
-	rows, err := db.conn.QueryContext(ctx, "SELECT task_id, session_data FROM logs")
+	rows, err := db.conn.QueryContext(ctx, "SELECT task_id, session_data, session_data_gz, session_compression FROM logs")
 	if err != nil {
 		return nil, err
 	}
@@ -1341,12 +1384,18 @@ func (db *Database) GetAllLogs(ctx context.Context) (map[uuid.UUID]*models.LogSe
 	logs := make(map[uuid.UUID]*models.LogSession)
 	for rows.Next() {
 		var taskID uuid.UUID
-		var sessionData string
-		if err := rows.Scan(&taskID, &sessionData); err != nil {
+		var sessionData *string
+		var gz []byte
+		var codec sql.NullString
+		if err := rows.Scan(&taskID, &sessionData, &gz, &codec); err != nil {
 			return nil, err
 		}
+		raw, err := db.decodeLogRow(sessionData, gz, codec.String)
+		if err != nil {
+			continue
+		}
 		var session models.LogSession
-		if err := json.Unmarshal([]byte(sessionData), &session); err != nil {
+		if err := json.Unmarshal(raw, &session); err != nil {
 			continue
 		}
 		logs[taskID] = &session
@@ -1460,6 +1509,97 @@ func (db *Database) DeleteOldHistory(ctx context.Context, days int) (int, error)
 		return 0, err
 	}
 	return int(affected), nil
+}
+
+// logArchiveCandidate is one live log payload eligible for archival.
+type logArchiveCandidate struct {
+	taskID uuid.UUID
+	raw    []byte
+}
+
+// archiveCandidates reads the live (un-archived) log payloads of terminal tasks
+// completed before cutoff, fully draining and closing the cursor before it
+// returns so the caller can issue UPDATEs on the same (possibly single-conn)
+// pool without deadlocking.
+func (db *Database) archiveCandidates(ctx context.Context, cutoff time.Time) ([]logArchiveCandidate, error) {
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT l.task_id, l.session_data
+		FROM logs l
+		JOIN tasks t ON t.id = l.task_id
+		WHERE t.status IN ($1, $2, $3)
+		  AND t.completed_at < $4
+		  AND l.session_data IS NOT NULL
+		  AND l.session_compression IS NULL`,
+		string(models.TaskStatusSuccess),
+		string(models.TaskStatusError),
+		string(models.TaskStatusCancelled),
+		cutoff,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var candidates []logArchiveCandidate
+	for rows.Next() {
+		var taskID uuid.UUID
+		var sessionData string
+		if err := rows.Scan(&taskID, &sessionData); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, logArchiveCandidate{taskID: taskID, raw: []byte(sessionData)})
+	}
+	return candidates, rows.Err()
+}
+
+// ArchiveOldLogs compresses (and, when an archive key is configured, AES-256-GCM
+// encrypts) the session_data payload of completed-task logs older than `days`,
+// IN PLACE (#272): the payload moves into session_data_gz and session_data is
+// nulled in a single per-row UPDATE. Only terminal tasks (success/error/
+// cancelled) with a live payload are touched; already-archived rows
+// (session_compression set) are skipped, so the sweep is idempotent. days<=0
+// disables archival and returns (0, 0, nil) so a misconfiguration is inert.
+//
+// It returns the number of rows archived and the total bytes saved (the sum of
+// raw-minus-stored sizes; ~always positive for real log payloads). Each row is
+// committed independently: a row's archive write and its DB update are one
+// statement, so there is no window where the payload exists in neither column.
+func (db *Database) ArchiveOldLogs(ctx context.Context, days int) (int, int64, error) {
+	if days <= 0 {
+		return 0, 0, nil
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -days)
+
+	candidates, err := db.archiveCandidates(ctx, cutoff)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	var archived int
+	var bytesSaved int64
+	for _, c := range candidates {
+		stored, codec, err := encodeArchive(c.raw, db.archiveKey)
+		if err != nil {
+			return archived, bytesSaved, err
+		}
+		// One statement flips the row from live to archived: set the compressed
+		// payload + codec and null session_data together. The guard re-checks
+		// session_compression IS NULL so two concurrent sweeps can't double-archive.
+		res, err := db.conn.ExecContext(ctx, `
+			UPDATE logs
+			SET session_data = NULL, session_data_gz = $1, session_compression = $2
+			WHERE task_id = $3 AND session_compression IS NULL`,
+			stored, codec, c.taskID)
+		if err != nil {
+			return archived, bytesSaved, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue // raced by another sweep; leave counters untouched
+		}
+		archived++
+		bytesSaved += int64(len(c.raw) - len(stored))
+	}
+	return archived, bytesSaved, nil
 }
 
 // Transaction support for atomic operations

@@ -491,6 +491,245 @@ func TestLogOperations(t *testing.T) {
 
 func timePtr(t time.Time) *time.Time { return &t }
 
+// bigSession builds a log session whose JSON is large and repetitive so gzip
+// measurably shrinks it, exercising the real archival code path.
+func bigSession(id string) *models.LogSession {
+	msgs := make([]models.LogMessage, 0, 40)
+	for i := 0; i < 40; i++ {
+		msgs = append(msgs, models.LogMessage{
+			CreatedAt: time.Now().Unix(),
+			Content:   strings.Repeat("the agent reasoned at length about the task and called tools. ", 20),
+		})
+	}
+	return &models.LogSession{ID: id, Title: "archival test", Messages: msgs}
+}
+
+// fetchLogRow reads the raw archival columns for a task so tests can assert the
+// on-disk shape (live vs. archived) directly.
+func fetchLogRow(t *testing.T, db *Database, taskID uuid.UUID) (sessionData *string, gzLen int, codec string) {
+	t.Helper()
+	var sd *string
+	var gz []byte
+	var c sql.NullString
+	err := db.conn.QueryRowContext(context.Background(),
+		"SELECT session_data, session_data_gz, session_compression FROM logs WHERE task_id = $1", taskID).
+		Scan(&sd, &gz, &c)
+	if err != nil {
+		t.Fatalf("fetch log row: %v", err)
+	}
+	return sd, len(gz), c.String
+}
+
+// TestArchiveOldLogsRoundtripAndAgeThreshold covers the compress->store->read
+// roundtrip AND the age-threshold selection (#272): only terminal tasks older
+// than the threshold are archived; a recent terminal task and a non-terminal
+// task are left live; GetLog returns identical content for an archived row.
+func TestArchiveOldLogsRoundtripAndAgeThreshold(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	// 1) old + terminal -> should be archived.
+	oldTask := &models.Task{ID: uuid.New(), Prompt: "old terminal", Status: models.TaskStatusSuccess,
+		CreatedAt: time.Now().UTC().AddDate(0, 0, -40), CompletedAt: timePtr(time.Now().UTC().AddDate(0, 0, -40))}
+	// 2) recent + terminal -> too new, left live.
+	recentTask := &models.Task{ID: uuid.New(), Prompt: "recent terminal", Status: models.TaskStatusError,
+		CreatedAt: time.Now().UTC().AddDate(0, 0, -2), CompletedAt: timePtr(time.Now().UTC().AddDate(0, 0, -2))}
+	// 3) old but non-terminal -> never archived.
+	runningTask := &models.Task{ID: uuid.New(), Prompt: "old running", Status: models.TaskStatusRunning,
+		CreatedAt: time.Now().UTC().AddDate(0, 0, -40)}
+	for _, tk := range []*models.Task{oldTask, recentTask, runningTask} {
+		if err := db.AddTask(ctx, tk); err != nil {
+			t.Fatalf("add task: %v", err)
+		}
+	}
+
+	oldSession := bigSession("old-sess")
+	for _, tc := range []struct {
+		id      uuid.UUID
+		session *models.LogSession
+	}{
+		{oldTask.ID, oldSession},
+		{recentTask.ID, bigSession("recent-sess")},
+		{runningTask.ID, bigSession("running-sess")},
+	} {
+		if err := db.AddLog(ctx, tc.id, tc.session); err != nil {
+			t.Fatalf("add log: %v", err)
+		}
+	}
+
+	// Threshold 30d: only the 40d-old terminal task qualifies.
+	n, bytesSaved, err := db.ArchiveOldLogs(ctx, 30)
+	if err != nil {
+		t.Fatalf("ArchiveOldLogs: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("archived %d rows, want 1 (age-threshold selection)", n)
+	}
+	if bytesSaved <= 0 {
+		t.Fatalf("bytesSaved = %d, want > 0 (gzip should shrink the payload)", bytesSaved)
+	}
+
+	// Old task is now archived: session_data NULL, gz populated, codec = gzip.
+	sd, gzLen, codec := fetchLogRow(t, db, oldTask.ID)
+	if sd != nil {
+		t.Fatal("archived row still has live session_data")
+	}
+	if gzLen == 0 {
+		t.Fatal("archived row has empty session_data_gz")
+	}
+	if codec != compressionGzip {
+		t.Fatalf("codec = %q, want %q", codec, compressionGzip)
+	}
+
+	// Recent + running rows untouched: still live, no codec.
+	for _, id := range []uuid.UUID{recentTask.ID, runningTask.ID} {
+		sd, _, codec := fetchLogRow(t, db, id)
+		if sd == nil || codec != "" {
+			t.Fatalf("task %s was archived but should have been left live", id)
+		}
+	}
+
+	// Roundtrip: GetLog transparently inflates the archived payload.
+	got, err := db.GetLog(ctx, oldTask.ID)
+	if err != nil {
+		t.Fatalf("GetLog(archived): %v", err)
+	}
+	if got.ID != oldSession.ID || len(got.Messages) != len(oldSession.Messages) {
+		t.Fatalf("archived roundtrip mismatch: got id=%q msgs=%d, want id=%q msgs=%d",
+			got.ID, len(got.Messages), oldSession.ID, len(oldSession.Messages))
+	}
+	if got.Messages[0].Content != oldSession.Messages[0].Content {
+		t.Fatal("archived message content mismatch after inflate")
+	}
+
+	// GetAllLogs also inflates transparently and still returns all three.
+	all, err := db.GetAllLogs(ctx)
+	if err != nil {
+		t.Fatalf("GetAllLogs: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("GetAllLogs returned %d, want 3", len(all))
+	}
+	if all[oldTask.ID].ID != oldSession.ID {
+		t.Fatal("GetAllLogs did not inflate the archived row correctly")
+	}
+
+	// Idempotent: a second sweep archives nothing (already-archived skipped).
+	n2, _, err := db.ArchiveOldLogs(ctx, 30)
+	if err != nil {
+		t.Fatalf("second ArchiveOldLogs: %v", err)
+	}
+	if n2 != 0 {
+		t.Fatalf("second sweep archived %d rows, want 0 (idempotent)", n2)
+	}
+}
+
+// TestArchiveOldLogsEncryptedRoundtrip covers the encrypted archive path: with a
+// 32-byte key configured, the stored bytes are encrypted and GetLog still
+// transparently inflates+decrypts to the original session.
+func TestArchiveOldLogsEncryptedRoundtrip(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	key := make([]byte, aesKeyLen)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	db.SetLogArchiveKey(key)
+
+	task := &models.Task{ID: uuid.New(), Prompt: "enc", Status: models.TaskStatusSuccess,
+		CreatedAt: time.Now().UTC().AddDate(0, 0, -40), CompletedAt: timePtr(time.Now().UTC().AddDate(0, 0, -40))}
+	if err := db.AddTask(ctx, task); err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+	session := bigSession("enc-sess")
+	if err := db.AddLog(ctx, task.ID, session); err != nil {
+		t.Fatalf("add log: %v", err)
+	}
+
+	n, _, err := db.ArchiveOldLogs(ctx, 30)
+	if err != nil {
+		t.Fatalf("ArchiveOldLogs: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("archived %d, want 1", n)
+	}
+	_, _, codec := fetchLogRow(t, db, task.ID)
+	if codec != compressionGzipAES {
+		t.Fatalf("codec = %q, want %q", codec, compressionGzipAES)
+	}
+
+	got, err := db.GetLog(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetLog(encrypted archive): %v", err)
+	}
+	if got.ID != session.ID || len(got.Messages) != len(session.Messages) {
+		t.Fatal("encrypted archive roundtrip mismatch")
+	}
+
+	// Without the key, reading the encrypted archive must fail closed.
+	db.SetLogArchiveKey(nil)
+	if _, err := db.GetLog(ctx, task.ID); err == nil {
+		t.Fatal("GetLog returned an encrypted archive without a key; want error")
+	}
+}
+
+// TestArchiveOldLogsDisabled confirms days<=0 is inert (no scan, no writes).
+func TestArchiveOldLogsDisabled(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	n, saved, err := db.ArchiveOldLogs(ctx, 0)
+	if err != nil || n != 0 || saved != 0 {
+		t.Fatalf("ArchiveOldLogs(0) = (%d,%d,%v), want (0,0,nil)", n, saved, err)
+	}
+	n, saved, err = db.ArchiveOldLogs(ctx, -5)
+	if err != nil || n != 0 || saved != 0 {
+		t.Fatalf("ArchiveOldLogs(-5) = (%d,%d,%v), want (0,0,nil)", n, saved, err)
+	}
+}
+
+// TestAddLogResetsArchiveColumns confirms re-writing a previously archived row
+// returns it to the live, uncompressed state (AddLog clears the archive columns).
+func TestAddLogResetsArchiveColumns(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	task := &models.Task{ID: uuid.New(), Prompt: "rewrite", Status: models.TaskStatusSuccess,
+		CreatedAt: time.Now().UTC().AddDate(0, 0, -40), CompletedAt: timePtr(time.Now().UTC().AddDate(0, 0, -40))}
+	if err := db.AddTask(ctx, task); err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+	if err := db.AddLog(ctx, task.ID, bigSession("v1")); err != nil {
+		t.Fatalf("add log v1: %v", err)
+	}
+	if _, _, err := db.ArchiveOldLogs(ctx, 30); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if _, _, codec := fetchLogRow(t, db, task.ID); codec == "" {
+		t.Fatal("row should be archived before rewrite")
+	}
+
+	if err := db.AddLog(ctx, task.ID, bigSession("v2")); err != nil {
+		t.Fatalf("add log v2: %v", err)
+	}
+	sd, gzLen, codec := fetchLogRow(t, db, task.ID)
+	if sd == nil || gzLen != 0 || codec != "" {
+		t.Fatalf("rewrite did not reset archive columns: sd=%v gzLen=%d codec=%q", sd != nil, gzLen, codec)
+	}
+	got, err := db.GetLog(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetLog after rewrite: %v", err)
+	}
+	if got.ID != "v2" {
+		t.Fatalf("GetLog returned id %q, want v2", got.ID)
+	}
+}
+
 func TestGetNodesScopedPaginated(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

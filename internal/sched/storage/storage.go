@@ -461,6 +461,18 @@ func (s *Storage) CleanupOldRuns(ctx context.Context, retentionDays, keepPerTask
 	return s.db.CleanupOldRuns(ctx, retentionDays, keepPerTask)
 }
 
+// SetLogArchiveKey configures the optional host-side AES-256-GCM key used to
+// encrypt archived log payloads (#272). See db.SetLogArchiveKey — the key is
+// held in memory only and never logged.
+func (s *Storage) SetLogArchiveKey(key []byte) { s.db.SetLogArchiveKey(key) }
+
+// ArchiveOldLogs compresses (optionally encrypts) log payloads for terminal
+// tasks older than days, in place. Returns (rows archived, bytes saved, error).
+// See db.ArchiveOldLogs.
+func (s *Storage) ArchiveOldLogs(ctx context.Context, days int) (int, int64, error) {
+	return s.db.ArchiveOldLogs(ctx, days)
+}
+
 // User operations
 
 // AddUser adds a new user.
