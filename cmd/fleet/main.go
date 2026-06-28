@@ -522,6 +522,8 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Get("/tasks/{task_id}", h.GetTask)
 		r.Put("/tasks/{task_id}", h.UpdateTask)
 		r.Post("/tasks/{task_id}/tags", h.UpdateTaskTags)
+		r.Post("/tasks/{task_id}/rerun", h.RerunTask)
+		r.Post("/tasks/{task_id}/clone", h.CloneTask)
 		r.Delete("/tasks/{task_id}", h.CancelTask)
 		r.Get("/logs/{task_id}", h.GetLogs)
 		r.Get("/stats", h.GetDashboardStats)
