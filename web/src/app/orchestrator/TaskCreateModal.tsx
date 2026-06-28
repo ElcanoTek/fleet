@@ -47,6 +47,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
 
   const [prompt, setPrompt] = useState("");
   const [description, setDescription] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
   const [emails, setEmails] = useState<string[]>([]);
   const [customEmail, setCustomEmail] = useState("");
   const [scheduledDate, setScheduledDate] = useState("");
@@ -118,6 +119,11 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
 
     const taskData: TaskCreate = { prompt: finalPrompt };
     if (description.trim()) taskData.description = description;
+    const tags = tagsInput
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+    if (tags.length > 0) taskData.tags = tags;
     if (model) taskData.model = model;
     if (fallbackModel) taskData.fallback_model = fallbackModel;
     if (maxIterations) taskData.max_iterations = Number.parseInt(maxIterations, 10);
@@ -201,6 +207,15 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                   placeholder="Why this task exists, what it costs, side effects, the runbook if it fails, who owns it… (Markdown)"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
+                />
+                <label htmlFor="tagsInput">Tags (comma-separated)</label>
+                <input
+                  id="tagsInput"
+                  name="tags"
+                  type="text"
+                  placeholder="nightly, prod, data-pipeline"
+                  value={tagsInput}
+                  onChange={(e) => setTagsInput(e.target.value)}
                 />
               </details>
             </div>
