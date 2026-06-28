@@ -52,6 +52,8 @@ import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
 import { SearchBar } from "./SearchBar";
 import { getPill } from "./protocolPills";
 import { useClientConfig } from "@/app/lib/useClientConfig";
+import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
+import { NavToOrchestrator } from "@/app/shared/ui/CrossViewNav";
 import {
   applyContextCompacted,
   applyContextPressure,
@@ -490,7 +492,9 @@ export function ChatExperience() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // searchOpen gates the Cmd/Ctrl+K full-text search palette (#308).
   const [searchOpen, setSearchOpen] = useState(false);
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
+  // Theme bootstrap + toggle are owned by the shared shell: the <ThemeToggle/>
+  // in this view's header self-manages light/dark via useTheme, the same way
+  // the orchestrator header and login card do.
   // showStats gates the whole per-turn "details" block: the cost /
   // latency / tokens / model chip, the conversation-wide totals chip,
   // AND the execution trail (tool pills + python stream output). One
@@ -1077,38 +1081,9 @@ export function ChatExperience() {
     }
   }, [contextUsage?.severity, activeConversationId]);
 
-  // Theme boot
-  useEffect(() => {
-    const root = document.documentElement;
-    const storageKey = "chat-theme-preference";
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-
-    const resolveTheme = () => {
-      const stored = window.localStorage.getItem(storageKey);
-      if (stored === "light" || stored === "dark") {
-        return stored;
-      }
-      return media.matches ? "dark" : "light";
-    };
-
-    const applyTheme = (nextTheme: "light" | "dark") => {
-      root.setAttribute("data-theme", nextTheme);
-      setTheme(nextTheme);
-    };
-
-    applyTheme(resolveTheme());
-
-    const handleSystemChange = () => {
-      const stored = window.localStorage.getItem(storageKey);
-      if (stored === "light" || stored === "dark") {
-        return;
-      }
-      applyTheme(media.matches ? "dark" : "light");
-    };
-
-    media.addEventListener("change", handleSystemChange);
-    return () => media.removeEventListener("change", handleSystemChange);
-  }, []);
+  // Theme bootstrap + toggle (read the persisted/system pref, apply
+  // data-theme, follow the OS until the user chooses) live in the shared
+  // useTheme hook, consumed by the <ThemeToggle/> in this view's header.
 
   // showStats boot: read once from localStorage. Kept in its own effect
   // (not merged with theme) so SSR hydration doesn't flicker the chip on
@@ -1657,10 +1632,6 @@ export function ChatExperience() {
     if (activeConversationId && activeConversation?.title) return activeConversation.title;
     return deriveConversationTitle(messages);
   }, [activeConversationId, activeConversation, messages]);
-  const themeLabel = useMemo(
-    () => (theme === "dark" ? "Switch to light mode" : "Switch to dark mode"),
-    [theme],
-  );
   // Show ⌘K only to mac users; everyone else gets Ctrl+K. SSR is off
   // for this component (dynamic import in app/page.tsx) so reading
   // navigator at render time is safe — no hydration mismatch.
@@ -3105,13 +3076,6 @@ export function ChatExperience() {
     }));
   };
 
-  const toggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    document.documentElement.setAttribute("data-theme", nextTheme);
-    window.localStorage.setItem("chat-theme-preference", nextTheme);
-    setTheme(nextTheme);
-  };
-
   const toggleShowStats = () => {
     setShowStats((prev) => {
       const next = !prev;
@@ -3676,16 +3640,10 @@ export function ChatExperience() {
             {userEmail || "Loading..."}
           </div>
 
-          {/* Cross-view link to the orchestrator (View B). The one middleware
-              gates both /chat and /orchestrator off the same session, so this
-              navigates without a re-login. */}
-          <a
-            href="/orchestrator"
-            data-testid="nav-to-orchestrator"
-            className="mb-4 block rounded-md px-2 py-1 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-          >
-            Operations Center →
-          </a>
+          {/* Cross-view link to the orchestrator (View B), from the shared
+              shell. The one middleware gates both /chat and /orchestrator off
+              the same session, so this navigates without a re-login. */}
+          <NavToOrchestrator className="mb-4 block rounded-md px-2 py-1 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]" />
 
           <div className="flex-1 overflow-y-auto">
             <p className="mb-1 px-2 text-[0.6875rem] font-medium text-[var(--color-text-muted)]">
@@ -4329,35 +4287,10 @@ export function ChatExperience() {
                   />
                 </span>
               </button>
-              <button
-                aria-label={themeLabel}
-                aria-pressed={theme === "dark"}
-                className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                title="Toggle theme"
-                type="button"
-                onClick={toggleTheme}
-              >
-                <span className="relative size-4" aria-hidden="true">
-                  <Icon
-                    name="sun"
-                    className={[
-                      "absolute inset-0 size-4 transition duration-200",
-                      theme === "light"
-                        ? "rotate-0 scale-100 opacity-100"
-                        : "-rotate-12 scale-[0.86] opacity-0",
-                    ].join(" ")}
-                  />
-                  <Icon
-                    name="moon"
-                    className={[
-                      "absolute inset-0 size-4 transition duration-200",
-                      theme === "dark"
-                        ? "rotate-0 scale-100 opacity-100"
-                        : "rotate-12 scale-[0.86] opacity-0",
-                    ].join(" ")}
-                  />
-                </span>
-              </button>
+              {/* Shared shell theme switch (same control as the orchestrator
+                  header + login card). Default chrome matches this header's
+                  square icon-button exactly. */}
+              <ThemeToggle />
             </div>
           </header>
 
