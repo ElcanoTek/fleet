@@ -4,7 +4,21 @@
 # routine updates land as one PR instead of a flood; majors stay separate so
 # breaking changes get their own review.
 #
-# Schema: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+# Supply-chain cooldown: the gomod and npm surfaces carry a `cooldown` block so
+# Dependabot waits a few days before opening a PR for a freshly published
+# release. This is a deliberate defense against fast typosquat / account-takeover
+# attacks, where a compromised version is published and then yanked once the
+# ecosystem flags it — by the time Dependabot proposes the bump, that window has
+# usually closed. It matters most for patch bumps, which the auto-merge workflow
+# (`.github/workflows/auto-merge-dependabot.yml`) merges on its own once CI is
+# green: the cooldown keeps a minutes-old patch from being proposed (and thus
+# auto-merged) before the ecosystem has had a chance to scrutinize it. Cooldown
+# applies to version updates only, never to Dependabot security updates, so
+# urgent CVE fixes are not delayed.
+#
+# Schema (key `cooldown`, integer `*-days` sub-keys; supported for gomod and npm;
+# applies to version updates only):
+#   https://docs.github.com/code-security/reference/supply-chain-security/dependabot-options-reference#cooldown--
 version: 2
 
 updates:
@@ -14,6 +28,13 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # Wait before proposing freshly published releases (see header). Patch is the
+    # tightest gate because auto-merge-dependabot.yml auto-merges patch bumps.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     commit-message:
       prefix: "deps(go)"
     groups:
@@ -28,6 +49,12 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # Same supply-chain cooldown as gomod (see header).
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
     commit-message:
       prefix: "deps(web)"
     groups:
