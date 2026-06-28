@@ -931,6 +931,15 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tool-call audit log — `GET /conversations/{id}/audit` returns the
+	// persistent, queryable history of every tool the agent ran in this
+	// conversation (#224). Membership-scoped: 404 for a conversation the
+	// caller doesn't own.
+	if sub == "audit" && r.Method == http.MethodGet {
+		s.handleConversationAudit(w, r, id)
+		return
+	}
+
 	switch {
 	case sub == "" && r.Method == http.MethodGet:
 		conv, err := s.store.Get(r.Context(), user, id)
@@ -1537,6 +1546,10 @@ func (s *Server) runTurnAsync(
 	memories []string,
 	imageAttachments []agent.ImageAttachment,
 ) {
+	// Turn-start timestamp, stamped on every tool-call audit row derived from
+	// this turn (the SDK does not propagate per-call timing, so the turn start is
+	// the available anchor — see deriveToolCallEntries).
+	startedAtUnix := time.Now().Unix()
 	// Order matters: finishTurn must seal the buffer and schedule
 	// retention AFTER title_updated has been emitted. turnCancel runs
 	// first to release any resources the agent still holds.
@@ -1618,6 +1631,18 @@ func (s *Server) runTurnAsync(
 
 	if err := s.store.AppendHistory(persistCtx, conv.ID, res.NewHistory); err != nil {
 		log.Printf("persist history error (user=%s conv=%s): %v", user, conv.ID, err)
+	}
+
+	// Tool-call audit ledger (#224): derive one row per tool call from the same
+	// accumulated history we just persisted, so the choke point is the existing
+	// event flow rather than a new instrumentation point in the hot loop. Args
+	// are redacted before insertion (see deriveToolCallEntries). Best-effort: a
+	// failure is logged but never fails the turn — the ledger is observability,
+	// not a turn-blocking dependency.
+	if entries := deriveToolCallEntries(res.NewHistory, conv.ID, buf.turnID, user, startedAtUnix); len(entries) > 0 {
+		if err := s.store.RecordToolCalls(persistCtx, entries); err != nil {
+			log.Printf("RecordToolCalls (user=%s conv=%s): %v", user, conv.ID, err)
+		}
 	}
 
 	// Record metrics so the admin dashboard can aggregate cost per user.
@@ -1987,6 +2012,94 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 	}
 	defer f.Close()
 	http.ServeContent(w, r, filepath.Base(resolvedAbs), info.ModTime(), f)
+}
+
+// auditDefaultLimit / auditMaxLimit bound the per-conversation audit page size.
+const (
+	auditDefaultLimit = 50
+	auditMaxLimit     = 200
+)
+
+// handleConversationAudit serves GET /conversations/{id}/audit — the persistent,
+// queryable tool-call audit log for one conversation (#224).
+//
+// Membership scope: it 404s a conversation the caller doesn't own (store.Get is
+// scoped by user_email), so one user can never read another's tool history. This
+// reuses the exact ownership check every other conversation sub-route uses
+// (handleStream, the GET conversationByID body) — there is no separate, weaker
+// authorization path.
+//
+// Query params (all optional): tool (filter to one tool name), from (RFC3339 or
+// YYYY-MM-DD lower bound on started_at), limit (default 50, max 200). The
+// response shape mirrors the stored row, with redacted args/result summaries —
+// raw secret values never reach this endpoint (see deriveToolCallEntries).
+func (s *Server) handleConversationAudit(w http.ResponseWriter, r *http.Request, convID string) {
+	user := userFromCtx(r.Context())
+	conv, err := s.store.Get(r.Context(), user, convID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conv == nil {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+
+	toolFilter := r.URL.Query().Get("tool")
+	fromUnix := parseAuditFrom(r.URL.Query().Get("from"))
+
+	limit := auditDefaultLimit
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > auditMaxLimit {
+		limit = auditMaxLimit
+	}
+
+	entries, err := s.store.ListToolCalls(r.Context(), convID, toolFilter, fromUnix, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Named "rows" (not "tools") to avoid shadowing the package-level `tools`
+	// import used elsewhere in this file.
+	rows := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		row := map[string]any{
+			"id":             e.ID,
+			"turn_id":        e.TurnID,
+			"tool_name":      e.ToolName,
+			"args_summary":   e.ArgsSummary,
+			"result_summary": e.ResultSummary,
+			"is_error":       e.IsError,
+			"started_at":     e.StartedAt,
+		}
+		if e.DurationMS != nil {
+			row["duration_ms"] = *e.DurationMS
+		}
+		rows = append(rows, row)
+	}
+	writeJSON(w, map[string]any{"tool_calls": rows})
+}
+
+// parseAuditFrom parses the `from` audit query param, accepting either a full
+// RFC3339 timestamp or a bare YYYY-MM-DD date. Returns the unix-second lower
+// bound, or 0 (no floor) when the value is empty or unparseable — a malformed
+// filter degrades to "no lower bound" rather than erroring the request.
+func parseAuditFrom(raw string) int64 {
+	if raw == "" {
+		return 0
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.Unix()
+	}
+	if t, err := time.Parse("2006-01-02", raw); err == nil {
+		return t.Unix()
+	}
+	return 0
 }
 
 // parseLastEventID extracts the `Last-Event-ID` header, falling back
