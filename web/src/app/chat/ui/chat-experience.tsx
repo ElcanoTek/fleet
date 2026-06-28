@@ -52,6 +52,7 @@ import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
 import { SearchBar } from "./SearchBar";
 import { getPill } from "./protocolPills";
 import { useClientConfig } from "@/app/lib/useClientConfig";
+import { fetchClientSession } from "@/app/shared/lib/session";
 import {
   applyContextCompacted,
   applyContextPressure,
@@ -2883,14 +2884,13 @@ export function ChatExperience() {
 
     const loadInitialState = async () => {
       try {
-        const sessionResponse = await fetch("/api/session", { cache: "no-store" });
-        if (!sessionResponse.ok) {
+        const session = await fetchClientSession();
+        if (!session) {
           window.location.href = "/login";
           return;
         }
-        const sessionData = (await sessionResponse.json()) as { email: string };
         if (cancelled) return;
-        setUserEmail(sessionData.email);
+        setUserEmail(session.email);
 
         // Personas
         try {

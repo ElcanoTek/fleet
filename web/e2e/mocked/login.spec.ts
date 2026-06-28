@@ -20,8 +20,9 @@ test("unauthenticated /orchestrator is gated by the shared middleware", async ({
   // (see middleware.test.ts: "gates /orchestrator/* with the SAME session
   // check"). With no session cookie the production server redirects to /login;
   // either way the dashboard must never render for an unauthenticated visitor.
-  await page.route("**/api/orchestrator/me", (r: Route) =>
-    r.fulfill({ status: 401, json: { authenticated: false } }),
+  // The orchestrator's cookie probe now shares chat's /api/session source.
+  await page.route("**/api/session", (r: Route) =>
+    r.fulfill({ status: 401, json: { error: "Unauthorized" } }),
   );
   await page.goto("/orchestrator");
   await expect(page).toHaveURL(/\/login$/);

@@ -42,7 +42,6 @@ async function mockOrchestrator(page: Page, captured: { createBody?: Record<stri
     const path = url.pathname.replace("/api/orchestrator", "");
     const method = route.request().method();
 
-    if (path === "/me") return route.fulfill({ json: { authenticated: true, username: "e2e" } });
     if (path === "/stats") return route.fulfill({ json: STATS });
     if (path === "/nodes") return route.fulfill({ json: NODES });
     if (path === "/mcp-servers") return route.fulfill({ json: MCP_SERVERS });
