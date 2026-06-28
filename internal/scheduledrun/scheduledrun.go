@@ -204,6 +204,20 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	if err != nil {
 		return nil, fmt.Errorf("prepare worktree: %w", err)
 	}
+
+	// Record the effective per-run workspace path for the file browser (#287): the
+	// per-run git worktree subdir when isolation is enabled, otherwise the shared
+	// workspace root the sandbox bind-mounts. Reported once, before the agent runs;
+	// the reporter (installed by the runner pool) persists it to the task row. A
+	// nil reporter (tests / cutlass one-shot) makes this a no-op.
+	effectiveWorkspace := wtPath
+	if effectiveWorkspace == "" {
+		effectiveWorkspace = r.workspaceRoot()
+	}
+	if abs, aerr := filepath.Abs(effectiveWorkspace); aerr == nil {
+		effectiveWorkspace = abs
+	}
+	reportWorkspacePath(ctx, effectiveWorkspace)
 	// Cleanup is scheduled in a defer so its clock starts at run COMPLETION, never
 	// run start: the agent executes synchronously below (a loop can run for many
 	// minutes), and arming the delay timer up-front would let a delay shorter than
