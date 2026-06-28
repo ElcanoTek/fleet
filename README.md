@@ -684,6 +684,30 @@ DSN passwords are redacted in the output.
 > just confirm a chat turn executes a `run_python` tool call. Use `--no-sandbox`
 > to skip the check when running `status` as root.
 
+### diagnose — a redacted support bundle for issue reports
+
+```
+fleet-admin diagnose                       # write fleet-diagnose-<UTC>.tar.gz to the cwd
+fleet-admin diagnose --output /tmp/bundle.tar.gz
+fleet-admin diagnose --no-sandbox          # skip the podman image inspection
+```
+
+`diagnose` collects a single gzipped tar you can attach to an issue. It bundles
+four text sections: `status.txt` (the **exact** `fleet-admin status` ✓/✗ report —
+the same checks, not a copy), `config.txt` (the **names** of the set
+`FLEET_*`/`CHAT_*`/`DATABASE_URL`/`OPENROUTER_API_KEY` env vars — never their
+values — plus the loaded bundle's app name, model hints, and MCP server names),
+`db.txt` (the migration version of **both** databases via read-only SQL — no
+migrations run), and `sandbox.txt` (the resolved sandbox image ref and, when
+podman is present, that image's id/size).
+
+It **never uploads anything** — it only writes a local file — and it **never
+writes a secret value**: every section is run through fleet's centralized
+scrubber (`internal/redact`, seeded with the values of secret-named env vars) and
+DSN passwords are stripped before anything is added to the archive. A section that
+can't be collected (e.g. a DB is unreachable) becomes an `ERROR …` line; the rest
+of the bundle is still written. Review the tarball before sharing it.
+
 ### service lifecycle — restart · stop · logs
 
 Day-2 conveniences over the host systemd unit, so you never drop to raw
