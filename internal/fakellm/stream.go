@@ -285,15 +285,41 @@ func (s *Server) handleModels(w http.ResponseWriter, _ *http.Request) {
 	ids := append([]string(nil), s.models...)
 	s.mu.RUnlock()
 
+	// Mirror the subset of the real OpenRouter /api/v1/models shape that the
+	// discovery endpoint (#251) parses: pricing strings, input modalities, and
+	// top_provider.max_completion_tokens, so the live e2e exercises the full
+	// picker path (pricing + vision + thinking badges) rather than just ids.
+	type pricing struct {
+		Prompt     string `json:"prompt"`
+		Completion string `json:"completion"`
+	}
+	type architecture struct {
+		InputModalities []string `json:"input_modalities"`
+	}
+	type topProvider struct {
+		MaxCompletionTokens *int `json:"max_completion_tokens"`
+	}
 	type entry struct {
-		ID            string `json:"id"`
-		ContextLength int    `json:"context_length"`
+		ID            string       `json:"id"`
+		Name          string       `json:"name"`
+		ContextLength int          `json:"context_length"`
+		Pricing       pricing      `json:"pricing"`
+		Architecture  architecture `json:"architecture"`
+		TopProvider   topProvider  `json:"top_provider"`
 	}
 	out := struct {
 		Data []entry `json:"data"`
 	}{}
+	maxCompletion := 8192
 	for _, id := range ids {
-		out.Data = append(out.Data, entry{ID: id, ContextLength: 200000})
+		out.Data = append(out.Data, entry{
+			ID:            id,
+			Name:          id,
+			ContextLength: 200000,
+			Pricing:       pricing{Prompt: "0.000003", Completion: "0.000015"},
+			Architecture:  architecture{InputModalities: []string{"text", "image"}},
+			TopProvider:   topProvider{MaxCompletionTokens: &maxCompletion},
+		})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)

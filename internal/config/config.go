@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -784,14 +785,37 @@ func (c *Config) LockdownAvailable() bool {
 	return c.SandboxImage != ""
 }
 
-// LockdownAllows reports whether the slug is on the lockdown allow-list.
+// LockdownAllows reports whether the slug is on the lockdown allow-list. The
+// allow-list entries may be exact slugs or `*`-glob patterns (e.g.
+// "anthropic/*", "google/gemini-*"), matched via ModelAllowed — a superset of
+// the historical exact-string behavior, so an entry with no wildcard still
+// matches exactly as before.
 func (c *Config) LockdownAllows(slug string) bool {
+	return ModelAllowed(slug, c.LockdownAllowedModels)
+}
+
+// ModelAllowed reports whether slug matches any pattern in the allow-list.
+// Patterns support `*` wildcards via path.Match (a `/`-aware glob); an entry
+// with no metacharacters degrades to exact-string equality. An empty slug never
+// matches. An empty pattern list returns false — callers that want "no list =
+// allow all" must check len(list)==0 themselves, so the meaning of an empty list
+// stays explicit at each call site.
+func ModelAllowed(slug string, patterns []string) bool {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
 		return false
 	}
-	for _, allowed := range c.LockdownAllowedModels {
-		if allowed == slug {
+	for _, pat := range patterns {
+		pat = strings.TrimSpace(pat)
+		if pat == "" {
+			continue
+		}
+		if pat == slug {
+			return true
+		}
+		// path.Match only errors on a malformed pattern (e.g. an unterminated
+		// `[`); treat that as "no match" rather than letting it match anything.
+		if ok, err := path.Match(pat, slug); err == nil && ok {
 			return true
 		}
 	}
