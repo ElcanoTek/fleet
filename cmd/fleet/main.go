@@ -158,6 +158,14 @@ func run() error {
 	systemPromptsDir := bundle.SystemPromptsDir
 	skillsDir := bundle.SkillsDir
 
+	// Per-persona tool allowlists (Gate-4, #294): translate the bundle manifest's
+	// personas: block into the agentcore form once and hand the SAME map to both
+	// drivers. The generic bundle declares no personas: block, so this is empty
+	// and behaviour is unchanged (every persona sees all permitted tools). The gate
+	// only NARROWS — a persona's allowlist can subtract from, never widen beyond,
+	// the server/credential gates.
+	personaPolicies := toAgentcorePersonaPolicies(bundle)
+
 	// Shared box-wide admission limiter: bounds TOTAL in-flight agent turns
 	// (interactive chat + scheduled tasks) to FLEET_MAX_CONCURRENT_AGENTS, with a
 	// slice reserved for interactive chat so background tasks can never starve it.
@@ -257,6 +265,7 @@ func run() error {
 		Limiter:              agentLimiter, // shared box-wide cap; interactive turns admitted through it
 		NotesProvider:        notesProvider,
 		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
+		PersonaPolicies:      personaPolicies,
 	})
 	if err != nil {
 		return fmt.Errorf("build interactive engine: %w", err)
@@ -362,6 +371,7 @@ func run() error {
 		PersonasDir:      personasDir,
 		SystemPromptsDir: systemPromptsDir,
 		ProtocolsDir:     protocolsDir,
+		PersonaPolicies:  personaPolicies,
 		// Record per-iteration telemetry for looped tasks (#179).
 		IterationStore: schedStorage,
 		// Back the built-in create_task tool (#277) so a scheduled task that opted
@@ -775,6 +785,51 @@ func toAgentcorePricing(p clientconfig.PricingConfig) agentcore.PricingConfig {
 		}
 	}
 	return out
+}
+
+// toAgentcorePersonaPolicies translates the bundle manifest's personas: block
+// (#294) into the agentcore.PersonaToolPermissions map both drivers consume,
+// keyed by persona basename. An entry whose allow+deny lists are both empty is
+// SKIPPED (it is the explicit no-narrowing case; carrying it would only add a
+// map lookup that resolves to the same passthrough). The generic bundle declares
+// no personas: block, so this returns nil and behaviour is unchanged. The
+// manifest loader already validated names are non-blank and unique.
+func toAgentcorePersonaPolicies(bundle *clientconfig.Bundle) map[string]agentcore.PersonaToolPermissions {
+	if bundle == nil || len(bundle.Personas) == 0 {
+		return nil
+	}
+	out := make(map[string]agentcore.PersonaToolPermissions, len(bundle.Personas))
+	for _, p := range bundle.Personas {
+		policy, ok := bundle.PersonaToolPolicy(p.Name)
+		if !ok || (len(policy.Allow) == 0 && len(policy.Deny) == 0) {
+			continue
+		}
+		// Key by the normalized basename so a manifest "name: code-reviewer.yaml"
+		// and a run's "code-reviewer" persona resolve to the same entry. The
+		// accessor returns defensive copies, so the slices are ours to hand off.
+		out[personaKey(p.Name)] = agentcore.PersonaToolPermissions{
+			Allow: policy.Allow,
+			Deny:  policy.Deny,
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// personaKey normalizes a persona reference to its bare basename — stripping any
+// directory and trailing .yaml/.yml — so the manifest map keys match the basename
+// the drivers look a run's persona up by.
+func personaKey(name string) string {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == "." || base == string(filepath.Separator) {
+		return ""
+	}
+	if ext := filepath.Ext(base); ext == ".yaml" || ext == ".yml" {
+		base = strings.TrimSuffix(base, ext)
+	}
+	return strings.TrimSpace(base)
 }
 
 // ensureDistinctDatabases fails fast when the chat and sched DSNs resolve to the

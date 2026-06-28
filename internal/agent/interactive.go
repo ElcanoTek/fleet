@@ -67,6 +67,15 @@ type TurnConfig struct {
 	OptionalServers agentcore.MCPOptionalSet
 	Selection       agentcore.MCPSelection
 
+	// Persona is the turn's active persona basename (e.g. "assistant"), used to
+	// label persona_tool_blocked audit events. PersonaPolicy is the per-persona
+	// tool allowlist (Gate-4, #294): nil keeps current behavior (the persona sees
+	// every tool the server/credential gates already permit). When set it NARROWS
+	// the registered tool roster before the first LLM call. The Manager resolves
+	// it from the bundle manifest's personas: block for the turn's persona.
+	Persona       string
+	PersonaPolicy *agentcore.PersonaToolPermissions
+
 	MaxCostUSD     float64
 	MaxTotalTokens int
 
@@ -135,6 +144,8 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		Allowlist:           tc.Allowlist,
 		OptionalServers:     tc.OptionalServers,
 		Selection:           tc.Selection,
+		PersonaName:         tc.Persona,
+		PersonaPolicy:       tc.PersonaPolicy,
 		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)

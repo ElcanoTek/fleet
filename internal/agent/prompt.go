@@ -129,6 +129,27 @@ type Manager struct {
 	// skipped straight to the fallback on later turns and operators can query
 	// per-model health. Passed into every interactive run's Deps.
 	health *agentcore.ProviderHealthRegistry
+
+	// personaPolicies is the per-persona tool allowlist (Gate-4, #294), keyed by
+	// persona basename, resolved once from the bundle manifest's personas: block.
+	// A persona with no entry inherits the permissive default (sees every tool the
+	// server/credential gates permit). Nil/empty when the bundle declares no
+	// personas: block — defaults unchanged.
+	personaPolicies map[string]agentcore.PersonaToolPermissions
+}
+
+// personaPolicy returns the per-persona tool allowlist for the named persona
+// (#294), or nil when the persona has no manifest entry or its policy is empty
+// (both cases mean "no narrowing"). nil-safe.
+func (m *Manager) personaPolicy(persona string) *agentcore.PersonaToolPermissions {
+	if m == nil || len(m.personaPolicies) == 0 {
+		return nil
+	}
+	p, ok := m.personaPolicies[persona]
+	if !ok || (len(p.Allow) == 0 && len(p.Deny) == 0) {
+		return nil
+	}
+	return &p
 }
 
 // ProviderHealth returns a snapshot of per-model circuit-breaker state for the

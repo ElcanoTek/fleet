@@ -105,6 +105,13 @@ type Bundle struct {
 	// in the generic bundle. cmd/fleet translates it into agentcore.AgentPolicy.
 	AgentPolicyConfig AgentPolicy
 
+	// Personas carries the manifest's optional per-persona tool-permission
+	// policies (#294), in manifest order. Empty in the generic bundle (defaults
+	// unchanged). Look one up via PersonaToolPolicy. cmd/fleet translates each
+	// into agentcore.PersonaToolPermissions and the drivers apply it as a
+	// least-privilege NARROWING gate when building a run's tool roster.
+	Personas []PersonaDef
+
 	// HTTPTools is the manifest's inline REST-API tool catalog (the http_tools:
 	// section), in manifest order. Each entry is registered as a native tool
 	// alongside the MCP catalog — no MCP subprocess required. Empty in the generic
@@ -152,6 +159,44 @@ type AgentPolicy struct {
 	ParallelSafeTools       []string            `yaml:"parallel_safe_tools"`
 	CriticalToolSuffixes    []string            `yaml:"critical_tools"`
 	CriticalToolSubstitutes map[string][]string `yaml:"critical_tool_substitutes"`
+}
+
+// PersonaToolPermissions is the per-persona tool policy declared in the
+// manifest's personas: block (#294). It is a least-privilege NARROWING gate
+// layered on top of the existing server allowlist (Gate-2) and credential
+// allowlist (Gate-3): it can only SUBTRACT from what a persona is already
+// permitted to call, never add. It is a plain data struct (no dependency on
+// internal/agentcore) so clientconfig stays a low-level package; cmd/fleet
+// translates it into agentcore.PersonaToolPermissions.
+//
+//   - An absent block (both lists empty) means all tools are available
+//     (backward compatible — existing bundles are unaffected).
+//   - When Allow is non-empty, only listed tools are offered (default-deny).
+//   - When only Deny is set, all tools except those are offered (default-allow
+//     with exceptions).
+//   - Deny takes precedence when a tool matches both lists.
+//
+// Pattern syntax (matched against the fantasy tool name, e.g. "bash" or
+// "mcp_<server>_<tool>"):
+//
+//	bash                      exact native-tool name
+//	mcp:server/tool           specific MCP tool (→ "mcp_<server>_<tool>")
+//	mcp:server/*              all tools from one MCP server
+//	prefix/*                  any tool whose fantasy name has the prefix
+//	*                         all tools
+type PersonaToolPermissions struct {
+	Allow []string `yaml:"allow"`
+	Deny  []string `yaml:"deny"`
+}
+
+// PersonaDef is one entry in the manifest's personas: block. Name matches the
+// basename of a persona YAML file in personas/ (e.g. "code-reviewer" for
+// personas/code-reviewer.yaml). A persona with no entry — or an entry with an
+// empty tool_permissions block — keeps current behavior (sees all permitted
+// tools).
+type PersonaDef struct {
+	Name            string                 `yaml:"name"`
+	ToolPermissions PersonaToolPermissions `yaml:"tool_permissions"`
 }
 
 // PricingOverride is one entry in the manifest's pricing.overrides list: an
@@ -427,6 +472,7 @@ type manifest struct {
 	EmptyState    EmptyState       `yaml:"empty_state"`
 	TaskTemplates []TaskTemplate   `yaml:"task_templates"`
 	AgentPolicy   AgentPolicy      `yaml:"agent_policy"`
+	Personas      []PersonaDef     `yaml:"personas"`
 	Pricing       PricingConfig    `yaml:"pricing"`
 	Sandbox       *sandboxManifest `yaml:"sandbox"`
 }
@@ -493,6 +539,7 @@ func Load(dir string) (*Bundle, error) {
 		MCPCatalog:        m.MCPServers,
 		HTTPTools:         m.HTTPTools,
 		AgentPolicyConfig: m.AgentPolicy,
+		Personas:          m.Personas,
 		PricingConfig:     m.Pricing,
 		SandboxConfig:     resolveSandbox(m.Sandbox, abs),
 		sandboxDeclared:   m.Sandbox != nil,
@@ -639,8 +686,32 @@ func (b *Bundle) validate() error {
 	if err := b.validateHTTPTools(seen); err != nil {
 		return err
 	}
+	if err := b.validatePersonas(); err != nil {
+		return err
+	}
 	if err := validatePricing(b.PricingConfig); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validatePersonas fails the load on a malformed personas[] entry — a blank
+// name or a duplicate name. A typo'd or duplicated persona entry would
+// otherwise silently fail to bind its tool policy (leaving the persona on the
+// permissive default), which for a least-privilege gate is the dangerous
+// direction: fail loud at startup instead. Empty tool_permissions blocks are
+// allowed (they are the explicit "no narrowing" case).
+func (b *Bundle) validatePersonas() error {
+	seen := map[string]bool{}
+	for i := range b.Personas {
+		name := strings.TrimSpace(b.Personas[i].Name)
+		if name == "" {
+			return fmt.Errorf("personas[%d]: name is required", i)
+		}
+		if seen[name] {
+			return fmt.Errorf("personas: duplicate persona name %q", name)
+		}
+		seen[name] = true
 	}
 	return nil
 }
@@ -874,6 +945,48 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		}
 	}
 	return p
+}
+
+// PersonaToolPolicy returns the manifest tool-permission policy for the named
+// persona (#294), defensively copied, and whether an entry exists. The name is
+// the persona basename (with any directory / .yaml extension stripped) so a
+// caller can pass either "code-reviewer" or "code-reviewer.yaml". A persona
+// with no manifest entry returns (zero, false); the caller treats that as "no
+// narrowing" (sees all permitted tools). An entry whose lists are both empty
+// returns (zero-valued-but-present, true), which is functionally identical to
+// no narrowing — the policy can only ever subtract.
+func (b *Bundle) PersonaToolPolicy(name string) (PersonaToolPermissions, bool) {
+	want := personaBaseName(name)
+	if want == "" {
+		return PersonaToolPermissions{}, false
+	}
+	for i := range b.Personas {
+		if personaBaseName(b.Personas[i].Name) != want {
+			continue
+		}
+		src := b.Personas[i].ToolPermissions
+		return PersonaToolPermissions{
+			Allow: append([]string(nil), src.Allow...),
+			Deny:  append([]string(nil), src.Deny...),
+		}, true
+	}
+	return PersonaToolPermissions{}, false
+}
+
+// personaBaseName normalizes a persona reference to its bare basename: it
+// strips any directory and a trailing .yaml/.yml extension and trims spaces, so
+// "personas/code-reviewer.yaml", "code-reviewer.yaml", and "code-reviewer" all
+// resolve to the same key. The drivers identify personas by this basename when
+// matching a run's persona against the manifest entries.
+func personaBaseName(name string) string {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == "." || base == string(filepath.Separator) {
+		return ""
+	}
+	if ext := filepath.Ext(base); ext == ".yaml" || ext == ".yml" {
+		base = strings.TrimSuffix(base, ext)
+	}
+	return strings.TrimSpace(base)
 }
 
 // Pricing returns the bundle's custom model-pricing config (defensively copied),
