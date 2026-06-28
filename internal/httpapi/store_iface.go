@@ -53,6 +53,10 @@ type chatStore interface {
 	InsertTurnEvents(ctx context.Context, events []store.TurnEvent) error
 	FinishTurn(ctx context.Context, turnID string, status store.TurnStatus, finishedAt int64, lossy bool) error
 	LoadTurnEvents(ctx context.Context, turnID string, afterEventID uint64) ([]store.TurnEvent, error)
+	// GetTurnEventPage is the cursor-paginated read path over a whole
+	// conversation's turn events (#189). See store.GetTurnEventPage for the
+	// cursor/direction contract.
+	GetTurnEventPage(ctx context.Context, conversationID string, cursor int64, limit int, asc bool) ([]store.TurnEvent, int64, error)
 	LookupTurn(ctx context.Context, turnID string) (*store.TurnRecord, error)
 
 	// Tool-call audit ledger (#224): one row per tool invocation, written from
