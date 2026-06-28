@@ -540,6 +540,31 @@ does (and the manual path if you'd rather run each piece yourself):
    `X-Content-Type-Options`/`X-Frame-Options`. The orchestrator stays loopback
    HTTP — it is impersonation-load-bearing and must remain on 127.0.0.1.
 
+5. **IP access control (optional defense-in-depth)** — the chat server can
+   restrict access at the network level, in front of the shared-token auth, so an
+   operator can express "only our office + VPN ranges" in fleet config instead of
+   host firewall rules. All three knobs are **empty by default**, which is fully
+   backward compatible — no list means every source IP is allowed, exactly as
+   before:
+   - `FLEET_IP_ALLOWLIST` — comma-separated IPs/CIDRs (e.g.
+     `192.168.1.0/24,10.0.0.0/8,203.0.113.7`). When set, **only** matching
+     addresses may connect; a bare host is treated as `/32` (IPv4) or `/128`
+     (IPv6).
+   - `FLEET_IP_DENYLIST` — comma-separated IPs/CIDRs that are **always** blocked.
+     **Deny overrides allow** — an address in both lists is denied.
+   - `FLEET_TRUSTED_PROXIES` — comma-separated IPs of trusted reverse proxies
+     (e.g. the fronting Caddy: `127.0.0.1,::1`). Only when the immediate peer is
+     one of these does fleet read the real client IP from `X-Forwarded-For`.
+     **Without this set, `X-Forwarded-For` is never consulted**, so an untrusted
+     client cannot spoof an allowlisted address via the header — you must
+     explicitly opt in by naming your proxy IPs.
+
+   Blocked requests get a uniform `403 Access denied` (plain text, no reason
+   leaked); `/healthz` is exempt so load-balancer probes keep working; a
+   malformed CIDR/IP entry is a **fatal startup error** (a silently-dropped
+   allowlist entry could leave the box more open than intended); and the active
+   filter state is logged at startup and surfaced in `GET /admin/health-summary`.
+
 See `deploy/fleet.service` and `deploy/Caddyfile` for the full annotated knob
 list (listener addresses, admin/registration tokens, data dir, timezone).
 

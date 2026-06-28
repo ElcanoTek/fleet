@@ -1061,3 +1061,66 @@ func TestLoadWithSingleQuotedEnvFromPodman(t *testing.T) {
 		t.Errorf("Expected quotes stripped, got: %q", cfg.OpenRouterAPIKey)
 	}
 }
+
+func TestLoad_IPAccessControlDefaultsEmpty(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.IPAllowlist) != 0 {
+		t.Errorf("IPAllowlist default: got %v, want empty (allow-all)", cfg.IPAllowlist)
+	}
+	if len(cfg.IPDenylist) != 0 {
+		t.Errorf("IPDenylist default: got %v, want empty", cfg.IPDenylist)
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Errorf("TrustedProxies default: got %v, want empty", cfg.TrustedProxies)
+	}
+}
+
+func TestLoad_IPAccessControlParses(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+	t.Setenv("FLEET_IP_ALLOWLIST", "192.168.1.0/24, 10.0.0.0/8, 203.0.113.7")
+	t.Setenv("FLEET_IP_DENYLIST", "45.33.32.156")
+	t.Setenv("FLEET_TRUSTED_PROXIES", "127.0.0.1, ::1")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := len(cfg.IPAllowlist); got != 3 {
+		t.Fatalf("IPAllowlist len = %d, want 3", got)
+	}
+	// Bare host coerced to /32.
+	if s := cfg.IPAllowlist[2].String(); s != "203.0.113.7/32" {
+		t.Errorf("bare host CIDR = %q, want 203.0.113.7/32", s)
+	}
+	if got := len(cfg.IPDenylist); got != 1 {
+		t.Errorf("IPDenylist len = %d, want 1", got)
+	}
+	if got := len(cfg.TrustedProxies); got != 2 {
+		t.Errorf("TrustedProxies len = %d, want 2", got)
+	}
+}
+
+func TestLoad_IPAccessControlMalformedIsFatal(t *testing.T) {
+	cases := map[string]string{
+		"FLEET_IP_ALLOWLIST":    "not-a-cidr",
+		"FLEET_IP_DENYLIST":     "10.0.0.0/99",
+		"FLEET_TRUSTED_PROXIES": "999.999.999.999",
+	}
+	for envKey, badVal := range cases {
+		t.Run(envKey, func(t *testing.T) {
+			isolateEnv(t)
+			chdir(t, t.TempDir())
+			t.Setenv(envKey, badVal)
+			if _, err := Load(""); err == nil {
+				t.Fatalf("Load with malformed %s=%q: want error, got nil", envKey, badVal)
+			}
+		})
+	}
+}

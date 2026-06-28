@@ -299,6 +299,9 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 	}
 	log.Printf("sse: buffer_duration=%s max_bytes_per_turn=%d heartbeat_interval=%s",
 		bufferRetainTTL, sseMaxBytesPerTurn, sseHeartbeatInterval)
+	// Surface the active IP access-control state (#314) so an operator can confirm
+	// their config loaded. Silent when neither list is set (the default open case).
+	logIPFilter(ipFilterConfig{allow: cfg.IPAllowlist, deny: cfg.IPDenylist, trustedProxies: cfg.TrustedProxies})
 	return s
 }
 
@@ -497,7 +500,12 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
-	return recoverMiddleware(bodyLimitMiddleware(mux))
+	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits
+	// just inside recoverMiddleware and before bodyLimitMiddleware, so a blocked
+	// client IP is dropped before any body parsing, route dispatch, or auth
+	// comparison. It is a no-op (returns next unwrapped) when no allow/deny lists
+	// are configured, so default behavior is unchanged. /healthz stays exempt.
+	return recoverMiddleware(s.ipFilterMiddleware(bodyLimitMiddleware(mux)))
 }
 
 // maxJSONBodyBytes caps non-upload request bodies on the chat server, matching

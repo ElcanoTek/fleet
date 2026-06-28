@@ -39,6 +39,10 @@
 #   # ADMIN_API_KEY=... / REGISTRATION_TOKEN=...  # orchestrator admin/registration
 #   # FLEET_TIMEZONE=UTC / FLEET_DATA_DIR=/var/lib/fleet
 #   # FLEET_SHUTDOWN_GRACE_SECONDS=30            # drain budget on SIGTERM (keep < TimeoutStopSec)
+#   # IP access control (defense-in-depth, all empty by default = allow all):
+#   # FLEET_IP_ALLOWLIST=192.168.1.0/24,10.0.0.0/8 # if set, ONLY these IPs/CIDRs may connect
+#   # FLEET_IP_DENYLIST=45.33.32.156             # always blocked (deny overrides allow)
+#   # FLEET_TRUSTED_PROXIES=127.0.0.1,::1        # only these peers' X-Forwarded-For is trusted
 
 [Unit]
 Description=fleet (chat + orchestrator + scheduler + worker pool)

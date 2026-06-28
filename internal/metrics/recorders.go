@@ -13,7 +13,16 @@ const (
 	nameSandboxPool  = "fleet_sandbox_pool_size"
 	nameTurnTimeouts = "fleet_turn_timeouts_total"
 	nameRunsPruned   = "fleet_sched_runs_pruned_total"
+	nameIPBlocked    = "fleet_ip_blocked_total"
 )
+
+// RecordIPBlocked counts one request dropped by the IP access-control middleware
+// (#314), labeled by the matching list: "allowlist" (no allowlist match) or
+// "denylist" (explicitly blocked).
+func RecordIPBlocked(reason string) {
+	incCounter(nameIPBlocked, "Requests blocked by the IP access-control filter, by reason.",
+		[]string{"reason"}, []string{reason}, 1)
+}
 
 // RecordRunsPruned counts task runs deleted by the automatic retention sweep (#252).
 func RecordRunsPruned(n int) {
