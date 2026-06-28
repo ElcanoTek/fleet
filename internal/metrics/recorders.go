@@ -14,6 +14,20 @@ const (
 	nameTurnTimeouts = "fleet_turn_timeouts_total"
 	nameRunsPruned   = "fleet_sched_runs_pruned_total"
 	nameIPBlocked    = "fleet_ip_blocked_total"
+
+	// Per-task sandbox resource telemetry (#263). These are last-write-wins
+	// gauges reflecting the most recently FINISHED sandbox run, deliberately
+	// WITHOUT a task_id label: a task_id label would grow the time-series set
+	// without bound (one new series per run, forever), the cardinality
+	// anti-pattern Prometheus warns against. Per-task attribution belongs in
+	// the structured task log, not the metrics stream; the gauge answers
+	// "how hard is the sandbox being pushed lately" for alerting/right-sizing.
+	nameSandboxCPUUsage     = "fleet_sandbox_cpu_usage_percent"
+	nameSandboxMemUsage     = "fleet_sandbox_memory_usage_bytes"
+	nameSandboxMemLimit     = "fleet_sandbox_memory_limit_bytes"
+	nameSandboxIOBytes      = "fleet_sandbox_io_bytes"
+	nameSandboxPidsPeak     = "fleet_sandbox_pids_peak"
+	nameSandboxRunsObserved = "fleet_sandbox_runs_observed_total"
 )
 
 // RecordIPBlocked counts one request dropped by the IP access-control middleware
@@ -76,4 +90,30 @@ func RegisterSandboxPoolSize(size func() int) {
 	RegisterGauge(nameSandboxPool, "Warm sandbox containers currently parked in the pool.", nil, func() []GaugeSample {
 		return []GaugeSample{{Value: float64(size())}}
 	})
+}
+
+// RecordSandboxResourceUsage publishes one finished sandbox run's resource
+// telemetry (#263): peak CPU %, peak resident memory, the configured memory
+// limit, peak PID count, and cumulative block I/O. The gauges are last-write-
+// wins (no task_id label — see the const block for the cardinality rationale)
+// and io is split read/write via a `direction` label. netReported gates the
+// network I/O series so NoNetwork runs don't publish misleading zeros.
+//
+// This is observability sampled read-only from `podman stats`; it never alters
+// sandbox isolation or limits.
+func RecordSandboxResourceUsage(cpuPeak float64, memPeakBytes, memLimitBytes, blockInBytes, blockOutBytes, pidsPeak uint64, netReported bool, netInBytes, netOutBytes uint64) {
+	setGauge(nameSandboxCPUUsage, "Peak sandbox CPU percent for the most recently finished task run.", nil, nil, cpuPeak)
+	setGauge(nameSandboxMemUsage, "Peak sandbox resident memory in bytes for the most recently finished task run.", nil, nil, float64(memPeakBytes))
+	if memLimitBytes > 0 {
+		setGauge(nameSandboxMemLimit, "Configured sandbox memory limit in bytes (from the most recently finished task run).", nil, nil, float64(memLimitBytes))
+	}
+	setGauge(nameSandboxPidsPeak, "Peak sandbox PID count for the most recently finished task run.", nil, nil, float64(pidsPeak))
+	ioLabels := []string{"direction"}
+	setGauge(nameSandboxIOBytes, "Cumulative sandbox block I/O bytes for the most recently finished task run, by direction.", ioLabels, []string{"read"}, float64(blockInBytes))
+	setGauge(nameSandboxIOBytes, "Cumulative sandbox block I/O bytes for the most recently finished task run, by direction.", ioLabels, []string{"write"}, float64(blockOutBytes))
+	if netReported {
+		setGauge(nameSandboxIOBytes, "Cumulative sandbox block I/O bytes for the most recently finished task run, by direction.", ioLabels, []string{"net_in"}, float64(netInBytes))
+		setGauge(nameSandboxIOBytes, "Cumulative sandbox block I/O bytes for the most recently finished task run, by direction.", ioLabels, []string{"net_out"}, float64(netOutBytes))
+	}
+	incCounter(nameSandboxRunsObserved, "Total sandbox runs for which resource telemetry was collected.", nil, nil, 1)
 }

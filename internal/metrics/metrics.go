@@ -20,12 +20,14 @@ import (
 var reg = &registry{
 	counters:   map[string]*counterVec{},
 	histograms: map[string]*histogramVec{},
+	gauges:     map[string]*gaugeVec{},
 }
 
 type registry struct {
 	mu           sync.Mutex
 	counters     map[string]*counterVec
 	histograms   map[string]*histogramVec
+	gauges       map[string]*gaugeVec // imperatively-set gauges (last value wins)
 	gaugeFuncs   []gaugeFunc
 	counterFuncs []gaugeFunc // pull-at-scrape counters (cumulative values read live)
 }
@@ -49,6 +51,31 @@ func incCounter(name, help string, labelNames []string, labelVals []string, by f
 		reg.counters[name] = c
 	}
 	c.values[seriesKey(labelNames, labelVals)] += by
+}
+
+// ── gauges (imperatively set) ────────────────────────────────────────────────
+
+// gaugeVec is a settable gauge family: each Set overwrites the value for its
+// labelset (last write wins), unlike a counter which accumulates. Used for
+// point-in-time measurements pushed at the end of an event (e.g. a task run's
+// peak sandbox CPU/memory, #263) rather than pulled at scrape.
+type gaugeVec struct {
+	help   string
+	labels []string
+	values map[string]float64 // serialized-labelset → last value
+}
+
+// setGauge overwrites the gauge `name` for the given label values. Registers the
+// family on first use.
+func setGauge(name, help string, labelNames, labelVals []string, v float64) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	g := reg.gauges[name]
+	if g == nil {
+		g = &gaugeVec{help: help, labels: labelNames, values: map[string]float64{}}
+		reg.gauges[name] = g
+	}
+	g.values[seriesKey(labelNames, labelVals)] = v
 }
 
 // ── histograms ───────────────────────────────────────────────────────────────
@@ -170,6 +197,19 @@ func Render() string {
 			fmt.Fprintf(&b, "%s_bucket%s %d\n", n, withLE(k, "+Inf"), s.count)
 			fmt.Fprintf(&b, "%s_sum%s %s\n", n, k, formatFloat(s.sum))
 			fmt.Fprintf(&b, "%s_count%s %d\n", n, k, s.count)
+		}
+	}
+
+	gnames := make([]string, 0, len(reg.gauges))
+	for n := range reg.gauges {
+		gnames = append(gnames, n)
+	}
+	sort.Strings(gnames)
+	for _, n := range gnames {
+		g := reg.gauges[n]
+		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s gauge\n", n, g.help, n)
+		for _, line := range sortedSeries(g.values) {
+			fmt.Fprintf(&b, "%s%s %s\n", n, line.labels, formatFloat(line.value))
 		}
 	}
 

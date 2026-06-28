@@ -368,6 +368,21 @@ lowers the host's base footprint.
 > `FLEET_SANDBOX_PIDS` — otherwise those workloads are OOM-killed against the
 > 512 MiB default, not your host's free RAM.
 
+> **Per-task resource telemetry.** To help right-size those caps, fleet samples
+> `podman stats` read-only over each sandbox container's lifetime and records the
+> run's peak/average CPU and memory plus cumulative I/O and peak PID count. This
+> is **observability only** — it never changes the container's isolation or
+> limits. The peaks of the most recently finished run are exported on `/metrics`
+> as `fleet_sandbox_cpu_usage_percent`, `fleet_sandbox_memory_usage_bytes`,
+> `fleet_sandbox_memory_limit_bytes`, `fleet_sandbox_io_bytes{direction=…}`, and
+> `fleet_sandbox_pids_peak` (last-write-wins gauges, deliberately **without** a
+> per-task label to avoid unbounded time-series cardinality). When a run's memory
+> crosses 90% of its limit, a one-shot warning is logged so an OOM-prone task is
+> visible. Sampling cadence is `FLEET_SANDBOX_STATS_INTERVAL_SECONDS` (default
+> **10s**, floor **5s**); set it to a negative value to disable collection. When
+> `podman stats` is unavailable the feature degrades silently — it never fails a
+> turn.
+
 ### Quick start (one host)
 
 The topology (Caddy → web app → loopback backends):
