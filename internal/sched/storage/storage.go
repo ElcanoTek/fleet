@@ -833,6 +833,13 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 		task.AgentSessionID = update.AgentSessionID
 	}
 
+	// Record the per-run workspace path (#287) when the runner supplies it. A nil
+	// WorkspacePath leaves any previously-recorded value untouched, so a later
+	// terminal status update doesn't wipe the path the running update set.
+	if update.WorkspacePath != nil {
+		task.WorkspacePath = update.WorkspacePath
+	}
+
 	if update.Status == models.TaskStatusSuccess || update.Status == models.TaskStatusError {
 		completedAt := time.Now().UTC()
 		task.CompletedAt = &completedAt

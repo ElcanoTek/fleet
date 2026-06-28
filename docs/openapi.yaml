@@ -106,7 +106,23 @@ components:
         error_message: { type: string }
         files: { type: array, items: { type: string } }
         created_by: { type: string, format: uuid }
+        workspace_path: { type: string, description: "Host filesystem path of the per-run workspace directory the agent wrote into (#287). Present once the run begins; absent for tasks that never ran." }
       required: [id, prompt, status]
+    WorkspaceEntry:
+      type: object
+      properties:
+        name: { type: string, description: "Slash-joined path relative to the workspace root; directories carry a trailing slash." }
+        size_bytes: { type: integer, format: int64 }
+        modified_at: { type: string, format: date-time }
+        is_dir: { type: boolean }
+      required: [name, size_bytes, modified_at, is_dir]
+    WorkspaceListing:
+      type: object
+      properties:
+        files: { type: array, items: { $ref: "#/components/schemas/WorkspaceEntry" } }
+        workspace_path: { type: string, description: "The resolved workspace root the listing is rooted at." }
+        truncated: { type: boolean, description: "True when the listing was capped (very large workspace)." }
+      required: [files, workspace_path]
     NodeRegistration:
       type: object
       properties:
@@ -444,6 +460,68 @@ paths:
             text/event-stream:
               schema: { type: string }
         "404": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/workspace:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: List (or ZIP-export) the files an agent created in a completed task's workspace.
+      description: >
+        Lists the files the task's agent wrote into its per-run workspace directory
+        (reports, data, code, charts). Access is restricted to the admin or the
+        task's creator (the creating user or API key) — strictly more than ordinary
+        task visibility, because workspace files are private artifacts. Only available
+        for completed tasks (success/error); a running task's workspace is mid-write.
+        With ?format=zip the entire workspace is streamed as a ZIP archive (capped at
+        FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES total uncompressed size, default 50 MiB).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema: { type: string, enum: [zip] }
+          description: When "zip", stream the whole workspace as a ZIP archive instead of the JSON listing.
+      responses:
+        "200":
+          description: The workspace listing (JSON), or the ZIP archive when ?format=zip.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkspaceListing" }
+            application/zip:
+              schema: { type: string, format: binary }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/workspace/*:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Download a single file from a completed task's workspace.
+      description: >
+        Streams one file from the task's per-run workspace as an attachment. The
+        trailing path is interpreted relative to the workspace root and is guarded
+        against traversal (".."/absolute/NUL paths are rejected; symlinks that escape
+        the workspace root are not followable). Access is restricted to the admin or
+        the task's creator. A file larger than FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES
+        (default 50 MiB) returns 413 and must be fetched via the CLI.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: The file contents, as an attachment.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
   /tasks/pending:
     get:
       summary: Lease the next pending task (worker protocol).

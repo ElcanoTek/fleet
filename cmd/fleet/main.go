@@ -591,6 +591,12 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		// replay of the persisted log once finished (#200). Same auth/ownership gate
 		// as /logs/{task_id}.
 		r.Get("/tasks/{task_id}/stream", h.StreamTaskLogs)
+		// Workspace file browser (#287): list + download artifacts the task's agent
+		// wrote into its per-run workspace. Stricter than the generic task gate —
+		// the handler restricts access to the admin or the task's creator and
+		// enforces the shared path-traversal guard on every file access.
+		r.Get("/tasks/{task_id}/workspace", h.TaskWorkspace)
+		r.Get("/tasks/{task_id}/workspace/*", h.TaskWorkspaceFile)
 		r.Get("/stats", h.GetDashboardStats)
 		r.Get("/api/me", h.GetCurrentUser)
 

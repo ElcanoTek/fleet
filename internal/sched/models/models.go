@@ -656,13 +656,19 @@ type Task struct {
 	Status         TaskStatus `json:"status"`
 	AssignedNodeID *uuid.UUID `json:"assigned_node_id,omitempty"`
 	AgentSessionID *string    `json:"agent_session_id,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	CompletedAt    *time.Time `json:"completed_at,omitempty"`
-	Result         *string    `json:"result,omitempty"`
-	ErrorMessage   *string    `json:"error_message,omitempty"`
-	ScheduledFor   *time.Time `json:"scheduled_for,omitempty"`
-	Recurrence     string     `json:"recurrence,omitempty"`
+	// WorkspacePath is the host filesystem path of the per-run workspace directory
+	// the agent wrote into (#287). Set by the runner when the run begins; surfaced
+	// by the workspace file-browser endpoints. nil/empty = no workspace recorded
+	// (legacy rows or a run that never reached execution). Persisted; not settable
+	// by clients.
+	WorkspacePath *string    `json:"workspace_path,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	Result        *string    `json:"result,omitempty"`
+	ErrorMessage  *string    `json:"error_message,omitempty"`
+	ScheduledFor  *time.Time `json:"scheduled_for,omitempty"`
+	Recurrence    string     `json:"recurrence,omitempty"`
 	// Timezone is the IANA timezone the cron Recurrence is evaluated in. Always
 	// present in responses ("UTC" for legacy/unset tasks). See TaskCreate.Timezone.
 	Timezone string `json:"timezone"`
@@ -797,7 +803,11 @@ type StatusUpdate struct {
 	Message        *string    `json:"message,omitempty"`
 	Progress       *float64   `json:"progress,omitempty"`
 	AgentSessionID *string    `json:"agent_session_id,omitempty"`
-	Timestamp      *time.Time `json:"timestamp,omitempty"`
+	// WorkspacePath records the per-run workspace directory (#287). When non-nil
+	// the storage layer persists it on the task; nil leaves the existing value
+	// untouched (so a later status update doesn't clobber a recorded path).
+	WorkspacePath *string    `json:"workspace_path,omitempty"`
+	Timestamp     *time.Time `json:"timestamp,omitempty"`
 }
 
 // TaskAssignment is the task assignment carried to the worker.
