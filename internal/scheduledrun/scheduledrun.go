@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"charm.land/fantasy"
@@ -48,6 +49,12 @@ type Options struct {
 	// IterationStore records per-iteration telemetry for looped tasks (#179). nil
 	// disables telemetry (the loop still runs); production wires the sched storage.
 	IterationStore IterationStore
+
+	// TaskEnqueuer backs the built-in create_task tool (#277): it lets a SCHEDULED
+	// run of a task that opted in (allow_task_creation) enqueue follow-up tasks.
+	// nil disables the tool entirely (it is never registered) — the secure default.
+	// Production wires the sched storage; *storage.Storage satisfies the seam.
+	TaskEnqueuer tools.TaskEnqueuer
 }
 
 // Runner executes claimed scheduled tasks in-process through the unified runtime
@@ -75,6 +82,7 @@ type Runner struct {
 	baseSystemPrompt string
 
 	iterationStore IterationStore
+	taskEnqueuer   tools.TaskEnqueuer
 }
 
 // IterationStore records per-iteration telemetry for a looped task (#179). It is
@@ -97,6 +105,7 @@ func New(opts Options) *Runner {
 		systemPromptsDir: opts.SystemPromptsDir,
 		protocolsDir:     opts.ProtocolsDir,
 		iterationStore:   opts.IterationStore,
+		taskEnqueuer:     opts.TaskEnqueuer,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -149,6 +158,42 @@ func (r *Runner) taskPromptAndPersona(task *models.Task) (systemPrompt, persona 
 		return r.baseSystemPrompt, r.cfg.Persona
 	}
 	return r.composeSystemPrompt(personaFile), personaFile
+}
+
+// maybeAppendCreateTaskTool returns base with the built-in create_task tool
+// appended ONLY when the run is authorized to spawn follow-up tasks (#277):
+//   - an enqueuer must be wired (nil = the feature is disabled process-wide), and
+//   - the task must have opted in via allow_task_creation (default false).
+//
+// This is the authority gate, evaluated at tool-list construction time, mirroring
+// how the scheduled confirm_audit tool is conditionally appended. Because this
+// driver is scheduled-only, an INTERACTIVE turn never reaches this code at all,
+// and a scheduled run whose task did not opt in never gets the tool — so there is
+// no privilege-escalation path and the model literally cannot see create_task
+// unless its task granted the capability. When the gate is closed, base is
+// returned unchanged (defaults are byte-identical to the prior behaviour).
+//
+// The deeper limits (per-run spawn cap, per-child budget fraction, the stricter
+// recurrence grant) are enforced INSIDE the tool as defence in depth; this gate
+// only decides whether the tool exists for the run. The per-run spawn counter is
+// allocated here so it is scoped to exactly one task run.
+func (r *Runner) maybeAppendCreateTaskTool(base []fantasy.AgentTool, task *models.Task) []fantasy.AgentTool {
+	if r.taskEnqueuer == nil || !task.AllowTaskCreation {
+		return base
+	}
+	counter := &atomic.Int32{}
+	out := append(append([]fantasy.AgentTool{}, base...),
+		tools.NewCreateTaskTool(tools.CreateTaskConfig{
+			Enqueuer:         r.taskEnqueuer,
+			CreatingTaskID:   task.ID,
+			ParentModel:      task.Model,
+			ParentBudgetUSD:  r.cfg.MaxCostUSD,
+			RecurringAllowed: task.AllowRecurringTaskCreation,
+			MaxCreations:     tools.DefaultMaxTaskCreations,
+			Counter:          counter,
+		}))
+	log.Printf("scheduled task %s: create_task tool enabled (recurring=%v)", task.ID, task.AllowRecurringTaskCreation)
+	return out
 }
 
 // sandboxTaker is the subset of *sandbox.Pool that a scheduled run uses to
@@ -332,6 +377,10 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 
 	turnTools := tools.NewTurnTools(sb)
 
+	// create_task (#277) is appended ONLY for a task that opted in. See
+	// maybeAppendCreateTaskTool for the gate rationale.
+	nativeTools := r.maybeAppendCreateTaskTool(turnTools.Tools, task)
+
 	maxIter := r.cfg.MaxIterations
 	if task.MaxIterations != nil && *task.MaxIterations > 0 {
 		maxIter = *task.MaxIterations
@@ -356,7 +405,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		Model:               model,
 		FallbackModel:       fallback,
 		MCPClient:           mcpClient,
-		NativeTools:         turnTools.Tools,
+		NativeTools:         nativeTools,
 		SystemPrompt:        taskSystemPrompt,
 		Persona:             taskPersona,
 		MaxIterations:       maxIter,

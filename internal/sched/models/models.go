@@ -625,6 +625,23 @@ type TaskCreate struct {
 	// cron engine never runs: it sits inert until POST /triggers/{slug} spawns a
 	// run cloned from it.
 	TriggerType TriggerType `json:"trigger_type,omitempty"`
+	// AllowTaskCreation is the per-task capability bit that lets a SCHEDULED run
+	// of THIS task spawn follow-up tasks via the built-in create_task tool (#277).
+	// Default false: an interactive/unprivileged run never sees the tool, and a
+	// scheduled run whose task did not opt in cannot self-schedule — there is no
+	// privilege escalation and no unbounded self-scheduling loop. This is the
+	// authority gate; the tool is registered ONLY when this is true.
+	AllowTaskCreation bool `json:"allow_task_creation,omitempty"`
+	// AllowRecurringTaskCreation is the stricter, separately-toggled governance
+	// bit that additionally lets create_task set a cron recurrence on a spawned
+	// task (#277). It is meaningless without AllowTaskCreation; with the parent
+	// only granted AllowTaskCreation, create_task refuses any non-empty recurrence
+	// so a single opt-in cannot mint an unbounded recurring fleet of tasks.
+	AllowRecurringTaskCreation bool `json:"allow_recurring_task_creation,omitempty"`
+	// CreatedByTaskID records the task whose scheduled run spawned this one via
+	// create_task (#277), for audit/lineage. Set server-side by the create_task
+	// tool, NOT by external clients (it is ignored on the public POST /tasks path).
+	CreatedByTaskID *uuid.UUID `json:"created_by_task_id,omitempty"`
 }
 
 // Task represents a task to be executed by a worker.
@@ -703,6 +720,16 @@ type Task struct {
 	// TriggerType is how this task is fired: "cron" (default) or "webhook". A
 	// webhook task is an inert template; see TaskCreate.TriggerType.
 	TriggerType TriggerType `json:"trigger_type"`
+	// AllowTaskCreation gates the built-in create_task tool for THIS task's
+	// scheduled runs (#277). Default false. See TaskCreate.AllowTaskCreation.
+	AllowTaskCreation bool `json:"allow_task_creation,omitempty"`
+	// AllowRecurringTaskCreation additionally gates create_task's recurrence
+	// field (#277). Default false. See TaskCreate.AllowRecurringTaskCreation.
+	AllowRecurringTaskCreation bool `json:"allow_recurring_task_creation,omitempty"`
+	// CreatedByTaskID is the parent task whose scheduled run spawned this one via
+	// create_task (#277). nil for tasks not spawned by a task. Persisted; set
+	// server-side, not settable by external clients.
+	CreatedByTaskID *uuid.UUID `json:"created_by_task_id,omitempty"`
 }
 
 // NewTask creates a new Task with defaults.
@@ -730,30 +757,33 @@ func NewTask(tc TaskCreate) *Task {
 	}
 
 	return &Task{
-		ID:                     uuid.New(),
-		Prompt:                 tc.Prompt,
-		Model:                  tc.Model,
-		FallbackModel:          tc.FallbackModel,
-		MaxIterations:          tc.MaxIterations,
-		MCPSelection:           tc.MCPSelection,
-		CredentialAllowlist:    tc.CredentialAllowlist,
-		LoopConfig:             tc.LoopConfig,
-		WorktreeConfig:         tc.WorktreeConfig,
-		Priority:               tc.Priority,
-		InstructionSelfImprove: tc.InstructionSelfImprove,
-		AllowNetwork:           tc.AllowNetwork,
-		Persona:                tc.Persona,
-		Description:            tc.Description,
-		Status:                 status,
-		CreatedAt:              time.Now().UTC(),
-		ScheduledFor:           tc.ScheduledFor,
-		Recurrence:             tc.Recurrence,
-		Timezone:               tz,
-		Files:                  tc.Files,
-		Tags:                   tc.Tags,
-		MaxRetries:             derefOr(tc.MaxRetries, 0),
-		RetryPolicy:            tc.RetryPolicy,
-		TriggerType:            triggerType,
+		ID:                         uuid.New(),
+		Prompt:                     tc.Prompt,
+		Model:                      tc.Model,
+		FallbackModel:              tc.FallbackModel,
+		MaxIterations:              tc.MaxIterations,
+		MCPSelection:               tc.MCPSelection,
+		CredentialAllowlist:        tc.CredentialAllowlist,
+		LoopConfig:                 tc.LoopConfig,
+		WorktreeConfig:             tc.WorktreeConfig,
+		Priority:                   tc.Priority,
+		InstructionSelfImprove:     tc.InstructionSelfImprove,
+		AllowNetwork:               tc.AllowNetwork,
+		Persona:                    tc.Persona,
+		Description:                tc.Description,
+		Status:                     status,
+		CreatedAt:                  time.Now().UTC(),
+		ScheduledFor:               tc.ScheduledFor,
+		Recurrence:                 tc.Recurrence,
+		Timezone:                   tz,
+		Files:                      tc.Files,
+		Tags:                       tc.Tags,
+		MaxRetries:                 derefOr(tc.MaxRetries, 0),
+		RetryPolicy:                tc.RetryPolicy,
+		TriggerType:                triggerType,
+		AllowTaskCreation:          tc.AllowTaskCreation,
+		AllowRecurringTaskCreation: tc.AllowRecurringTaskCreation,
+		CreatedByTaskID:            tc.CreatedByTaskID,
 	}
 }
 
@@ -793,6 +823,11 @@ func TaskToCreate(t *Task) TaskCreate {
 		Files:                  t.Files,
 		MaxRetries:             &maxRetries,
 		TriggerType:            t.TriggerType,
+		// Capability flags are part of the create-recipe so a re-run/clone keeps
+		// the same governance posture (#277). CreatedByTaskID is per-spawn lineage,
+		// like SourceTaskID, and is intentionally NOT carried.
+		AllowTaskCreation:          t.AllowTaskCreation,
+		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
 	}
 }
 

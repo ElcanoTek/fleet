@@ -537,11 +537,21 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
 func sourceTaskIDValue(id *uuid.UUID) any {
+	if id == nil {
+		return nil
+	}
+	return id.String()
+}
+
+// createdByTaskIDValue maps the optional spawned-by-task lineage pointer (#277)
+// to a nullable column value: nil → SQL NULL, set → the UUID string. Mirrors
+// sourceTaskIDValue; the two columns carry distinct lineage (re-run vs spawn).
+func createdByTaskIDValue(id *uuid.UUID) any {
 	if id == nil {
 		return nil
 	}
@@ -567,8 +577,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, timezone, created_by_key_id,
-			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
+			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path,
+			allow_task_creation, allow_recurring_task_creation, created_by_task_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -605,7 +616,10 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			retry_policy = EXCLUDED.retry_policy,
 			source_task_id = EXCLUDED.source_task_id,
 			persona = EXCLUDED.persona,
-			workspace_path = EXCLUDED.workspace_path`,
+			workspace_path = EXCLUDED.workspace_path,
+			allow_task_creation = EXCLUDED.allow_task_creation,
+			allow_recurring_task_creation = EXCLUDED.allow_recurring_task_creation,
+			created_by_task_id = EXCLUDED.created_by_task_id`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -643,6 +657,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		sourceTaskIDValue(task.SourceTaskID),
 		nullableString(task.Persona),
 		workspacePathValue(task.WorkspacePath),
+		task.AllowTaskCreation,
+		task.AllowRecurringTaskCreation,
+		createdByTaskIDValue(task.CreatedByTaskID),
 	)
 	return err
 }
@@ -830,6 +847,9 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		sourceTaskID           sql.NullString
 		persona                sql.NullString
 		workspacePath          sql.NullString
+		allowTaskCreation      bool
+		allowRecurringTaskCre  bool
+		createdByTaskID        sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -839,6 +859,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &timezone, &createdByKeyID,
 		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy, &sourceTaskID, &persona, &workspacePath,
+		&allowTaskCreation, &allowRecurringTaskCre, &createdByTaskID,
 	)
 	if err != nil {
 		return nil, err
@@ -886,6 +907,15 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 			task.SourceTaskID = &sid
 		} else {
 			log.Printf("Warning: invalid source_task_id %q: %v", sourceTaskID.String, perr)
+		}
+	}
+	task.AllowTaskCreation = allowTaskCreation
+	task.AllowRecurringTaskCreation = allowRecurringTaskCre
+	if createdByTaskID.Valid && createdByTaskID.String != "" {
+		if cid, perr := uuid.Parse(createdByTaskID.String); perr == nil {
+			task.CreatedByTaskID = &cid
+		} else {
+			log.Printf("Warning: invalid created_by_task_id %q: %v", createdByTaskID.String, perr)
 		}
 	}
 	task.Description = description.String
@@ -1482,7 +1512,10 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			retry_policy = $32,
 			source_task_id = $33,
 			persona = $34,
-			workspace_path = $35
+			workspace_path = $35,
+			allow_task_creation = $36,
+			allow_recurring_task_creation = $37,
+			created_by_task_id = $38
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1519,6 +1552,9 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		sourceTaskIDValue(task.SourceTaskID),
 		nullableString(task.Persona),
 		workspacePathValue(task.WorkspacePath),
+		task.AllowTaskCreation,
+		task.AllowRecurringTaskCreation,
+		createdByTaskIDValue(task.CreatedByTaskID),
 	)
 	return err
 }
