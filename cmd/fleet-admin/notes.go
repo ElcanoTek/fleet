@@ -48,7 +48,7 @@ func openNotesStore(dbURL string) (*sched.Store, func(), int) {
 		return nil, nil, errf(1, "%v", err)
 	}
 	database := scheddb.New()
-	if err := database.Init(dsn); err != nil {
+	if err := database.Init(dsn, scheddb.DefaultPoolConfig()); err != nil {
 		return nil, nil, errf(1, "open sched DB: %v", err)
 	}
 	return sched.NewStore(database), func() { _ = database.Close() }, 0

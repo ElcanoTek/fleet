@@ -33,7 +33,7 @@ func setupAuthzHandler(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.M
 	}
 
 	store := storage.New()
-	if err := store.Initialize(filepath.Join(tmpDir, "test.db")); err != nil {
+	if err := store.Initialize(filepath.Join(tmpDir, "test.db"), storage.DefaultPoolConfig()); err != nil {
 		os.RemoveAll(tmpDir)
 		if isDatabaseUnavailable(err) {
 			t.Skipf("database unavailable: %v", err)

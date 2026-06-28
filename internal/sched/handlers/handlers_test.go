@@ -40,7 +40,7 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 	}
 
 	store := storage.New()
-	if err := store.Initialize(filepath.Join(tmpDir, "test.db")); err != nil {
+	if err := store.Initialize(filepath.Join(tmpDir, "test.db"), storage.DefaultPoolConfig()); err != nil {
 		os.RemoveAll(tmpDir)
 		if isDatabaseUnavailable(err) {
 			t.Skipf("Skipping tests: database unavailable: %v", err)

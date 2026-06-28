@@ -37,7 +37,7 @@ func serverFixture(t *testing.T) *Server {
 	if dsn == "" {
 		t.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL is not set — skipping Postgres-backed test")
 	}
-	st, err := store.Open(dsn)
+	st, err := store.Open(dsn, store.DefaultPoolConfig())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

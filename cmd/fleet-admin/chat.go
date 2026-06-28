@@ -60,7 +60,7 @@ func chatUserUpsert(argv []string, create bool) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
-	st, err := store.Open(dsn)
+	st, err := store.Open(dsn, store.DefaultPoolConfig())
 	if err != nil {
 		return errf(1, "open chat DB: %v", err)
 	}
@@ -95,7 +95,7 @@ func chatUserDel(argv []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
-	st, err := store.Open(dsn)
+	st, err := store.Open(dsn, store.DefaultPoolConfig())
 	if err != nil {
 		return errf(1, "open chat DB: %v", err)
 	}
@@ -118,7 +118,7 @@ func chatUserList(argv []string) int {
 	if err != nil {
 		return errf(1, "%v", err)
 	}
-	st, err := store.Open(dsn)
+	st, err := store.Open(dsn, store.DefaultPoolConfig())
 	if err != nil {
 		return errf(1, "open chat DB: %v", err)
 	}

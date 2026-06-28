@@ -101,8 +101,15 @@ func (s *Storage) SetTimezone(timezone string) {
 // Location returns the configured timezone location for scheduling.
 func (s *Storage) Location() *time.Location { return s.location }
 
-// Initialize initializes the persistent storage.
-func (s *Storage) Initialize(dbPath string) error { return s.db.Init(dbPath) }
+// Initialize initializes the persistent storage with the given pool tuning (#276).
+func (s *Storage) Initialize(dbPath string, pool db.PoolConfig) error {
+	return s.db.Init(dbPath, pool)
+}
+
+// DefaultPoolConfig re-exports db.DefaultPoolConfig so callers that only import
+// the storage package (e.g. the admin CLI and handler tests) can pass the
+// behavior-preserving baseline without importing internal/sched/db (#276).
+func DefaultPoolConfig() db.PoolConfig { return db.DefaultPoolConfig() }
 
 // Close closes the storage.
 func (s *Storage) Close() error { return s.db.Close() }
@@ -1001,5 +1008,5 @@ func GetStorage() *Storage {
 // InitGlobalStorage initializes the global storage.
 func InitGlobalStorage(dataDir string) error {
 	globalStorage = New()
-	return globalStorage.Initialize(filepath.Join(dataDir, "orchestrator.db"))
+	return globalStorage.Initialize(filepath.Join(dataDir, "orchestrator.db"), db.DefaultPoolConfig())
 }

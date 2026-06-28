@@ -33,7 +33,7 @@ func acquireTestLock(t *testing.T, db *db.Database) {
 func newTestStore(t *testing.T) (*Storage, *db.Database) {
 	t.Helper()
 	database := db.New()
-	if err := database.Init(""); err != nil {
+	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
 		t.Skipf("Skipping storage test because DB init failed: %v", err)
 	}
 

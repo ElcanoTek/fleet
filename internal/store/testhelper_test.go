@@ -35,7 +35,7 @@ func newTestStore(t testing.TB) *Store {
 	if dsn == "" {
 		t.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL is not set — skipping Postgres-backed test")
 	}
-	s, err := Open(dsn)
+	s, err := Open(dsn, DefaultPoolConfig())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
