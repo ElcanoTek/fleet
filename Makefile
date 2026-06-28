@@ -29,6 +29,16 @@ help:
 # restart the UNCHANGED old binary.
 build: compile bins
 
+# The release version, single-sourced from the top-level VERSION file, stamped
+# into both binaries below via `-ldflags -X` (see internal/version). `compile`
+# and the CI compile-check intentionally DON'T stamp it — a bare `go build`
+# falls back to the "dev" sentinel + VCS revision, which is honest for an
+# unstamped build. $(file <VERSION) reads the file without spawning a shell
+# (GNU Make 4.x); the strip drops the trailing newline.
+VERSION := $(strip $(file < VERSION))
+VERSION_PKG := github.com/ElcanoTek/fleet/internal/version
+VERSION_LDFLAGS := -X $(VERSION_PKG).version=$(VERSION)
+
 # compile-check every package (no artifacts emitted — `go build ./...` discards
 # the command binaries it produces).
 compile:
@@ -36,8 +46,8 @@ compile:
 
 # emit just the two deployable artifacts (used by scripts/update.sh + bootstrap.sh).
 bins:
-	go build -o ./fleet ./cmd/fleet
-	go build -o ./fleet-admin ./cmd/fleet-admin
+	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet ./cmd/fleet
+	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet-admin ./cmd/fleet-admin
 
 # Tests run WITH the fleet_host_executor tag so the host-mode fixtures + MockMode
 # tests compile. The release binary (`make build`/`bins`) is built WITHOUT it, so

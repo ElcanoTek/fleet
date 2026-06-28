@@ -35,6 +35,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/ElcanoTek/fleet/internal/version"
 )
 
 func main() {
@@ -73,6 +75,11 @@ func dispatch(argv []string) int {
 		return cmdBackup(argv[1:])
 	case "restore":
 		return cmdRestore(argv[1:])
+	case "version", "--version", "-v":
+		// Build identity: the release version stamped from the top-level VERSION
+		// file plus the VCS revision. Touches no DB/host, so it works anywhere.
+		fmt.Println("fleet-admin " + version.String())
+		return 0
 	case "-h", "--help", "help":
 		usage()
 		return 0
@@ -148,5 +155,7 @@ in-process: both DBs reachable, the sandbox image present + runnable, required
 env vars set, the client bundle loads, and the systemd unit state.
 
 Passwords are read from stdin with --password - (never on argv).
+
+  fleet-admin version                                       (print build version + VCS revision; a.k.a. --version)
 `)
 }
