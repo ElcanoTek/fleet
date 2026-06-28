@@ -404,6 +404,12 @@ func (s *Storage) CleanupHistory(days int) (int, error) {
 	return s.db.DeleteOldHistory(context.Background(), days)
 }
 
+// CleanupOldRuns prunes terminal task runs older than retentionDays while always
+// keeping the most recent keepPerTask runs per task (#252). See db.CleanupOldRuns.
+func (s *Storage) CleanupOldRuns(ctx context.Context, retentionDays, keepPerTask int) (int, error) {
+	return s.db.CleanupOldRuns(ctx, retentionDays, keepPerTask)
+}
+
 // User operations
 
 // AddUser adds a new user.

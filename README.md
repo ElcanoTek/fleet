@@ -44,6 +44,12 @@ them.
   `context_budget`, block `cost_ceiling`); unset = the default transient-only
   curve. Retries are bounded and the agent is told its attempt number so it can
   avoid repeating non-idempotent side-effects — fleet does not auto-dedupe those.
+  A daily retention sweep prunes terminal task runs (and their JSONB logs) older
+  than `FLEET_RUN_LOG_RETENTION_DAYS` (default **90**) so the scheduler DB can't
+  grow without bound, while always keeping the most recent
+  `FLEET_KEEP_RUNS_PER_TASK` (default **10**) runs of each task regardless of age
+  (so a task's last-known state is never lost). Set the retention to `0` to
+  disable pruning; the sweep runs at `FLEET_CLEANUP_HOUR` UTC (default 04:00).
 
 - **Connected to your data and tools, wherever they live.** fleet speaks
   [MCP](#standards) and ships a per-deployment **MCP catalog**. Tasks select
