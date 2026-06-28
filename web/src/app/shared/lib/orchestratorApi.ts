@@ -162,7 +162,6 @@ export const orchestratorApi = {
     request<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
   config: () => request<{ version?: string; timezone?: string }>("/config"),
-  me: () => request<{ authenticated: boolean; username?: string; role?: string }>("/me"),
 
   // MCP catalog + credential accounts.
   mcpServers: () => request<{ servers: McpServer[] }>("/mcp-servers"),

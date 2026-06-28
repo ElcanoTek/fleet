@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 // chat accepts two session cookies:
@@ -162,6 +163,26 @@ export function getAuthLoginUrl() {
 // is harmless.
 export function buildElcanoLoginUrl(returnTo: string) {
   return `${getAuthLoginUrl()}/?return_to=${encodeURIComponent(returnTo)}`;
+}
+
+// elcanoLoginRedirect is the ONE "Use Elcano email" handoff, shared by both
+// views' /api/.../auth/elcano-login routes. They differ only in where the auth
+// service returns the browser after the magic-link round-trip (`returnToPath`):
+// chat lands on home ("/"), the orchestrator on "/orchestrator" — so each user
+// returns to the view they started in.
+//
+// Without a configured public key the app can never verify the elcano_auth
+// cookie auth would mint, so sending the user there would trap them in a
+// redirect loop (auth sets the cookie, the app can't read it, back to /login,
+// repeat). In that case bounce to the password login with a message instead.
+export function elcanoLoginRedirect(request: NextRequest, returnToPath: string): NextResponse {
+  if (!getAuthSigningPubkey()) {
+    return NextResponse.redirect(getRedirectUrl(request, "/login?e=elcano_unavailable"), {
+      status: 303,
+    });
+  }
+  const returnTo = getRedirectUrl(request, returnToPath).toString();
+  return NextResponse.redirect(buildElcanoLoginUrl(returnTo), { status: 303 });
 }
 
 // The public key is standard base64 (matching auth-admin keygen output and
