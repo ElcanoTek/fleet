@@ -55,6 +55,15 @@ const DefaultTitleModel = "google/gemini-3.5-flash"
 // default; a deployment overrides via SENDGRID_FROM_EMAIL / MAILBUX_FROM_EMAIL.
 const DefaultFromEmail = "noreply@example.com"
 
+// Sub-agent caps (#175): deliberately SMALL defaults. Depth bounds recursion (a
+// child spawning a child …); fan-out bounds how many children one parent may
+// spawn. Both are hard refusals when exceeded — combined with the budget split,
+// they bound total sub-agent spend and prevent a spawn fork-bomb.
+const (
+	defaultSubagentsMaxDepth    = 2
+	defaultSubagentsMaxChildren = 4
+)
+
 // allowedEnvVars is the union allowlist of keys that may be set from a .env
 // file. Anything else in the file is ignored. The process environment wins
 // over the file so operators can override individual values per invocation.
@@ -374,6 +383,27 @@ type Config struct {
 	PhoneAFriendEnabled bool
 	PhoneAFriendModel   string
 
+	// ── sub-agents (#175) ──
+	// SubagentsEnabled turns on the spawn_subagent native tool, which lets a
+	// governed run delegate a scoped piece of work to a CHILD run. The child is
+	// not a new or weaker loop: it is another agentcore.Run governed exactly like
+	// the parent (ADR-0001), inheriting the parent's sandbox network posture, MCP
+	// + credential allowlist (least-privilege: it may only SUBTRACT), and a SLICE
+	// of the parent's remaining cost/token budget — the parent ceiling is the hard
+	// wall across all descendants. OFF by default (FLEET_SUBAGENTS_ENABLED) so
+	// config/default behaviour is unchanged.
+	//
+	// SubagentsMaxDepth caps recursion (a child of a child …); SubagentsMaxChildren
+	// caps fan-out per parent. A spawn exceeding either is REFUSED with a tool
+	// error. SubagentsModel names the default child model slug
+	// (FLEET_SUBAGENTS_MODEL); empty inherits the parent's model. The child model
+	// is resolved HOST-SIDE (like the phone-a-friend reviewer) so credentials stay
+	// host-side.
+	SubagentsEnabled     bool
+	SubagentsMaxDepth    int
+	SubagentsMaxChildren int
+	SubagentsModel       string
+
 	// ── run-history retention (#252) ──
 	// RunLogRetentionDays prunes terminal task runs (and their logs) older than
 	// this many days in a daily sweep. <=0 disables pruning. Default 90.
@@ -569,6 +599,12 @@ func Load(envFile string) (*Config, error) {
 		// ── phone a friend: super-LLM review (#175) ──
 		PhoneAFriendEnabled: getenvFleetBool("PHONE_A_FRIEND_ENABLED", false),
 		PhoneAFriendModel:   getenvFleet("PHONE_A_FRIEND_MODEL"),
+
+		// ── sub-agents (#175) ──
+		SubagentsEnabled:     getenvFleetBool("SUBAGENTS_ENABLED", false),
+		SubagentsMaxDepth:    getenvFleetInt("SUBAGENTS_MAX_DEPTH", defaultSubagentsMaxDepth),
+		SubagentsMaxChildren: getenvFleetInt("SUBAGENTS_MAX_CHILDREN", defaultSubagentsMaxChildren),
+		SubagentsModel:       getenvFleet("SUBAGENTS_MODEL"),
 
 		// ── run-history retention (#252) ──
 		RunLogRetentionDays: getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),

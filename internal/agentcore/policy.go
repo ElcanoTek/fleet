@@ -108,6 +108,18 @@ func (p *ScheduledPolicy) orchestration() *orchestrationState { return p.orch }
 // SetNoteProposer wires the admin-notes proposer (propose_note) for this run.
 func (p *ScheduledPolicy) SetNoteProposer(np NoteProposer) { p.orch.setNoteProposer(np) }
 
+// Budget exposes this run's current cost/token ceilings and accumulated spend
+// (#175). The spawn_subagent tool reads the PARENT policy's Budget to size a
+// child's sliced ceiling against the parent's REMAINING budget — the parent
+// ceiling is the hard wall across all descendants. See orchestrationState.
+func (p *ScheduledPolicy) Budget() BudgetState { return p.orch.budgetState() }
+
+// ChargeChildUsage folds a completed child run's usage into THIS run's
+// accumulated cost/token counters (#175), so the parent's own ceiling check and
+// every later sibling spawn account for the child's spend. This is what makes
+// the parent ceiling un-breachable by the collective spend of its sub-agents.
+func (p *ScheduledPolicy) ChargeChildUsage(u RunUsage) { p.orch.chargeChildUsage(u) }
+
 // BeforeToolCall runs the scheduled gate chain: cost/token ceiling → repeat-call
 // guard → critical-tool audit gating → note proposal. The ceiling check is FIRST
 // (matching the interactive policy) so an unattended run that blows its budget

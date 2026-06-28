@@ -352,6 +352,17 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		CredentialAllowlist: taskCredentialAllowlist(task),
 		PhoneAFriendEnabled: r.cfg.PhoneAFriendEnabled,
 		ReviewerModel:       reviewer,
+		// Governed sub-agents (#175, part b): OFF unless FLEET_SUBAGENTS_ENABLED.
+		// The child model is resolved HOST-SIDE through the SAME Manager resolver the
+		// parent's model came from (r.mgr), so a per-child model choice keeps
+		// credentials host-side — never in the sandbox or model context.
+		Subagent: agent.SubagentOptions{
+			Enabled:     r.cfg.SubagentsEnabled,
+			MaxDepth:    r.cfg.SubagentsMaxDepth,
+			MaxChildren: r.cfg.SubagentsMaxChildren,
+			ModelSlug:   r.cfg.SubagentsModel,
+			Resolver:    r.mgr,
+		},
 	})
 
 	// On a retry (a prior attempt failed transiently and was re-queued), warn the
