@@ -276,6 +276,10 @@ func run() error {
 
 	// ── scheduler ticker (promote scheduled→pending + recover leases) ──
 	sch := scheduler.New(schedStorage, timezone())
+	// Automatic run-history retention (#252): a daily sweep prunes old terminal
+	// runs, always keeping the most recent KeepRunsPerTask per task. Off when
+	// RunLogRetentionDays<=0.
+	sch.SetRetention(cfg.RunLogRetentionDays, cfg.KeepRunsPerTask, cfg.CleanupHour)
 	sch.Start()
 	defer sch.Stop()
 

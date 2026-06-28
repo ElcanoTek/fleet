@@ -90,25 +90,28 @@ var allowedEnvVars = map[string]bool{
 	"DB_SSLMODE":   true,
 
 	// ── LLM (shared) ──
-	"OPENROUTER_API_KEY":          true,
-	"OPENROUTER_BASE_URL":         true,
-	"FLEET_OPENROUTER_BASE_URL":   true,
-	"CHAT_MAX_ITERATIONS":         true,
-	"CHAT_MAX_COST_USD":           true,
-	"CHAT_MAX_TOTAL_TOKENS":       true,
-	"CHAT_TURN_TIMEOUT_SECONDS":   true,
-	"CHAT_TEMPERATURE":            true,
-	"CHAT_TITLE_MODEL":            true,
-	"FLEET_MAX_ITERATIONS":        true,
-	"FLEET_MAX_COST_USD":          true,
-	"FLEET_MAX_TOTAL_TOKENS":      true,
-	"FLEET_TEMPERATURE":           true,
-	"FLEET_TITLE_MODEL":           true,
-	"FLEET_MAX_CONCURRENT_AGENTS": true,
-	"LLM_MAX_TOKENS":              true,
-	"REASONING_ENABLED":           true,
-	"REASONING_EFFORT":            true,
-	"FLEET_MAX_TOOL_OUTPUT_BYTES": true,
+	"OPENROUTER_API_KEY":           true,
+	"OPENROUTER_BASE_URL":          true,
+	"FLEET_OPENROUTER_BASE_URL":    true,
+	"CHAT_MAX_ITERATIONS":          true,
+	"CHAT_MAX_COST_USD":            true,
+	"CHAT_MAX_TOTAL_TOKENS":        true,
+	"CHAT_TURN_TIMEOUT_SECONDS":    true,
+	"CHAT_TEMPERATURE":             true,
+	"CHAT_TITLE_MODEL":             true,
+	"FLEET_MAX_ITERATIONS":         true,
+	"FLEET_MAX_COST_USD":           true,
+	"FLEET_MAX_TOTAL_TOKENS":       true,
+	"FLEET_TEMPERATURE":            true,
+	"FLEET_TITLE_MODEL":            true,
+	"FLEET_MAX_CONCURRENT_AGENTS":  true,
+	"FLEET_RUN_LOG_RETENTION_DAYS": true,
+	"FLEET_KEEP_RUNS_PER_TASK":     true,
+	"FLEET_CLEANUP_HOUR":           true,
+	"LLM_MAX_TOKENS":               true,
+	"REASONING_ENABLED":            true,
+	"REASONING_EFFORT":             true,
+	"FLEET_MAX_TOOL_OUTPUT_BYTES":  true,
 
 	// ── personas / protocols ──
 	"PERSONA_DEFAULT": true,
@@ -358,6 +361,16 @@ type Config struct {
 	SystemPrompt      string
 	Persona           string
 
+	// ── run-history retention (#252) ──
+	// RunLogRetentionDays prunes terminal task runs (and their logs) older than
+	// this many days in a daily sweep. <=0 disables pruning. Default 90.
+	RunLogRetentionDays int
+	// KeepRunsPerTask is the minimum number of most-recent terminal runs kept per
+	// task regardless of age, so a task's last-known state is never pruned. Default 10.
+	KeepRunsPerTask int
+	// CleanupHour is the UTC hour (0–23) the daily retention sweep runs. Default 4.
+	CleanupHour int
+
 	InputDir   string
 	InputFiles []string
 
@@ -539,6 +552,11 @@ func Load(envFile string) (*Config, error) {
 		TaskFallbackModel: stripQuotes(os.Getenv("CUTLASS_TASK_FALLBACK_MODEL")),
 		TaskMaxIterations: getEnvOrDefaultInt("CUTLASS_TASK_MAX_ITERATIONS", 0),
 		LLMTemperature:    getEnvOrDefaultFloat("CUTLASS_TEMPERATURE", 0.3),
+
+		// ── run-history retention (#252) ──
+		RunLogRetentionDays: getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),
+		KeepRunsPerTask:     getenvFleetInt("KEEP_RUNS_PER_TASK", 10),
+		CleanupHour:         getenvFleetInt("CLEANUP_HOUR", 4),
 
 		// ── attachments / uploads (generic infra) ──
 		EmailAttachmentDir: getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),
