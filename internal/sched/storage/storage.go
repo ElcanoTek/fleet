@@ -573,6 +573,11 @@ type TaskEdit struct {
 	// nil to disable worktree isolation).
 	WorktreeConfig    *models.WorktreeConfig
 	SetWorktreeConfig bool
+	// RetryPolicy + SetRetryPolicy mirror the same pattern (#201): the flag
+	// distinguishes "leave unchanged" from "replace" (including nil to revert to
+	// the legacy retry policy).
+	RetryPolicy    *models.RetryPolicy
+	SetRetryPolicy bool
 }
 
 // UpdateEditableTask applies an edit to a task inside a transaction, re-locking
@@ -614,6 +619,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	}
 	if edit.SetWorktreeConfig {
 		task.WorktreeConfig = edit.WorktreeConfig
+	}
+	if edit.SetRetryPolicy {
+		task.RetryPolicy = edit.RetryPolicy
 	}
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
@@ -949,6 +957,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		CredentialAllowlist: task.CredentialAllowlist,
 		LoopConfig:          task.LoopConfig,
 		WorktreeConfig:      task.WorktreeConfig,
+		RetryPolicy:         task.RetryPolicy,
 		Description:         task.Description,
 		Priority:            task.Priority,
 		ScheduledFor:        &nextTime,
