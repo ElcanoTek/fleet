@@ -57,15 +57,25 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/version"
 )
 
 func main() {
 	// Subcommand dispatch. With no args (or any non-subcommand arg) fleet boots
-	// THE fleet server (run). `fleet mcp-broker` instead runs the out-of-process
-	// MCP credential broker over stdio (issue #167): it holds the connector
-	// secrets + MCP subprocesses and serves delegated MCP calls back to a parent
-	// fleet process. It boots no HTTP servers / scheduler — it is a single-purpose
-	// stdio adapter.
+	// THE fleet server (run).
+	//
+	// `fleet version` (also `--version` / `-v`) prints the build identity — the
+	// release version stamped from the top-level VERSION file plus the VCS
+	// revision — and exits. It boots nothing, so it works on a box where the DBs
+	// or sandbox are down.
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Println("fleet " + version.String())
+		return
+	}
+	// `fleet mcp-broker` instead runs the out-of-process MCP credential broker
+	// over stdio (issue #167): it holds the connector secrets + MCP subprocesses
+	// and serves delegated MCP calls back to a parent fleet process. It boots no
+	// HTTP servers / scheduler — it is a single-purpose stdio adapter.
 	if len(os.Args) > 1 && os.Args[1] == "mcp-broker" {
 		if err := runMCPBroker(); err != nil {
 			log.Fatalf("fleet mcp-broker: %v", err)
@@ -229,6 +239,7 @@ func run() error {
 	chatSrv := httpapi.New(cfg, mgr, chatStore,
 		httpapi.WithClientConfig(bundle),
 		httpapi.WithStartTime(startTime),
+		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
 	)
 
@@ -240,7 +251,7 @@ func run() error {
 	hcfg := handlers.Config{
 		AdminAPIKey:         os.Getenv("ADMIN_API_KEY"),
 		RegistrationToken:   os.Getenv("REGISTRATION_TOKEN"),
-		Version:             "fleet",
+		Version:             version.String(),
 		DataDir:             cfg.DataDir,
 		Timezone:            timezone(),
 		DefaultTaskTimezone: defaultTaskTimezone(),
