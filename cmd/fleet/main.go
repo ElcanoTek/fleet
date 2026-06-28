@@ -148,6 +148,11 @@ func run() error {
 		CriticalToolSubstitutes: bundlePolicy.CriticalToolSubstitutes,
 	})
 
+	// Install the bundle's custom model-pricing overrides (#297). The generic
+	// bundle ships none, so cost accounting stays on the OpenRouter-returned
+	// price (the pre-#297 default). Must run before any turn starts.
+	agentcore.ConfigurePricing(toAgentcorePricing(bundle.Pricing()))
+
 	personasDir := bundle.PersonasDir
 	protocolsDir := bundle.ProtocolsDir
 	systemPromptsDir := bundle.SystemPromptsDir
@@ -729,6 +734,28 @@ func envIntDefault(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// toAgentcorePricing translates the bundle's pricing config (a low-level
+// clientconfig data struct) into the agentcore.PricingConfig the accounting path
+// consumes (#297). A blank fallback is left blank so agentcore applies its
+// OpenRouter default; the manifest loader already validated the fallback value
+// and the override rates.
+func toAgentcorePricing(p clientconfig.PricingConfig) agentcore.PricingConfig {
+	out := agentcore.PricingConfig{Fallback: agentcore.PricingFallback(p.Fallback)}
+	if len(p.Overrides) > 0 {
+		out.Overrides = make([]agentcore.PricingOverride, 0, len(p.Overrides))
+		for _, o := range p.Overrides {
+			out.Overrides = append(out.Overrides, agentcore.PricingOverride{
+				Model:                          o.Model,
+				InputCostPerMillionTokens:      o.InputCostPerMillionTokens,
+				OutputCostPerMillionTokens:     o.OutputCostPerMillionTokens,
+				CacheReadCostPerMillionTokens:  o.CacheReadCostPerMillionTokens,
+				CacheWriteCostPerMillionTokens: o.CacheWriteCostPerMillionTokens,
+			})
+		}
+	}
+	return out
 }
 
 // ensureDistinctDatabases fails fast when the chat and sched DSNs resolve to the
