@@ -200,3 +200,71 @@ empty_state:
           placeholder: "a follow-up email to a client about…"
       promptTemplate: "Draft the following for me, and ask me anything you need first."
   protocol_pills: []
+
+# Task templates — pre-filled scheduled-task configurations the Operations
+# Center's task-create form offers as a starting point ("new task from a
+# template", #262). Each entry carries a name/description/icon and a partial
+# `task` payload that mirrors the EDITABLE subset of the POST /tasks request
+# (internal/sched/models.TaskCreate): prompt, model, fallback_model,
+# max_iterations, max_retries, recurrence, timezone, priority, allow_network,
+# instruction_self_improve, persona, description, tags. Omitted keys leave the
+# corresponding form field at its own default. Security-/routing-sensitive knobs
+# (mcp_selection, credential_allowlist, loop_config, worktree_config,
+# trigger_type, allow_task_creation) are deliberately NOT templatable — the user
+# sets those explicitly — so a shipped template can never silently widen a task's
+# authority. The task itself is always created through the ordinary create path;
+# templates are read-only config exposed via GET /task-templates.
+#
+# A prompt may contain {variable} placeholders (e.g. {repo_path}); the API
+# surfaces the placeholder names so the UI can prompt for values before applying
+# the template. These five are NEUTRAL, generic starters (no client-specific
+# content) so fleet is useful out of the box; a client bundle overrides this
+# block with its own.
+task_templates:
+  - name: "Daily Standup"
+    description: "Summarize recent activity into a morning standup update."
+    icon: "📋"
+    task:
+      prompt: |
+        Review recent git commits and any connected activity sources from the
+        last working day. Write a concise standup update with three sections:
+        what got done, what's planned next, and any blockers.
+      model: "anthropic/claude-sonnet-4-6"
+      recurrence: "0 8 * * 1-5"
+      max_iterations: 15
+      tags: ["daily", "standup"]
+  - name: "Code Review"
+    description: "Review the latest changes in a repo for bugs and security issues."
+    icon: "🔍"
+    task:
+      prompt: "Review the latest git changes in {repo_path} for correctness bugs and security issues. Summarize findings by severity."
+      model: "anthropic/claude-opus-4.8"
+      fallback_model: "anthropic/claude-sonnet-4-6"
+      max_iterations: 25
+      tags: ["review", "code"]
+  - name: "Weekly Report"
+    description: "Friday end-of-day summary of accomplishments and next-week priorities."
+    icon: "📊"
+    task:
+      prompt: "Compile a weekly report covering key accomplishments, notable metrics, and the top priorities for next week."
+      model: "anthropic/claude-sonnet-4-6"
+      recurrence: "0 17 * * 5"
+      max_iterations: 20
+      tags: ["weekly", "report"]
+  - name: "Security Audit"
+    description: "Periodic scan of dependencies and configuration for known issues."
+    icon: "🔐"
+    task:
+      prompt: "Audit {repo_path} for dependency vulnerabilities and risky configuration. List each finding with its severity and a recommended fix."
+      model: "anthropic/claude-opus-4.8"
+      max_iterations: 30
+      tags: ["security", "audit"]
+  - name: "Test Generation"
+    description: "Generate missing unit tests for a given package or file."
+    icon: "🧪"
+    task:
+      prompt: "Generate unit tests for {target} covering the untested paths. Match the project's existing test style and keep each test focused."
+      model: "anthropic/claude-opus-4.8"
+      fallback_model: "anthropic/claude-sonnet-4-6"
+      max_iterations: 25
+      tags: ["tests"]

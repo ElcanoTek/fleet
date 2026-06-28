@@ -1143,6 +1143,47 @@ tr.clickable:hover td {
   color: var(--color-text-muted);
 }
 
+/* Task templates (#262) — "start from a template" cards in the create form. */
+.template-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.5rem;
+}
+.template-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 0.6rem;
+  cursor: pointer;
+  text-align: left;
+}
+.template-card:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text-primary);
+}
+.template-card-icon {
+  font-size: 1.2rem;
+  line-height: 1.2;
+}
+.template-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.template-card-name {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.template-card-desc {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
 /* Email chips */
 .chips-container {
   display: flex;

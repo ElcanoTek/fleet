@@ -135,6 +135,12 @@ type Handlers struct {
 	// SetMCPCatalogProvider; nil → empty catalog. See mcp.go.
 	mcpCatalog func() []MCPServerCatalogEntry
 
+	// taskTemplates returns the read-only task-template catalog the task-create UI
+	// renders as "new task from a template". Injected by cmd/fleet via
+	// SetTaskTemplateProvider from the loaded client bundle; nil → empty catalog.
+	// See task_templates.go.
+	taskTemplates taskTemplateProvider
+
 	// taskStreamLookup resolves a task's live SSE run-log buffer (#200), wired by
 	// cmd/fleet via SetTaskStreamProvider from the worker pool's registry. nil →
 	// no live stream is ever available (every task falls back to the persisted log

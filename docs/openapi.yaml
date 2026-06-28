@@ -768,6 +768,56 @@ paths:
                         server: { type: string }
                         account: { type: string }
 
+  /task-templates:
+    get:
+      summary: Read-only task-template catalog for the "new task from a template" UI.
+      description: >
+        Returns the client bundle's task_templates catalog: each entry's name,
+        description, icon, a partial-TaskCreate `task` payload that seeds the
+        task-create form, and the {variable} placeholder names extracted from its
+        prompt (so the UI can prompt for them before pre-filling). Pure config
+        read-through — no template is ever persisted and no task is created here
+        (the task is created through the ordinary POST /tasks path). Returns an
+        empty array when the bundle ships no templates.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: { type: string }
+                    description: { type: string }
+                    icon: { type: string }
+                    variables:
+                      type: array
+                      items: { type: string }
+                    task:
+                      type: object
+                      description: >
+                        Partial TaskCreate payload (subset of editable fields) used
+                        to pre-fill the form. All fields optional.
+                      properties:
+                        prompt: { type: string }
+                        model: { type: string }
+                        fallback_model: { type: string }
+                        max_iterations: { type: integer }
+                        max_retries: { type: integer }
+                        recurrence: { type: string }
+                        timezone: { type: string }
+                        priority: { type: integer }
+                        allow_network: { type: boolean }
+                        instruction_self_improve: { type: boolean }
+                        persona: { type: string }
+                        description: { type: string }
+                        tags:
+                          type: array
+                          items: { type: string }
+
   /keys:
     post:
       summary: Create an API key (plaintext shown once).
