@@ -20,6 +20,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -200,11 +203,45 @@ func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task) 
 // prior behaviour, byte-identical); a task WITH a LoopConfig (#179) runs the
 // worker+verify loop instead — see runWithLoop.
 func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession, error) {
-	if task.LoopConfig != nil {
-		return r.runWithLoop(ctx, task)
+	// Git worktree isolation (#180): prepare the worktree ONCE per task — before
+	// the (possibly looped) execution — so a looped task's iterations share one
+	// worktree and accumulate filesystem state, rather than each iteration
+	// starting from a fresh empty checkout. wtPath is "" when worktree isolation
+	// is disabled (the common case), leaving the sandbox working dir untouched.
+	runID := uuid.NewString()[:8]
+	wtPath, _, wtCleanup, err := prepareWorktree(ctx, r.workspaceRoot(), task, runID)
+	if err != nil {
+		return nil, fmt.Errorf("prepare worktree: %w", err)
 	}
-	session, _, _, err := r.runWorker(ctx, task, "", nil)
+	if wc := task.WorktreeConfig; wc != nil && wc.Enabled && wc.AutoCleanup {
+		if wc.CleanupDelaySeconds > 0 {
+			// Detached timer so the run returns promptly; the worktree is reaped
+			// later. (Orphans from a process crash are reclaimed by
+			// `fleet-admin worktree prune`.)
+			time.AfterFunc(time.Duration(wc.CleanupDelaySeconds)*time.Second, wtCleanup)
+		} else {
+			defer wtCleanup()
+		}
+	}
+
+	if task.LoopConfig != nil {
+		return r.runWithLoop(ctx, task, wtPath)
+	}
+	session, _, _, err := r.runWorker(ctx, task, "", nil, wtPath)
 	return session, err
+}
+
+// workspaceRoot resolves the host workspace root the same way the agent manager
+// does (config, then ./workspace), so worktree operations target the same dir
+// the sandbox bind-mounts.
+func (r *Runner) workspaceRoot() string {
+	if r.cfg != nil && strings.TrimSpace(r.cfg.WorkspaceRoot) != "" {
+		return r.cfg.WorkspaceRoot
+	}
+	if abs, err := filepath.Abs("workspace"); err == nil {
+		return abs
+	}
+	return "workspace"
 }
 
 // runWorker executes ONE worker pass: it resolves the model, acquires the
@@ -214,7 +251,7 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 // only pass). It returns the session, whether the exit condition passed (always
 // true / unused when lc == nil), the exit-condition result label, and any run
 // error.
-func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt string, lc *models.LoopConfig) (*models.LogSession, bool, string, error) {
+func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt string, lc *models.LoopConfig, wtPath string) (*models.LogSession, bool, string, error) {
 	// Resolve the task's model (falls back to the configured task model).
 	modelSlug := r.cfg.TaskModel
 	if task.Model != nil && strings.TrimSpace(*task.Model) != "" {
@@ -247,6 +284,16 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		return nil, false, "", fmt.Errorf("take sandbox: %w", err)
 	}
 	defer cleanup()
+
+	// Git worktree isolation (#180): scope every otherwise-unscoped tool call in
+	// this run into the per-run worktree. wtPath is non-empty only when the task
+	// enabled worktree isolation (prepared once per task in Run); the worktree is
+	// a subdir of the bind-mounted workspace root, reachable at the same absolute
+	// path inside the sandbox. This is flavor-agnostic: in-process and native-acp
+	// host-delegated calls both run on this one per-run Sandbox.
+	if wtPath != "" {
+		sb.SetDefaultWorkingDir(wtPath)
+	}
 
 	turnTools := tools.NewTurnTools(sb)
 

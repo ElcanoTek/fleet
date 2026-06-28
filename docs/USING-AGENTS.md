@@ -405,6 +405,54 @@ cost gates apply per cycle — "governance is one core" holds. Per-iteration
 telemetry (status, exit result, cost, tokens) is recorded to `task_iterations`
 and embedded in the `GET /tasks/{id}` response for a looped task.
 
+### Git worktree isolation
+
+A scheduled task with a `worktree_config` (#180) runs each occurrence in its own
+git **worktree + branch**, so two tasks targeting the same repository can't
+corrupt each other's working tree (dirty files, colliding checkouts). A task with
+no `worktree_config` shares the workspace root, unchanged.
+
+```json
+{
+  "worktree_config": {
+    "enabled": true,
+    "base_branch": "main",          // empty = repo HEAD
+    "branch_prefix": "fleet/task-", // empty = "fleet/task-"
+    "auto_cleanup": true,           // remove worktree + branch after the run
+    "cleanup_delay_seconds": 0      // delay before removal (0 = immediate)
+  }
+}
+```
+
+The task's workspace must be the **root of a git repository**; a non-repo (or a
+non-root subdirectory) is rejected at task creation. Each run gets a deterministic,
+unique branch `"<branch_prefix><task_id>-<run_id>"` and a worktree checkout, so
+concurrent runs never collide and no locking is needed. For a looped task (#179)
+the worktree is created **once per task** and reused across iterations, so
+filesystem state accumulates the way it does for a shared-workspace loop.
+
+**Where the worktree lives — and why it is NOT `/tmp`.** The worktree is created
+as a subdirectory of the workspace root (`<workspace>/.fleet-worktrees/<task>-<run>`),
+*not* at a standalone `/tmp` path. A git worktree's `.git` is a file pointing back
+to `"<mainrepo>/.git/worktrees/<name>"`; git only resolves it when **both** the
+worktree and the main repo are reachable at their host absolute paths inside the
+sandbox. The sandbox bind-mounts the workspace root at the same absolute path, so
+a subdir of it satisfies that linkage — a lone `/tmp` worktree would break git
+inside the container because the main repo would be unmounted. The subdir is kept
+out of the main tree's `git status` via `.git/info/exclude` (a local, never-committed
+exclude). The run is scoped into the worktree by setting it as the run's default
+working directory on the per-run sandbox, so every otherwise-unscoped bash /
+run_python / file call lands there. This is enforced **host-side** on the one
+per-run sandbox, so it applies uniformly to both the in-process and `native-acp`
+(host-delegated) execution paths — no flavor gets a non-isolated fast path.
+
+**Cleanup.** With `auto_cleanup: true` the worktree and its branch are removed
+after the run (optionally after `cleanup_delay_seconds`); with `false` the branch
+is left in place for inspection or a manual push. Orphans from a crashed run (the
+process died between worktree creation and cleanup) are reclaimed by an operator
+with `fleet-admin worktree prune --older-than <dur>` (and `fleet-admin worktree
+list` shows all registered worktrees).
+
 ---
 
 ## The permission UI
