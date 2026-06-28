@@ -5,12 +5,17 @@ import { verifyOrigin } from "@/app/lib/csrf";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await getServerSession();
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const { upstream, error } = await chatServerProxy(session.email, "/conversations", { method: "GET" });
+  // Forward the ?archived=true filter (#282) — the archived sidebar section
+  // relies on it. Without this the param is dropped and the backend returns the
+  // active list, so the archived view would silently show active conversations.
+  const archived = request.nextUrl.searchParams.get("archived") === "true";
+  const path = archived ? "/conversations?archived=true" : "/conversations";
+  const { upstream, error } = await chatServerProxy(session.email, path, { method: "GET" });
   if (error) return error;
   return passthrough(upstream);
 }

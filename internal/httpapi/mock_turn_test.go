@@ -129,7 +129,7 @@ func TestMockTurn_PersistsHistory(t *testing.T) {
 
 	// Grab the created conversation id.
 	ctx := context.Background()
-	list, err := s.store.List(ctx, "u@x.com")
+	list, err := s.store.List(ctx, "u@x.com", false)
 	if err != nil || len(list) == 0 {
 		t.Fatalf("list: len=%d err=%v", len(list), err)
 	}
