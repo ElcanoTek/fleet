@@ -21,7 +21,7 @@ func setupTestDB(t *testing.T) *Database {
 	}
 
 	db := New()
-	if err := db.Init(connStr); err != nil {
+	if err := db.Init(connStr, DefaultPoolConfig()); err != nil {
 		if isDatabaseUnavailable(err) {
 			t.Skipf("Database unavailable, skipping integration tests: %v", err)
 		}

@@ -41,7 +41,7 @@ func openSchedStorage(dbURL string) (*storage.Storage, int) {
 		return nil, errf(1, "%v", err)
 	}
 	st := storage.New()
-	if err := st.Initialize(dsn); err != nil {
+	if err := st.Initialize(dsn, storage.DefaultPoolConfig()); err != nil {
 		return nil, errf(1, "open sched DB: %v", err)
 	}
 	return st, 0

@@ -40,7 +40,32 @@ func New() *Database {
 // Init initializes the database connection and schema. Accepts a connection
 // string or reads from DATABASE_URL. A legacy file-path argument (leading '.'
 // or '/', or empty) is ignored in favor of DATABASE_URL / DB_* env vars.
-func (db *Database) Init(connStr string) error {
+// PoolConfig tunes the sched DB connection pool (#276). Local to this package
+// (the cmd layer maps env-derived config into it) to keep it decoupled from
+// internal/config. DefaultPoolConfig reproduces the historical hard-coded values.
+type PoolConfig struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxIdleTime time.Duration
+	ConnMaxLifetime time.Duration
+	ConnectTimeout  time.Duration
+}
+
+// DefaultPoolConfig is the behavior-preserving baseline: 25 open / 5 idle, 5m
+// lifetime, 10s connect ping (sched historically pinged at 10s).
+func DefaultPoolConfig() PoolConfig {
+	return PoolConfig{
+		MaxOpenConns:    25,
+		MaxIdleConns:    5,
+		ConnMaxLifetime: 5 * time.Minute,
+		ConnectTimeout:  10 * time.Second,
+	}
+}
+
+// Stats returns the connection-pool snapshot for metrics (#276).
+func (db *Database) Stats() sql.DBStats { return db.conn.Stats() }
+
+func (db *Database) Init(connStr string, pool PoolConfig) error {
 	if connStr == "" || connStr[0] == '.' || connStr[0] == '/' {
 		connStr = os.Getenv("DATABASE_URL")
 		if connStr == "" {
@@ -61,11 +86,16 @@ func (db *Database) Init(connStr string) error {
 	}
 	db.conn = conn
 
-	db.conn.SetMaxOpenConns(25)
-	db.conn.SetMaxIdleConns(5)
-	db.conn.SetConnMaxLifetime(5 * time.Minute)
+	db.conn.SetMaxOpenConns(pool.MaxOpenConns)
+	db.conn.SetMaxIdleConns(pool.MaxIdleConns)
+	db.conn.SetConnMaxIdleTime(pool.ConnMaxIdleTime)
+	db.conn.SetConnMaxLifetime(pool.ConnMaxLifetime)
 
-	pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	connectTimeout := pool.ConnectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = 10 * time.Second
+	}
+	pingCtx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
 	if err := db.conn.PingContext(pingCtx); err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)

@@ -17,7 +17,7 @@ func BenchmarkHandleAuthVerify_HasUsers(b *testing.B) {
 		b.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL not set")
 	}
 
-	st, err := store.Open(dbURL)
+	st, err := store.Open(dbURL, store.DefaultPoolConfig())
 	if err != nil {
 		b.Fatalf("Open store: %v", err)
 	}
@@ -46,7 +46,7 @@ func BenchmarkHandleAuthVerify_NoUsers(b *testing.B) {
 		b.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL not set")
 	}
 
-	st, err := store.Open(dbURL)
+	st, err := store.Open(dbURL, store.DefaultPoolConfig())
 	if err != nil {
 		b.Fatalf("Open store: %v", err)
 	}

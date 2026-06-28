@@ -60,7 +60,7 @@ func TestMigrations_IdempotentReopen(t *testing.T) {
 	v1 := maxAppliedVersion(t, s1.db)
 
 	dsn := testDSN()
-	s2, err := Open(dsn)
+	s2, err := Open(dsn, DefaultPoolConfig())
 	if err != nil {
 		t.Fatalf("second open: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestMigrations_RefusesNewerDB(t *testing.T) {
 		_, _ = raw.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 999`)
 	})
 
-	if _, err := Open(testDSN()); err == nil {
+	if _, err := Open(testDSN(), DefaultPoolConfig()); err == nil {
 		t.Fatal("Open should reject a DB with a future schema version")
 	}
 }
@@ -111,7 +111,7 @@ func TestMigrations_PreservesExistingData(t *testing.T) {
 
 	// Reopen WITHOUT truncating, to confirm Open itself is non-destructive.
 	dsn := testDSN()
-	s2, err := Open(dsn)
+	s2, err := Open(dsn, DefaultPoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
