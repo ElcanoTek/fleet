@@ -672,6 +672,10 @@ type Task struct {
 	// server-side at creation so the completion path can attribute cost back to
 	// the key for spending caps. Persisted; not settable by clients.
 	CreatedByKeyID *string `json:"created_by_key_id,omitempty"`
+	// SourceTaskID is the task this one was re-run / cloned from (#270), set
+	// server-side by POST /tasks/{id}/rerun|clone. nil for original tasks.
+	// Persisted; not settable by clients.
+	SourceTaskID *uuid.UUID `json:"source_task_id,omitempty"`
 	// NextRunAtLocal is ScheduledFor rendered in Timezone (RFC3339 with offset),
 	// populated at query time for display so callers need no client-side tz math.
 	// Not persisted; nil when the task has no scheduled_for.
@@ -755,6 +759,38 @@ func derefOr(p *int, def int) int {
 		return def
 	}
 	return *p
+}
+
+// TaskToCreate rebuilds the TaskCreate "recipe" from an existing task — the
+// inverse of NewTask over the create-relevant fields. It is the basis for re-run
+// / clone (#270): the caller adjusts ScheduledFor / Recurrence and applies any
+// overrides, then NewTask mints a fresh task. Runtime-only fields (Status,
+// AttemptCount, lease, results, SourceTaskID) are intentionally NOT carried.
+func TaskToCreate(t *Task) TaskCreate {
+	maxRetries := t.MaxRetries
+	return TaskCreate{
+		Prompt:                 t.Prompt,
+		Model:                  t.Model,
+		FallbackModel:          t.FallbackModel,
+		MaxIterations:          t.MaxIterations,
+		MCPSelection:           t.MCPSelection,
+		CredentialAllowlist:    t.CredentialAllowlist,
+		LoopConfig:             t.LoopConfig,
+		WorktreeConfig:         t.WorktreeConfig,
+		RetryPolicy:            t.RetryPolicy,
+		Description:            t.Description,
+		Tags:                   t.Tags,
+		Priority:               t.Priority,
+		InstructionSelfImprove: t.InstructionSelfImprove,
+		AllowNetwork:           t.AllowNetwork,
+		RuntimeFlavor:          t.RuntimeFlavor,
+		ScheduledFor:           t.ScheduledFor,
+		Recurrence:             t.Recurrence,
+		Timezone:               t.Timezone,
+		Files:                  t.Files,
+		MaxRetries:             &maxRetries,
+		TriggerType:            t.TriggerType,
+	}
 }
 
 // StatusUpdate is a status update for a task (from the in-process worker).

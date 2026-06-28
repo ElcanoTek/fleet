@@ -45,6 +45,7 @@ export type Task = {
   runtime_flavor?: string;
   tags?: string[];
   retry_policy?: RetryPolicy;
+  source_task_id?: string;
   status?: string;
   created_by?: string;
   created_by_username?: string;
