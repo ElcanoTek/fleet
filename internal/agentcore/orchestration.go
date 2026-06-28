@@ -209,6 +209,98 @@ func (o *orchestrationState) checkCeilings() (bool, string) {
 	return false, ""
 }
 
+// BudgetState snapshots a run's cost/token ceilings and accumulated spend. It is
+// the read side of the sub-agent budget split (#175): the spawn_subagent tool
+// reads the PARENT's BudgetState to compute how much of the parent's REMAINING
+// budget it may hand a child, so the parent ceiling stays the hard wall across
+// all descendants. A zero ceiling means "unlimited" (the same convention
+// checkCeilings uses). Spend already INCLUDES any prior children charged back
+// via chargeChildUsage, so each successive spawn sees a smaller remaining slice.
+type BudgetState struct {
+	MaxCostUSD     float64 // 0 = unlimited
+	SpentCostUSD   float64
+	MaxTotalTokens int // 0 = unlimited
+	SpentTokens    int // uncached: prompt - cached + completion (matches checkCeilings)
+}
+
+// RemainingCostUSD returns the unspent cost budget, or -1 when the ceiling is
+// unlimited (0). Never returns a negative slice for a finite ceiling: an
+// over-budget run reports 0 remaining.
+func (b BudgetState) RemainingCostUSD() float64 {
+	if b.MaxCostUSD <= 0 {
+		return -1
+	}
+	rem := b.MaxCostUSD - b.SpentCostUSD
+	if rem < 0 {
+		return 0
+	}
+	return rem
+}
+
+// RemainingTokens returns the unspent token budget, or -1 when the ceiling is
+// unlimited (0). Never negative for a finite ceiling.
+func (b BudgetState) RemainingTokens() int {
+	if b.MaxTotalTokens <= 0 {
+		return -1
+	}
+	rem := b.MaxTotalTokens - b.SpentTokens
+	if rem < 0 {
+		return 0
+	}
+	return rem
+}
+
+// budgetState reads the current ceilings + accumulated spend under the orch lock.
+func (o *orchestrationState) budgetState() BudgetState {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return BudgetState{
+		MaxCostUSD:     o.maxCostUSD,
+		SpentCostUSD:   o.CostUSD,
+		MaxTotalTokens: o.maxTotalTokens,
+		SpentTokens:    o.PromptTokens - o.CachedTokens + o.CompletionTokens,
+	}
+}
+
+// chargeChildUsage folds a completed CHILD run's usage into THIS (parent) run's
+// accumulated counters. This is the enforcement linchpin of the #175 budget
+// split: a child runs as its own agentcore.Run with its OWN orchestrationState
+// (and its OWN sliced ceiling, which the child's checkCeilings/budgetGuardedStep
+// already enforce), so its spend is invisible to the parent's ceiling until it
+// is charged back here. After this call the parent's checkCeilings sees the
+// child's tokens+cost, so:
+//
+//   - the parent itself stops sooner (it has less budget left), and
+//   - the NEXT sibling spawn reads a smaller remaining slice (budgetState),
+//
+// which together make the parent ceiling a hard wall that the collective spend
+// of all children across fan-out AND depth can never breach. (Depth composes for
+// free: a grandchild's spend is charged to its parent, whose own run-end usage —
+// including that grandchild — is in turn charged to the grandparent here.)
+//
+// It deliberately does NOT touch the email/critical-action tracking that
+// recordToolResult owns: this is pure usage accounting, mirroring updateUsage's
+// counter math (uncached-token semantics are derived at read time in
+// checkCeilings/budgetState, so only the raw counters move here).
+func (o *orchestrationState) chargeChildUsage(u RunUsage) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.PromptTokens += u.PromptTokens
+	o.CompletionTokens += u.CompletionTokens
+	o.CachedTokens += u.CachedTokens
+	o.CacheCreationTokens += u.CacheCreationTokens
+	o.CostUSD += u.CostUSD
+	if o.logSession != nil {
+		o.logSession.mu.Lock()
+		o.logSession.PromptTokens += u.PromptTokens
+		o.logSession.CompletionTokens += u.CompletionTokens
+		o.logSession.CachedTokens += u.CachedTokens
+		o.logSession.CacheCreationTokens += u.CacheCreationTokens
+		o.logSession.Cost += u.CostUSD
+		o.logSession.mu.Unlock()
+	}
+}
+
 // maxConsecutiveIdenticalCalls is how many times the SAME tool may run with
 // byte-identical arguments back-to-back before the loop guard cuts it off.
 const maxConsecutiveIdenticalCalls = 3

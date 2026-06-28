@@ -60,6 +60,22 @@ type Agent struct {
 	phoneAFriendEnabled bool
 	reviewerModel       fantasy.LanguageModel
 
+	// ── sub-agents (#175, part b) ──
+	// subagent carries the spawn_subagent feature gate, recursion/fan-out caps,
+	// per-child model resolution, depth-in-tree, and the live fan-out counter for
+	// THIS run. OFF by default. See subagent.go. The live parent policy
+	// (runtimePolicy) is captured in Execute so the spawn tool can read the
+	// parent's remaining budget and charge child spend back against it.
+	subagent      subagentConfig
+	runtimePolicy *agentcore.ScheduledPolicy
+
+	// budgetOverride, when set (>0), forces this run's cost/token ceilings instead
+	// of the config defaults. A spawned CHILD sets these to its SLICED budget so
+	// its own agentcore.Run enforces the sliced ceiling via the SAME checkCeilings
+	// the parent uses (#175). Zero leaves the config-derived ceiling in place.
+	costCeilingOverride  float64
+	tokenCeilingOverride int
+
 	// loadedServers is the set of MCP servers whose tools are currently
 	// registered. mcpServersDirty signals the loop to rebuild the tool list
 	// after a mcp_load_servers call registered new servers.
@@ -107,6 +123,47 @@ type Options struct {
 	// when the flag is off OR no reviewer model is supplied.
 	PhoneAFriendEnabled bool
 	ReviewerModel       fantasy.LanguageModel
+
+	// ── sub-agents (#175, part b) ──
+	// Subagent configures the spawn_subagent native tool. OFF by default
+	// (Subagent.Enabled=false) so config/default behaviour is unchanged. See
+	// subagentConfig / subagent.go for the governance properties (monotonic
+	// privilege, budget split, depth/fan-out caps). The DRIVER (scheduledrun)
+	// builds this from config + the Manager's model resolver + sandbox.
+	Subagent SubagentOptions
+}
+
+// SubagentOptions is the spawn_subagent feature configuration the driver supplies
+// (#175, part b). It is OFF unless Enabled is set. The child run inherits the
+// parent's sandbox, MCP client, and allowlists from the parent Agent itself; this
+// struct carries only the policy knobs and the host-side model resolver a child
+// needs.
+type SubagentOptions struct {
+	// Enabled gates the whole feature (FLEET_SUBAGENTS_ENABLED). When false the
+	// spawn_subagent tool is not registered at all.
+	Enabled bool
+	// MaxDepth caps recursion depth (root run = depth 0; a spawn at MaxDepth is
+	// refused). MaxChildren caps fan-out per parent. Both <=0 fall back to the
+	// package defaults so a misconfiguration can never mean "unbounded".
+	MaxDepth    int
+	MaxChildren int
+	// ModelSlug is the default child model slug (FLEET_SUBAGENTS_MODEL); empty
+	// means a child inherits the parent's model. A per-spawn override is resolved
+	// through Resolver too.
+	ModelSlug string
+	// Resolver resolves a child model slug to a host-side LanguageModel — the SAME
+	// cached resolver the parent's model came from, so a per-child model choice is
+	// resolved host-side exactly like the phone-a-friend reviewer and credentials
+	// never enter the sandbox or model context. Nil disables per-child model
+	// override (the child always inherits the parent's model handle).
+	Resolver ModelResolver
+}
+
+// ModelResolver resolves an OpenRouter model slug to a host-side LanguageModel.
+// *agent.Manager satisfies it via Resolve. Narrow seam so the spawn tool can
+// resolve a per-child model without depending on the whole Manager.
+type ModelResolver interface {
+	Resolve(ctx context.Context, slug string) (fantasy.LanguageModel, error)
 }
 
 // NewAgent builds a scheduled driver from options. The session log is fresh.
@@ -136,6 +193,7 @@ func NewAgent(opts Options) *Agent {
 		credentialAllowlist: opts.CredentialAllowlist,
 		phoneAFriendEnabled: opts.PhoneAFriendEnabled,
 		reviewerModel:       opts.ReviewerModel,
+		subagent:            newSubagentConfig(opts.Subagent),
 	}
 }
 
@@ -307,10 +365,26 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		maxCostUSD = a.config.MaxCostUSD
 		maxTotalTokens = a.config.MaxTotalTokens
 	}
+	// A spawned child carries a SLICED budget (#175): its override REPLACES the
+	// config ceiling so the child's own agentcore.Run enforces the slice through
+	// the SAME checkCeilings the parent uses — the child cannot outspend its slice,
+	// and (because its spend is charged back to the parent) the collective spend of
+	// all children cannot breach the parent ceiling.
+	if a.costCeilingOverride > 0 {
+		maxCostUSD = a.costCeilingOverride
+	}
+	if a.tokenCeilingOverride > 0 {
+		maxTotalTokens = a.tokenCeilingOverride
+	}
 	inner := agentcore.NewScheduledPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTotalTokens)
 	if a.noteProposer != nil {
 		inner.SetNoteProposer(a.noteProposer)
 	}
+	// Capture the live policy so the spawn_subagent tool can read THIS run's
+	// remaining budget and charge child spend back against it (#175). It is the
+	// SAME ScheduledPolicy agentcore drives, so the budget the tool reads is the
+	// budget the loop enforces — there is no separate accounting.
+	a.runtimePolicy = inner
 	policy := &scheduledPolicy{inner: inner, agent: a, task: task, runCtx: ctx}
 
 	// propose_note tool registration in lockstep with wiring + the prompt
@@ -320,6 +394,15 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	nativeTools := a.nativeTools
 	if a.noteProposer != nil {
 		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeNoteTool())
+	}
+
+	// spawn_subagent (#175, part b): register the tool ONLY when the feature is
+	// enabled, so config/default behaviour is unchanged. The tool body adapts I/O
+	// around a CHILD agentcore.Run (a fresh agent.Agent.Execute) — no second
+	// governance path. See subagent.go for the monotonic-privilege + budget-split
+	// + depth/fan-out enforcement.
+	if a.subagent.enabled {
+		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), a.newSpawnSubagentTool())
 	}
 
 	// Loader tools (mcp_list_servers / mcp_load_servers) drive the in-loop tool
