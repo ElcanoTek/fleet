@@ -489,6 +489,10 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/memories", auth(member(http.HandlerFunc(s.memories))))
 	mux.Handle("/memories/", auth(member(http.HandlerFunc(s.memoryByID))))
 	mux.Handle("/personas", auth(member(http.HandlerFunc(s.listPersonas))))
+	// Dynamic model discovery (#251): the model catalog, routed through the
+	// backend so the API key stays server-side and the allow-list is applied
+	// before the response reaches the browser.
+	mux.Handle("/api/v1/models", auth(member(http.HandlerFunc(s.handleModels))))
 	mux.Handle("/mcp-servers", auth(member(http.HandlerFunc(s.listMCPServerCatalog))))
 	mux.Handle("/server-config", auth(member(http.HandlerFunc(s.serverConfig))))
 	mux.Handle("/client-config", auth(member(http.HandlerFunc(s.clientConfigHandler))))
