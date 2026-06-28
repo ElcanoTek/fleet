@@ -24,10 +24,11 @@ type chatStore interface {
 	// Conversations.
 	CreateConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error)
 	Get(ctx context.Context, userEmail, convID string) (*store.Conversation, error)
-	List(ctx context.Context, userEmail string) ([]store.Conversation, error)
+	List(ctx context.Context, userEmail string, archivedOnly bool) ([]store.Conversation, error)
 	Delete(ctx context.Context, userEmail, convID string) error
 	DeleteAllUnpinned(ctx context.Context, userEmail string) (int, error)
 	SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error
+	SetArchived(ctx context.Context, userEmail, convID string, archived bool) error
 	SetModel(ctx context.Context, userEmail, convID, model string) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
 	UpdateTitle(ctx context.Context, userEmail, convID, title string) error
@@ -84,6 +85,7 @@ type chatStore interface {
 	VerifyUser(ctx context.Context, email, plainPassword string) error
 	AdminStats(ctx context.Context) ([]store.AdminRow, error)
 	SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap int) (expired int, evicted int, err error)
+	AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int, error)
 	SweepOrphanWorkspaces(ctx context.Context, root string) (int, error)
 }
 

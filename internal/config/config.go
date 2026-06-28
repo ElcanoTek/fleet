@@ -60,11 +60,12 @@ const DefaultFromEmail = "noreply@example.com"
 // over the file so operators can override individual values per invocation.
 var allowedEnvVars = map[string]bool{
 	// ── chat transport / data ──
-	"CHAT_SERVER_ADDR":          true,
-	"CHAT_SERVER_TOKEN":         true,
-	"CHAT_DATA_DIR":             true,
-	"CONVERSATION_TTL_DAYS":     true,
-	"CONVERSATION_UNPINNED_CAP": true,
+	"CHAT_SERVER_ADDR":              true,
+	"CHAT_SERVER_TOKEN":             true,
+	"CHAT_DATA_DIR":                 true,
+	"CONVERSATION_TTL_DAYS":         true,
+	"CONVERSATION_UNPINNED_CAP":     true,
+	"FLEET_AUTO_ARCHIVE_AFTER_DAYS": true,
 
 	// ── fleet transport / data (canonical) ──
 	"FLEET_SERVER_ADDR":  true,
@@ -321,6 +322,10 @@ type Config struct {
 	DataDir         string
 	ConversationTTL int // days
 	UnpinnedCap     int // per-user
+	// AutoArchiveAfterDays soft-archives unpinned conversations untouched for
+	// this many days (#282). 0 (the default) disables it — a conversation is
+	// then only ever archived by an explicit user action. FLEET_AUTO_ARCHIVE_AFTER_DAYS.
+	AutoArchiveAfterDays int
 
 	// SearchEnabled gates full-text search (#308): the GET /search endpoint plus
 	// the message-content index maintenance + startup backfill.
@@ -522,11 +527,12 @@ func Load(envFile string) (*Config, error) {
 		TLSHTTPAddr:  getenvDefault("FLEET_TLS_HTTP_ADDR", ":80"),
 
 		// ── data (interactive) ──
-		DataDir:         getenvFleetDefault("DATA_DIR", "./data"),
-		ConversationTTL: getenvInt("CONVERSATION_TTL_DAYS", 14),
-		UnpinnedCap:     getenvInt("CONVERSATION_UNPINNED_CAP", 50),
-		SearchEnabled:   getenvBool("FLEET_SEARCH_ENABLED", true),
-		DatabaseURL:     buildDatabaseURL(),
+		DataDir:              getenvFleetDefault("DATA_DIR", "./data"),
+		ConversationTTL:      getenvInt("CONVERSATION_TTL_DAYS", 14),
+		UnpinnedCap:          getenvInt("CONVERSATION_UNPINNED_CAP", 50),
+		AutoArchiveAfterDays: getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
+		SearchEnabled:        getenvBool("FLEET_SEARCH_ENABLED", true),
+		DatabaseURL:          buildDatabaseURL(),
 
 		// ── LLM (shared) ──
 		OpenRouterAPIKey: stripQuotes(os.Getenv("OPENROUTER_API_KEY")),

@@ -80,7 +80,7 @@ func TestList_PinnedFirstThenRecent(t *testing.T) {
 		t.Fatalf("SetPinned: %v", err)
 	}
 
-	list, err := s.List(ctx, "u@x.com")
+	list, err := s.List(ctx, "u@x.com", false)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestSweep_UnpinnedCap(t *testing.T) {
 		t.Errorf("evicted: got %d want 3", evicted)
 	}
 
-	remaining, _ := s.List(ctx, "u@x.com")
+	remaining, _ := s.List(ctx, "u@x.com", false)
 	if len(remaining) != 3 {
 		t.Errorf("remaining: got %d want 3", len(remaining))
 	}

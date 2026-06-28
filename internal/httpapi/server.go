@@ -816,7 +816,10 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 	user := userFromCtx(r.Context())
 	switch r.Method {
 	case http.MethodGet:
-		list, err := s.store.List(r.Context(), user)
+		// ?archived=true returns the archived conversations (the collapsed
+		// "Archived" sidebar section, #282); default returns active ones.
+		archivedOnly := r.URL.Query().Get("archived") == "true"
+		list, err := s.store.List(r.Context(), user, archivedOnly)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1008,6 +1011,21 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.SetPinned(r.Context(), user, id, req.Pinned); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case sub == "archive" && r.Method == http.MethodPost:
+		// Soft-archive / unarchive (#282). Archiving hides the conversation
+		// from the default sidebar (and unpins it); unarchiving restores it.
+		var req struct {
+			Archived bool `json:"archived"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := s.store.SetArchived(r.Context(), user, id, req.Archived); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1299,6 +1317,15 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			conv.Model = reqModel
+		}
+		// Sending a message to an archived conversation un-archives it (#282) —
+		// mirrors how replying to an archived email brings it back to the inbox.
+		if conv.ArchivedAt != nil {
+			if err := s.store.SetArchived(r.Context(), user, conv.ID, false); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			conv.ArchivedAt = nil
 		}
 	} else {
 		persona := strings.TrimSpace(req.Persona)
@@ -1614,6 +1641,19 @@ func (s *Server) runTurnAsync(
 					"title": title,
 				})
 			}
+		}
+	}
+
+	// Auto-archive (#282): file away unpinned conversations untouched for
+	// FLEET_AUTO_ARCHIVE_AFTER_DAYS. Runs before the sweep so freshly archived
+	// rows are exempt from the cap eviction on the same pass. Disabled (no-op)
+	// unless the operator opts in (default 0). Opportunistic, like the sweep.
+	if s.cfg.AutoArchiveAfterDays > 0 {
+		if n, err := s.store.AutoArchiveOlderThan(persistCtx,
+			time.Duration(s.cfg.AutoArchiveAfterDays)*24*time.Hour); err != nil {
+			log.Printf("post-turn auto-archive error: %v", err)
+		} else if n > 0 {
+			log.Printf("auto-archive: %d conversations archived", n)
 		}
 	}
 

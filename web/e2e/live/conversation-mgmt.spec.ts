@@ -125,6 +125,89 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     await expect(bar.getByText("Pinned survivor", { exact: true })).toBeVisible();
   });
 
+  test("archiving hides a chat into the Archived section and unarchiving restores it", async ({
+    page,
+    login,
+  }) => {
+    test.setTimeout(120_000);
+    await login();
+
+    await seedChat(page, "Filed away chat");
+
+    const bar = sidebar(page);
+    const row = bar.locator("div.group").filter({ hasText: "Filed away chat" }).first();
+    await row.hover();
+    const archiveResponse = page.waitForResponse(
+      (res) =>
+        /\/api\/conversations\/[^/]+\/archive$/.test(res.url()) && res.request().method() === "POST",
+    );
+    await row.getByRole("button", { name: "Archive Filed away chat" }).click({ force: true });
+    expect((await archiveResponse).status()).toBe(200);
+
+    // Gone from the main list; surfaced under a collapsed "Archived (1)" section.
+    const archivedToggle = bar.getByRole("button", { name: /Archived conversations \(1\)/i });
+    await expect(archivedToggle).toBeVisible({ timeout: 10_000 });
+
+    // Server is the source of truth: it reports the chat as archived.
+    const origin = new URL(page.url()).origin;
+    const archived = (await (
+      await page.request.get("/api/conversations?archived=true", { headers: { Origin: origin } })
+    ).json()) as { conversations: Array<{ title: string; archived_at: number | null }> | null };
+    const found = (archived.conversations ?? []).find((c) => c.title === "Filed away chat");
+    expect(found?.archived_at).toBeTruthy();
+
+    // Expand the section and unarchive it.
+    await archivedToggle.click();
+    const archivedRow = bar.locator("div.group").filter({ hasText: "Filed away chat" }).first();
+    await archivedRow.hover();
+    const unarchiveResponse = page.waitForResponse(
+      (res) =>
+        /\/api\/conversations\/[^/]+\/archive$/.test(res.url()) && res.request().method() === "POST",
+    );
+    await archivedRow.getByRole("button", { name: "Unarchive Filed away chat" }).click({ force: true });
+    expect((await unarchiveResponse).status()).toBe(200);
+
+    // Back in the main list; no longer reported as archived by the server.
+    await expect(archivedToggle).toHaveCount(0, { timeout: 10_000 });
+    await expect(bar.getByText("Filed away chat", { exact: true })).toBeVisible();
+    const after = (await (
+      await page.request.get("/api/conversations?archived=true", { headers: { Origin: origin } })
+    ).json()) as { conversations: Array<{ title: string }> | null };
+    expect((after.conversations ?? []).some((c) => c.title === "Filed away chat")).toBe(false);
+  });
+
+  test("deleting a chat from the Archived section removes it everywhere", async ({ page, login }) => {
+    test.setTimeout(120_000);
+    await login();
+
+    await seedChat(page, "Archived doomed");
+
+    const bar = sidebar(page);
+    const row = bar.locator("div.group").filter({ hasText: "Archived doomed" }).first();
+    await row.hover();
+    const archiveResponse = page.waitForResponse(
+      (res) =>
+        /\/api\/conversations\/[^/]+\/archive$/.test(res.url()) && res.request().method() === "POST",
+    );
+    await row.getByRole("button", { name: "Archive Archived doomed" }).click({ force: true });
+    expect((await archiveResponse).status()).toBe(200);
+
+    // Expand the Archived section, then delete from it (the ghost-row regression).
+    await bar.getByRole("button", { name: /Archived conversations \(1\)/i }).click();
+    const archivedRow = bar.locator("div.group").filter({ hasText: "Archived doomed" }).first();
+    await archivedRow.hover();
+    await archivedRow.getByRole("button", { name: "Delete Archived doomed" }).click({ force: true });
+    await page.getByRole("button", { name: /^delete$/i }).click();
+
+    // The row must be gone from the UI (no ghost) and from the server.
+    await expect(bar.getByText("Archived doomed", { exact: true })).toHaveCount(0, { timeout: 10_000 });
+    const origin = new URL(page.url()).origin;
+    const archived = (await (
+      await page.request.get("/api/conversations?archived=true", { headers: { Origin: origin } })
+    ).json()) as { conversations: Array<{ title: string }> | null };
+    expect((archived.conversations ?? []).some((c) => c.title === "Archived doomed")).toBe(false);
+  });
+
   test("reloading mid-conversation resumes full history from the chat server", async ({ page, login }) => {
     test.setTimeout(120_000);
     await login();
