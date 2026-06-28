@@ -406,7 +406,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 					// field is set unconditionally (not a mode branch).
 					RecordUsage: func(u fantasy.Usage, md fantasy.ProviderMetadata) {
 						if usageOrch != nil {
-							usageOrch.updateUsage(u, md)
+							usageOrch.updateUsage(slugOf(activeModel), u, md)
 						}
 					},
 				})

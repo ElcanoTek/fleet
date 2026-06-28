@@ -102,6 +102,11 @@ type Bundle struct {
 	// bundle (defaults unchanged). See HTTPToolDef.
 	HTTPTools []HTTPToolDef
 
+	// PricingConfig carries the bundle's optional custom model-pricing overrides
+	// (#297). Empty in the generic bundle. cmd/fleet translates it into
+	// agentcore.PricingConfig and installs it via agentcore.ConfigurePricing.
+	PricingConfig PricingConfig
+
 	// SandboxConfig is the bundle's resolved sandbox descriptor (Containerfile,
 	// local tag, optional prebuilt image override). Access it via Sandbox().
 	SandboxConfig Sandbox
@@ -138,6 +143,38 @@ type AgentPolicy struct {
 	ParallelSafeTools       []string            `yaml:"parallel_safe_tools"`
 	CriticalToolSuffixes    []string            `yaml:"critical_tools"`
 	CriticalToolSubstitutes map[string][]string `yaml:"critical_tool_substitutes"`
+}
+
+// PricingOverride is one entry in the manifest's pricing.overrides list: an
+// operator-declared per-model rate. Rates are per MILLION tokens (the unit
+// pricing pages publish). It is a plain data struct (no dependency on
+// internal/agentcore) so clientconfig stays a low-level package; cmd/fleet
+// translates it into agentcore.PricingOverride.
+type PricingOverride struct {
+	Model                          string  `yaml:"model"`
+	InputCostPerMillionTokens      float64 `yaml:"input_cost_per_million_tokens"`
+	OutputCostPerMillionTokens     float64 `yaml:"output_cost_per_million_tokens"`
+	CacheReadCostPerMillionTokens  float64 `yaml:"cache_read_cost_per_million_tokens"`
+	CacheWriteCostPerMillionTokens float64 `yaml:"cache_write_cost_per_million_tokens"`
+}
+
+// PricingConfig is the bundle's optional custom model-pricing block (#297). An
+// operator on negotiated / enterprise rates declares per-model overrides here so
+// cost accounting (and the cost ceiling) reflects their real spend instead of the
+// OpenRouter-published price.
+//
+//   - Overrides: per-model rate table. A step whose model slug matches an entry
+//     is priced locally from its token counts using these rates.
+//   - Fallback: what to do for a model NOT listed in Overrides. "openrouter"
+//     (default, and the value an absent/blank block resolves to) keeps the
+//     existing behavior — trust the OpenRouter-returned cost. "zero" suppresses
+//     cost for unlisted models (fully-private deployments).
+//
+// An absent pricing: block leaves the zero value, which cmd/fleet maps to the
+// default (no overrides, OpenRouter fallback) — behavior identical to pre-#297.
+type PricingConfig struct {
+	Overrides []PricingOverride `yaml:"overrides"`
+	Fallback  string            `yaml:"fallback"`
 }
 
 // Sandbox is the bundle's resolved execution-sandbox descriptor. The sandbox is
@@ -325,6 +362,7 @@ type manifest struct {
 	HTTPTools   []HTTPToolDef    `yaml:"http_tools"`
 	EmptyState  EmptyState       `yaml:"empty_state"`
 	AgentPolicy AgentPolicy      `yaml:"agent_policy"`
+	Pricing     PricingConfig    `yaml:"pricing"`
 	Sandbox     *sandboxManifest `yaml:"sandbox"`
 }
 
@@ -389,6 +427,7 @@ func Load(dir string) (*Bundle, error) {
 		MCPCatalog:        m.MCPServers,
 		HTTPTools:         m.HTTPTools,
 		AgentPolicyConfig: m.AgentPolicy,
+		PricingConfig:     m.Pricing,
 		SandboxConfig:     resolveSandbox(m.Sandbox, abs),
 		sandboxDeclared:   m.Sandbox != nil,
 		SystemPromptsDir:  filepath.Join(abs, "system_prompts"),
@@ -531,7 +570,13 @@ func (b *Bundle) validate() error {
 			return fmt.Errorf("mcp_servers[%q]: unknown type %q (want stdio|http)", s.Name, s.Type)
 		}
 	}
-	return b.validateHTTPTools(seen)
+	if err := b.validateHTTPTools(seen); err != nil {
+		return err
+	}
+	if err := validatePricing(b.PricingConfig); err != nil {
+		return err
+	}
+	return nil
 }
 
 // validateHTTPTools fails the load on a malformed http_tools[] entry — a missing
@@ -577,6 +622,39 @@ func (b *Bundle) validateHTTPTools(seen map[string]bool) error {
 		if jq := strings.TrimSpace(t.ResponseJQ); jq != "" {
 			if _, err := gojq.Parse(jq); err != nil {
 				return fmt.Errorf("http_tools[%q]: response_jq does not parse: %w", name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// validatePricing fails the load on a malformed pricing block (#297): an unknown
+// fallback mode, an override missing its model slug, or a negative rate. This is
+// the same fail-loud-at-startup posture as the rest of validate — a typo'd
+// fallback or a sign-flipped rate would otherwise silently mis-account cost (and
+// the cost ceiling that rides on it). An absent block (zero value) is valid: an
+// empty fallback resolves to the OpenRouter default downstream.
+func validatePricing(p PricingConfig) error {
+	switch strings.ToLower(strings.TrimSpace(p.Fallback)) {
+	case "", "openrouter", "zero":
+	default:
+		return fmt.Errorf("pricing.fallback: unknown value %q (want openrouter|zero)", p.Fallback)
+	}
+	for i, o := range p.Overrides {
+		if strings.TrimSpace(o.Model) == "" {
+			return fmt.Errorf("pricing.overrides[%d]: model is required", i)
+		}
+		for _, r := range []struct {
+			name string
+			val  float64
+		}{
+			{"input_cost_per_million_tokens", o.InputCostPerMillionTokens},
+			{"output_cost_per_million_tokens", o.OutputCostPerMillionTokens},
+			{"cache_read_cost_per_million_tokens", o.CacheReadCostPerMillionTokens},
+			{"cache_write_cost_per_million_tokens", o.CacheWriteCostPerMillionTokens},
+		} {
+			if r.val < 0 {
+				return fmt.Errorf("pricing.overrides[%q]: %s must not be negative (got %g)", o.Model, r.name, r.val)
 			}
 		}
 	}
@@ -728,6 +806,19 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		for k, v := range b.AgentPolicyConfig.CriticalToolSubstitutes {
 			p.CriticalToolSubstitutes[k] = append([]string(nil), v...)
 		}
+	}
+	return p
+}
+
+// Pricing returns the bundle's custom model-pricing config (defensively copied),
+// with the fallback normalized to lower-case (and a blank fallback left blank so
+// the agentcore layer applies its OpenRouter default). The generic bundle ships
+// no overrides, so this returns an empty config and cost accounting stays on the
+// OpenRouter-returned price — identical to pre-#297 behavior.
+func (b *Bundle) Pricing() PricingConfig {
+	p := PricingConfig{Fallback: strings.ToLower(strings.TrimSpace(b.PricingConfig.Fallback))}
+	if len(b.PricingConfig.Overrides) > 0 {
+		p.Overrides = append([]PricingOverride(nil), b.PricingConfig.Overrides...)
 	}
 	return p
 }

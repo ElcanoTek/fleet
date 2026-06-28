@@ -508,3 +508,104 @@ func TestValidateMCPArgPaths(t *testing.T) {
 		t.Fatalf("problem should name the bad server + missing script, got: %s", probs[0])
 	}
 }
+
+// TestPricingBlockParsesAndNormalizes confirms the manifest pricing: block loads
+// into the bundle, the accessor lower-cases the fallback, and the per-million
+// rates survive the round-trip (#297).
+func TestPricingBlockParsesAndNormalizes(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "branding: {}\n" +
+		"pricing:\n" +
+		"  fallback: OpenRouter\n" +
+		"  overrides:\n" +
+		"    - model: \"anthropic/claude-opus-4-8\"\n" +
+		"      input_cost_per_million_tokens: 7.50\n" +
+		"      output_cost_per_million_tokens: 22.50\n" +
+		"      cache_read_cost_per_million_tokens: 0.75\n" +
+		"      cache_write_cost_per_million_tokens: 1.875\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load pricing bundle: %v", err)
+	}
+	p := b.Pricing()
+	if p.Fallback != "openrouter" {
+		t.Errorf("fallback = %q, want normalized %q", p.Fallback, "openrouter")
+	}
+	if len(p.Overrides) != 1 {
+		t.Fatalf("overrides = %d, want 1", len(p.Overrides))
+	}
+	o := p.Overrides[0]
+	if o.Model != "anthropic/claude-opus-4-8" {
+		t.Errorf("model = %q", o.Model)
+	}
+	if o.InputCostPerMillionTokens != 7.50 || o.OutputCostPerMillionTokens != 22.50 {
+		t.Errorf("input/output rates = %v/%v, want 7.5/22.5", o.InputCostPerMillionTokens, o.OutputCostPerMillionTokens)
+	}
+	if o.CacheReadCostPerMillionTokens != 0.75 || o.CacheWriteCostPerMillionTokens != 1.875 {
+		t.Errorf("cache rates = %v/%v, want 0.75/1.875", o.CacheReadCostPerMillionTokens, o.CacheWriteCostPerMillionTokens)
+	}
+}
+
+// TestPricingAbsentBlockIsEmptyDefault confirms a bundle with no pricing: block
+// loads with an empty config (no overrides, blank fallback) — the agentcore layer
+// then applies its OpenRouter default, so behavior is unchanged.
+func TestPricingAbsentBlockIsEmptyDefault(t *testing.T) {
+	root := repoRoot(t)
+	b, err := Load(filepath.Join(root, "config", "default"))
+	if err != nil {
+		t.Fatalf("load config/default: %v", err)
+	}
+	p := b.Pricing()
+	if len(p.Overrides) != 0 {
+		t.Errorf("default bundle should ship no pricing overrides, got %d", len(p.Overrides))
+	}
+	if p.Fallback != "" {
+		t.Errorf("default bundle fallback = %q, want empty (OpenRouter default applied downstream)", p.Fallback)
+	}
+}
+
+// TestPricingRejectsUnknownFallback guards the strict-validation posture: a typo'd
+// fallback fails the load loudly rather than silently mis-accounting cost.
+func TestPricingRejectsUnknownFallback(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "branding: {}\n" +
+		"pricing:\n" +
+		"  fallback: free\n"
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err == nil {
+		t.Fatal("Load accepted an unknown pricing.fallback (free); want a validation error")
+	}
+}
+
+// TestPricingRejectsNegativeRateAndMissingModel guards the other two validation
+// rules: an empty model slug and a negative rate both fail the load.
+func TestPricingRejectsNegativeRateAndMissingModel(t *testing.T) {
+	cases := map[string]string{
+		"missing model": "branding: {}\n" +
+			"pricing:\n" +
+			"  overrides:\n" +
+			"    - model: \"\"\n" +
+			"      input_cost_per_million_tokens: 1\n",
+		"negative rate": "branding: {}\n" +
+			"pricing:\n" +
+			"  overrides:\n" +
+			"    - model: \"x/y\"\n" +
+			"      input_cost_per_million_tokens: -1\n",
+	}
+	for name, manifest := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(dir); err == nil {
+				t.Fatalf("Load accepted a malformed pricing override (%s); want a validation error", name)
+			}
+		})
+	}
+}

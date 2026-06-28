@@ -476,7 +476,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			return nil
 		},
 		OnStepFinish: func(step fantasy.StepResult) error {
-			r.orch.updateUsage(step.Usage, step.ProviderMetadata)
+			r.orch.updateUsage(modelSlug, step.Usage, step.ProviderMetadata)
 			if r.engine.usageReporter != nil {
 				r.engine.usageReporter(usageSnapshot(r.orch))
 			}

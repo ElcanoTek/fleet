@@ -3,7 +3,12 @@
 
 package agentcore
 
-import "strings"
+import (
+	"strings"
+	"sync"
+
+	"charm.land/fantasy"
+)
 
 // ModelPrice holds per-1M-token input/output prices in USD for one model.
 type ModelPrice struct {
@@ -23,10 +28,10 @@ type ModelPrice struct {
 // is added or OpenRouter changes a price; values below were sourced from
 // OpenRouter public pricing as of 2025-Q2.
 //
-// Per-deployment overrides are intentionally out of scope here; custom/private
-// pricing is tracked separately (#297). LookupModelPrice is the single read
-// seam so an override layer can be added in front of this map without touching
-// callers.
+// Per-deployment overrides for the RUNTIME cost-accounting path are handled by
+// the custom-pricing config (#297, PricingConfig below); this advisory forecast
+// table is intentionally separate. LookupModelPrice is the single read seam so an
+// override layer can be added in front of this map without touching callers.
 var KnownModelPricing = map[string]ModelPrice{
 	"anthropic/claude-sonnet-4-5": {InputPerM: 3.00, OutputPerM: 15.00},
 	"anthropic/claude-haiku-4-5":  {InputPerM: 0.80, OutputPerM: 4.00},
@@ -185,4 +190,164 @@ func ForecastCost(model string, systemToks, toolToks, promptToks, maxIterations 
 	fc.Note = "Range is 0.25x-1x the median; actual cost depends on task complexity. " +
 		"Estimate is local arithmetic over a chars/4 token heuristic and advisory pricing — not a live model call."
 	return fc
+}
+
+// Custom model pricing overrides (#297).
+//
+// Cost accounting normally trusts the USD figure OpenRouter returns in the
+// per-step provider metadata (openrouterCost). Operators on negotiated /
+// enterprise rates or a private model endpoint pay a different price than the
+// published OpenRouter rate, so the provider-returned cost over- or under-counts
+// their real spend — which in turn makes the cost ceiling (maxCostUSD) and the
+// cost-audit data unreliable.
+//
+// A PricingConfig lets an operator declare per-model rates in the client bundle
+// manifest. When an override matches the active model slug, cost for that step is
+// computed LOCALLY from the token counts using the operator's rates instead of
+// the OpenRouter figure. With no overrides configured (the shipped default),
+// behavior is byte-identical to before: the OpenRouter cost is used as-is.
+//
+// This is installed process-wide via ConfigurePricing, mirroring the
+// ConfigureAgentPolicy seam: cmd/fleet translates the bundle's pricing block and
+// installs it once at startup, before any turn runs. Keeping it global (rather
+// than threading it through every policy constructor) means the existing
+// orchestrationState/policy signatures are untouched and the change stays scoped
+// to the usage-accounting path.
+
+// PricingFallback selects what happens to cost for a model with no override.
+type PricingFallback string
+
+const (
+	// PricingFallbackOpenRouter uses the OpenRouter-returned cost for unlisted
+	// models. This is the default and reproduces the pre-#297 behavior exactly.
+	PricingFallbackOpenRouter PricingFallback = "openrouter"
+	// PricingFallbackZero suppresses cost for unlisted models (cost stays 0).
+	// Useful for fully private deployments where OpenRouter prices are
+	// meaningless and only the explicitly-listed models should accrue cost.
+	PricingFallbackZero PricingFallback = "zero"
+)
+
+// PricingOverride is one operator-declared per-model rate. Rates are expressed
+// per MILLION tokens (the unit pricing pages publish), so a $7.50/M input rate
+// is the literal 7.5 here. A zero rate for a token class means that class is
+// free under the override (e.g. a model with no cache pricing leaves the cache
+// fields at 0).
+type PricingOverride struct {
+	Model                          string
+	InputCostPerMillionTokens      float64
+	OutputCostPerMillionTokens     float64
+	CacheReadCostPerMillionTokens  float64
+	CacheWriteCostPerMillionTokens float64
+}
+
+// PricingConfig is the resolved pricing policy: a set of per-model overrides plus
+// the fallback policy for unlisted models. The zero value (no overrides, empty
+// fallback) preserves the default OpenRouter behavior.
+type PricingConfig struct {
+	Overrides []PricingOverride
+	Fallback  PricingFallback
+}
+
+// normalizeSlug lower-cases and trims a model slug for case-insensitive matching
+// between the configured override and the active model.
+func normalizeSlug(slug string) string {
+	return strings.ToLower(strings.TrimSpace(slug))
+}
+
+// lookup returns the override for modelSlug (case-insensitively) and whether one
+// matched. First match wins, so an operator listing the same model twice gets the
+// earlier entry — the order matches the manifest.
+func (c PricingConfig) lookup(modelSlug string) (PricingOverride, bool) {
+	slug := normalizeSlug(modelSlug)
+	if slug == "" {
+		return PricingOverride{}, false
+	}
+	for _, o := range c.Overrides {
+		if normalizeSlug(o.Model) == slug {
+			return o, true
+		}
+	}
+	return PricingOverride{}, false
+}
+
+// computeOverrideCost prices a step's token usage with an operator override.
+// Rates are per million tokens; each token class is charged independently so a
+// model with no cache pricing (cache rates 0) simply contributes nothing for
+// those classes.
+func computeOverrideCost(o PricingOverride, usage fantasy.Usage) float64 {
+	const perMillion = 1_000_000.0
+	input := float64(usage.InputTokens) / perMillion * o.InputCostPerMillionTokens
+	output := float64(usage.OutputTokens) / perMillion * o.OutputCostPerMillionTokens
+	cacheRead := float64(usage.CacheReadTokens) / perMillion * o.CacheReadCostPerMillionTokens
+	cacheWrite := float64(usage.CacheCreationTokens) / perMillion * o.CacheWriteCostPerMillionTokens
+	return input + output + cacheRead + cacheWrite
+}
+
+// computeCostFromUsage resolves the cost for one step under the price-resolution
+// order:
+//
+//  1. a manifest override matching modelSlug → compute locally from token counts
+//  2. otherwise the fallback policy:
+//     - "zero": cost is 0 (unlisted models accrue nothing)
+//     - "openrouter" (default / empty): the OpenRouter-returned cost (orCost),
+//     or 0 when the provider returned none (orCost == nil) — exactly the
+//     pre-#297 behavior.
+//
+// It is a pure function (no global state) so the override math, the override
+// lookup, and both fallback branches are unit-testable in isolation.
+func computeCostFromUsage(modelSlug string, usage fantasy.Usage, orCost *float64, cfg PricingConfig) float64 {
+	if o, ok := cfg.lookup(modelSlug); ok {
+		return computeOverrideCost(o, usage)
+	}
+	if cfg.Fallback == PricingFallbackZero {
+		return 0
+	}
+	if orCost != nil {
+		return *orCost
+	}
+	return 0
+}
+
+var (
+	pricingMu sync.RWMutex
+	// activePricing is the process-wide pricing policy. The zero value (no
+	// overrides, empty fallback) reproduces the default OpenRouter behavior, so an
+	// operator who never calls ConfigurePricing sees no change.
+	activePricing PricingConfig
+)
+
+// ConfigurePricing installs the client bundle's pricing policy process-wide. Call
+// once at startup (cmd/fleet) before any turn runs. Mirrors ConfigureAgentPolicy.
+// Safe to call with a zero PricingConfig, which yields the default behavior (the
+// OpenRouter-returned cost for every model). Idempotent: each call fully replaces
+// the previously installed policy. The slice is defensively copied so a later
+// mutation of the caller's slice can't race the readers.
+func ConfigurePricing(c PricingConfig) {
+	pricingMu.Lock()
+	defer pricingMu.Unlock()
+	cp := PricingConfig{Fallback: c.Fallback}
+	if len(c.Overrides) > 0 {
+		cp.Overrides = append([]PricingOverride(nil), c.Overrides...)
+	}
+	activePricing = cp
+}
+
+// pricingConfig returns the installed pricing policy under the read lock. The
+// returned value shares the underlying Overrides slice; callers must treat it as
+// read-only (the accounting path only reads it).
+func pricingConfig() PricingConfig {
+	pricingMu.RLock()
+	defer pricingMu.RUnlock()
+	return activePricing
+}
+
+// ResolveStepCost prices one model step under the process-wide pricing policy
+// installed by ConfigurePricing. It is the exported entry point for cost-bearing
+// call sites OUTSIDE the governed run loop (e.g. the conversation summarizer in
+// internal/agent) so they honor the same per-model overrides the run loop does.
+// orCost is the OpenRouter-returned cost for the step (nil when the provider
+// returned none). With no overrides installed (the default), the result is the
+// OpenRouter cost or 0 — identical to the prior behavior.
+func ResolveStepCost(modelSlug string, usage fantasy.Usage, orCost *float64) float64 {
+	return computeCostFromUsage(modelSlug, usage, orCost, pricingConfig())
 }

@@ -7,7 +7,28 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openrouter"
 )
+
+func ptr(f float64) *float64 { return &f }
+
+// openRouterMetadataWithCost builds provider metadata carrying an
+// OpenRouter-reported cost, the shape openrouterCost reads.
+func openRouterMetadataWithCost(cost float64) fantasy.ProviderMetadata {
+	return fantasy.ProviderMetadata{
+		openrouter.Name: &openrouter.ProviderMetadata{
+			Usage: openrouter.UsageAccounting{Cost: cost},
+		},
+	}
+}
+
+// approxEqual compares two costs with a tolerance generous enough to absorb
+// float rounding but tight enough to catch a wrong rate or token-class mistake.
+func approxEqual(a, b float64) bool {
+	return math.Abs(a-b) < 1e-9
+}
 
 func TestLookupModelPrice(t *testing.T) {
 	t.Parallel()
@@ -73,10 +94,6 @@ func TestEstimateTokensNoTools(t *testing.T) {
 	if toolToks != 0 {
 		t.Fatalf("negative tool count produced %d tool tokens, want 0", toolToks)
 	}
-}
-
-func approxEqual(a, b float64) bool {
-	return math.Abs(a-b) < 1e-9
 }
 
 func TestForecastCostKnownModel(t *testing.T) {
@@ -170,5 +187,188 @@ func TestForecastCostClampsIterations(t *testing.T) {
 	// With 1 iteration, median == per-iteration.
 	if !approxEqual(*fc.EstimatedTotalCostUSD, *fc.PerIterationCostUSD) {
 		t.Fatalf("median %v should equal per-iter %v at 1 iteration", *fc.EstimatedTotalCostUSD, *fc.PerIterationCostUSD)
+	}
+}
+
+// TestComputeCostFromUsage_OverrideMatch exercises the primary path: a configured
+// override matches the model slug, so cost is computed LOCALLY from the token
+// counts at the operator's rates — the OpenRouter-returned cost is ignored.
+func TestComputeCostFromUsage_OverrideMatch(t *testing.T) {
+	cfg := PricingConfig{
+		Overrides: []PricingOverride{{
+			Model:                          "anthropic/claude-opus-4-8",
+			InputCostPerMillionTokens:      7.50,
+			OutputCostPerMillionTokens:     22.50,
+			CacheReadCostPerMillionTokens:  0.75,
+			CacheWriteCostPerMillionTokens: 1.875,
+		}},
+		Fallback: PricingFallbackOpenRouter,
+	}
+	usage := fantasy.Usage{
+		InputTokens:         1_000_000,
+		OutputTokens:        2_000_000,
+		CacheReadTokens:     500_000,
+		CacheCreationTokens: 100_000,
+	}
+	// 1M*7.50 + 2M*22.50 + 0.5M*0.75 + 0.1M*1.875
+	// = 7.50 + 45.00 + 0.375 + 0.1875 = 53.0625
+	want := 53.0625
+	// A wildly different OR cost must be IGNORED when an override matches.
+	got := computeCostFromUsage("anthropic/claude-opus-4-8", usage, ptr(999.0), cfg)
+	if !approxEqual(got, want) {
+		t.Fatalf("override cost = %v, want %v", got, want)
+	}
+}
+
+// TestComputeCostFromUsage_OverrideCaseInsensitive confirms the slug match is
+// case-insensitive and trims surrounding whitespace on both sides.
+func TestComputeCostFromUsage_OverrideCaseInsensitive(t *testing.T) {
+	cfg := PricingConfig{Overrides: []PricingOverride{{
+		Model:                     "  Anthropic/Claude-Opus-4-8  ",
+		InputCostPerMillionTokens: 10,
+	}}}
+	usage := fantasy.Usage{InputTokens: 2_000_000}
+	got := computeCostFromUsage("ANTHROPIC/claude-opus-4-8", usage, ptr(1.0), cfg)
+	if !approxEqual(got, 20.0) {
+		t.Fatalf("case-insensitive override cost = %v, want 20.0", got)
+	}
+}
+
+// TestComputeCostFromUsage_NoMatchOpenRouterFallback is the default behavior: no
+// override matches, fallback is "openrouter" (and the empty fallback resolves the
+// same way), so the OpenRouter-returned cost is used verbatim.
+func TestComputeCostFromUsage_NoMatchOpenRouterFallback(t *testing.T) {
+	usage := fantasy.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+
+	// Explicit openrouter fallback.
+	cfg := PricingConfig{
+		Overrides: []PricingOverride{{Model: "some/other-model", InputCostPerMillionTokens: 1}},
+		Fallback:  PricingFallbackOpenRouter,
+	}
+	if got := computeCostFromUsage("openai/gpt-4o", usage, ptr(0.0185), cfg); !approxEqual(got, 0.0185) {
+		t.Fatalf("openrouter-fallback cost = %v, want 0.0185 (the OR cost)", got)
+	}
+
+	// Empty fallback resolves to the openrouter default.
+	if got := computeCostFromUsage("openai/gpt-4o", usage, ptr(0.0185), PricingConfig{}); !approxEqual(got, 0.0185) {
+		t.Fatalf("empty-fallback cost = %v, want 0.0185 (the OR cost)", got)
+	}
+
+	// No OR cost available (nil) under the openrouter fallback → 0, no accrual,
+	// exactly the pre-#297 behavior.
+	if got := computeCostFromUsage("openai/gpt-4o", usage, nil, PricingConfig{}); got != 0 {
+		t.Fatalf("nil OR cost under openrouter fallback = %v, want 0", got)
+	}
+}
+
+// TestComputeCostFromUsage_NoMatchZeroFallback confirms the "zero" fallback
+// suppresses cost for unlisted models even when the provider returned one.
+func TestComputeCostFromUsage_NoMatchZeroFallback(t *testing.T) {
+	cfg := PricingConfig{Fallback: PricingFallbackZero}
+	usage := fantasy.Usage{InputTokens: 5_000_000, OutputTokens: 5_000_000}
+	if got := computeCostFromUsage("openai/gpt-4o", usage, ptr(123.45), cfg); got != 0 {
+		t.Fatalf("zero-fallback cost = %v, want 0 (unlisted model suppressed)", got)
+	}
+}
+
+// TestComputeCostFromUsage_ZeroFallbackStillHonorsOverride confirms a listed
+// model is still priced from its override even when the fallback is "zero".
+func TestComputeCostFromUsage_ZeroFallbackStillHonorsOverride(t *testing.T) {
+	cfg := PricingConfig{
+		Fallback: PricingFallbackZero,
+		Overrides: []PricingOverride{{
+			Model:                      "private/model",
+			InputCostPerMillionTokens:  2,
+			OutputCostPerMillionTokens: 4,
+		}},
+	}
+	usage := fantasy.Usage{InputTokens: 1_000_000, OutputTokens: 500_000}
+	// 1M*2 + 0.5M*4 = 2 + 2 = 4
+	if got := computeCostFromUsage("private/model", usage, nil, cfg); !approxEqual(got, 4.0) {
+		t.Fatalf("override-under-zero-fallback cost = %v, want 4.0", got)
+	}
+}
+
+// TestComputeCostFromUsage_EmptySlug falls through to the fallback (an empty slug
+// can never match an override) — guards the finalize-hook path where the active
+// model may be nil.
+func TestComputeCostFromUsage_EmptySlug(t *testing.T) {
+	cfg := PricingConfig{Overrides: []PricingOverride{{Model: "x", InputCostPerMillionTokens: 1}}}
+	usage := fantasy.Usage{InputTokens: 1_000_000}
+	if got := computeCostFromUsage("", usage, ptr(0.5), cfg); !approxEqual(got, 0.5) {
+		t.Fatalf("empty-slug cost = %v, want 0.5 (fallback to OR cost)", got)
+	}
+}
+
+// TestComputeCostFromUsage_FirstMatchWins confirms duplicate entries resolve to
+// the first (manifest order), matching the documented behavior.
+func TestComputeCostFromUsage_FirstMatchWins(t *testing.T) {
+	cfg := PricingConfig{Overrides: []PricingOverride{
+		{Model: "dup/model", InputCostPerMillionTokens: 1},
+		{Model: "dup/model", InputCostPerMillionTokens: 99},
+	}}
+	usage := fantasy.Usage{InputTokens: 1_000_000}
+	if got := computeCostFromUsage("dup/model", usage, nil, cfg); !approxEqual(got, 1.0) {
+		t.Fatalf("first-match cost = %v, want 1.0", got)
+	}
+}
+
+// TestUpdateUsage_UsesOverrideForCeiling is the end-to-end accounting check: with
+// an override installed process-wide, updateUsage accrues cost at the OVERRIDE
+// rate (not the OpenRouter figure), and the cost ceiling fires against that
+// overridden spend. This is the behavior the issue's budget/ceiling criterion
+// asks for.
+func TestUpdateUsage_UsesOverrideForCeiling(t *testing.T) {
+	// Install a high override rate, restore the default after the test so the
+	// process-wide config doesn't leak into other tests in the package.
+	t.Cleanup(func() { ConfigurePricing(PricingConfig{}) })
+	ConfigurePricing(PricingConfig{
+		Overrides: []PricingOverride{{
+			Model:                      "private/expensive",
+			InputCostPerMillionTokens:  100, // $100/M input
+			OutputCostPerMillionTokens: 200, // $200/M output
+		}},
+	})
+
+	// $0.50 ceiling.
+	p := NewScheduledPolicy(NewLogSession(), 50, 0.50, 0)
+
+	// One step: 1000 input + 1000 output tokens.
+	// override cost = (1000/1e6)*100 + (1000/1e6)*200 = 0.10 + 0.20 = 0.30
+	p.orch.updateUsage("private/expensive", fantasy.Usage{InputTokens: 1000, OutputTokens: 1000}, fantasy.ProviderMetadata{})
+	if !approxEqual(p.orch.CostUSD, 0.30) {
+		t.Fatalf("CostUSD after one override-priced step = %v, want 0.30", p.orch.CostUSD)
+	}
+	// Under the ceiling so far.
+	if blocked, _ := p.BeforeToolCall("read_file", "c1", "{}"); blocked {
+		t.Fatal("blocked before exceeding the ceiling")
+	}
+
+	// A second identical step pushes accrued cost to 0.60 >= 0.50.
+	p.orch.updateUsage("private/expensive", fantasy.Usage{InputTokens: 1000, OutputTokens: 1000}, fantasy.ProviderMetadata{})
+	if !approxEqual(p.orch.CostUSD, 0.60) {
+		t.Fatalf("CostUSD after two override-priced steps = %v, want 0.60", p.orch.CostUSD)
+	}
+	blocked, msg := p.BeforeToolCall("read_file", "c2", "{}")
+	if !blocked {
+		t.Fatalf("expected the cost ceiling to fire at override-priced spend %.2f >= 0.50", p.orch.CostUSD)
+	}
+	if msg == "" {
+		t.Fatal("ceiling block returned an empty message")
+	}
+}
+
+// TestUpdateUsage_DefaultUsesOpenRouterCost is the no-override regression guard:
+// with the default (empty) pricing config, updateUsage accrues exactly the
+// OpenRouter-returned cost — byte-identical to the pre-#297 path.
+func TestUpdateUsage_DefaultUsesOpenRouterCost(t *testing.T) {
+	t.Cleanup(func() { ConfigurePricing(PricingConfig{}) })
+	ConfigurePricing(PricingConfig{}) // explicit default
+
+	p := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
+	md := openRouterMetadataWithCost(0.0042)
+	p.orch.updateUsage("openai/gpt-4o", fantasy.Usage{InputTokens: 100, OutputTokens: 50}, md)
+	if !approxEqual(p.orch.CostUSD, 0.0042) {
+		t.Fatalf("default-path CostUSD = %v, want 0.0042 (the OR cost)", p.orch.CostUSD)
 	}
 }
