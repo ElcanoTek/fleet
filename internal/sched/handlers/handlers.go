@@ -890,6 +890,13 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 	if utf8.RuneCountInString(tc.Description) > maxTaskDescriptionChars {
 		return fmt.Errorf("description exceeds maximum length of %d characters", maxTaskDescriptionChars)
 	}
+	// Tags (#212): normalize in place to the canonical (lowercased, deduped,
+	// validated) form so the persisted value is consistent and filterable.
+	normalizedTags, err := models.NormalizeAndValidateTags(tc.Tags)
+	if err != nil {
+		return fmt.Errorf("tags: %w", err)
+	}
+	tc.Tags = normalizedTags
 	return nil
 }
 
@@ -1116,6 +1123,19 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 	if hasDescription := r.URL.Query().Get("has_description"); hasDescription == "true" {
 		filter.HasDescription = true
 		hasFilters = true
+	}
+
+	// Tag filter (#212): ?tag=a&tag=b → tasks carrying ALL of a,b. Query tags are
+	// lowercased/trimmed to match the stored canonical form; blanks are dropped.
+	if rawTags := r.URL.Query()["tag"]; len(rawTags) > 0 {
+		for _, t := range rawTags {
+			if t = strings.ToLower(strings.TrimSpace(t)); t != "" {
+				filter.Tags = append(filter.Tags, t)
+			}
+		}
+		if len(filter.Tags) > 0 {
+			hasFilters = true
+		}
 	}
 
 	if completedToday := r.URL.Query().Get("completed_today"); completedToday == "true" {
@@ -1539,6 +1559,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		Timezone:               tc.Timezone,
 		Files:                  tc.Files,
 		SetFiles:               tc.Files != nil,
+		Tags:                   tc.Tags,
+		SetTags:                tc.Tags != nil,
 	}
 
 	updated, err := h.storage.UpdateEditableTask(r.Context(), taskID, edit)
@@ -1553,6 +1575,77 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 
 	//nolint:gosec // G706: untrusted fields are sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper. updated.ID is a uuid.UUID.
 	log.Printf("Task updated: %s (prompt: %.50s...)", updated.ID, logSafe(updated.Prompt))
+	localizeTask(updated)
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// GetTagCatalogue handles GET /tasks/tags (#212): the distinct tags in use with
+// per-tag task counts, busiest first. A read endpoint — group auth suffices.
+func (h *Handlers) GetTagCatalogue(w http.ResponseWriter, r *http.Request) {
+	catalogue, err := h.storage.ListTagCatalogue(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to load tag catalogue")
+		return
+	}
+	writeJSON(w, http.StatusOK, catalogue)
+}
+
+// tagMutation is the POST /tasks/{task_id}/tags body: tags to add and/or remove.
+type tagMutation struct {
+	Add    []string `json:"add"`
+	Remove []string `json:"remove"`
+}
+
+// UpdateTaskTags handles POST /tasks/{task_id}/tags (#212): atomically add and/or
+// remove tags on a task. Mutating, so it requires the create-task privilege.
+func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionCreateTask) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return
+	}
+
+	taskID, err := uuid.Parse(chi.URLParam(r, "task_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid task ID")
+		return
+	}
+
+	task, err := h.storage.GetTask(taskID)
+	if err != nil || task == nil {
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+	if scopes := p.scopes(); len(scopes) > 0 {
+		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
+			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
+			return
+		}
+	}
+
+	var body tagMutation
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	// Normalize add/remove independently so a malformed tag is rejected before any
+	// mutation; the storage layer re-validates the merged set.
+	add, err := models.NormalizeAndValidateTags(body.Add)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("add tags: %v", err))
+		return
+	}
+	remove, err := models.NormalizeAndValidateTags(body.Remove)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("remove tags: %v", err))
+		return
+	}
+
+	updated, err := h.storage.UpdateTaskTags(r.Context(), taskID, add, remove)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to update tags: %v", err))
+		return
+	}
 	localizeTask(updated)
 	writeJSON(w, http.StatusOK, updated)
 }

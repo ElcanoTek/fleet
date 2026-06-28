@@ -285,6 +285,22 @@ paths:
               schema: { $ref: "#/components/schemas/Task" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /tasks/tags:
+    get:
+      summary: List the distinct task tags in use with per-tag task counts (busiest first).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    tag: { type: string }
+                    task_count: { type: integer }
   /tasks/{task_id}:
     parameters:
       - name: task_id
@@ -319,6 +335,31 @@ paths:
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200": { description: Cancelled }
+  /tasks/{task_id}/tags:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Atomically add and/or remove tags on a task.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                add: { type: array, items: { type: string } }
+                remove: { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /tasks/pending:
     get:
       summary: Lease the next pending task (worker protocol).

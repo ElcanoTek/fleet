@@ -504,7 +504,17 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags"
+
+// marshalTags serializes task tags for the JSONB column, ALWAYS as a JSON array
+// (never the bare "null" marshalJSON emits for a nil slice) so the tags catalogue
+// query's jsonb_array_elements_text never hits a scalar. Empty → "[]".
+func marshalTags(tags []string) string {
+	if len(tags) == 0 {
+		return "[]"
+	}
+	return marshalJSON(tags)
+}
 
 // AddTask adds or updates a task.
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
@@ -515,8 +525,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id,
-			trigger_type, credential_allowlist, loop_config, worktree_config, description
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
+			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -549,7 +559,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			credential_allowlist = EXCLUDED.credential_allowlist,
 			loop_config = EXCLUDED.loop_config,
 			worktree_config = EXCLUDED.worktree_config,
-			description = EXCLUDED.description`,
+			description = EXCLUDED.description,
+			tags = EXCLUDED.tags`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -583,6 +594,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		marshalLoopConfig(task.LoopConfig),
 		marshalWorktreeConfig(task.WorktreeConfig),
 		nullableString(task.Description),
+		marshalTags(task.Tags),
 	)
 	return err
 }
@@ -735,6 +747,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		loopConfig             sql.NullString
 		worktreeConfig         sql.NullString
 		description            sql.NullString
+		tags                   sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -743,7 +756,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &runtimeFlavor, &timezone, &createdByKeyID,
-		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description,
+		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags,
 	)
 	if err != nil {
 		return nil, err
@@ -810,6 +823,9 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	if files.Valid {
 		task.Files = unmarshalStringSlice(files.String)
 	}
+	// tags is NOT NULL DEFAULT '[]', so it's always present; assign independently
+	// of files (unmarshalStringSlice maps ""/"null" → empty slice safely).
+	task.Tags = unmarshalStringSlice(tags.String)
 	if leaseOwner.Valid {
 		task.LeaseOwner = &leaseOwner.String
 	}
@@ -1309,7 +1325,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			credential_allowlist = $28,
 			loop_config = $29,
 			worktree_config = $30,
-			description = $31
+			description = $31,
+			tags = $32
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1342,6 +1359,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		marshalLoopConfig(task.LoopConfig),
 		marshalWorktreeConfig(task.WorktreeConfig),
 		nullableString(task.Description),
+		marshalTags(task.Tags),
 	)
 	return err
 }
@@ -1612,6 +1630,9 @@ type TaskFilter struct {
 	// HasDescription, when true, restricts to tasks carrying operator
 	// documentation (#281): a non-null, non-empty description.
 	HasDescription bool
+	// Tags, when non-empty, restricts to tasks carrying ALL of these tags
+	// (AND-semantics via jsonb containment) — #212.
+	Tags []string
 	// Visibility filters for scoped users. With node targeting removed, scoped
 	// visibility reduces to "own tasks OR all untargeted tasks" (every task is
 	// untargeted now), so a scoped user with VisibleToScopes set sees all tasks.
@@ -1694,6 +1715,14 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 		whereClauses = append(whereClauses, "description IS NOT NULL AND description <> ''")
 	}
 
+	if len(filter.Tags) > 0 {
+		// AND-semantics: task tags must contain ALL requested tags. jsonb `@>`
+		// (contains) over the GIN index; the bind value is a JSON array string.
+		whereClauses = append(whereClauses, fmt.Sprintf("tags @> $%d::jsonb", argIndex))
+		args = append(args, marshalTags(filter.Tags))
+		argIndex++
+	}
+
 	// Scoped visibility: with node targeting removed, a scoped user sees their
 	// own tasks plus all untargeted tasks — and every task is untargeted now —
 	// so this adds no restriction beyond what an unscoped user sees. (Kept as a
@@ -1723,6 +1752,36 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 	defer rows.Close()
 	tasks, err := db.rowsToTasks(rows)
 	return tasks, total, err
+}
+
+// TagCount is one row of the tag catalogue: a distinct tag and how many tasks
+// carry it (#212).
+type TagCount struct {
+	Tag       string `json:"tag"`
+	TaskCount int    `json:"task_count"`
+}
+
+// GetTagCatalogue returns every distinct tag in use with its task count, busiest
+// first (then alphabetical). Drives GET /tasks/tags.
+func (db *Database) GetTagCatalogue(ctx context.Context) ([]TagCount, error) {
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT tag, COUNT(*) AS task_count
+		FROM tasks, jsonb_array_elements_text(tags) AS tag
+		GROUP BY tag
+		ORDER BY task_count DESC, tag ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []TagCount{}
+	for rows.Next() {
+		var tc TagCount
+		if err := rows.Scan(&tc.Tag, &tc.TaskCount); err != nil {
+			return nil, err
+		}
+		out = append(out, tc)
+	}
+	return out, rows.Err()
 }
 
 // GetUsersByIDs gets users by a list of IDs efficiently.
