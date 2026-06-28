@@ -100,6 +100,12 @@ type Pool struct {
 	store  *storage.Storage
 	runner TaskRunner
 
+	// streams holds the live per-task SSE event buffers (#200). executeTask
+	// registers a buffer before a run and seals it after, tee'ing the run's event
+	// stream into it via agentcore.WithStreamObserver; the orchestrator's
+	// GET /tasks/{id}/stream handler attaches clients through StreamRegistry.
+	streams *TaskStreamRegistry
+
 	// limiter is the shared admission governor. tryClaim admits scheduled tasks
 	// through TryAcquireScheduled (non-blocking); when the scheduler is at its
 	// sub-cap — or the whole box is full — the claim is a no-op and work stays
@@ -172,8 +178,14 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		drainGrace:         grace,
 		leaseOwner:         uuid.New(),
 		active:             make(map[uuid.UUID]uuid.UUID),
+		streams:            newTaskStreamRegistry(),
 	}
 }
+
+// StreamRegistry returns the pool's live per-task SSE stream registry (#200). The
+// orchestrator wires it into the handlers' GET /tasks/{id}/stream lookup so a
+// client can tail an in-progress task's run log.
+func (p *Pool) StreamRegistry() *TaskStreamRegistry { return p.streams }
 
 // maxConcurrentFromEnv reads FLEET_MAX_CONCURRENT_AGENTS, validating it like
 // cutlass's iteration bound (a positive integer), falling back to the default.
@@ -364,12 +376,42 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uuid.UUID) {
 	start := time.Now()
 
+	// Register a live SSE buffer so GET /tasks/{id}/stream can attach + tail this
+	// run (#200). The buffer is tee'd into the run's Observer event stream via
+	// taskCtx below, sealed after the run, and retained briefly for late joiners.
+	// It is purely in-memory and additive — the authoritative log is still written
+	// to storage by submitLog at completion exactly as before.
+	buf := p.streams.register(task.ID)
+	// Seal + retain the buffer no matter how executeTask returns (including a panic
+	// in the run, which safe.Recover in tryClaim catches AFTER this defer seals the
+	// buffer) so attached clients always see EOF rather than hanging. release is
+	// idempotent, so the explicit terminal-status seal below is the normal path and
+	// this defer is the safety net.
+	defer p.streams.release(task.ID, buf)
+	buf.Emit("status", map[string]any{
+		"type": "status", "status": "running", "task_id": task.ID.String(),
+	})
+
 	// Report running (sets StartedAt + renews lease).
 	if _, err := p.reportStatus(task.ID, models.TaskStatusRunning, "Starting task execution"); err != nil {
 		log.Printf("runner: failed to report running for task %s: %v", task.ID, err)
 	}
 
-	session, runErr := p.runner.Run(taskCtx, task)
+	session, runErr := p.runner.Run(agentcore.WithStreamObserver(taskCtx, buf), task)
+
+	// Emit a terminal lifecycle status (the always-last frame). The deferred release
+	// seals the buffer so attached clients see EOF; the registry retains it briefly.
+	termStatus := "succeeded"
+	if runErr != nil {
+		termStatus = "failed"
+	}
+	var costUSD float64
+	if session != nil {
+		costUSD = session.Cost
+	}
+	buf.Emit("status", map[string]any{
+		"type": "status", "status": termStatus, "task_id": task.ID.String(), "cost_usd": costUSD,
+	})
 
 	// If our lease was recovered out from under us (another claim now owns the
 	// task), do not clobber its state.

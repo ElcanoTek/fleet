@@ -64,6 +64,36 @@ type Observer interface {
 	Observe(eventType string, payload map[string]any)
 }
 
+// streamObserverKey is the context key carrying an OPTIONAL secondary Observer
+// that a caller wants the run's events tee'd to, in addition to the mode's own
+// Observer. It is an additive seam: the scheduled worker pool (internal/runner)
+// attaches a live SSE buffer here so GET /tasks/{id}/stream can tail an
+// in-progress task's run log, reusing the SAME Observer event stream the
+// captain's-log writer consumes — no second governance path, no change to the
+// interactive chat SSE. nil/absent leaves behaviour byte-identical.
+type streamObserverKey struct{}
+
+// WithStreamObserver returns a child context carrying obs as the run's secondary
+// (tee) Observer. The scheduled driver reads it via StreamObserverFromContext and
+// fans run events to it alongside the captain's-log observer. A nil obs is a
+// no-op (the context is returned unchanged), so callers needn't branch.
+func WithStreamObserver(ctx context.Context, obs Observer) context.Context {
+	if obs == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, streamObserverKey{}, obs)
+}
+
+// StreamObserverFromContext returns the secondary Observer attached by
+// WithStreamObserver, or nil when none is present. Drivers compose it with their
+// own Observer so the live stream sees exactly the events the persisted log does.
+func StreamObserverFromContext(ctx context.Context) Observer {
+	if obs, ok := ctx.Value(streamObserverKey{}).(Observer); ok {
+		return obs
+	}
+	return nil
+}
+
 // Policy gates tool calls and finishing.
 //
 //   - Interactive: approvals/memory staging + cost-ceiling guard via the
