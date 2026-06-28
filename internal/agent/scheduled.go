@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -15,6 +16,18 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
+
+// personaLabel normalizes a scheduled persona reference (which may be a
+// personas/<name>.yaml filename) to its bare basename for the
+// persona_tool_blocked audit-event label (#294). It is cosmetic; the actual
+// policy was already resolved against the manifest by the driver.
+func personaLabel(persona string) string {
+	base := filepath.Base(strings.TrimSpace(persona))
+	if base == "." || base == string(filepath.Separator) {
+		return ""
+	}
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
 
 // The SCHEDULED driver: one-shot run-to-completion over the unified
 // agentcore.Run loop. cutlass's Execute is reconstructed here as a Mode=Scheduled
@@ -89,6 +102,11 @@ type Agent struct {
 	// credentialAllowlist scopes which (server, account) MCP pairs this task may
 	// call (Gate-3, #184). nil = inherit global; threaded into RunConfig.
 	credentialAllowlist agentcore.CredentialAllowlist
+
+	// personaPolicy is the per-persona tool allowlist (Gate-4, #294). nil = no
+	// narrowing (the persona sees every tool the earlier gates permit); threaded
+	// into RunConfig so denied tools never enter the model's tool list.
+	personaPolicy *agentcore.PersonaToolPermissions
 }
 
 // Options configure a scheduled Agent.
@@ -115,6 +133,12 @@ type Options struct {
 	// call (Gate-3, #184). nil = inherit global. Threaded into RunConfig so the
 	// run loop denies any pair not on the list before the call is dispatched.
 	CredentialAllowlist agentcore.CredentialAllowlist
+
+	// PersonaPolicy is the per-persona tool allowlist (Gate-4, #294) for this
+	// task's resolved persona. nil = no narrowing (current behavior). The DRIVER
+	// (scheduledrun) resolves it from the bundle manifest's personas: block for
+	// the task's effective persona and threads it into RunConfig.
+	PersonaPolicy *agentcore.PersonaToolPermissions
 
 	// PhoneAFriendEnabled turns on the one-time "phone a friend" super-LLM review
 	// (part of #175). OFF by default so config/default behaviour is unchanged.
@@ -191,6 +215,7 @@ func NewAgent(opts Options) *Agent {
 		notesProvider:       opts.NotesProvider,
 		noteProposer:        opts.NoteProposer,
 		credentialAllowlist: opts.CredentialAllowlist,
+		personaPolicy:       opts.PersonaPolicy,
 		phoneAFriendEnabled: opts.PhoneAFriendEnabled,
 		reviewerModel:       opts.ReviewerModel,
 		subagent:            newSubagentConfig(opts.Subagent),
@@ -485,9 +510,13 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		// Per-task credential allowlist (#184): scope which (server, account) MCP
 		// pairs this task may call. nil = inherit global.
 		CredentialAllowlist: a.credentialAllowlist,
-		LoaderTools:         loaderTools,
-		NativeTools:         nativeTools,
-		ProviderHeaders:     agentcore.DefaultProviderHeaders,
+		// Per-persona tool allowlist (#294): NARROW the registered roster to the
+		// task persona's permitted tools. nil = no narrowing.
+		PersonaName:     personaLabel(a.persona),
+		PersonaPolicy:   a.personaPolicy,
+		LoaderTools:     loaderTools,
+		NativeTools:     nativeTools,
+		ProviderHeaders: agentcore.DefaultProviderHeaders,
 	}
 
 	res, err := agentcore.Run(ctx, agentcore.ModeScheduled, cfg, deps)

@@ -112,6 +112,69 @@ fleet-admin sched task set-credentials <task_id> --clear   # revert to global in
 
 ---
 
+## Per-persona tool allowlist (least-privilege by role)
+
+Different personas have different roles and risk surfaces. A `code-reviewer`
+persona that can send email, or an `executive-assistant` that can run arbitrary
+shell commands, violates least privilege. The **per-persona tool allowlist**
+(#294) lets the bundle manifest declare, per persona, which tools that persona
+may see — Gate-4, layered on top of the server opt-in (Gate-1), the per-server
+tool allowlist (Gate-2), and the per-task credential allowlist (Gate-3).
+
+Declare it in the manifest's `personas:` block (the persona `name` matches the
+basename of its `personas/<name>.yaml` file):
+
+```yaml
+personas:
+  - name: code-reviewer
+    tool_permissions:
+      allow:
+        - bash
+        - run_python
+        - mcp:filesystem/*
+      deny:
+        - mcp:email/*
+        - send_email
+  - name: executive-assistant
+    tool_permissions:
+      deny:
+        - bash
+        - run_python
+```
+
+Pattern syntax (matched against the fantasy tool name — a native name like
+`bash` or the `mcp_<server>_<tool>` form discovered MCP tools register under):
+
+| Pattern | Matches |
+|---|---|
+| `bash` | the native tool named `bash`, exactly |
+| `mcp:server/tool` | one MCP tool (→ `mcp_<server>_<tool>`) |
+| `mcp:server/*` | every tool from one MCP server |
+| `prefix/*` | any tool whose fantasy name has that prefix |
+| `*` | every tool |
+
+Resolution rules:
+
+- **No `tool_permissions` block (or both lists empty)** → no narrowing; the
+  persona sees every tool the earlier gates already permit (backward compatible —
+  the generic bundle ships no `personas:` block, so behaviour is unchanged).
+- **`allow` non-empty** → default-deny: only matching tools are offered.
+- **only `deny`** → default-allow: every tool except matching ones is offered.
+- **Deny takes precedence** when a tool matches both lists.
+
+**This gate can only NARROW, never widen.** The filter runs over the tool list
+that already survived Gates 1–3, so a tool a persona's `allow` names but that the
+server or credential gates already dropped never reappears — the allowlist
+subtracts from, but can never add to, what the run was already permitted to
+offer. Enforcement is at **tool registration, before the first LLM call**: a
+suppressed tool never enters the model's tool list (a tool the model cannot see
+cannot be hallucinated into a call). Each suppressed tool emits a
+`persona_tool_blocked{persona, tool, reason}` observer event for the audit
+trail. **Credentials are unaffected** — they stay host-side, brokered
+out-of-process; this gate only decides which tool *schemas* are advertised.
+
+---
+
 ## Scheduled execution: sealed by default
 
 A scheduled task's `bash` / `run_python` execution sandbox runs with **no
