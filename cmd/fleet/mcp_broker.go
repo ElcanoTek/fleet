@@ -37,9 +37,13 @@ func runMCPBroker() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	cfg.MCPServers = bundle.MCPServerConfigs()
+	cfg.HTTPTools = bundle.HTTPToolConfigs()
 
-	// The SAME builder the interactive Manager uses — one credential path.
-	client := agent.BuildMCPClient(scheduledrun.BuildMCPSpecs(cfg))
+	// The SAME builder the interactive Manager uses — one credential path. Inline
+	// http_tools (issue #261) are resolved + registered HERE, in the broker process
+	// that holds the connector secrets, so their auth headers never cross back to
+	// the parent fleet process (only public tool descriptors + rendered text do).
+	client := agent.BuildMCPClient(scheduledrun.BuildMCPSpecs(cfg), cfg.HTTPTools)
 	//nolint:gosec // G706 false positive: the only arg is an int tool count rendered with %d (no CR/LF can forge a log line); it is the size of the connected MCP catalog, not request input.
 	log.Printf("mcp-broker: serving %d MCP tools over stdio", len(client.GetAllTools()))
 

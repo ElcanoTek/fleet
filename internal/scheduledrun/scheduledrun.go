@@ -515,6 +515,13 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Clien
 		cleanup() // reap any subprocesses bound before the failure
 		return nil, noop, fmt.Errorf("bind task mcp selection: %w", err)
 	}
+	// Inline http_tools (issue #261) are global manifest tools with no per-task
+	// selection (like a non-optional server), so register them on this per-run
+	// client too — otherwise a task that pins an MCP selection would silently lose
+	// them. Same host-side credential path as the interactive Manager / broker.
+	if r.cfg != nil {
+		agent.RegisterHTTPTools(client, r.cfg.HTTPTools)
+	}
 	log.Printf("scheduled task %s: bound %d MCP server(s) on per-run client: %v", task.ID, len(registered), registered)
 	return client, cleanup, nil
 }

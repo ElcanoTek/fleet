@@ -146,12 +146,14 @@ type ManagerOptions struct {
 // No language model is preloaded — each turn's model is resolved lazily from the
 // slug the frontend sends.
 // BuildMCPClient registers every enabled server in specs onto a fresh MCP client,
-// credentialed host-side via each spec's Env (stdio) or Headers (HTTP), and returns
+// credentialed host-side via each spec's Env (stdio) or Headers (HTTP), then
+// registers any inline http_tools (issue #261) onto the same client, and returns
 // it. A server that fails to connect is logged and skipped so the rest still
 // register. It is shared by the interactive Manager and the out-of-process broker
 // (fleet mcp-broker) so both connect the catalog identically — one credential path,
-// not two (issue #167).
-func BuildMCPClient(specs map[string]MCPServerSpec) *mcp.Client {
+// not two (issue #167). httpTools may be nil/empty (the generic default), in which
+// case no inline HTTP tools are registered and behavior is unchanged.
+func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolConfig) *mcp.Client {
 	client := mcp.NewClient()
 	for name, spec := range specs {
 		if !spec.Enabled {
@@ -174,7 +176,38 @@ func BuildMCPClient(specs map[string]MCPServerSpec) *mcp.Client {
 		}
 		log.Printf("MCP %s connected (%d tools available, optional=%v)", name, len(client.GetAllTools()), spec.Optional)
 	}
+	// Inline HTTP tools (issue #261): registered host-side on the SAME credentialed
+	// client so they route through the same broker/governance seam as MCP tools. The
+	// resolved auth headers live only in this process and are applied to the outbound
+	// request at call time — never shipped to the sandbox or the model.
+	RegisterHTTPTools(client, httpTools)
 	return client
+}
+
+// RegisterHTTPTools translates the resolved config.HTTPToolConfig catalog into the
+// mcp package's spec shape and registers it onto client. Exported so the scheduled
+// per-task binder (which builds a fresh per-run client for a task with an explicit
+// MCP selection) carries the SAME inline-HTTP-tool catalog as the interactive
+// Manager and the broker — one registration path, host-side credentials only.
+func RegisterHTTPTools(client *mcp.Client, httpTools []config.HTTPToolConfig) {
+	if len(httpTools) == 0 {
+		return
+	}
+	specs := make([]mcp.HTTPToolSpec, 0, len(httpTools))
+	for _, t := range httpTools {
+		specs = append(specs, mcp.HTTPToolSpec{
+			Name:         t.Name,
+			Description:  t.Description,
+			Method:       t.Method,
+			URL:          t.URL,
+			Headers:      t.Headers,
+			BodyTemplate: t.BodyTemplate,
+			InputSchema:  t.InputSchema,
+			ResponseJQ:   t.ResponseJQ,
+		})
+	}
+	client.AddHTTPTools(specs)
+	log.Printf("inline HTTP tools registered: %d", len(specs))
 }
 
 func New(opts ManagerOptions) (*Manager, error) {
@@ -191,7 +224,8 @@ func New(opts ManagerOptions) (*Manager, error) {
 	// Connect the catalog (credentialed host-side). The SAME builder backs the
 	// out-of-process broker (fleet mcp-broker), so both register servers
 	// identically — there is no second, divergent credential path (issue #167).
-	client := BuildMCPClient(opts.ServerSpecs)
+	// Inline http_tools (issue #261) are registered onto the same client here too.
+	client := BuildMCPClient(opts.ServerSpecs, cfg.HTTPTools)
 	// Gating metadata (per-server allowlist + Optional flag) is pure spec data,
 	// independent of the live connection.
 	allow := mcpAllowlist{}

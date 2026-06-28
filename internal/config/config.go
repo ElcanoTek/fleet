@@ -496,6 +496,14 @@ type Config struct {
 	// default bundle's catalog is empty. Nil/empty means "no MCP servers".
 	MCPServers map[string]MCPServerConfig
 
+	// HTTPTools is the runtime inline HTTP-tool catalog (the manifest's http_tools:
+	// section), sourced from the client bundle via Bundle.HTTPToolConfigs() and
+	// assigned here, in manifest order. Header secrets are resolved host-side at
+	// CALL time (Headers carries the resolved values), so this slice — like the MCP
+	// catalog — is built in whichever process holds the connector credentials.
+	// Empty (the generic default) means "no HTTP tools" and changes nothing.
+	HTTPTools []HTTPToolConfig
+
 	// ── TLS termination (chat server) ──
 	// The standard deployment fronts the Next.js app (the ONLY public entrypoint)
 	// with Caddy/Tailscale, which terminate TLS; the Go chat/orchestrator servers
@@ -582,6 +590,26 @@ type MCPServerConfig struct {
 	// (creds.AccountsFor). Surfaced (names only) in the MCP catalog + the
 	// model-facing roster so a task/agent can discover valid account names.
 	AccountVars []string
+}
+
+// HTTPToolConfig is one resolved inline HTTP tool (the manifest http_tools[]
+// entry after env-header resolution). It is the credential-bearing runtime shape
+// the MCP client registers as a synthetic-server tool: Headers holds the values
+// already resolved from the host process env, so it — like MCPServerConfig — is
+// built only in a process that legitimately holds the secrets and is never shipped
+// to the sandbox or the model. The model sees only Name/Description/InputSchema
+// and supplies the declared params; URL/BodyTemplate {param} substitution and the
+// optional ResponseJQ filter run host-side at call time.
+type HTTPToolConfig struct {
+	Name         string
+	Description  string
+	Method       string
+	URL          string
+	Headers      map[string]string
+	BodyTemplate string
+	InputSchema  map[string]interface{}
+	ResponseJQ   string
+	Critical     bool
 }
 
 // Load reads environment variables in this precedence order (highest wins):

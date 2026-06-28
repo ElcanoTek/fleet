@@ -104,6 +104,7 @@ func run(argv []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	cfg.MCPServers = bundle.MCPServerConfigs()
+	cfg.HTTPTools = bundle.HTTPToolConfigs()
 	if strings.TrimSpace(cfg.SandboxImage) == "" {
 		if ref := bundle.Sandbox().ResolvedImageRef(); ref != "" {
 			cfg.SandboxImage = ref

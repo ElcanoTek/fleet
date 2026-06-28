@@ -129,6 +129,7 @@ func runChecks(ctx context.Context, opts validateOptions) []checkResult {
 	cfg, cfgErr := config.Load(os.Getenv("FLEET_ENV_FILE"))
 	if cfgErr == nil && bundleErr == nil {
 		cfg.MCPServers = bundle.MCPServerConfigs()
+		cfg.HTTPTools = bundle.HTTPToolConfigs()
 	}
 
 	results = append(results, checkEnvVars(cfg, cfgErr))
