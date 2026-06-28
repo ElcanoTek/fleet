@@ -1548,6 +1548,20 @@ tr.clickable:hover td {
   color: var(--color-text-muted);
   margin-bottom: 0.3rem;
 }
+/* Inline agent-generated images in the task log (#271). */
+.log-image {
+  display: block;
+  max-width: 100%;
+  margin: 0.5rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 0.4rem);
+}
+.log-image-fallback {
+  display: inline-block;
+  margin: 0.25rem 0;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
 .refresh-note {
   text-align: center;
   color: var(--color-text-muted);

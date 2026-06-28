@@ -1,17 +1,36 @@
 "use client";
 
-import { useCallback } from "react";
+import { memo, useCallback, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { stripAnsiCodes } from "@/app/shared/lib/format";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
+import { resolveTaskWorkspaceHref } from "@/app/chat/ui/workspaceHref";
 
 // LogViewer — the task log modal. React port of moc modals.js openLogModal().
 // moc rendered logs with marked + DOMPurify + highlight.js; per the migration
 // plan those are DROPPED in favor of react-markdown (the chat toolchain
 // standard), which is safe-by-default (no raw HTML) so DOMPurify is unneeded.
+//
+// Inline images (#271): a scheduled task's agent can produce an image with the
+// generate_image tool and reference it in its reply as `![alt](weekly.png)`,
+// exactly as it does in interactive chat. Without rewriting, ReactMarkdown
+// would emit `<img src="weekly.png">` and the browser would 404 on a sibling of
+// the orchestrator page. The img/a overrides below rewrite a RELATIVE workspace
+// path to the task's workspace file proxy (resolveTaskWorkspaceHref →
+// /api/orchestrator/tasks/<id>/workspace/<path>), reusing chat's existing
+// workspace-href safety policy:
+//   - Only relative paths the agent wrote into its own workspace are rewritten.
+//     Absolute http(s)/data/mailto/protocol-relative/site-root hrefs pass
+//     through untouched, so a poisoned log can't make the browser fetch an
+//     arbitrary remote URL (no SSRF / tracking-pixel vector).
+//   - The bytes are streamed through the authenticated, task-creator-scoped
+//     workspace proxy (#287's GET /tasks/{id}/workspace/*), which path-guards
+//     every access with SafeWorkspaceJoin.
+//   - A workspace image that fails to load (file GC'd, still running, wrong
+//     type) DEGRADES to a plain download link rather than a broken image.
 
 export type LogViewerProps = {
   task: Task | null;
@@ -64,7 +83,51 @@ function LogViewerBody({ task, onClose }: { task: Task; onClose: () => void }) {
                 <div key={msg.id ?? idx} className={`log-message log-message--${msg.role ?? "unknown"}`}>
                   <div className="log-message-role">{msg.role ?? "—"}</div>
                   <div className="log-message-content">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        // Rewrite relative <img> srcs to the task workspace file
+                        // proxy so agent-generated images render inline (#271).
+                        // Absolute http(s)/data URLs pass through unchanged, so a
+                        // log can't make the browser fetch an arbitrary remote URL.
+                        img: ({ src, alt, title }) => {
+                          const { href, isWorkspaceFile, downloadFilename } = resolveTaskWorkspaceHref(
+                            typeof src === "string" ? src : "",
+                            task.id,
+                          );
+                          return (
+                            <LogImage
+                              src={href}
+                              alt={alt ?? ""}
+                              title={title ?? undefined}
+                              isWorkspaceFile={isWorkspaceFile}
+                              downloadFilename={downloadFilename}
+                            />
+                          );
+                        },
+                        // Same rewrite for <a href>: a link to a workspace file
+                        // (e.g. the agent links the image instead of embedding it)
+                        // gets a working href + a download attribute; external
+                        // links open in a new tab. Mirrors chat's anchor handling.
+                        a: ({ href, title, children }) => {
+                          const { href: resolved, isWorkspaceFile, downloadFilename } =
+                            resolveTaskWorkspaceHref(typeof href === "string" ? href : "", task.id);
+                          const isExternal = /^https?:\/\//i.test(resolved);
+                          const extraProps: { target?: string; rel?: string; download?: string } = {};
+                          if (isWorkspaceFile) {
+                            extraProps.download = downloadFilename || "";
+                          } else if (isExternal) {
+                            extraProps.target = "_blank";
+                            extraProps.rel = "noopener noreferrer";
+                          }
+                          return (
+                            <a href={resolved || undefined} title={title ?? undefined} {...extraProps}>
+                              {children}
+                            </a>
+                          );
+                        },
+                      }}
+                    >
                       {stripAnsiCodes(msg.content ?? "")}
                     </ReactMarkdown>
                   </div>
@@ -77,5 +140,61 @@ function LogViewerBody({ task, onClose }: { task: Task; onClose: () => void }) {
     </div>
   );
 }
+
+// LogImage renders an agent-produced image from a task's workspace, with a
+// graceful fallback (#271). A workspace image that fails to load — the file was
+// GC'd, the task is mid-run, or the referenced path isn't actually renderable —
+// degrades to a plain download link (or, for a non-workspace href, the original
+// reference) instead of a broken image icon. memo + eager/async decoding mirror
+// chat's WorkspaceImage so the modal doesn't re-fetch on every parent render.
+const LogImage = memo(function LogImage({
+  src,
+  alt,
+  title,
+  isWorkspaceFile,
+  downloadFilename,
+}: {
+  src: string;
+  alt: string;
+  title?: string;
+  isWorkspaceFile: boolean;
+  downloadFilename: string;
+}) {
+  const [errored, setErrored] = useState(false);
+
+  if (!src) {
+    return <span className="log-image-fallback">{alt || "image"}</span>;
+  }
+
+  if (errored) {
+    // Degrade to a link rather than a broken image. Workspace files get a
+    // download attribute with the agent-chosen basename; everything else is a
+    // bare link to the original reference.
+    return (
+      <a
+        className="log-image-fallback"
+        href={src}
+        title={title}
+        {...(isWorkspaceFile ? { download: downloadFilename || "" } : {})}
+      >
+        {alt || downloadFilename || "image (not available)"}
+      </a>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      data-testid="log-image"
+      className="log-image"
+      src={src}
+      alt={alt}
+      title={title}
+      loading="eager"
+      decoding="async"
+      onError={() => setErrored(true)}
+    />
+  );
+});
 
 export default LogViewer;

@@ -19,6 +19,13 @@ const STATS = {
 
 const NODES = { data: [], total: 0, limit: 100, offset: 0 };
 
+// A 1x1 transparent PNG, used as a stand-in for an agent-generated image served
+// through the task workspace proxy (#271).
+const ONE_PX_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 const MCP_SERVERS = {
   servers: [
     { name: "xandr", description: "Xandr DSP", tool_count: 7, accounts: ["client_a", "client_b"] },
@@ -59,6 +66,12 @@ async function mockOrchestrator(page: Page, captured: { createBody?: Record<stri
       captured.createBody = body;
       return route.fulfill({ json: createdTask(body) });
     }
+    // Agent-generated image fetched through the task workspace proxy (#271):
+    // return a real 1x1 PNG so the <img> loads and stays mounted (a 404 would
+    // correctly degrade it to the download-link fallback instead).
+    if (/^\/tasks\/[^/]+\/workspace\//.test(path)) {
+      return route.fulfill({ contentType: "image/png", body: ONE_PX_PNG });
+    }
     if (path.startsWith("/logs/")) {
       return route.fulfill({
         json: {
@@ -66,7 +79,14 @@ async function mockOrchestrator(page: Page, captured: { createBody?: Record<stri
           title: "Optimization run",
           messages: [
             { id: "m1", role: "user", content: "Run the optimization protocol" },
-            { id: "m2", role: "assistant", content: "Done. **Report** attached." },
+            {
+              id: "m2",
+              role: "assistant",
+              // The agent references a generate_image artifact the same way it
+              // does in chat (#271). The log viewer must rewrite the relative
+              // path to the task workspace proxy and render it inline.
+              content: "Done. **Report** attached.\n\n![chart](spend_chart.png)",
+            },
           ],
         },
       });
@@ -149,4 +169,25 @@ test("opening a task renders its log viewer (react-markdown)", async ({ page }) 
   // The assistant message's **Report** markdown renders to <strong>Report</strong>
   // via react-markdown — assert the bolded text, proving the markdown pipeline ran.
   await expect(page.getByTestId("log-modal-body").getByText("Report", { exact: true })).toBeVisible();
+});
+
+test("the log viewer renders an agent-generated image inline (#271)", async ({ page }) => {
+  const captured: { createBody?: Record<string, unknown> } = {};
+  await mockOrchestrator(page, captured);
+  await page.goto("/orchestrator");
+  await expect(page.getByTestId("orchestrator-dashboard")).toBeVisible();
+
+  await page.getByText("Run the optimization protocol").click();
+  await expect(page.getByRole("dialog", { name: "Task Logs" })).toBeVisible();
+
+  // The relative `![chart](spend_chart.png)` reference is rewritten to the task
+  // workspace file proxy and rendered as an <img>, mirroring chat's inline
+  // image handling. The src must be the task-scoped workspace URL — never the
+  // bare relative path (which would 404) and never an arbitrary remote URL.
+  const img = page.getByTestId("log-image");
+  await expect(img).toBeVisible();
+  await expect(img).toHaveAttribute(
+    "src",
+    /\/api\/orchestrator\/tasks\/[^/]+\/workspace\/spend_chart\.png$/,
+  );
 });
