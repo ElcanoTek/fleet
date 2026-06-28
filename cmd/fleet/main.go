@@ -22,6 +22,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -52,6 +53,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
+	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
 	"github.com/ElcanoTek/fleet/internal/sched/scheduler"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -152,7 +154,13 @@ func run() error {
 	if err := ensureDistinctDatabases(chatDB, schedDB); err != nil {
 		return err
 	}
-	chatStore, err := store.Open(chatDB)
+	chatStore, err := store.Open(chatDB, store.PoolConfig{
+		MaxOpenConns:    cfg.ChatDBPool.MaxOpenConns,
+		MaxIdleConns:    cfg.ChatDBPool.MaxIdleConns,
+		ConnMaxIdleTime: cfg.ChatDBPool.ConnMaxIdleTime,
+		ConnMaxLifetime: cfg.ChatDBPool.ConnMaxLifetime,
+		ConnectTimeout:  cfg.ChatDBPool.ConnectTimeout,
+	})
 	if err != nil {
 		return fmt.Errorf("open chat DB: %w", err)
 	}
@@ -193,12 +201,24 @@ func run() error {
 	}
 
 	schedStorage := storage.New()
-	if err := schedStorage.Initialize(schedDB); err != nil {
+	if err := schedStorage.Initialize(schedDB, scheddb.PoolConfig{
+		MaxOpenConns:    cfg.SchedDBPool.MaxOpenConns,
+		MaxIdleConns:    cfg.SchedDBPool.MaxIdleConns,
+		ConnMaxIdleTime: cfg.SchedDBPool.ConnMaxIdleTime,
+		ConnMaxLifetime: cfg.SchedDBPool.ConnMaxLifetime,
+		ConnectTimeout:  cfg.SchedDBPool.ConnectTimeout,
+	}); err != nil {
 		return fmt.Errorf("open sched DB: %w", err)
 	}
 	defer schedStorage.Close()
 	schedStorage.SetTimezone(timezone())
 	log.Printf("sched DB connected + migrated")
+
+	// Pool health metrics (#276): expose both pools' live db.Stats() at scrape.
+	metrics.RegisterDBPool(map[string]func() metrics.DBPoolStats{
+		"chat":  func() metrics.DBPoolStats { return toDBPoolStats(chatStore.PoolStats()) },
+		"sched": func() metrics.DBPoolStats { return toDBPoolStats(schedStorage.DB().Stats()) },
+	})
 
 	// Notes store + the live provider/proposer wired into BOTH drivers.
 	notesStore := sched.NewStore(schedStorage.DB())
@@ -585,6 +605,21 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 // ── DSN / addr resolution ──
 
 // chatDSN resolves the interactive chat Postgres DSN.
+// toDBPoolStats adapts a database/sql pool snapshot into the metrics package's
+// DB-agnostic shape (#276).
+func toDBPoolStats(s sql.DBStats) metrics.DBPoolStats {
+	return metrics.DBPoolStats{
+		MaxOpenConns:        s.MaxOpenConnections,
+		OpenConns:           s.OpenConnections,
+		InUse:               s.InUse,
+		Idle:                s.Idle,
+		WaitCount:           s.WaitCount,
+		WaitDurationSeconds: s.WaitDuration.Seconds(),
+		MaxIdleClosed:       s.MaxIdleClosed,
+		MaxLifetimeClosed:   s.MaxLifetimeClosed,
+	}
+}
+
 func chatDSN(cfg *config.Config) string {
 	if v := strings.TrimSpace(os.Getenv("FLEET_CHAT_DATABASE_URL")); v != "" {
 		return v

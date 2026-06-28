@@ -65,7 +65,7 @@ func cleanDB(s *storage.Storage) error {
 func setupTest(t *testing.T) (*Handlers, *storage.Storage) {
 	tmpDir := t.TempDir()
 	store := storage.New()
-	if err := store.Initialize(filepath.Join(tmpDir, "test.db")); err != nil {
+	if err := store.Initialize(filepath.Join(tmpDir, "test.db"), storage.DefaultPoolConfig()); err != nil {
 		if isDatabaseUnavailable(err) {
 			t.Skipf("Skipping tests: database unavailable: %v", err)
 		}

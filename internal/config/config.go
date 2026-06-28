@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Canonical + legacy env prefixes. FLEET_ wins; the two legacy prefixes are
@@ -83,12 +84,23 @@ var allowedEnvVars = map[string]bool{
 
 	// ── database (chat) ──
 	"DATABASE_URL": true,
-	"DB_HOST":      true,
-	"DB_PORT":      true,
-	"DB_USER":      true,
-	"DB_PASSWORD":  true,
-	"DB_NAME":      true,
-	"DB_SSLMODE":   true,
+	// DB connection-pool tuning (#276), per pool.
+	"FLEET_CHAT_DB_MAX_CONNS":           true,
+	"FLEET_CHAT_DB_MIN_CONNS":           true,
+	"FLEET_CHAT_DB_MAX_CONN_IDLE_TIME":  true,
+	"FLEET_CHAT_DB_MAX_CONN_LIFETIME":   true,
+	"FLEET_CHAT_DB_CONNECT_TIMEOUT":     true,
+	"FLEET_SCHED_DB_MAX_CONNS":          true,
+	"FLEET_SCHED_DB_MIN_CONNS":          true,
+	"FLEET_SCHED_DB_MAX_CONN_IDLE_TIME": true,
+	"FLEET_SCHED_DB_MAX_CONN_LIFETIME":  true,
+	"FLEET_SCHED_DB_CONNECT_TIMEOUT":    true,
+	"DB_HOST":                           true,
+	"DB_PORT":                           true,
+	"DB_USER":                           true,
+	"DB_PASSWORD":                       true,
+	"DB_NAME":                           true,
+	"DB_SSLMODE":                        true,
 
 	// ── LLM (shared) ──
 	"OPENROUTER_API_KEY":           true,
@@ -302,6 +314,17 @@ func isAllowedEnvVar(k string) bool {
 	return true
 }
 
+// DBPoolConfig tunes one database/sql connection pool (#276). Zero values are
+// not meaningful — Load always fills these from env with behavior-preserving
+// defaults.
+type DBPoolConfig struct {
+	MaxOpenConns    int           // SetMaxOpenConns
+	MaxIdleConns    int           // SetMaxIdleConns
+	ConnMaxIdleTime time.Duration // SetConnMaxIdleTime (0 = unlimited)
+	ConnMaxLifetime time.Duration // SetConnMaxLifetime (0 = unlimited)
+	ConnectTimeout  time.Duration // initial-ping timeout on open
+}
+
 // Config holds the union runtime configuration for fleet (interactive +
 // scheduled). Interactive-only fields are inert for scheduled runs and vice
 // versa.
@@ -335,6 +358,16 @@ type Config struct {
 
 	// DatabaseURL is the Postgres DSN. URL-form (url.UserPassword) DSN builder.
 	DatabaseURL string
+
+	// ── DB connection pools (#276) ──
+	// Per-pool tuning for the two Postgres handles fleet opens (chat + sched).
+	// Defaults preserve the historical hard-coded behavior: 25 max open, 5 max
+	// idle, no idle-time reaping (unlimited), 5m max lifetime — so existing
+	// deployments are unaffected. Operators opt into idle reaping by setting
+	// FLEET_{CHAT,SCHED}_DB_MAX_CONN_IDLE_TIME. Combined default ceiling is 50
+	// open connections — under Postgres' default max_connections=100.
+	ChatDBPool  DBPoolConfig
+	SchedDBPool DBPoolConfig
 
 	// ── LLM (shared) ──
 	OpenRouterAPIKey   string
@@ -546,6 +579,25 @@ func Load(envFile string) (*Config, error) {
 		AutoArchiveAfterDays: getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
 		SearchEnabled:        getenvBool("FLEET_SEARCH_ENABLED", true),
 		DatabaseURL:          buildDatabaseURL(),
+
+		// DB connection pools (#276) — defaults reproduce the historical
+		// hard-coded behavior exactly: 25 open / 5 idle, idle-time reaping OFF
+		// (0 = unlimited, matching the prior code which never called
+		// SetConnMaxIdleTime), 5m lifetime; chat pings at 5s, sched at 10s.
+		ChatDBPool: DBPoolConfig{
+			MaxOpenConns:    getenvFleetInt("CHAT_DB_MAX_CONNS", 25),
+			MaxIdleConns:    getenvFleetInt("CHAT_DB_MIN_CONNS", 5),
+			ConnMaxIdleTime: getenvFleetDuration("CHAT_DB_MAX_CONN_IDLE_TIME", 0),
+			ConnMaxLifetime: getenvFleetDuration("CHAT_DB_MAX_CONN_LIFETIME", 5*time.Minute),
+			ConnectTimeout:  getenvFleetDuration("CHAT_DB_CONNECT_TIMEOUT", 5*time.Second),
+		},
+		SchedDBPool: DBPoolConfig{
+			MaxOpenConns:    getenvFleetInt("SCHED_DB_MAX_CONNS", 25),
+			MaxIdleConns:    getenvFleetInt("SCHED_DB_MIN_CONNS", 5),
+			ConnMaxIdleTime: getenvFleetDuration("SCHED_DB_MAX_CONN_IDLE_TIME", 0),
+			ConnMaxLifetime: getenvFleetDuration("SCHED_DB_MAX_CONN_LIFETIME", 5*time.Minute),
+			ConnectTimeout:  getenvFleetDuration("SCHED_DB_CONNECT_TIMEOUT", 10*time.Second),
+		},
 
 		// ── LLM (shared) ──
 		OpenRouterAPIKey: stripQuotes(os.Getenv("OPENROUTER_API_KEY")),
@@ -952,6 +1004,18 @@ func getenvFleetInt(suffix string, def int) int {
 	if v, ok := lookupFleet(suffix); ok {
 		if i, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
 			return i
+		}
+	}
+	return def
+}
+
+// getenvFleetDuration reads FLEET_<suffix> (with CHAT_/CUTLASS_ back-compat) as
+// a Go duration string (e.g. "5m", "10s"). Falls back to def on absence or parse
+// error. Used for the DB-pool timeout knobs (#276).
+func getenvFleetDuration(suffix string, def time.Duration) time.Duration {
+	if v, ok := lookupFleet(suffix); ok {
+		if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil {
+			return d
 		}
 	}
 	return def

@@ -77,11 +77,34 @@ type Conversation struct {
 	ArchivedAt *int64 `json:"archived_at"`
 }
 
+// PoolConfig tunes the chat DB connection pool (#276). Kept local to the store
+// package (the cmd layer maps the env-derived config into it) so this low-level
+// package stays decoupled from internal/config. DefaultPoolConfig reproduces the
+// historical hard-coded settings.
+type PoolConfig struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxIdleTime time.Duration
+	ConnMaxLifetime time.Duration
+	ConnectTimeout  time.Duration
+}
+
+// DefaultPoolConfig is the behavior-preserving baseline (used by tests and as a
+// fallback): 25 open / 5 idle, 5m lifetime, 5s connect ping.
+func DefaultPoolConfig() PoolConfig {
+	return PoolConfig{
+		MaxOpenConns:    25,
+		MaxIdleConns:    5,
+		ConnMaxLifetime: 5 * time.Minute,
+		ConnectTimeout:  5 * time.Second,
+	}
+}
+
 // Open connects to Postgres using the given DSN (DATABASE_URL format or
-// keyword/value — anything pgx accepts) and runs any pending migrations.
-// Fails loudly if the DB is newer than the binary knows about (prevents
-// accidental downgrade).
-func Open(dsn string) (*Store, error) {
+// keyword/value — anything pgx accepts), applies the pool settings, and runs any
+// pending migrations. Fails loudly if the DB is newer than the binary knows
+// about (prevents accidental downgrade).
+func Open(dsn string, pool PoolConfig) (*Store, error) {
 	if dsn == "" {
 		return nil, errors.New("empty database DSN (set DATABASE_URL)")
 	}
@@ -89,14 +112,18 @@ func Open(dsn string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
-	// Matches /root/moc's pool settings — plenty of headroom for a
-	// single chat-server process and well under Postgres' default
-	// max_connections=100.
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	// Pool settings are operator-tunable (#276); defaults stay well under
+	// Postgres' default max_connections=100 for a single-box deployment.
+	db.SetMaxOpenConns(pool.MaxOpenConns)
+	db.SetMaxIdleConns(pool.MaxIdleConns)
+	db.SetConnMaxIdleTime(pool.ConnMaxIdleTime)
+	db.SetConnMaxLifetime(pool.ConnMaxLifetime)
 
-	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	connectTimeout := pool.ConnectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = 5 * time.Second
+	}
+	pingCtx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
 		_ = db.Close()

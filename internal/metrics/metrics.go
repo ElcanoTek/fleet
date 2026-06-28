@@ -23,10 +23,11 @@ var reg = &registry{
 }
 
 type registry struct {
-	mu         sync.Mutex
-	counters   map[string]*counterVec
-	histograms map[string]*histogramVec
-	gaugeFuncs []gaugeFunc
+	mu           sync.Mutex
+	counters     map[string]*counterVec
+	histograms   map[string]*histogramVec
+	gaugeFuncs   []gaugeFunc
+	counterFuncs []gaugeFunc // pull-at-scrape counters (cumulative values read live)
 }
 
 // ── counters ────────────────────────────────────────────────────────────────
@@ -114,6 +115,17 @@ func RegisterGauge(name, help string, labelNames []string, fn func() []GaugeSamp
 	reg.gaugeFuncs = append(reg.gaugeFuncs, gaugeFunc{name: name, help: help, labels: labelNames, fn: fn})
 }
 
+// RegisterCounterFunc wires a pull-at-scrape COUNTER: like RegisterGauge, fn is
+// evaluated each Render, but the value is emitted with `# TYPE <name> counter`.
+// Use this for cumulative monotonic values read live from a source that already
+// tracks the running total (e.g. sql.DBStats.WaitCount, #276) — there is no
+// per-event delta to push, so incCounter doesn't fit. Call once at startup.
+func RegisterCounterFunc(name, help string, labelNames []string, fn func() []GaugeSample) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	reg.counterFuncs = append(reg.counterFuncs, gaugeFunc{name: name, help: help, labels: labelNames, fn: fn})
+}
+
 // ── render ───────────────────────────────────────────────────────────────────
 
 // Render returns the full metrics snapshot in Prometheus text exposition format.
@@ -158,6 +170,13 @@ func Render() string {
 			fmt.Fprintf(&b, "%s_bucket%s %d\n", n, withLE(k, "+Inf"), s.count)
 			fmt.Fprintf(&b, "%s_sum%s %s\n", n, k, formatFloat(s.sum))
 			fmt.Fprintf(&b, "%s_count%s %d\n", n, k, s.count)
+		}
+	}
+
+	for _, g := range reg.counterFuncs {
+		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s counter\n", g.name, g.help, g.name)
+		for _, s := range g.fn() {
+			fmt.Fprintf(&b, "%s%s %s\n", g.name, seriesKey(g.labels, s.Labels), formatFloat(s.Value))
 		}
 	}
 
