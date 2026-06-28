@@ -34,6 +34,7 @@ export function ConversationSidebar({
   serverConfig,
   clearConversation,
   setSearchOpen,
+  setShortcutsOpen,
   userEmail,
   sidebarQuery,
   setSidebarQuery,
@@ -61,6 +62,7 @@ export function ConversationSidebar({
   serverConfig: ServerConfig;
   clearConversation: (opts?: { lockdown?: boolean }) => void;
   setSearchOpen: Dispatch<SetStateAction<boolean>>;
+  setShortcutsOpen: Dispatch<SetStateAction<boolean>>;
   userEmail: string;
   sidebarQuery: string;
   setSidebarQuery: Dispatch<SetStateAction<string>>;
@@ -128,6 +130,16 @@ export function ConversationSidebar({
             onClick={() => setSearchOpen(true)}
           >
             <Icon name="search" className="size-4" />
+          </button>
+          <button
+            className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] sm:size-7"
+            type="button"
+            title="Keyboard shortcuts (?)"
+            aria-label="Keyboard shortcuts"
+            data-testid="shortcuts-button"
+            onClick={() => setShortcutsOpen(true)}
+          >
+            <Icon name="info" className="size-4" />
           </button>
           {!serverConfig.lockdownOnly ? (
             <button
