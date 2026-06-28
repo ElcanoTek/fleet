@@ -197,14 +197,56 @@ What it is and is **not**, stated plainly (honesty in docs):
   never runs and behaviour is identical to before. The reviewer model slug comes
   from `FLEET_PHONE_A_FRIEND_MODEL` and **falls back to the run's fallback model**
   when unset; an unresolvable slug also falls back rather than failing the run.
-- Sub-agents (the other half of #175 — letting the native agent spawn children
-  with their own model choice) are **not** part of this and are **not yet
-  shipped**.
+- Sub-agents (the other half of #175) are a separate capability — see below.
 
 Because the critique re-enters through the verifier's existing enforcement-round
 channel (`scheduledPolicy.CanFinish`), no second governance path is created: the
 review is bounded by the same per-run audit, finish enforcement, cost/token
 ceilings, and round cap as everything else.
+
+---
+
+## Governed sub-agents (#175)
+
+An **optional, off-by-default** capability (`FLEET_SUBAGENTS_ENABLED`) that adds a
+`spawn_subagent` native tool so a scheduled run can delegate a scoped subtask to a
+**child** run. The child is **not** a new or weaker loop — it is another
+`agentcore.Run`, governed exactly like the parent (see
+[ADR-0007](adr/0007-governed-sub-agents.md)). The tool body
+(`internal/agent/subagent.go`) only adapts I/O around a fresh
+`agent.Agent.Execute`.
+
+Each spawn obeys four non-negotiable properties:
+
+- **Governance is one core.** The child runs through `(*Agent).Execute → agentcore.Run`
+  — the same governed entrypoint, pinned by `TestEntrypointConformance`.
+- **Monotonic privilege.** The child inherits the parent's sandbox (so the same
+  network-seal posture — it has no namespace of its own to widen), the parent's
+  brokered MCP client, and the parent's MCP/credential allowlists, and may only
+  **subtract** (an `allow_servers` request is intersected with what the parent has
+  loaded; the credential allowlist is the parent's, copied). A per-child model is
+  resolved **host-side** like the phone-a-friend reviewer, so credentials never
+  enter the sandbox or model context.
+- **Hard budget split.** The child's cost/token ceiling is **sliced from the
+  parent's remaining budget**, and the child's actual spend is **charged back**
+  into the parent. The parent's configured `MaxCostUSD`/`MaxTotalTokens` is the
+  hard wall the collective spend of all descendants — across fan-out *and* depth —
+  can never breach.
+- **Recursion / fan-out caps.** `FLEET_SUBAGENTS_MAX_DEPTH` (default 2) bounds
+  recursion and `FLEET_SUBAGENTS_MAX_CHILDREN` (default 4) bounds per-parent
+  fan-out; a spawn exceeding either is **refused with a tool error**, never a
+  panic or silent allow.
+
+Stated plainly (honesty in docs): with the flag off (the default), the tool is not
+even registered and behaviour is identical to before. The budget split combines an
+**atomic up-front reservation** of each child's granted ceiling (held against the
+parent's remaining budget under the parent mutex for as long as the child runs)
+with **charge-back** of the child's actual spend on return. Because the
+reservation is atomic, even N **concurrent** spawns can never collectively be
+granted more than the parent has left — the wall does **not** rely on
+`spawn_subagent` being a sequential tool (a concurrency regression test pins this
+under `-race`; see ADR-0007). `FLEET_SUBAGENTS_MODEL` names a default child model
+slug; empty means the child inherits the parent's model.
 
 ---
 
