@@ -51,6 +51,15 @@ type Agent struct {
 	notesProvider agentcore.NotesProvider
 	noteProposer  agentcore.NoteProposer
 
+	// phoneAFriendEnabled gates the one-time "phone a friend" super-LLM review
+	// (part of #175). OFF by default — config/default behaviour is unchanged.
+	// reviewerModel is the (typically stronger) reviewer used by that review; it
+	// is host-side, like every other model handle, and never enters the sandbox
+	// or the agent's model context. When the flag is on but reviewerModel is nil,
+	// the review degrades to a no-op (it requires a reviewer model to run).
+	phoneAFriendEnabled bool
+	reviewerModel       fantasy.LanguageModel
+
 	// loadedServers is the set of MCP servers whose tools are currently
 	// registered. mcpServersDirty signals the loop to rebuild the tool list
 	// after a mcp_load_servers call registered new servers.
@@ -90,6 +99,14 @@ type Options struct {
 	// call (Gate-3, #184). nil = inherit global. Threaded into RunConfig so the
 	// run loop denies any pair not on the list before the call is dispatched.
 	CredentialAllowlist agentcore.CredentialAllowlist
+
+	// PhoneAFriendEnabled turns on the one-time "phone a friend" super-LLM review
+	// (part of #175). OFF by default so config/default behaviour is unchanged.
+	// ReviewerModel is the resolved (typically stronger) reviewer model that
+	// review uses; like every model handle it is host-side. The review is skipped
+	// when the flag is off OR no reviewer model is supplied.
+	PhoneAFriendEnabled bool
+	ReviewerModel       fantasy.LanguageModel
 }
 
 // NewAgent builds a scheduled driver from options. The session log is fresh.
@@ -117,6 +134,8 @@ func NewAgent(opts Options) *Agent {
 		notesProvider:       opts.NotesProvider,
 		noteProposer:        opts.NoteProposer,
 		credentialAllowlist: opts.CredentialAllowlist,
+		phoneAFriendEnabled: opts.PhoneAFriendEnabled,
+		reviewerModel:       opts.ReviewerModel,
 	}
 }
 
@@ -159,20 +178,26 @@ func (o *scheduledObserver) Observe(eventType string, payload map[string]any) {
 	}
 }
 
-// scheduledPolicy layers the end-of-run verifier onto agentcore.ScheduledPolicy.
-// agentcore's audit/finish enforcement gates finishing first; once those clear,
-// the verifier runs ONCE and any missing deliverables it reports are injected as
-// one more enforcement round (CanFinish returns false with the missing-action
-// nudges). After the verifier has run once it stops re-gating so the loop
-// terminates.
+// scheduledPolicy layers two host-side finish gates onto agentcore.ScheduledPolicy,
+// in order: the end-of-run verifier, then the "phone a friend" super-LLM review
+// (part of #175). agentcore's audit/finish enforcement gates finishing first;
+// once those clear, the verifier runs ONCE and any missing deliverables it
+// reports are injected as one more enforcement round; once THAT clears, the
+// phone-a-friend review (when enabled) runs ONCE and any material issues it
+// reports are injected as one more enforcement round. Each gate flips a "done"
+// flag after running so it never re-gates — the loop always terminates. Both are
+// the same shape: a one-time host-side LLM re-check feeding back through the SAME
+// CanFinish enforcement-round channel, so no second governance path is created.
 type scheduledPolicy struct {
 	inner    *agentcore.ScheduledPolicy
 	agent    *Agent
 	task     string
 	verified bool
+	reviewed bool
 	// runCtx is the run's context, captured at build time so the end-of-run
-	// verifier's model call honors the run's deadline/cancellation (CanFinish
-	// itself takes no ctx). Falls back to context.Background() if unset.
+	// verifier's and phone-a-friend reviewer's model calls honor the run's
+	// deadline/cancellation (CanFinish itself takes no ctx). Falls back to
+	// context.Background() if unset.
 	runCtx context.Context
 }
 
@@ -185,33 +210,56 @@ func (p *scheduledPolicy) RecordToolResult(toolName, rawInput, resultText string
 }
 
 // CanFinish first defers to the audit/finish enforcement. When that clears, it
-// runs the end-of-run verifier once; missing actions become a final enforcement
-// round. The verifier requires a fallback model — without one it is skipped.
+// runs the end-of-run verifier once (missing actions become a final enforcement
+// round) and then the phone-a-friend review once (material issues become a final
+// enforcement round). Each gate requires its model — the verifier the fallback
+// model, the review the reviewer model — and is skipped when its model is absent;
+// the review gate is additionally skipped unless phoneAFriendEnabled.
 func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 	if ok, msgs := p.inner.CanFinish(round); !ok {
 		return false, msgs
 	}
-	if p.verified || p.agent == nil || p.agent.fallbackModel == nil {
-		return true, nil
+	ctx := p.runCtx
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	p.verified = true
-	records := buildToolExecSummary(p.agent.logSession)
-	vctx := p.runCtx
-	if vctx == nil {
-		vctx = context.Background()
+
+	// Gate 1: end-of-run verifier (completeness re-check).
+	if !p.verified && p.agent != nil && p.agent.fallbackModel != nil {
+		p.verified = true
+		records := buildToolExecSummary(p.agent.logSession)
+		missing, err := p.agent.runEndOfRunVerifier(ctx, p.task, records)
+		if err != nil {
+			log.Printf("verifier skipped: %v", err)
+		} else if len(missing) > 0 {
+			return false, []string{fmt.Sprintf(
+				"End-of-run verification found unfinished required actions: %v. "+
+					"Complete each one now, or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
+				missing)}
+		}
 	}
-	missing, err := p.agent.runEndOfRunVerifier(vctx, p.task, records)
-	if err != nil {
-		log.Printf("verifier skipped: %v", err)
-		return true, nil
+
+	// Gate 2: phone-a-friend super-LLM review (quality re-check, part of #175).
+	// Runs only after the verifier gate has cleared, so the reviewer critiques a
+	// run that already attempted everything the task required. OFF unless both the
+	// feature flag is set and a reviewer model is configured.
+	if !p.reviewed && p.agent != nil && p.agent.phoneAFriendEnabled && p.agent.reviewerModel != nil {
+		p.reviewed = true
+		records := buildToolExecSummary(p.agent.logSession)
+		answer := latestAssistantText(p.agent.logSession)
+		issues, err := p.agent.runPhoneAFriendReview(ctx, p.agent.reviewerModel, p.task, answer, records)
+		if err != nil {
+			log.Printf("phone_a_friend review skipped: %v", err)
+		} else if len(issues) > 0 {
+			return false, []string{fmt.Sprintf(
+				"A reviewer model (phone a friend) found problems with the current answer/work that must be "+
+					"addressed before finishing: %v. Revise the work to fix each one, or call "+
+					"confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
+				issues)}
+		}
 	}
-	if len(missing) == 0 {
-		return true, nil
-	}
-	return false, []string{fmt.Sprintf(
-		"End-of-run verification found unfinished required actions: %v. "+
-			"Complete each one now, or call confirm_audit(success=false, user_visible_summary=...) to abort explicitly.",
-		missing)}
+
+	return true, nil
 }
 
 // Unwrap exposes the inner ScheduledPolicy so agentcore's loop can reach the
