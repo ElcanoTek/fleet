@@ -3,7 +3,7 @@ module github.com/ElcanoTek/fleet
 go 1.26.4
 
 require (
-	charm.land/fantasy v0.33.1
+	charm.land/fantasy v0.33.2
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/goccy/go-yaml v1.19.2
@@ -56,7 +56,7 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/kaptinlin/jsonpointer v0.4.26 // indirect
-	github.com/kaptinlin/jsonschema v0.8.0 // indirect
+	github.com/kaptinlin/jsonschema v0.9.2 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -74,7 +74,7 @@ require (
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/api v0.284.0 // indirect
-	google.golang.org/genai v1.60.0 // indirect
+	google.golang.org/genai v1.61.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260610212136-7ab31c22f7ad // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
