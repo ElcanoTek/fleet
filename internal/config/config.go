@@ -221,6 +221,26 @@ var allowedEnvVars = map[string]bool{
 	// ── admin ──
 	"ADMIN_EMAILS": true,
 
+	// ── task completion notifications (#208) ──
+	// Host-side outbound notifier for scheduled-task terminal status. All OFF by
+	// default: with none of these set, no notifications fire. The SMTP password
+	// and webhook signing secret are held host-side and never logged or shipped
+	// into the sandbox. FLEET_PUBLIC_URL is reused to build the per-task log link.
+	"FLEET_NOTIFY_ON":             true,
+	"FLEET_NOTIFY_EMAIL_TO":       true,
+	"FLEET_NOTIFY_TIMEOUT":        true,
+	"FLEET_NOTIFY_RETRIES":        true,
+	"FLEET_SMTP_HOST":             true,
+	"FLEET_SMTP_PORT":             true,
+	"FLEET_SMTP_USERNAME":         true,
+	"FLEET_SMTP_PASSWORD":         true,
+	"FLEET_SMTP_FROM":             true,
+	"FLEET_WEBHOOK_URL":           true,
+	"FLEET_WEBHOOK_METHOD":        true,
+	"FLEET_WEBHOOK_BODY_TEMPLATE": true,
+	"FLEET_WEBHOOK_SECRET":        true,
+	"FLEET_PUBLIC_URL":            true,
+
 	// ── sandbox ──
 	"CHAT_SANDBOX_IMAGE":           true,
 	"CHAT_SANDBOX_RUNTIME":         true,
