@@ -164,6 +164,13 @@ func (h *hostImpl) close() {
 	}
 }
 
+// resourceUsage reports no telemetry: the host backend runs in-process with no
+// container to sample (#263). The container backend is the only one that polls
+// `podman stats`.
+func (h *hostImpl) resourceUsage() (ResourceUsageSummary, bool) {
+	return ResourceUsageSummary{}, false
+}
+
 // ensureBridge spawns the python bridge subprocess if it hasn't been
 // started. Idempotent and lazy — the first runPython pays the boot
 // cost, subsequent calls reuse the running process.

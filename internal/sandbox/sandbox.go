@@ -188,6 +188,11 @@ func (s *Sandbox) SetDefaultWorkingDir(dir string) {
 type impl interface {
 	runBash(ctx context.Context, req BashRequest) (BashResult, error)
 	runPython(ctx context.Context, req PythonRequest) (PythonResult, error)
+	// resourceUsage returns the per-run resource telemetry rollup (#263) and
+	// whether any was collected. Populated only after close() for the container
+	// backend (the poller publishes its rollup on teardown); the host backend
+	// has no container to sample and always returns ok=false.
+	resourceUsage() (ResourceUsageSummary, bool)
 	close()
 }
 
@@ -240,6 +245,18 @@ func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (PythonResul
 	}
 	s.mu.Unlock()
 	return s.impl.runPython(ctx, req)
+}
+
+// ResourceUsage returns the per-run sandbox resource telemetry (#263) — peak
+// and average CPU/memory plus cumulative I/O sampled from `podman stats` over
+// the sandbox's lifetime — and whether any was collected.
+//
+// Telemetry is finalized on Close (the poller publishes its rollup when the
+// container tears down), so callers should read this AFTER Close. ok is false
+// when collection was disabled, the host backend was in use (no container), or
+// `podman stats` was unavailable for the whole run.
+func (s *Sandbox) ResourceUsage() (ResourceUsageSummary, bool) {
+	return s.impl.resourceUsage()
 }
 
 // Close tears down the backend. Safe to call multiple times. After
