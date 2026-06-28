@@ -120,6 +120,12 @@ type Handlers struct {
 	// + credential-account admin table render. Injected by cmd/fleet via
 	// SetMCPCatalogProvider; nil → empty catalog. See mcp.go.
 	mcpCatalog func() []MCPServerCatalogEntry
+
+	// taskStreamLookup resolves a task's live SSE run-log buffer (#200), wired by
+	// cmd/fleet via SetTaskStreamProvider from the worker pool's registry. nil →
+	// no live stream is ever available (every task falls back to the persisted log
+	// one-shot replay). See task_stream.go.
+	taskStreamLookup TaskStreamLookup
 }
 
 // statsCache caches dashboard statistics.

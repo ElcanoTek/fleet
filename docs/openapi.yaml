@@ -422,6 +422,28 @@ paths:
               schema: { $ref: "#/components/schemas/Task" }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/stream:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Stream a task's run log live (SSE).
+      description: >
+        Server-Sent Events stream of the task's run log. While the task is in flight
+        the in-memory event buffer is tailed live, with Last-Event-ID replay on
+        reconnect; once the task has finished the persisted log is replayed one-shot.
+        Event types: agent_message, tool_call, tool_result, and a terminal status.
+        Same auth + ownership gate as GET /logs/{task_id}.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: An SSE stream of run-log events.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Error" }
   /tasks/pending:
     get:
       summary: Lease the next pending task (worker protocol).

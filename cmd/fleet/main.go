@@ -40,6 +40,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -357,6 +358,16 @@ func run() error {
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{Limiter: agentLimiter, DrainGrace: poolGrace})
 	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 
+	// Wire the live SSE run-log stream (#200): GET /tasks/{id}/stream attaches a
+	// client to the pool's per-task event buffer for an in-progress task. The two
+	// TaskStream interfaces are structurally identical; the closure bridges the
+	// runner type to the handler type. Safe to set after buildOrchestratorMux — the
+	// handler reads h.taskStreamLookup per request, and the pool isn't running yet.
+	registry := pool.StreamRegistry()
+	h.SetTaskStreamProvider(func(taskID uuid.UUID) (handlers.TaskStream, bool) {
+		return registry.Lookup(taskID)
+	})
+
 	// Metrics gauges (#176): live in-flight turn counts + warm sandbox depth,
 	// evaluated at each /metrics scrape. Extracted to keep run() within the
 	// cyclomatic budget.
@@ -576,6 +587,10 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Post("/tasks/{task_id}/clone", h.CloneTask)
 		r.Delete("/tasks/{task_id}", h.CancelTask)
 		r.Get("/logs/{task_id}", h.GetLogs)
+		// Live SSE run-log stream for an in-progress task, falling back to a one-shot
+		// replay of the persisted log once finished (#200). Same auth/ownership gate
+		// as /logs/{task_id}.
+		r.Get("/tasks/{task_id}/stream", h.StreamTaskLogs)
 		r.Get("/stats", h.GetDashboardStats)
 		r.Get("/api/me", h.GetCurrentUser)
 
