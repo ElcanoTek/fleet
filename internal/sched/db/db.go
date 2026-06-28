@@ -504,7 +504,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description"
 
 // AddTask adds or updates a task.
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
@@ -515,8 +515,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id,
-			trigger_type, credential_allowlist, loop_config, worktree_config
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
+			trigger_type, credential_allowlist, loop_config, worktree_config, description
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -548,7 +548,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			trigger_type = EXCLUDED.trigger_type,
 			credential_allowlist = EXCLUDED.credential_allowlist,
 			loop_config = EXCLUDED.loop_config,
-			worktree_config = EXCLUDED.worktree_config`,
+			worktree_config = EXCLUDED.worktree_config,
+			description = EXCLUDED.description`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -581,6 +582,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		marshalCredentialAllowlist(task.CredentialAllowlist),
 		marshalLoopConfig(task.LoopConfig),
 		marshalWorktreeConfig(task.WorktreeConfig),
+		nullableString(task.Description),
 	)
 	return err
 }
@@ -732,6 +734,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		credentialAllowlist    sql.NullString
 		loopConfig             sql.NullString
 		worktreeConfig         sql.NullString
+		description            sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -740,7 +743,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &runtimeFlavor, &timezone, &createdByKeyID,
-		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig,
+		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description,
 	)
 	if err != nil {
 		return nil, err
@@ -782,6 +785,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	task.CredentialAllowlist = unmarshalCredentialAllowlist(credentialAllowlist)
 	task.LoopConfig = unmarshalLoopConfig(loopConfig)
 	task.WorktreeConfig = unmarshalWorktreeConfig(worktreeConfig)
+	task.Description = description.String
 	if agentSessionID.Valid {
 		task.AgentSessionID = &agentSessionID.String
 	}
@@ -1304,7 +1308,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			timezone = $27,
 			credential_allowlist = $28,
 			loop_config = $29,
-			worktree_config = $30
+			worktree_config = $30,
+			description = $31
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1336,6 +1341,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		marshalCredentialAllowlist(task.CredentialAllowlist),
 		marshalLoopConfig(task.LoopConfig),
 		marshalWorktreeConfig(task.WorktreeConfig),
+		nullableString(task.Description),
 	)
 	return err
 }
@@ -1603,6 +1609,9 @@ type TaskFilter struct {
 	CompletedToday  bool
 	CompletedStatus *string
 	CreatedBy       *uuid.UUID
+	// HasDescription, when true, restricts to tasks carrying operator
+	// documentation (#281): a non-null, non-empty description.
+	HasDescription bool
 	// Visibility filters for scoped users. With node targeting removed, scoped
 	// visibility reduces to "own tasks OR all untargeted tasks" (every task is
 	// untargeted now), so a scoped user with VisibleToScopes set sees all tasks.
@@ -1679,6 +1688,10 @@ func (db *Database) GetTasksFiltered(ctx context.Context, filter TaskFilter, lim
 		whereClauses = append(whereClauses, fmt.Sprintf("created_by = $%d", argIndex))
 		args = append(args, *filter.CreatedBy)
 		argIndex++
+	}
+
+	if filter.HasDescription {
+		whereClauses = append(whereClauses, "description IS NOT NULL AND description <> ''")
 	}
 
 	// Scoped visibility: with node targeting removed, a scoped user sees their
