@@ -293,11 +293,22 @@ func warmPoolSize(maxConcurrent int) int {
 	}
 }
 
+// resolveWarmSize picks the warm-pool depth: an explicit FLEET_SANDBOX_WARM_SIZE
+// (>0) pins it; otherwise it is derived from MaxConcurrentAgents (clamped 2..8),
+// preserving the prior default (#181).
+func resolveWarmSize(cfg *config.Config) int {
+	if cfg.SandboxWarmSize > 0 {
+		return cfg.SandboxWarmSize
+	}
+	return warmPoolSize(cfg.MaxConcurrentAgents)
+}
+
 func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromptsDir, skillsDir string) (*sandbox.Pool, error) {
 	poolCfg := sandbox.PoolConfig{
-		Size:         warmPoolSize(cfg.MaxConcurrentAgents),
+		Size:         resolveWarmSize(cfg),
 		Mode:         sandbox.ModeContainer,
 		BridgeScript: tools.PythonBridgeScript(),
+		WarmTTL:      time.Duration(cfg.SandboxWarmTTLSeconds) * time.Second,
 	}
 	if cfg.MockMode {
 		// MockMode runs ModeHost (unsandboxed, os/exec). That executor is only
