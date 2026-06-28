@@ -43,6 +43,27 @@
 #   # FLEET_IP_ALLOWLIST=192.168.1.0/24,10.0.0.0/8 # if set, ONLY these IPs/CIDRs may connect
 #   # FLEET_IP_DENYLIST=45.33.32.156             # always blocked (deny overrides allow)
 #   # FLEET_TRUSTED_PROXIES=127.0.0.1,::1        # only these peers' X-Forwarded-For is trusted
+#   # Task-completion notifications (#208) — host-side outbound email/webhook on a
+#   # scheduled task reaching a terminal status. ALL OFF by default: with none of
+#   # these set, no notifications fire and behavior is unchanged. Secrets
+#   # (FLEET_SMTP_PASSWORD, FLEET_WEBHOOK_SECRET) stay host-side; they are never
+#   # logged or shipped into the sandbox.
+#   # FLEET_NOTIFY_ON=success,failure            # which terminal statuses fire (empty = all)
+#   # FLEET_PUBLIC_URL=https://fleet.example.com # base for the per-task log link in notifications
+#   # Email (SMTP) — fires only when a host AND recipients are both set:
+#   # FLEET_SMTP_HOST=smtp.mailgun.org
+#   # FLEET_SMTP_PORT=587                        # STARTTLS submission (default 587)
+#   # FLEET_SMTP_USERNAME=postmaster@example.com
+#   # FLEET_SMTP_PASSWORD=...                     # SECRET — never logged
+#   # FLEET_SMTP_FROM=fleet-notifier@example.com
+#   # FLEET_NOTIFY_EMAIL_TO=ops@example.com,oncall@example.com
+#   # Outbound webhook — fires when a URL is set:
+#   # FLEET_WEBHOOK_URL=https://hooks.slack.com/services/...
+#   # FLEET_WEBHOOK_METHOD=POST                  # default POST
+#   # FLEET_WEBHOOK_BODY_TEMPLATE={"text":"Task {{.Name}} {{.Status}} — ${{.CostUSD}}"}
+#   # FLEET_WEBHOOK_SECRET=...                    # SECRET — if set, body is HMAC-SHA256-signed (X-Fleet-Signature)
+#   # FLEET_NOTIFY_TIMEOUT=10s                    # per-attempt timeout (default 10s)
+#   # FLEET_NOTIFY_RETRIES=2                      # additional attempts after the first (default 2)
 
 [Unit]
 Description=fleet (chat + orchestrator + scheduler + worker pool)
