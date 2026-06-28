@@ -55,6 +55,12 @@ type Options struct {
 	// nil disables the tool entirely (it is never registered) — the secure default.
 	// Production wires the sched storage; *storage.Storage satisfies the seam.
 	TaskEnqueuer tools.TaskEnqueuer
+
+	// PersonaPolicies is the per-persona tool allowlist (Gate-4, #294), keyed by
+	// persona basename, translated from the bundle manifest's personas: block.
+	// nil/empty = no narrowing for any persona (defaults unchanged). cmd/fleet
+	// builds it once from the bundle and hands the SAME map to both drivers.
+	PersonaPolicies map[string]agentcore.PersonaToolPermissions
 }
 
 // Runner executes claimed scheduled tasks in-process through the unified runtime
@@ -83,6 +89,10 @@ type Runner struct {
 
 	iterationStore IterationStore
 	taskEnqueuer   tools.TaskEnqueuer
+
+	// personaPolicies is the per-persona tool allowlist (Gate-4, #294), keyed by
+	// persona basename. nil/empty = no narrowing. Resolved per task at dispatch.
+	personaPolicies map[string]agentcore.PersonaToolPermissions
 }
 
 // IterationStore records per-iteration telemetry for a looped task (#179). It is
@@ -106,9 +116,28 @@ func New(opts Options) *Runner {
 		protocolsDir:     opts.ProtocolsDir,
 		iterationStore:   opts.IterationStore,
 		taskEnqueuer:     opts.TaskEnqueuer,
+		personaPolicies:  opts.PersonaPolicies,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
+}
+
+// personaPolicy resolves the per-persona tool allowlist (#294) for a resolved
+// scheduled persona filename (e.g. "code-reviewer.yaml" or the global default).
+// It returns nil when there is no manifest entry or the entry's policy is empty
+// — both mean "no narrowing". The persona filename is normalized to its bare
+// basename to match the manifest keys.
+func (r *Runner) personaPolicy(persona string) *agentcore.PersonaToolPermissions {
+	if len(r.personaPolicies) == 0 {
+		return nil
+	}
+	base := filepath.Base(strings.TrimSpace(persona))
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	p, ok := r.personaPolicies[base]
+	if !ok || (len(p.Allow) == 0 && len(p.Deny) == 0) {
+		return nil
+	}
+	return &p
 }
 
 // buildBaseSystemPrompt composes the scheduled base prompt: the default system
@@ -432,6 +461,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		NotesProvider:       r.notesProvider,
 		NoteProposer:        r.noteProposer,
 		CredentialAllowlist: taskCredentialAllowlist(task),
+		PersonaPolicy:       r.personaPolicy(taskPersona),
 		PhoneAFriendEnabled: r.cfg.PhoneAFriendEnabled,
 		ReviewerModel:       reviewer,
 		// Governed sub-agents (#175, part b): OFF unless FLEET_SUBAGENTS_ENABLED.

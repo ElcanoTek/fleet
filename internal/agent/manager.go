@@ -138,6 +138,12 @@ type ManagerOptions struct {
 	// Nil = propose_note unavailable. Note: note proposals are intentionally GLOBAL
 	// (author "agent", un-scoped) — unlike per-conversation/user memory proposals.
 	NoteProposer agentcore.NoteProposer
+
+	// PersonaPolicies is the per-persona tool allowlist (Gate-4, #294), keyed by
+	// persona basename, translated from the bundle manifest's personas: block.
+	// nil/empty = no narrowing for any persona (defaults unchanged). cmd/fleet
+	// builds it once from the bundle and hands it to BOTH drivers.
+	PersonaPolicies map[string]agentcore.PersonaToolPermissions
 }
 
 // New constructs a Manager: it dials OpenRouter (via the model resolver),
@@ -269,6 +275,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		chatSystemPromptFile: chatPromptFile,
 		limiter:              opts.Limiter,
 		health:               agentcore.NewProviderHealthRegistry(),
+		personaPolicies:      opts.PersonaPolicies,
 	}
 	m.mcpToolRoster = m.computeMCPToolRoster()
 	m.optionalServerMetadata = m.buildOptionalServerMetadata(opts.ServerSpecs)
@@ -608,6 +615,8 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		Allowlist:       agentcore.MCPAllowlist(m.allowlist),
 		OptionalServers: agentcore.MCPOptionalSet(m.optionalServers),
 		Selection:       selection,
+		Persona:         persona,
+		PersonaPolicy:   m.personaPolicy(persona),
 		MaxCostUSD:      m.config.MaxCostUSD,
 		MaxTotalTokens:  m.config.MaxTotalTokens,
 		ApprovalStager:  in.ApprovalStager,

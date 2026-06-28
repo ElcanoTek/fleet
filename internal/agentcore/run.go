@@ -54,6 +54,18 @@ type RunConfig struct {
 	// call (Gate-3, #184). nil = no restriction (inherit global). Only the
 	// scheduled driver sets it today; the interactive driver leaves it nil.
 	CredentialAllowlist CredentialAllowlist
+	// PersonaName is the run's active persona basename (e.g. "code-reviewer"),
+	// used only to label persona_tool_blocked audit events. Empty when the run
+	// has no persona.
+	PersonaName string
+	// PersonaPolicy is the per-persona tool allowlist (Gate-4, #294). nil or an
+	// empty policy = no narrowing (the persona sees every tool the earlier gates
+	// already permitted). When set, it filters the registered tool roster BEFORE
+	// the first LLM call so denied tools never appear in the model's tool list.
+	// It can only SUBTRACT from what the server/credential gates already
+	// permitted, never add. The drivers resolve it from the bundle manifest's
+	// personas: block.
+	PersonaPolicy *PersonaToolPermissions
 	// RemediationHints configures the fast.io guard (defaults to
 	// DefaultRemediationHints, which exposes both remediation paths).
 	RemediationHints RemediationHints
@@ -282,7 +294,21 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	}
 	toolCfg.preGatedTools = cfg.PreGatedTools
 	buildTools := func() ([]fantasy.AgentTool, error) {
-		return buildFantasyTools(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
+		tools, err := buildFantasyTools(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
+		if err != nil {
+			return nil, err
+		}
+		// Gate-4 (#294): NARROW the registered roster to the persona's tool
+		// allowlist BEFORE the agent (and thus the first LLM call) sees it, so a
+		// denied tool never enters the model's tool list. Applied after
+		// buildFantasyTools — over the slice that already survived Gates 1-3 — so
+		// the persona policy can only SUBTRACT, never widen. A nil/empty policy is
+		// a zero-overhead passthrough (current behavior). Re-applied on every
+		// rebuild (the mcp_load_servers dirty path) via this closure.
+		if cfg.PersonaPolicy != nil {
+			tools = resolvePersonaTools(cfg.PersonaName, *cfg.PersonaPolicy, tools, deps.Observer)
+		}
+		return tools, nil
 	}
 
 	fantasyTools, err := buildTools()
