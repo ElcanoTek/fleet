@@ -62,7 +62,6 @@ test("clicking a search result loads that conversation", async ({ page }) => {
           title: "Python async patterns",
           persona: "default",
           model: "",
-          runtime: "",
           pinned: false,
           created_at: 1719432000,
           updated_at: 1719432000,

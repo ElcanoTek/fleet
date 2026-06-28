@@ -13,9 +13,9 @@ import (
 //
 // Enforcement lives at the MCPBroker seam (credentialGatedBroker), NOT at tool
 // registration: the broker is the SINGLE seam every MCP call routes through —
-// the in-process mcpTool and the native-acp delegated calls alike (issue #167).
-// Gating it there means BOTH flavors enforce the allowlist identically (the
-// native-acp host broker is the real credential boundary), rather than only the
+// the in-process mcpTool and any out-of-process broker alike (issue #167).
+// Gating it there means every caller enforces the allowlist identically (the
+// out-of-process broker is the real credential boundary), rather than only the
 // in-process tool-build path. A denied call never reaches the credentialed
 // client; it returns a governance message as a tool-level error (isError=true,
 // surfaced to the model as a tool result, not a transport failure) which the
@@ -91,8 +91,8 @@ type credentialGatedBroker struct {
 // GateMCPBrokerWithAllowlist wraps broker with Gate-3 enforcement for the given
 // allowlist. A nil allowlist (inherit global) returns the broker unchanged, so
 // there is zero overhead and zero behaviour change on the default path. Exported
-// so the native-acp host-governance builder gates its delegated-call broker the
-// same way the in-process loop gates its own.
+// so an out-of-process broker (#167) can gate its broker the same way the
+// in-process loop gates its own.
 func GateMCPBrokerWithAllowlist(broker MCPBroker, al CredentialAllowlist) MCPBroker {
 	permitted := al.permittedRegisteredNames()
 	if permitted == nil {

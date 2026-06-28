@@ -12,7 +12,6 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/ElcanoTek/fleet/internal/acpruntime"
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
@@ -68,34 +67,7 @@ type TurnInput struct {
 	// per-turn container sandbox and constrains the resolved model slug to the
 	// operator's lockdown allow-list.
 	Lockdown bool
-
-	// Runtime selects the execution flavor for this turn (clientconfig flavor
-	// name). "" / "native-inprocess" run the in-process loop; "native-acp" routes
-	// through the sandboxed ACP agent; an "acp" (external) flavor drives an
-	// external provider's agent (Claude Code / Goose) at the containment tier.
-	// Unknown values fall back to the default.
-	Runtime string
-
-	// PermissionBroker, when set, routes an EXTERNAL acp agent's
-	// session/request_permission to a human (default-deny on timeout, no
-	// approve-all). Required for the external flavor; ignored by the native
-	// flavors (which are fully governed in-loop). Nil with an external flavor
-	// fails the turn's permission requests closed (deny).
-	PermissionBroker PermissionBroker
 }
-
-// PermissionBroker routes an external ACP agent's permission request to a human
-// and blocks for the decision (default-deny on timeout / cancel; no
-// approve-all). It is re-exported from acpruntime so the httpapi layer can wire
-// an implementation without importing acpruntime directly.
-type PermissionBroker = acpruntime.PermissionBroker
-
-// PermissionRequest / PermissionDecision are the broker's request/response
-// shapes, re-exported from acpruntime for the same reason.
-type (
-	PermissionRequest  = acpruntime.PermissionRequest
-	PermissionDecision = acpruntime.PermissionDecision
-)
 
 // TurnResult is returned after a turn completes.
 type TurnResult struct {
@@ -587,34 +559,27 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		}
 	}
 
-	flavor := m.resolveRuntime(in.Runtime)
-
 	tc := TurnConfig{
-		SystemPrompt:     systemPrompt,
-		Messages:         messages,
-		Label:            in.ConversationID,
-		Model:            model,
-		Temperature:      m.config.Temperature,
-		MaxTokens:        maxTokens,
-		MaxIterations:    m.config.MaxIterations,
-		PriorHistory:     in.History,
-		NativeTools:      turnTools.Tools,
-		Sandbox:          sb,
-		MCPClient:        m.mcpClient,
-		Allowlist:        agentcore.MCPAllowlist(m.allowlist),
-		OptionalServers:  agentcore.MCPOptionalSet(m.optionalServers),
-		Selection:        selection,
-		MaxCostUSD:       m.config.MaxCostUSD,
-		MaxTotalTokens:   m.config.MaxTotalTokens,
-		ApprovalStager:   in.ApprovalStager,
-		MemoryProposer:   in.MemoryProposer,
-		NoteProposer:     m.noteProposer,
-		Runtime:          flavor.Name,
-		RuntimeFlavor:    flavor,
-		NativeAgentImage: m.nativeAgentImage,
-		Lockdown:         in.Lockdown,
-		PermissionBroker: in.PermissionBroker,
-		HealthRegistry:   m.health,
+		SystemPrompt:    systemPrompt,
+		Messages:        messages,
+		Label:           in.ConversationID,
+		Model:           model,
+		Temperature:     m.config.Temperature,
+		MaxTokens:       maxTokens,
+		MaxIterations:   m.config.MaxIterations,
+		PriorHistory:    in.History,
+		NativeTools:     turnTools.Tools,
+		Sandbox:         sb,
+		MCPClient:       m.mcpClient,
+		Allowlist:       agentcore.MCPAllowlist(m.allowlist),
+		OptionalServers: agentcore.MCPOptionalSet(m.optionalServers),
+		Selection:       selection,
+		MaxCostUSD:      m.config.MaxCostUSD,
+		MaxTotalTokens:  m.config.MaxTotalTokens,
+		ApprovalStager:  in.ApprovalStager,
+		MemoryProposer:  in.MemoryProposer,
+		NoteProposer:    m.noteProposer,
+		HealthRegistry:  m.health,
 	}
 
 	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink})

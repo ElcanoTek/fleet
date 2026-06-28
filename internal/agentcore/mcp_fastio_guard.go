@@ -79,9 +79,9 @@ func fastIOServerEnabled(serverTools []mcp.ServerTool) bool {
 // The hints parameter exposes the remediation path(s); DefaultRemediationHints
 // exposes both the native tool and the blob flow.
 //
-// Both flavors reach this through the localMCPBroker (issue #167): the in-process
-// loop and the native-acp host broker share one implementation, so the guard runs
-// identically without a separate exported entry point.
+// Every caller reaches this through the localMCPBroker (issue #167): the
+// in-process loop and an out-of-process broker share one implementation, so the
+// guard runs identically without a separate exported entry point.
 func rejectFastIOInlineBase64Upload(toolName string, args map[string]any, hints RemediationHints) (ok bool, hint string) {
 	if toolName != fastIOUploadToolName {
 		return true, ""

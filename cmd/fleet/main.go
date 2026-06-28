@@ -29,7 +29,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -62,21 +61,11 @@ import (
 
 func main() {
 	// Subcommand dispatch. With no args (or any non-subcommand arg) fleet boots
-	// THE fleet server (run). `fleet acp` instead runs fleet AS an ACP AGENT
-	// over stdio (P-ACP-3 ingress): an external editor launches it and drives
-	// fleet's OWN governed pipeline. The ingress path deliberately does NOT boot
-	// the HTTP servers / scheduler / worker pool — it is a single-process stdio
-	// adapter on the same governed turn.
-	if len(os.Args) > 1 && os.Args[1] == "acp" {
-		if err := runACP(); err != nil {
-			log.Fatalf("fleet acp: %v", err)
-		}
-		return
-	}
-	// `fleet mcp-broker` runs the out-of-process MCP credential broker over stdio
-	// (issue #167): it holds the connector secrets + MCP subprocesses and serves
-	// delegated MCP calls back to a parent fleet process. Like `acp`, it boots no
-	// HTTP servers / scheduler — it is a single-purpose stdio adapter.
+	// THE fleet server (run). `fleet mcp-broker` instead runs the out-of-process
+	// MCP credential broker over stdio (issue #167): it holds the connector
+	// secrets + MCP subprocesses and serves delegated MCP calls back to a parent
+	// fleet process. It boots no HTTP servers / scheduler — it is a single-purpose
+	// stdio adapter.
 	if len(os.Args) > 1 && os.Args[1] == "mcp-broker" {
 		if err := runMCPBroker(); err != nil {
 			log.Fatalf("fleet mcp-broker: %v", err)
@@ -86,37 +75,6 @@ func main() {
 	if err := run(); err != nil {
 		log.Fatalf("fleet: %v", err)
 	}
-}
-
-// preflightDefaultRuntimeImage fails closed (#159) when the bundle's DEFAULT
-// runtime flavor is container-backed (native-acp / external acp) but its agent
-// image is not present in the service user's container store. Without this, the
-// first turn would die at `podman run` with an opaque error; here we surface an
-// actionable startup error instead and refuse to boot — deliberately NOT
-// degrading to the in-process loop, which would run uncontained on a deploy that
-// believes it is containerized. Native-inprocess defaults (operator opted in via
-// FLEET_ENABLE_INPROCESS_LOOP) need no image and pass through.
-func preflightDefaultRuntimeImage(cfg *config.Config, bundle *clientconfig.Bundle, defaultRuntime string) error {
-	def, ok := bundle.Runtime(defaultRuntime)
-	if !ok || strings.TrimSpace(def.Image) == "" {
-		return nil // in-process default (no image) — nothing to verify
-	}
-	runtimeBin := strings.TrimSpace(cfg.SandboxRuntime)
-	if runtimeBin == "" {
-		runtimeBin = "podman"
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	//nolint:gosec // G204: runtimeBin is the operator-configured sandbox runtime and def.Image is a manifest ref (not request input); this is a read-only `image exists` probe.
-	if err := exec.CommandContext(ctx, runtimeBin, "image", "exists", def.Image).Run(); err != nil {
-		return fmt.Errorf(
-			"default runtime flavor %q requires agent image %q, which is not in the %s store for this user; "+
-				"build it (scripts/build-native-agent-image.sh, or re-run scripts/bootstrap.sh) or set FLEET_NATIVE_AGENT_IMAGE to a prebuilt ref. "+
-				"Refusing to start; the in-process loop is NOT used as a silent fallback",
-			def.Name, def.Image, runtimeBin)
-	}
-	log.Printf("runtimes: preflight ok — default flavor %q image %q present", def.Name, def.Image)
-	return nil
 }
 
 func run() error {
@@ -257,44 +215,6 @@ func run() error {
 	}
 	defer mgr.Close()
 
-	// Wire the bundle's runtime-flavor catalog so a conversation can select a
-	// flavor (native-acp sandboxed default; native-inprocess gated behind
-	// FLEET_ENABLE_INPROCESS_LOOP). The native-agent image for native-acp turns is
-	// the manifest's runtimes.native-acp.image.
-	var nativeAgentImage string
-	if acpRT, ok := bundle.Runtime(clientconfig.RuntimeNativeACP); ok {
-		nativeAgentImage = acpRT.Image
-	}
-	// The interactive default is the bundle's declared default (native-acp
-	// post-#159); FLEET_DEFAULT_RUNTIME overrides it against the gated catalog
-	// (an unknown/gated value is ignored). Mirrors the scheduled resolution.
-	defaultRuntime := bundle.DefaultRuntime()
-	if want := strings.TrimSpace(cfg.DefaultRuntime); want != "" {
-		if _, ok := bundle.Runtime(want); ok {
-			defaultRuntime = want
-		} else {
-			// want/defaultRuntime are operator-set env / bundle flavor names, not request input.
-			log.Printf("FLEET_DEFAULT_RUNTIME %q not found/selectable in bundle; using default %s", want, defaultRuntime)
-		}
-	}
-	mgr.SetRuntimes(bundle.Runtimes(), defaultRuntime, nativeAgentImage)
-	// defaultRuntime is a bundle/operator-env flavor name, not request input.
-	log.Printf("runtimes: default=%s flavors=%d native_agent_image=%q",
-		defaultRuntime, len(bundle.Runtimes()), nativeAgentImage)
-
-	// Fail-closed preflight (#159): when the DEFAULT flavor is container-backed
-	// (native-acp / external acp), its agent image must already exist in the
-	// service user's container store — otherwise the very first turn dies at
-	// `podman run` with an opaque error, in both chat and scheduled paths. Refuse
-	// to start with an actionable message instead. We do NOT silently fall back to
-	// the in-process loop: that would run uncontained on a deploy that believes it
-	// is containerized. Skipped in MockMode (tests have no container runtime).
-	if !cfg.MockMode {
-		if err := preflightDefaultRuntimeImage(cfg, bundle, defaultRuntime); err != nil {
-			return err
-		}
-	}
-
 	// Health summary (#301): uptime + an injected scheduler worker/task provider
 	// (adapts the sched store's dashboard stats) so the chat-side endpoint can
 	// report a single-pane view without httpapi importing the sched packages.
@@ -351,13 +271,6 @@ func run() error {
 		}
 		return out
 	})
-	// Let task creation reject a runtime flavor this deployment doesn't offer
-	// (the bundle's gated catalog — e.g. native-inprocess when the in-process loop
-	// is off, #159) instead of silently falling back at dispatch.
-	h.SetRuntimeValidator(func(name string) bool {
-		_, ok := bundle.Runtime(name)
-		return ok
-	})
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
 	orchHandler := buildOrchestratorMux(h, notesHandlers)
 
@@ -366,66 +279,17 @@ func run() error {
 	sch.Start()
 	defer sch.Stop()
 
-	// Resolve the scheduled execution flavor from FLEET_SCHEDULED_RUNTIME against
-	// the bundle's runtimes catalog (process-wide; the scheduled Task model carries
-	// no per-task runtime). An unknown / empty value falls back to native-inprocess.
-	// native-acp scheduled tasks reuse the SAME native-agent image as interactive.
-	// An EXTERNAL (type: acp / delegated_policy) flavor is admitted on the scheduler
-	// ONLY behind the per-client opt-in below — otherwise the scheduled-external gate
-	// fails it closed at dispatch (internal/agent/scheduled_external.go).
-	// Default to the bundle's default flavor (native-acp post-#159, since
-	// native-inprocess is gated out unless FLEET_ENABLE_INPROCESS_LOOP is set), so
-	// scheduled and interactive share one default. FLEET_SCHEDULED_RUNTIME overrides
-	// it; an unknown/gated value falls back to the bundle default.
-	scheduledRuntime := bundle.DefaultRuntime()
-	var scheduledFlavor clientconfig.Runtime
-	if rt, ok := bundle.Runtime(scheduledRuntime); ok {
-		scheduledFlavor = rt
-	}
-	if want := strings.TrimSpace(cfg.ScheduledRuntime); want != "" {
-		if rt, ok := bundle.Runtime(want); ok {
-			scheduledRuntime = rt.Name
-			scheduledFlavor = rt
-		} else {
-			// want/scheduledRuntime are operator-set env / bundle flavor names, not request input.
-			log.Printf("FLEET_SCHEDULED_RUNTIME %q not found/selectable in bundle; using default %s", want, scheduledRuntime)
-		}
-	}
-	if scheduledRuntime == clientconfig.RuntimeNativeACP && nativeAgentImage == "" {
-		log.Printf("warn: scheduled runtime native-acp selected but no native-agent image is configured; scheduled tasks will fall back to in-process")
-	}
-	// The per-client opt-in for ungoverned external agents on the scheduler. Default
-	// false (the generic bundle leaves it unset): a scheduled-external task without
-	// this is a LOUD ERROR at dispatch (fail-closed; no fallback to a native flavor).
-	allowUngovernedScheduled := bundlePolicy.AllowUngovernedScheduledAgents
-	externalScheduled := scheduledFlavor.Type == clientconfig.RuntimeTypeACP || scheduledFlavor.DelegatedPolicy
-	if externalScheduled {
-		log.Printf("scheduled runtime %q is EXTERNAL (containment tier, governance: delegated); allow_ungoverned_scheduled_agents=%v",
-			scheduledRuntime, allowUngovernedScheduled)
-		if !allowUngovernedScheduled {
-			log.Printf("warn: scheduled-external runtime %q selected but allow_ungoverned_scheduled_agents is OFF; scheduled tasks will FAIL at dispatch (fail-closed, no fallback)", scheduledRuntime)
-		}
-	}
-	log.Printf("scheduled runtime: flavor=%s native_agent_image=%q", scheduledRuntime, nativeAgentImage)
-
 	// ── capped worker pool: TaskRunner = the scheduled agent over the SHARED sandbox pool ──
 	taskRunner := scheduledrun.New(scheduledrun.Options{
-		Config:                   cfg,
-		Manager:                  mgr,
-		NotesProvider:            notesProvider,
-		NoteProposer:             notesProvider,
-		PersonasDir:              personasDir,
-		SystemPromptsDir:         systemPromptsDir,
-		ProtocolsDir:             protocolsDir,
-		Runtime:                  scheduledRuntime,
-		NativeAgentImage:         nativeAgentImage,
-		RuntimeFlavor:            scheduledFlavor,
-		AllowUngovernedScheduled: allowUngovernedScheduled,
+		Config:           cfg,
+		Manager:          mgr,
+		NotesProvider:    notesProvider,
+		NoteProposer:     notesProvider,
+		PersonasDir:      personasDir,
+		SystemPromptsDir: systemPromptsDir,
+		ProtocolsDir:     protocolsDir,
 		// Record per-iteration telemetry for looped tasks (#179).
 		IterationStore: schedStorage,
-		// Resolve a task's per-task runtime-flavor override (Operations Center
-		// picker) against the same bundle catalog the chat picker uses.
-		ResolveRuntime: bundle.Runtime,
 	})
 	// Reclaim sandbox containers orphaned by a PRIOR crash before building the
 	// pool: they run `--detach --rm` under conmon, so a non-graceful exit leaves

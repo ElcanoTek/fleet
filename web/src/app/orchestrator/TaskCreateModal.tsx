@@ -7,7 +7,6 @@ import { validateTaskForm } from "@/app/shared/lib/validation";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { useToast } from "@/app/shared/ui/Toast";
 import { ModelPicker } from "@/app/shared/ui/ModelPicker";
-import { useClientConfig } from "@/app/lib/useClientConfig";
 import { McpServerPicker } from "@/app/shared/ui/McpServerPicker";
 import { FileUpload, type FileUploadHandle } from "@/app/shared/ui/FileUpload";
 
@@ -60,11 +59,6 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
   const [maxIterCustom, setMaxIterCustom] = useState("");
   const [captainsLog, setCaptainsLog] = useState(false);
   const [allowNetwork, setAllowNetwork] = useState(false);
-  // Per-task runtime-flavor override (the Operations Center agent picker, #158),
-  // mirroring chat's per-conversation flavor. "" = the bundle's global scheduled
-  // runtime. The catalog comes from the SAME source chat's picker uses.
-  const [selectedRuntime, setSelectedRuntime] = useState("");
-  const { runtimes, defaultRuntime } = useClientConfig(open);
 
   // The NEW per-task MCP selection (replaces target_node_name).
   const [mcpSelection, setMcpSelection] = useState<MCPChoice[]>([]);
@@ -129,7 +123,6 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
     if (maxIterations) taskData.max_iterations = Number.parseInt(maxIterations, 10);
     if (captainsLog) taskData.instruction_self_improve = true;
     if (allowNetwork) taskData.allow_network = true;
-    if (selectedRuntime) taskData.runtime_flavor = selectedRuntime;
     if (mcpSelection.length > 0) taskData.mcp_selection = mcpSelection;
     if (scheduledFor) {
       try {
@@ -442,36 +435,6 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                       </div>
                     ) : null}
                   </div>
-
-                  {/* Agent (runtime flavor) picker — parity with chat (#158). The
-                      flavor a scheduled task's agent runs under: in-process,
-                      sandboxed native-acp, or an external ACP agent. "" = the
-                      bundle's global scheduled runtime. Self-hides when the
-                      bundle ships fewer than two flavors (nothing to pick). */}
-                  {runtimes.length >= 2 ? (
-                    <div className="form-group advanced-section-group">
-                      <label htmlFor="taskRuntimeSelect">Agent runtime</label>
-                      <select
-                        id="taskRuntimeSelect"
-                        data-testid="task-runtime-select"
-                        value={selectedRuntime}
-                        onChange={(e) => setSelectedRuntime(e.target.value)}
-                      >
-                        <option value="">
-                          Default
-                          {defaultRuntime
-                            ? ` (${runtimes.find((r) => r.name === defaultRuntime)?.display_name ?? defaultRuntime})`
-                            : ""}
-                        </option>
-                        {runtimes.map((rt) => (
-                          <option key={rt.name} value={rt.name}>
-                            {rt.display_name}
-                            {rt.beta ? " (beta)" : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : null}
 
                   <div className="form-group advanced-section-group">
                     <div className="advanced-switch-row">

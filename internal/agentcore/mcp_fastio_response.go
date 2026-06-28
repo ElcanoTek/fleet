@@ -73,8 +73,8 @@ var fastIODropBullets = []string{
 // 3460d911 burned ~25 KB on fast.io meta before the agent gave up.
 // Post-trim that drops to ~5–6 KB of actual file metadata.
 //
-// Reached through the localMCPBroker by both flavors (issue #167) — the in-process
-// loop and the native-acp host broker share one implementation, so the trim runs
+// Reached through the localMCPBroker by every caller (issue #167) — the in-process
+// loop and an out-of-process broker share one implementation, so the trim runs
 // identically without a separate exported entry point.
 func trimFastIOResponse(text string) string {
 	if text == "" {

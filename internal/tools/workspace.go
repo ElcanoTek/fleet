@@ -33,9 +33,9 @@ const (
 // This is the in-process seam for git worktree isolation (#180): the scheduled
 // runner sets it to the per-run worktree path so the agent's tool calls land in
 // the worktree. It is absent (and therefore a no-op) for every non-worktree run,
-// so existing behaviour is unchanged. The native-acp flavor scopes via the
-// host sandbox's default working dir instead (see Sandbox.SetDefaultWorkingDir),
-// since the in-container agent does not share this context.
+// so existing behaviour is unchanged. A bash/run_python call that arrives with an
+// empty per-call working dir is scoped via the host sandbox's default working dir
+// instead (see Sandbox.SetDefaultWorkingDir).
 func WithForcedWorkingDir(ctx context.Context, dir string) context.Context {
 	return context.WithValue(ctx, ctxKeyForcedWorkingDir, dir)
 }

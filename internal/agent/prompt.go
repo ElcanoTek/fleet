@@ -81,9 +81,9 @@ type Manager struct {
 	notesProvider agentcore.NotesProvider
 
 	// noteProposer stages agent-proposed admin-notes edits (propose_note). Wired
-	// once here so EVERY interactive RunTurn (web, ACP ingress, native-acp)
-	// inherits the same propose_note guarantee — not per-entrypoint. Nil leaves
-	// propose_note reporting "unavailable" (and the tool unregistered).
+	// once here so EVERY interactive RunTurn inherits the same propose_note
+	// guarantee — not per-entrypoint. Nil leaves propose_note reporting
+	// "unavailable" (and the tool unregistered).
 	noteProposer agentcore.NoteProposer
 
 	// mcpToolRoster is the frozen list of `mcp_<server>_<tool>` names
@@ -117,13 +117,6 @@ type Manager struct {
 	// systemPromptsDir (e.g. "chat.md"). The scheduled path uses its own base.
 	chatSystemPromptFile string
 
-	// runtimes is the bundle's runtime-flavor catalog + the default flavor name.
-	// A turn's requested flavor is validated against this; native-acp turns spawn
-	// nativeAgentImage. Empty leaves every turn on native-inprocess.
-	runtimes         []clientconfig.Runtime
-	defaultRuntime   string
-	nativeAgentImage string
-
 	// limiter is the SHARED process-wide admission governor (interactive +
 	// scheduled). RunTurn admits each chat turn through it so the box-wide
 	// concurrency cap bounds chat too, with reserved headroom keeping chat ahead
@@ -145,32 +138,6 @@ func (m *Manager) ProviderHealth() []agentcore.ModelHealth {
 		return nil
 	}
 	return m.health.Snapshot()
-}
-
-// SetRuntimes configures the runtime-flavor catalog + the native-agent image the
-// Manager honors on a turn's requested flavor. Called at boot from the loaded
-// client bundle (cmd/fleet). When unset, every turn runs native-inprocess.
-func (m *Manager) SetRuntimes(runtimes []clientconfig.Runtime, defaultRuntime, nativeAgentImage string) {
-	m.runtimes = runtimes
-	m.defaultRuntime = defaultRuntime
-	m.nativeAgentImage = nativeAgentImage
-}
-
-// resolveRuntime picks the effective flavor for a requested name: the requested
-// flavor when it exists in the catalog, else the bundle default, else
-// native-inprocess. Returns the resolved descriptor so RunTurn can route on the
-// type (native-acp / external acp) and read the flavor's image/env/args.
-func (m *Manager) resolveRuntime(requested string) clientconfig.Runtime {
-	want := strings.TrimSpace(requested)
-	if want == "" {
-		want = m.defaultRuntime
-	}
-	for _, rt := range m.runtimes {
-		if rt.Name == want {
-			return rt
-		}
-	}
-	return clientconfig.Runtime{Name: clientconfig.RuntimeNativeInprocess, Type: clientconfig.RuntimeTypeNativeInprocess}
 }
 
 // MCPServerSpec describes one MCP server to connect to. Either stdio
