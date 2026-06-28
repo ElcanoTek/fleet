@@ -2,9 +2,68 @@ package handlers
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
+
+// TestBuildRerunTaskCreate covers the scheduling logic — including the regression
+// that a rerun's immediate run must use ScheduledFor=nil (NOT &now), so it
+// passes validateTaskCreate's "not in the past" check.
+func TestBuildRerunTaskCreate(t *testing.T) {
+	h := &Handlers{}
+	src := &models.Task{
+		Prompt:     "do the work for the team",
+		Priority:   3,
+		Recurrence: "0 9 * * *",
+		Timezone:   "UTC",
+		Tags:       []string{"nightly"},
+	}
+
+	t.Run("rerun is immediate, one-time, and validates", func(t *testing.T) {
+		tc, err := buildRerunTaskCreate(src, false, taskRerunOverrides{}, time.UTC)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		if tc.ScheduledFor != nil {
+			t.Errorf("rerun must use nil ScheduledFor (run-now), got %v", tc.ScheduledFor)
+		}
+		if tc.Recurrence != "" {
+			t.Errorf("rerun must clear recurrence, got %q", tc.Recurrence)
+		}
+		// The regression guard: this must NOT be rejected as "in the past".
+		if verr := h.validateTaskCreate(&tc); verr != nil {
+			t.Fatalf("rerun recipe must pass validation, got %v", verr)
+		}
+	})
+
+	t.Run("recurring clone keeps recurrence and schedules a future fire", func(t *testing.T) {
+		tc, err := buildRerunTaskCreate(src, true, taskRerunOverrides{}, time.UTC)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		if tc.Recurrence != "0 9 * * *" {
+			t.Errorf("clone must preserve recurrence, got %q", tc.Recurrence)
+		}
+		if tc.ScheduledFor == nil || !tc.ScheduledFor.After(time.Now()) {
+			t.Errorf("recurring clone must schedule a future fire, got %v", tc.ScheduledFor)
+		}
+		if verr := h.validateTaskCreate(&tc); verr != nil {
+			t.Fatalf("clone recipe must pass validation, got %v", verr)
+		}
+	})
+
+	t.Run("non-recurring clone is immediate", func(t *testing.T) {
+		noRecur := &models.Task{Prompt: "do the work for the team", Timezone: "UTC"}
+		tc, err := buildRerunTaskCreate(noRecur, true, taskRerunOverrides{}, time.UTC)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		if tc.ScheduledFor != nil {
+			t.Errorf("non-recurring clone must run immediately (nil ScheduledFor), got %v", tc.ScheduledFor)
+		}
+	})
+}
 
 func TestApplyRerunOverrides(t *testing.T) {
 	base := func() models.TaskCreate {

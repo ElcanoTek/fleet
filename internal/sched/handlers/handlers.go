@@ -1735,32 +1735,12 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 		}
 	}
 
-	tc := models.TaskToCreate(source)
-	now := time.Now().UTC()
-	if keepRecurrence {
-		// Clone: keep the cron string; recompute the next fire so the clone is a
-		// live recurring task rather than inheriting a stale scheduled_for.
-		if strings.TrimSpace(tc.Recurrence) != "" {
-			schedule, perr := cron.ParseStandard(tc.Recurrence)
-			if perr != nil {
-				writeError(w, http.StatusBadRequest, "source task has an invalid recurrence")
-				return
-			}
-			loc, lerr := time.LoadLocation(tc.Timezone)
-			if lerr != nil {
-				loc = h.storage.Location()
-			}
-			next := schedule.Next(time.Now().In(loc)).UTC()
-			tc.ScheduledFor = &next
-		} else {
-			tc.ScheduledFor = &now
-		}
-	} else {
-		// Rerun: one-time, immediate.
-		tc.Recurrence = ""
-		tc.ScheduledFor = &now
+	loc := h.storage.Location()
+	tc, berr := buildRerunTaskCreate(source, keepRecurrence, req.Overrides, loc)
+	if berr != nil {
+		writeError(w, http.StatusBadRequest, berr.Error())
+		return
 	}
-	applyRerunOverrides(&tc, req.Overrides)
 
 	if err := h.validateTaskCreate(&tc); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1783,6 +1763,42 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 	log.Printf("Task %s created (%s of %s)", newTask.ID, verb, source.ID)
 	localizeTask(newTask)
 	writeJSON(w, http.StatusCreated, newTask)
+}
+
+// buildRerunTaskCreate constructs the TaskCreate recipe for a re-run (#270) from
+// a source task. keepRecurrence=false (rerun) clears recurrence and runs
+// immediately; true (clone) preserves a cron recurrence (recomputing the next
+// fire in the task's timezone, falling back to fallbackLoc). Overrides are then
+// applied. It is pure (no h/HTTP) so the scheduling logic is unit-testable.
+//
+// IMPORTANT: an immediate run uses ScheduledFor=nil — the codebase's "run now"
+// convention (a fresh pending task the worker claims at once). Setting &now would
+// be rejected by validateTaskCreate's "scheduled time cannot be in the past"
+// check, which re-samples a strictly-later now.
+func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunOverrides, fallbackLoc *time.Location) (models.TaskCreate, error) {
+	tc := models.TaskToCreate(source)
+	if keepRecurrence && strings.TrimSpace(tc.Recurrence) != "" {
+		schedule, perr := cron.ParseStandard(tc.Recurrence)
+		if perr != nil {
+			return tc, fmt.Errorf("source task has an invalid recurrence")
+		}
+		loc := fallbackLoc
+		if l, lerr := time.LoadLocation(tc.Timezone); lerr == nil && l != nil {
+			loc = l
+		}
+		if loc == nil {
+			loc = time.UTC
+		}
+		next := schedule.Next(time.Now().In(loc)).UTC()
+		tc.ScheduledFor = &next
+	} else {
+		tc.ScheduledFor = nil // immediate run-now
+		if !keepRecurrence {
+			tc.Recurrence = "" // rerun is one-time
+		}
+	}
+	applyRerunOverrides(&tc, o)
+	return tc, nil
 }
 
 // applyRerunOverrides mutates tc with any non-nil override fields (#270). Tags,
