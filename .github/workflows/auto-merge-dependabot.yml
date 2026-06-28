@@ -1,0 +1,43 @@
+# Dependabot already opens dependency-update PRs (see .github/dependabot.yml),
+# but every one — even a routine patch — currently waits on a human to merge.
+# This workflow lets PATCH-level bumps merge themselves once the full CI gate
+# (build / vet / lint / test / -race / govulncheck, web lint+test+build,
+# Playwright mocked + live, and the gitleaks secret scan) is green. CI is the
+# correct approval signal for a patch; it is never bypassed — `gh pr merge
+# --auto` only enables auto-merge, so GitHub still holds the merge until every
+# required check passes. Minor and major bumps are intentionally left for a
+# human, where an API change or a transitive surprise is more likely.
+#
+# Requires "Allow auto-merge" to be enabled on the repository (Settings →
+# General → Pull Requests). This is the pattern documented in GitHub's
+# "Automating Dependabot with GitHub Actions" guide.
+name: Auto-merge Dependabot patch PRs
+
+on:
+  pull_request:
+
+# Dependabot-triggered runs get a read-only GITHUB_TOKEN by default; these
+# elevated permissions are honored only for the dependabot[bot] actor, and the
+# job guard below makes sure nothing else can reach the merge step.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for patch updates
+        # Only patch bumps auto-merge; minor and major get human review.
+        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-patch' }}
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
