@@ -8,8 +8,8 @@ delegation: the loop, the sandbox, and the credential broker are the whole story
 
 This guide documents the runtime mechanics an operator needs: the per-turn
 sandbox seal, the cost/token ceilings, context-window compaction, the per-task
-MCP credential allowlist, the scheduled end-of-run verifier, and git-worktree
-isolation for scheduled tasks.
+MCP credential allowlist, the scheduled end-of-run verifier, the optional
+"phone a friend" super-LLM review, and git-worktree isolation for scheduled tasks.
 
 ---
 
@@ -165,6 +165,46 @@ verify/retry control around `agentcore.Run`), so the sandbox, policy, audit, and
 cost gates apply per cycle — "governance is one core" holds. Per-iteration
 telemetry (status, exit result, cost, tokens) is recorded to `task_iterations`
 and embedded in the `GET /tasks/{id}` response for a looped task.
+
+---
+
+## "Phone a friend": one-time super-LLM review (#175)
+
+An **optional, off-by-default** quality gate that layers onto the SAME finish
+seam as the verifier. When `FLEET_PHONE_A_FRIEND_ENABLED` is set, a scheduled run
+that has already cleared audit/finish enforcement **and** the end-of-run verifier
+is reviewed once more by a configurable — typically stronger — **reviewer model**
+(inspired by Brad's [lifeline](https://github.com/bradflaugher/lifeline) MCP: a
+one-time second opinion from a more capable model). `runPhoneAFriendReview`
+sends the original task, the agent's final answer/work, and the executed-tool
+summary to the reviewer and asks for a JSON verdict
+(`{"needs_revision", "issues", "reasoning"}`); when the reviewer flags material
+problems, the loop turns the issue list into **one more enforcement round** so
+the agent revises before finishing.
+
+What it is and is **not**, stated plainly (honesty in docs):
+
+- It is a **host-side LLM call**, exactly like the verifier — the reviewer's
+  credentials are just another host model handle and **never** enter the sandbox,
+  the agent's model context, or logs (raw output is clamped to a short preview
+  before any log line). It is **not** a built-in agent tool and **not** an MCP
+  server, so the agent cannot invoke the reviewer at will, unbudgeted, or surface
+  it in the sandboxed tool roster — keeping governance one core.
+- It runs **at most once per run** and **fails open**: a reviewer error, an empty
+  reply, or an unparseable verdict logs a skip and allows the run to finish, so a
+  flaky reviewer never blocks otherwise-complete work.
+- It is **scheduled-only** and gated: with the flag off (the default), the review
+  never runs and behaviour is identical to before. The reviewer model slug comes
+  from `FLEET_PHONE_A_FRIEND_MODEL` and **falls back to the run's fallback model**
+  when unset; an unresolvable slug also falls back rather than failing the run.
+- Sub-agents (the other half of #175 — letting the native agent spawn children
+  with their own model choice) are **not** part of this and are **not yet
+  shipped**.
+
+Because the critique re-enters through the verifier's existing enforcement-round
+channel (`scheduledPolicy.CanFinish`), no second governance path is created: the
+review is bounded by the same per-run audit, finish enforcement, cost/token
+ceilings, and round cap as everything else.
 
 ---
 

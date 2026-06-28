@@ -361,6 +361,19 @@ type Config struct {
 	SystemPrompt      string
 	Persona           string
 
+	// ── phone a friend: super-LLM review (#175) ──
+	// PhoneAFriendEnabled turns on a one-time, host-side review of a scheduled
+	// run's answer/work by a (typically stronger) reviewer model before the run is
+	// allowed to finish; material issues it reports are fed back as one more
+	// enforcement round (the same shape as the end-of-run verifier). OFF by
+	// default (FLEET_PHONE_A_FRIEND_ENABLED) so config/default behaviour is
+	// unchanged. PhoneAFriendModel names the reviewer model slug
+	// (FLEET_PHONE_A_FRIEND_MODEL); empty falls back to the task's fallback model.
+	// The reviewer is just another host-side LLM call — its credentials never
+	// enter the sandbox, the agent's model context, or logs.
+	PhoneAFriendEnabled bool
+	PhoneAFriendModel   string
+
 	// ── run-history retention (#252) ──
 	// RunLogRetentionDays prunes terminal task runs (and their logs) older than
 	// this many days in a daily sweep. <=0 disables pruning. Default 90.
@@ -552,6 +565,10 @@ func Load(envFile string) (*Config, error) {
 		TaskFallbackModel: stripQuotes(os.Getenv("CUTLASS_TASK_FALLBACK_MODEL")),
 		TaskMaxIterations: getEnvOrDefaultInt("CUTLASS_TASK_MAX_ITERATIONS", 0),
 		LLMTemperature:    getEnvOrDefaultFloat("CUTLASS_TEMPERATURE", 0.3),
+
+		// ── phone a friend: super-LLM review (#175) ──
+		PhoneAFriendEnabled: getenvFleetBool("PHONE_A_FRIEND_ENABLED", false),
+		PhoneAFriendModel:   getenvFleet("PHONE_A_FRIEND_MODEL"),
 
 		// ── run-history retention (#252) ──
 		RunLogRetentionDays: getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),

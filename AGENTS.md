@@ -104,7 +104,8 @@ same PR.
 
 - **Agent runtime mechanics** (per-turn sandbox seal, cost/token ceilings,
   context compaction, MCP credential allowlist, the scheduled end-of-run
-  verifier, git-worktree isolation): [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)
+  verifier, the optional "phone a friend" super-LLM review, git-worktree
+  isolation): [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)
 - **Architecture overview:** [`README.md`](README.md) ("Architecture at a glance")
 - **Why the invariants are the way they are:** [`docs/adr/`](docs/adr/)
   (Architecture Decision Records)

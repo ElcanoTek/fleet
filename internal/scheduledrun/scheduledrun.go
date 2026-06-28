@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/fantasy"
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -271,6 +272,23 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		}
 	}
 
+	// "Phone a friend" super-LLM reviewer (#175). Resolved only when the feature
+	// is enabled; the reviewer slug comes from FLEET_PHONE_A_FRIEND_MODEL and
+	// falls back to the run's fallback model when unset. A resolution failure
+	// leaves the reviewer nil, which the agent treats as "skip the review" — the
+	// feature degrades gracefully rather than failing the run.
+	var reviewer fantasy.LanguageModel
+	if r.cfg.PhoneAFriendEnabled {
+		reviewer = fallback
+		if slug := strings.TrimSpace(r.cfg.PhoneAFriendModel); slug != "" {
+			if rv, rerr := r.mgr.Resolve(ctx, slug); rerr == nil {
+				reviewer = rv
+			} else {
+				log.Printf("scheduled task %s: phone_a_friend reviewer %q unresolved (%v); falling back to the run's fallback model", task.ID, slug, rerr)
+			}
+		}
+	}
+
 	// Acquire the execution sandbox for this task. Scheduled runs are
 	// network-SEALED by default (--network=none, same as interactive lockdown)
 	// because unattended runs have no human on the loop; a task opts into
@@ -332,6 +350,8 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		NotesProvider:       r.notesProvider,
 		NoteProposer:        r.noteProposer,
 		CredentialAllowlist: taskCredentialAllowlist(task),
+		PhoneAFriendEnabled: r.cfg.PhoneAFriendEnabled,
+		ReviewerModel:       reviewer,
 	})
 
 	// On a retry (a prior attempt failed transiently and was re-queued), warn the
