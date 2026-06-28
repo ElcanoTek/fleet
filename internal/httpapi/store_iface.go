@@ -30,7 +30,6 @@ type chatStore interface {
 	SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error
 	SetModel(ctx context.Context, userEmail, convID, model string) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
-	SetRuntime(ctx context.Context, userEmail, convID, runtime string) error
 	UpdateTitle(ctx context.Context, userEmail, convID, title string) error
 
 	// Full-text search (#308): ranked title + message-content matches, scoped to

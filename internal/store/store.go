@@ -70,11 +70,6 @@ type Conversation struct {
 	// rootless slirp4netns. Drives the "Lockdown chat" badge on the
 	// frontend.
 	Lockdown bool `json:"lockdown"`
-	// Runtime is the per-chat execution flavor (fleet's ACP runtime selection).
-	// Empty = the bundle's default flavor. Recognized values are the manifest's
-	// runtimes: keys (native-inprocess, native-acp, ...); an unknown value falls
-	// back to the default at run time. Set via PUT /conversations/{id}/runtime.
-	Runtime string `json:"runtime"`
 }
 
 // Open connects to Postgres using the given DSN (DATABASE_URL format or
@@ -242,25 +237,6 @@ func (s *Store) SetModel(ctx context.Context, userEmail, convID, model string) e
 	return nil
 }
 
-// SetRuntime updates the per-chat execution flavor (fleet's ACP runtime
-// selection). Empty clears it (the bundle default applies next turn). The value
-// is validated against the bundle catalog at the HTTP layer; an unknown value
-// still falls back to the default at run time.
-func (s *Store) SetRuntime(ctx context.Context, userEmail, convID, runtime string) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET runtime = $1, updated_at = $2 WHERE id = $3 AND user_email = $4`,
-		runtime, time.Now().Unix(), convID, userEmail,
-	)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return errors.New("conversation not found")
-	}
-	return nil
-}
-
 // UpdateTitle is called after the first assistant reply (when we have enough
 // context to auto-name the conversation).
 func (s *Store) UpdateTitle(ctx context.Context, userEmail, convID, title string) error {
@@ -327,7 +303,7 @@ func (s *Store) DeleteAllUnpinned(ctx context.Context, userEmail string) (int, e
 // List returns the user's conversations, pinned first, newest first.
 func (s *Store) List(ctx context.Context, userEmail string) ([]Conversation, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, optional_mcp_servers_enabled, runtime
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, optional_mcp_servers_enabled
 		 FROM conversations WHERE user_email = $1
 		 ORDER BY pinned DESC, updated_at DESC, id DESC`,
 		userEmail,
@@ -341,7 +317,7 @@ func (s *Store) List(ctx context.Context, userEmail string) ([]Conversation, err
 	for rows.Next() {
 		var c Conversation
 		var optionalRaw []byte
-		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &optionalRaw, &c.Runtime); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &optionalRaw); err != nil {
 			return nil, err
 		}
 		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
@@ -353,13 +329,13 @@ func (s *Store) List(ctx context.Context, userEmail string) ([]Conversation, err
 // Get fetches a single conversation (without messages).
 func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, optional_mcp_servers_enabled, runtime
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, optional_mcp_servers_enabled
 		 FROM conversations WHERE id = $1 AND user_email = $2`,
 		convID, userEmail,
 	)
 	var c Conversation
 	var optionalRaw []byte
-	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &optionalRaw, &c.Runtime); err != nil {
+	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &optionalRaw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

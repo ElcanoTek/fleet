@@ -26,7 +26,6 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
-	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -45,31 +44,9 @@ type Options struct {
 	SystemPromptsDir string
 	ProtocolsDir     string
 
-	// Runtime / NativeAgentImage select the scheduled execution flavor. Empty /
-	// "native-inprocess" runs the in-process loop; "native-acp" routes through the
-	// sandboxed ACP agent (fully governed host-side); an external "acp" flavor
-	// routes through the containment-tier scheduled-external path (fail-closed;
-	// gated by AllowUngovernedScheduled).
-	Runtime          string
-	NativeAgentImage string
-	// RuntimeFlavor is the resolved clientconfig descriptor for Runtime.
-	RuntimeFlavor clientconfig.Runtime
-	// AllowUngovernedScheduled is the per-client opt-in admitting an EXTERNAL
-	// flavor as a scheduled task. Off → scheduled-external is a loud error at
-	// dispatch (fail-closed).
-	AllowUngovernedScheduled bool
-
 	// IterationStore records per-iteration telemetry for looped tasks (#179). nil
 	// disables telemetry (the loop still runs); production wires the sched storage.
 	IterationStore IterationStore
-
-	// ResolveRuntime resolves a per-task runtime-flavor name (the Operations
-	// Center picker) to its bundle descriptor. nil disables per-task overrides
-	// (every task uses the global Runtime/RuntimeFlavor). An unknown name falls
-	// back to the global default; the resolved descriptor still flows through the
-	// fail-closed scheduled-external gate, so a per-task external flavor cannot
-	// bypass AllowUngovernedScheduled.
-	ResolveRuntime func(name string) (clientconfig.Runtime, bool)
 }
 
 // Runner executes claimed scheduled tasks in-process through the unified runtime
@@ -96,13 +73,6 @@ type Runner struct {
 
 	baseSystemPrompt string
 
-	runtime          string
-	nativeAgentImage string
-	runtimeFlavor    clientconfig.Runtime
-
-	allowUngovernedScheduled bool
-	resolveRuntime           func(name string) (clientconfig.Runtime, bool)
-
 	iterationStore IterationStore
 }
 
@@ -118,19 +88,14 @@ type IterationStore interface {
 // restart, matching the scheduled path's prior behaviour).
 func New(opts Options) *Runner {
 	r := &Runner{
-		cfg:                      opts.Config,
-		mgr:                      opts.Manager,
-		notesProvider:            opts.NotesProvider,
-		noteProposer:             opts.NoteProposer,
-		personasDir:              opts.PersonasDir,
-		systemPromptsDir:         opts.SystemPromptsDir,
-		protocolsDir:             opts.ProtocolsDir,
-		runtime:                  opts.Runtime,
-		nativeAgentImage:         opts.NativeAgentImage,
-		runtimeFlavor:            opts.RuntimeFlavor,
-		allowUngovernedScheduled: opts.AllowUngovernedScheduled,
-		resolveRuntime:           opts.ResolveRuntime,
-		iterationStore:           opts.IterationStore,
+		cfg:              opts.Config,
+		mgr:              opts.Manager,
+		notesProvider:    opts.NotesProvider,
+		noteProposer:     opts.NoteProposer,
+		personasDir:      opts.PersonasDir,
+		systemPromptsDir: opts.SystemPromptsDir,
+		protocolsDir:     opts.ProtocolsDir,
+		iterationStore:   opts.IterationStore,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -294,12 +259,9 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// Git worktree isolation (#180): scope this run's tool calls into the per-run
 	// worktree (prepared once per task in Run; a subdir of the bind-mounted
 	// workspace root, reachable at the same absolute path inside the sandbox).
-	// Two complementary seams cover both flavors:
+	// Two complementary seams cover the tool surface:
 	//   - Sandbox.SetDefaultWorkingDir fills the cwd of any bash/run_python call
-	//     that arrives with an empty WorkingDir. This is what scopes the
-	//     native-acp flavor: the in-container agent's calls are delegated to the
-	//     host Executor, which drops the per-call WorkingDir, so the default
-	//     applies host-side.
+	//     that arrives with an empty WorkingDir, so the default applies host-side.
 	//   - WithForcedWorkingDir scopes the IN-PROCESS tool layer (bash/run_python/
 	//     file tools), whose resolvers otherwise default an empty working dir to
 	//     the process cwd before the sandbox seam can fill it.
@@ -328,39 +290,19 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	}
 	defer mcpCleanup()
 
-	// Per-task runtime-flavor override (the Operations Center agent picker). An
-	// empty/unknown flavor leaves the bundle's global scheduled runtime in place.
-	// The resolved descriptor flows into agent.Options.RuntimeFlavor unchanged, so
-	// a per-task EXTERNAL flavor is still gated by the fail-closed
-	// scheduled-external path (AllowUngovernedScheduled) — the picker cannot
-	// bypass governance.
-	runtime, runtimeFlavor := r.runtime, r.runtimeFlavor
-	if want := strings.TrimSpace(task.RuntimeFlavor); want != "" && r.resolveRuntime != nil {
-		if rt, ok := r.resolveRuntime(want); ok {
-			runtime, runtimeFlavor = rt.Name, rt
-		} else {
-			log.Printf("scheduled task %s: runtime flavor %q not in bundle catalog; using global default %q", task.ID, want, r.runtime)
-		}
-	}
-
 	a := agent.NewAgent(agent.Options{
-		Config:                   r.cfg,
-		Model:                    model,
-		FallbackModel:            fallback,
-		MCPClient:                mcpClient,
-		NativeTools:              turnTools.Tools,
-		SystemPrompt:             r.baseSystemPrompt,
-		Persona:                  r.cfg.Persona,
-		MaxIterations:            maxIter,
-		Sandbox:                  sb,
-		NotesProvider:            r.notesProvider,
-		NoteProposer:             r.noteProposer,
-		Runtime:                  runtime,
-		NativeAgentImage:         r.nativeAgentImage,
-		RuntimeFlavor:            runtimeFlavor,
-		AllowUngovernedScheduled: r.allowUngovernedScheduled,
-		MCPSelection:             taskMCPSelection(task),
-		CredentialAllowlist:      taskCredentialAllowlist(task),
+		Config:              r.cfg,
+		Model:               model,
+		FallbackModel:       fallback,
+		MCPClient:           mcpClient,
+		NativeTools:         turnTools.Tools,
+		SystemPrompt:        r.baseSystemPrompt,
+		Persona:             r.cfg.Persona,
+		MaxIterations:       maxIter,
+		Sandbox:             sb,
+		NotesProvider:       r.notesProvider,
+		NoteProposer:        r.noteProposer,
+		CredentialAllowlist: taskCredentialAllowlist(task),
 	})
 
 	// On a retry (a prior attempt failed transiently and was re-queued), warn the
@@ -397,21 +339,6 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// shell: form runs a command in it). model/fallback back the llm: form.
 	passed, result := r.evaluateExitCondition(ctx, lc, sb, session, fallback)
 	return session, passed, result, nil
-}
-
-// taskMCPSelection converts the task's persisted MCP selection into the
-// agentcore.MCPSelection the scheduled agent advertises (native-acp) — the SAME
-// shape bindTaskMCP binds onto the per-task client, so the advertised surface and
-// the bound credentialed servers stay in lockstep. Empty/nil → no MCP surface.
-func taskMCPSelection(task *models.Task) agentcore.MCPSelection {
-	if len(task.MCPSelection) == 0 {
-		return nil
-	}
-	sel := make(agentcore.MCPSelection, 0, len(task.MCPSelection))
-	for _, c := range task.MCPSelection {
-		sel = append(sel, agentcore.MCPChoice{Server: c.Server, Account: c.Account})
-	}
-	return sel
 }
 
 // taskCredentialAllowlist converts the task's persisted credential allowlist
@@ -539,8 +466,8 @@ func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession 
 }
 
 // BuildMCPSpecs converts config.MCPServers into the agent.MCPServerSpec map the
-// interactive Manager connects at construction. Shared by cmd/fleet (interactive
-// + ACP ingress engines) and cmd/cutlass (the one-shot harness) so all callers
+// interactive Manager connects at construction. Shared by cmd/fleet (the
+// interactive engine) and cmd/cutlass (the one-shot harness) so all callers
 // resolve identical MCP specs.
 func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 	out := make(map[string]agent.MCPServerSpec, len(cfg.MCPServers))

@@ -74,10 +74,10 @@ type RunConfig struct {
 
 	// PreGatedTools are already-policy-aware tools registered VERBATIM (NOT
 	// wrapped in the policyGuardedTool gate, because they call BeforeToolCall +
-	// RecordToolResult themselves — exactly like the built-in mcpTool). The
-	// native-acp agent uses this for its delegating MCP tools, which mirror the
-	// in-process mcpTool's policy handling while delegating execution host-side.
-	// Empty for the in-process modes (their MCP tools come from MCPClient).
+	// RecordToolResult themselves — exactly like the built-in mcpTool). A driver
+	// may use this for tools that mirror the in-process mcpTool's policy handling
+	// while routing execution elsewhere.
+	// Empty for the in-process loop (its MCP tools come from MCPClient).
 	PreGatedTools []fantasy.AgentTool
 }
 
@@ -145,11 +145,10 @@ type Deps struct {
 	CompactionSummarizer func(ctx context.Context, droppable []fantasy.Message) fantasy.Message
 
 	// UsageReporter, when set, is invoked after each LLM step with that step's
-	// accumulated run usage (the SAME counters usageSnapshot returns). The
-	// native-acp agent wires this to ship a per-step usage event back to the host
-	// over `_fleet/event` so the host accounts for tokens/cost identically to the
-	// in-process path (which reads the counters directly off the orch). Nil in
-	// both in-process modes — they read usage from the orch at the end.
+	// accumulated run usage (the SAME counters usageSnapshot returns). A driver
+	// may wire this to ship a per-step usage event out-of-band so an external
+	// accountant tracks tokens/cost as steps complete. Nil for the in-process
+	// loop — it reads usage from the orch at the end.
 	UsageReporter func(RunUsage)
 
 	// HealthRegistry, when set, is the cross-run provider circuit-breaker (#267).
@@ -272,7 +271,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	// Gate-3 (#184): scope MCP calls to the task's permitted (server, account)
 	// pairs. nil allowlist = inherit global (no-op wrap). Applied at the broker
 	// seam — the single path every MCP call routes through — so the in-process
-	// and native-acp flavors enforce it identically.
+	// loop and any out-of-process broker (#167) enforce it identically.
 	broker = GateMCPBrokerWithAllowlist(broker, cfg.CredentialAllowlist)
 	// The catalog is data, sourced either from an injected list (broker mode) or
 	// the local client. Decoupling it from the client lets the broker own the

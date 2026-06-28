@@ -8,16 +8,15 @@ import (
 	"strings"
 )
 
-// Email argument materialization, shared by every governed staging surface
-// (the web approval stager and the ACP ingress approver). An agent's
-// send_email / preview_email tool call may reference a workspace content_file
-// or relative attachment paths, but run_python writes into
-// workspace/<convID>/ while the Go server and the email MCP subprocess each
-// have their own cwd — so a bare filename never resolves downstream. The fix
-// is the same on every transport: at stage time (the one place that holds the
-// convID and where the files are still on disk) inline content_file and rewrite
-// relative attachment paths to absolute. Living here keeps both call sites
-// byte-identical (the staged args must equal the args replayed post-approval).
+// Email argument materialization, used by the governed staging surface (the web
+// approval stager). An agent's send_email / preview_email tool call may reference
+// a workspace content_file or relative attachment paths, but run_python writes
+// into workspace/<convID>/ while the Go server and the email MCP subprocess each
+// have their own cwd — so a bare filename never resolves downstream. The fix is
+// applied at stage time (the one place that holds the convID and where the files
+// are still on disk): inline content_file and rewrite relative attachment paths
+// to absolute. Living here keeps the staged args and the args replayed
+// post-approval byte-identical.
 
 // MaxInlinedContentBytes caps what we pull off disk into a staged approval.
 // SendGrid accepts ~30 MiB total including attachments; a ten-megabyte body is

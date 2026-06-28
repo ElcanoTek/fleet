@@ -145,25 +145,14 @@ func run(argv []string) error {
 	}
 	defer mgr.Close()
 
-	// cutlass runs the in-process native flavor only: it is a LOCAL debug harness,
-	// so it deliberately does not spin a native-acp/external provider image. Drive
-	// the governed in-process loop (agentcore.Run, Mode=Scheduled).
-	var flavor clientconfig.Runtime
-	if rt, ok := bundle.Runtime(clientconfig.RuntimeNativeInprocess); ok {
-		flavor = rt
-	}
-	mgr.SetRuntimes(bundle.Runtimes(), bundle.DefaultRuntime(), "")
-
+	// cutlass is a LOCAL debug harness that drives the governed in-process native
+	// loop (agentcore.Run, Mode=Scheduled) — the same and only runtime fleet ships.
 	runner := scheduledrun.New(scheduledrun.Options{
 		Config:           cfg,
 		Manager:          mgr,
 		PersonasDir:      bundle.PersonasDir,
 		SystemPromptsDir: bundle.SystemPromptsDir,
 		ProtocolsDir:     bundle.ProtocolsDir,
-		Runtime:          clientconfig.RuntimeNativeInprocess,
-		RuntimeFlavor:    flavor,
-		// AllowUngovernedScheduled stays false: an external flavor is never admitted
-		// from the local harness.
 	})
 
 	ctx := context.Background()

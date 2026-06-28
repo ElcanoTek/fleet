@@ -113,8 +113,8 @@ type ApprovalStager interface {
 // Session pre-approval sentinels (#300): instead of a real approval ID, Stage
 // may return one of these to signal a session-scoped pre-decision the user made
 // earlier ("approve/deny all <tool> in this conversation"). They ride the normal
-// (string, error) return so they cross the ACP boundary unchanged — a bridged
-// native-acp stager forwards the returned string verbatim. The interactive gates
+// (string, error) return so any stager can forward the returned string verbatim
+// without a special case. The interactive gates
 // interpret them: pre-approved → let the tool run normally (no approval card);
 // pre-denied → block with a denial message (no card). An ApprovalStager that has
 // no session registry simply never returns them, so the gates fall through to the

@@ -1,6 +1,6 @@
 # fleet
 
-**A general-purpose agent fleet you run yourself — any agent, any model, in a
+**A general-purpose agent fleet you run yourself — any model, in a
 sandbox, on a budget, connected to your data.**
 
 fleet is an open-source platform for running AI agents — both one-shot scheduled
@@ -21,21 +21,15 @@ them.
 
 ## Why fleet
 
-- **Any agent, any model.** fleet is an [ACP](#standards) client: alongside its
-  own native agent loop it can drive **any ACP-compliant AI agent** (Claude Code,
-  Goose, …) as selectable, sandboxed "flavors" you pick per chat or per
-  scheduled task. You can also choose the **best model for each task** rather than hard-wiring one vendor.
+- **Any model.** fleet runs its own native agent loop and lets you choose the
+  **best model for each task** rather than hard-wiring one vendor.
 
-- **Sandboxed by default.** Every tool call — bash, Python, file I/O, MCP —
-  executes inside an ephemeral, rootless-Podman container over a persistent
-  per-conversation workspace. There is **no fast path that skips the tool
-  sandbox**, on any runtime flavor. The **default** flavor is `native-acp`: it
-  wraps the agent's *whole orchestration loop* inside the sandbox as an ACP agent
-  that holds no privileged local executor and delegates every call back to the
-  host — so the loop never shares the fleet process's address space (or its
-  host-held MCP credentials). The legacy `native-inprocess` flavor (loop in the
-  fleet process, tools still sandboxed) is the fast dev/test/parity lane and is
-  **off by default** — an operator re-enables it with `FLEET_ENABLE_INPROCESS_LOOP=1`.
+- **Sandboxed by default.** The agent loop runs in the fleet process, but every
+  tool call — bash, Python, file I/O, MCP — executes inside an ephemeral,
+  rootless-Podman container over a persistent per-conversation workspace. There
+  is **no fast path that skips the tool sandbox**. MCP credentials never enter
+  the sandbox: they are isolated by the **out-of-process MCP broker**, which
+  injects them only when it runs a delegated MCP call host-side (issue #167).
 
 - **Cost-controlled.** Each turn runs against configurable per-task cost and
   token **ceilings**, with usage and cost accounting tracked as the agent works.
@@ -60,9 +54,8 @@ them.
   Standardize your team's agent setups once; roll your own as needed.
 
 - **Standards-compliant.** fleet is built on open standards, all shipped and
-  tested (see [Standards](#standards)): **ACP** (Agent Client Protocol) to drive
-  the native and external agents, **MCP** (Model Context Protocol) for tools and
-  data, and the open **Agent Skills** format for packaged, on-demand
+  tested (see [Standards](#standards)): **MCP** (Model Context Protocol) for
+  tools and data, and the open **Agent Skills** format for packaged, on-demand
   capabilities.
 
 - **MIT-licensed and observable.** The whole platform is open source. The agent
@@ -95,23 +88,18 @@ record coming out.
 
 - **Hard limits that actually fire.** Each turn runs against a per-turn cost
   ceiling, a token ceiling, an iteration cap, and a timeout. They are enforced,
-  not advisory: a model that won't stop calling tools is stopped by the ceiling,
-  and for the `native-acp` flavor the host re-checks reconciled usage against the
-  same ceilings and hard-cancels the run if a buggy or compromised agent
-  overshoots. A runaway loop costs you a capped turn, not an open-ended invoice.
+  not advisory: a model that won't stop calling tools is stopped by the ceiling.
+  A runaway loop costs you a capped turn, not an open-ended invoice.
 - **A record you can replay.** The observer events persist as a per-turn audit
   trail an operator can inspect after the fact. fleet ships no usage dashboard,
   but the trail is the substrate one would be built on — the per-turn data needed
   to answer "what did this agent do, and what did it cost?" is captured by
-  default. (For external/containment-tier runs, usage is the agent's
-  self-report — see below — so cost there is recorded honestly, including as an
-  unmetered zero when the agent reports none.)
-- **The posture is on the record.** Each turn is stamped with its **governance
-  tier** in the session log — **fully governed** (`native-inprocess` /
-  `native-acp`, where fleet owns tool execution, policy, and accounting) versus
-  **containment / delegated** (an external agent like Claude Code or Goose,
-  self-executing inside a locked sandbox). You don't have to guess how much fleet
-  was in control of a given run; the log says so.
+  default.
+- **fleet owns execution end to end.** The agent loop runs in the fleet process
+  and fleet owns tool execution, policy, and accounting for every turn — there is
+  no self-executing agent whose work fleet can only observe. The session log
+  records the real, executed tool calls, so you don't have to guess what the
+  agent did; the trail says so.
 
 ### Am I comfortable handing over control?
 
@@ -122,28 +110,25 @@ matter.
 - **The agent has no direct power.** Every tool call — bash, Python, file I/O,
   MCP — runs inside an ephemeral rootless-Podman sandbox over a persistent
   per-conversation workspace, with no fast path that skips it; the host enforces
-  all policy regardless of flavor. The `native-acp` flavor goes further and runs
-  the agent's loop itself inside the sandbox, delegating execution back to the
-  host. External agents are contained further (`--read-only`, `--cap-drop=ALL`, scrubbed env,
-  model-only egress). Containment bounds what an external agent can *do on your
-  host* — it does **not** stop a self-executing agent from transmitting what it
-  *reads* to its own model endpoint, so prefer the native flavors for sensitive
-  data (see [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md)).
-- **Credentials stay out of reach.** MCP credentials are brokered host-side: the
-  broker injects them only when it runs a delegated MCP call, so they never enter
-  the sandbox, the agent container, the model's context, or the logs. They live
-  in a `0600` env file managed through `fleet-admin`, with per-MCP multi-account
-  seats. The agent uses your connectors without ever holding their keys. This
-  isolation is about the *sandbox*; the client-config bundle's own host-side MCP
-  servers **do** receive these brokered credentials by design — so treat write
-  access to the bundle repo as production access (see
+  all policy. The agent loop runs in the fleet process but holds no privileged
+  executor of its own — each tool call is handed to the sandbox under host
+  policy, so the agent can only act through that governed seam.
+- **Credentials stay out of reach.** MCP credentials are isolated by the
+  out-of-process MCP broker: it injects them only when it runs a delegated MCP
+  call host-side, so they never enter the sandbox, the model's context, or the
+  logs. They live in a `0600` env file managed through `fleet-admin`, with
+  per-MCP multi-account seats. The agent uses your connectors without ever
+  holding their keys. This isolation is about the *sandbox*; the client-config
+  bundle's own host-side MCP servers **do** receive these brokered credentials by
+  design — so treat write access to the bundle repo as production access (see
   [`SECURITY.md`](SECURITY.md), "The client-config bundle is root-equivalent").
 - **A human stays on the loop.** Sensitive actions raise an **allow / deny** card
   in the chat UI and block the turn until someone answers. It is **default-deny**
   on timeout, and there is **no "approve all"** — every request is decided on its
-  own merits. Scheduled work, which has no human to ask, is **fail-closed**:
-  external flavors on the scheduler are off by default and deny anything
-  sensitive rather than proceed unsupervised.
+  own merits. Scheduled work, which has no human to ask, is **fail-closed**: its
+  execution sandbox is network-sealed by default and an end-of-run verifier
+  re-checks the run before it is allowed to finish (see
+  [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)).
 
 Together these make delegation something you can watch, cap, and stop:
 reproducible setups, a live and replayable record, limits that fire, isolated
@@ -164,15 +149,6 @@ both driven by **one** unified agent runtime (`internal/agentcore`).
 fleet is built on open protocols. We list only what is actually implemented and
 tested in this repository:
 
-- **ACP — Agent Client Protocol.** fleet is an ACP client that spawns each agent
-  flavor as a sandboxed subprocess and owns the host-side governance seam (tool
-  execution, MCP calls, policy/audit, observer events). The native flavor
-  (`cmd/fleet-native-agent`) wraps fleet's own run loop as an ACP agent; external
-  agents (Claude Code, Goose, …) plug in the same way. See
-  [`internal/acpruntime`](internal/acpruntime) and
-  [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md). _(Advanced/optional: fleet can
-  also run **as** an ACP agent so an editor drives it — see
-  [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md). Not needed for the web app.)_
 - **MCP — Model Context Protocol.** A merged Go MCP client (stdio + HTTP) drives
   the tools and data sources in the deployment's MCP catalog. See
   [`internal/mcp`](internal/mcp).
@@ -198,15 +174,12 @@ with the shipped router (it does not gate body schemas).
 
 ```
 cmd/
-  fleet/          the fleet binary (chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool); `fleet acp` runs it as an ACP agent over stdio (editor ingress)
+  fleet/          the fleet binary (chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool)
   fleet-admin/    unified admin CLI (bootstrap, users, MCP credential accounts)
-  fleet-native-agent/  the native ACP agent (wraps agentcore.Run inside the sandbox)
   cutlass/        optional local one-shot debug entrypoint (not the production scheduled path)
   sandbox-probe/  deploy-time sandbox smoke test
 internal/
   agentcore/      the one unified run loop + shared agent primitives (cost ceilings, policy)
-  acpruntime/     the ACP client + agent-side runner (drives native + external agents)
-  acpingress/     fleet AS an ACP agent over stdio (`fleet acp`) — editor ingress on the governed turn
   agent/          input sources, observers, policies, finalize (interactive + scheduled)
   runner/         in-process capped worker pool (the old "gig", folded in)
   creds/          MCP credential-account store (host-side credential broker)
@@ -278,37 +251,20 @@ inside fleet's database or binary:
 - **`protocols/`** — playbooks your agents follow
 - **`skills/`** — packaged [Agent Skills](#standards) (`SKILL.md` + bundled scripts)
 - **`mcp/`** — your MCP connectors (+ `requirements.txt`)
-- **`manifest.yaml`** — MCP catalog, tool policy, model defaults, runtime
-  flavors, sandbox block
+- **`manifest.yaml`** — MCP catalog, tool policy, model defaults, sandbox block
 - **`sandbox/Containerfile`** — the exact image your tool calls run in
 
-Those are versioned files you control, and fleet reaches agents and tools over
-**open protocols** — [ACP](#standards) to drive the native and external agents,
-[MCP](#standards) for tools and data. So your agent setup travels *with* you:
+Those are versioned files you control, and fleet reaches tools and data over an
+**open protocol** — [MCP](#standards). So your agent setup travels *with* you:
 version it in git, fork it per team, share it across orgs, or point it at another
-ACP/MCP-capable platform. Moving off fleet doesn't mean starting over — you keep
-the bundle, and the wire protocols are not fleet-specific. The assets are yours
-and the protocols are open, which keeps adoption low-risk: you can
+MCP-capable platform. Moving off fleet doesn't mean starting over — you keep
+the bundle, and the wire protocol is not fleet-specific. The assets are yours
+and the protocol is open, which keeps adoption low-risk: you can
 start on real work without betting that you can never leave.
 
 The public template
 [`ElcanoTek/example-config`](https://github.com/ElcanoTek/example-config) shows
 the full layout — fork it and the whole thing is yours from day one.
-
-## Using other agents
-
-fleet is an ACP client: besides its own loop it can drive **other coding agents**
-(Claude Code, Goose, …) as selectable, sandboxed flavors you pick per chat or per
-scheduled task. See **[`docs/USING-AGENTS.md`](docs/USING-AGENTS.md)** for the
-flavor model, how to add an external agent to a client bundle, the permission UI,
-the governance tiers (stated honestly), and a worked example. Read the governance
-and data-residency sections before enabling an external agent.
-
-> **Advanced/optional — driving fleet *from* an editor (ACP ingress).** fleet can
-> also expose *itself* as an ACP agent (`fleet acp`) so an editor (Zed, Neovim)
-> drives its governed pipeline over stdio. This is a developer convenience, **not**
-> part of the web chat/orchestrator product — most deployments never use it. The
-> setup lives at the end of [`docs/USING-AGENTS.md`](docs/USING-AGENTS.md).
 
 ## Development
 
@@ -811,10 +767,6 @@ standards. Our thanks to the teams and communities behind them:
 - **[Model Context Protocol](https://modelcontextprotocol.io)** and its SDKs —
   the open standard fleet speaks (stdio + HTTP) to reach tools and data through a
   credential-brokered MCP catalog.
-- **[Agent Client Protocol](https://agentclientprotocol.com)** and the
-  [`coder/acp-go-sdk`](https://github.com/coder/acp-go-sdk) — the open standard
-  fleet uses to drive its native agent and external agents (Claude Code, Goose, …)
-  as sandboxed flavors, and to run *as* an agent under an editor.
 - **[Agent Skills](https://github.com/anthropics/skills)** — the open skill
   format fleet loads from the client-config bundle (`SKILL.md` + bundled scripts,
   with progressive disclosure).
