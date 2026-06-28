@@ -366,8 +366,15 @@ func run() error {
 	chatAddr := addrOr(cfg.Addr, ":8080")
 	orchAddr := orchestratorAddr()
 
-	chatServer := &http.Server{Addr: chatAddr, Handler: securityHeadersMiddleware(chatSrv.Routes(), tlsActive(cfg)), ReadHeaderTimeout: 30 * time.Second}
-	orchServer := &http.Server{Addr: orchAddr, Handler: orchHandler, ReadHeaderTimeout: 30 * time.Second}
+	// Liveness + readiness probes (#215) on BOTH ports, sharing one check set
+	// and one drain signal (chatSrv.BeginShutdown is the single graceful-drain
+	// trigger, so both ports report not_ready while draining).
+	readinessChecks := buildReadinessChecks(cfg, chatStore, schedStorage.DB())
+	chatHandler := securityHeadersMiddleware(withHealthProbes(chatSrv.Routes(), startTime, chatSrv.IsDraining, readinessChecks), tlsActive(cfg))
+	orchHandlerWithProbes := withHealthProbes(orchHandler, startTime, chatSrv.IsDraining, readinessChecks)
+
+	chatServer := &http.Server{Addr: chatAddr, Handler: chatHandler, ReadHeaderTimeout: 30 * time.Second}
+	orchServer := &http.Server{Addr: orchAddr, Handler: orchHandlerWithProbes, ReadHeaderTimeout: 30 * time.Second}
 
 	// Signal handling (#278) distinguishes deployment restart from dev Ctrl-C:
 	//   - SIGTERM → graceful: stop admitting, drain in-flight chat turns + tasks

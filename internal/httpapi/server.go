@@ -156,6 +156,11 @@ func (s *Server) BeginShutdown() {
 	s.broadcastShutdownFrame()
 }
 
+// IsDraining reports whether graceful shutdown has begun (#215/#278). The
+// readiness probe consults this so a draining instance reports not_ready/503 —
+// matching /healthz — and load balancers stop routing new traffic to it.
+func (s *Server) IsDraining() bool { return s.shuttingDown.Load() }
+
 // broadcastShutdownFrame emits a transient `shutdown` SSE frame to every running
 // turn's live subscribers. Buffers are collected under inflightMu, then notified
 // outside it, so we never hold inflightMu while taking a buffer's own lock

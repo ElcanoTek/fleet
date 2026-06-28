@@ -65,6 +65,9 @@ func DefaultPoolConfig() PoolConfig {
 // Stats returns the connection-pool snapshot for metrics (#276).
 func (db *Database) Stats() sql.DBStats { return db.conn.Stats() }
 
+// Ping verifies the sched DB is reachable (readiness probe, #215).
+func (db *Database) Ping(ctx context.Context) error { return db.conn.PingContext(ctx) }
+
 func (db *Database) Init(connStr string, pool PoolConfig) error {
 	if connStr == "" || connStr[0] == '.' || connStr[0] == '/' {
 		connStr = os.Getenv("DATABASE_URL")
