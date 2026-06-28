@@ -24,6 +24,7 @@ export type MCPChoice = { server: string; account?: string };
 export type Task = {
   id: string;
   prompt?: string;
+  description?: string;
   model?: string;
   fallback_model?: string;
   max_iterations?: number | null;
@@ -43,6 +44,7 @@ export type Task = {
 
 export type TaskCreate = {
   prompt: string;
+  description?: string;
   model?: string;
   fallback_model?: string;
   max_iterations?: number;

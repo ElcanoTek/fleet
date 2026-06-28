@@ -30,10 +30,10 @@ type taskExportEnvelope struct {
 	Tasks   []*models.Task `json:"tasks"`
 }
 
-// cmdSchedTask dispatches `fleet-admin sched task export|import|set-model|set-credentials`.
+// cmdSchedTask dispatches `fleet-admin sched task export|import|set-model|set-credentials|set-description`.
 func cmdSchedTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched task export|import|set-model|set-credentials")
+		return errf(1, "usage: fleet-admin sched task export|import|set-model|set-credentials|set-description")
 	}
 	switch argv[0] {
 	case "export":
@@ -44,9 +44,58 @@ func cmdSchedTask(argv []string) int {
 		return schedTaskSetModel(argv[1:])
 	case "set-credentials":
 		return schedTaskSetCredentials(argv[1:])
+	case "set-description":
+		return schedTaskSetDescription(argv[1:])
 	default:
-		return errf(1, "unknown sched task subcommand %q (want export|import|set-model|set-credentials)", argv[0])
+		return errf(1, "unknown sched task subcommand %q (want export|import|set-model|set-credentials|set-description)", argv[0])
 	}
+}
+
+// schedTaskSetDescription sets a task's operator-documentation field (#281).
+// The text is the second positional arg, or "-" to read the full text from stdin
+// (so `set-description <id> - < TASK_README.md` works). An empty string clears it.
+func schedTaskSetDescription(argv []string) int {
+	fs := flag.NewFlagSet("sched task set-description", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	rest := fs.Args()
+	if len(rest) != 2 {
+		return errf(1, "usage: fleet-admin sched task set-description <task_id> <text>|-   (- reads from stdin)")
+	}
+	taskID, err := uuid.Parse(strings.TrimSpace(rest[0]))
+	if err != nil {
+		return errf(1, "invalid task id %q: %v", rest[0], err)
+	}
+	description := rest[1]
+	if description == "-" {
+		b, rerr := io.ReadAll(os.Stdin)
+		if rerr != nil {
+			return errf(5, "read description from stdin: %v", rerr)
+		}
+		description = string(b)
+	}
+
+	st, code := openSchedStorage(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer st.Close()
+
+	updated, err := st.UpdateTaskDescription(context.Background(), taskID, description)
+	if err != nil {
+		if errors.Is(err, storage.ErrTaskNotEditable) {
+			return errf(4, "task %s is no longer editable (must be pending or scheduled)", taskID)
+		}
+		return errf(5, "set description: %v", err)
+	}
+	if updated.Description == "" {
+		fmt.Fprintf(os.Stderr, "cleared description on task %s\n", updated.ID)
+	} else {
+		fmt.Fprintf(os.Stderr, "set description on task %s (%d chars)\n", updated.ID, len([]rune(updated.Description)))
+	}
+	return 0
 }
 
 // allowFlag collects repeatable --allow values (server or server:account).
