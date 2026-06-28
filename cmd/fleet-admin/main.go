@@ -14,7 +14,7 @@
 //	fleet-admin chat user add|update|del|list
 //	fleet-admin sched user add|update|set-role|rename|del|list
 //	fleet-admin sched apikey create|list|revoke|delete
-//	fleet-admin sched task export|import|set-model|set-credentials|set-description|tag
+//	fleet-admin sched task export|import|set-model|set-credentials|set-description|tag|estimate
 //	fleet-admin mcp account set|list|del
 //	fleet-admin notes set|get|list|rm
 //	fleet-admin notes proposal publish|reject
@@ -127,6 +127,7 @@ Users, credentials, notes:
   fleet-admin sched task set-credentials <task_id> --allow server[:account] ... | --clear   (per-task MCP credential allowlist)
   fleet-admin sched task set-description <task_id> <text>|-    (operator docs; - reads stdin, e.g. < TASK_README.md)
   fleet-admin sched task tag <task_id> --add <tag> ... --remove <tag> ...   (organize tasks by label)
+  fleet-admin sched task estimate --model <slug> --prompt <text> [--max-iter N] [--mcp-tools N] [--max-cost USD] [--system-prompt <text>] [--json]   (pre-submission cost forecast; no DB, no model call)
   fleet-admin mcp account set <server> <account> --secret KEY=-   (value via stdin)
   fleet-admin mcp account list <server>
   fleet-admin mcp account del <server> <account>

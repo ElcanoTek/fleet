@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -33,7 +34,7 @@ type taskExportEnvelope struct {
 // cmdSchedTask dispatches `fleet-admin sched task export|import|set-model|set-credentials|set-description`.
 func cmdSchedTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched task export|import|set-model|set-credentials|set-description")
+		return errf(1, "usage: fleet-admin sched task export|import|set-model|set-credentials|set-description|tag|estimate")
 	}
 	switch argv[0] {
 	case "export":
@@ -48,9 +49,86 @@ func cmdSchedTask(argv []string) int {
 		return schedTaskSetDescription(argv[1:])
 	case "tag":
 		return schedTaskTag(argv[1:])
+	case "estimate":
+		return schedTaskEstimate(argv[1:])
 	default:
-		return errf(1, "unknown sched task subcommand %q (want export|import|set-model|set-credentials|set-description|tag)", argv[0])
+		return errf(1, "unknown sched task subcommand %q (want export|import|set-model|set-credentials|set-description|tag|estimate)", argv[0])
 	}
+}
+
+// schedTaskEstimate prints a pre-submission cost forecast for a would-be task
+// without creating it (#233):
+//
+//	fleet-admin sched task estimate --model anthropic/claude-sonnet-4-5 \
+//	    --max-iter 20 --prompt "Summarize all issues opened in the last 7 days"
+//
+// It is pure local computation over the same agentcore forecast the
+// POST /tasks/estimate endpoint uses — no server call and no model call — so it
+// needs neither a database nor network access. It exits non-zero on a usage
+// error and 0 once it prints the forecast. Because it runs outside the server it
+// cannot load the client-config bundle's system prompt; pass --system-prompt
+// (or --mcp-tools for the tool-schema budget) to make the estimate reflect that
+// input. The endpoint, which has the bundle, includes the system prompt
+// automatically.
+func schedTaskEstimate(argv []string) int {
+	fs := flag.NewFlagSet("sched task estimate", flag.ContinueOnError)
+	model := fs.String("model", "", "OpenRouter model slug (required)")
+	prompt := fs.String("prompt", "", "task prompt (required)")
+	maxIter := fs.Int("max-iter", 1, "loop iteration cap")
+	maxCost := fs.Float64("max-cost", 0, "per-task cost ceiling in USD (0 disables the would-hit-ceiling check)")
+	mcpTools := fs.Int("mcp-tools", 0, "number of MCP tool definitions in scope")
+	systemPrompt := fs.String("system-prompt", "", "system prompt text to include in the token estimate")
+	asJSON := fs.Bool("json", false, "emit the forecast as JSON")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	if strings.TrimSpace(*model) == "" {
+		return errf(1, "--model is required")
+	}
+	if strings.TrimSpace(*prompt) == "" {
+		return errf(1, "--prompt is required")
+	}
+	if *mcpTools < 0 {
+		return errf(1, "--mcp-tools cannot be negative")
+	}
+
+	systemToks, toolToks, promptToks := agentcore.EstimateTokens(*systemPrompt, *prompt, *mcpTools)
+	fc := agentcore.ForecastCost(*model, systemToks, toolToks, promptToks, *maxIter, *maxCost)
+
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(fc); err != nil {
+			return errf(1, "encode forecast: %v", err)
+		}
+		return 0
+	}
+
+	printForecast(fc)
+	return 0
+}
+
+// printForecast renders a CostForecast as a human-readable block. Cost lines are
+// shown only when the model's pricing is known; otherwise the unknown-pricing
+// note is printed so the operator isn't handed a fabricated number.
+func printForecast(fc agentcore.CostForecast) {
+	fmt.Printf("Model:                %s\n", fc.Model)
+	fmt.Printf("Estimated prompt:     %d tokens (system %d + tools %d + task)\n",
+		fc.EstimatedPromptTokens, fc.SystemPromptTokens, fc.ToolDefinitionsTokens)
+	fmt.Printf("Avg output / iter:    %d tokens\n", fc.AvgOutputTokens)
+	fmt.Printf("Max iterations:       %d\n", fc.MaxIterations)
+	if fc.PricingKnown && fc.PerIterationCostUSD != nil && fc.EstimatedTotalCostUSD != nil && fc.EstimatedTotalRange != nil {
+		fmt.Printf("Per-iteration cost:   $%.4f\n", *fc.PerIterationCostUSD)
+		fmt.Printf("Estimated total:      $%.4f (range $%.4f - $%.4f)\n",
+			*fc.EstimatedTotalCostUSD, fc.EstimatedTotalRange.MinUSD, fc.EstimatedTotalRange.MaxUSD)
+		if fc.MaxCostCeilingUSD > 0 {
+			fmt.Printf("Cost ceiling:         $%.2f\n", fc.MaxCostCeilingUSD)
+			if fc.WouldHitCeiling {
+				fmt.Printf("WARNING:              estimated total exceeds the cost ceiling\n")
+			}
+		}
+	}
+	fmt.Printf("Note:                 %s\n", fc.Note)
 }
 
 // schedTaskTag adds and/or removes tags on a task (#212):
