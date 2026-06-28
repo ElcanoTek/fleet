@@ -88,6 +88,10 @@ real stack and runs in CI too (the `e2e-live` job) — it is not local-only.
 
 ## Continuous integration
 
+[`docs/TESTING.md`](docs/TESTING.md) documents every CI lane, the exact command
+each runs, and the `make` targets that mirror them locally (`make ci-go`,
+`make ci-web`, `make ci-e2e-mocked`, `make ci-local`).
+
 Every pull request must be green before merge. CI runs:
 
 - **Go** — `go build`, `go vet`, `golangci-lint` (full gate — fails on any
