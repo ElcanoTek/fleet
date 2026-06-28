@@ -11,9 +11,16 @@ info:
     `cmd/fleet/openapi_drift_test.go` walks the real chi router
     (`buildOrchestratorMux`) and fails the build if the set of
     `{method, path}` here ever drifts from the shipped routes, and if any
-    operation references a security scheme not defined below. The drift gate
-    covers **route + method + security-scheme presence only** — it does NOT
-    verify request/response body schemas or status codes, which are documentary.
+    operation references a security scheme not defined below.
+
+    A second gate (`TestOpenAPISchemaDrift`) statically cross-checks the reusable
+    `components.schemas.*` against their backing Go models via reflection: every
+    documented property must exist as a json field on the model, every `required:`
+    field must exist and not be `omitempty`, and scalar types must agree. It does
+    NOT verify status codes, runtime population, or inline (anonymous, non-`$ref`)
+    operation bodies — those remain documentary. Undocumented model fields are
+    surfaced as test warnings, not failures. See the test's block comment for the
+    exact scope and its limits.
 
     The interactive chat HTTP/SSE API (`internal/httpapi`) is a separate surface
     and is not described here.
@@ -58,7 +65,7 @@ components:
     ErrorResponse:
       type: object
       properties:
-        error: { type: string }
+        detail: { type: string, description: "Human-readable error message (the handler's writeError body)." }
     HealthResponse:
       type: object
       properties:
@@ -162,8 +169,10 @@ components:
     NodeRegistration:
       type: object
       properties:
-        name: { type: string }
-        capabilities: { type: array, items: { type: string } }
+        hostname: { type: string }
+        name: { type: string, description: "Optional display name; defaults to hostname." }
+        os_type: { type: string }
+      required: [hostname]
     Node:
       type: object
       properties:
@@ -176,15 +185,27 @@ components:
       properties:
         name: { type: string }
         role: { type: string, enum: [admin, client, readonly] }
-        scopes: { type: array, items: { type: string } }
+        allowed_node_patterns: { type: array, items: { type: string }, description: "Scope patterns limiting the key's task/node visibility." }
+        rate_limit: { type: integer }
+        expires_in_days: { type: integer }
+        description: { type: string }
+        max_cost_per_day_usd: { type: number, description: "Daily spend cap in USD (omit for unlimited)." }
+        max_cost_per_month_usd: { type: number, description: "Monthly spend cap in USD (omit for unlimited)." }
       required: [name]
     APIKeyCreated:
       type: object
+      description: "The created key's metadata (the embedded APIKeyResponse) plus the one-time plaintext api_key."
       properties:
-        id: { type: string }
-        key: { type: string, description: "The plaintext key — shown ONCE at creation." }
+        api_key: { type: string, description: "The plaintext key — shown ONCE at creation." }
+        key_id: { type: string }
         name: { type: string }
-        role: { type: string }
+        key_prefix: { type: string }
+        allowed_node_patterns: { type: array, items: { type: string } }
+        permissions: { type: array, items: { type: string } }
+        rate_limit: { type: integer }
+        created_at: { type: string, format: date-time }
+        enabled: { type: boolean }
+        description: { type: string }
     UserCreate:
       type: object
       properties:
@@ -208,14 +229,18 @@ components:
       type: object
       properties:
         token: { type: string }
-        role: { type: string }
+        user: { $ref: "#/components/schemas/UserResponse" }
     DashboardStats:
       type: object
       properties:
-        scheduled: { type: integer }
-        running: { type: integer }
-        completed: { type: integer }
-        failed: { type: integer }
+        total_nodes: { type: integer }
+        active_nodes: { type: integer }
+        idle_nodes: { type: integer }
+        offline_nodes: { type: integer }
+        pending_tasks: { type: integer }
+        running_tasks: { type: integer }
+        completed_tasks_today: { type: integer }
+        failed_tasks_today: { type: integer }
     LogSession:
       type: object
       description: A captain's-log session (the recorded transcript of one task run).
