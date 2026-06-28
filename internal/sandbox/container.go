@@ -319,6 +319,22 @@ func (c *containerImpl) start(ctx context.Context) error {
 	}
 	c.bridgeScriptPath = scriptF.Name()
 
+	// Resolve the seccomp profile passed to `podman run` (#219). The bundled
+	// default is a curated default-deny allowlist that adds syscall filtering on
+	// top of --cap-drop=ALL + no-new-privileges; FLEET_SANDBOX_SECCOMP_PROFILE
+	// can point at a custom profile or "none" to disable it for debugging. The
+	// runtime reads the file only at container-create time, so it's safe to
+	// remove once `podman run` returns — hence the defer here rather than
+	// tracking it for the container's lifetime like the bridge script.
+	// On any error after this point, NewContainer calls close(), which removes
+	// the bridge script (tracked via c.bridgeScriptPath); the seccomp temp file
+	// is cleaned up by the deferred seccompCleanup below.
+	seccompArg, seccompCleanup, err := resolveSeccompArg(bridgeDir)
+	if err != nil {
+		return fmt.Errorf("seccomp profile: %w", err)
+	}
+	defer seccompCleanup()
+
 	c.containerID = generateContainerName()
 
 	args := []string{
@@ -336,6 +352,14 @@ func (c *containerImpl) start(ctx context.Context) error {
 		"--read-only",
 		"--cap-drop=ALL",
 		"--security-opt=no-new-privileges",
+		// Seccomp syscall filter (#219): defense-in-depth beyond the capability
+		// drops above. The bundled default-deny allowlist blocks kernel attack
+		// surface (ptrace, perf_event_open, keyctl, userfaultfd, io_uring, bpf,
+		// personality) that --cap-drop=ALL alone does not filter, while still
+		// permitting everything bash/python/file-IO/MCP tools need. Resolved
+		// above from FLEET_SANDBOX_SECCOMP_PROFILE (default = bundled profile,
+		// "none" = unconfined for debugging, or a custom path). See seccomp.go.
+		"--security-opt", "seccomp=" + seccompArg,
 		// Map the container's running user (uid 1000 / sandbox, set by
 		// the image's USER directive) to the HOST chat user. Without
 		// this, rootless podman maps host-chat to container-root and

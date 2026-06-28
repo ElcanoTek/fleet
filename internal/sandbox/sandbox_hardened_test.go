@@ -1,11 +1,15 @@
 package sandbox_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
 // sandboxEnv reads the canonical FLEET_SANDBOX_* variable, falling back
@@ -144,6 +148,96 @@ func TestSandboxUnderSystemdHardening(t *testing.T) {
 	}
 	if !strings.Contains(s, "PYTHON status=success") {
 		t.Fatalf("expected PYTHON status=success, got:\n%s", out)
+	}
+}
+
+// TestSandboxSeccompBlocksPtrace is the regression net for the seccomp syscall
+// filter (#219). It boots a real sandbox container through the production
+// NewContainer path (so the --security-opt seccomp=<profile> flag container.go
+// emits is actually exercised end-to-end) and asserts that:
+//
+//   - bash + a basic shell command still work (the profile does not break
+//     legitimate tool calls), and
+//   - a raw ptrace(2) syscall from inside the container returns EPERM — i.e.
+//     the bundled default-deny profile withholds it.
+//
+// If a future change drops the --security-opt seccomp flag (or allowlists
+// ptrace), the OCI runtime's own default applies instead, ptrace stops
+// returning the seccomp EPERM, and this test fails — catching the regression.
+//
+// Guards: linux + podman + the sandbox image present + FLEET_SANDBOX_HARDENED_TEST=1.
+// Unlike the systemd tests below it does NOT need root/systemd — it drives
+// NewContainer directly — but it pulls/needs a real OCI image, so it stays
+// behind the same opt-in env so a casual `go test ./...` doesn't trigger it.
+//
+// COVERAGE NOTE: like the other tests in this file, no CI lane sets
+// FLEET_SANDBOX_HARDENED_TEST, so this is validated by OPERATOR / MANUAL runs.
+// The pure-Go invariants of the profile (default-deny, which syscalls are/aren't
+// allowlisted, clone3->ENOSYS fallback, the resolver override paths) ARE covered
+// in CI by seccomp_test.go, which needs no podman.
+func TestSandboxSeccompBlocksPtrace(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("seccomp filter runs on linux only")
+	}
+	if sandboxEnv("HARDENED_TEST") != "1" {
+		t.Skip("set FLEET_SANDBOX_HARDENED_TEST=1 (or legacy CHAT_SANDBOX_HARDENED_TEST=1) to run (pulls/needs a real sandbox image)")
+	}
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skip("podman not on PATH")
+	}
+
+	image := sandboxEnv("TEST_IMAGE")
+	if image == "" {
+		image = defaultHardenedTestImage
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	sb, err := sandbox.NewContainer(ctx, sandbox.ContainerConfig{
+		Image:            image,
+		WorkspaceHostDir: t.TempDir(),
+		BridgeScript:     []byte("# seccomp ptrace test — bridge unused\n"),
+		BridgeDir:        t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewContainer: %v", err)
+	}
+	defer sb.Close()
+
+	// Sanity: the profile must not break a basic bash command.
+	if res, err := sb.RunBash(ctx, sandbox.BashRequest{Command: "echo seccomp_alive"}); err != nil {
+		t.Fatalf("RunBash sanity: %v", err)
+	} else if res.ExitCode != 0 || !strings.Contains(string(res.Stdout), "seccomp_alive") {
+		t.Fatalf("bash sanity failed under seccomp profile: exit=%d stdout=%q stderr=%q", res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	// Issue a raw ptrace(2) (x86_64 syscall nr 101) from Python via ctypes and
+	// assert it fails with EPERM — the signature of a seccomp deny. We check the
+	// syscall return / errno directly rather than relying on a tool exit code so
+	// the assertion is unambiguous about *why* it was blocked.
+	const ptraceProbe = `python3 - <<'PY'
+import ctypes, errno, sys
+libc = ctypes.CDLL(None, use_errno=True)
+ctypes.set_errno(0)
+PTRACE_TRACEME = 0
+ret = libc.syscall(101, PTRACE_TRACEME, 0, 0, 0)
+err = ctypes.get_errno()
+print("ptrace ret=%d errno=%d" % (ret, err))
+if ret == -1 and err == errno.EPERM:
+    print("PTRACE_BLOCKED")
+    sys.exit(0)
+print("PTRACE_NOT_BLOCKED")
+sys.exit(1)
+PY`
+	res, err := sb.RunBash(ctx, sandbox.BashRequest{Command: ptraceProbe})
+	if err != nil {
+		t.Fatalf("RunBash ptrace probe: %v", err)
+	}
+	out := string(res.Stdout) + string(res.Stderr)
+	t.Logf("ptrace probe output:\n%s", out)
+	if res.ExitCode != 0 || !strings.Contains(out, "PTRACE_BLOCKED") {
+		t.Fatalf("ptrace was NOT blocked by seccomp (exit=%d) — the --security-opt seccomp flag may have regressed:\n%s", res.ExitCode, out)
 	}
 }
 
