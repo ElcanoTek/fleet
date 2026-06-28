@@ -289,6 +289,13 @@ func run() error {
 		// trusted by the orchestrator too (#157). cfg.SharedToken is guaranteed
 		// non-empty by config.Validate.
 		SharedToken: cfg.SharedToken,
+		// Cost-forecast inputs (#233): mirror the runtime selection so POST
+		// /tasks/estimate projects against the same model + iteration cap + cost
+		// ceiling a real dispatch uses. cfg.MaxIterations is the per-task default
+		// the runner applies when a task omits one.
+		DefaultTaskModel:     cfg.TaskModel,
+		MaxCostUSD:           cfg.MaxCostUSD,
+		DefaultMaxIterations: cfg.MaxIterations,
 	}
 	h := handlers.New(hcfg, schedStorage, keyMgr)
 	// Wire the orchestrator's read-only Optional-MCP catalog + credential-account
@@ -343,6 +350,10 @@ func run() error {
 		// sched storage. Tasks without the flag never see the tool.
 		TaskEnqueuer: schedStorage,
 	})
+	// Wire the cost-forecast's system-prompt resolver (#233) from the SAME runner
+	// that assembles the prompt at dispatch, so POST /tasks/estimate counts the
+	// exact system prompt a real run would send. Read-only; never dispatches.
+	h.SetSystemPromptProvider(taskRunner.SystemPromptForPersona)
 	// Reclaim sandbox containers orphaned by a PRIOR crash before building the
 	// pool: they run `--detach --rm` under conmon, so a non-graceful exit leaves
 	// them holding host RAM/PIDs across systemd restarts. Best-effort — log and
@@ -635,6 +646,9 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 	// (per-API-key + global), so a runaway key can't flood the task queue or
 	// drain the LLM budget. The admin key bypasses it (see SchedRateLimitMiddleware).
 	r.With(h.SchedRateLimitMiddleware).Post("/tasks", h.CreateTask)
+	// Pre-submission cost forecast (#233): same body, auth, and rate limiter as
+	// POST /tasks, but pure local computation — it creates nothing.
+	r.With(h.SchedRateLimitMiddleware).Post("/tasks/estimate", h.EstimateTask)
 	r.With(h.SchedRateLimitMiddleware).Post("/upload", h.HandleUpload)
 	r.Get("/files/{filename}", h.HandleDownload)
 

@@ -196,6 +196,25 @@ func (r *Runner) maybeAppendCreateTaskTool(base []fantasy.AgentTool, task *model
 	return out
 }
 
+// SystemPromptForPersona returns the assembled scheduled system prompt for a
+// persona override, using the SAME composition the runner applies at dispatch:
+// the global base prompt for an empty/unknown persona, or the default prompt
+// plus that persona's domain-expertise block for a known override. It exists so
+// the cost forecast (#233) can count the exact system prompt a real run would
+// send. Read-only: it reads bundle files already on disk and assembles a string;
+// it dispatches nothing.
+func (r *Runner) SystemPromptForPersona(persona string) string {
+	override := strings.TrimSpace(persona)
+	if override == "" {
+		return r.baseSystemPrompt
+	}
+	personaFile := filepath.Base(override) + ".yaml"
+	if _, err := os.Stat(filepath.Join(r.personasDir, personaFile)); err != nil {
+		return r.baseSystemPrompt
+	}
+	return r.composeSystemPrompt(personaFile)
+}
+
 // sandboxTaker is the subset of *sandbox.Pool that a scheduled run uses to
 // acquire an execution sandbox. It is an interface so the take-decision
 // (sealed-by-default vs. egress opt-in) is unit-testable without spinning a
