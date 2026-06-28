@@ -8,6 +8,7 @@
 //	fleet-admin bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
 //	fleet-admin update    [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run]
 //	fleet-admin status    [--service <name>] [--no-sandbox]
+//	fleet-admin validate-config [--bundle-path <dir>] [--skip-network-checks] [--no-sandbox]
 //	fleet-admin restart|stop [--service <name>]
 //	fleet-admin logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
 //	fleet-admin chat user add|update|del|list
@@ -53,6 +54,8 @@ func dispatch(argv []string) int {
 		return cmdUpdate(argv[1:])
 	case "status", "doctor":
 		return cmdStatus(argv[1:])
+	case "validate-config":
+		return cmdValidateConfig(argv[1:])
 	case "restart":
 		return cmdRestart(argv[1:])
 	case "stop":
@@ -90,6 +93,8 @@ Operator lifecycle (bootstrap → update → status):
   fleet-admin bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
   fleet-admin update    [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--yes] [--dry-run]
   fleet-admin status    [--service <name>] [--no-sandbox]    (a.k.a. doctor; non-zero exit if unhealthy)
+  fleet-admin validate-config [--bundle-path <dir>] [--skip-network-checks] [--no-sandbox]
+                                                             (preflight config checks; non-zero exit if invalid)
   fleet-admin restart   [--service <name>]                   (systemctl restart; needs root/sudo)
   fleet-admin stop      [--service <name>]                   (systemctl stop; needs root/sudo)
   fleet-admin logs      [--service <name>] [-n 50] [-f]      (journalctl tail; -f follows; a.k.a. tail)
