@@ -219,7 +219,7 @@ func TestDeleteUserCascadesConversations(t *testing.T) {
 	if err := s.DeleteUser(ctx, "cascade@x.com"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	rows, err := s.List(ctx, "cascade@x.com")
+	rows, err := s.List(ctx, "cascade@x.com", false)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

@@ -197,6 +197,84 @@ func TestConversationsLifecycle(t *testing.T) {
 	}
 }
 
+// TestConversationArchiveRoute exercises POST /conversations/{id}/archive plus
+// the GET ?archived=true filter (#282): archiving hides the conversation from
+// the default list, unpins it, and surfaces it in the archived list;
+// unarchiving restores it; a foreign user cannot archive it.
+func TestConversationArchiveRoute(t *testing.T) {
+	s := serverFixture(t)
+	h := s.Routes()
+
+	w := do(t, h, http.MethodPost, "/conversations",
+		map[string]string{"title": "archive me", "persona": "victoria"}, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: %d body=%s", w.Code, w.Body.String())
+	}
+	var conv store.Conversation
+	if err := json.Unmarshal(w.Body.Bytes(), &conv); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Pin it first, to prove archiving clears the pin.
+	if w = do(t, h, http.MethodPost, "/conversations/"+conv.ID+"/pin",
+		map[string]bool{"pinned": true}, "u@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("pin: %d", w.Code)
+	}
+
+	// A foreign user cannot archive it.
+	if w = do(t, h, http.MethodPost, "/conversations/"+conv.ID+"/archive",
+		map[string]bool{"archived": true}, "intruder@x.com"); w.Code == http.StatusNoContent {
+		t.Error("foreign archive should not succeed")
+	}
+
+	// Owner archives.
+	if w = do(t, h, http.MethodPost, "/conversations/"+conv.ID+"/archive",
+		map[string]bool{"archived": true}, "u@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("archive: %d body=%s", w.Code, w.Body.String())
+	}
+
+	countList := func(query, user string) (int, bool) {
+		t.Helper()
+		w := do(t, h, http.MethodGet, "/conversations"+query, nil, user)
+		if w.Code != http.StatusOK {
+			t.Fatalf("list%s: %d", query, w.Code)
+		}
+		var resp struct {
+			Conversations []store.Conversation `json:"conversations"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode list: %v", err)
+		}
+		pinned := false
+		for _, c := range resp.Conversations {
+			if c.Pinned {
+				pinned = true
+			}
+		}
+		return len(resp.Conversations), pinned
+	}
+
+	// Gone from the default list, present (and unpinned) in the archived list.
+	if n, _ := countList("", "u@x.com"); n != 0 {
+		t.Errorf("archived conversation still in default list: %d", n)
+	}
+	if n, pinned := countList("?archived=true", "u@x.com"); n != 1 || pinned {
+		t.Errorf("archived list: n=%d pinned=%v (want 1, unpinned)", n, pinned)
+	}
+
+	// Unarchive restores it to the default list.
+	if w = do(t, h, http.MethodPost, "/conversations/"+conv.ID+"/archive",
+		map[string]bool{"archived": false}, "u@x.com"); w.Code != http.StatusNoContent {
+		t.Fatalf("unarchive: %d", w.Code)
+	}
+	if n, _ := countList("", "u@x.com"); n != 1 {
+		t.Errorf("unarchived conversation not back in default list: %d", n)
+	}
+	if n, _ := countList("?archived=true", "u@x.com"); n != 0 {
+		t.Errorf("archived list should be empty after unarchive: %d", n)
+	}
+}
+
 func TestConversations_AuthEnforced(t *testing.T) {
 	s := serverFixture(t)
 	h := s.Routes()

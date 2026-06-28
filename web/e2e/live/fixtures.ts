@@ -19,16 +19,21 @@ export const creds = { email: TEST_EMAIL, password: TEST_PASSWORD, schedUsername
 
 // wipeConversations deletes every conversation for the logged-in user via the
 // real DELETE endpoint, so each test starts from a clean slate (conversations
-// share one chat DB across the suite). The API enforces same-origin CSRF, so we
-// set Origin explicitly (page.request does not auto-set it).
+// share one chat DB across the suite). It must clear BOTH active and archived
+// (#282) — archived conversations are hidden from the default list, so fetching
+// only the active list would leak them across tests and skew archive counts.
+// The API enforces same-origin CSRF, so we set Origin explicitly (page.request
+// does not auto-set it).
 async function wipeConversations(page: import("@playwright/test").Page) {
   const origin = new URL(page.url()).origin;
   const headers = { Origin: origin };
-  const resp = await page.request.get("/api/conversations", { headers });
-  if (!resp.ok()) return;
-  const body = (await resp.json()) as { conversations: Array<{ id: string }> | null };
-  for (const c of body.conversations ?? []) {
-    await page.request.delete(`/api/conversations/${c.id}`, { headers });
+  for (const path of ["/api/conversations", "/api/conversations?archived=true"]) {
+    const resp = await page.request.get(path, { headers });
+    if (!resp.ok()) continue;
+    const body = (await resp.json()) as { conversations: Array<{ id: string }> | null };
+    for (const c of body.conversations ?? []) {
+      await page.request.delete(`/api/conversations/${c.id}`, { headers });
+    }
   }
 }
 

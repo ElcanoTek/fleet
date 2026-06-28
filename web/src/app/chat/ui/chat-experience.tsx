@@ -109,6 +109,10 @@ type ConversationSummary = {
   // slugs to the server's lockdown allow-list. Drives the lock-icon
   // badge in the sidebar + chat header and filters the model picker.
   lockdown?: boolean;
+  // archived_at is null for active conversations and a unix timestamp for
+  // archived ones (#282). Archived conversations live in the collapsed
+  // "Archived" sidebar section, not the main list.
+  archived_at?: number | null;
 };
 
 type ServerConfig = {
@@ -525,6 +529,10 @@ export function ChatExperience() {
   const [crossfadingMessageIds, setCrossfadingMessageIds] = useState<number[]>([]);
   const [userEmail, setUserEmail] = useState("");
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  // Archived conversations (#282): fetched separately, shown in a collapsed
+  // "Archived" section at the bottom of the sidebar.
+  const [archivedConversations, setArchivedConversations] = useState<ConversationSummary[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   // The slot identifier the rest of the UI hangs off of: the active
   // conv id when one is loaded, the PENDING sentinel when the user is
@@ -719,9 +727,16 @@ export function ChatExperience() {
   // record (or null for a brand-new pending chat). Used so the chat
   // header can render the lockdown badge without re-walking the
   // conversation list.
+  // Search both lists: a conversation archived while it is the open one (#282)
+  // moves out of `conversations` into `archivedConversations`, but the chat view
+  // stays on it — so the header title, lockdown badge, and tab title must still
+  // resolve it rather than going blank.
   const activeConversation = useMemo(
-    () => conversations.find((c) => c.id === activeConversationId) ?? null,
-    [conversations, activeConversationId],
+    () =>
+      conversations.find((c) => c.id === activeConversationId) ??
+      archivedConversations.find((c) => c.id === activeConversationId) ??
+      null,
+    [conversations, archivedConversations, activeConversationId],
   );
   // Lockdown state for the current view:
   //   - Active conversation flagged lockdown → use that
@@ -1631,21 +1646,17 @@ export function ChatExperience() {
       document.title = base;
       return;
     }
-    const server = conversations.find((c) => c.id === activeConversationId);
-    const name = server?.title?.trim();
+    const name = activeConversation?.title?.trim();
     document.title = name ? `${name} — ${base}` : base;
-  }, [activeConversationId, conversations, branding.app_name]);
+  }, [activeConversationId, activeConversation, branding.app_name]);
 
   // Prefer the server's (possibly auto-summarized) title for the active
   // conversation. Falls back to a first-user-message derivation for brand
   // new / unsaved chats.
   const title = useMemo(() => {
-    if (activeConversationId) {
-      const server = conversations.find((c) => c.id === activeConversationId);
-      if (server?.title) return server.title;
-    }
+    if (activeConversationId && activeConversation?.title) return activeConversation.title;
     return deriveConversationTitle(messages);
-  }, [activeConversationId, conversations, messages]);
+  }, [activeConversationId, activeConversation, messages]);
   const themeLabel = useMemo(
     () => (theme === "dark" ? "Switch to light mode" : "Switch to dark mode"),
     [theme],
@@ -1676,10 +1687,21 @@ export function ChatExperience() {
 
   const refreshConversations = async () => {
     try {
-      const response = await fetch("/api/conversations", { cache: "no-store" });
-      if (!response.ok) return;
-      const data = (await response.json()) as { conversations: ConversationSummary[] | null };
-      setConversations(data.conversations ?? []);
+      // Active and archived lists in parallel (#282). The archived fetch is
+      // best-effort — a failure leaves the previous archived list in place
+      // rather than blanking the section.
+      const [activeRes, archivedRes] = await Promise.all([
+        fetch("/api/conversations", { cache: "no-store" }),
+        fetch("/api/conversations?archived=true", { cache: "no-store" }),
+      ]);
+      if (activeRes.ok) {
+        const data = (await activeRes.json()) as { conversations: ConversationSummary[] | null };
+        setConversations(data.conversations ?? []);
+      }
+      if (archivedRes.ok) {
+        const data = (await archivedRes.json()) as { conversations: ConversationSummary[] | null };
+        setArchivedConversations(data.conversations ?? []);
+      }
     } catch {
       // non-fatal
     }
@@ -1825,6 +1847,10 @@ export function ChatExperience() {
     if (!response.ok) throw new Error("Unable to delete conversation.");
     const remaining = conversations.filter((c) => c.id !== conversationId);
     setConversations(remaining);
+    // Also drop it from the archived list (#282): delete is reachable from the
+    // Archived section, and the two lists are disjoint, so filtering both is
+    // safe — it's a no-op on whichever list didn't hold the row.
+    setArchivedConversations((current) => current.filter((c) => c.id !== conversationId));
     clearConvSlot(conversationId);
     if (activeConversationId !== conversationId) return;
     const nextConversation = remaining[0];
@@ -1971,6 +1997,37 @@ export function ChatExperience() {
     });
     if (!response.ok) {
       // revert on failure
+      await refreshConversations();
+    }
+  };
+
+  // toggleArchive moves a conversation between the active and archived lists
+  // (#282). Optimistic: the row hops sections immediately; on a backend error
+  // we re-fetch to restore the truth. Archiving also clears the pin (the
+  // backend enforces this), so the optimistic copy drops it too.
+  const toggleArchive = async (conversation: ConversationSummary, archived: boolean) => {
+    if (archived) {
+      setConversations((current) => current.filter((c) => c.id !== conversation.id));
+      setArchivedConversations((current) =>
+        [{ ...conversation, pinned: false, archived_at: Math.floor(Date.now() / 1000) }, ...current].sort(
+          (a, b) => b.updated_at - a.updated_at,
+        ),
+      );
+    } else {
+      setArchivedConversations((current) => current.filter((c) => c.id !== conversation.id));
+      setConversations((current) =>
+        [{ ...conversation, archived_at: null }, ...current].sort((a, b) => {
+          if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+          return b.updated_at - a.updated_at;
+        }),
+      );
+    }
+    const response = await fetch(`/api/conversations/${conversation.id}/archive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived }),
+    });
+    if (!response.ok) {
       await refreshConversations();
     }
   };
@@ -3664,7 +3721,7 @@ export function ChatExperience() {
                 >
                   <button
                     className={[
-                      "block w-full min-w-0 rounded-md px-2 py-1.5 pr-36 text-left text-[0.8125rem] transition sm:pr-[6.25rem]",
+                      "block w-full min-w-0 rounded-md px-2 py-1.5 pr-44 text-left text-[0.8125rem] transition sm:pr-[8rem]",
                       activeConversationId === conversation.id
                         ? "text-[var(--color-text-primary)]"
                         : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
@@ -3699,6 +3756,28 @@ export function ChatExperience() {
                       onClick={() => void downloadConversation(conversation)}
                     >
                       <Icon name="download" className="size-3.5" />
+                    </button>
+                    <button
+                      aria-label={`Archive ${conversation.title}`}
+                      title="Archive"
+                      className="touch-reveal pointer-events-auto inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                      type="button"
+                      onClick={() => void toggleArchive(conversation, true)}
+                    >
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 24 24"
+                        className="size-3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.8}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <rect x="3" y="4" width="18" height="4" rx="1" />
+                        <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+                        <path d="M10 12h4" />
+                      </svg>
                     </button>
                     <button
                       aria-label={`Delete ${conversation.title}`}
@@ -3740,6 +3819,81 @@ export function ChatExperience() {
                 </div>
               ))
             )}
+
+            {archivedConversations.length > 0 ? (
+              <div className="mt-3 border-t border-[var(--color-border)] pt-2">
+                <button
+                  type="button"
+                  aria-expanded={showArchived}
+                  aria-label={`Archived conversations (${archivedConversations.length})`}
+                  className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
+                  onClick={() => setShowArchived((v) => !v)}
+                >
+                  <Icon
+                    name={showArchived ? "chevron-down" : "chevron-right"}
+                    className="size-3 shrink-0"
+                  />
+                  Archived ({archivedConversations.length})
+                </button>
+                {showArchived
+                  ? archivedConversations.map((conversation) => (
+                      <div
+                        key={conversation.id}
+                        className={[
+                          "group relative rounded-md transition",
+                          activeConversationId === conversation.id
+                            ? "bg-[var(--color-overlay-soft)]"
+                            : "hover:bg-[var(--color-overlay-soft)]",
+                        ].join(" ")}
+                      >
+                        <button
+                          className="block w-full min-w-0 rounded-md py-1.5 pl-7 pr-24 text-left text-[0.8125rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] sm:pr-[4.5rem]"
+                          type="button"
+                          onClick={() => void loadConversation(conversation.id)}
+                        >
+                          <span className="block truncate italic">{conversation.title}</span>
+                        </button>
+
+                        <div className="touch-reveal pointer-events-none absolute inset-y-0 right-1 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                          <button
+                            aria-label={`Unarchive ${conversation.title}`}
+                            title="Unarchive"
+                            className="touch-reveal pointer-events-auto inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                            type="button"
+                            onClick={() => void toggleArchive(conversation, false)}
+                          >
+                            <svg
+                              aria-hidden="true"
+                              viewBox="0 0 24 24"
+                              className="size-3.5"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth={1.8}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <rect x="3" y="4" width="18" height="4" rx="1" />
+                              <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+                              <path d="M12 18v-6" />
+                              <path d="M9.5 14.5 12 12l2.5 2.5" />
+                            </svg>
+                          </button>
+                          <button
+                            aria-label={`Delete ${conversation.title}`}
+                            className="touch-reveal pointer-events-auto inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                            type="button"
+                            onClick={() =>
+                              setPendingDeleteConversation({ id: conversation.id, title: conversation.title })
+                            }
+                          >
+                            <Icon name="trash" className="size-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="grid gap-1 pt-3">

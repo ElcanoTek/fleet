@@ -70,6 +70,11 @@ type Conversation struct {
 	// rootless slirp4netns. Drives the "Lockdown chat" badge on the
 	// frontend.
 	Lockdown bool `json:"lockdown"`
+	// ArchivedAt is nil for active conversations and a unix timestamp
+	// (seconds) for archived ones (#282). Archived conversations are hidden
+	// from the default GET /conversations list but remain fully readable via
+	// ?archived=true, and are excluded from the unpinned-cap eviction.
+	ArchivedAt *int64 `json:"archived_at"`
 }
 
 // Open connects to Postgres using the given DSN (DATABASE_URL format or
@@ -270,6 +275,54 @@ func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned 
 	return nil
 }
 
+// SetArchived archives or unarchives a conversation (#282). archived=true sets
+// archived_at = now; archived=false clears it (NULL). Archiving also clears the
+// pin: "pinned" means keep-prominent, which is the opposite of filing away, so
+// the two states are mutually exclusive (the issue's pinned-interaction rule).
+func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archived bool) error {
+	now := time.Now().Unix()
+	var archivedAt any // NULL when unarchiving
+	pinned := false    // archiving always unpins; unarchiving leaves it unpinned
+	if archived {
+		archivedAt = now
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3 WHERE id = $4 AND user_email = $5`,
+		archivedAt, pinned, now, convID, userEmail,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errors.New("conversation not found")
+	}
+	return nil
+}
+
+// AutoArchiveOlderThan archives unpinned, not-already-archived conversations
+// whose updated_at is older than d (#282). Returns the count archived. A zero or
+// negative duration is a no-op (the feature is disabled). This is a softer
+// alternative to the TTL hard-delete in SweepExpired — conversations are filed
+// away rather than destroyed.
+func (s *Store) AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int, error) {
+	if d <= 0 {
+		return 0, nil
+	}
+	now := time.Now().Unix()
+	cutoff := time.Now().Add(-d).Unix()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET archived_at = $1, updated_at = $2
+		 WHERE pinned = FALSE AND archived_at IS NULL AND updated_at < $3`,
+		now, now, cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("auto-archive: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // Delete removes a conversation and (via FK cascade) its messages.
 func (s *Store) Delete(ctx context.Context, userEmail, convID string) error {
 	res, err := s.db.ExecContext(ctx,
@@ -286,11 +339,13 @@ func (s *Store) Delete(ctx context.Context, userEmail, convID string) error {
 	return nil
 }
 
-// DeleteAllUnpinned removes every unpinned conversation for a user.
-// Pinned conversations are untouched. Returns the count removed.
+// DeleteAllUnpinned removes every unpinned conversation for a user. Pinned
+// conversations — and archived ones (#282), which the user can't see when
+// triggering this from the sidebar and which represent an intentional "keep"
+// state — are untouched. Returns the count removed.
 func (s *Store) DeleteAllUnpinned(ctx context.Context, userEmail string) (int, error) {
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM conversations WHERE user_email = $1 AND pinned = FALSE`,
+		`DELETE FROM conversations WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL`,
 		userEmail,
 	)
 	if err != nil {
@@ -300,11 +355,19 @@ func (s *Store) DeleteAllUnpinned(ctx context.Context, userEmail string) (int, e
 	return int(n), nil
 }
 
-// List returns the user's conversations, pinned first, newest first.
-func (s *Store) List(ctx context.Context, userEmail string) ([]Conversation, error) {
+// List returns the user's conversations, pinned first, newest first. When
+// archivedOnly is false it returns only active (archived_at IS NULL)
+// conversations — the default sidebar view; when true it returns only the
+// archived ones (#282). The two are distinct lists so the frontend can render
+// archived conversations in a separate, collapsed section.
+func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) ([]Conversation, error) {
+	archivedFilter := "archived_at IS NULL"
+	if archivedOnly {
+		archivedFilter = "archived_at IS NOT NULL"
+	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, optional_mcp_servers_enabled
-		 FROM conversations WHERE user_email = $1
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, optional_mcp_servers_enabled
+		 FROM conversations WHERE user_email = $1 AND `+archivedFilter+`
 		 ORDER BY pinned DESC, updated_at DESC, id DESC`,
 		userEmail,
 	)
@@ -317,7 +380,7 @@ func (s *Store) List(ctx context.Context, userEmail string) ([]Conversation, err
 	for rows.Next() {
 		var c Conversation
 		var optionalRaw []byte
-		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &optionalRaw); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &optionalRaw); err != nil {
 			return nil, err
 		}
 		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
@@ -329,13 +392,13 @@ func (s *Store) List(ctx context.Context, userEmail string) ([]Conversation, err
 // Get fetches a single conversation (without messages).
 func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, optional_mcp_servers_enabled
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, optional_mcp_servers_enabled
 		 FROM conversations WHERE id = $1 AND user_email = $2`,
 		convID, userEmail,
 	)
 	var c Conversation
 	var optionalRaw []byte
-	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &optionalRaw); err != nil {
+	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &optionalRaw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -910,9 +973,13 @@ func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap int) (expired int, evicted int, err error) {
 	cutoff := time.Now().Add(-ttl).Unix()
 
+	// Archived conversations (#282) are exempt from both cleanup paths, just
+	// like pinned ones: archiving is a user-intentional "keep, but decluttered"
+	// state, so it must not be hard-deleted by the TTL or evicted by the cap.
+
 	// 1. TTL sweep.
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM conversations WHERE pinned = FALSE AND updated_at < $1`,
+		`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND updated_at < $1`,
 		cutoff,
 	)
 	if err != nil {
@@ -921,13 +988,14 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	n, _ := res.RowsAffected()
 	expired = int(n)
 
-	// 2. Per-user cap. Find user emails that have >unpinnedCap unpinned rows.
+	// 2. Per-user cap. Find user emails that have >unpinnedCap unpinned,
+	//    non-archived rows.
 	if unpinnedCap <= 0 {
 		return expired, 0, nil
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT user_email, COUNT(*) FROM conversations
-		 WHERE pinned = FALSE GROUP BY user_email HAVING COUNT(*) > $1`,
+		 WHERE pinned = FALSE AND archived_at IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
 		unpinnedCap,
 	)
 	if err != nil {
@@ -952,7 +1020,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		res, err := s.db.ExecContext(ctx,
 			`DELETE FROM conversations WHERE id IN (
 			    SELECT id FROM conversations
-			    WHERE user_email = $1 AND pinned = FALSE
+			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL
 			    ORDER BY updated_at DESC, id DESC
 			    OFFSET $2
 			 )`,
