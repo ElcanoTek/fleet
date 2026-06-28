@@ -47,6 +47,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
   const [prompt, setPrompt] = useState("");
   const [description, setDescription] = useState("");
   const [tagsInput, setTagsInput] = useState("");
+  const [persona, setPersona] = useState("");
   const [emails, setEmails] = useState<string[]>([]);
   const [customEmail, setCustomEmail] = useState("");
   const [scheduledDate, setScheduledDate] = useState("");
@@ -118,6 +119,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
       .map((t) => t.trim().toLowerCase())
       .filter(Boolean);
     if (tags.length > 0) taskData.tags = tags;
+    if (persona.trim()) taskData.persona = persona.trim();
     if (model) taskData.model = model;
     if (fallbackModel) taskData.fallback_model = fallbackModel;
     if (maxIterations) taskData.max_iterations = Number.parseInt(maxIterations, 10);
@@ -209,6 +211,15 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                   placeholder="nightly, prod, data-pipeline"
                   value={tagsInput}
                   onChange={(e) => setTagsInput(e.target.value)}
+                />
+                <label htmlFor="personaInput">Persona (bundle persona name; blank = default)</label>
+                <input
+                  id="personaInput"
+                  name="persona"
+                  type="text"
+                  placeholder="security-auditor"
+                  value={persona}
+                  onChange={(e) => setPersona(e.target.value)}
                 />
               </details>
             </div>

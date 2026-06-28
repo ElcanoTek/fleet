@@ -1,4 +1,4 @@
--- 029_drop_task_runtime_flavor.up.sql — remove the per-task runtime-flavor
+-- 030_drop_task_runtime_flavor.up.sql — remove the per-task runtime-flavor
 -- override. The runtime-"flavor" system (native-inprocess / native-acp / external
 -- acp) has been removed along with the ACP layer: fleet runs exactly one native
 -- in-process agent loop, so a per-task runtime override no longer means anything.

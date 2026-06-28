@@ -102,9 +102,21 @@ func New(opts Options) *Runner {
 }
 
 // buildBaseSystemPrompt composes the scheduled base prompt: the default system
-// prompt + the configured persona domain expertise. Failures degrade to an
-// empty/partial prompt with a log line rather than blocking the runner.
+// prompt + the configured GLOBAL persona's domain expertise. Baked once at
+// startup and used for tasks with no per-task persona override (#221).
 func (r *Runner) buildBaseSystemPrompt() string {
+	personaPath := r.cfg.Persona
+	if personaPath == "" {
+		personaPath = "assistant.yaml"
+	}
+	return r.composeSystemPrompt(personaPath)
+}
+
+// composeSystemPrompt builds the scheduled system prompt = the default system
+// prompt + the named persona's domain expertise block. personaFile is a
+// personas/ filename (e.g. "assistant.yaml"); a missing persona file just omits
+// the expertise block. Failures degrade to a partial prompt rather than blocking.
+func (r *Runner) composeSystemPrompt(personaFile string) string {
 	var sb strings.Builder
 	spName := r.cfg.SystemPrompt
 	if spName == "" {
@@ -113,16 +125,29 @@ func (r *Runner) buildBaseSystemPrompt() string {
 	if content, err := os.ReadFile(filepath.Join(r.systemPromptsDir, filepath.Base(spName))); err == nil {
 		sb.Write(content)
 	}
-	personaPath := r.cfg.Persona
-	if personaPath == "" {
-		personaPath = "assistant.yaml"
-	}
-	if content, err := os.ReadFile(filepath.Join(r.personasDir, filepath.Base(personaPath))); err == nil && len(content) > 0 {
-		name := strings.TrimSuffix(filepath.Base(personaPath), filepath.Ext(personaPath))
+	if content, err := os.ReadFile(filepath.Join(r.personasDir, filepath.Base(personaFile))); err == nil && len(content) > 0 {
+		name := strings.TrimSuffix(filepath.Base(personaFile), filepath.Ext(personaFile))
 		fmt.Fprintf(&sb, "\n\n---\n\n# %s Domain Expertise & Context\n\n", name)
 		sb.Write(content)
 	}
 	return sb.String()
+}
+
+// taskPromptAndPersona resolves the system prompt + effective persona filename
+// for a task (#221). With no per-task persona it returns the pre-baked base
+// prompt + global persona; with a valid override it rebuilds the prompt with
+// that persona; an unknown override logs and falls back to the global default.
+func (r *Runner) taskPromptAndPersona(task *models.Task) (systemPrompt, persona string) {
+	override := strings.TrimSpace(task.Persona)
+	if override == "" {
+		return r.baseSystemPrompt, r.cfg.Persona
+	}
+	personaFile := filepath.Base(override) + ".yaml"
+	if _, err := os.Stat(filepath.Join(r.personasDir, personaFile)); err != nil {
+		log.Printf("scheduled task %s: persona %q not found in bundle; using global default", task.ID, override)
+		return r.baseSystemPrompt, r.cfg.Persona
+	}
+	return r.composeSystemPrompt(personaFile), personaFile
 }
 
 // sandboxTaker is the subset of *sandbox.Pool that a scheduled run uses to
@@ -290,14 +315,18 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	}
 	defer mcpCleanup()
 
+	// Per-task persona override (#221): a task may name a personas/<name>.yaml to
+	// swap in specialized domain expertise; empty uses the runner's global persona.
+	taskSystemPrompt, taskPersona := r.taskPromptAndPersona(task)
+
 	a := agent.NewAgent(agent.Options{
 		Config:              r.cfg,
 		Model:               model,
 		FallbackModel:       fallback,
 		MCPClient:           mcpClient,
 		NativeTools:         turnTools.Tools,
-		SystemPrompt:        r.baseSystemPrompt,
-		Persona:             r.cfg.Persona,
+		SystemPrompt:        taskSystemPrompt,
+		Persona:             taskPersona,
 		MaxIterations:       maxIter,
 		Sandbox:             sb,
 		NotesProvider:       r.notesProvider,
