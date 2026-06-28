@@ -538,7 +538,6 @@ type TaskEdit struct {
 	Priority               int
 	InstructionSelfImprove bool
 	AllowNetwork           bool
-	RuntimeFlavor          string
 	// Persona replaces the task's per-task persona override (#221), assigned
 	// unconditionally from the full edit payload (empty = use the global persona).
 	Persona string
@@ -629,7 +628,6 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
 	task.AllowNetwork = edit.AllowNetwork
-	task.RuntimeFlavor = edit.RuntimeFlavor
 	task.Persona = edit.Persona
 	task.ScheduledFor = edit.ScheduledFor
 	task.Recurrence = edit.Recurrence

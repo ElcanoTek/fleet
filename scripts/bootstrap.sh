@@ -542,42 +542,6 @@ else
   fi
 fi
 
-# ── native-agent image (#159) — the containerized agent LOOP for native-acp, ──
-# the DEFAULT runtime flavor. It EXTENDS the sandbox base above, so it builds
-# after it. cmd/fleet refuses to start when native-acp is the default but this
-# image is absent (fail-closed preflight), so build it now. Best-effort + warn: a
-# failure leaves the clear startup error pointing at this script. Skipped when an
-# operator runs in-process-only (FLEET_ENABLE_INPROCESS_LOOP=1) — then native-acp
-# isn't the default and the preflight has nothing to check.
-step "Building the native-agent image (containerized loop for native-acp)"
-NATIVE_AGENT_CONTAINERFILE="${REPO_ROOT}/config/default/sandbox/Containerfile.native-agent"
-NATIVE_AGENT_IMAGE="${FLEET_NATIVE_AGENT_IMAGE:-localhost/fleet-native-agent:latest}"
-NATIVE_AGENT_SANDBOX_BASE="${SANDBOX_IMAGE_REF:-$(sandbox_manifest_tag "${CLIENT_CONFIG_DIR}/manifest.yaml")}"
-if [[ "${FLEET_ENABLE_INPROCESS_LOOP:-}" == "1" ]]; then
-  info "FLEET_ENABLE_INPROCESS_LOOP=1 — native-acp is not the default; skipping native-agent build."
-elif [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would run: FLEET_SANDBOX_IMAGE=${NATIVE_AGENT_SANDBOX_BASE} scripts/build-native-agent-image.sh"
-elif [[ ! -f "$NATIVE_AGENT_CONTAINERFILE" ]]; then
-  warn "no ${NATIVE_AGENT_CONTAINERFILE} — cannot build native-agent; set runtimes.native-acp.image or FLEET_ENABLE_INPROCESS_LOOP=1."
-elif ! command -v podman >/dev/null 2>&1; then
-  warn "podman not found — skipping native-agent build (install podman, then run scripts/build-native-agent-image.sh)."
-elif [[ "$ENABLE_SERVICE" == "1" ]] && id "$SERVICE_USER" >/dev/null 2>&1; then
-  # Build into the service user's rootless store (same as the sandbox image) so
-  # the User=fleet unit — and the startup preflight running as that user — find it.
-  info "building as ${SERVICE_USER} (rootless) → ${NATIVE_AGENT_IMAGE} (base ${NATIVE_AGENT_SANDBOX_BASE})"
-  if runuser -u "$SERVICE_USER" -- sh -c "cd '${REPO_ROOT}' && HOME='${SERVICE_HOME}' XDG_RUNTIME_DIR='/run/${SERVICE_USER}' FLEET_NATIVE_AGENT_IMAGE='${NATIVE_AGENT_IMAGE}' FLEET_SANDBOX_IMAGE='${NATIVE_AGENT_SANDBOX_BASE}' '${REPO_ROOT}/scripts/build-native-agent-image.sh'"; then
-    ok "native-agent image ${NATIVE_AGENT_IMAGE} built into ${SERVICE_USER}'s rootless store"
-  else
-    warn "rootless native-agent build (as ${SERVICE_USER}) failed — fleet will refuse to start with the native-acp default until it's built; run scripts/build-native-agent-image.sh."
-  fi
-else
-  if FLEET_NATIVE_AGENT_IMAGE="${NATIVE_AGENT_IMAGE}" FLEET_SANDBOX_IMAGE="${NATIVE_AGENT_SANDBOX_BASE}" "$(dirname "$0")/build-native-agent-image.sh"; then
-    ok "native-agent image built from ${NATIVE_AGENT_CONTAINERFILE}"
-  else
-    warn "native-agent image build failed — run scripts/build-native-agent-image.sh before starting fleet."
-  fi
-fi
-
 # ── host-side MCP server Python deps (the active bundle's requirements) ──
 # fleet runs the bundle's MCP servers host-side as `python3 <bundle>/mcp/*.py`, so
 # their Python deps must be importable by the system python3 the service user runs.

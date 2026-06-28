@@ -42,7 +42,6 @@ export type Task = {
   mcp_selection?: MCPChoice[];
   instruction_self_improve?: boolean;
   allow_network?: boolean;
-  runtime_flavor?: string;
   persona?: string;
   tags?: string[];
   retry_policy?: RetryPolicy;
@@ -66,7 +65,6 @@ export type TaskCreate = {
   mcp_selection?: MCPChoice[];
   instruction_self_improve?: boolean;
   allow_network?: boolean;
-  runtime_flavor?: string;
   persona?: string;
   scheduled_for?: string;
   recurrence?: string;

@@ -235,41 +235,6 @@ func TestTaskAllowNetworkRoundTrip(t *testing.T) {
 	}
 }
 
-// TestTaskRuntimeFlavorRoundTrip proves the per-task runtime-flavor override
-// (#158, the Operations Center agent picker) persists: a task with an explicit
-// flavor round-trips it, and the default is the empty string (use the bundle's
-// global scheduled runtime).
-func TestTaskRuntimeFlavorRoundTrip(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	ctx := context.Background()
-
-	picked := &models.Task{ID: uuid.New(), Prompt: "acp", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC(), RuntimeFlavor: "native-acp"}
-	if err := db.AddTask(ctx, picked); err != nil {
-		t.Fatalf("Failed to add task: %v", err)
-	}
-	gotPicked, err := db.GetTask(ctx, picked.ID)
-	if err != nil {
-		t.Fatalf("Failed to get task: %v", err)
-	}
-	if gotPicked.RuntimeFlavor != "native-acp" {
-		t.Errorf("RuntimeFlavor = %q, want %q (explicit pick must persist)", gotPicked.RuntimeFlavor, "native-acp")
-	}
-
-	// The default is empty: no per-task override, fall back to the global runtime.
-	def := &models.Task{ID: uuid.New(), Prompt: "default", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC()}
-	if err := db.AddTask(ctx, def); err != nil {
-		t.Fatalf("Failed to add default task: %v", err)
-	}
-	gotDef, err := db.GetTask(ctx, def.ID)
-	if err != nil {
-		t.Fatalf("Failed to get default task: %v", err)
-	}
-	if gotDef.RuntimeFlavor != "" {
-		t.Errorf("RuntimeFlavor = %q, want empty (default = global runtime)", gotDef.RuntimeFlavor)
-	}
-}
-
 func TestTaskTimezoneRoundTrip(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

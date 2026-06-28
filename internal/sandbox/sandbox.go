@@ -89,12 +89,6 @@ const (
 	// Podman container with --read-only / dropped caps. Network egress
 	// is per-turn (ContainerConfig.NoNetwork) — see container.go.
 	ModeContainer
-
-	// ModeDelegating forwards bash/python to a Delegate instead of running
-	// them locally. Used by the native ACP agent: it holds no executor of
-	// its own and ships every call back over ACP to the client, which runs
-	// it in the real host-managed sandbox. See delegating.go.
-	ModeDelegating
 )
 
 // BashRequest is the per-call input the sandbox sees for a bash
@@ -167,12 +161,11 @@ type Sandbox struct {
 	// RunPython call that does not specify its own WorkingDir / WorkspaceDir.
 	// It is one of the two seams git-worktree isolation (#180) uses to scope a
 	// scheduled run into its per-run worktree (a subdirectory of the bind-mounted
-	// workspace root). This seam specifically covers the native-acp flavor: the
-	// in-container agent delegates bash/run_python to the host Executor, which
-	// drops the per-call working dir, so an empty WorkingDir arrives here and this
-	// default fills it. The in-process tool layer is scoped separately via
-	// tools.WithForcedWorkingDir, because its resolvers pre-fill a non-empty cwd
-	// (the process cwd) that this empty-only default would not override.
+	// workspace root). This seam covers a call that arrives with an empty
+	// WorkingDir: this default fills it. The in-process tool layer is scoped
+	// separately via tools.WithForcedWorkingDir, because its resolvers pre-fill a
+	// non-empty cwd (the process cwd) that this empty-only default would not
+	// override.
 	//
 	// Safe without a reset because a Sandbox is single-use: the pool hands each
 	// one out once and Close()s it after the turn (it is never returned to the
@@ -213,8 +206,6 @@ func (s *Sandbox) ModeName() string {
 		return "host"
 	case ModeContainer:
 		return "container"
-	case ModeDelegating:
-		return "delegating"
 	default:
 		return "unknown"
 	}

@@ -29,16 +29,13 @@ import (
 // inside the container because the main repo would be unreachable.
 //
 // Scoping the run into the worktree uses two complementary seams (see runWorker):
-//   - Sandbox.SetDefaultWorkingDir scopes the native-acp flavor — the in-container
-//     agent delegates bash/run_python to the host Executor, which drops the
-//     per-call working dir, so the sandbox default applies host-side.
+//   - Sandbox.SetDefaultWorkingDir fills the cwd for any bash/run_python call
+//     that arrives with an empty per-call working dir, so the sandbox default
+//     applies host-side.
 //   - tools.WithForcedWorkingDir scopes the in-process tool layer (bash,
 //     run_python, and the relative-path file tools), whose resolvers would
 //     otherwise default to the process cwd.
-// Together these cover bash, run_python, and the relative-path file tools on both
-// flavors. NOT covered: an agent that writes via the ACP-native fs/* capability
-// directly (a fallback the native agent does not use — it routes file ops through
-// bash/run_python); those host-side fs handlers are not redirected here.
+// Together these cover bash, run_python, and the relative-path file tools.
 
 const (
 	// worktreeSubdir is the directory under the workspace root that holds per-run

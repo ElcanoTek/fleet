@@ -64,8 +64,8 @@ type engine struct {
 	requireCompactionOptIn bool
 
 	// usageReporter, when set, is called after each step with the run's
-	// accumulated usage so a driver can ship it out-of-band (native-acp's
-	// per-step `_fleet/event` usage report). Nil in the in-process modes.
+	// accumulated usage so a driver can ship it out-of-band to an external
+	// accountant. Nil for the in-process loop.
 	usageReporter func(RunUsage)
 }
 

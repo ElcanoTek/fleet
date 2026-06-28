@@ -74,11 +74,6 @@ type Server struct {
 	// the endpoint then returns neutral generic defaults.
 	clientConfig *clientconfig.Bundle
 
-	// permissions is the in-flight permission-request registry for EXTERNAL acp
-	// agents: the rendezvous between the turn goroutine's blocked broker and the
-	// POST /conversations/{id}/permissions/{requestId} decision handler.
-	permissions *permissionRegistry
-
 	// sessionApprovals holds per-conversation batch pre-approvals (#300): in-memory,
 	// session-scoped policies consulted by approvalStager.Stage before staging a card.
 	sessionApprovals *SessionApprovalRegistry
@@ -283,7 +278,6 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		sharedToken:      cfg.SharedToken,
 		rateLimitHits:    newRateHitCounter(),
 		inflight:         make(map[string]inflightEntry),
-		permissions:      newPermissionRegistry(),
 		sessionApprovals: NewSessionApprovalRegistry(),
 		sseReconnects:    newReconnectCounter(),
 	}
@@ -700,19 +694,6 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 type clientConfigResponse struct {
 	Branding   clientConfigBranding   `json:"branding"`
 	EmptyState clientConfigEmptyState `json:"empty_state"`
-	// Runtimes is the runtime-flavor catalog for the chat flavor picker, plus
-	// the default flavor. Empty/single-flavor bundles let the frontend hide the
-	// picker entirely.
-	Runtimes       []clientConfigRuntime `json:"runtimes"`
-	DefaultRuntime string                `json:"default_runtime"`
-}
-
-// clientConfigRuntime is one selectable runtime flavor for the chat picker.
-type clientConfigRuntime struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Description string `json:"description"`
-	Beta        bool   `json:"beta"`
 }
 
 type clientConfigBranding struct {
@@ -765,51 +746,8 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 		if len(b.EmptyState.ProtocolPills) > 0 {
 			resp.EmptyState.ProtocolPills = b.EmptyState.ProtocolPills
 		}
-		for _, rt := range b.Runtimes() {
-			resp.Runtimes = append(resp.Runtimes, clientConfigRuntime{
-				Name:        rt.Name,
-				DisplayName: displayNameOrName(rt.DisplayName, rt.Name),
-				Description: rt.Description,
-				Beta:        rt.Beta,
-			})
-		}
-		resp.DefaultRuntime = b.DefaultRuntime()
 	}
 	writeJSON(w, resp)
-}
-
-// displayNameOrName returns the display name when set, else the raw name.
-func displayNameOrName(display, name string) string {
-	if strings.TrimSpace(display) != "" {
-		return display
-	}
-	return name
-}
-
-// runtimeKnown reports whether name is a flavor declared in the bundle catalog.
-// When no bundle is wired, only native-inprocess is accepted.
-func (s *Server) runtimeKnown(name string) bool {
-	if s.clientConfig == nil {
-		return name == clientconfig.RuntimeNativeInprocess
-	}
-	_, ok := s.clientConfig.Runtime(name)
-	return ok
-}
-
-// persistChatRuntime persists a per-turn runtime-flavor override onto the
-// conversation when the request named a NEW, recognized flavor. An empty or
-// unknown value is a no-op (the stored flavor — or the bundle default — stands),
-// mirroring the model-override semantics in postChat.
-func (s *Server) persistChatRuntime(ctx context.Context, user string, conv *store.Conversation, requested string) error {
-	rt := strings.TrimSpace(requested)
-	if rt == "" || rt == conv.Runtime || !s.runtimeKnown(rt) {
-		return nil
-	}
-	if err := s.store.SetRuntime(ctx, user, conv.ID, rt); err != nil {
-		return err
-	}
-	conv.Runtime = rt
-	return nil
 }
 
 func (s *Server) listPersonas(w http.ResponseWriter, _ *http.Request) {
@@ -954,14 +892,6 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 	// Approval resolution lives at /conversations/{id}/approvals/{approvalId}.
 	if sub == "approvals" && subArg != "" {
 		s.handleApproval(w, r, id, subArg)
-		return
-	}
-
-	// External-agent permission decision lives at
-	// /conversations/{id}/permissions/{requestId} (allow/deny; default-deny on
-	// timeout is enforced server-side by the broker).
-	if sub == "permissions" && subArg != "" {
-		s.handlePermissionDecision(w, r, id, subArg)
 		return
 	}
 
@@ -1134,27 +1064,6 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	case sub == "runtime" && r.Method == http.MethodPost:
-		// Per-conversation runtime-flavor selection (the chat flavor picker). An
-		// empty value clears the override (the bundle default applies); a
-		// non-empty value must name a flavor in the bundle catalog.
-		var req struct {
-			Runtime string `json:"runtime"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		runtime := strings.TrimSpace(req.Runtime)
-		if runtime != "" && !s.runtimeKnown(runtime) {
-			http.Error(w, "unknown runtime flavor", http.StatusBadRequest)
-			return
-		}
-		if err := s.store.SetRuntime(r.Context(), user, id, runtime); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
 	case sub == "mcp-servers" && r.Method == http.MethodGet:
 		// Per-conversation MCP-server catalog. Response shape:
 		//   { "servers": [{ name, description, tools: [...], tool_count,
@@ -1303,12 +1212,6 @@ type chatRequest struct {
 	// only when no ConversationID is provided (lockdown is set once
 	// at conversation creation and immutable thereafter).
 	Lockdown bool `json:"lockdown,omitempty"`
-	// Runtime is the per-conversation execution flavor (fleet's ACP runtime
-	// selection). On a new conversation it is persisted; on an existing one a
-	// non-empty value overrides the stored flavor. Empty = keep whatever's
-	// stored (the dedicated POST /conversations/{id}/runtime clears it).
-	// Unknown flavors fall back to the bundle default at run time.
-	Runtime string `json:"runtime,omitempty"`
 }
 
 func memoryContents(memories []store.Memory) []string {
@@ -1383,12 +1286,6 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			}
 			conv.Model = reqModel
 		}
-		// Per-turn runtime override: persist a new, recognized flavor so the
-		// next reload reflects the picker.
-		if err := s.persistChatRuntime(r.Context(), user, conv, req.Runtime); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
 	} else {
 		persona := strings.TrimSpace(req.Persona)
 		if persona == "" {
@@ -1442,12 +1339,6 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 				}
 				conv.OptionalMCPServersEnabled = clean
 			}
-		}
-		// Seed the per-conversation runtime flavor from the chat request so the
-		// flavor picker's pre-chat selection takes effect on the first turn.
-		if err := s.persistChatRuntime(r.Context(), user, conv, req.Runtime); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
 		}
 	}
 
@@ -1617,7 +1508,6 @@ func (s *Server) runTurnAsync(
 		ConversationID:            conv.ID,
 		OptionalMCPServersEnabled: conv.OptionalMCPServersEnabled,
 		Lockdown:                  conv.Lockdown,
-		Runtime:                   conv.Runtime,
 		ImageAttachments:          imageAttachments,
 		ApprovalStager: &approvalStager{
 			ctx:             turnCtx,
@@ -1633,14 +1523,6 @@ func (s *Server) runTurnAsync(
 			store:          s.store,
 			conversationID: conv.ID,
 			userEmail:      user,
-			sink:           buf,
-		},
-		// External (acp) flavors route session/request_permission to the human
-		// through this broker (default-deny on timeout, no approve-all). The
-		// native flavors ignore it — they are governed in-loop.
-		PermissionBroker: &permissionBroker{
-			registry:       s.permissions,
-			conversationID: conv.ID,
 			sink:           buf,
 		},
 	}, buf)

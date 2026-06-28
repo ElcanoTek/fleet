@@ -5,7 +5,6 @@ go 1.26.4
 require (
 	charm.land/fantasy v0.33.1
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
-	github.com/coder/acp-go-sdk v0.13.5
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/golang-migrate/migrate/v4 v4.19.1

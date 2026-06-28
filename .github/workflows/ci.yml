@@ -329,12 +329,9 @@ jobs:
         # defensively so the job is robust to runner image changes. The boot
         # script can stand up its own cluster too, but here we use the service.
         #
-        # pasta (passt) is the rootless network backend that maps the host into
-        # the container as `host.containers.internal`. The native ACP e2e gate
-        # (scripts/e2e-boot-server.sh → ensure_native_agent) needs the
-        # in-container agent to reach the host-side fake LLM at that name; pasta
-        # makes it reachable (verified), so install it explicitly rather than
-        # relying on the runner image's default rootless backend.
+        # pasta (passt) is the rootless network backend for the per-turn podman
+        # tool sandbox; install it explicitly rather than relying on the runner
+        # image's default rootless backend.
         run: |
           sudo apt-get update -qq
           command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman

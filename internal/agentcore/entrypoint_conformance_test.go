@@ -22,15 +22,14 @@ import (
 //
 // The web/SSE path reaches Run through agent.Manager.RunTurn → RunInteractiveTurn
 // (interactive.go); the scheduled-native path through agent.Agent.Execute
-// (scheduled.go); the ACP ingress + scheduled-external-ACP native flavors through
-// acpruntime.AgentRunner.Prompt (acpruntime/agent.go).
+// (scheduled.go). These are the only two agent-turn entrypoints — fleet runs one
+// native in-process loop and nothing else.
 func TestEntrypointConformance(t *testing.T) {
 	root := repoRoot(t)
 	// file → a human label for the entrypoint it hosts.
 	governed := map[string]string{
 		"internal/agent/interactive.go": "web/SSE interactive turn (Manager.RunTurn → RunInteractiveTurn)",
 		"internal/agent/scheduled.go":   "scheduled-native task (Agent.Execute)",
-		"internal/acpruntime/agent.go":  "ACP ingress + native-ACP flavor (AgentRunner.Prompt)",
 	}
 	for rel, label := range governed {
 		src, err := os.ReadFile(filepath.Join(root, rel))
@@ -40,23 +39,6 @@ func TestEntrypointConformance(t *testing.T) {
 		if !strings.Contains(string(src), "agentcore.Run(") {
 			t.Errorf("%s (%s) no longer calls agentcore.Run — the one-governed-core invariant requires every turn entrypoint to drive it", rel, label)
 		}
-	}
-}
-
-// TestExternalACPIsContainmentTier documents (and pins) the one deliberate
-// exception: the EXTERNAL ACP flavor does NOT call agentcore.Run. An external
-// coding agent (Claude Code, Goose, …) self-executes inside a locked sandbox;
-// fleet observes its self-reported behavior at the containment tier rather than
-// governing its loop in-process. If this path ever starts driving agentcore.Run,
-// that is a real governance-model change and this test should be revisited.
-func TestExternalACPIsContainmentTier(t *testing.T) {
-	root := repoRoot(t)
-	src, err := os.ReadFile(filepath.Join(root, "internal/agent/scheduled_external.go"))
-	if err != nil {
-		t.Fatalf("read scheduled_external.go: %v", err)
-	}
-	if strings.Contains(string(src), "agentcore.Run(") {
-		t.Errorf("external-ACP path now calls agentcore.Run; the containment-tier model documented here has changed — re-evaluate the governance tiers")
 	}
 }
 

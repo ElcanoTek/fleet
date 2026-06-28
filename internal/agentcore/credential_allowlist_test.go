@@ -12,8 +12,8 @@ import (
 
 // Tests for the per-task credential allowlist (#184): Permits / the registered-
 // name projection, and the Gate-3 enforcement at the MCPBroker seam (which is
-// the SINGLE path both the in-process and native-acp flavors route MCP calls
-// through, so gating it there enforces the allowlist on both).
+// the SINGLE path every MCP call routes through, so gating it there enforces the
+// allowlist for every caller).
 
 func TestCredentialAllowlist_Permits(t *testing.T) {
 	tests := []struct {

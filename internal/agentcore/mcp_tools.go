@@ -62,9 +62,9 @@ type toolBuildConfig struct {
 	loaderTools []fantasy.AgentTool
 	// remediationHints configures the fast.io inline-upload guard hint.
 	remediationHints RemediationHints
-	// preGatedTools are already-policy-aware tools registered verbatim (the
-	// native-acp delegating MCP tools). They call BeforeToolCall +
-	// RecordToolResult themselves, so they are NOT wrapped in policyGuardedTool.
+	// preGatedTools are already-policy-aware tools registered verbatim. They call
+	// BeforeToolCall + RecordToolResult themselves, so they are NOT wrapped in
+	// policyGuardedTool.
 	preGatedTools []fantasy.AgentTool
 }
 
@@ -98,10 +98,9 @@ func buildFantasyTools(
 	for _, t := range cfg.loaderTools {
 		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy})
 	}
-	// Pre-gated tools (native-acp delegating MCP tools) own their policy handling
-	// (BeforeToolCall + RecordToolResult), exactly like the built-in mcpTool, so
-	// they register VERBATIM — wrapping them would double the gate and drop
-	// RecordToolResult.
+	// Pre-gated tools own their policy handling (BeforeToolCall +
+	// RecordToolResult), exactly like the built-in mcpTool, so they register
+	// VERBATIM — wrapping them would double the gate and drop RecordToolResult.
 	allTools = append(allTools, cfg.preGatedTools...)
 
 	mcpRegistered := 0
@@ -121,9 +120,9 @@ func buildFantasyTools(
 		}
 		// Gate 3 (per-task credential allowlist, #184) is enforced at the MCPBroker
 		// seam (gateMCPBrokerWithAllowlist), not here — the broker is the single
-		// seam BOTH the in-process and native-acp MCP calls route through, so the
-		// allowlist holds on both flavors. The tool is advertised; a denied call is
-		// refused at dispatch with a governance message.
+		// seam every MCP call routes through, so the allowlist holds for every
+		// caller. The tool is advertised; a denied call is refused at dispatch with
+		// a governance message.
 		allTools = append(allTools, &mcpTool{
 			serverName: st.ServerName,
 			tool:       st.Tool,
@@ -217,7 +216,7 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 	if g.policy != nil {
 		// Record the outcome so policies that gate on tool RESULTS observe native
 		// tool calls (bash/python/task_tracker/...), not just the MCP and
-		// delegating tools. Without this the scheduled task-tracker finish gate
+		// pre-gated tools. Without this the scheduled task-tracker finish gate
 		// (latestTaskTracker.Seen) never fired in production. A transport error or
 		// an is-error response counts as a failed call.
 		g.policy.RecordToolResult(name, params.Input, resp.Content, err == nil && !resp.IsError)
@@ -234,13 +233,6 @@ func sanitizeSchemaProperties(props map[string]any) map[string]any {
 		out[k] = sanitizeSchemaValue(v)
 	}
 	return out
-}
-
-// SanitizeSchemaProperties is the exported form used by the native-acp agent's
-// delegating MCP tools so they sanitize their advertised schema EXACTLY as the
-// in-process mcpTool does (parity: OpenAI rejects `\p{…}` patterns).
-func SanitizeSchemaProperties(props map[string]any) map[string]any {
-	return sanitizeSchemaProperties(props)
 }
 
 const jsonSchemaPatternKey = "pattern"
