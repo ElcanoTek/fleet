@@ -55,6 +55,11 @@ type chatStore interface {
 	LoadTurnEvents(ctx context.Context, turnID string, afterEventID uint64) ([]store.TurnEvent, error)
 	LookupTurn(ctx context.Context, turnID string) (*store.TurnRecord, error)
 
+	// Tool-call audit ledger (#224): one row per tool invocation, written from
+	// the post-turn persistence path and read by GET /conversations/{id}/audit.
+	RecordToolCalls(ctx context.Context, entries []store.ToolCallEntry) error
+	ListToolCalls(ctx context.Context, conversationID, toolFilter string, fromUnix int64, limit int) ([]store.ToolCallEntry, error)
+
 	// Memories + memory proposals.
 	ListMemories(ctx context.Context, userEmail string) ([]store.Memory, error)
 	CreateMemory(ctx context.Context, userEmail, content, source string) (*store.Memory, error)
