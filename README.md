@@ -698,6 +698,41 @@ rebuild-only mode (bash holds the pre-pull inode open, so the fix would otherwis
 only land on the *next* update). On a build failure the live binary/image is left
 untouched; roll back with `git checkout <sha> && fleet-admin update --no-pull`.
 
+### upgrade — drain, swap, health-gate, auto-roll-back
+
+```
+git pull && scripts/fleet-upgrade.sh            # build → backup → swap → restart → /readyz gate
+scripts/fleet-upgrade.sh --no-build             # swap the already-built source binaries
+scripts/fleet-upgrade.sh --dry-run              # print the plan; change nothing
+```
+
+`scripts/fleet-upgrade.sh` is a safer companion to `update.sh` for production
+boxes. It does not pull (run `git pull` first); it `make build`s, **backs up the
+live `fleet`/`fleet-admin` binaries**, installs the new ones, `systemctl
+restart`s, then **gates on the new process's `/readyz` probe** before declaring
+success — and if `/readyz` does not come green within `--health-timeout` (default
+90s) it **reinstalls the backup binaries and restarts**, so a bad build
+self-heals to the last-known-good version instead of crash-looping.
+
+The **drain is the binary's, not the script's**: `systemctl restart` sends
+`SIGTERM`, and `cmd/fleet` already handles it gracefully — it flips `/healthz`
+and `/readyz` to `503` (a load balancer stops routing to it), lets in-flight chat
+turns **and** running scheduled tasks finish within
+`FLEET_SHUTDOWN_GRACE_SECONDS` (default 30s, bounded by the unit's
+`TimeoutStopSec`), then force-cancels stragglers and exits 0. The script's value
+is the **backup/rollback + readiness gate around** that built-in drain; it adds
+no Go code and runs no migrations.
+
+> **Honest about "zero-downtime."** This is *zero-downtime-ish* / brief-blip, not
+> truly zero-downtime. fleet is a **single process on one box** (the deployment
+> posture — no rolling replicas behind a proxy), so there is an unavoidable window
+> from when the old process finishes draining and exits until the new one binds
+> its listeners and passes `/readyz`, during which new requests get a `503` (while
+> draining) or a connection refusal (during the swap). What *is* graceful:
+> **in-flight work is drained, not killed.** True zero-downtime would need a
+> second instance plus a front proxy that fails over — out of scope for the
+> single-big-box deployment.
+
 ### status (doctor) — is the box healthy?
 
 ```
