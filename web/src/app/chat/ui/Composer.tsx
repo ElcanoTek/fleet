@@ -220,7 +220,14 @@ export function Composer({
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
+                  // Enter sends; Shift+Enter is a natural newline (textarea
+                  // default). Cmd/Ctrl+Enter is an explicit "send" alias (#306)
+                  // for users who prefer it — it also fires when the bare-Enter
+                  // branch wouldn't (e.g. with Shift held it still sends).
+                  const sendCombo =
+                    (event.key === "Enter" && !event.shiftKey) ||
+                    (event.key === "Enter" && (event.metaKey || event.ctrlKey));
+                  if (sendCombo) {
                     event.preventDefault();
                     void submitPrompt(prompt);
                   }
