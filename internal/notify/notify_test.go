@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -88,36 +89,52 @@ func TestRenderWebhookBody_BadTemplate(t *testing.T) {
 	}
 }
 
-// TestSignWebhook checks the HMAC-SHA256 signature is correct and prefixed, and
-// empty when no secret is set (plain webhook). This is the #316 HMAC seam.
+// TestSignWebhook checks the timestamp-bound HMAC-SHA256 signature against a
+// known-answer vector, that it is versioned ("v1="), that the timestamp is part
+// of the signed payload (a different timestamp yields a different MAC), and that
+// it is empty when no secret is set (plain webhook). This is the #316 HMAC seam.
 func TestSignWebhook(t *testing.T) {
 	body := []byte(`{"hello":"world"}`)
 	const secret = "test-signing-secret"
+	const timestamp = "1700000000"
 
-	got := SignWebhook(body, secret)
+	got := SignWebhook(body, secret, timestamp)
 
+	// Known-answer: the signed payload is "<timestamp>.<body>".
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	mac.Write([]byte(timestamp + "." + string(body)))
+	want := "v1=" + hex.EncodeToString(mac.Sum(nil))
 	if got != want {
 		t.Errorf("SignWebhook = %q, want %q", got, want)
 	}
-	if SignWebhook(body, "") != "" {
+	if !strings.HasPrefix(got, "v1=") {
+		t.Errorf("signature %q is not versioned with the v1= prefix", got)
+	}
+
+	// The timestamp is bound into the MAC: changing it changes the signature, so a
+	// captured signature cannot be replayed under a fresh timestamp.
+	if other := SignWebhook(body, secret, "1700000001"); other == got {
+		t.Error("signature did not change when the timestamp changed; timestamp is not bound into the MAC")
+	}
+
+	if SignWebhook(body, "", timestamp) != "" {
 		t.Error("SignWebhook with no secret should return empty (plain webhook)")
 	}
 }
 
 // TestWebhookSend_SignedAndStatus drives a real sendWebhook against an httptest
-// server: it asserts the signature header is present and verifies, the default
-// JSON body arrives, and a non-2xx is surfaced as an error.
+// server: it asserts both provenance headers are present, the signature verifies
+// over the exact received body + timestamp (the receiver's recomputation), the
+// default JSON body arrives, and a non-2xx is surfaced as an error.
 func TestWebhookSend_SignedAndStatus(t *testing.T) {
 	const secret = "hook-secret-value"
-	var gotSig, gotBody string
+	var gotSig, gotTS, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, r.ContentLength)
 		_, _ = r.Body.Read(buf)
 		gotBody = string(buf)
 		gotSig = r.Header.Get(signatureHeader)
+		gotTS = r.Header.Get(timestampHeader)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -127,9 +144,22 @@ func TestWebhookSend_SignedAndStatus(t *testing.T) {
 		t.Fatalf("sendWebhook: %v", err)
 	}
 
-	// The receiver can verify the signature over the body it got.
-	if gotSig != SignWebhook([]byte(gotBody), secret) {
-		t.Errorf("signature %q does not verify over received body", gotSig)
+	// Both headers must be present for a signed delivery.
+	if gotSig == "" || gotTS == "" {
+		t.Fatalf("missing provenance headers: signature=%q timestamp=%q", gotSig, gotTS)
+	}
+	// The timestamp must be a plausible recent Unix-seconds value (replay window).
+	ts, err := strconv.ParseInt(gotTS, 10, 64)
+	if err != nil {
+		t.Fatalf("timestamp header %q is not an integer: %v", gotTS, err)
+	}
+	if delta := time.Since(time.Unix(ts, 0)); delta < 0 || delta > time.Minute {
+		t.Errorf("timestamp %v is not recent (delta %v)", ts, delta)
+	}
+	// The receiver verifies the signature over the body + timestamp it received —
+	// exactly the recomputation a real receiver performs.
+	if want := SignWebhook([]byte(gotBody), secret, gotTS); gotSig != want {
+		t.Errorf("signature %q does not verify over received body+timestamp (want %q)", gotSig, want)
 	}
 	if !strings.Contains(gotBody, sampleEvent().TaskID) {
 		t.Errorf("body did not carry the task id: %s", gotBody)
@@ -143,6 +173,27 @@ func TestWebhookSend_SignedAndStatus(t *testing.T) {
 	n2 := New(Config{WebhookURL: bad.URL})
 	if err := n2.sendWebhook(context.Background(), sampleEvent()); err == nil {
 		t.Error("expected an error for a 500 response")
+	}
+}
+
+// TestWebhookSend_Unsigned checks the default backward-compatible path: with no
+// secret configured, neither provenance header is set and delivery still
+// succeeds.
+func TestWebhookSend_Unsigned(t *testing.T) {
+	var gotSig, gotTS string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSig = r.Header.Get(signatureHeader)
+		gotTS = r.Header.Get(timestampHeader)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := New(Config{WebhookURL: srv.URL}) // no WebhookSecret
+	if err := n.sendWebhook(context.Background(), sampleEvent()); err != nil {
+		t.Fatalf("sendWebhook: %v", err)
+	}
+	if gotSig != "" || gotTS != "" {
+		t.Errorf("unsigned delivery set provenance headers: signature=%q timestamp=%q", gotSig, gotTS)
 	}
 }
 
@@ -246,14 +297,22 @@ func TestNotify_Disabled(t *testing.T) {
 // TestSecretsNotLogged is the core security assertion: when a webhook send fails,
 // the package's log output must NOT contain the signing secret, and a failed
 // email send must NOT contain the SMTP password. We capture the Notifier's log
-// seam and the rendered error/body and scan them for the secret material.
+// seam and the rendered error/body and scan them for the secret material. We also
+// capture the outbound request headers to assert the raw signing secret never
+// travels on the wire — only the DERIVED HMAC does (in X-Fleet-Signature).
 func TestSecretsNotLogged(t *testing.T) {
 	const webhookSecret = "SUPER-SECRET-WEBHOOK-KEY-abc123"
 	const smtpPassword = "SUPER-SECRET-SMTP-PASSWORD-xyz789"
 
 	// A webhook receiver that always 500s, so the failure path (and its log line)
-	// runs through retry exhaustion.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	// runs through retry exhaustion. It records the request headers it saw so we
+	// can prove the secret was never sent as a header value.
+	var hmu sync.Mutex
+	var sawHeaders http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hmu.Lock()
+		sawHeaders = r.Header.Clone()
+		hmu.Unlock()
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
@@ -305,6 +364,27 @@ func TestSecretsNotLogged(t *testing.T) {
 		if strings.Contains(haystack, secret) {
 			t.Errorf("secret leaked into log/error output:\n%s", haystack)
 		}
+	}
+
+	// The raw signing secret must never appear in any outbound header — only the
+	// derived HMAC (X-Fleet-Signature) and the timestamp travel on the wire.
+	hmu.Lock()
+	hdr := sawHeaders
+	hmu.Unlock()
+	if hdr == nil {
+		t.Fatal("webhook receiver never saw a request")
+	}
+	for k, vals := range hdr {
+		for _, v := range vals {
+			if strings.Contains(v, webhookSecret) {
+				t.Errorf("signing secret leaked into outbound header %s: %q", k, v)
+			}
+		}
+	}
+	// Sanity: the signed delivery did carry the provenance headers.
+	if hdr.Get(signatureHeader) == "" || hdr.Get(timestampHeader) == "" {
+		t.Errorf("signed webhook missing provenance headers: %s=%q %s=%q",
+			signatureHeader, hdr.Get(signatureHeader), timestampHeader, hdr.Get(timestampHeader))
 	}
 }
 

@@ -11,6 +11,26 @@
 // outage cannot wedge the runner: the Notifier is fired from a detached
 // goroutine in the runner, errors are logged and NEVER affect task status.
 //
+// # Webhook signing (#316)
+//
+// When a per-endpoint signing secret is configured (WebhookSecret, sourced from
+// the host env-file as FLEET_WEBHOOK_SECRET) each outbound webhook is signed with
+// HMAC-SHA256 so a receiver can verify it really came from this fleet and was not
+// replayed. The scheme — documented for receiver authors in
+// docs/WEBHOOK-SIGNING.md — is:
+//
+//	timestamp     := strconv.FormatInt(time.Now().Unix(), 10)   // seconds since epoch
+//	signedPayload := timestamp + "." + string(body)             // exact bytes sent
+//	mac           := HMAC-SHA256(secret, signedPayload)
+//	X-Fleet-Signature: v1=<hex(mac)>
+//	X-Fleet-Timestamp: <timestamp>
+//
+// Binding the timestamp into the MAC lets the receiver enforce a replay window
+// (reject when |now − timestamp| exceeds, say, 5 minutes) without trusting an
+// unauthenticated header. The "v1=" prefix versions the scheme so it can evolve
+// without silently breaking receivers. SignWebhook computes the canonical value
+// and setSignatureHeader is the single seam that attaches both headers.
+//
 // Security posture (matches the project invariants):
 //
 //   - All configuration — recipients, the webhook URL, the SMTP credentials,
@@ -20,16 +40,14 @@
 //   - Secrets are NEVER logged. The senders return errors that describe WHAT
 //     failed (dial, auth, status code) without echoing the password, the bearer,
 //     or the signing secret; the package's own log lines carry only the task ID
-//     and the channel name.
+//     and the channel name. Only the DERIVED HMAC (not the secret) ever leaves
+//     the process, in the X-Fleet-Signature header.
 //
 // Default OFF: an empty Config (no SMTP host AND no webhook URL) yields a
 // Notifier whose Notify is a no-op, so a deployment that sets none of the
-// FLEET_SMTP_*/FLEET_WEBHOOK_* env vars behaves exactly as before.
-//
-// #316 will add HMAC request signing on top of the webhook sender. The sender is
-// already structured for that: SignWebhook computes the canonical signature and
-// setSignatureHeader is the single seam where the X-Fleet-Signature header is
-// attached, so the HMAC work slots in without reshaping the call path.
+// FLEET_SMTP_*/FLEET_WEBHOOK_* env vars behaves exactly as before. A webhook with
+// no secret configured is delivered UNSIGNED (neither signature header is set),
+// preserving the pre-#316 behavior for receivers that do not verify.
 package notify
 
 import (
@@ -43,6 +61,7 @@ import (
 	"net"
 	"net/http"
 	"net/smtp"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -63,10 +82,19 @@ const defaultRetries = 2
 // runner is not waiting on it.
 const defaultRetryBackoff = 2 * time.Second
 
-// signatureHeader carries the hex HMAC-SHA256 of the rendered webhook body,
-// prefixed "sha256=", so a receiver can verify provenance without TLS client
-// certs. Sent only when a webhook secret is configured.
+// signatureHeader carries the versioned hex HMAC-SHA256 over the signed payload
+// ("<timestamp>.<body>"), prefixed "v1=", so a receiver can verify provenance
+// without TLS client certs. Sent only when a webhook secret is configured.
 const signatureHeader = "X-Fleet-Signature"
+
+// timestampHeader carries the Unix-seconds timestamp that is bound into the
+// signature (see SignWebhook). The receiver uses it both to reconstruct the MAC
+// and to enforce a replay window. Sent only when a webhook secret is configured.
+const timestampHeader = "X-Fleet-Timestamp"
+
+// signatureVersion prefixes the signature value so the scheme can evolve without
+// silently breaking receivers (cf. Stripe's "v1="/GitHub's "sha256=").
+const signatureVersion = "v1"
 
 // Status is the terminal outcome a notification reports. It is a small closed
 // set the runner maps from its terminal branches; the webhook body template and
@@ -302,25 +330,39 @@ func RenderWebhookBody(tmpl string, ev Event) ([]byte, error) {
 // (a UUID, a closed-set status, a numeric cost/duration, and a URL we build).
 const defaultWebhookTemplate = `{"task_id":"{{.TaskID}}","name":"{{.Name}}","status":"{{.Status}}","cost_usd":{{.CostUSD}},"duration_seconds":{{.DurationSeconds}},"log_url":"{{.LogURL}}"}`
 
-// SignWebhook returns the canonical signature value for body under secret:
-// "sha256=" + hex(HMAC-SHA256(secret, body)). Returns "" when secret is empty.
-// Exported so the signing is unit-testable and so #316's HMAC work has one
-// canonical definition to build on.
-func SignWebhook(body []byte, secret string) string {
+// SignWebhook returns the canonical X-Fleet-Signature value for body under
+// secret, binding in timestamp (Unix seconds, as it appears in the
+// X-Fleet-Timestamp header):
+//
+//	"v1=" + hex(HMAC-SHA256(secret, timestamp + "." + body))
+//
+// Returns "" when secret is empty (plain, unsigned webhook). Pure and exported
+// so it is unit-testable with known-answer vectors and so receiver authors have
+// one canonical definition to mirror. body and timestamp MUST be the exact
+// bytes/string sent in the request, or the receiver's recomputed MAC will not
+// match.
+func SignWebhook(body []byte, secret, timestamp string) string {
 	if secret == "" {
 		return ""
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	mac.Write([]byte(timestamp + "." + string(body)))
+	return signatureVersion + "=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 // setSignatureHeader is the single seam where the request gets its provenance
-// signature. #316 (HMAC) extends signing here without touching sendWebhook's
-// call path. No-op when no secret is configured (plain webhook).
+// signature. It stamps the current time, signs "<timestamp>.<body>", and sets
+// the signature + timestamp headers together so the receiver can both verify the
+// MAC and enforce a replay window. No-op when no secret is configured (plain
+// webhook): neither header is set, preserving pre-#316 behavior.
 func setSignatureHeader(req *http.Request, body []byte, secret string) {
-	if sig := SignWebhook(body, secret); sig != "" {
+	if secret == "" {
+		return
+	}
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	if sig := SignWebhook(body, secret, timestamp); sig != "" {
 		req.Header.Set(signatureHeader, sig)
+		req.Header.Set(timestampHeader, timestamp)
 	}
 }
 
