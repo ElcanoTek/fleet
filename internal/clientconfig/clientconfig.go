@@ -87,6 +87,15 @@ type Bundle struct {
 	Models     Models
 	EmptyState EmptyState
 
+	// TaskTemplates is the bundle's catalog of pre-filled scheduled-task
+	// configurations (manifest task_templates block), in manifest order. Empty
+	// in the generic bundle's absence of the section; the shipped generic bundle
+	// declares a handful of neutral starters. Surfaced read-only by the
+	// orchestrator's GET /task-templates so the task-create UI can offer
+	// "new task from a template" — the task itself is still created through the
+	// existing POST /tasks path. See TaskTemplate.
+	TaskTemplates []TaskTemplate
+
 	// MCPCatalog is the declarative server catalog from the manifest, in
 	// manifest order.
 	MCPCatalog []ServerDef
@@ -268,6 +277,61 @@ type EmptyState struct {
 	ProtocolPills []map[string]any `yaml:"protocol_pills"`
 }
 
+// TaskTemplate is one entry in the manifest's task_templates block: a named,
+// described, pre-filled scheduled-task configuration the task-create UI offers
+// as a starting point ("new task from a template"). It is purely read-through
+// bundle config — fleet never persists a template and never creates a task FROM
+// the backend; the UI seeds its form with Task's fields, the user edits them
+// freely, and the resulting task is created through the ordinary POST /tasks
+// path. A template therefore cannot grant any capability the create path does
+// not already validate.
+type TaskTemplate struct {
+	Name        string           `yaml:"name"`
+	Description string           `yaml:"description"`
+	Icon        string           `yaml:"icon"`
+	Task        TaskTemplateTask `yaml:"task"`
+}
+
+// TaskTemplateTask is the partial task payload a template carries — the subset
+// of models.TaskCreate fields it makes sense to pre-fill in the create form.
+//
+// It deliberately mirrors only the EXISTING, form-editable TaskCreate fields, so
+// every value a template sets maps to a real create-path field (honesty: no
+// template knob promises a capability the task model lacks). Notable omissions
+// and why:
+//
+//   - max_cost_usd / runtime_flavor: not fields on models.TaskCreate (the
+//     issue's stale "current state" listing notwithstanding), so a template that
+//     set them could not apply them — left out rather than feign support.
+//   - scheduled_for / files: inherently per-invocation; a template seeds a
+//     reusable shape, not a one-off run.
+//   - credential_allowlist / mcp_selection / loop_config / worktree_config /
+//     trigger_type / allow_task_creation / allow_recurring_task_creation:
+//     security- or routing-sensitive knobs deliberately kept OUT of templates so
+//     a shipped template can never silently widen a task's authority. The user
+//     sets these explicitly in the form when they want them.
+//
+// Scalars that have a meaningful zero (priority, the bool flags) are plain
+// values; optional fields whose ABSENCE should leave the form at its own default
+// (model, fallback_model, max_iterations, max_retries) are pointers so an omitted
+// YAML key is distinguishable from an explicit zero. The struct is serialized to
+// the UI as opaque JSON; the Go side never interprets the values beyond parsing.
+type TaskTemplateTask struct {
+	Prompt                 string   `yaml:"prompt" json:"prompt,omitempty"`
+	Model                  *string  `yaml:"model,omitempty" json:"model,omitempty"`
+	FallbackModel          *string  `yaml:"fallback_model,omitempty" json:"fallback_model,omitempty"`
+	MaxIterations          *int     `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	MaxRetries             *int     `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
+	Recurrence             string   `yaml:"recurrence,omitempty" json:"recurrence,omitempty"`
+	Timezone               string   `yaml:"timezone,omitempty" json:"timezone,omitempty"`
+	Priority               int      `yaml:"priority,omitempty" json:"priority,omitempty"`
+	AllowNetwork           bool     `yaml:"allow_network,omitempty" json:"allow_network,omitempty"`
+	InstructionSelfImprove bool     `yaml:"instruction_self_improve,omitempty" json:"instruction_self_improve,omitempty"`
+	Persona                string   `yaml:"persona,omitempty" json:"persona,omitempty"`
+	Description            string   `yaml:"description,omitempty" json:"description,omitempty"`
+	Tags                   []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+}
+
 // ServerDef is one declarative MCP server in the catalog.
 type ServerDef struct {
 	Name    string `yaml:"name"`
@@ -356,14 +420,15 @@ type HTTPToolDef struct {
 // is distinguishable from a present-but-empty one: only a DECLARED sandbox block
 // enforces the Containerfile-exists invariant.
 type manifest struct {
-	Branding    Branding         `yaml:"branding"`
-	Models      Models           `yaml:"models"`
-	MCPServers  []ServerDef      `yaml:"mcp_servers"`
-	HTTPTools   []HTTPToolDef    `yaml:"http_tools"`
-	EmptyState  EmptyState       `yaml:"empty_state"`
-	AgentPolicy AgentPolicy      `yaml:"agent_policy"`
-	Pricing     PricingConfig    `yaml:"pricing"`
-	Sandbox     *sandboxManifest `yaml:"sandbox"`
+	Branding      Branding         `yaml:"branding"`
+	Models        Models           `yaml:"models"`
+	MCPServers    []ServerDef      `yaml:"mcp_servers"`
+	HTTPTools     []HTTPToolDef    `yaml:"http_tools"`
+	EmptyState    EmptyState       `yaml:"empty_state"`
+	TaskTemplates []TaskTemplate   `yaml:"task_templates"`
+	AgentPolicy   AgentPolicy      `yaml:"agent_policy"`
+	Pricing       PricingConfig    `yaml:"pricing"`
+	Sandbox       *sandboxManifest `yaml:"sandbox"`
 }
 
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
@@ -424,6 +489,7 @@ func Load(dir string) (*Bundle, error) {
 		Branding:          m.Branding,
 		Models:            m.Models,
 		EmptyState:        m.EmptyState,
+		TaskTemplates:     m.TaskTemplates,
 		MCPCatalog:        m.MCPServers,
 		HTTPTools:         m.HTTPTools,
 		AgentPolicyConfig: m.AgentPolicy,

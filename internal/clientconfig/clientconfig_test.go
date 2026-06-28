@@ -82,6 +82,113 @@ func TestLoadDefaultBundle(t *testing.T) {
 	}
 }
 
+// TestDefaultBundleTaskTemplates asserts the shipped generic bundle parses its
+// task_templates block (#262): the five neutral starters load in manifest order
+// and carry the partial-TaskCreate fields the UI pre-fills. This is the parse
+// half of the feature's "test the template parse + the from-template field
+// application" requirement.
+func TestDefaultBundleTaskTemplates(t *testing.T) {
+	root := repoRoot(t)
+	b, err := Load(filepath.Join(root, "config", "default"))
+	if err != nil {
+		t.Fatalf("load default bundle: %v", err)
+	}
+	if len(b.TaskTemplates) != 5 {
+		t.Fatalf("default bundle TaskTemplates = %d, want 5", len(b.TaskTemplates))
+	}
+	// First entry is the Daily Standup starter — assert its fields decoded.
+	first := b.TaskTemplates[0]
+	if first.Name != "Daily Standup" {
+		t.Errorf("TaskTemplates[0].Name = %q, want Daily Standup", first.Name)
+	}
+	if first.Icon == "" || first.Description == "" {
+		t.Errorf("TaskTemplates[0] missing icon/description: %+v", first)
+	}
+	if first.Task.Prompt == "" {
+		t.Error("TaskTemplates[0].Task.Prompt should be set")
+	}
+	if first.Task.Recurrence != "0 8 * * 1-5" {
+		t.Errorf("TaskTemplates[0].Task.Recurrence = %q", first.Task.Recurrence)
+	}
+	if first.Task.MaxIterations == nil || *first.Task.MaxIterations != 15 {
+		t.Errorf("TaskTemplates[0].Task.MaxIterations = %v, want 15", first.Task.MaxIterations)
+	}
+	if len(first.Task.Tags) == 0 {
+		t.Error("TaskTemplates[0].Task.Tags should be set")
+	}
+	// Every shipped template must name itself and carry a non-empty prompt.
+	for i, tmpl := range b.TaskTemplates {
+		if tmpl.Name == "" {
+			t.Errorf("TaskTemplates[%d].Name is empty", i)
+		}
+		if tmpl.Task.Prompt == "" {
+			t.Errorf("TaskTemplates[%d] (%q) has an empty prompt", i, tmpl.Name)
+		}
+	}
+}
+
+// TestTaskTemplateOptionalPointersDistinguishUnset confirms an omitted optional
+// key (model, max_iterations, …) stays nil rather than collapsing to a zero
+// value, so the UI can tell "template said nothing, keep my form default" from
+// "template explicitly set zero".
+func TestTaskTemplateOptionalPointersDistinguishUnset(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `
+task_templates:
+  - name: "Bare"
+    description: "only a prompt"
+    task:
+      prompt: "do the thing"
+  - name: "Pinned"
+    description: "model + iterations set"
+    task:
+      prompt: "review {repo_path}"
+      model: "anthropic/claude-opus-4.8"
+      max_iterations: 7
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(b.TaskTemplates) != 2 {
+		t.Fatalf("TaskTemplates = %d, want 2", len(b.TaskTemplates))
+	}
+	bare := b.TaskTemplates[0].Task
+	if bare.Model != nil {
+		t.Errorf("Bare.Model = %v, want nil (key omitted)", *bare.Model)
+	}
+	if bare.MaxIterations != nil {
+		t.Errorf("Bare.MaxIterations = %v, want nil (key omitted)", *bare.MaxIterations)
+	}
+	pinned := b.TaskTemplates[1].Task
+	if pinned.Model == nil || *pinned.Model != "anthropic/claude-opus-4.8" {
+		t.Errorf("Pinned.Model = %v, want the pinned slug", pinned.Model)
+	}
+	if pinned.MaxIterations == nil || *pinned.MaxIterations != 7 {
+		t.Errorf("Pinned.MaxIterations = %v, want 7", pinned.MaxIterations)
+	}
+}
+
+// TestTaskTemplatesAbsentSectionIsEmpty: a bundle with no task_templates key
+// loads fine and exposes an empty (nil) catalog — the generic no-templates case
+// the orchestrator turns into a [] response.
+func TestTaskTemplatesAbsentSectionIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("branding: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(b.TaskTemplates) != 0 {
+		t.Errorf("TaskTemplates = %d, want 0 for a bundle with no section", len(b.TaskTemplates))
+	}
+}
+
 // TestDefaultBundleSkillsValid asserts the shipped generic bundle's skills/ dir
 // is well-formed: it ships the example skill, and ValidateSkills finds no
 // problems. This is the skills analogue of the ValidateMCPArgPaths CI guard.

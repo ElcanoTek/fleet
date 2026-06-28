@@ -327,6 +327,14 @@ func run() error {
 		}
 		return out
 	})
+	// Wire the orchestrator's read-only task-template catalog from the loaded
+	// client bundle (#262). Templates are pre-filled scheduled-task shapes the
+	// task-create UI offers as a starting point; the task itself is still created
+	// through POST /tasks, so a template grants no capability the create path
+	// doesn't already validate. Pure config read-through — never persisted.
+	h.SetTaskTemplateProvider(func() []clientconfig.TaskTemplate {
+		return bundle.TaskTemplates
+	})
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
 	orchHandler := buildOrchestratorMux(h, notesHandlers)
 
@@ -629,6 +637,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		// proxies /api/orchestrator/mcp-servers + /mcp-accounts to these.
 		r.Get("/mcp-servers", h.GetMCPServers)
 		r.Get("/mcp-accounts", h.GetMCPAccounts)
+
+		// Read-only task-template catalog for the task-create UI's "new task from a
+		// template" affordance (#262). The web app proxies
+		// /api/orchestrator/task-templates to this. Never persists or creates a task.
+		r.Get("/task-templates", h.ListTaskTemplates)
 
 		// Notes reads (admin + scoped user).
 		r.Get("/notes", notes.ListNotes)
