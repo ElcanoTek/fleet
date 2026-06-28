@@ -51,6 +51,68 @@ branding:
 # mcp_servers[] here (see /root/elcano-config/manifest.yaml for a full example).
 mcp_servers: []
 
+# Inline HTTP tools (issue #261). A lightweight alternative to an MCP server for
+# simple "call this REST endpoint" tools: declare name + method + URL + an input
+# JSON Schema inline, no subprocess required. Each entry is registered as a native
+# tool the agent sees alongside MCP tools (addressed as mcp__http_<name>).
+#
+# These are bundle-author-defined and therefore TRUSTED, exactly like mcp_servers.
+# SECURITY — the same credential boundary as an MCP server applies:
+#   - headers values may carry ${ENV_VAR}; they are resolved from the HOST process
+#     env and applied to the outbound request HOST-SIDE at call time. The secret
+#     never enters the sandbox, the model context, or the logs. The model only
+#     supplies the declared input params and sees the (redacted) response body.
+#   - the request runs host-side through the SAME brokered seam every MCP tool call
+#     funnels through (policy gate, output redaction, isError handling). There is no
+#     per-tool sandbox enforcement and no streaming/OAuth/multipart support in V1.
+#
+# Behavior:
+#   - {param} tokens in url (percent-encoded) and body_template (raw) are filled
+#     from the model's input at call time.
+#   - response_jq (optional) filters/transforms a JSON response before the model
+#     sees it; it is syntax-checked at load. A non-JSON body is passed through.
+#   - 30s timeout; redirects followed. A non-2xx response is returned to the model
+#     as "status <N>: <body>" (so it can reason about the failure), not an error.
+#   - critical: true opts the tool into the same audit/approval gate as
+#     agent_policy.critical_tools — use it for tools that write data or have side
+#     effects.
+#
+# The generic bundle ships NONE (the list is absent) so nothing changes by default.
+# Example (commented out):
+#
+# http_tools:
+#   - name: "get_jira_ticket"
+#     description: "Look up a Jira ticket by ID and return its title, status, and description"
+#     method: GET
+#     url: "https://company.atlassian.net/rest/api/3/issue/{ticket_id}"
+#     headers:
+#       Authorization: "Basic ${JIRA_API_TOKEN}"
+#       Content-Type: "application/json"
+#     input_schema:
+#       type: object
+#       properties:
+#         ticket_id:
+#           type: string
+#           description: "Jira ticket ID (e.g. PROJ-123)"
+#       required: ["ticket_id"]
+#     response_jq: ".fields | {summary, status: .status.name, description}"
+#
+#   - name: "post_slack_message"
+#     description: "Post a message to a Slack channel"
+#     method: POST
+#     url: "https://slack.com/api/chat.postMessage"
+#     headers:
+#       Authorization: "Bearer ${SLACK_BOT_TOKEN}"
+#       Content-Type: "application/json"
+#     body_template: '{"channel": "{channel}", "text": "{message}"}'
+#     critical: true
+#     input_schema:
+#       type: object
+#       properties:
+#         channel: { type: string }
+#         message: { type: string }
+#       required: ["channel", "message"]
+
 # Agent tool-behavior policy. Client-specific (e.g. ad-tech DSP deal tools); the
 # generic bundle ships NONE, so fleet stays on its base generic critical
 # suffixes (send_email, send_template_email — always enforced regardless of this

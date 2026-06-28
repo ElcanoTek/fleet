@@ -32,6 +32,42 @@ authoritative description of each field, including the MCP catalog's declarative
 enable gate (`enabled_env` / `enabled_groups` / `always`), the `${VAR}` env
 interpolation, the tool allowlist, and the account-suffix vars.
 
+## Inline HTTP tools (`http_tools`)
+
+For simple "call this REST endpoint" needs that don't justify a full MCP server,
+the manifest's `http_tools:` section declares lightweight tools inline: a `name`,
+`method`, `url` (with `{param}` placeholders), an `input_schema`, optional
+`headers`, `body_template`, `response_jq` filter, and a `critical` flag. Each
+entry is registered as a native tool the agent sees **alongside** MCP tools
+(addressed as `mcp__http_<name>`). The generic bundle ships none — see the
+commented-out example in `manifest.yaml`. `http_tools` is validated at load
+(method, URL, duplicate/reserved names, `input_schema` shape, and `response_jq`
+syntax all fail startup loudly).
+
+These are **bundle-author-defined and therefore trusted**, exactly like
+`mcp_servers`. The security posture is identical to an MCP server's, and worth
+stating plainly:
+
+- **Credentials stay host-side.** `headers` values may carry `${ENV_VAR}`
+  references; they are resolved from the **host** process env and applied to the
+  outbound request at call time, in whichever process holds the connector secrets
+  (the out-of-process MCP broker, else the host-side manager). The secret never
+  enters the sandbox, the model context, or the logs — the model supplies only the
+  declared input params and sees only the (redacted) response body.
+- **The request runs host-side, NOT in the sandbox.** Like MCP credential
+  brokering, the HTTP call is brokered through the same host-side seam every MCP
+  tool call funnels through, so it is governed by the same policy gate, output
+  redaction, and `isError` handling. There is **no** per-tool sandbox enforcement
+  for these calls (they are host-side by design, because the credentials are
+  host-side) — so an `http_tool`, like an MCP server, can reach any network
+  endpoint its URL names. Add only tools you trust, and prefer `critical: true`
+  for any tool that writes data or triggers side effects (it opts into the same
+  audit/approval gate as `agent_policy.critical_tools`).
+- **V1 scope.** No OAuth/token-refresh (use a pre-populated `Authorization`
+  header), no streaming responses, no multipart/form-data bodies. A non-2xx
+  response is returned to the model as `status <N>: <body>` so it can reason about
+  the failure, not raised as an execution error.
+
 ## Skills
 
 The `skills/` directory holds **Agent Skills** — packaged, on-demand capabilities

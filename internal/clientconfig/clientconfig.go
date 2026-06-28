@@ -34,6 +34,13 @@
 // vars used by the account-suffix scan (creds.ApplyClientSuffix / AccountsFor).
 // Credential VALUES never live in the manifest — only the env-var NAMES do; the
 // loader resolves them from the process environment at Load time.
+//
+// The manifest's http_tools[] section (issue #261) declares lightweight inline
+// REST-API tools that register as native tools without a full MCP server. They are
+// bundle-author-defined and trusted like mcp_servers, and share the SAME credential
+// boundary: header ${ENV_VAR} secrets are resolved host-side and applied to the
+// outbound request at call time, never entering the sandbox or the model context.
+// See HTTPToolDef.
 package clientconfig
 
 import (
@@ -44,9 +51,24 @@ import (
 	"strings"
 
 	"github.com/goccy/go-yaml"
+	"github.com/itchyny/gojq"
 
 	"github.com/ElcanoTek/fleet/internal/config"
 )
+
+// HTTPToolServerName is the synthetic MCP-server name inline http_tools are
+// registered under on the credentialed *mcp.Client. The leading underscore keeps
+// it out of the namespace a bundle's own mcp_servers[] entries occupy; validate()
+// rejects an MCP server that tries to claim it. The agent sees these tools as
+// mcp__http_<name> — routed, gated, redacted, and brokered host-side exactly like
+// any MCP tool.
+const HTTPToolServerName = "_http"
+
+// httpToolMethods is the set of HTTP methods an http_tool may declare. Kept tight
+// (no TRACE/CONNECT/OPTIONS/HEAD) to the verbs a REST tool actually needs.
+var httpToolMethods = map[string]bool{
+	"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true,
+}
 
 // EnvDir is the environment variable naming the client bundle directory.
 const EnvDir = "FLEET_CLIENT_CONFIG_DIR"
@@ -73,6 +95,12 @@ type Bundle struct {
 	// lists (parallel-safe tools, critical-tool suffixes, substitute map). Empty
 	// in the generic bundle. cmd/fleet translates it into agentcore.AgentPolicy.
 	AgentPolicyConfig AgentPolicy
+
+	// HTTPTools is the manifest's inline REST-API tool catalog (the http_tools:
+	// section), in manifest order. Each entry is registered as a native tool
+	// alongside the MCP catalog — no MCP subprocess required. Empty in the generic
+	// bundle (defaults unchanged). See HTTPToolDef.
+	HTTPTools []HTTPToolDef
 
 	// SandboxConfig is the bundle's resolved sandbox descriptor (Containerfile,
 	// local tag, optional prebuilt image override). Access it via Sandbox().
@@ -247,6 +275,45 @@ type ServerDef struct {
 	EnabledByDefault bool   `yaml:"enabled_by_default"`
 }
 
+// HTTPToolDef is one inline HTTP tool in the manifest's http_tools: section.
+// Each entry is registered as a native tool alongside the MCP catalog — no MCP
+// server subprocess is required. Like an MCP server, an http_tool is
+// BUNDLE-AUTHOR-DEFINED and therefore trusted: the manifest author decides which
+// endpoint is called and which secrets back it.
+//
+// SECURITY — the credential boundary mirrors the MCP catalog exactly:
+//
+//   - Headers values may carry ${ENV_VAR} references. They are resolved from the
+//     HOST process environment at CALL time (resolveEnvMap), inside whichever
+//     process holds the credentialed client (the out-of-process mcp-broker under
+//     issue #167, else the host-side manager). The resolved secret is applied to
+//     the outbound request header and NEVER enters the sandbox, the model context,
+//     or the logs — the model only ever supplies the declared input params and
+//     sees the (redacted) response body.
+//   - The HTTP request itself runs HOST-SIDE through the same MCP client/broker
+//     seam every MCP tool call funnels through, so it is governed by the same
+//     policy gate, output redaction, and isError handling — not a second path.
+//
+// URL and BodyTemplate may carry {param} tokens substituted from the model's
+// declared input at call time (URL context is percent-encoded; body context is
+// raw). InputSchema is the JSON Schema the model sees. ResponseJQ, when set, is a
+// jq program applied to a JSON response body before it is returned to the model.
+// Critical opts the tool into the existing critical-tool audit gate (its bare
+// name is registered as a critical suffix — same semantics as
+// AgentPolicy.CriticalToolSuffixes), for tools that write data or trigger side
+// effects.
+type HTTPToolDef struct {
+	Name         string                 `yaml:"name"`
+	Description  string                 `yaml:"description"`
+	Method       string                 `yaml:"method"`        // GET | POST | PUT | PATCH | DELETE
+	URL          string                 `yaml:"url"`           // may contain {param} tokens
+	Headers      map[string]string      `yaml:"headers"`       // values support ${ENV_VAR}, resolved host-side at call time
+	BodyTemplate string                 `yaml:"body_template"` // may contain {param} tokens
+	InputSchema  map[string]interface{} `yaml:"input_schema"`
+	ResponseJQ   string                 `yaml:"response_jq"` // optional jq program over a JSON response
+	Critical     bool                   `yaml:"critical"`
+}
+
 // manifest is the on-disk YAML shape. Sandbox is a pointer so an absent block
 // (a minimal/legacy bundle that never opted into the sandbox-as-config contract)
 // is distinguishable from a present-but-empty one: only a DECLARED sandbox block
@@ -255,6 +322,7 @@ type manifest struct {
 	Branding    Branding         `yaml:"branding"`
 	Models      Models           `yaml:"models"`
 	MCPServers  []ServerDef      `yaml:"mcp_servers"`
+	HTTPTools   []HTTPToolDef    `yaml:"http_tools"`
 	EmptyState  EmptyState       `yaml:"empty_state"`
 	AgentPolicy AgentPolicy      `yaml:"agent_policy"`
 	Sandbox     *sandboxManifest `yaml:"sandbox"`
@@ -319,6 +387,7 @@ func Load(dir string) (*Bundle, error) {
 		Models:            m.Models,
 		EmptyState:        m.EmptyState,
 		MCPCatalog:        m.MCPServers,
+		HTTPTools:         m.HTTPTools,
 		AgentPolicyConfig: m.AgentPolicy,
 		SandboxConfig:     resolveSandbox(m.Sandbox, abs),
 		sandboxDeclared:   m.Sandbox != nil,
@@ -432,11 +501,17 @@ func (b *Bundle) validate() error {
 		}
 	}
 
+	// Tool names share ONE namespace across mcp_servers[] (server names) and
+	// http_tools[] (tool names): the agent addresses them as mcp_<server>_<tool>,
+	// so a collision would make dispatch ambiguous. `seen` therefore tracks both.
 	seen := map[string]bool{}
 	for i := range b.MCPCatalog {
 		s := &b.MCPCatalog[i]
 		if strings.TrimSpace(s.Name) == "" {
 			return fmt.Errorf("mcp_servers[%d]: name is required", i)
+		}
+		if s.Name == HTTPToolServerName {
+			return fmt.Errorf("mcp_servers[%q]: name %q is reserved for inline http_tools", s.Name, HTTPToolServerName)
 		}
 		if seen[s.Name] {
 			return fmt.Errorf("mcp_servers: duplicate server name %q", s.Name)
@@ -454,6 +529,55 @@ func (b *Bundle) validate() error {
 			}
 		default:
 			return fmt.Errorf("mcp_servers[%q]: unknown type %q (want stdio|http)", s.Name, s.Type)
+		}
+	}
+	return b.validateHTTPTools(seen)
+}
+
+// validateHTTPTools fails the load on a malformed http_tools[] entry — a missing
+// name/method/url, an unsupported method, a name that collides with an MCP server
+// or another http_tool, an input_schema that is not a JSON-Schema object, or a
+// response_jq that does not parse. The jq syntax check runs HERE (at Load) so a
+// typo'd jq program fails startup loudly rather than at the first model call. The
+// already-populated `seen` set enforces the single shared name namespace.
+func (b *Bundle) validateHTTPTools(seen map[string]bool) error {
+	for i := range b.HTTPTools {
+		t := &b.HTTPTools[i]
+		name := strings.TrimSpace(t.Name)
+		if name == "" {
+			return fmt.Errorf("http_tools[%d]: name is required", i)
+		}
+		if name == HTTPToolServerName {
+			return fmt.Errorf("http_tools[%q]: name is reserved", name)
+		}
+		if seen[name] {
+			return fmt.Errorf("http_tools: duplicate tool name %q (collides with an mcp_servers entry or another http_tool)", name)
+		}
+		seen[name] = true
+
+		method := strings.ToUpper(strings.TrimSpace(t.Method))
+		if method == "" {
+			return fmt.Errorf("http_tools[%q]: method is required (GET|POST|PUT|PATCH|DELETE)", name)
+		}
+		if !httpToolMethods[method] {
+			return fmt.Errorf("http_tools[%q]: unsupported method %q (want GET|POST|PUT|PATCH|DELETE)", name, t.Method)
+		}
+		t.Method = method // normalize so the executor sees a canonical verb
+		if strings.TrimSpace(t.URL) == "" {
+			return fmt.Errorf("http_tools[%q]: url is required", name)
+		}
+		// input_schema, when present, must be a JSON-Schema object so the model is
+		// handed a well-formed tool parameter schema. An absent schema is allowed
+		// (a no-parameter tool); the executor advertises an empty object schema.
+		if t.InputSchema != nil {
+			if typ, ok := t.InputSchema["type"].(string); ok && typ != "object" {
+				return fmt.Errorf("http_tools[%q]: input_schema.type must be %q, got %q", name, "object", typ)
+			}
+		}
+		if jq := strings.TrimSpace(t.ResponseJQ); jq != "" {
+			if _, err := gojq.Parse(jq); err != nil {
+				return fmt.Errorf("http_tools[%q]: response_jq does not parse: %w", name, err)
+			}
 		}
 	}
 	return nil
@@ -501,6 +625,38 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 			sc.Dir = bundleDir
 		}
 		out[s.Name] = sc
+	}
+	return out
+}
+
+// HTTPToolConfigs builds the runtime inline-HTTP-tool catalog from the manifest's
+// http_tools[] section, resolving each header's ${ENV_VAR} references against the
+// current process env — exactly as MCPServerConfigs resolves an HTTP MCP server's
+// headers. It is therefore called only in a process that legitimately holds the
+// connector credentials (cmd/fleet, the mcp-broker, cutlass); the resolved secrets
+// live in config.HTTPToolConfig.Headers and are applied to the outbound request
+// host-side at call time, never entering the sandbox or the model context.
+//
+// Returns the slice in manifest order. Empty in the generic bundle (no http_tools)
+// — the default, which registers no HTTP tools and changes nothing.
+func (b *Bundle) HTTPToolConfigs() []config.HTTPToolConfig {
+	if len(b.HTTPTools) == 0 {
+		return nil
+	}
+	out := make([]config.HTTPToolConfig, 0, len(b.HTTPTools))
+	for i := range b.HTTPTools {
+		t := &b.HTTPTools[i]
+		out = append(out, config.HTTPToolConfig{
+			Name:         t.Name,
+			Description:  t.Description,
+			Method:       t.Method,
+			URL:          t.URL,
+			Headers:      resolveEnvMap(t.Headers, nil),
+			BodyTemplate: t.BodyTemplate,
+			InputSchema:  t.InputSchema,
+			ResponseJQ:   t.ResponseJQ,
+			Critical:     t.Critical,
+		})
 	}
 	return out
 }
@@ -555,6 +711,18 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		ParallelSafeTools:    append([]string(nil), b.AgentPolicyConfig.ParallelSafeTools...),
 		CriticalToolSuffixes: append([]string(nil), b.AgentPolicyConfig.CriticalToolSuffixes...),
 	}
+	// An http_tool flagged `critical: true` opts into the SAME critical-tool audit
+	// gate as the manifest's critical_tools suffixes. The tool is registered as
+	// mcp__http_<name>, and isCriticalTool matches on a trailing "_<suffix>", so its
+	// bare name is the suffix that selects it. (One source of truth: the gate stays
+	// agentcore's; this only contributes the names.)
+	for i := range b.HTTPTools {
+		if b.HTTPTools[i].Critical {
+			if name := strings.TrimSpace(b.HTTPTools[i].Name); name != "" {
+				p.CriticalToolSuffixes = append(p.CriticalToolSuffixes, name)
+			}
+		}
+	}
 	if len(b.AgentPolicyConfig.CriticalToolSubstitutes) > 0 {
 		p.CriticalToolSubstitutes = make(map[string][]string, len(b.AgentPolicyConfig.CriticalToolSubstitutes))
 		for k, v := range b.AgentPolicyConfig.CriticalToolSubstitutes {
@@ -599,6 +767,15 @@ func (b *Bundle) EnvVarNames() []string {
 			}
 		}
 		for _, v := range s.Headers {
+			for _, name := range envRefs(v) {
+				add(name)
+			}
+		}
+	}
+	// Inline http_tools' header secrets must survive the .env-file allowlist too:
+	// they are resolved host-side at call time exactly like an MCP server's headers.
+	for i := range b.HTTPTools {
+		for _, v := range b.HTTPTools[i].Headers {
 			for _, name := range envRefs(v) {
 				add(name)
 			}

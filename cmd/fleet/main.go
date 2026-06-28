@@ -118,6 +118,10 @@ func run() error {
 	// The MCP catalog comes from the bundle manifest, gated on the now-loaded
 	// process env.
 	cfg.MCPServers = bundle.MCPServerConfigs()
+	// Inline http_tools (issue #261): resolved host-side (auth headers expanded from
+	// the process env) and registered onto the credentialed MCP client alongside the
+	// MCP catalog. Empty in the generic bundle.
+	cfg.HTTPTools = bundle.HTTPToolConfigs()
 
 	// The sandbox image is a per-client bundle artifact: resolve it from the
 	// bundle manifest (sandbox.image when set — the opt-in prebuilt/registry
