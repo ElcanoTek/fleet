@@ -94,10 +94,13 @@ func TestPoolClaimConcurrencyNoDoubleLease(t *testing.T) {
 }
 
 // TestToolFailureMarksTaskFailed pins the tool-failure-mid-task contract: a
-// runner whose task errors leaves the task in terminal `error` (never stuck in
-// `running`), persists the error text into error_message, and clears the lease.
-// A failure log session is also stored so the failure is inspectable. This is
-// the runner-level analog of moc's error-status path.
+// runner whose task fails with a non-retryable error leaves the task in a
+// terminal state (never stuck in `running`), persists the error text into
+// error_message, and clears the lease. A failure log session is also stored so
+// the failure is inspectable. Since #253, a non-retryable terminal failure is
+// routed to the dead-letter queue (`dead_lettered`) rather than bare `error`, so
+// it is reviewable/replayable; the not-stuck/lease/error_message/log guarantees
+// are unchanged.
 func TestToolFailureMarksTaskFailed(t *testing.T) {
 	store := newTestStore(t)
 	seedPending(t, store, 1)
@@ -112,15 +115,15 @@ func TestToolFailureMarksTaskFailed(t *testing.T) {
 	go func() { pool.Run(ctx); close(done) }()
 
 	waitFor(t, 2*time.Second, func() bool {
-		failed, _ := store.GetTasksByStatus(models.TaskStatusError)
+		failed, _ := store.GetTasksByStatus(models.TaskStatusDeadLettered)
 		return len(failed) == 1
 	})
 	cancel()
 	<-done
 
-	failed, _ := store.GetTasksByStatus(models.TaskStatusError)
+	failed, _ := store.GetTasksByStatus(models.TaskStatusDeadLettered)
 	if len(failed) != 1 {
-		t.Fatalf("expected 1 task in error status, got %d", len(failed))
+		t.Fatalf("expected 1 task in dead_lettered status, got %d", len(failed))
 	}
 	task := failed[0]
 	// Not stuck running: a terminal status with completion + cleared lease.

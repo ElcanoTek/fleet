@@ -29,6 +29,10 @@ import (
 // locked write.
 var ErrTaskNotEditable = errors.New("task is no longer editable")
 
+// ErrTaskNotDeadLettered is returned by ReplayDeadLetteredTask when the target
+// task is not in the dead_lettered state (#253) — only quarantined tasks replay.
+var ErrTaskNotDeadLettered = errors.New("task is not dead-lettered")
+
 // MatchGlob implements simple glob matching similar to Python's fnmatch. It
 // survives the node-routing removal because scoped API keys / users still match
 // node-name scope patterns for visibility checks.
@@ -993,6 +997,130 @@ func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, no
 		}
 		task.AssignedNodeID = nil
 	}
+
+	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// DeadLetterTaskWithContext routes a terminally-failed task to the dead-letter
+// queue (#253): it sets Status=dead_lettered, records dead_lettered_at /
+// dead_letter_reason / dead_letter_attempts, stamps CompletedAt + ErrorMessage
+// (so the row reads as terminal everywhere a completed/errored task does), and
+// clears the lease — all in one tx, gated on the caller still owning the lease
+// (a stale runner's quarantine is rejected, like RequeueTaskForRetryWithContext).
+//
+// It is the terminal sibling of RequeueTaskForRetryWithContext: the runner calls
+// requeue while retries remain and a transient class allows it, and calls this
+// once retries are exhausted or the failure is non-retryable. Like the requeue
+// path it deliberately does NOT call scheduleNextRecurrence — a dead-lettered
+// occurrence does not auto-spawn the next cron tick; the recurrence resumes on
+// the next normal completion, and the quarantined occurrence awaits replay.
+// attempts is the total number of attempts made (AttemptCount+1 at the call site).
+func (s *Storage) DeadLetterTaskWithContext(ctx context.Context, taskID, nodeID uuid.UUID, reason string, attempts int) (*models.Task, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
+	isAssigned := task.AssignedNodeID != nil && *task.AssignedNodeID == nodeID
+	if !hasValidLease && !isAssigned {
+		return nil, fmt.Errorf("node is not assigned to this task")
+	}
+	// Already-terminal tasks are never re-quarantined.
+	if task.Status == models.TaskStatusSuccess || task.Status == models.TaskStatusError ||
+		task.Status == models.TaskStatusCancelled || task.Status == models.TaskStatusDeadLettered {
+		return task, nil
+	}
+
+	now := time.Now().UTC()
+	task.Status = models.TaskStatusDeadLettered
+	task.CompletedAt = &now
+	task.DeadLetteredAt = &now
+	task.DeadLetterAttempts = attempts
+	task.LeaseOwner = nil
+	task.LeaseExpiresAt = nil
+	if reason != "" {
+		task.ErrorMessage = &reason
+		task.DeadLetterReason = &reason
+	}
+
+	// Free the assigned node (mirror the terminal/requeue paths) so it can pick up
+	// other work.
+	if task.AssignedNodeID != nil {
+		node, err := s.db.GetNodeForUpdate(ctx, tx, *task.AssignedNodeID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if node != nil && node.CurrentTaskID != nil && *node.CurrentTaskID == task.ID {
+			node.Status = models.NodeStatusIdle
+			node.CurrentTaskID = nil
+			if err := s.db.UpdateNodeTx(ctx, tx, node); err != nil {
+				return nil, err
+			}
+		}
+		task.AssignedNodeID = nil
+	}
+
+	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// GetDeadLetteredTasks returns dead-lettered tasks (#253), newest-quarantined
+// first, for the DLQ review listing (`fleet-admin sched dlq list`). limit/offset
+// paginate; a non-positive limit returns all matching rows.
+func (s *Storage) GetDeadLetteredTasks(ctx context.Context, limit, offset int) ([]*models.Task, error) {
+	return s.db.GetDeadLetteredTasks(ctx, limit, offset)
+}
+
+// ReplayDeadLetteredTask re-enqueues a dead-lettered task (#253): it resets the
+// SAME row to a fresh pending slate — AttemptCount=0, the DLQ columns cleared,
+// status=pending, scheduled_for/started_at/completed_at/error cleared — so the
+// scheduler's normal claim path picks it up again. It is gated on the task being
+// in the dead_lettered state (ErrTaskNotDeadLettered otherwise), mirroring the
+// editability guards on the other operator mutations. Returns the updated task.
+func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.Status != models.TaskStatusDeadLettered {
+		return nil, ErrTaskNotDeadLettered
+	}
+
+	task.Status = models.TaskStatusPending
+	task.AttemptCount = 0
+	task.ScheduledFor = nil
+	task.StartedAt = nil
+	task.CompletedAt = nil
+	task.ErrorMessage = nil
+	task.DeadLetteredAt = nil
+	task.DeadLetterReason = nil
+	task.DeadLetterAttempts = 0
+	task.LeaseOwner = nil
+	task.LeaseExpiresAt = nil
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err

@@ -129,6 +129,40 @@ brokering, which always stays host-side.
 
 ---
 
+## Dead-letter queue (#253)
+
+A scheduled task retries on transient failures up to its `max_retries` budget
+(the backoff curve + which failure classes retry come from the per-task
+`retry_policy`, #201). Once that contract reaches a **terminal** failure — either
+a transient failure with the retry budget exhausted, or a non-retryable
+(deterministic) failure — the runner routes the task to a distinct
+`dead_lettered` terminal status instead of bare `error`, so the exhausted task is
+**reviewable and replayable** rather than silently failing. The row records when
+it was quarantined (`dead_lettered_at`), the final attempt's failure message
+(`dead_letter_reason`), and the total attempts made (`dead_letter_attempts`). The
+runner is the only writer of this status; a self-reporting worker cannot set it.
+
+`error` is preserved for the **non-final** failure cases it always covered —
+per-attempt failures that will retry, an interrupted run (shutdown grace
+expired), and a panic during execution.
+
+Review and replay are operator actions on the box, via the admin CLI:
+
+```sh
+fleet-admin sched dlq list [--tag <tag>] [--limit N] [--offset N] [--json]
+fleet-admin sched dlq replay <task_id>   # reset to pending; the scheduler re-runs it
+```
+
+`replay` resets the same task to a fresh pending slate (`attempt_count = 0`, the
+dead-letter columns cleared) and the normal claim path re-runs it. Entry into the
+DLQ also increments the `fleet_dead_letter_queued_total{reason}` counter (reason
+is the bounded class `retry_exhausted` or `non_retryable` — deliberately not a
+per-task label, to avoid unbounded metric cardinality). Dead-lettered tasks are
+**not** subject to the automatic retention sweep — quarantine is for review, so a
+DLQ task persists until it is replayed (or explicitly removed).
+
+---
+
 ## The scheduled end-of-run verifier
 
 Scheduled runs layer an extra host-side LLM re-check on top of the shared
