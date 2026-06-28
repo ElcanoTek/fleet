@@ -1276,6 +1276,66 @@ func (db *Database) GetAllLogs(ctx context.Context) (map[uuid.UUID]*models.LogSe
 	return logs, rows.Err()
 }
 
+// cleanupEligibleSubquery selects terminal task ids eligible for pruning (#252):
+// older than the cutoff ($2) but NOT among the most recent $1 runs of their
+// (prompt, recurrence) bucket — so the last-known state of any task is always
+// kept regardless of age. Non-terminal tasks and rows with a NULL completed_at
+// are never selected. Reused for the logs + tasks deletes within one tx; safe to
+// run twice because the tasks ranking is unchanged between them (only logs are
+// deleted first).
+const cleanupEligibleSubquery = `
+	SELECT id FROM (
+		SELECT id, completed_at,
+		       ROW_NUMBER() OVER (
+		           PARTITION BY prompt, recurrence
+		           ORDER BY completed_at DESC NULLS LAST
+		       ) AS rn
+		FROM tasks
+		WHERE status IN ('success', 'error', 'cancelled')
+	) ranked
+	WHERE rn > $1 AND completed_at IS NOT NULL AND completed_at < $2`
+
+// CleanupOldRuns prunes completed/error/cancelled task runs (and their logs)
+// older than retentionDays, ALWAYS preserving the most recent keepPerTask runs
+// per task bucket (prompt+recurrence) regardless of age (#252). retentionDays<=0
+// disables pruning (returns 0) so a misconfiguration can never mass-delete.
+// Returns the number of task rows deleted.
+func (db *Database) CleanupOldRuns(ctx context.Context, retentionDays, keepPerTask int) (int, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	if keepPerTask < 0 {
+		keepPerTask = 0
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM logs WHERE task_id IN (`+cleanupEligibleSubquery+`)`,
+		keepPerTask, cutoff); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx,
+		`DELETE FROM tasks WHERE id IN (`+cleanupEligibleSubquery+`)`,
+		keepPerTask, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(affected), nil
+}
+
 // DeleteOldHistory deletes tasks and logs older than days, in one transaction.
 func (db *Database) DeleteOldHistory(ctx context.Context, days int) (int, error) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)

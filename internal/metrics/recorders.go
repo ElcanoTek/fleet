@@ -12,7 +12,16 @@ const (
 	nameTokenUsage   = "fleet_token_usage_total"
 	nameSandboxPool  = "fleet_sandbox_pool_size"
 	nameTurnTimeouts = "fleet_turn_timeouts_total"
+	nameRunsPruned   = "fleet_sched_runs_pruned_total"
 )
+
+// RecordRunsPruned counts task runs deleted by the automatic retention sweep (#252).
+func RecordRunsPruned(n int) {
+	if n <= 0 {
+		return
+	}
+	incCounter(nameRunsPruned, "Total scheduled task runs deleted by the retention sweep.", nil, nil, float64(n))
+}
 
 // RecordHTTPRequest records one served request: a count by route/method/status
 // and its latency in the duration histogram.

@@ -5,11 +5,13 @@
 package scheduler
 
 import (
+	"context"
 	"log"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -23,6 +25,25 @@ type Scheduler struct {
 	storage  *storage.Storage
 	location *time.Location
 	stop     chan struct{}
+
+	// Automatic run-history retention (#252). retentionDays<=0 disables the daily
+	// pruning sweep entirely; otherwise terminal runs older than retentionDays are
+	// pruned daily at cleanupHour:00 UTC, always keeping keepPerTask runs per task.
+	retentionDays int
+	keepPerTask   int
+	cleanupHour   int
+}
+
+// SetRetention configures the automatic daily run-history pruning sweep (#252).
+// Call before Start. retentionDays<=0 leaves pruning OFF (the default). hour is
+// clamped to 0–23.
+func (s *Scheduler) SetRetention(retentionDays, keepPerTask, hour int) {
+	s.retentionDays = retentionDays
+	s.keepPerTask = keepPerTask
+	if hour < 0 || hour > 23 {
+		hour = 4
+	}
+	s.cleanupHour = hour
 }
 
 // New creates a new Scheduler.
@@ -53,6 +74,19 @@ func (s *Scheduler) runLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
+	// Daily retention sweep (#252): a timer that fires at the next cleanupHour:00
+	// UTC, then re-arms every 24h. Disabled (nil channel — never selected) when
+	// retention is off.
+	var cleanupC <-chan time.Time
+	var cleanupTimer *time.Timer
+	if s.retentionDays > 0 {
+		cleanupTimer = time.NewTimer(durationUntilHour(time.Now().UTC(), s.cleanupHour))
+		defer cleanupTimer.Stop()
+		cleanupC = cleanupTimer.C
+		log.Printf("scheduler: run-history retention ON (retention=%dd, keep=%d/task, sweep daily at %02d:00 UTC)",
+			s.retentionDays, s.keepPerTask, s.cleanupHour)
+	}
+
 	for {
 		select {
 		case <-ticker.C:
@@ -63,10 +97,40 @@ func (s *Scheduler) runLoop() {
 				s.ProcessScheduledTasks()
 				s.RecoverExpiredLeases()
 			}()
+		case <-cleanupC:
+			func() {
+				defer safe.Recover("scheduler.cleanup", nil)
+				s.runCleanup()
+			}()
+			cleanupTimer.Reset(24 * time.Hour)
 		case <-s.stop:
 			return
 		}
 	}
+}
+
+// runCleanup performs one retention sweep, logging + counting what it pruned.
+func (s *Scheduler) runCleanup() {
+	n, err := s.storage.CleanupOldRuns(context.Background(), s.retentionDays, s.keepPerTask)
+	if err != nil {
+		log.Printf("scheduler: run-history cleanup failed: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("scheduler: pruned %d old task run(s) (retention=%dd, keep=%d/task)", n, s.retentionDays, s.keepPerTask)
+		metrics.RecordRunsPruned(n)
+	}
+}
+
+// durationUntilHour returns the time from `now` until the next occurrence of
+// hour:00 (in now's location). If now is exactly at the top of that hour it
+// returns ~24h (next day) rather than 0, so the first sweep doesn't fire instantly.
+func durationUntilHour(now time.Time, hour int) time.Duration {
+	next := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, now.Location())
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next.Sub(now)
 }
 
 // RecoverExpiredLeases re-queues tasks whose lease expired (crash recovery).
