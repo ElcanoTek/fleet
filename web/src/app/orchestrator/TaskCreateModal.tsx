@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
-import type { CostForecast, McpServer, MCPChoice, TaskCreate } from "@/app/shared/lib/orchestratorApi";
+import { useEffect, useRef, useState } from "react";
+import type { CostForecast, McpServer, MCPChoice, TaskCreate, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
+import { applyTemplateVars, promptableVars } from "@/app/shared/lib/taskTemplates";
 import { validateTaskForm } from "@/app/shared/lib/validation";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { useToast } from "@/app/shared/ui/Toast";
@@ -73,6 +74,69 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
   const [forecast, setForecast] = useState<CostForecast | null>(null);
 
   const fileHandle = useRef<FileUploadHandle | null>(null);
+
+  // Task templates (#262): the bundle's read-only catalog of pre-filled task
+  // shapes. Fetched once when the modal opens; an empty catalog (or a fetch
+  // failure) simply suppresses the template section — the blank-form behavior is
+  // always available.
+  const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    orchestratorApi
+      .taskTemplates()
+      .then((list) => {
+        if (!cancelled) setTemplates(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        // Templates are a convenience; a failure must not block task creation.
+        if (!cancelled) setTemplates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  // applyTemplate pre-fills the form from a template. Built-in variables ({date},
+  // {user_name}) are substituted automatically; any remaining custom {token} is
+  // collected through a small prompt() per variable, then substituted. Every
+  // field stays editable afterward — this only seeds the form. The task is still
+  // created through the ordinary submit/createTask path.
+  const applyTemplate = (tpl: TaskTemplate) => {
+    const ctx = { userName: undefined as string | undefined };
+    const userValues: Record<string, string> = {};
+    for (const name of promptableVars(tpl.variables ?? [], ctx)) {
+      const entered = window.prompt(`Value for {${name}}`, "");
+      if (entered != null && entered !== "") userValues[name] = entered;
+    }
+    const t = tpl.task ?? {};
+    setPrompt(t.prompt ? applyTemplateVars(t.prompt, userValues, ctx) : "");
+    setDescription(t.description ?? "");
+    setTagsInput((t.tags ?? []).join(", "));
+    setPersona(t.persona ?? "");
+    setRecurrence(t.recurrence ?? "");
+    setModel(t.model ?? DEFAULT_PRIMARY_MODEL);
+    setFallbackModel(t.fallback_model ?? DEFAULT_FALLBACK_MODEL);
+    setAllowNetwork(Boolean(t.allow_network));
+    setCaptainsLog(Boolean(t.instruction_self_improve));
+    if (typeof t.max_iterations === "number") {
+      const known = MAX_ITER_OPTIONS.some((o) => o.value === String(t.max_iterations));
+      if (known) {
+        setMaxIterSelect(String(t.max_iterations));
+        setMaxIterCustom("");
+      } else {
+        setMaxIterSelect("__custom__");
+        setMaxIterCustom(String(t.max_iterations));
+      }
+    } else {
+      setMaxIterSelect("");
+      setMaxIterCustom("");
+    }
+    if (t.recurrence || t.persona || t.allow_network || t.instruction_self_improve) {
+      setAdvancedOpen(true);
+    }
+  };
 
   if (!open) return null;
 
@@ -209,6 +273,41 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
               void submit();
             }}
           >
+            {/* Task templates (#262) — pre-filled starting points. Suppressed
+                entirely when the bundle ships none. "Start from scratch" (the
+                blank form below) is always available. */}
+            {templates.length > 0 ? (
+              <div className="form-group" data-testid="task-template-section">
+                <div className="form-label-row">
+                  <span className="form-label">Start from a template</span>
+                  <span className="optional-badge">Optional</span>
+                </div>
+                <div className="template-card-grid" role="group" aria-label="Task templates">
+                  {templates.map((tpl) => (
+                    <button
+                      key={tpl.name}
+                      type="button"
+                      className="template-card"
+                      data-testid="template-card"
+                      onClick={() => applyTemplate(tpl)}
+                    >
+                      {tpl.icon ? (
+                        <span className="template-card-icon" aria-hidden="true">
+                          {tpl.icon}
+                        </span>
+                      ) : null}
+                      <span className="template-card-text">
+                        <span className="template-card-name">{tpl.name}</span>
+                        {tpl.description ? (
+                          <span className="template-card-desc">{tpl.description}</span>
+                        ) : null}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {/* Prompt */}
             <div className="form-group">
               <label htmlFor="promptTextarea">Prompt / Command</label>

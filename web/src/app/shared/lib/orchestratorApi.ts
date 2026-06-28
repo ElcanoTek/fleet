@@ -93,6 +93,36 @@ export type CostForecast = {
   note: string;
 };
 
+// TaskTemplateTask is the partial TaskCreate a template carries — the subset of
+// editable fields the create form pre-fills (#262). Mirrors
+// clientconfig.TaskTemplateTask. Omitted fields leave the form at its default.
+export type TaskTemplateTask = {
+  prompt?: string;
+  model?: string;
+  fallback_model?: string;
+  max_iterations?: number;
+  max_retries?: number;
+  recurrence?: string;
+  timezone?: string;
+  priority?: number;
+  allow_network?: boolean;
+  instruction_self_improve?: boolean;
+  persona?: string;
+  description?: string;
+  tags?: string[];
+};
+
+// TaskTemplate is one "new task from a template" entry from the bundle's
+// read-only catalog. `variables` are the {token} placeholder names extracted from
+// the prompt server-side, so the UI can prompt for values before applying.
+export type TaskTemplate = {
+  name: string;
+  description?: string;
+  icon?: string;
+  variables: string[];
+  task: TaskTemplateTask;
+};
+
 export type DashboardStats = {
   total_nodes?: number;
   active_nodes?: number;
@@ -188,6 +218,9 @@ export const orchestratorApi = {
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
   config: () => request<{ version?: string; timezone?: string }>("/config"),
   me: () => request<{ authenticated: boolean; username?: string; role?: string }>("/me"),
+
+  // Read-only task-template catalog for "new task from a template" (#262).
+  taskTemplates: () => request<TaskTemplate[]>("/task-templates"),
 
   // MCP catalog + credential accounts.
   mcpServers: () => request<{ servers: McpServer[] }>("/mcp-servers"),
