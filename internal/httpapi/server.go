@@ -1051,9 +1051,20 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		if len(title) > 200 {
 			title = title[:200]
 		}
-		if err := s.store.UpdateTitle(r.Context(), user, id, title); err != nil {
+		// A manual rename sets the title AND locks it (#302) so the background
+		// auto-titler never overwrites the user's chosen name.
+		if err := s.store.RenameTitle(r.Context(), user, id, title); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		// If a turn is mid-flight (e.g. the user renames DURING first-turn
+		// auto-titling), push the manual name over the live SSE buffer so the
+		// sidebar reflects it immediately and isn't left showing a now-superseded
+		// auto-title. The DB is already authoritative (the lock makes the manual
+		// name win); this just keeps the screen in sync without a reload. When no
+		// turn is live, no stale auto-title emit can arrive, so no emit is needed.
+		if entry, ok := s.getInflight(id); ok && entry.buf != nil {
+			entry.buf.Emit("conversation.title_updated", map[string]any{"id": id, "title": title})
 		}
 		writeJSON(w, struct {
 			ID    string `json:"id"`
@@ -1339,8 +1350,10 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 		title := strings.TrimSpace(req.Title)
 		if title == "" {
-			// derive from first message; shortened later
-			title = truncateForTitle(req.Message, 80)
+			// Instant heuristic title (#302): a real noun-phrase name with zero
+			// I/O so the sidebar shows something meaningful immediately; the
+			// async LLM titler may upgrade it (unless the user locks it).
+			title = agent.HeuristicTitle(req.Message)
 		}
 		lockdown := req.Lockdown || s.cfg.LockdownOnly
 		if lockdown {
@@ -1626,7 +1639,7 @@ func (s *Server) runTurnAsync(
 	// First-turn auto-title: on the opening turn, summarize the exchange
 	// into a 5-7 word sidebar title. Emits via the buffer so both the
 	// initial client and any reattach see it.
-	if len(history) == 0 && !res.Cancelled && strings.TrimSpace(res.FinalText) != "" {
+	if s.cfg.AutoTitle && len(history) == 0 && !res.Cancelled && strings.TrimSpace(res.FinalText) != "" {
 		// Independent of persistCtx (and the request — this whole goroutine
 		// is detached): titling makes its own LLM call, and sharing persistCtx's
 		// 10s budget would let it starve the post-turn sweep below. The wait
@@ -1638,13 +1651,19 @@ func (s *Server) runTurnAsync(
 		title := s.agent.SuggestTitle(titleCtx, userInput, res.FinalText)
 		cancel()
 		if title != "" {
-			if err := s.store.UpdateTitle(persistCtx, user, conv.ID, title); err != nil {
-				log.Printf("auto-title UpdateTitle failed: %v", err)
-			} else {
+			// UpdateTitle is locked-guarded (#302): if the user manually renamed
+			// the conversation mid-turn it returns ErrTitleLocked — a benign skip,
+			// not an error, and we must NOT emit the overwrite to the sidebar.
+			switch err := s.store.UpdateTitle(persistCtx, user, conv.ID, title); {
+			case err == nil:
 				buf.Emit("conversation.title_updated", map[string]any{
 					"id":    conv.ID,
 					"title": title,
 				})
+			case errors.Is(err, store.ErrTitleLocked):
+				// user renamed it; leave their name in place.
+			default:
+				log.Printf("auto-title UpdateTitle failed: %v", err)
 			}
 		}
 	}
@@ -2015,15 +2034,4 @@ func writeJSON(w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("write json: %v", err)
 	}
-}
-
-func truncateForTitle(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "New conversation"
-	}
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

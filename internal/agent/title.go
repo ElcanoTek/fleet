@@ -69,6 +69,60 @@ var (
 	orphanThinkTagRegex = regexp.MustCompile(`</?think>`)
 )
 
+// heuristicFillerPrefix strips conversational lead-ins so the instant title
+// (#302) reads as a noun phrase, not a verbatim request.
+var heuristicFillerPrefix = regexp.MustCompile(`(?i)^(can you|could you|would you|please|help me|i need to|i need|i want to|i want|i'd like to|i'd like|what is|what are|what's|how (do|can|should|to) (i|you|we)?|how to|tell me about|tell me|give me|show me|let's|lets)\s+`)
+
+// HeuristicTitle derives a sidebar title from the first user message with ZERO
+// I/O (#302), so a new conversation shows a real name within milliseconds
+// instead of a placeholder while the LLM titler runs. Strips a leading filler
+// phrase, title-cases the remainder, and truncates to ~50 chars on a word
+// boundary. Returns "New conversation" when nothing meaningful remains. The
+// async LLM titler may later upgrade this (unless the user has locked the title).
+func HeuristicTitle(msg string) string {
+	s := strings.TrimSpace(msg)
+	// Strip stacked lead-ins ("can you help me ..." → "..."), bounded so a
+	// pathological all-filler message can't loop forever.
+	for i := 0; i < 4; i++ {
+		stripped := heuristicFillerPrefix.ReplaceAllString(s, "")
+		if stripped == s {
+			break
+		}
+		s = strings.TrimSpace(stripped)
+	}
+	// Single-line, collapse internal whitespace.
+	s = strings.Join(strings.Fields(s), " ")
+	s = truncateTitle(s, 50)
+	s = strings.TrimRight(s, " .,;:!?-")
+	if utf8.RuneCountInString(s) < 3 {
+		return "New conversation"
+	}
+	return titleCase(s)
+}
+
+// titleCase upper-cases the first letter of each word, leaving the rest as-is
+// (so acronyms like "Go", "API", "SQL" and mixed-case tokens survive). Small
+// connector words stay lowercase unless they lead.
+func titleCase(s string) string {
+	small := map[string]bool{
+		"a": true, "an": true, "the": true, "and": true, "or": true, "but": true,
+		"of": true, "to": true, "in": true, "on": true, "for": true, "with": true,
+		"at": true, "by": true, "from": true, "as": true, "is": true,
+	}
+	words := strings.Fields(s)
+	for i, w := range words {
+		lower := strings.ToLower(w)
+		if i > 0 && small[lower] {
+			words[i] = lower
+			continue
+		}
+		r := []rune(w)
+		r[0] = []rune(strings.ToUpper(string(r[0])))[0]
+		words[i] = string(r)
+	}
+	return strings.Join(words, " ")
+}
+
 // normalizeTitle cleans a raw model response into a sidebar title.
 func normalizeTitle(raw string) string {
 	title := thinkTagRegex.ReplaceAllString(raw, "")

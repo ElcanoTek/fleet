@@ -32,6 +32,7 @@ type chatStore interface {
 	SetModel(ctx context.Context, userEmail, convID, model string) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
 	UpdateTitle(ctx context.Context, userEmail, convID, title string) error
+	RenameTitle(ctx context.Context, userEmail, convID, title string) error
 
 	// Full-text search (#308): ranked title + message-content matches, scoped to
 	// the user and paginated; returns (results, total, error).

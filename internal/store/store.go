@@ -75,7 +75,16 @@ type Conversation struct {
 	// from the default GET /conversations list but remain fully readable via
 	// ?archived=true, and are excluded from the unpinned-cap eviction.
 	ArchivedAt *int64 `json:"archived_at"`
+	// TitleLocked is set when the user manually renames a conversation (#302).
+	// While true, the background auto-titler skips it so a manual name is never
+	// silently overwritten.
+	TitleLocked bool `json:"title_locked"`
 }
+
+// ErrTitleLocked is returned by UpdateTitle when the conversation's title is
+// locked by a manual rename (#302) — the auto-titler treats it as "skip", not a
+// failure.
+var ErrTitleLocked = errors.New("title is locked by a manual rename")
 
 // PoolConfig tunes the chat DB connection pool (#276). Kept local to the store
 // package (the cmd layer maps the env-derived config into it) so this low-level
@@ -271,16 +280,37 @@ func (s *Store) SetModel(ctx context.Context, userEmail, convID, model string) e
 
 // UpdateTitle is called after the first assistant reply (when we have enough
 // context to auto-name the conversation).
+// UpdateTitle sets the title from the AUTO-titler (#302). It is guarded by
+// title_locked = FALSE so a user's manual rename is never overwritten; when the
+// title is locked it makes no change and returns ErrTitleLocked, which the
+// caller treats as a benign skip.
 func (s *Store) UpdateTitle(ctx context.Context, userEmail, convID, title string) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET title = $1, updated_at = $2 WHERE id = $3 AND user_email = $4`,
+		`UPDATE conversations SET title = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND title_locked = FALSE`,
 		title, time.Now().Unix(), convID, userEmail,
 	)
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Either the row is locked or it's gone; the auto-titler skips both.
+		return ErrTitleLocked
+	}
+	return nil
+}
+
+// RenameTitle applies a MANUAL rename (#302): it sets the title and locks it
+// (title_locked = TRUE) in one statement, unconditionally — a manual rename
+// always wins and pins the name against the auto-titler thereafter.
+func (s *Store) RenameTitle(ctx context.Context, userEmail, convID, title string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET title = $1, title_locked = TRUE, updated_at = $2 WHERE id = $3 AND user_email = $4`,
+		title, time.Now().Unix(), convID, userEmail,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
 		return errors.New("conversation not found")
 	}
 	return nil
@@ -393,7 +423,7 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 		archivedFilter = "archived_at IS NOT NULL"
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, optional_mcp_servers_enabled
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled
 		 FROM conversations WHERE user_email = $1 AND `+archivedFilter+`
 		 ORDER BY pinned DESC, updated_at DESC, id DESC`,
 		userEmail,
@@ -407,7 +437,7 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 	for rows.Next() {
 		var c Conversation
 		var optionalRaw []byte
-		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &optionalRaw); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw); err != nil {
 			return nil, err
 		}
 		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
@@ -419,13 +449,13 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 // Get fetches a single conversation (without messages).
 func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, optional_mcp_servers_enabled
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled
 		 FROM conversations WHERE id = $1 AND user_email = $2`,
 		convID, userEmail,
 	)
 	var c Conversation
 	var optionalRaw []byte
-	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &optionalRaw); err != nil {
+	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
