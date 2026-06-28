@@ -45,6 +45,42 @@ contributing, never commit real credentials — the generic `config/default`
 bundle ships with no connector secrets, and all deployment secrets live in an
 operator-managed `0600` env file outside the repo (see the README).
 
+## Supply-chain security (dependencies)
+
+Fleet pulls third-party code from two ecosystems — Go modules at the repo root
+and npm packages under `web/` — and relies on several deliberate controls to
+keep a compromised or fresh-and-unvetted release from reaching `main`:
+
+- **Go module integrity is verified, with the defaults intact.** The repo commits
+  a complete `go.sum`, and the build does **not** set any of `GOFLAGS`, `GOPROXY`,
+  `GOSUMDB`, `GONOSUMCHECK`, `GONOSUMDB`, `GOPRIVATE`, or `GOINSECURE` — so Go's
+  out-of-the-box posture applies: modules are fetched through the public proxy
+  (`proxy.golang.org`) and every download is checked against the committed
+  `go.sum` and the public checksum database (`sum.golang.org`). The checksum DB
+  is **not** disabled. This is a conscious choice: there is no private module
+  source to exempt, so weakening these (e.g. `GONOSUMCHECK`, `GOFLAGS=-insecure`,
+  or a `GOPRIVATE` carve-out) would only remove protection. Do not add such an
+  override without a documented reason and a corresponding entry here.
+- **Dependency-CVE scanning.** CI runs `govulncheck` against the Go module on
+  every PR (the `govulncheck` job in `.github/workflows/ci.yml`), failing the
+  build on a known-vulnerable dependency that fleet actually calls into.
+- **Release cooldown.** `.github/dependabot.yml` applies a `cooldown` to the gomod
+  and npm surfaces so Dependabot waits a few days (3 for patch, 7 for minor, 14
+  for major) before proposing a freshly published release. This blunts fast
+  typosquat / account-takeover attacks, where a malicious version is published and
+  then yanked once the ecosystem flags it. It matters most for **patch** bumps,
+  which `.github/workflows/auto-merge-dependabot.yml` auto-merges once the full CI
+  gate is green: without a cooldown a minutes-old patch could be proposed and
+  auto-merged before any scrutiny. Cooldown applies to version updates only —
+  Dependabot **security** updates are never delayed, so urgent CVE fixes still
+  flow immediately.
+
+The cooldown reduces the window for a fast attack but is **not** a guarantee:
+a patient attacker who waits out the cooldown, or a compromise the ecosystem
+never flags, would still slip through. The committed `go.sum` + checksum DB and
+`govulncheck` are the stronger, always-on controls; the cooldown is
+defense-in-depth on top of the auto-merge path.
+
 ## CSRF protection (cookie-authenticated routes)
 
 State-mutating orchestrator routes (`POST /tasks`, `POST /upload`, …) accept the
