@@ -1,7 +1,19 @@
 // Pure helpers for rewriting agent-emitted relative paths in markdown
-// to the per-conversation workspace file API. Used by both the <img>
-// and <a> interceptors in chat-experience.tsx and exported separately
+// to a per-run workspace file API. Used by both the <img> and <a>
+// interceptors in the chat transcript (chat-experience.tsx) AND the
+// orchestrator task-log viewer (LogViewer.tsx), and exported separately
 // so vitest can exercise the rewrite logic without booting React.
+//
+// Two callers, two workspace endpoints, ONE safety policy:
+//   - chat reads from   /api/conversations/<convID>/workspace/<path>
+//   - the task-log view reads from
+//                       /api/orchestrator/tasks/<taskID>/workspace/<path>
+// Both are authenticated, origin-local proxies scoped to a single run's
+// workspace dir. The rewrite ONLY targets relative paths the agent
+// emitted (a file it actually wrote into its own workspace); every
+// absolute http(s)/data/mailto/protocol-relative/site-root href passes
+// through untouched, so neither caller can be coaxed into fetching an
+// arbitrary remote URL (no SSRF / tracking-pixel vector — see #271).
 
 // Sentinel for messages that belong to a brand-new chat whose server
 // id we haven't received yet. Mirrors the constant in chat-experience.tsx.
@@ -37,12 +49,58 @@ export function resolveWorkspaceHref(
   raw: string | undefined | null,
   conversationId: string | null,
 ): WorkspaceHref {
-  const value = typeof raw === "string" ? raw : "";
-  if (!value) return { href: "", isWorkspaceFile: false, downloadFilename: "" };
-
   if (!conversationId || conversationId === PENDING_CONV_KEY) {
+    const value = typeof raw === "string" ? raw : "";
     return { href: value, isWorkspaceFile: false, downloadFilename: "" };
   }
+  return resolveScopedWorkspaceHref(
+    raw,
+    `/api/conversations/${encodeURIComponent(conversationId)}/workspace/`,
+  );
+}
+
+/**
+ * resolveTaskWorkspaceHref is the scheduled-task counterpart of
+ * resolveWorkspaceHref (#271). It rewrites a relative href the agent
+ * emitted in a task-log message (e.g. `![chart](weekly.png)` produced by
+ * the generate_image tool) to the task's workspace file proxy
+ * `/api/orchestrator/tasks/<taskID>/workspace/<path>`, which streams the
+ * file from the task's own per-run workspace dir.
+ *
+ * It shares the EXACT safety rules of the chat path: only relative paths
+ * are rewritten; absolute http(s)/data/mailto/protocol-relative/site-root
+ * hrefs pass through unchanged, so a task log can never make the browser
+ * fetch an arbitrary remote URL.
+ */
+export function resolveTaskWorkspaceHref(
+  raw: string | undefined | null,
+  taskId: string | null,
+): WorkspaceHref {
+  if (!taskId) {
+    const value = typeof raw === "string" ? raw : "";
+    return { href: value, isWorkspaceFile: false, downloadFilename: "" };
+  }
+  return resolveScopedWorkspaceHref(
+    raw,
+    `/api/orchestrator/tasks/${encodeURIComponent(taskId)}/workspace/`,
+  );
+}
+
+/**
+ * resolveScopedWorkspaceHref is the shared core: it applies the
+ * sandbox-prefix stripping, the absolute-URL bailout, and the
+ * per-segment percent-encoding, then joins the surviving relative path
+ * onto `basePath` (which must already be a trailing-slash workspace API
+ * prefix). Keeping the policy in one place is what guarantees the chat
+ * and task-log callers can never drift apart on what counts as a "safe,
+ * workspace-local" reference.
+ */
+function resolveScopedWorkspaceHref(
+  raw: string | undefined | null,
+  basePath: string,
+): WorkspaceHref {
+  const value = typeof raw === "string" ? raw : "";
+  if (!value) return { href: "", isWorkspaceFile: false, downloadFilename: "" };
 
   // Some models (notably ChatGPT-style ones) hallucinate links that leak
   // the sandbox's view of the workspace — e.g. `sandbox:/opt/chat/workspace/
@@ -94,7 +152,7 @@ export function resolveWorkspaceHref(
   const downloadFilename = decodedSegments[decodedSegments.length - 1];
 
   return {
-    href: `/api/conversations/${encodeURIComponent(conversationId)}/workspace/${segments}`,
+    href: `${basePath}${segments}`,
     isWorkspaceFile: true,
     downloadFilename,
   };
