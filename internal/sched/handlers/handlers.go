@@ -120,20 +120,6 @@ type Handlers struct {
 	// + credential-account admin table render. Injected by cmd/fleet via
 	// SetMCPCatalogProvider; nil → empty catalog. See mcp.go.
 	mcpCatalog func() []MCPServerCatalogEntry
-
-	// runtimeSelectable reports whether a runtime-flavor name is selectable for a
-	// task (the bundle's gated catalog). Injected by cmd/fleet via
-	// SetRuntimeValidator; nil → no validation (any value accepted, dispatch
-	// resolves it). Lets task creation reject a gated/unknown flavor (e.g.
-	// native-inprocess when FLEET_ENABLE_INPROCESS_LOOP is off, #159) up front
-	// with a 400 instead of a silent fallback at dispatch.
-	runtimeSelectable func(name string) bool
-}
-
-// SetRuntimeValidator wires the bundle's gated runtime-flavor catalog so task
-// creation can reject a flavor the deployment does not offer.
-func (h *Handlers) SetRuntimeValidator(fn func(name string) bool) {
-	h.runtimeSelectable = fn
 }
 
 // statsCache caches dashboard statistics.
@@ -840,17 +826,10 @@ func localizeTasks(tasks []*models.Task) {
 	}
 }
 
-// validateTaskRouting validates the task's targeting/routing fields: the runtime
-// flavor, the trigger type (#177), and the per-task MCP selection. Split out of
-// validateTaskCreate to keep that function under the gocyclo threshold.
+// validateTaskRouting validates the task's targeting/routing fields: the trigger
+// type (#177) and the per-task MCP selection. Split out of validateTaskCreate to
+// keep that function under the gocyclo threshold.
 func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
-	// Reject a runtime-flavor the deployment doesn't offer (e.g. native-inprocess
-	// when the in-process loop is gated off, #159) up front rather than silently
-	// falling back to the default at dispatch.
-	if rf := strings.TrimSpace(tc.RuntimeFlavor); rf != "" && h.runtimeSelectable != nil && !h.runtimeSelectable(rf) {
-		return fmt.Errorf("runtime flavor %q is not available on this deployment", rf)
-	}
-
 	// Reject an unrecognized trigger type up front (#177). Empty defaults to
 	// "cron" in NewTask, so only a non-empty invalid value is an error.
 	if tc.TriggerType != "" && !tc.TriggerType.IsValid() {
@@ -1580,7 +1559,6 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
-		RuntimeFlavor:          tc.RuntimeFlavor,
 		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,
 		Recurrence:             tc.Recurrence,
@@ -1686,7 +1664,6 @@ type taskRerunOverrides struct {
 	FallbackModel *string  `json:"fallback_model,omitempty"`
 	MaxIterations *int     `json:"max_iterations,omitempty"`
 	Priority      *int     `json:"priority,omitempty"`
-	RuntimeFlavor *string  `json:"runtime_flavor,omitempty"`
 	AllowNetwork  *bool    `json:"allow_network,omitempty"`
 	Description   *string  `json:"description,omitempty"`
 	Tags          []string `json:"tags,omitempty"`
@@ -1829,9 +1806,6 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	}
 	if o.Priority != nil {
 		tc.Priority = *o.Priority
-	}
-	if o.RuntimeFlavor != nil {
-		tc.RuntimeFlavor = *o.RuntimeFlavor
 	}
 	if o.AllowNetwork != nil {
 		tc.AllowNetwork = *o.AllowNetwork

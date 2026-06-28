@@ -49,8 +49,6 @@ import { parseSseChunk, stepStreamDedup, type ServerEvent } from "@/app/lib/sse"
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import { LoadingLogo } from "./LoadingLogo";
 import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
-import { RuntimePicker } from "./RuntimePicker";
-import { PermissionCard } from "./PermissionCard";
 import { SearchBar } from "./SearchBar";
 import { getPill } from "./protocolPills";
 import { useClientConfig } from "@/app/lib/useClientConfig";
@@ -77,8 +75,6 @@ import {
   type MemoryProposal,
   type Message,
   type ModelRequiredEventPayload,
-  type PermissionOption,
-  type PermissionStatus,
   type PythonStream,
   type RetryEventPayload,
   type ToolCall,
@@ -113,9 +109,6 @@ type ConversationSummary = {
   // slugs to the server's lockdown allow-list. Drives the lock-icon
   // badge in the sidebar + chat header and filters the model picker.
   lockdown?: boolean;
-  // runtime is the per-conversation execution flavor (fleet's ACP runtime
-  // selection). Empty = the bundle default. Drives the flavor picker.
-  runtime?: string;
 };
 
 type ServerConfig = {
@@ -665,11 +658,7 @@ export function ChatExperience() {
   // Runtime client config: branding strings + the empty-state quick-start
   // cards, fetched from the member-gated /api/client-config so the UI is
   // client-agnostic. Falls back to neutral defaults on error / while loading.
-  const { branding, pills, runtimes, defaultRuntime } = useClientConfig();
-  // selectedRuntime is the active conversation's runtime flavor ("" = use the
-  // bundle default). Synced from the conversation on load; persisted with the
-  // turn via the chat request body + the dedicated /runtime endpoint.
-  const [selectedRuntime, setSelectedRuntime] = useState<string>("");
+  const { branding, pills } = useClientConfig();
   // selectedModel is the OpenRouter slug for the active conversation. Empty
   // means "use the server-configured primary." It can be edited mid-chat;
   // submitPrompt forwards the current value with every turn so the backend
@@ -1711,7 +1700,6 @@ export function ChatExperience() {
       if (conv) {
         setSelectedPersona(conv.persona);
         setSelectedModel(conv.model || DEFAULT_MODEL);
-        setSelectedRuntime(conv.runtime || "");
       }
       setSidebarOpen(false);
       return;
@@ -1737,7 +1725,6 @@ export function ChatExperience() {
       setActiveConversationId(data.conversation.id);
       setSelectedPersona(data.conversation.persona);
       setSelectedModel(data.conversation.model || DEFAULT_MODEL);
-      setSelectedRuntime(data.conversation.runtime || "");
       // Reset compaction UI state so the freshly-loaded conversation
       // starts with pre-summary turns collapsed (when present) and
       // any prior error from another chat does not leak into this one.
@@ -1966,25 +1953,6 @@ export function ChatExperience() {
     }
   };
 
-  // selectRuntime updates the active conversation's runtime flavor. It updates
-  // local state immediately (so the next turn's chat body carries it) and, when
-  // a conversation already exists, persists it via the dedicated endpoint so a
-  // mid-conversation change sticks even without sending a turn. A brand-new chat
-  // has no row yet — the choice rides the first chat request body instead.
-  const selectRuntime = (name: string) => {
-    setSelectedRuntime(name);
-    const convId = activeConversationIdRef.current;
-    if (!convId) return;
-    void fetch(`/api/conversations/${encodeURIComponent(convId)}/runtime`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ runtime: name }),
-    }).catch(() => {
-      // Best-effort: the flavor still rides the next chat request body, which
-      // persists it server-side, so a transient failure here is non-fatal.
-    });
-  };
-
   const togglePin = async (conversation: ConversationSummary) => {
     const nextPinned = !conversation.pinned;
     // Optimistic update
@@ -2120,8 +2088,6 @@ export function ChatExperience() {
     // to DEFAULT_MODEL — for lockdown that's also the first allowed
     // slug, and for normal chat it's the product default.
     setSelectedModel(DEFAULT_MODEL);
-    // New chat starts on the bundle default flavor (empty = default).
-    setSelectedRuntime("");
     promptRef.current?.focus();
   };
 
@@ -2440,62 +2406,6 @@ export function ChatExperience() {
               : ap,
           );
           return { ...msg, approvals: touched };
-        });
-        return { ...prev, [ctx.target]: next };
-      });
-      return;
-    }
-
-    // An EXTERNAL ACP agent (Claude Code / Goose) asked for permission to do
-    // something sensitive. Surface it inline as an allow/deny prompt; the
-    // agent's turn is BLOCKED server-side until the user decides (or the
-    // default-deny timeout fires). There is no "approve all".
-    if (event.event === "permission.requested") {
-      const p = payload as {
-        request_id: string;
-        title?: string;
-        kind?: string;
-        locations?: string[];
-        options?: PermissionOption[];
-      };
-      patchAssistantMessage(ctx.target, ctx.assistantId, (m) => {
-        const existing = m.permissionRequests ?? [];
-        if (existing.some((pr) => pr.id === p.request_id)) return m;
-        return {
-          ...m,
-          permissionRequests: [
-            ...existing,
-            {
-              id: p.request_id,
-              title: p.title ?? "The agent wants to perform an action",
-              kind: p.kind,
-              locations: p.locations,
-              options: p.options ?? [],
-              status: "pending" as PermissionStatus,
-            },
-          ],
-        };
-      });
-      return;
-    }
-
-    // The server resolved a permission request (the human decided, or the
-    // default-deny timeout fired). Reflect the terminal state so a stale prompt
-    // can't linger — important when the timeout, not the user, decided.
-    if (event.event === "permission.resolved") {
-      const p = payload as { request_id: string; allowed?: boolean };
-      const status: PermissionStatus = p.allowed ? "allowed" : "denied";
-      setMessagesByConv((prev) => {
-        const existing = prev[ctx.target];
-        if (!existing) return prev;
-        const next = existing.map((msg) => {
-          if (!msg.permissionRequests?.length) return msg;
-          return {
-            ...msg,
-            permissionRequests: msg.permissionRequests.map((pr) =>
-              pr.id === p.request_id && pr.status === "pending" ? { ...pr, status } : pr,
-            ),
-          };
         });
         return { ...prev, [ctx.target]: next };
       });
@@ -3403,9 +3313,6 @@ export function ChatExperience() {
       persona: selectedPersona,
       model: trimmedModel,
     };
-    if (selectedRuntime) {
-      body.runtime = selectedRuntime;
-    }
     if (uploadedAttachments.length > 0) {
       body.attachments = uploadedAttachments;
     }
@@ -4797,26 +4704,6 @@ export function ChatExperience() {
                                 </div>
                               ) : null}
 
-                              {message.permissionRequests && message.permissionRequests.length > 0 ? (
-                                <div className="grid gap-1.5">
-                                  {message.permissionRequests.map((pr) => (
-                                    <PermissionCard
-                                      key={pr.id}
-                                      request={pr}
-                                      conversationId={realConvId(currentConvKey) ?? ""}
-                                      onResolved={(next) => {
-                                        patchAssistantMessage(currentConvKey, message.id, (m) => ({
-                                          ...m,
-                                          permissionRequests: (m.permissionRequests ?? []).map((x) =>
-                                            x.id === next.id ? next : x,
-                                          ),
-                                        }));
-                                      }}
-                                    />
-                                  ))}
-                                </div>
-                              ) : null}
-
                               {message.memoryProposals && message.memoryProposals.length > 0 ? (
                                 <div className="grid gap-1.5">
                                   {message.memoryProposals.map((mp) => (
@@ -5150,16 +5037,6 @@ export function ChatExperience() {
                       </div>
                     );
                   })()}
-                  {/* Runtime flavor picker — self-hides unless the bundle ships
-                      more than one flavor. Lets a conversation pick the native
-                      in-process fast path vs the sandboxed native-acp agent
-                      (and, later, external ACP flavors). */}
-                  <RuntimePicker
-                    flavors={runtimes}
-                    selected={selectedRuntime}
-                    defaultRuntime={defaultRuntime}
-                    onSelect={selectRuntime}
-                  />
                   {/* No leading "Persona" / "Model" word labels — the
                       pill values themselves convey what each control is,
                       and dropping the labels keeps the persona dropdown's

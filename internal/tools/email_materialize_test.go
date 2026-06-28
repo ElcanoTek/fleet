@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// These exercise the shared email-arg materialization used by every governed
-// staging surface (the web approval stager and the ACP ingress approver). They
-// need no DB and no model — just a workspace root.
+// These exercise the email-arg materialization used by the governed staging
+// surface (the web approval stager). They need no DB and no model — just a
+// workspace root.
 
 func TestMaterializeContentFileInlinesWorkspaceFile(t *testing.T) {
 	convID := "conv-mat-1"

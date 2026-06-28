@@ -67,13 +67,13 @@ func TestBuildRerunTaskCreate(t *testing.T) {
 
 func TestApplyRerunOverrides(t *testing.T) {
 	base := func() models.TaskCreate {
-		return models.TaskCreate{Prompt: "orig", Priority: 1, RuntimeFlavor: "native-acp", Tags: []string{"a"}}
+		return models.TaskCreate{Prompt: "orig", Priority: 1, Tags: []string{"a"}}
 	}
 
 	t.Run("nil overrides leave everything", func(t *testing.T) {
 		tc := base()
 		applyRerunOverrides(&tc, taskRerunOverrides{})
-		if tc.Prompt != "orig" || tc.Priority != 1 || tc.RuntimeFlavor != "native-acp" || len(tc.Tags) != 1 {
+		if tc.Prompt != "orig" || tc.Priority != 1 || len(tc.Tags) != 1 {
 			t.Errorf("empty overrides changed fields: %+v", tc)
 		}
 	})
@@ -85,8 +85,8 @@ func TestApplyRerunOverrides(t *testing.T) {
 		if tc.Prompt != "changed" || tc.Priority != 9 {
 			t.Errorf("overrides not applied: prompt=%q priority=%d", tc.Prompt, tc.Priority)
 		}
-		if tc.RuntimeFlavor != "native-acp" {
-			t.Errorf("unset field should be unchanged, got %q", tc.RuntimeFlavor)
+		if len(tc.Tags) != 1 || tc.Tags[0] != "a" {
+			t.Errorf("unset field should be unchanged, got %v", tc.Tags)
 		}
 	})
 

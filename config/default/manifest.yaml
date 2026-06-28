@@ -22,85 +22,6 @@ sandbox:
   tag: localhost/fleet-sandbox:latest
   image: "${FLEET_SANDBOX_IMAGE:-}"
 
-# Runtime flavors. fleet is an ACP client that drives each flavor as an ACP
-# agent; native-inprocess is the fast in-process path kept as the default and
-# the parity oracle. A flavor is selected per conversation / scheduled task (the
-# chat + orchestrator flavor pickers).
-#
-#   type:             native-inprocess | native-acp | acp
-#   image:            agent container image ref (native-acp / acp). Pin by digest
-#                     in production; resolves ${VAR} via the manifest pass. The
-#                     generic bundle uses the build-on-box native-agent tag,
-#                     overridable via ${FLEET_NATIVE_AGENT_IMAGE}.
-#   network:          restricted | none | model_only — the agent container's
-#                     egress posture. native-acp needs model-endpoint egress
-#                     (the loop runs in the agent); MCP creds are NEVER shipped
-#                     into the container regardless (brokered host-side).
-#   delegated_policy: containment tier for self-executing external flavors
-#                     (governance: delegated). Native flavors leave it false
-#                     (fully governed, identical to in-process native).
-#   model_env:        for type: acp — the env var NAMES carrying the external
-#                     PROVIDER's OWN model-endpoint credential(s). The host reads
-#                     these from its environment and passes ONLY them into the
-#                     locked agent container (the scrubbed env). fleet secrets
-#                     and MCP credentials are NEVER shipped to an external agent.
-#   args:             for type: acp — extra args appended to the agent container
-#                     entrypoint (e.g. a bridge's `acp` subcommand).
-#   default:          the flavor selected when none is chosen (at most one).
-#
-# External (type: acp) flavors are the CONTAINMENT tier (governance: delegated):
-# the provider's agent self-executes inside a locked, model-only-egress sandbox
-# and fleet observes (does not enforce) its self-report; session/request_permission
-# is routed to a human (default-deny). See docs/USING-AGENTS.md for the full tier
-# breakdown, the data-residency caveat, and a worked example. The provider images
-# below need not exist in this generic bundle — a real XYZ-config bundle pins its
-# own digests and supplies the model creds; this block documents the wiring.
-runtimes:
-  # native-acp (containerized loop) is the DEFAULT (#159): the whole agent loop
-  # runs inside the sandbox and delegates execution back to the host, so it holds
-  # no privileged local executor and never shares the fleet process's address
-  # space with host-held MCP credentials. native-inprocess (loop in the fleet
-  # process) is gated behind FLEET_ENABLE_INPROCESS_LOOP=1 (default off) — off, it
-  # is dropped from the selectable catalog and rejected server-side.
-  native-inprocess:
-    type: native-inprocess
-    display_name: "Native (in-process)"
-    description: "Fast in-process loop. Dev/test/trusted-local; the parity oracle. Gated by FLEET_ENABLE_INPROCESS_LOOP."
-  native-acp:
-    type: native-acp
-    image: "${FLEET_NATIVE_AGENT_IMAGE:-localhost/fleet-native-agent:latest}"
-    network: restricted
-    display_name: "Native (sandboxed)"
-    description: "Native loop wrapped as a sandboxed ACP agent. Fully governed."
-    default: true
-  # Claude Code as an external ACP agent, wired via the claude-agent-acp bridge
-  # (https://github.com/zed-industries/claude-code-acp) baked into the provider
-  # image. Self-executes in a locked sandbox; fleet contains + observes. The
-  # bridge reads ANTHROPIC_API_KEY for the model endpoint — the only secret that
-  # enters the container.
-  claude-code:
-    type: acp
-    image: "${FLEET_CLAUDE_CODE_IMAGE:-localhost/fleet-claude-code:latest}"
-    network: model_only
-    delegated_policy: true
-    model_env: ["ANTHROPIC_API_KEY"]
-    display_name: "Claude Code (external)"
-    description: "Anthropic Claude Code via the ACP bridge. Self-executing; containment tier."
-    beta: true
-  # Goose (https://github.com/block/goose) speaks ACP natively — `goose acp`.
-  # Same containment tier. Goose-on-OpenRouter reads OPENROUTER_API_KEY; a
-  # bundle targeting a different Goose provider lists that provider's key here.
-  goose:
-    type: acp
-    image: "${FLEET_GOOSE_IMAGE:-localhost/fleet-goose:latest}"
-    network: model_only
-    delegated_policy: true
-    model_env: ["OPENROUTER_API_KEY"]
-    args: ["acp"]
-    display_name: "Goose (external)"
-    description: "Block's Goose via native ACP. Self-executing; containment tier."
-    beta: true
-
 branding:
   app_name: "Fleet"
   login_title: "Welcome aboard."
@@ -141,20 +62,10 @@ mcp_servers: []
 #                               automatically — list only client-specific ones).
 #   critical_tool_substitutes:  committed-suffix -> allowed executed substitute
 #                               suffixes that may discharge the commitment.
-#   allow_ungoverned_scheduled_agents:
-#                               per-client opt-in (default false) that lets an
-#                               EXTERNAL (type: acp / delegated_policy) flavor run
-#                               as a SCHEDULED task at the CONTAINMENT tier. fleet
-#                               is FAIL-CLOSED: with this off, a scheduled task that
-#                               selects an external flavor is a LOUD ERROR at
-#                               dispatch — never a silent fallback to a native
-#                               flavor. The generic bundle leaves it false. See
-#                               docs/USING-AGENTS.md ("Scheduled-external").
 agent_policy:
   parallel_safe_tools: []
   critical_tools: []
   critical_tool_substitutes: {}
-  allow_ungoverned_scheduled_agents: false
 
 empty_state:
   # Neutral example quick-start cards. The shape is the web's ProtocolPill — the

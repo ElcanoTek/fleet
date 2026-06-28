@@ -25,8 +25,7 @@ const teardownGrace = 3 * time.Second
 
 // stdioConn adapts a child process's stdout (read side) and stdin (write side) into
 // a single io.ReadWriteCloser — the connection the broker protocol rides over. The
-// broker child speaks frames on stdin/stdout and logs to stderr, the same split the
-// ACP agent subprocess uses.
+// broker child speaks frames on stdin/stdout and logs to stderr.
 type stdioConn struct {
 	r io.ReadCloser
 	w io.WriteCloser

@@ -196,61 +196,21 @@ func TestRunInteractiveTurn_OneRoundCollapse(t *testing.T) {
 	}
 }
 
-// TestACPInteractiveFallback asserts the governance-honesty gate is now EMPTY:
-// P-ACP-2b closed every reason the P-ACP-1 gate carried (MCP, approval staging,
-// memory/note staging, lockdown) by extending the host-side delegation, so
-// native-acp runs FULLY GOVERNED in every case it previously fell back. The gate
-// stays as the single auditable hook to re-introduce a fallback if a new governed
-// surface ever lands before its delegation seam.
-func TestACPInteractiveFallback(t *testing.T) {
-	cases := []struct {
-		name   string
-		mutate func(*TurnConfig)
-	}{
-		{"clean", func(*TurnConfig) {}},
-		{"lockdown", func(tc *TurnConfig) { tc.Lockdown = true }},
-		{"mcp", func(tc *TurnConfig) { tc.Selection = agentcore.MCPSelection{{Server: "x"}} }},
-		{"approvals", func(tc *TurnConfig) { tc.ApprovalStager = stubApprovalStager{} }},
-		{"memory", func(tc *TurnConfig) { tc.MemoryProposer = stubMemoryProposer{} }},
-		{"note", func(tc *TurnConfig) { tc.NoteProposer = stubNoteProposer{} }},
-		{"all", func(tc *TurnConfig) {
-			tc.Lockdown = true
-			tc.Selection = agentcore.MCPSelection{{Server: "x"}}
-			tc.ApprovalStager = stubApprovalStager{}
-			tc.MemoryProposer = stubMemoryProposer{}
-			tc.NoteProposer = stubNoteProposer{}
-		}},
-	}
-	for _, tcase := range cases {
-		t.Run(tcase.name, func(t *testing.T) {
-			tc := TurnConfig{Runtime: "native-acp", NativeAgentImage: "img"}
-			tcase.mutate(&tc)
-			if reason := acpInteractiveFallback(tc); reason != "" {
-				t.Fatalf("acpInteractiveFallback(%s) = %q, want empty (native-acp fully governs this case in P-ACP-2b)", tcase.name, reason)
-			}
-		})
-	}
+// recordingNoteProposer records the slug of the propose_note call routed to it,
+// so a test can prove the tool was both registered and wired to the proposer.
+type recordingNoteProposer struct{ slug string }
+
+func (n *recordingNoteProposer) Propose(slug, _, _, _ string) (string, error) {
+	n.slug = slug
+	return "note-1", nil
 }
-
-type stubApprovalStager struct{}
-
-func (stubApprovalStager) Stage(string, string, string) (string, error)   { return "", nil }
-func (stubApprovalStager) StageSuggestion(string) (string, string, error) { return "", "", nil }
-
-type stubMemoryProposer struct{}
-
-func (stubMemoryProposer) Propose(string) (string, error) { return "", nil }
-
-type stubNoteProposer struct{}
-
-func (stubNoteProposer) Propose(_, _, _, _ string) (string, error) { return "", nil }
 
 // TestRunInteractiveTurn_ProposeNoteWiredWhenProposerSet proves the single
 // agentcore-boundary guarantee for propose_note (issue #40): when a NoteProposer
 // is set on the TurnConfig, RunInteractiveTurn both REGISTERS the propose_note
 // tool (so the model's call is accepted, not rejected as unknown) and WIRES the
 // proposer (so the call routes to it) — advertised, registered, and wired in
-// lockstep, on the same path web / ingress / native-acp all use.
+// lockstep.
 func TestRunInteractiveTurn_ProposeNoteWiredWhenProposerSet(t *testing.T) {
 	np := &recordingNoteProposer{}
 	calls := 0
