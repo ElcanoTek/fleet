@@ -49,6 +49,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -403,7 +404,21 @@ func run() error {
 	if poolGrace <= 0 {
 		poolGrace = -1
 	}
-	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{Limiter: agentLimiter, DrainGrace: poolGrace})
+	// Task-completion notifier (#208): host-side outbound email/webhook on a
+	// scheduled task reaching a terminal status. Config comes from the host
+	// env-file (FLEET_SMTP_*/FLEET_WEBHOOK_*/FLEET_NOTIFY_*); secrets stay
+	// host-side and never enter the sandbox or the log. Default OFF — with none of
+	// those vars set, taskNotifier.Enabled() is false and the fire path is a no-op.
+	taskNotifier := notify.New(notify.Load())
+	if taskNotifier.Enabled() {
+		log.Printf("task notifications: enabled")
+	}
+	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{
+		Limiter:       agentLimiter,
+		DrainGrace:    poolGrace,
+		Notifier:      taskNotifier,
+		PublicURLBase: os.Getenv("FLEET_PUBLIC_URL"),
+	})
 	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 
 	// Wire the live SSE run-log stream (#200): GET /tasks/{id}/stream attaches a

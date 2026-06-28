@@ -36,6 +36,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -96,6 +97,16 @@ type Config struct {
 	// defaultDrainGrace. A negative value means "force-cancel immediately" (no
 	// wait) — the fast SIGINT/dev-exit path; ForceCancel does the same on demand.
 	DrainGrace time.Duration
+	// Notifier, when set, receives an outbound completion notification each time a
+	// task reaches a terminal status (#208). nil (the default) disables
+	// notifications entirely — the fire path becomes a cheap no-op. The notifier is
+	// fired from a detached goroutine; its errors NEVER affect task status.
+	Notifier Notifier
+	// PublicURLBase is the absolute base URL (scheme+host, no trailing slash) used
+	// to build the per-task log link in notifications, e.g.
+	// https://fleet.example.com. Empty omits the link. Only consulted when Notifier
+	// is set.
+	PublicURLBase string
 }
 
 // Pool is the in-process capped worker pool.
@@ -140,6 +151,12 @@ type Pool struct {
 	// while letting running tasks finish up to drainGrace; it fires only when the
 	// grace period expires or ForceCancel is called. nil until Run installs it.
 	taskCancel context.CancelFunc
+
+	// notifier delivers outbound completion notifications on terminal status
+	// (#208). nil = notifications OFF (the default); the fire path is then a cheap
+	// no-op. publicURLBase builds the per-task log link when set.
+	notifier      Notifier
+	publicURLBase string
 }
 
 // defaultDrainGrace bounds the shutdown wait for in-flight tasks when Config
@@ -182,6 +199,8 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		leaseOwner:         uuid.New(),
 		active:             make(map[uuid.UUID]uuid.UUID),
 		streams:            newTaskStreamRegistry(),
+		notifier:           cfg.Notifier,
+		publicURLBase:      strings.TrimRight(cfg.PublicURLBase, "/"),
 	}
 }
 
@@ -449,6 +468,8 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		}
 		p.submitLog(task, session, msg)
 		log.Printf("runner: task %s interrupted after %v", task.ID, time.Since(start).Round(time.Second))
+		// Terminal failure: fire the outbound notification off-thread (#208).
+		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 	case runErr != nil && task.RetryPolicy.ShouldRetryClass(classifyFailure(runErr)) && task.AttemptCount < task.MaxRetries:
 		// Retryable failure class with retries left: re-queue the SAME task for
 		// another whole-task attempt after a backoff, instead of failing terminally.
@@ -481,6 +502,8 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		// replayable rather than indistinguishable from a one-off per-attempt error.
 		reason := fmt.Sprintf("retry budget exhausted after %d attempt(s): %v", task.AttemptCount+1, runErr)
 		p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", start)
+		// Terminal failure (quarantined): fire the outbound notification (#208).
+		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 	case runErr != nil:
 		// Non-retryable (deterministic) failure: there is no point retrying, so route
 		// straight to the dead-letter queue (#253). This replaces the prior bare-error
@@ -488,12 +511,16 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		// for review rather than silently erroring.
 		reason := "non-retryable failure: " + runErr.Error()
 		p.sendToDeadLetter(task, session, runErr, reason, "non_retryable", start)
+		// Terminal failure (quarantined): fire the outbound notification (#208).
+		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 	default:
 		if _, err := p.reportStatus(task.ID, models.TaskStatusSuccess, "Task completed successfully"); err != nil {
 			log.Printf("runner: failed to report success for task %s: %v", task.ID, err)
 		}
 		p.submitLog(task, session, "")
 		log.Printf("runner: task %s completed in %v", task.ID, time.Since(start).Round(time.Second))
+		// Terminal success: fire the outbound notification off-thread (#208).
+		p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
 	}
 }
 
