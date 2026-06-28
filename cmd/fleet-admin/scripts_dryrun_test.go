@@ -95,3 +95,28 @@ func TestUpdateDryRunSmoke(t *testing.T) {
 		}
 	}
 }
+
+// TestFleetUpgradeDryRunSmoke is the regression guard for #305 (drain-and-restart
+// upgrade): `fleet-upgrade.sh --dry-run --yes` must succeed and its plan must
+// include the load-bearing steps — build, back up the live binary (so rollback is
+// possible), restart (which sends SIGTERM → the binary's graceful drain), and gate
+// on the /readyz probe. --yes skips the confirm prompt; the script also guards the
+// prompt behind a TTY so the test (no TTY) never blocks regardless.
+func TestFleetUpgradeDryRunSmoke(t *testing.T) {
+	out := runScriptDryRun(t, "fleet-upgrade.sh", "--dry-run", "--yes")
+	for _, want := range []string{
+		"make build",
+		"Backing up the live binaries", // the rollback-backup step
+		"would install",                // the swap-in-new-binary step
+		// The step header is always printed; the literal "systemctl restart" line
+		// only renders on a systemd host, and CI may run without systemd (mirrors
+		// TestUpdateDryRunSmoke asserting "Restarting", not "systemctl restart").
+		"Restarting",
+		"/readyz",           // the readiness gate
+		"NOT zero-downtime", // honest brief-blip disclosure
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("fleet-upgrade --dry-run plan missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+}
