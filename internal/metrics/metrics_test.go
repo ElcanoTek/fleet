@@ -68,6 +68,51 @@ func TestRender_GaugeCallback(t *testing.T) {
 	}
 }
 
+func TestRender_SandboxResourceGauges(t *testing.T) {
+	// First finished run.
+	RecordSandboxResourceUsage(45.5, 256<<20, 512<<20, 1000, 2000, 12, true, 50, 60)
+
+	out := Render()
+	if !strings.Contains(out, "# TYPE fleet_sandbox_cpu_usage_percent gauge") {
+		t.Errorf("missing cpu gauge TYPE line:\n%s", out)
+	}
+	if !strings.Contains(out, "fleet_sandbox_cpu_usage_percent 45.5") {
+		t.Errorf("cpu gauge value wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "fleet_sandbox_memory_usage_bytes "+formatFloat(float64(256<<20))) {
+		t.Errorf("mem usage gauge wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "fleet_sandbox_memory_limit_bytes "+formatFloat(float64(512<<20))) {
+		t.Errorf("mem limit gauge wrong:\n%s", out)
+	}
+	if !strings.Contains(out, `fleet_sandbox_io_bytes{direction="read"} 1000`) {
+		t.Errorf("io read gauge wrong:\n%s", out)
+	}
+	if !strings.Contains(out, `fleet_sandbox_io_bytes{direction="write"} 2000`) {
+		t.Errorf("io write gauge wrong:\n%s", out)
+	}
+	if !strings.Contains(out, `fleet_sandbox_io_bytes{direction="net_in"} 50`) {
+		t.Errorf("io net_in gauge wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "# TYPE fleet_sandbox_runs_observed_total counter") {
+		t.Errorf("missing runs-observed counter:\n%s", out)
+	}
+
+	// Gauge is last-write-wins: a second run overwrites (does not accumulate).
+	RecordSandboxResourceUsage(80.0, 300<<20, 512<<20, 3000, 4000, 20, false, 0, 0)
+	out2 := Render()
+	if !strings.Contains(out2, "fleet_sandbox_cpu_usage_percent 80") {
+		t.Errorf("gauge should overwrite to 80, got:\n%s", out2)
+	}
+	if strings.Contains(out2, "fleet_sandbox_cpu_usage_percent 45.5") {
+		t.Errorf("old gauge value should be gone:\n%s", out2)
+	}
+	// runs_observed is a counter — it accumulates across the two runs.
+	if !strings.Contains(out2, "fleet_sandbox_runs_observed_total 2") {
+		t.Errorf("runs-observed counter should be 2:\n%s", out2)
+	}
+}
+
 func TestRender_TurnTimeoutAndLabelEscaping(t *testing.T) {
 	RecordTurnTimeout("interactive")
 	RecordTurnUsage(`weird"\model`, 0.0, 1, 0, 0)

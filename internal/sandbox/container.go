@@ -15,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // containerImpl is the production backend: rootless Podman container,
@@ -45,6 +48,14 @@ type containerImpl struct {
 	bridgeStderr     *syncBuffer // captured `podman exec` stderr — used to surface the real reason on broken-pipe write failures
 	bridgeStarted    bool
 	bridgeScriptPath string // host-side temp file (bind-mounted into container)
+
+	// Resource-telemetry collector (#263). statsCancel stops the polling
+	// goroutine; statsDone is closed when it has returned with its rollup,
+	// which is then published into statsSummary. All read-only sampling —
+	// never affects isolation. nil when collection is disabled.
+	statsCancel  context.CancelFunc
+	statsDone    chan struct{}
+	statsSummary ResourceUsageSummary
 }
 
 // syncBuffer is a goroutine-safe wrapper around bytes.Buffer. We need
@@ -164,6 +175,13 @@ type ContainerConfig struct {
 	// StartTimeout caps how long we wait for `podman run` to return a
 	// container ID. Defaults to 30s.
 	StartTimeout time.Duration
+
+	// StatsInterval is the cadence at which per-task resource telemetry
+	// (#263) samples `podman stats` for this container. Zero defers to
+	// FLEET_SANDBOX_STATS_INTERVAL_SECONDS (default 10s, floor 5s); a
+	// negative value disables collection. Sampling is read-only and never
+	// touches the container's isolation or limits.
+	StatsInterval time.Duration
 }
 
 // NewContainer starts a fresh sandbox container and returns a Sandbox
@@ -444,7 +462,64 @@ func (c *containerImpl) start(ctx context.Context) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("podman run: %w (stderr: %s)", err, bytes.TrimSpace(stderr.Bytes()))
 	}
+	c.startStatsCollector()
 	return nil
+}
+
+// startStatsCollector launches the read-only resource-telemetry poller (#263)
+// for this container, if collection is enabled. The goroutine runs for the
+// container's lifetime and is cancelled in close(), which then reads the rollup
+// out of the done channel. A disabled interval (negative env / negative config)
+// spawns nothing, so there is no goroutine to leak and no `podman stats` cost.
+//
+// This is OBSERVABILITY only: it samples `podman stats` and records peaks; it
+// never alters the container's caps or isolation.
+func (c *containerImpl) startStatsCollector() {
+	interval := c.cfg.StatsInterval
+	if interval == 0 {
+		interval = resolveStatsInterval(os.Getenv("FLEET_SANDBOX_STATS_INTERVAL_SECONDS"))
+	}
+	if interval <= 0 {
+		// Collection disabled (operator opt-out) — no goroutine, no rollup.
+		return
+	}
+	containerID := c.containerID
+	podman := c.cfg.PodmanBinary
+	// NoNetwork containers have an empty namespace; their net counters are
+	// meaningless, so we tell the collector not to surface Net* fields.
+	netReported := !c.cfg.NoNetwork
+	statsCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	c.statsCancel = cancel
+	c.statsDone = done
+	onBreach := func(usedBytes, limitBytes uint64) {
+		// memBreached only crosses once, so this fires at most once per
+		// container — no log spam. The warning surfaces in the journal so an
+		// operator can see a turn brushing its --memory cap.
+		logMemoryBreach(containerID, usedBytes, limitBytes)
+	}
+	safe.Go("sandbox.stats.collect", func() {
+		defer close(done)
+		summary := collectStats(statsCtx, podman, containerID, interval, netReported, onBreach)
+		c.mu.Lock()
+		c.statsSummary = summary
+		c.mu.Unlock()
+		if summary.Samples > 0 {
+			// Publish the run's peaks to /metrics (#263). Last-write-wins
+			// gauges, no per-task label — see metrics.RecordSandboxResourceUsage.
+			metrics.RecordSandboxResourceUsage(
+				summary.CPUPercentPeak,
+				summary.MemUsageBytesPeak,
+				summary.MemLimitBytes,
+				summary.BlockInputBytes,
+				summary.BlockOutputBytes,
+				summary.PidsPeak,
+				summary.NetReported,
+				summary.NetInputBytes,
+				summary.NetOutputBytes,
+			)
+		}
+	})
 }
 
 // podmanArgs prepends the global flags every podman invocation needs.
@@ -700,9 +775,23 @@ func (c *containerImpl) close() {
 	c.bridgeStarted = false
 	containerID := c.containerID
 	scriptPath := c.bridgeScriptPath
+	statsCancel := c.statsCancel
+	statsDone := c.statsDone
+	c.statsCancel = nil
 	c.containerID = ""
 	c.bridgeScriptPath = ""
 	c.mu.Unlock()
+
+	// Stop the telemetry poller and let it publish its rollup before we tear
+	// the container down. The poller exits promptly on ctx cancel (it only
+	// blocks on a ticker / a short-lived `podman stats`), so this adds no
+	// meaningful latency to close.
+	if statsCancel != nil {
+		statsCancel()
+	}
+	if statsDone != nil {
+		<-statsDone
+	}
 
 	if containerID != "" {
 		// Best-effort kill. --rm in `podman run` means the container is
@@ -716,6 +805,15 @@ func (c *containerImpl) close() {
 	if scriptPath != "" {
 		_ = os.Remove(scriptPath)
 	}
+}
+
+// resourceUsage returns the telemetry rollup published by the stats poller on
+// close (#263), and whether any samples were collected. Reading before close
+// returns the zero summary (the poller publishes only on teardown).
+func (c *containerImpl) resourceUsage() (ResourceUsageSummary, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.statsSummary, c.statsSummary.Samples > 0
 }
 
 // containerNamePrefix is the shared prefix for every sandbox container name. It
