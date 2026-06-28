@@ -43,6 +43,7 @@ export type Task = {
   instruction_self_improve?: boolean;
   allow_network?: boolean;
   runtime_flavor?: string;
+  persona?: string;
   tags?: string[];
   retry_policy?: RetryPolicy;
   source_task_id?: string;
@@ -66,6 +67,7 @@ export type TaskCreate = {
   instruction_self_improve?: boolean;
   allow_network?: boolean;
   runtime_flavor?: string;
+  persona?: string;
   scheduled_for?: string;
   recurrence?: string;
   files?: string[];

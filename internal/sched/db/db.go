@@ -504,7 +504,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -534,8 +534,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id,
-			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
+			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -571,7 +571,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			description = EXCLUDED.description,
 			tags = EXCLUDED.tags,
 			retry_policy = EXCLUDED.retry_policy,
-			source_task_id = EXCLUDED.source_task_id`,
+			source_task_id = EXCLUDED.source_task_id,
+			persona = EXCLUDED.persona`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -608,6 +609,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		marshalTags(task.Tags),
 		marshalRetryPolicy(task.RetryPolicy),
 		sourceTaskIDValue(task.SourceTaskID),
+		nullableString(task.Persona),
 	)
 	return err
 }
@@ -785,6 +787,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		tags                   sql.NullString
 		retryPolicy            sql.NullString
 		sourceTaskID           sql.NullString
+		persona                sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -793,7 +796,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &runtimeFlavor, &timezone, &createdByKeyID,
-		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy, &sourceTaskID,
+		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy, &sourceTaskID, &persona,
 	)
 	if err != nil {
 		return nil, err
@@ -836,6 +839,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	task.LoopConfig = unmarshalLoopConfig(loopConfig)
 	task.WorktreeConfig = unmarshalWorktreeConfig(worktreeConfig)
 	task.RetryPolicy = unmarshalRetryPolicy(retryPolicy)
+	task.Persona = persona.String
 	if sourceTaskID.Valid && sourceTaskID.String != "" {
 		if sid, perr := uuid.Parse(sourceTaskID.String); perr == nil {
 			task.SourceTaskID = &sid
@@ -1373,7 +1377,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			description = $31,
 			tags = $32,
 			retry_policy = $33,
-			source_task_id = $34
+			source_task_id = $34,
+			persona = $35
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1409,6 +1414,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		marshalTags(task.Tags),
 		marshalRetryPolicy(task.RetryPolicy),
 		sourceTaskIDValue(task.SourceTaskID),
+		nullableString(task.Persona),
 	)
 	return err
 }
