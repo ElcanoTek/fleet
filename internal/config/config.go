@@ -221,11 +221,14 @@ var allowedEnvVars = map[string]bool{
 	// ── admin ──
 	"ADMIN_EMAILS": true,
 
-	// ── task completion notifications (#208) ──
+	// ── task completion notifications (#208, #316) ──
 	// Host-side outbound notifier for scheduled-task terminal status. All OFF by
 	// default: with none of these set, no notifications fire. The SMTP password
 	// and webhook signing secret are held host-side and never logged or shipped
-	// into the sandbox. FLEET_PUBLIC_URL is reused to build the per-task log link.
+	// into the sandbox. When FLEET_WEBHOOK_SECRET is set the webhook body is signed
+	// with HMAC-SHA256 (X-Fleet-Signature/X-Fleet-Timestamp, #316); unset = the
+	// webhook is delivered unsigned. FLEET_PUBLIC_URL is reused to build the
+	// per-task log link.
 	"FLEET_NOTIFY_ON":             true,
 	"FLEET_NOTIFY_EMAIL_TO":       true,
 	"FLEET_NOTIFY_TIMEOUT":        true,
