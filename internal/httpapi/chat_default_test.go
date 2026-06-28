@@ -55,6 +55,11 @@ func (f *fakeEngine) RunTurn(_ context.Context, in TurnInput, sink agent.EventSi
 		Model:     in.Model,
 		NewHistory: []agent.HistoryEntry{
 			{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"` + in.UserMessage + `"}`)},
+			// A tool_call + tool_result pair so the audit-ledger derivation
+			// (deriveToolCallEntries) in runTurnAsync has something to record —
+			// this is what proves the in-process write path fires end to end.
+			{Role: "assistant", Type: "tool_call", Content: json.RawMessage(`{"id":"call_1","name":"bash","input":"{\"command\":\"ls\"}"}`)},
+			{Role: "tool", Type: "tool_result", Content: json.RawMessage(`{"id":"call_1","name":"bash","text":"ok","is_err":false}`)},
 			{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"fake reply"}`)},
 		},
 	}, nil
@@ -90,6 +95,7 @@ type fakeChatStore struct {
 	finishes   int
 	created    int
 	turnEvents int
+	toolCalls  []store.ToolCallEntry
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -159,6 +165,35 @@ func (s *fakeChatStore) FinishTurn(context.Context, string, store.TurnStatus, in
 	defer s.mu.Unlock()
 	s.finishes++
 	return nil
+}
+
+func (s *fakeChatStore) RecordToolCalls(_ context.Context, entries []store.ToolCallEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolCalls = append(s.toolCalls, entries...)
+	return nil
+}
+
+func (s *fakeChatStore) ListToolCalls(_ context.Context, convID, toolFilter string, fromUnix int64, limit int) ([]store.ToolCallEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.ToolCallEntry, 0, len(s.toolCalls))
+	for _, e := range s.toolCalls {
+		if e.ConversationID != convID {
+			continue
+		}
+		if toolFilter != "" && e.ToolName != toolFilter {
+			continue
+		}
+		if fromUnix > 0 && e.StartedAt < fromUnix {
+			continue
+		}
+		out = append(out, e)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 // Sweeps + per-turn overrides the path may touch — all no-ops.
@@ -240,6 +275,7 @@ func TestChatTurnPersistsTranscript_NoDBNoProvider(t *testing.T) {
 	st.mu.Lock()
 	created, turnRows, appends, recorded := st.created, st.turnRows, st.appends, st.recorded
 	hist := append([]agent.HistoryEntry(nil), st.history["conv-1"]...)
+	toolCalls := append([]store.ToolCallEntry(nil), st.toolCalls...)
 	st.mu.Unlock()
 
 	if created != 1 {
@@ -254,9 +290,20 @@ func TestChatTurnPersistsTranscript_NoDBNoProvider(t *testing.T) {
 	if recorded != 1 {
 		t.Errorf("RecordTurn calls = %d, want 1", recorded)
 	}
-	// The appended transcript must carry the assistant reply.
-	if len(hist) != 2 || hist[1].Role != "assistant" {
-		t.Fatalf("persisted history = %+v, want [user, assistant]", hist)
+	// The appended transcript must carry the assistant reply (last entry).
+	if len(hist) == 0 || hist[len(hist)-1].Role != "assistant" {
+		t.Fatalf("persisted history = %+v, want assistant reply last", hist)
+	}
+	// The tool-call audit ledger (#224) must have captured the turn's one tool
+	// call — proof the write path in runTurnAsync fires on the default path.
+	if len(toolCalls) != 1 {
+		t.Fatalf("RecordToolCalls entries = %d, want 1: %+v", len(toolCalls), toolCalls)
+	}
+	if toolCalls[0].ToolName != "bash" || toolCalls[0].ConversationID != "conv-1" {
+		t.Errorf("audit entry wrong: %+v", toolCalls[0])
+	}
+	if toolCalls[0].TurnID == "" {
+		t.Errorf("audit entry missing turn id: %+v", toolCalls[0])
 	}
 
 	// FinishTurn (the turn-event ledger seal) runs in the buffer's persister flow
@@ -309,12 +356,13 @@ func TestChatSecondTurnReplaysHistory(t *testing.T) {
 	if engine.turns != 2 {
 		t.Fatalf("engine saw %d turns, want 2", engine.turns)
 	}
-	// Turn 2 must have replayed turn 1's user + assistant entries.
-	if len(engine.lastHistory) != 2 {
-		t.Fatalf("turn 2 replayed %d history entries, want 2 (turn 1's user+assistant)", len(engine.lastHistory))
+	// Turn 2 must have replayed turn 1's full transcript: the user message, the
+	// tool_call + tool_result pair, and the assistant reply (see fakeEngine).
+	if len(engine.lastHistory) != 4 {
+		t.Fatalf("turn 2 replayed %d history entries, want 4 (turn 1's user+tool_call+tool_result+assistant)", len(engine.lastHistory))
 	}
-	if engine.lastHistory[0].Role != "user" || engine.lastHistory[1].Role != "assistant" {
-		t.Errorf("replayed history roles = %q/%q, want user/assistant",
-			engine.lastHistory[0].Role, engine.lastHistory[1].Role)
+	if engine.lastHistory[0].Role != "user" || engine.lastHistory[len(engine.lastHistory)-1].Role != "assistant" {
+		t.Errorf("replayed history roles = %q…%q, want user…assistant",
+			engine.lastHistory[0].Role, engine.lastHistory[len(engine.lastHistory)-1].Role)
 	}
 }
