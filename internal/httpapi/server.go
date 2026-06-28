@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"net/http"
@@ -1154,17 +1155,30 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		body := map[string]any{
-			"conversation": conv,
-			"history":      history,
-			"exported_at":  time.Now().UTC().Format(time.RFC3339),
+		exportedAt := time.Now().UTC()
+		// ?format=markdown renders a human-readable transcript (#210); the default
+		// (json) preserves the prior machine-readable shape exactly.
+		switch strings.ToLower(r.URL.Query().Get("format")) {
+		case "markdown", "md":
+			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+			w.Header().Set(
+				"Content-Disposition",
+				fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "md")),
+			)
+			_, _ = io.WriteString(w, renderConversationMarkdown(conv, history, exportedAt))
+		default:
+			body := map[string]any{
+				"conversation": conv,
+				"history":      history,
+				"exported_at":  exportedAt.Format(time.RFC3339),
+			}
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set(
+				"Content-Disposition",
+				fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "json")),
+			)
+			_ = json.NewEncoder(w).Encode(body)
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set(
-			"Content-Disposition",
-			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID)),
-		)
-		_ = json.NewEncoder(w).Encode(body)
 	case sub == "cancel" && r.Method == http.MethodPost:
 		// Explicit Stop button. Owner-scoped: confirm the conversation
 		// belongs to the caller before issuing the cancel so a token
@@ -1927,7 +1941,7 @@ func parseLastEventID(r *http.Request) uint64 {
 // download: slugified title + short id + .json. Keeps the Save dialog
 // self-explanatory without trusting user-chosen characters in the
 // Content-Disposition header.
-func exportFilename(title, id string) string {
+func exportFilename(title, id, ext string) string {
 	slug := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
@@ -1948,7 +1962,7 @@ func exportFilename(title, id string) string {
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
 	}
-	return slug + "-" + shortID + ".json"
+	return slug + "-" + shortID + "." + ext
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
