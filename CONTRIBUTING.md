@@ -4,6 +4,9 @@ Thanks for your interest in fleet! This guide covers how to build, test, and
 submit changes. Contributions of all sizes are welcome — bug fixes, docs,
 tests, and features.
 
+New here? [`ONBOARDING.md`](ONBOARDING.md) is a single linear path from clone to
+your first sandbox session (a passing `make test` and one streamed chat turn).
+
 ## Repository layout
 
 fleet is a Go monorepo with a Next.js frontend:
