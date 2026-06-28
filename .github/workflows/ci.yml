@@ -1,3 +1,155 @@
+
+on:
+  pull_request:
+    paths:
+      - 'Containerfile'
+      - 'Dockerfile*'
+      - '.github/workflows/container-scan.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Containerfile'
+      - 'Dockerfile*'
+      - '.github/workflows/container-scan.yml'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  trivy-scan:
+    name: Trivy — scan sandbox container image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build sandbox image
+        run: |
+          podman build \
+            -t fleet-sandbox:ci \
+            -f config/default/sandbox/Containerfile \
+            .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: fleet-sandbox:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-sandbox
+
+  grype-scan:
+    name: Grype — scan sandbox container image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build sandbox image
+        run: |
+          docker build \
+            -t fleet-sandbox:ci \
+            -f config/default/sandbox/Containerfile \
+            .
+
+      - name: Run Grype vulnerability scanner
+        uses: anchore/scan-action@v6
+        with:
+          image: fleet-sandbox:ci
+          fail-build: true
+          output-format: sarif
+
+      - name: Upload Grype results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+          category: grype-sandbox
+
+on:
+  pull_request:
+    paths:
+      - 'Containerfile'
+      - 'Dockerfile*'
+      - '.github/workflows/container-scan.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Containerfile'
+      - 'Dockerfile*'
+      - '.github/workflows/container-scan.yml'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  trivy-scan:
+    name: Trivy — scan sandbox container image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build sandbox image
+        run: |
+          podman build \
+            -t fleet-sandbox:ci \
+            -f config/default/sandbox/Containerfile \
+            .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: fleet-sandbox:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-sandbox
+
+  grype-scan:
+    name: Grype — scan sandbox container image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build sandbox image
+        run: |
+          docker build \
+            -t fleet-sandbox:ci \
+            -f config/default/sandbox/Containerfile \
+            .
+
+      - name: Run Grype vulnerability scanner
+        uses: anchore/scan-action@v6
+        with:
+          image: fleet-sandbox:ci
+          fail-build: true
+          output-format: sarif
+
+      - name: Upload Grype results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+          category: grype-sandbox
 name: CI
 
 on:
@@ -428,4 +580,6 @@ jobs:
             .e2e-run/logs/
             web/test-results/
           retention-days: 14
+name: container-image-scan
+name: container-image-scan
           if-no-files-found: ignore
