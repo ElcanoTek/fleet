@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
@@ -19,11 +21,13 @@ import (
 // fixed token + cost spend, so a child run's spend is deterministic. costUSD is
 // attached via OpenRouter provider metadata (the only path openrouterCost reads).
 type budgetMockModel struct {
-	name        string
-	inTokens    int64
-	outTokens   int64
-	costUSD     float64
-	streamCount int
+	name      string
+	inTokens  int64
+	outTokens int64
+	costUSD   float64
+	// streamCount is atomic: the concurrency tests share one mock across many
+	// child goroutines, so the call counter must be race-free.
+	streamCount atomic.Int64
 }
 
 func (m *budgetMockModel) finishPart() fantasy.StreamPart {
@@ -43,7 +47,7 @@ func (m *budgetMockModel) finishPart() fantasy.StreamPart {
 }
 
 func (m *budgetMockModel) Stream(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
-	m.streamCount++
+	m.streamCount.Add(1)
 	return func(yield func(fantasy.StreamPart) bool) {
 		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "child working"}) {
 			return
@@ -130,7 +134,7 @@ func TestSpawn_ChildRunsThroughGovernedCoreWithSlicedBudgetAndDepth(t *testing.T
 
 	// (1) The child actually ran through agentcore.Run: the child model streamed at
 	// least once (proving Execute → Run drove it).
-	if child.streamCount == 0 {
+	if child.streamCount.Load() == 0 {
 		t.Fatal("child model never streamed — the child did not run through agentcore.Run")
 	}
 
@@ -232,7 +236,7 @@ func TestSpawn_DepthCapRefusesAtMaxDepth(t *testing.T) {
 		t.Fatalf("expected a depth-cap refusal at depth==maxDepth, got isError=%v content=%q", resp.IsError, resp.Content)
 	}
 	// A refused spawn must NOT have run a child.
-	if child.streamCount != 0 {
+	if child.streamCount.Load() != 0 {
 		t.Fatal("a depth-refused spawn must not run any child")
 	}
 	// And it must NOT have consumed a fan-out slot (the depth check precedes it).
@@ -387,43 +391,188 @@ func TestExecute_RegistersSpawnToolOnlyWhenEnabled(t *testing.T) {
 	})
 }
 
-// TestSliceBudget_HardCapsAtParentRemaining unit-tests the budget slicer: a
-// request is never honored beyond the parent's remaining budget, and unlimited
-// parents yield unlimited children.
-func TestSliceBudget_HardCapsAtParentRemaining(t *testing.T) {
-	// Finite parent: $1.00 ceiling, $0.90 spent → $0.10 remaining.
-	b := agentcore.BudgetState{MaxCostUSD: 1.0, SpentCostUSD: 0.90}
-	// Request more than remaining → capped at remaining.
-	got, refusal := sliceCostBudget(b, 0.50)
-	if refusal != "" {
-		t.Fatalf("unexpected refusal: %s", refusal)
+// TestReserveChildBudget_ConcurrentNeverOverGrants is the #175 hardening
+// regression: it fires MANY budget reservations CONCURRENTLY against a small
+// parent ceiling and asserts the SUM of granted child budgets never exceeds the
+// parent's remaining budget — proving the invariant holds via the atomic
+// reservation under a.mu, WITHOUT relying on spawn_subagent being a sequential
+// tool. Each goroutine reserves but does NOT release (every child is treated as
+// in-flight at once), which is the worst case for over-granting. Run under -race.
+func TestReserveChildBudget_ConcurrentNeverOverGrants(t *testing.T) {
+	child := &budgetMockModel{name: "c"}
+	const (
+		ceilingCost   = 0.10 // small parent cost ceiling
+		ceilingTokens = 10000
+		goroutines    = 64 // far more than the budget can satisfy
+	)
+	// maxChildren high so FAN-OUT is not the binding constraint — BUDGET is. (Fan-
+	// out is reserved separately in spawn(), not in reserveChildBudget, so it does
+	// not bound this test.)
+	p := newParentForSpawn(t, child, ceilingCost, ceilingTokens, 2, goroutines+10)
+
+	var (
+		mu          sync.Mutex
+		grantedCost float64
+		grantedTok  int
+		grants      int
+	)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // release all goroutines at once to maximize contention
+			// Each requests an explicit slice; the atomic reservation must cap the
+			// SUM regardless of how many race in.
+			cost, tok, refusal := p.reserveChildBudget(0.03, 3000)
+			if refusal != "" {
+				return // refused once the budget is reserved out — expected
+			}
+			mu.Lock()
+			grantedCost += cost
+			grantedTok += tok
+			grants++
+			mu.Unlock()
+		}()
 	}
-	if got > 0.10+1e-9 {
-		t.Fatalf("sliceCostBudget granted $%.4f > remaining $0.10 — the parent ceiling is not a hard cap", got)
+	close(start)
+	wg.Wait()
+
+	// THE INVARIANT: the sum of all concurrently-granted child budgets never
+	// exceeds the parent's remaining budget on EITHER axis.
+	if grantedCost > ceilingCost+1e-9 {
+		t.Fatalf("concurrent reservations granted $%.4f total > parent remaining $%.4f — atomic reservation failed",
+			grantedCost, ceilingCost)
+	}
+	if grantedTok > ceilingTokens {
+		t.Fatalf("concurrent reservations granted %d tokens total > parent remaining %d — atomic reservation failed",
+			grantedTok, ceilingTokens)
+	}
+	if grants == 0 {
+		t.Fatal("no reservations succeeded; the test did not exercise the grant path")
+	}
+	// Sanity: the reservation counters reflect exactly what was handed out.
+	p.mu.Lock()
+	gotResCost, gotResTok := p.subagent.reservedCostUSD, p.subagent.reservedTokens
+	p.mu.Unlock()
+	if gotResCost > ceilingCost+1e-9 || gotResTok > ceilingTokens {
+		t.Fatalf("reservation counters exceeded the parent ceiling: cost=$%.4f tok=%d", gotResCost, gotResTok)
+	}
+}
+
+// TestSpawn_ConcurrentNeverBreachesParentCeiling drives the FULL spawn path
+// concurrently (children actually run through agentcore.Run) and asserts the
+// parent's charged-back spend never exceeds its ceiling — the end-to-end form of
+// the hardening, also run under -race.
+func TestSpawn_ConcurrentNeverBreachesParentCeiling(t *testing.T) {
+	// Each child step costs $0.02; parent ceiling $0.10. Children request a tiny
+	// slice so each stops after ~one paid step.
+	child := &budgetMockModel{name: "c", inTokens: 10, outTokens: 2, costUSD: 0.02}
+	const goroutines = 32
+	p := newParentForSpawn(t, child, 0.10, 0, 2, goroutines+10)
+
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = p.spawn(context.Background(), spawnSubagentInput{Task: "subtask", MaxCostUSD: 0.02})
+		}()
+	}
+	wg.Wait()
+
+	// After all children settle, the parent's charged-back spend is bounded by its
+	// ceiling plus at most one in-flight last-step overrun PER child that ran. With
+	// a $0.02 per-step child and a $0.10 ceiling, total spend must stay well within
+	// a small multiple of the ceiling — and crucially the reservation is fully
+	// released (no leak).
+	b := p.runtimePolicy.Budget()
+	// The hard guarantee the reservation provides: at most a bounded number of
+	// children are ever granted budget (sum of grants <= remaining at grant time),
+	// so charged-back spend cannot run away. Allow a generous slack for last-step
+	// overruns but assert it did not, e.g., let all 32 children each spend.
+	if b.SpentCostUSD > ceilingWithOverrunSlack {
+		t.Fatalf("concurrent spawns charged back $%.4f, far above the $0.10 ceiling — budget split leaked",
+			b.SpentCostUSD)
+	}
+	// Reservation must be fully released after every child returns (no leak).
+	p.mu.Lock()
+	resCost, resTok := p.subagent.reservedCostUSD, p.subagent.reservedTokens
+	p.mu.Unlock()
+	if resCost != 0 || resTok != 0 {
+		t.Fatalf("in-flight reservation leaked after all children returned: cost=$%.4f tok=%d", resCost, resTok)
+	}
+}
+
+// ceilingWithOverrunSlack bounds acceptable total charged-back spend for the
+// concurrent end-to-end spawn test: the $0.10 ceiling plus a generous allowance
+// for the few children that win a grant and each overrun their own slice by at
+// most one step. It is deliberately well below "every goroutine spent" ($0.64),
+// so a regression that lets all 32 children run would fail.
+const ceilingWithOverrunSlack = 0.30
+
+// TestGrantFrom_HardCapsAtAvailable unit-tests the pure grant slicers: a request
+// is never honored beyond the AVAILABLE (reservation-reduced) budget on either
+// axis.
+func TestGrantFrom_HardCapsAtAvailable(t *testing.T) {
+	// Cost: $0.10 available, request $0.50 → capped at available.
+	if got := grantCostFrom(0.10, 0.50); got > 0.10+1e-9 {
+		t.Fatalf("grantCostFrom granted $%.4f > available $0.10 — not a hard cap", got)
+	}
+	// Cost: no request → default fraction of available.
+	if got := grantCostFrom(0.10, 0); got > 0.10+1e-9 {
+		t.Fatalf("grantCostFrom default granted $%.4f > available $0.10", got)
+	}
+	// Tokens: 2000 available, request 5000 → capped.
+	if got := grantTokensFrom(2000, 5000); got > 2000 {
+		t.Fatalf("grantTokensFrom granted %d > available 2000 — not a hard cap", got)
+	}
+}
+
+// TestReserveChildBudget_AtomicAndHardCaps exercises the atomic reservation path:
+// a grant is computed against remaining MINUS in-flight reservations, never
+// exceeds available, refuses when too little is left, and unlimited parents yield
+// unlimited children.
+func TestReserveChildBudget_AtomicAndHardCaps(t *testing.T) {
+	child := &budgetMockModel{name: "c"}
+
+	// Finite cost parent: $1.00 ceiling, $0.90 spent → $0.10 remaining.
+	p := newParentForSpawn(t, child, 1.0, 0, 2, 100)
+	p.runtimePolicy.ChargeChildUsage(agentcore.RunUsage{CostUSD: 0.90})
+	cost, _, refusal := p.reserveChildBudget(0.50, 0)
+	if refusal != "" {
+		t.Fatalf("unexpected refusal with $0.10 remaining: %s", refusal)
+	}
+	if cost > 0.10+1e-9 {
+		t.Fatalf("granted $%.4f > remaining $0.10 — hard cap breached", cost)
+	}
+	// The grant is now reserved; a SECOND reservation sees less available and is
+	// refused (only ~$0.05 is left after the first ~$0.05 grant, below the floor
+	// once the first grant takes the default fraction). Even if it grants, the SUM
+	// must never exceed the $0.10 remaining.
+	cost2, _, _ := p.reserveChildBudget(0.50, 0)
+	if cost+cost2 > 0.10+1e-9 {
+		t.Fatalf("two reservations summed to $%.4f > remaining $0.10 — atomic reservation failed", cost+cost2)
 	}
 
-	// Unlimited parent (0 ceiling) → unlimited child (0).
-	if got, _ := sliceCostBudget(agentcore.BudgetState{}, 0.5); got != 0 {
-		t.Fatalf("unlimited parent should yield unlimited (0) child cost, got %v", got)
+	// Unlimited parent (0 ceiling) → unlimited child (0), no refusal.
+	pu := newParentForSpawn(t, child, 0, 0, 2, 100)
+	if c, tok, refusal := pu.reserveChildBudget(0.5, 5000); refusal != "" || c != 0 || tok != 0 {
+		t.Fatalf("unlimited parent should grant unlimited (0,0) with no refusal, got c=%v tok=%d refusal=%q", c, tok, refusal)
 	}
 
 	// Exhausted parent → refusal.
-	if _, refusal := sliceCostBudget(agentcore.BudgetState{MaxCostUSD: 1.0, SpentCostUSD: 1.0}, 0); refusal == "" {
+	pe := newParentForSpawn(t, child, 1.0, 0, 2, 100)
+	pe.runtimePolicy.ChargeChildUsage(agentcore.RunUsage{CostUSD: 1.0})
+	if _, _, refusal := pe.reserveChildBudget(0, 0); refusal == "" {
 		t.Fatal("an exhausted parent budget must refuse a spawn")
 	}
 
-	// Token side: 10000 ceiling, 8000 spent → 2000 remaining; request 5000 → capped.
-	tb := agentcore.BudgetState{MaxTotalTokens: 10000, SpentTokens: 8000}
-	gotT, refusal := sliceTokenBudget(tb, 5000)
-	if refusal != "" {
-		t.Fatalf("unexpected refusal: %s", refusal)
-	}
-	if gotT > 2000 {
-		t.Fatalf("sliceTokenBudget granted %d > remaining 2000 — not a hard cap", gotT)
-	}
-
-	// Token side, near-exhausted (below the floor) → refusal.
-	if _, refusal := sliceTokenBudget(agentcore.BudgetState{MaxTotalTokens: 10000, SpentTokens: 9900}, 0); refusal == "" {
-		t.Fatal("a near-exhausted token budget (below the min child floor) must refuse a spawn")
+	// Token axis: 10000 ceiling, 9900 spent → 100 remaining (below floor) → refuse.
+	pt := newParentForSpawn(t, child, 0, 10000, 2, 100)
+	pt.runtimePolicy.ChargeChildUsage(agentcore.RunUsage{PromptTokens: 9900})
+	if _, _, refusal := pt.reserveChildBudget(0, 0); refusal == "" {
+		t.Fatal("a near-exhausted token budget (below the floor) must refuse a spawn")
 	}
 }

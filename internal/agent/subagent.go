@@ -71,6 +71,19 @@ type subagentConfig struct {
 	// parallel tools) and the fan-out cap must be a true invariant, not a racy
 	// read-modify-write.
 	childrenSpawned int
+
+	// reservedCostUSD / reservedTokens track budget GRANTED to children that are
+	// still in flight (spawned but not yet returned). Both are guarded by the
+	// parent Agent's mu. The budget grant subtracts these from the parent's
+	// remaining budget under the lock BEFORE computing a new grant, so even N
+	// concurrent spawns can never collectively be granted more than the parent has
+	// left — the atomic reservation, not the tool being sequential, is what makes
+	// the parent ceiling a hard wall. Each child's reservation is released (under
+	// the lock) when it returns; its ACTUAL spend is then folded into the parent
+	// via ChargeChildUsage, so the budget the next spawn reads reflects real spend
+	// (reservation gone) rather than the conservative grant.
+	reservedCostUSD float64
+	reservedTokens  int
 }
 
 // newSubagentConfig normalizes the driver options into the per-run config,
@@ -194,22 +207,16 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput) (fantasy.ToolR
 	}
 
 	// ── (3) HARD BUDGET SPLIT ───────────────────────────────────────────────
-	// Read the PARENT's live budget from the SAME policy agentcore is enforcing.
-	// remaining = parent ceiling − parent spend so far (spend already includes
-	// every earlier sibling charged back via ChargeChildUsage), so successive
-	// spawns see a strictly shrinking slice. -1 means "unlimited" (no parent
-	// ceiling configured); in that case the child simply inherits "unlimited" too,
-	// and the depth/fan-out caps remain the bound.
-	var budget agentcore.BudgetState
-	if a.runtimePolicy != nil {
-		budget = a.runtimePolicy.Budget()
-	}
-	childCost, refusal := sliceCostBudget(budget, in.MaxCostUSD)
-	if refusal != "" {
-		a.releaseChildSlot()
-		return fantasy.NewTextErrorResponse(refusal), nil
-	}
-	childTokens, refusal := sliceTokenBudget(budget, in.MaxTotalTokens)
+	// Reserve the child's budget ATOMICALLY under the parent's mutex. The grant is
+	// computed against the parent's remaining budget MINUS the budget already
+	// granted to other in-flight children (subagent.reservedCostUSD/Tokens), and
+	// the grant is added to that reservation before the lock is released. This is
+	// what makes the parent ceiling a hard wall WITHOUT relying on spawns being
+	// sequential: even N concurrent spawns each read-modify-write the reservation
+	// under the same lock, so the sum of granted budgets can never exceed the
+	// parent's remaining budget. -1 (unlimited parent) yields an unlimited child;
+	// the depth/fan-out caps remain the bound there.
+	childCost, childTokens, refusal := a.reserveChildBudget(in.MaxCostUSD, in.MaxTotalTokens)
 	if refusal != "" {
 		a.releaseChildSlot()
 		return fantasy.NewTextErrorResponse(refusal), nil
@@ -231,11 +238,14 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput) (fantasy.ToolR
 	// The child runs through (*Agent).Execute → agentcore.Run. No second loop.
 	runErr := childAgent.Execute(ctx, task)
 
-	// Charge the child's ACTUAL spend back into the parent's budget UNCONDITIONALLY
-	// (even on error / partial run): the child may have spent before failing, and
-	// that spend must count against the parent ceiling. This is the second half of
-	// the hard budget split — after this, the parent's own checkCeilings and every
-	// later sibling's budget read account for what this child spent.
+	// Release this child's in-flight reservation and charge its ACTUAL spend back
+	// into the parent's budget UNCONDITIONALLY (even on error / partial run): the
+	// child may have spent before failing, and that spend must count against the
+	// parent ceiling. The release + charge are the bookend of the atomic grant —
+	// after them, the budget the next spawn reads reflects this child's REAL spend
+	// (its conservative reservation is gone), and the parent's own checkCeilings
+	// accounts for it too.
+	a.releaseChildBudget(childCost, childTokens)
 	childUsage := childAgent.usageForParent()
 	if a.runtimePolicy != nil {
 		a.runtimePolicy.ChargeChildUsage(childUsage)
@@ -269,59 +279,107 @@ func (a *Agent) releaseChildSlot() {
 	}
 }
 
-// sliceCostBudget computes the child's cost ceiling from the parent's remaining
-// cost budget and the (optional) requested amount. It returns (ceiling, "") on
-// success — ceiling 0 means "unlimited" and is returned ONLY when the parent
-// itself is unlimited. When the parent has too little left to be useful it returns
-// (0, refusalMsg): a non-empty refusal string the caller surfaces as a tool error.
-// The cap is the hard wall: a request is never honored beyond what the parent has
-// remaining.
-func sliceCostBudget(b agentcore.BudgetState, requested float64) (ceiling float64, refusal string) {
-	remaining := b.RemainingCostUSD()
-	if remaining < 0 {
-		// Parent has no cost ceiling → child inherits "unlimited" cost too. Depth +
-		// fan-out caps still bound the tree.
-		return 0, ""
+// reserveChildBudget atomically computes and reserves a child's cost/token
+// ceiling under the parent's mutex (#175 hardening). It reads the parent's live
+// remaining budget, subtracts the budget already granted to OTHER in-flight
+// children (the reservation), slices a grant from what is genuinely available,
+// and adds that grant to the reservation — all in one critical section. Because
+// the read-modify-write of the reservation is serialized by a.mu, the sum of
+// budgets granted to any number of concurrent spawns can never exceed the
+// parent's remaining budget, independent of whether the tool runs sequentially.
+//
+// It returns (costCeiling, tokenCeiling, "") on success — a 0 ceiling on an axis
+// means "unlimited" and is returned only when the parent itself is unlimited on
+// that axis. On too-little-budget it returns (0, 0, refusalMsg) and reserves
+// nothing. The caller must call releaseChildBudget with the SAME returned
+// ceilings once the child has run.
+func (a *Agent) reserveChildBudget(reqCost float64, reqTokens int) (costCeiling float64, tokenCeiling int, refusal string) {
+	var budget agentcore.BudgetState
+	if a.runtimePolicy != nil {
+		budget = a.runtimePolicy.Budget()
 	}
-	if remaining < subagentMinChildCostUSD {
-		return 0, fmt.Sprintf("SUBAGENT_BUDGET_EXHAUSTED: only $%.4f of the cost budget remains — "+
-			"too little to delegate; finish the work yourself with what's left", remaining)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Cost axis. RemainingCostUSD() == -1 means the parent is unlimited; reserve
+	// nothing and grant unlimited (0). Otherwise the available budget is the
+	// parent's remaining MINUS what is already reserved for in-flight siblings.
+	if rem := budget.RemainingCostUSD(); rem >= 0 {
+		avail := rem - a.subagent.reservedCostUSD
+		if avail < subagentMinChildCostUSD {
+			return 0, 0, fmt.Sprintf("SUBAGENT_BUDGET_EXHAUSTED: only $%.4f of the cost budget is "+
+				"available after in-flight sub-agents — too little to delegate; finish the work "+
+				"yourself with what's left", max(avail, 0))
+		}
+		costCeiling = grantCostFrom(avail, reqCost)
 	}
+
+	// Token axis, mirrored.
+	if rem := budget.RemainingTokens(); rem >= 0 {
+		avail := rem - a.subagent.reservedTokens
+		if avail < subagentMinChildTokens {
+			return 0, 0, fmt.Sprintf("SUBAGENT_BUDGET_EXHAUSTED: only %d tokens of the budget are "+
+				"available after in-flight sub-agents — too little to delegate; finish the work "+
+				"yourself with what's left", max(avail, 0))
+		}
+		tokenCeiling = grantTokensFrom(avail, reqTokens)
+	}
+
+	// Commit the reservation while still holding the lock.
+	a.subagent.reservedCostUSD += costCeiling
+	a.subagent.reservedTokens += tokenCeiling
+	return costCeiling, tokenCeiling, ""
+}
+
+// releaseChildBudget returns an in-flight child's reservation under the parent
+// mutex once the child has finished. The child's ACTUAL spend is folded into the
+// parent separately via ChargeChildUsage, so after the release the next spawn
+// sees real spend rather than this child's conservative grant. Clamped at 0 so a
+// double release can never drive the reservation negative.
+func (a *Agent) releaseChildBudget(costCeiling float64, tokenCeiling int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.subagent.reservedCostUSD -= costCeiling
+	if a.subagent.reservedCostUSD < 0 {
+		a.subagent.reservedCostUSD = 0
+	}
+	a.subagent.reservedTokens -= tokenCeiling
+	if a.subagent.reservedTokens < 0 {
+		a.subagent.reservedTokens = 0
+	}
+}
+
+// grantCostFrom slices a child's cost ceiling from the available (already
+// reservation-reduced) cost budget. Pure helper, no locking; the caller holds
+// a.mu. avail is guaranteed >= subagentMinChildCostUSD by reserveChildBudget.
+func grantCostFrom(avail, requested float64) float64 {
 	grant := requested
 	if grant <= 0 {
-		grant = remaining * defaultChildBudgetFraction
+		grant = avail * defaultChildBudgetFraction
 	}
-	if grant > remaining {
-		// HARD CAP: never grant more than the parent has left.
-		grant = remaining
+	if grant > avail {
+		grant = avail // HARD CAP: never grant more than is available.
 	}
 	if grant < subagentMinChildCostUSD {
 		grant = subagentMinChildCostUSD
 	}
-	return grant, ""
+	return grant
 }
 
-// sliceTokenBudget mirrors sliceCostBudget for the token ceiling.
-func sliceTokenBudget(b agentcore.BudgetState, requested int) (ceiling int, refusal string) {
-	remaining := b.RemainingTokens()
-	if remaining < 0 {
-		return 0, "" // parent unlimited → child inherits unlimited tokens
-	}
-	if remaining < subagentMinChildTokens {
-		return 0, fmt.Sprintf("SUBAGENT_BUDGET_EXHAUSTED: only %d tokens of the budget remain — "+
-			"too little to delegate; finish the work yourself with what's left", remaining)
-	}
+// grantTokensFrom mirrors grantCostFrom for the token axis.
+func grantTokensFrom(avail, requested int) int {
 	grant := requested
 	if grant <= 0 {
-		grant = int(float64(remaining) * defaultChildBudgetFraction)
+		grant = int(float64(avail) * defaultChildBudgetFraction)
 	}
-	if grant > remaining {
-		grant = remaining // HARD CAP
+	if grant > avail {
+		grant = avail // HARD CAP
 	}
 	if grant < subagentMinChildTokens {
 		grant = subagentMinChildTokens
 	}
-	return grant, ""
+	return grant
 }
 
 // resolveChildModel returns the child's model handle + a human description for

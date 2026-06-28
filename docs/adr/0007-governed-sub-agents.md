@@ -59,15 +59,25 @@ non-negotiable properties:
 - `internal/agentcore/entrypoint_conformance_test.go` (`TestEntrypointConformance`)
   pins that `internal/agent/scheduled.go` — the file the child's `Execute` lives
   in — calls `agentcore.Run`, so the child cannot drift onto a forked loop.
-- **Budget split:** `internal/agent/subagent.go` `spawn()` reads the parent's
-  remaining budget via `(*agentcore.ScheduledPolicy).Budget` and charges child
-  spend back via `(*agentcore.ScheduledPolicy).ChargeChildUsage`. The slice math
-  (`sliceCostBudget`/`sliceTokenBudget`) hard-caps a grant at the parent's
-  remaining budget. The child's own slice is enforced by the SAME
-  `orchestrationState.checkCeilings` / `budgetGuardedStep` the parent uses.
+- **Budget split (atomic):** `internal/agent/subagent.go` `reserveChildBudget`
+  computes and reserves a child's ceiling **under the parent mutex (`a.mu`)** in
+  one critical section: it reads the parent's remaining budget via
+  `(*agentcore.ScheduledPolicy).Budget`, subtracts the budget already granted to
+  in-flight siblings (`subagent.reservedCostUSD`/`reservedTokens`), slices a grant
+  from what is genuinely available (`grantCostFrom`/`grantTokensFrom`, hard-capped
+  at available), and adds the grant to the reservation. Because that
+  read-modify-write is serialized by `a.mu`, the **sum of budgets granted to any
+  number of concurrent spawns can never exceed the parent's remaining budget** —
+  the hard wall does NOT depend on the tool being sequential. `releaseChildBudget`
+  frees the reservation when the child returns; `ChargeChildUsage` then folds the
+  child's ACTUAL spend into the parent. The child's own slice is enforced by the
+  SAME `orchestrationState.checkCeilings` / `budgetGuardedStep` the parent uses.
   Tests: `TestSpawn_BudgetNeverExceedsParentCeiling`,
-  `TestChargeChildUsage_FoldsIntoParentCeiling`,
-  `TestSliceBudget_HardCapsAtParentRemaining`.
+  `TestReserveChildBudget_ConcurrentNeverOverGrants` (fires N concurrent
+  reservations, asserts the summed grant never exceeds remaining; passes under
+  `-race`), `TestSpawn_ConcurrentNeverBreachesParentCeiling` (concurrent full
+  spawns; passes under `-race`), `TestChargeChildUsage_FoldsIntoParentCeiling`,
+  `TestReserveChildBudget_AtomicAndHardCaps`, `TestGrantFrom_HardCapsAtAvailable`.
 - **Depth / fan-out caps:** `spawn()` checks `subagent.depth >= maxDepth` and
   reserves a fan-out slot under the parent lock (`reserveChildSlot`). Tests:
   `TestSpawn_DepthCapRefusesAtMaxDepth`, `TestSpawn_FanOutCapRefusesExtraChild`.
@@ -94,25 +104,32 @@ that make a *governed* child safe.
   weaker, smaller-budget copy of itself, bounded by depth and fan-out.
 - The feature is invisible until an operator opts in, so the default deployment is
   byte-for-byte unchanged.
-- Cost: per-child accounting is charge-back, not a shared live ledger, so a
-  child's spend becomes visible to the parent's ceiling only when the child
-  returns (see "Alternatives"). For the bounded fan-out fleet supports this is an
-  accepted, conservative trade.
+- Cost: per-child accounting combines an **atomic up-front reservation** of each
+  child's granted ceiling with **charge-back** of the child's actual spend on
+  return. The grant is conservative (a child rarely spends its whole slice), so
+  in-flight reservations can refuse a spawn that real spend would have allowed;
+  this errs toward staying under the parent ceiling, which is the safe direction.
+  A child's actual spend becomes visible to the parent's ceiling only when it
+  returns, but its *reserved* budget is held against the wall the entire time it
+  runs (see "Alternatives").
 
 ## Alternatives considered
 
-- **A shared, live budget ledger** both parent and child mutate in real time.
-  Rejected for now: it would require threading a mutable ledger through
-  `agentcore.Run`'s seams, for a marginal gain. `spawn_subagent` is registered as
-  a **sequential** tool (`NewAgentTool`, `parallel:false`), so fantasy serializes
-  spawns within a round behind its `sequentialMu`: each spawn's budget read and
-  charge-back complete before the next spawn begins. The split is therefore
-  **exact** — a sibling spawn always sees the prior sibling's spend already
-  charged in. A child can still overspend its OWN sliced ceiling by at most one
-  in-flight step (the gap between two `checkCeilings`), but that overrun is
-  bounded by the child's slice, not the parent's, and is itself charged back; it
-  cannot make the parent's *total* exceed the parent ceiling beyond a single
-  child's last-step overrun. The depth/fan-out caps keep that small.
+- **A shared, live budget ledger** both parent and child mutate in real time
+  (every child token charged the instant it is spent). Rejected: it would require
+  threading a mutable, lock-shared ledger through `agentcore.Run`'s seams for a
+  marginal gain over the reservation model. The over-grant risk this would solve
+  is already **closed atomically**: `reserveChildBudget` holds each child's
+  granted ceiling against the parent's remaining budget under `a.mu` for the whole
+  time the child runs, so even N concurrent spawns can never collectively be
+  granted more than the parent has left. This is **enforced atomically under the
+  parent mutex and covered by a concurrency regression test**
+  (`TestReserveChildBudget_ConcurrentNeverOverGrants` and
+  `TestSpawn_ConcurrentNeverBreachesParentCeiling`, both run under `-race`) — it
+  does **not** rely on `spawn_subagent` being a sequential tool. A child can still
+  overspend its OWN sliced ceiling by at most one in-flight step (the gap between
+  two `checkCeilings`), but that overrun is bounded by the child's slice, charged
+  back on return, and capped by the depth/fan-out caps.
 - **A `spawn_subagent` MCP server** (like lifeline). Rejected: it would push
   child execution toward the broker/sandbox boundary and create a second
   model-invocation path the policy does not govern — the same reasoning that kept

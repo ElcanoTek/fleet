@@ -238,12 +238,15 @@ Each spawn obeys four non-negotiable properties:
   panic or silent allow.
 
 Stated plainly (honesty in docs): with the flag off (the default), the tool is not
-even registered and behaviour is identical to before. The budget split is
-charge-back, not a live shared ledger; because `spawn_subagent` is a **sequential**
-tool, spawns within a round serialize so each sees the prior sibling's spend
-already charged in — the split is exact (see ADR-0007 for the precise bound).
-`FLEET_SUBAGENTS_MODEL` names a default child model slug; empty means the child
-inherits the parent's model.
+even registered and behaviour is identical to before. The budget split combines an
+**atomic up-front reservation** of each child's granted ceiling (held against the
+parent's remaining budget under the parent mutex for as long as the child runs)
+with **charge-back** of the child's actual spend on return. Because the
+reservation is atomic, even N **concurrent** spawns can never collectively be
+granted more than the parent has left — the wall does **not** rely on
+`spawn_subagent` being a sequential tool (a concurrency regression test pins this
+under `-race`; see ADR-0007). `FLEET_SUBAGENTS_MODEL` names a default child model
+slug; empty means the child inherits the parent's model.
 
 ---
 
