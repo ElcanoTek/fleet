@@ -810,6 +810,33 @@ they need root/sudo; systemctl's own permission error surfaces via the exit code
 `logs` reads the journal (usually permitted unprivileged) and exits non-zero if
 the unit isn't installed.
 
+### process logs — stderr by default, optional rotating file
+
+fleet writes its process log (startup diagnostics + operational lines) to
+**stderr**. Under the shipped systemd unit that goes to **journald**, which
+already rotates it — so the default needs no configuration and is unchanged.
+
+For a **container / non-systemd** deployment where nothing else rotates the log,
+set `FLEET_LOG_FILE` to **also** tee those lines to a rotating file (the file
+sink is OFF until you set it):
+
+```
+FLEET_LOG_FILE=/var/log/fleet/fleet.log   # opt in; empty (default) = stderr only
+FLEET_LOG_MAX_SIZE_MB=100                 # rotate when the file reaches this size (default 100)
+FLEET_LOG_MAX_BACKUPS=7                   # keep this many rotated files (default 7)
+FLEET_LOG_MAX_AGE_DAYS=0                  # delete rotated files older than this; 0 = no age limit (default)
+FLEET_LOG_COMPRESS=true                   # gzip rotated files (default true)
+```
+
+With the file sink on, lines still go to stderr **as well** — it tees, it does
+not replace — so journald/Docker log drivers keep working alongside the file. The
+file directory must be writable by the service user (the systemd unit's
+`StateDirectory`/`ReadWritePaths` model); a bad path fails loudly at startup.
+
+This rotates the **existing** log lines as-is. It does **not** convert the log to
+structured JSON — the std-`log`-to-`slog` migration is tracked separately
+([#178](https://github.com/ElcanoTek/fleet/issues/178)).
+
 ### backup · restore — disaster recovery
 
 fleet keeps every conversation in the **chat** DB and every scheduled task in the
