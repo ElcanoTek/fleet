@@ -29,6 +29,14 @@ import { SearchBar } from "./SearchBar";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 import {
+  useKeyboardShortcuts,
+  type KeyboardShortcut,
+} from "@/app/shared/hooks/useKeyboardShortcuts";
+import {
+  KeyboardShortcutsOverlay,
+  type ShortcutHelpGroup,
+} from "@/app/shared/ui/KeyboardShortcutsOverlay";
+import {
   applyContextCompacted,
   applyContextPressure,
   applyModelRequired,
@@ -176,6 +184,31 @@ type UserMemory = {
 const minimumThinkingMs = 250;
 const streamIdleTimeoutMs = 300000;
 
+// shortcutHelpGroups is the single source of truth for the "?" help overlay
+// (#306). It documents only the shortcuts the shell actually wires through
+// useKeyboardShortcuts below — keep the two in step. Chips render
+// platform-aware (⌘ on macOS, Ctrl elsewhere) in the overlay.
+const shortcutHelpGroups: ShortcutHelpGroup[] = [
+  {
+    title: "Global",
+    entries: [
+      { chips: [{ mod: true }, { label: "K" }], description: "Open search" },
+      { chips: [{ mod: true }, { label: "N" }], description: "New conversation" },
+      { chips: [{ mod: true }, { label: "J" }], description: "Focus the message composer" },
+      { chips: [{ label: "?" }], description: "Show this keyboard-shortcut help" },
+      { chips: [{ label: "Esc" }], description: "Close search, help, or the sidebar" },
+    ],
+  },
+  {
+    title: "Composer",
+    entries: [
+      { chips: [{ label: "Enter" }], description: "Send the message" },
+      { chips: [{ mod: true }, { label: "Enter" }], description: "Send the message" },
+      { chips: [{ shift: true }, { label: "Enter" }], description: "Insert a newline" },
+    ],
+  },
+];
+
 // ── component ────────────────────────────────────────────────────────────
 
 // PENDING_CONV_KEY is the sentinel for messages that belong to a brand-new
@@ -229,6 +262,8 @@ export function ChatExperience() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // searchOpen gates the Cmd/Ctrl+K full-text search palette (#308).
   const [searchOpen, setSearchOpen] = useState(false);
+  // shortcutsOpen gates the "?" keyboard-shortcut help overlay (#306).
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Theme bootstrap + toggle are owned by the shared shell: the <ThemeToggle/>
   // in this view's header self-manages light/dark via useTheme, the same way
   // the orchestrator header and login card do.
@@ -591,35 +626,13 @@ export function ChatExperience() {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
 
-  // Global search shortcut (#308): Cmd/Ctrl+K opens the search palette; Cmd/Ctrl+F
-  // is an alternate binding, but only when the user isn't typing in a field (so it
-  // doesn't shadow the browser's in-page find while composing a message).
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      // Escape closes the palette. Handled HERE (top-level, always-mounted
-      // listener) rather than inside SearchBar so close is reliable regardless of
-      // focus or mount timing. setSearchOpen(false) is a no-op when already closed.
-      if (event.key === "Escape") {
-        setSearchOpen(false);
-        return;
-      }
-      if (!(event.metaKey || event.ctrlKey)) return;
-      const key = event.key.toLowerCase();
-      if (key !== "k" && key !== "f") return;
-      if (key === "f") {
-        const el = document.activeElement;
-        const typing =
-          el instanceof HTMLInputElement ||
-          el instanceof HTMLTextAreaElement ||
-          (el instanceof HTMLElement && el.isContentEditable);
-        if (typing) return;
-      }
-      event.preventDefault();
-      setSearchOpen(true);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  // Keyboard shortcuts are registered declaratively through the shared
+  // useKeyboardShortcuts hook below (search the comment "shortcut catalog"),
+  // placed after the callbacks they invoke (clearConversation etc.) are in
+  // scope. The two ad-hoc window keydown listeners that used to live here — the
+  // #308 search palette binding and an older sidebar-search focus binding — were
+  // folded into that one registration so every shortcut is discoverable in the
+  // "?" help overlay (#306).
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -917,21 +930,6 @@ export function ChatExperience() {
     scrollParent.addEventListener("scroll", handleScroll, { passive: true });
     return () => scrollParent.removeEventListener("scroll", handleScroll);
   }, [isLoadingHistory, messages.length]);
-
-  useEffect(() => {
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSidebarOpen(false);
-      // Cmd+K (macOS) / Ctrl+K (everywhere else): focus conversation search.
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setSidebarOpen(true);
-        // next tick so the sidebar finishes its transform before we focus
-        window.setTimeout(() => searchRef.current?.focus(), 80);
-      }
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, []);
 
   useEffect(() => {
     // Capture refs into locals so the cleanup doesn't read a "stale" ref
@@ -1839,6 +1837,78 @@ export function ChatExperience() {
     setSelectedModel(DEFAULT_MODEL);
     promptRef.current?.focus();
   };
+
+  // ── shortcut catalog ─────────────────────────────────────────────────
+  //
+  // One declarative list, registered through the shared useKeyboardShortcuts
+  // hook (#306). Each global action here has an equivalent mouse affordance
+  // elsewhere in the shell (the sidebar "New chat" button, the search button,
+  // the composer) — no keyboard-only paths. The "?" overlay below is generated
+  // from `shortcutHelpGroups`, keeping the documented keys in step with the
+  // wired ones.
+  //
+  // Platform: shortcuts marked `mod: true` fire on ⌘ (macOS) / Ctrl (elsewhere).
+  // Typing safety: bare-letter shortcuts (`?`) are suppressed while a text field
+  // is focused so they don't eat keystrokes; ⌘/Ctrl combos opt in via
+  // allowInInput so they still work from inside the composer. The composer's own
+  // Enter / Shift+Enter handling lives on its textarea and is untouched.
+  const closeOverlays = useCallback(() => {
+    // Escape collapses whatever transient surface is open. The search and
+    // shortcut overlays also carry their own focus-independent Escape listeners
+    // (they're mounted-while-open), so this is the catch-all for the sidebar.
+    setShortcutsOpen(false);
+    setSearchOpen(false);
+    setSidebarOpen(false);
+  }, []);
+
+  const shortcuts = useMemo<KeyboardShortcut[]>(
+    () => [
+      {
+        key: "k",
+        mod: true,
+        allowInInput: true,
+        handler: () => setSearchOpen(true),
+      },
+      {
+        // Cmd/Ctrl+F is an alternate binding for search, but NOT while typing —
+        // there it must fall through to the browser's in-page find.
+        key: "f",
+        mod: true,
+        allowInInput: false,
+        handler: () => setSearchOpen(true),
+      },
+      {
+        key: "n",
+        mod: true,
+        shift: false,
+        allowInInput: true,
+        handler: () => clearConversation(),
+      },
+      {
+        // Focus the composer from anywhere (mirrors clicking into it).
+        key: "j",
+        mod: true,
+        allowInInput: true,
+        handler: () => promptRef.current?.focus(),
+      },
+      {
+        // "?" opens the help overlay. Bare key, so it's suppressed while typing.
+        key: "?",
+        handler: () => setShortcutsOpen(true),
+      },
+      {
+        key: "Escape",
+        allowInInput: true,
+        handler: closeOverlays,
+      },
+    ],
+    // clearConversation is a fresh closure each render but stable in behavior;
+    // the hook reads the list through a ref so this list is rebuilt cheaply and
+    // never re-subscribes the listener.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [closeOverlays],
+  );
+  useKeyboardShortcuts(shortcuts);
 
   // ── the streaming event loop ─────────────────────────────────────────
   //
@@ -3268,6 +3338,7 @@ export function ChatExperience() {
           serverConfig={serverConfig}
           clearConversation={clearConversation}
           setSearchOpen={setSearchOpen}
+          setShortcutsOpen={setShortcutsOpen}
           userEmail={userEmail}
           sidebarQuery={sidebarQuery}
           setSidebarQuery={setSidebarQuery}
@@ -3307,6 +3378,13 @@ export function ChatExperience() {
               setSearchOpen(false);
               void loadConversation(conversationId);
             }}
+          />
+        ) : null}
+
+        {shortcutsOpen ? (
+          <KeyboardShortcutsOverlay
+            groups={shortcutHelpGroups}
+            onClose={() => setShortcutsOpen(false)}
           />
         ) : null}
 
