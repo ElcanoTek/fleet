@@ -539,8 +539,11 @@ type TaskEdit struct {
 	InstructionSelfImprove bool
 	AllowNetwork           bool
 	RuntimeFlavor          string
-	ScheduledFor           *time.Time
-	Recurrence             string
+	// Description replaces the task's operator documentation (#281). Like Prompt,
+	// it is assigned unconditionally from the full edit payload (empty = clear).
+	Description  string
+	ScheduledFor *time.Time
+	Recurrence   string
 	// Timezone is the IANA timezone the cron Recurrence is evaluated in. The edit
 	// handler pre-fills it from the existing task when the caller omits it, so it
 	// is always a valid name here.
@@ -591,6 +594,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	}
 
 	task.Prompt = edit.Prompt
+	task.Description = edit.Description
 	task.Model = edit.Model
 	task.FallbackModel = edit.FallbackModel
 	task.MaxIterations = edit.MaxIterations
@@ -655,6 +659,34 @@ func (s *Storage) UpdateTaskCredentialAllowlist(ctx context.Context, taskID uuid
 	}
 
 	task.CredentialAllowlist = allowlist
+	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// UpdateTaskDescription sets a task's operator-documentation field (#281),
+// leaving all other fields untouched. Editable tasks only (pending/scheduled),
+// mirroring the other targeted task edits.
+func (s *Storage) UpdateTaskDescription(ctx context.Context, taskID uuid.UUID, description string) (*models.Task, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
+		return nil, ErrTaskNotEditable
+	}
+
+	task.Description = description
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err
 	}
@@ -855,6 +887,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		CredentialAllowlist: task.CredentialAllowlist,
 		LoopConfig:          task.LoopConfig,
 		WorktreeConfig:      task.WorktreeConfig,
+		Description:         task.Description,
 		Priority:            task.Priority,
 		ScheduledFor:        &nextTime,
 		Recurrence:          task.Recurrence,

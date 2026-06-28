@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -249,9 +250,12 @@ type rateLimiter struct {
 }
 
 const (
-	taskPromptMinLength  = 3
-	taskPromptMaxLength  = 100000
-	taskScheduleMaxYears = 5
+	taskPromptMinLength = 3
+	taskPromptMaxLength = 100000
+	// maxTaskDescriptionChars caps the optional operator documentation field (#281)
+	// at 10k runes — generous for a runbook, bounded so it can't bloat the row.
+	maxTaskDescriptionChars = 10000
+	taskScheduleMaxYears    = 5
 )
 
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
@@ -881,6 +885,11 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 	if err := tc.WorktreeConfig.Validate(); err != nil {
 		return fmt.Errorf("worktree_config: %w", err)
 	}
+	// Description (#281): optional operator documentation, bounded so it can't
+	// bloat the task row. Counted in runes (not bytes) to be Unicode-fair.
+	if utf8.RuneCountInString(tc.Description) > maxTaskDescriptionChars {
+		return fmt.Errorf("description exceeds maximum length of %d characters", maxTaskDescriptionChars)
+	}
 	return nil
 }
 
@@ -1101,6 +1110,11 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 
 	if scheduledOnly := r.URL.Query().Get("scheduled_only"); scheduledOnly == "true" {
 		filter.ScheduledOnly = true
+		hasFilters = true
+	}
+
+	if hasDescription := r.URL.Query().Get("has_description"); hasDescription == "true" {
+		filter.HasDescription = true
 		hasFilters = true
 	}
 
@@ -1504,6 +1518,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	// overwritten (which would resurrect the task and clobber its lease).
 	edit := storage.TaskEdit{
 		Prompt:                 tc.Prompt,
+		Description:            tc.Description,
 		Model:                  tc.Model,
 		FallbackModel:          tc.FallbackModel,
 		MaxIterations:          tc.MaxIterations,

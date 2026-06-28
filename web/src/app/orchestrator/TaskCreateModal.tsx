@@ -46,6 +46,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
   const { showToast } = useToast();
 
   const [prompt, setPrompt] = useState("");
+  const [description, setDescription] = useState("");
   const [emails, setEmails] = useState<string[]>([]);
   const [customEmail, setCustomEmail] = useState("");
   const [scheduledDate, setScheduledDate] = useState("");
@@ -116,6 +117,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
     setErrors({});
 
     const taskData: TaskCreate = { prompt: finalPrompt };
+    if (description.trim()) taskData.description = description;
     if (model) taskData.model = model;
     if (fallbackModel) taskData.fallback_model = fallbackModel;
     if (maxIterations) taskData.max_iterations = Number.parseInt(maxIterations, 10);
@@ -186,6 +188,21 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                   {errors.prompt}
                 </div>
               ) : null}
+            </div>
+
+            {/* Documentation (#281) — optional operator notes, collapsed by default */}
+            <div className="form-group">
+              <details>
+                <summary>Documentation (optional)</summary>
+                <textarea
+                  id="descriptionTextarea"
+                  name="description"
+                  maxLength={10000}
+                  placeholder="Why this task exists, what it costs, side effects, the runbook if it fails, who owns it… (Markdown)"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </details>
             </div>
 
             {/* Email recipients */}

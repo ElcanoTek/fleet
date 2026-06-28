@@ -442,6 +442,11 @@ type TaskCreate struct {
 	// the global default at dispatch; an EXTERNAL flavor still routes through the
 	// fail-closed scheduled-external gate (allow_ungoverned_scheduled_agents).
 	RuntimeFlavor string `json:"runtime_flavor,omitempty"`
+	// Description is optional operator documentation for this task (#281):
+	// free-form Markdown (why the task exists, cost, side effects, runbook,
+	// owner). Empty = none. Distinct from the shared agent-notes wiki; never
+	// injected into agent prompts. Capped at maxTaskDescriptionChars at creation.
+	Description string `json:"description,omitempty"`
 	// Timezone is the IANA timezone name (e.g. "America/New_York") used to
 	// evaluate Recurrence in the task owner's local time. Empty falls back to
 	// the server's FLEET_DEFAULT_TIMEZONE (then "UTC") at create time. The cron
@@ -479,7 +484,9 @@ type Task struct {
 	AllowNetwork bool `json:"allow_network,omitempty"`
 	// RuntimeFlavor is the per-task runtime-flavor override; empty = the bundle's
 	// global scheduled runtime. See TaskCreate.RuntimeFlavor.
-	RuntimeFlavor  string     `json:"runtime_flavor,omitempty"`
+	RuntimeFlavor string `json:"runtime_flavor,omitempty"`
+	// Description is optional operator documentation (#281). See TaskCreate.Description.
+	Description    string     `json:"description,omitempty"`
 	Status         TaskStatus `json:"status"`
 	AssignedNodeID *uuid.UUID `json:"assigned_node_id,omitempty"`
 	AgentSessionID *string    `json:"agent_session_id,omitempty"`
@@ -555,6 +562,7 @@ func NewTask(tc TaskCreate) *Task {
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
 		RuntimeFlavor:          tc.RuntimeFlavor,
+		Description:            tc.Description,
 		Status:                 status,
 		CreatedAt:              time.Now().UTC(),
 		ScheduledFor:           tc.ScheduledFor,
