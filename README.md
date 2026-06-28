@@ -185,6 +185,7 @@ internal/
   creds/          MCP credential-account store (host-side credential broker)
   clientconfig/   loads the pluggable CLIENT BUNDLE (branding, MCP catalog, prompts, skills, ...)
   mcp/            merged Go MCP client (stdio + HTTP)
+  mcpbroker/      out-of-process MCP credential broker (keeps connector secrets out of the loop's address space)
   sandbox/        the single execution backend (ephemeral container over a persistent workspace)
   tools/          native agent tools (bash, python, ...)
   store/          interactive (chat) Postgres layer + migrations
