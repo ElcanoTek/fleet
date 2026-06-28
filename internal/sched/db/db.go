@@ -537,7 +537,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -567,8 +567,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, timezone, created_by_key_id,
-			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
+			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -604,7 +604,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			tags = EXCLUDED.tags,
 			retry_policy = EXCLUDED.retry_policy,
 			source_task_id = EXCLUDED.source_task_id,
-			persona = EXCLUDED.persona`,
+			persona = EXCLUDED.persona,
+			workspace_path = EXCLUDED.workspace_path`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -641,8 +642,18 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		marshalRetryPolicy(task.RetryPolicy),
 		sourceTaskIDValue(task.SourceTaskID),
 		nullableString(task.Persona),
+		workspacePathValue(task.WorkspacePath),
 	)
 	return err
+}
+
+// workspacePathValue maps the optional per-run workspace path (#287) to a
+// nullable column value: nil/empty → SQL NULL, set → the path string.
+func workspacePathValue(p *string) any {
+	if p == nil || strings.TrimSpace(*p) == "" {
+		return nil
+	}
+	return *p
 }
 
 // triggerTypeOrCron defends the NOT NULL trigger_type column against a
@@ -818,6 +829,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		retryPolicy            sql.NullString
 		sourceTaskID           sql.NullString
 		persona                sql.NullString
+		workspacePath          sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -826,7 +838,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &timezone, &createdByKeyID,
-		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy, &sourceTaskID, &persona,
+		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy, &sourceTaskID, &persona, &workspacePath,
 	)
 	if err != nil {
 		return nil, err
@@ -912,6 +924,9 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	}
 	if createdByKeyID.Valid {
 		task.CreatedByKeyID = &createdByKeyID.String
+	}
+	if workspacePath.Valid && workspacePath.String != "" {
+		task.WorkspacePath = &workspacePath.String
 	}
 	return task, nil
 }
@@ -1466,7 +1481,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			tags = $31,
 			retry_policy = $32,
 			source_task_id = $33,
-			persona = $34
+			persona = $34,
+			workspace_path = $35
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1502,6 +1518,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		marshalRetryPolicy(task.RetryPolicy),
 		sourceTaskIDValue(task.SourceTaskID),
 		nullableString(task.Persona),
+		workspacePathValue(task.WorkspacePath),
 	)
 	return err
 }

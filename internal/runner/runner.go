@@ -27,6 +27,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 )
 
 const (
@@ -397,7 +399,18 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		log.Printf("runner: failed to report running for task %s: %v", task.ID, err)
 	}
 
-	session, runErr := p.runner.Run(agentcore.WithStreamObserver(taskCtx, buf), task)
+	// Install the workspace-path reporter (#287): the scheduled runner invokes it
+	// once it has resolved this run's effective workspace directory (a per-run
+	// worktree subdir, or the shared workspace root), and we persist that path to
+	// the task row under our held lease so the file-browser endpoints can later
+	// list + stream the artifacts the agent produced. Reporting failure is
+	// non-fatal — it only disables the after-the-fact browser for this run.
+	runCtx := agentcore.WithStreamObserver(taskCtx, buf)
+	runCtx = scheduledrun.WithWorkspaceReporter(runCtx, func(_ context.Context, path string) {
+		p.reportWorkspacePath(task.ID, path)
+	})
+
+	session, runErr := p.runner.Run(runCtx, task)
 
 	// Emit a terminal lifecycle status (the always-last frame). The deferred release
 	// seals the buffer so attached clients see EOF; the registry retains it briefly.
@@ -538,6 +551,25 @@ func (p *Pool) reportStatus(taskID uuid.UUID, status models.TaskStatus, message 
 		Status:  status,
 		Message: msgPtr,
 	})
+}
+
+// reportWorkspacePath persists the per-run workspace path (#287) on the task row
+// under our held lease. It rides on a TaskStatusRunning update (the task IS
+// running when the scheduled runner reports its workspace) so the atomic
+// lease-checked path persists WorkspacePath without changing the lifecycle. A
+// failure is logged and swallowed — the file browser is a convenience, never a
+// reason to fail a run.
+func (p *Pool) reportWorkspacePath(taskID uuid.UUID, path string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	if _, err := p.store.UpdateTaskStatusAtomicWithContext(context.Background(), taskID, p.leaseOwner, &models.StatusUpdate{
+		TaskID:        taskID,
+		Status:        models.TaskStatusRunning,
+		WorkspacePath: &path,
+	}); err != nil {
+		log.Printf("runner: failed to record workspace path for task %s: %v", taskID, err)
+	}
 }
 
 // submitLog persists the run's session log. When the runner produced no

@@ -1932,45 +1932,31 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 	}
 	relPath = decoded
 
-	// Hard-reject obvious traversal + absolute paths up front. The
-	// EvalSymlinks check below is the load-bearing safety net, but a
-	// fast no on `..`/leading-`/` keeps the error message readable.
-	if strings.HasPrefix(relPath, "/") || strings.Contains(relPath, "..") || strings.ContainsRune(relPath, 0) {
+	// Resolve the requested file against the conversation workspace root,
+	// enforcing the shared path-traversal guard (tools.SafeWorkspaceJoin):
+	// reject `..`/absolute/NUL paths up front, then EvalSymlinks + confirm the
+	// result still lives under the workspace dir. Without the symlink check a
+	// `ln -s /etc/passwd workspace/<conv>/p` written by the agent (or a
+	// malicious upload) would let any user with the conversation read host
+	// secrets via this endpoint.
+	wsDir := tools.WorkspaceDirForConversation(convID)
+	resolvedAbs, err := tools.SafeWorkspaceJoin(wsDir, relPath)
+	switch {
+	case errors.Is(err, tools.ErrUnsafePath):
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
-	}
-
-	wsDir, err := filepath.Abs(tools.WorkspaceDirForConversation(convID))
-	if err != nil {
-		http.Error(w, "resolve workspace: "+err.Error(), http.StatusInternalServerError)
+	case errors.Is(err, tools.ErrPathEscapesWorkspace):
+		http.Error(w, "path escapes workspace", http.StatusBadRequest)
 		return
-	}
-	full := filepath.Join(wsDir, filepath.FromSlash(relPath))
-
-	// Resolve symlinks and confirm the result still lives under wsDir.
-	// Without this, a `ln -s /etc/passwd workspace/<conv>/p` written by
-	// the agent (or a malicious upload) would let any user with the
-	// conversation read host secrets via this endpoint.
-	resolved, err := filepath.EvalSymlinks(full)
-	if err != nil {
-		if os.IsNotExist(err) {
-			http.Error(w, "file not found", http.StatusNotFound)
-			return
-		}
+	case os.IsNotExist(err):
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	case err != nil:
 		http.Error(w, "resolve path: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	resolvedAbs, err := filepath.Abs(resolved)
-	if err != nil {
-		http.Error(w, "abs path: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if resolvedAbs != wsDir && !strings.HasPrefix(resolvedAbs, wsDir+string(filepath.Separator)) {
-		http.Error(w, "path escapes workspace", http.StatusBadRequest)
-		return
-	}
 
-	info, err := os.Stat(resolvedAbs)
+	info, err := os.Stat(resolvedAbs) //nolint:gosec // resolvedAbs is validated by tools.SafeWorkspaceJoin to live under the workspace dir
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.Error(w, "file not found", http.StatusNotFound)
