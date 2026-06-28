@@ -393,16 +393,19 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		}
 		p.submitLog(task, session, msg)
 		log.Printf("runner: task %s interrupted after %v", task.ID, time.Since(start).Round(time.Second))
-	case runErr != nil && isRetryable(runErr) && task.AttemptCount < task.MaxRetries:
-		// Transient, clean failure with retries left: re-queue the SAME task for
+	case runErr != nil && task.RetryPolicy.ShouldRetryClass(classifyFailure(runErr)) && task.AttemptCount < task.MaxRetries:
+		// Retryable failure class with retries left: re-queue the SAME task for
 		// another whole-task attempt after a backoff, instead of failing terminally.
 		// The next attempt re-binds MCP + runs the SAME governed loop via the normal
 		// claim path. (AttemptCount/MaxRetries: MaxRetries is ADDITIONAL attempts, so
-		// the task runs up to MaxRetries+1 times.)
-		backoff := retryBackoff(task.AttemptCount)
+		// the task runs up to MaxRetries+1 times.) Which classes retry, and the
+		// backoff curve, come from task.RetryPolicy (nil = legacy: transient only,
+		// 30s→10m exponential) — see #201.
+		class := classifyFailure(runErr)
+		backoff := retryBackoff(task.AttemptCount, task.RetryPolicy)
 		when := time.Now().UTC().Add(backoff)
-		msg := fmt.Sprintf("Task attempt %d failed (transient); retrying in %s: %v",
-			task.AttemptCount+1, backoff.Round(time.Second), runErr)
+		msg := fmt.Sprintf("Task attempt %d failed (%s); retrying in %s: %v",
+			task.AttemptCount+1, class, backoff.Round(time.Second), runErr)
 		if _, err := p.store.RequeueTaskForRetryWithContext(context.Background(), task.ID, p.leaseOwner, when, msg); err != nil {
 			// Could not re-queue (e.g. lease lost): fall back to a terminal error so
 			// the task never silently strands as running.
@@ -431,29 +434,50 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	}
 }
 
-// isRetryable reports whether a clean run failure is a TRANSIENT class worth a
-// whole-task retry. It is an ALLOWLIST: only the agentcore transient sentinels
-// qualify; everything else (deterministic config errors like "no model
-// configured", validation failures, etc.) is terminal. This keeps the
-// idempotency risk bounded — we never re-run a deterministically-failing task.
-func isRetryable(err error) bool {
-	return errors.Is(err, agentcore.ErrRetryBudgetExhausted) ||
-		errors.Is(err, agentcore.ErrStreamBlipPersisted)
+// classifyFailure maps a clean run failure to a RetryPolicy failure class (#201).
+// Only failures backed by a distinct agentcore sentinel are distinguishable;
+// everything else (deterministic config errors like "no model configured",
+// validation failures, etc.) is FailureTerminal — which the default policy never
+// retries, keeping the idempotency risk bounded. The richer classes the issue
+// envisions (timeout / governance / validation) await dedicated agentcore
+// sentinels; until then they fall through to terminal.
+func classifyFailure(err error) string {
+	switch {
+	case errors.Is(err, agentcore.ErrRetryBudgetExhausted), errors.Is(err, agentcore.ErrStreamBlipPersisted):
+		return models.FailureTransient
+	case errors.Is(err, agentcore.ErrCostCeilingExceeded):
+		return models.FailureCostCeiling
+	case errors.Is(err, agentcore.ErrContextBudgetExhausted):
+		return models.FailureContextBudget
+	default:
+		return models.FailureTerminal
+	}
 }
 
-// retryBackoff returns the delay before re-running after a transient failure:
-// exponential in the attempt number (30s, 60s, 120s, …), capped at 10m, with
-// ±10% jitter to avoid thundering-herd re-promotion. The result is always > 0 so
-// the re-queued ScheduledFor is strictly in the future (the scheduler promotes
-// only scheduled_for <= now), preventing a tight crash-loop.
-func retryBackoff(attempt int) time.Duration {
-	const base = 30 * time.Second
-	const maxBackoff = 10 * time.Minute
-	d := maxBackoff
-	if attempt >= 0 && attempt < 8 {
-		if scaled := base << attempt; scaled > 0 && scaled < maxBackoff {
-			d = scaled
+// retryBackoff returns the delay before re-running after a retryable failure.
+// The curve comes from the task's RetryPolicy (nil → legacy: 30s base, 10m cap,
+// exponential): exponential doubles per attempt up to the cap; fixed uses the
+// base every attempt. ±10% jitter avoids thundering-herd re-promotion. The result
+// is always > 0 so the re-queued ScheduledFor is strictly in the future (the
+// scheduler promotes only scheduled_for <= now), preventing a tight crash-loop.
+func retryBackoff(attempt int, policy *models.RetryPolicy) time.Duration {
+	initialSec, maxSec, exponential := policy.EffectiveBackoff()
+	base := time.Duration(initialSec) * time.Second
+	maxBackoff := time.Duration(maxSec) * time.Second
+
+	d := base
+	if exponential {
+		d = maxBackoff
+		if attempt >= 0 && attempt < 8 {
+			if scaled := base << attempt; scaled > 0 && scaled < maxBackoff {
+				d = scaled
+			}
 		}
+	} else if d > maxBackoff {
+		d = maxBackoff
+	}
+	if d <= 0 {
+		d = time.Second // defensive: keep the re-queued time strictly in the future
 	}
 	//nolint:gosec // G404: jitter only spreads retry backoff to avoid thundering-herd re-promotion; not security-sensitive.
 	jitter := time.Duration(rand.Int64N(int64(d/5))) - d/10 // ±10%

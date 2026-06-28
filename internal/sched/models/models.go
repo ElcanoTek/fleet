@@ -193,6 +193,121 @@ func (wc *WorktreeConfig) Validate() error {
 	return nil
 }
 
+// Failure classes (#201): the vocabulary the runner classifies a clean run
+// failure into, and that a RetryPolicy's retry_on/no_retry_on lists reference.
+// Only classes backed by a distinct agentcore sentinel today are
+// distinguishable; everything else is FailureTerminal. (Finer classes —
+// timeout / governance / validation — need new agentcore sentinels: a follow-up.)
+const (
+	FailureTransient     = "transient"      // retry budget / stream blip — a fresh run may succeed
+	FailureCostCeiling   = "cost_ceiling"   // cost/token ceiling hit — will recur; default no-retry
+	FailureContextBudget = "context_budget" // context exhausted after compaction — default no-retry
+	FailureTerminal      = "terminal"       // unknown / deterministic — never retried
+)
+
+// retryFailureClasses is the set a retry_on/no_retry_on list may name.
+var retryFailureClasses = map[string]struct{}{
+	FailureTransient: {}, FailureCostCeiling: {}, FailureContextBudget: {}, FailureTerminal: {},
+}
+
+// Backoff strategies + defaults for RetryPolicy (#201).
+const (
+	BackoffExponential              = "exponential"
+	BackoffFixed                    = "fixed"
+	DefaultRetryInitialDelaySeconds = 30
+	DefaultRetryMaxDelaySeconds     = 600
+)
+
+// RetryPolicy holds per-task retry backoff knobs and failure-class gating (#201).
+// nil → the legacy policy: transient failures only, 30s→10m exponential backoff.
+// The retry COUNT is Task.MaxRetries (NOT duplicated here, to keep one source of
+// truth); this policy governs the DELAY and WHICH failure classes retry.
+type RetryPolicy struct {
+	// Backoff is "exponential" (default) or "fixed".
+	Backoff string `json:"backoff,omitempty"`
+	// InitialDelaySeconds is the first retry delay (default 30). For exponential it
+	// doubles per attempt; for fixed it is used every attempt.
+	InitialDelaySeconds int `json:"initial_delay_seconds,omitempty"`
+	// MaxDelaySeconds caps the delay (default 600).
+	MaxDelaySeconds int `json:"max_delay_seconds,omitempty"`
+	// RetryOn lists failure classes that DO trigger a retry. nil → [transient].
+	RetryOn []string `json:"retry_on,omitempty"`
+	// NoRetryOn lists failure classes that block a retry regardless of RetryOn.
+	NoRetryOn []string `json:"no_retry_on,omitempty"`
+}
+
+// Validate rejects a statically-broken retry policy at task creation.
+func (rp *RetryPolicy) Validate() error {
+	if rp == nil {
+		return nil
+	}
+	switch rp.Backoff {
+	case "", BackoffExponential, BackoffFixed:
+	default:
+		return fmt.Errorf("backoff must be %q or %q (got %q)", BackoffExponential, BackoffFixed, rp.Backoff)
+	}
+	if rp.InitialDelaySeconds < 0 || rp.MaxDelaySeconds < 0 {
+		return fmt.Errorf("retry delays must be >= 0")
+	}
+	if rp.MaxDelaySeconds > 0 && rp.InitialDelaySeconds > rp.MaxDelaySeconds {
+		return fmt.Errorf("initial_delay_seconds (%d) cannot exceed max_delay_seconds (%d)", rp.InitialDelaySeconds, rp.MaxDelaySeconds)
+	}
+	for _, list := range [][]string{rp.RetryOn, rp.NoRetryOn} {
+		for _, c := range list {
+			if _, ok := retryFailureClasses[c]; !ok {
+				return fmt.Errorf("unknown failure class %q (allowed: transient, cost_ceiling, context_budget, terminal)", c)
+			}
+		}
+	}
+	return nil
+}
+
+// ShouldRetryClass decides whether a failure of the given class should retry
+// under this policy. NoRetryOn wins; then RetryOn (nil → only transient).
+// A nil policy defaults to "transient retries, nothing else" — today's behavior.
+func (rp *RetryPolicy) ShouldRetryClass(class string) bool {
+	if rp == nil {
+		return class == FailureTransient
+	}
+	for _, c := range rp.NoRetryOn {
+		if c == class {
+			return false
+		}
+	}
+	if rp.RetryOn == nil {
+		return class == FailureTransient
+	}
+	for _, c := range rp.RetryOn {
+		if c == class {
+			return true
+		}
+	}
+	return false
+}
+
+// EffectiveBackoff returns the resolved (initialSeconds, maxSeconds, exponential)
+// for this policy, applying defaults. A nil policy yields the legacy 30s/600s
+// exponential values.
+func (rp *RetryPolicy) EffectiveBackoff() (initialSeconds, maxSeconds int, exponential bool) {
+	initialSeconds, maxSeconds, exponential = DefaultRetryInitialDelaySeconds, DefaultRetryMaxDelaySeconds, true
+	if rp == nil {
+		return
+	}
+	if rp.InitialDelaySeconds > 0 {
+		initialSeconds = rp.InitialDelaySeconds
+	}
+	if rp.MaxDelaySeconds > 0 {
+		maxSeconds = rp.MaxDelaySeconds
+	}
+	if rp.Backoff == BackoffFixed {
+		exponential = false
+	}
+	if maxSeconds < initialSeconds {
+		maxSeconds = initialSeconds
+	}
+	return
+}
+
 // Tag constraints (#212): keep tags human-typeable, URL-safe, and bounded so the
 // catalogue + filter stay cheap and the column can't be abused to bloat a row.
 const (
@@ -481,6 +596,9 @@ type TaskCreate struct {
 	// MaxRetries is the number of ADDITIONAL whole-task attempts after the first
 	// when a run fails cleanly with a transient error. 0 (default) = no retries.
 	MaxRetries *int `json:"max_retries,omitempty"`
+	// RetryPolicy customizes retry backoff + which failure classes retry (#201).
+	// nil = legacy policy (transient-only, 30s→10m exponential). See RetryPolicy.
+	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
 	// AllowNetwork lets THIS scheduled task's bash/run_python execution sandbox
 	// keep outbound egress. The default (false) seals the sandbox with
 	// --network=none, matching the interactive lockdown path; egress is an
@@ -545,6 +663,10 @@ type Task struct {
 	// server-side at creation so the completion path can attribute cost back to
 	// the key for spending caps. Persisted; not settable by clients.
 	CreatedByKeyID *string `json:"created_by_key_id,omitempty"`
+	// SourceTaskID is the task this one was re-run / cloned from (#270), set
+	// server-side by POST /tasks/{id}/rerun|clone. nil for original tasks.
+	// Persisted; not settable by clients.
+	SourceTaskID *uuid.UUID `json:"source_task_id,omitempty"`
 	// NextRunAtLocal is ScheduledFor rendered in Timezone (RFC3339 with offset),
 	// populated at query time for display so callers need no client-side tz math.
 	// Not persisted; nil when the task has no scheduled_for.
@@ -560,6 +682,9 @@ type Task struct {
 	// up to MaxRetries+1 times before a failure is terminal.
 	AttemptCount int `json:"attempt_count"`
 	MaxRetries   int `json:"max_retries"`
+	// RetryPolicy customizes retry backoff + failure-class gating (#201). nil =
+	// legacy policy. See TaskCreate.RetryPolicy.
+	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
 	// CreatedByUsername is populated at query time for display purposes (not persisted)
 	CreatedByUsername *string `json:"created_by_username,omitempty"`
 	// TriggerType is how this task is fired: "cron" (default) or "webhook". A
@@ -613,6 +738,7 @@ func NewTask(tc TaskCreate) *Task {
 		Files:                  tc.Files,
 		Tags:                   tc.Tags,
 		MaxRetries:             derefOr(tc.MaxRetries, 0),
+		RetryPolicy:            tc.RetryPolicy,
 		TriggerType:            triggerType,
 	}
 }
@@ -623,6 +749,37 @@ func derefOr(p *int, def int) int {
 		return def
 	}
 	return *p
+}
+
+// TaskToCreate rebuilds the TaskCreate "recipe" from an existing task — the
+// inverse of NewTask over the create-relevant fields. It is the basis for re-run
+// / clone (#270): the caller adjusts ScheduledFor / Recurrence and applies any
+// overrides, then NewTask mints a fresh task. Runtime-only fields (Status,
+// AttemptCount, lease, results, SourceTaskID) are intentionally NOT carried.
+func TaskToCreate(t *Task) TaskCreate {
+	maxRetries := t.MaxRetries
+	return TaskCreate{
+		Prompt:                 t.Prompt,
+		Model:                  t.Model,
+		FallbackModel:          t.FallbackModel,
+		MaxIterations:          t.MaxIterations,
+		MCPSelection:           t.MCPSelection,
+		CredentialAllowlist:    t.CredentialAllowlist,
+		LoopConfig:             t.LoopConfig,
+		WorktreeConfig:         t.WorktreeConfig,
+		RetryPolicy:            t.RetryPolicy,
+		Description:            t.Description,
+		Tags:                   t.Tags,
+		Priority:               t.Priority,
+		InstructionSelfImprove: t.InstructionSelfImprove,
+		AllowNetwork:           t.AllowNetwork,
+		ScheduledFor:           t.ScheduledFor,
+		Recurrence:             t.Recurrence,
+		Timezone:               t.Timezone,
+		Files:                  t.Files,
+		MaxRetries:             &maxRetries,
+		TriggerType:            t.TriggerType,
+	}
 }
 
 // StatusUpdate is a status update for a task (from the in-process worker).

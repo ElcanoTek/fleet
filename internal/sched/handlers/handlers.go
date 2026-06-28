@@ -876,6 +876,11 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 		return fmt.Errorf("tags: %w", err)
 	}
 	tc.Tags = normalizedTags
+	// Retry policy (#201): nil → legacy backoff; non-nil must be internally
+	// consistent (valid backoff type, non-negative ordered delays, known classes).
+	if err := tc.RetryPolicy.Validate(); err != nil {
+		return fmt.Errorf("retry_policy: %w", err)
+	}
 	return nil
 }
 
@@ -1115,6 +1120,17 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 		if len(filter.Tags) > 0 {
 			hasFilters = true
 		}
+	}
+
+	// Lineage filter (#270): ?source_task_id=<uuid> → re-runs/clones of that task.
+	if src := strings.TrimSpace(r.URL.Query().Get("source_task_id")); src != "" {
+		sid, perr := uuid.Parse(src)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "Invalid source_task_id parameter")
+			return
+		}
+		filter.SourceTaskID = &sid
+		hasFilters = true
 	}
 
 	if completedToday := r.URL.Query().Get("completed_today"); completedToday == "true" {
@@ -1529,6 +1545,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		SetLoopConfig:          tc.LoopConfig != nil,
 		WorktreeConfig:         tc.WorktreeConfig,
 		SetWorktreeConfig:      tc.WorktreeConfig != nil,
+		RetryPolicy:            tc.RetryPolicy,
+		SetRetryPolicy:         tc.RetryPolicy != nil,
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
@@ -1626,6 +1644,167 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 	}
 	localizeTask(updated)
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// taskRerunOverrides is the optional subset of fields a re-run / clone may change
+// vs the source task (#270). Pointer fields → nil means "inherit from source".
+type taskRerunOverrides struct {
+	Prompt        *string  `json:"prompt,omitempty"`
+	Model         *string  `json:"model,omitempty"`
+	FallbackModel *string  `json:"fallback_model,omitempty"`
+	MaxIterations *int     `json:"max_iterations,omitempty"`
+	Priority      *int     `json:"priority,omitempty"`
+	AllowNetwork  *bool    `json:"allow_network,omitempty"`
+	Description   *string  `json:"description,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+}
+
+// taskRerunRequest is the (optional) body of POST /tasks/{id}/rerun|clone.
+type taskRerunRequest struct {
+	Overrides taskRerunOverrides `json:"overrides"`
+}
+
+// RerunTask handles POST /tasks/{task_id}/rerun (#270): create a NEW one-time
+// task copied from the source (scheduled_for=now, recurrence cleared), with
+// optional field overrides. The original is untouched.
+func (h *Handlers) RerunTask(w http.ResponseWriter, r *http.Request) {
+	h.rerunOrClone(w, r, false)
+}
+
+// CloneTask handles POST /tasks/{task_id}/clone (#270): like rerun, but preserves
+// the source's recurrence (computing the next fire time for a cron task).
+func (h *Handlers) CloneTask(w http.ResponseWriter, r *http.Request) {
+	h.rerunOrClone(w, r, true)
+}
+
+// rerunOrClone is the shared body for RerunTask/CloneTask. keepRecurrence=false
+// (rerun) clears recurrence and fires immediately; true (clone) keeps it.
+func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecurrence bool) {
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionCreateTask) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return
+	}
+
+	taskID, err := uuid.Parse(chi.URLParam(r, "task_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid task ID")
+		return
+	}
+	source, err := h.storage.GetTask(taskID)
+	if err != nil || source == nil {
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+	if scopes := p.scopes(); len(scopes) > 0 {
+		if !taskVisibleToScopes(source, scopes, p.ownerID()) {
+			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
+			return
+		}
+	}
+
+	// The body is optional; only decode when present (rerun-with-no-changes sends none).
+	var req taskRerunRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+	}
+
+	loc := h.storage.Location()
+	tc, berr := buildRerunTaskCreate(source, keepRecurrence, req.Overrides, loc)
+	if berr != nil {
+		writeError(w, http.StatusBadRequest, berr.Error())
+		return
+	}
+
+	if err := h.validateTaskCreate(&tc); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	newTask := models.NewTask(tc)
+	newTask.SourceTaskID = &source.ID
+	newTask.CreatedBy = p.ownerID()
+
+	if _, err := h.storage.AddTaskWithContext(r.Context(), newTask); err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to create task")
+		return
+	}
+	verb := "re-run"
+	if keepRecurrence {
+		verb = "clone"
+	}
+	//nolint:gosec // G706: IDs are uuid.UUID values; their String() is canonical hex+dashes, no CR/LF.
+	log.Printf("Task %s created (%s of %s)", newTask.ID, verb, source.ID)
+	localizeTask(newTask)
+	writeJSON(w, http.StatusCreated, newTask)
+}
+
+// buildRerunTaskCreate constructs the TaskCreate recipe for a re-run (#270) from
+// a source task. keepRecurrence=false (rerun) clears recurrence and runs
+// immediately; true (clone) preserves a cron recurrence (recomputing the next
+// fire in the task's timezone, falling back to fallbackLoc). Overrides are then
+// applied. It is pure (no h/HTTP) so the scheduling logic is unit-testable.
+//
+// IMPORTANT: an immediate run uses ScheduledFor=nil — the codebase's "run now"
+// convention (a fresh pending task the worker claims at once). Setting &now would
+// be rejected by validateTaskCreate's "scheduled time cannot be in the past"
+// check, which re-samples a strictly-later now.
+func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunOverrides, fallbackLoc *time.Location) (models.TaskCreate, error) {
+	tc := models.TaskToCreate(source)
+	if keepRecurrence && strings.TrimSpace(tc.Recurrence) != "" {
+		schedule, perr := cron.ParseStandard(tc.Recurrence)
+		if perr != nil {
+			return tc, fmt.Errorf("source task has an invalid recurrence")
+		}
+		loc := fallbackLoc
+		if l, lerr := time.LoadLocation(tc.Timezone); lerr == nil && l != nil {
+			loc = l
+		}
+		if loc == nil {
+			loc = time.UTC
+		}
+		next := schedule.Next(time.Now().In(loc)).UTC()
+		tc.ScheduledFor = &next
+	} else {
+		tc.ScheduledFor = nil // immediate run-now
+		if !keepRecurrence {
+			tc.Recurrence = "" // rerun is one-time
+		}
+	}
+	applyRerunOverrides(&tc, o)
+	return tc, nil
+}
+
+// applyRerunOverrides mutates tc with any non-nil override fields (#270). Tags,
+// when provided (non-nil, possibly empty), replace the inherited set.
+func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
+	if o.Prompt != nil {
+		tc.Prompt = *o.Prompt
+	}
+	if o.Model != nil {
+		tc.Model = o.Model
+	}
+	if o.FallbackModel != nil {
+		tc.FallbackModel = o.FallbackModel
+	}
+	if o.MaxIterations != nil {
+		tc.MaxIterations = o.MaxIterations
+	}
+	if o.Priority != nil {
+		tc.Priority = *o.Priority
+	}
+	if o.AllowNetwork != nil {
+		tc.AllowNetwork = *o.AllowNetwork
+	}
+	if o.Description != nil {
+		tc.Description = *o.Description
+	}
+	if o.Tags != nil {
+		tc.Tags = o.Tags
+	}
 }
 
 // Status Reporting Endpoints

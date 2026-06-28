@@ -39,8 +39,11 @@ them.
 - **Resilient scheduling.** A scheduled task that fails on a *transient* infra
   blip can be re-queued with exponential backoff up to its `max_retries`
   (default 0 = off, opt-in per task); a deterministic failure is never retried.
-  Retries are bounded and the agent is told its attempt number so it can avoid
-  repeating non-idempotent side-effects — fleet does not auto-dedupe those.
+  An optional per-task `retry_policy` tunes the backoff (exponential or fixed,
+  custom initial/max delay) and which failure classes retry (e.g. allow
+  `context_budget`, block `cost_ceiling`); unset = the default transient-only
+  curve. Retries are bounded and the agent is told its attempt number so it can
+  avoid repeating non-idempotent side-effects — fleet does not auto-dedupe those.
 
 - **Connected to your data and tools, wherever they live.** fleet speaks
   [MCP](#standards) and ships a per-deployment **MCP catalog**. Tasks select

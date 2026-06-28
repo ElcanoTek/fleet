@@ -21,6 +21,17 @@ export type Node = {
 // credential account backs it. Account === "" means the default/shared seat.
 export type MCPChoice = { server: string; account?: string };
 
+// RetryPolicy mirrors models.RetryPolicy (#201): per-task retry backoff + which
+// failure classes retry. Set via API/CLI; the orchestrator form does not expose
+// it yet.
+export type RetryPolicy = {
+  backoff?: "exponential" | "fixed";
+  initial_delay_seconds?: number;
+  max_delay_seconds?: number;
+  retry_on?: string[];
+  no_retry_on?: string[];
+};
+
 export type Task = {
   id: string;
   prompt?: string;
@@ -32,6 +43,8 @@ export type Task = {
   instruction_self_improve?: boolean;
   allow_network?: boolean;
   tags?: string[];
+  retry_policy?: RetryPolicy;
+  source_task_id?: string;
   status?: string;
   created_by?: string;
   created_by_username?: string;
@@ -55,6 +68,7 @@ export type TaskCreate = {
   recurrence?: string;
   files?: string[];
   tags?: string[];
+  retry_policy?: RetryPolicy;
 };
 
 export type DashboardStats = {
