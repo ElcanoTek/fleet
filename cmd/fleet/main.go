@@ -72,6 +72,14 @@ func main() {
 		}
 		return
 	}
+	// `fleet validate-config` runs the preflight checks (#248) — env vars, the
+	// manifest bundle, MCP servers, the databases, credentials, the sandbox, and
+	// the model API — against the SAME loaders the server boots through, then exits
+	// 0 (all blocking checks passed) or 1. It starts no servers and runs no
+	// migrations; it is a read-only diagnostic for CI and pre-`systemctl start`.
+	if len(os.Args) > 1 && os.Args[1] == "validate-config" {
+		os.Exit(runValidateConfig(os.Args[2:]))
+	}
 	if err := run(); err != nil {
 		log.Fatalf("fleet: %v", err)
 	}
