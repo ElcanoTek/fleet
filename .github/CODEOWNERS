@@ -1,0 +1,75 @@
+# CODEOWNERS — mandatory review for fleet's security-load-bearing code.
+#
+# Most of fleet is fine to review like any other change. A handful of paths,
+# however, encode the non-negotiable invariants the whole project rests on (see
+# AGENTS.md "Non-negotiable invariants"): the rootless-Podman sandbox, the
+# governance/policy core, the host-side credential boundary, the authn/z layer,
+# the irreversible database migrations, and the CI gates themselves. A quiet
+# weakening of any of these — by a future contributor or by an auto-merging
+# agent — would be a security regression even if every test still passed.
+#
+# This file routes those paths to a required reviewer. GitHub uses the LAST
+# matching pattern for a given file, so the more specific security rules below
+# override the catch-all at the top. CODEOWNERS only REQUESTS review by itself;
+# it becomes a hard gate when branch protection on `main` enables "Require
+# review from Code Owners" (see the recommended ruleset below).
+#
+# ---------------------------------------------------------------------------
+# Recommended branch-protection ruleset for `main` (set in repo Settings →
+# Branches/Rules; requires admin, so it is a documented manual follow-up — this
+# PR only adds the CODEOWNERS file). CONTRIBUTING.md notes the same:
+#   - Require a pull request before merging.
+#   - Require approvals: >= 1.
+#   - Require review from Code Owners.            <-- makes the rules below binding
+#   - Dismiss stale approvals on new commits.
+#   - Require status checks to pass (the full CI gate: Go build/vet/lint/test,
+#     the -race lane, govulncheck, web lint/test/build, Playwright mocked+live,
+#     and gitleaks) and require branches to be up to date.
+#   - Do NOT allow bypassing the above (no force-push / no admin override).
+#
+# Dependabot auto-merge interaction: .github/workflows/auto-merge-dependabot.yml
+# only enables `gh pr merge --auto` on PATCH-level dependency bumps, so GitHub
+# still holds the merge until every required status check passes. It does NOT
+# bypass branch protection or Code Owner review: a Dependabot PR that touches a
+# CODEOWNERS-matched, non-dependency path (e.g. a workflow, a migration, the
+# sandbox) is still gated on the required code-owner approval below. Routine
+# manifest/lockfile bumps live outside these paths and merge on green CI.
+# ---------------------------------------------------------------------------
+
+# Catch-all: every file has an owner so nothing is silently unowned. Specific
+# rules below take precedence for the security-sensitive paths.
+*                                       @bradflaugher
+
+# Sandbox hardening — every agent tool call runs inside this rootless-Podman
+# sandbox; there is no fast path that skips it.
+/internal/sandbox/                      @bradflaugher
+/config/default/sandbox/                @bradflaugher
+
+# Governance + policy core (the single governed run loop, Gate-3, the MCP
+# credential allowlist). New entrypoints must adapt I/O around this, not fork a
+# second, weaker governance path.
+/internal/agentcore/policy.go               @bradflaugher
+/internal/agentcore/agent_policy.go         @bradflaugher
+/internal/agentcore/credential_allowlist.go @bradflaugher
+/internal/agentcore/mcp_broker.go           @bradflaugher
+
+# Credential boundary — MCP/connector secrets are brokered host-side and never
+# enter the sandbox, the agent container, the model context, or logs.
+/internal/creds/                        @bradflaugher
+/internal/mcpbroker/                    @bradflaugher
+
+# Authentication / authorization and rate limiting (HTTP API).
+/internal/httpapi/auth.go               @bradflaugher
+/internal/httpapi/auth_verify.go        @bradflaugher
+/internal/httpapi/ratelimit.go          @bradflaugher
+
+# Irreversible schema changes. The chat and scheduler migration systems are
+# separate; both apply forward-only.
+/internal/store/migrations/             @bradflaugher
+/internal/sched/db/migrations/          @bradflaugher
+
+# CI gates and dependency/agent automation — these workflows ARE the merge
+# guarantees, including the Dependabot auto-merge path.
+/.github/workflows/                     @bradflaugher
+/.github/dependabot.yml                 @bradflaugher
+/.github/CODEOWNERS                     @bradflaugher
