@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -262,6 +263,49 @@ func (s *Storage) AddTaskWithContext(ctx context.Context, task *models.Task) (*m
 		return nil, err
 	}
 	return task, nil
+}
+
+// EnqueueTask is the storage-layer task-create plumbing the in-process create_task
+// tool calls (#277): it validates the optional cron recurrence, mints a task from
+// tc via models.NewTask (the SAME constructor the public POST /tasks path uses),
+// persists it, and returns the new task's id, status, and next-run instant.
+//
+// It deliberately reuses NewTask + AddTask rather than forking a parallel create
+// path. The #277 capability gate (allow_task_creation, the per-run spawn cap,
+// budget + recurrence checks) is enforced UPSTREAM in the create_task tool before
+// this is ever called; this method is the persistence seam, not the authority
+// gate. It does NOT perform the handler's user/key authentication — the caller is
+// the already-authorized scheduled run itself, and lineage (CreatedByTaskID) is
+// set by the tool, never by an external client.
+func (s *Storage) EnqueueTask(ctx context.Context, tc models.TaskCreate) (uuid.UUID, string, time.Time, error) {
+	tc.Prompt = strings.TrimSpace(tc.Prompt)
+	if tc.Prompt == "" {
+		return uuid.Nil, "", time.Time{}, fmt.Errorf("prompt is required")
+	}
+
+	if tc.Recurrence = strings.TrimSpace(tc.Recurrence); tc.Recurrence != "" {
+		schedule, err := cron.ParseStandard(tc.Recurrence)
+		if err != nil {
+			return uuid.Nil, "", time.Time{}, fmt.Errorf("recurrence must be a standard 5-field cron expression")
+		}
+		// With no explicit one-time run, wait for the next cron trigger (evaluated
+		// in the storage timezone) rather than running immediately. Always stored
+		// as an absolute UTC instant, matching the handler's create path.
+		if tc.ScheduledFor == nil {
+			next := schedule.Next(time.Now().In(s.location)).UTC()
+			tc.ScheduledFor = &next
+		}
+	}
+
+	task := models.NewTask(tc)
+	if _, err := s.AddTaskWithContext(ctx, task); err != nil {
+		return uuid.Nil, "", time.Time{}, err
+	}
+	var nextRunAt time.Time
+	if task.ScheduledFor != nil {
+		nextRunAt = *task.ScheduledFor
+	}
+	return task.ID, string(task.Status), nextRunAt, nil
 }
 
 // GetTask gets a task by ID.

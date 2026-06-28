@@ -334,6 +334,10 @@ func run() error {
 		ProtocolsDir:     protocolsDir,
 		// Record per-iteration telemetry for looped tasks (#179).
 		IterationStore: schedStorage,
+		// Back the built-in create_task tool (#277) so a scheduled task that opted
+		// in (allow_task_creation) can enqueue follow-up tasks through the shared
+		// sched storage. Tasks without the flag never see the tool.
+		TaskEnqueuer: schedStorage,
 	})
 	// Reclaim sandbox containers orphaned by a PRIOR crash before building the
 	// pool: they run `--detach --rm` under conmon, so a non-graceful exit leaves
