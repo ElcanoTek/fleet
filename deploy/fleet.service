@@ -39,6 +39,17 @@
 #   # ADMIN_API_KEY=... / REGISTRATION_TOKEN=...  # orchestrator admin/registration
 #   # FLEET_TIMEZONE=UTC / FLEET_DATA_DIR=/var/lib/fleet
 #   # FLEET_SHUTDOWN_GRACE_SECONDS=30            # drain budget on SIGTERM (keep < TimeoutStopSec)
+#   # Process log file sink (#298) — OPT-IN, default OFF. Under this unit the
+#   # process log goes to stderr → journald, which already rotates it, so leave
+#   # FLEET_LOG_FILE unset. Set it (e.g. a container/non-systemd box) to ALSO tee
+#   # the log lines to a size/age/backup-rotated file under a writable path (e.g.
+#   # the StateDirectory /var/lib/fleet). It rotates the existing lines as-is; it
+#   # does NOT convert them to structured JSON (slog migration #178 is separate).
+#   # FLEET_LOG_FILE=/var/lib/fleet/log/fleet.log
+#   # FLEET_LOG_MAX_SIZE_MB=100                  # rotate at this size (default 100)
+#   # FLEET_LOG_MAX_BACKUPS=7                    # keep this many rotated files (default 7)
+#   # FLEET_LOG_MAX_AGE_DAYS=0                   # delete rotated files older than this; 0 = no age limit (default)
+#   # FLEET_LOG_COMPRESS=true                    # gzip rotated files (default true)
 #   # IP access control (defense-in-depth, all empty by default = allow all):
 #   # FLEET_IP_ALLOWLIST=192.168.1.0/24,10.0.0.0/8 # if set, ONLY these IPs/CIDRs may connect
 #   # FLEET_IP_DENYLIST=45.33.32.156             # always blocked (deny overrides allow)

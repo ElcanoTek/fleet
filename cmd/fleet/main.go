@@ -48,6 +48,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/runner"
@@ -110,12 +111,37 @@ func run() error {
 		return fmt.Errorf("load client config bundle: %w", err)
 	}
 	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
-	log.Printf("client config: bundle=%s app=%q mcp_catalog=%d", bundle.Dir, bundle.Branding.AppName, len(bundle.MCPCatalog))
 
 	cfg, err := config.Load(os.Getenv("FLEET_ENV_FILE"))
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// Process log file sink (#298): OPT-IN. With FLEET_LOG_FILE unset (the
+	// default) this is a no-op and the process logs only to stderr — which
+	// journald rotates under the shipped systemd unit (ADR-0004), so the default
+	// behaviour is unchanged. When set (typically a container/non-systemd box),
+	// it ALSO tees the standard log lines to a size/age/backup-rotated file. It
+	// rotates the existing lines as-is; it does NOT restructure them to JSON
+	// (slog migration #178 is separate). Configured before the first diagnostic
+	// log line so the file sink captures startup too.
+	logCloser, err := logging.Configure(logging.Config{
+		File:       cfg.Log.File,
+		MaxSizeMB:  cfg.Log.MaxSizeMB,
+		MaxAgeDays: cfg.Log.MaxAgeDays,
+		MaxBackups: cfg.Log.MaxBackups,
+		Compress:   cfg.Log.Compress,
+	})
+	if err != nil {
+		return fmt.Errorf("configure log file sink (FLEET_LOG_FILE=%q): %w", cfg.Log.File, err)
+	}
+	if logCloser != nil {
+		defer logCloser.Close()
+		log.Printf("logging: file sink enabled at %s (max_size=%dMB max_age=%dd max_backups=%d compress=%t)",
+			cfg.Log.File, cfg.Log.MaxSizeMB, cfg.Log.MaxAgeDays, cfg.Log.MaxBackups, cfg.Log.Compress)
+	}
+
+	log.Printf("client config: bundle=%s app=%q mcp_catalog=%d", bundle.Dir, bundle.Branding.AppName, len(bundle.MCPCatalog))
 	// The MCP catalog comes from the bundle manifest, gated on the now-loaded
 	// process env.
 	cfg.MCPServers = bundle.MCPServerConfigs()
