@@ -15,7 +15,7 @@ supply the client's prompts, personas, playbooks, and connectors.
 
 ```
 <bundle>/
-  manifest.yaml        # branding, models, mcp_servers[], empty_state, sandbox
+  manifest.yaml        # branding, models, mcp_servers[], empty_state, pricing, sandbox
   sandbox/
     Containerfile      # the bundle's execution-sandbox image (build-on-box)
   system_prompts/

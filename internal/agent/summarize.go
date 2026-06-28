@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // summarizeSystemPrompt drives the summarize-and-continue compaction call. Kept
@@ -87,10 +89,10 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 		return nil, fmt.Errorf("summarize: model returned empty text after %s", time.Since(startedAt))
 	}
 
-	cost := 0.0
-	if c := openrouterCost(result.Response.ProviderMetadata); c != nil {
-		cost = *c
-	}
+	// Price the summarize step under the operator's pricing policy (#297) so a
+	// per-model override applies here too, not just in the governed run loop. With
+	// no overrides installed this is exactly the OpenRouter-returned cost.
+	cost := agentcore.ResolveStepCost(modelSlug, result.TotalUsage, openrouterCost(result.Response.ProviderMetadata))
 
 	return &SummarizeResult{
 		Text:             text,

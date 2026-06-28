@@ -119,6 +119,11 @@ func run(argv []string) error {
 		CriticalToolSubstitutes: bp.CriticalToolSubstitutes,
 	})
 
+	// Install the bundle's custom model-pricing overrides (#297) before any turn
+	// runs. The generic bundle ships none, so cost accounting stays on the
+	// OpenRouter-returned price.
+	agentcore.ConfigurePricing(toAgentcorePricing(bundle.Pricing()))
+
 	// Fresh, isolated workspace for this run so it never collides with the
 	// server's shared workspace/ — set BEFORE agent.New so the sandbox pool
 	// bind-mounts the isolated root.
@@ -260,4 +265,25 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// toAgentcorePricing translates the bundle's pricing config into the
+// agentcore.PricingConfig the accounting path consumes (#297). Mirrors the
+// fleet-server helper; cutlass installs the same overrides so a one-shot run
+// accounts cost (and enforces its ceiling) at the operator's negotiated rates.
+func toAgentcorePricing(p clientconfig.PricingConfig) agentcore.PricingConfig {
+	out := agentcore.PricingConfig{Fallback: agentcore.PricingFallback(p.Fallback)}
+	if len(p.Overrides) > 0 {
+		out.Overrides = make([]agentcore.PricingOverride, 0, len(p.Overrides))
+		for _, o := range p.Overrides {
+			out.Overrides = append(out.Overrides, agentcore.PricingOverride{
+				Model:                          o.Model,
+				InputCostPerMillionTokens:      o.InputCostPerMillionTokens,
+				OutputCostPerMillionTokens:     o.OutputCostPerMillionTokens,
+				CacheReadCostPerMillionTokens:  o.CacheReadCostPerMillionTokens,
+				CacheWriteCostPerMillionTokens: o.CacheWriteCostPerMillionTokens,
+			})
+		}
+	}
+	return out
 }

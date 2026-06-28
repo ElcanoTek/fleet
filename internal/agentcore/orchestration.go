@@ -451,7 +451,14 @@ func hasUnresolvedToolPlaceholder(rawInput string) bool {
 // updateUsage records token usage and cost from a fantasy step. Maintains both
 // the orch-level counters (chat's UI footer) and the logSession accumulators
 // (scheduled captain's-log).
-func (o *orchestrationState) updateUsage(usage fantasy.Usage, metadata fantasy.ProviderMetadata) {
+//
+// modelSlug is the model that produced this step; it selects a per-model price
+// override when the operator configured one (#297). The step's cost is resolved
+// through computeCostFromUsage: a matching manifest override prices the step
+// locally from the token counts; otherwise the configured fallback applies —
+// which, in the shipped default (no overrides), is the OpenRouter-returned cost,
+// i.e. byte-identical to the prior behavior.
+func (o *orchestrationState) updateUsage(modelSlug string, usage fantasy.Usage, metadata fantasy.ProviderMetadata) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -461,10 +468,8 @@ func (o *orchestrationState) updateUsage(usage fantasy.Usage, metadata fantasy.P
 	o.CachedTokens += int(usage.CacheReadTokens)
 	o.CacheCreationTokens += int(usage.CacheCreationTokens)
 
-	cost := openrouterCost(metadata)
-	if cost != nil {
-		o.CostUSD += *cost
-	}
+	cost := computeCostFromUsage(modelSlug, usage, openrouterCost(metadata), pricingConfig())
+	o.CostUSD += cost
 
 	if o.logSession != nil {
 		o.logSession.mu.Lock()
@@ -473,9 +478,7 @@ func (o *orchestrationState) updateUsage(usage fantasy.Usage, metadata fantasy.P
 		o.logSession.CachedTokens += int(usage.CacheReadTokens)
 		o.logSession.CacheCreationTokens += int(usage.CacheCreationTokens)
 		o.logSession.LastStepPromptTokens = int(usage.InputTokens + usage.CacheReadTokens)
-		if cost != nil {
-			o.logSession.Cost += *cost
-		}
+		o.logSession.Cost += cost
 		o.logSession.mu.Unlock()
 	}
 }

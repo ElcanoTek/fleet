@@ -129,6 +129,36 @@ agent_policy:
   critical_tools: []
   critical_tool_substitutes: {}
 
+# Custom model-pricing overrides (#297). Cost accounting normally trusts the USD
+# figure OpenRouter returns per step. Operators on negotiated / enterprise rates
+# (or a private model endpoint) pay a different price, so declare per-model rates
+# here and Fleet prices matching steps LOCALLY from the token counts instead —
+# which also makes the cost ceiling (FLEET_MAX_COST_USD) reflect real spend.
+#
+# Rates are per MILLION tokens (the unit pricing pages publish). Model slugs are
+# matched case-insensitively against the active model. Omitting this block (as
+# this generic bundle does) leaves cost accounting on the OpenRouter-returned
+# price — identical to having no overrides at all.
+#
+#   overrides[]:
+#     model:                              model slug to override (case-insensitive)
+#     input_cost_per_million_tokens:      $/M for prompt (input) tokens
+#     output_cost_per_million_tokens:     $/M for completion (output) tokens
+#     cache_read_cost_per_million_tokens:  $/M for cache-read tokens (optional; 0)
+#     cache_write_cost_per_million_tokens: $/M for cache-write tokens (optional; 0)
+#   fallback:  what to do for a model NOT listed above —
+#                openrouter  (default; trust the OpenRouter-returned cost)
+#                zero        (suppress cost for unlisted models; private deploys)
+#
+# pricing:
+#   fallback: openrouter
+#   overrides:
+#     - model: "anthropic/claude-opus-4-8"
+#       input_cost_per_million_tokens: 7.50
+#       output_cost_per_million_tokens: 22.50
+#       cache_read_cost_per_million_tokens: 0.75
+#       cache_write_cost_per_million_tokens: 1.875
+
 empty_state:
   # Neutral example quick-start cards. The shape is the web's ProtocolPill — the
   # Go side passes these through to the browser as opaque JSON.
