@@ -902,6 +902,15 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 	if err := tc.RetryPolicy.Validate(); err != nil {
 		return fmt.Errorf("retry_policy: %w", err)
 	}
+	// Persona (#221): a per-task persona override must be a single bundle filename
+	// component (no path separators / traversal) so it resolves to
+	// personas/<name>.yaml. An unknown-but-safe name falls back to the global
+	// persona at dispatch.
+	if persona := strings.TrimSpace(tc.Persona); persona != "" {
+		if strings.ContainsAny(persona, `/\`) || strings.Contains(persona, "..") || filepath.Base(persona) != persona {
+			return fmt.Errorf("persona must be a bundle persona name without a path (got %q)", persona)
+		}
+	}
 	return nil
 }
 
@@ -1572,6 +1581,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
 		RuntimeFlavor:          tc.RuntimeFlavor,
+		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,
 		Recurrence:             tc.Recurrence,
 		Timezone:               tc.Timezone,
@@ -1680,6 +1690,7 @@ type taskRerunOverrides struct {
 	AllowNetwork  *bool    `json:"allow_network,omitempty"`
 	Description   *string  `json:"description,omitempty"`
 	Tags          []string `json:"tags,omitempty"`
+	Persona       *string  `json:"persona,omitempty"`
 }
 
 // taskRerunRequest is the (optional) body of POST /tasks/{id}/rerun|clone.
@@ -1830,6 +1841,9 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	}
 	if o.Tags != nil {
 		tc.Tags = o.Tags
+	}
+	if o.Persona != nil {
+		tc.Persona = *o.Persona
 	}
 }
 

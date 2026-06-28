@@ -539,6 +539,9 @@ type TaskEdit struct {
 	InstructionSelfImprove bool
 	AllowNetwork           bool
 	RuntimeFlavor          string
+	// Persona replaces the task's per-task persona override (#221), assigned
+	// unconditionally from the full edit payload (empty = use the global persona).
+	Persona string
 	// Description replaces the task's operator documentation (#281). Like Prompt,
 	// it is assigned unconditionally from the full edit payload (empty = clear).
 	Description  string
@@ -627,6 +630,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
 	task.AllowNetwork = edit.AllowNetwork
 	task.RuntimeFlavor = edit.RuntimeFlavor
+	task.Persona = edit.Persona
 	task.ScheduledFor = edit.ScheduledFor
 	task.Recurrence = edit.Recurrence
 	if edit.Timezone != "" {
@@ -958,6 +962,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		LoopConfig:          task.LoopConfig,
 		WorktreeConfig:      task.WorktreeConfig,
 		RetryPolicy:         task.RetryPolicy,
+		Persona:             task.Persona,
 		Description:         task.Description,
 		Priority:            task.Priority,
 		ScheduledFor:        &nextTime,
