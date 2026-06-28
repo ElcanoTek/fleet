@@ -504,7 +504,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy"
 
 // marshalTags serializes task tags for the JSONB column, ALWAYS as a JSON array
 // (never the bare "null" marshalJSON emits for a nil slice) so the tags catalogue
@@ -525,8 +525,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, runtime_flavor, timezone, created_by_key_id,
-			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)
+			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -560,7 +560,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			loop_config = EXCLUDED.loop_config,
 			worktree_config = EXCLUDED.worktree_config,
 			description = EXCLUDED.description,
-			tags = EXCLUDED.tags`,
+			tags = EXCLUDED.tags,
+			retry_policy = EXCLUDED.retry_policy`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -595,6 +596,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		marshalWorktreeConfig(task.WorktreeConfig),
 		nullableString(task.Description),
 		marshalTags(task.Tags),
+		marshalRetryPolicy(task.RetryPolicy),
 	)
 	return err
 }
@@ -705,6 +707,28 @@ func unmarshalWorktreeConfig(ns sql.NullString) *models.WorktreeConfig {
 	return &wc
 }
 
+// marshalRetryPolicy serializes the optional retry policy for the nullable JSONB
+// column: nil → SQL NULL (legacy policy), non-nil → its JSON (#201).
+func marshalRetryPolicy(rp *models.RetryPolicy) any {
+	if rp == nil {
+		return nil
+	}
+	return marshalJSON(rp)
+}
+
+// unmarshalRetryPolicy reads the nullable retry_policy column back. NULL/empty → nil.
+func unmarshalRetryPolicy(ns sql.NullString) *models.RetryPolicy {
+	if !ns.Valid || ns.String == "" {
+		return nil
+	}
+	var rp models.RetryPolicy
+	if err := json.Unmarshal([]byte(ns.String), &rp); err != nil {
+		log.Printf("Warning: failed to unmarshal retry_policy: %v (input: %.100s)", err, ns.String)
+		return nil
+	}
+	return &rp
+}
+
 func nullableString(s string) *string {
 	if s == "" {
 		return nil
@@ -748,6 +772,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		worktreeConfig         sql.NullString
 		description            sql.NullString
 		tags                   sql.NullString
+		retryPolicy            sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -756,7 +781,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &runtimeFlavor, &timezone, &createdByKeyID,
-		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags,
+		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy,
 	)
 	if err != nil {
 		return nil, err
@@ -798,6 +823,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	task.CredentialAllowlist = unmarshalCredentialAllowlist(credentialAllowlist)
 	task.LoopConfig = unmarshalLoopConfig(loopConfig)
 	task.WorktreeConfig = unmarshalWorktreeConfig(worktreeConfig)
+	task.RetryPolicy = unmarshalRetryPolicy(retryPolicy)
 	task.Description = description.String
 	if agentSessionID.Valid {
 		task.AgentSessionID = &agentSessionID.String
@@ -1326,7 +1352,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			loop_config = $29,
 			worktree_config = $30,
 			description = $31,
-			tags = $32
+			tags = $32,
+			retry_policy = $33
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1360,6 +1387,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		marshalWorktreeConfig(task.WorktreeConfig),
 		nullableString(task.Description),
 		marshalTags(task.Tags),
+		marshalRetryPolicy(task.RetryPolicy),
 	)
 	return err
 }

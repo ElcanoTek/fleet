@@ -897,6 +897,11 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 		return fmt.Errorf("tags: %w", err)
 	}
 	tc.Tags = normalizedTags
+	// Retry policy (#201): nil → legacy backoff; non-nil must be internally
+	// consistent (valid backoff type, non-negative ordered delays, known classes).
+	if err := tc.RetryPolicy.Validate(); err != nil {
+		return fmt.Errorf("retry_policy: %w", err)
+	}
 	return nil
 }
 
@@ -1550,6 +1555,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		SetLoopConfig:          tc.LoopConfig != nil,
 		WorktreeConfig:         tc.WorktreeConfig,
 		SetWorktreeConfig:      tc.WorktreeConfig != nil,
+		RetryPolicy:            tc.RetryPolicy,
+		SetRetryPolicy:         tc.RetryPolicy != nil,
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
