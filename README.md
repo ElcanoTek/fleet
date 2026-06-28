@@ -205,6 +205,8 @@ web/              one Next.js app: /chat and /orchestrator
 config/default/   the GENERIC client bundle baked into the repo (runs bare),
                   including config/default/sandbox/Containerfile — the sandbox
                   image is a per-client bundle artifact (build-on-box default)
+docs/             architecture & operator docs; docs/adr/ records the load-bearing
+                  Architecture Decision Records behind the invariants
 ```
 
 ## The client-config bundle
