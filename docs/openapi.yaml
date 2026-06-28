@@ -72,6 +72,37 @@ components:
     MCPSelection:
       type: array
       items: { $ref: "#/components/schemas/MCPChoice" }
+    CostRange:
+      type: object
+      properties:
+        min: { type: number }
+        max: { type: number }
+    ModelPrice:
+      type: object
+      properties:
+        input_per_m: { type: number, description: "USD per 1M input (prompt) tokens" }
+        output_per_m: { type: number, description: "USD per 1M output (completion) tokens" }
+    CostForecast:
+      type: object
+      description: >
+        Pre-submission cost forecast for a scheduled task (#233). All cost fields
+        are null when the model's pricing is unknown; the token estimates are
+        still populated. Advisory only — the forecast never gates task creation.
+      properties:
+        model: { type: string }
+        estimated_prompt_tokens: { type: integer }
+        system_prompt_tokens: { type: integer }
+        tool_definitions_tokens: { type: integer }
+        avg_output_tokens: { type: integer }
+        max_iterations: { type: integer }
+        pricing_known: { type: boolean }
+        per_iteration_cost_usd: { type: number, nullable: true }
+        estimated_total_cost_usd: { type: number, nullable: true }
+        estimated_total_cost_range: { allOf: [{ $ref: "#/components/schemas/CostRange" }], nullable: true }
+        max_cost_ceiling_usd: { type: number }
+        would_hit_ceiling: { type: boolean }
+        price: { allOf: [{ $ref: "#/components/schemas/ModelPrice" }], nullable: true }
+        note: { type: string }
     TaskCreate:
       type: object
       properties:
@@ -304,6 +335,33 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+  /tasks/estimate:
+    post:
+      summary: Pre-submission cost forecast for a task.
+      description: >
+        Same request body as POST /tasks, but returns a token + cost forecast
+        and creates nothing. Pure local computation (no model call). Returns 200
+        with cost fields populated for a model whose pricing is known, or 202
+        with null cost fields and an explanatory note when the model's pricing is
+        unknown. Same authentication and rate limiter as POST /tasks.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskCreate" }
+      responses:
+        "200":
+          description: Forecast (model pricing known)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CostForecast" }
+        "202":
+          description: Forecast with null cost fields (model pricing unknown)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CostForecast" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
   /tasks/tags:

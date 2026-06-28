@@ -73,6 +73,26 @@ export type TaskCreate = {
   retry_policy?: RetryPolicy;
 };
 
+// CostForecast mirrors agentcore.CostForecast (#233): the pre-submission token +
+// cost forecast returned by POST /tasks/estimate. Cost fields are null when the
+// model's pricing is unknown; the token estimates are always present.
+export type CostRange = { min: number; max: number };
+export type CostForecast = {
+  model: string;
+  estimated_prompt_tokens: number;
+  system_prompt_tokens: number;
+  tool_definitions_tokens: number;
+  avg_output_tokens: number;
+  max_iterations: number;
+  pricing_known: boolean;
+  per_iteration_cost_usd: number | null;
+  estimated_total_cost_usd: number | null;
+  estimated_total_cost_range: CostRange | null;
+  max_cost_ceiling_usd: number;
+  would_hit_ceiling: boolean;
+  note: string;
+};
+
 export type DashboardStats = {
   total_nodes?: number;
   active_nodes?: number;
@@ -160,6 +180,11 @@ export const orchestratorApi = {
   tasks: (qs: string) => request<Paginated<Task>>(`/tasks${qs ? `?${qs}` : ""}`),
   createTask: (body: TaskCreate) =>
     request<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
+  // Pre-submission cost forecast (#233): same body as createTask, creates
+  // nothing. The endpoint returns 200 (pricing known) or 202 (pricing unknown);
+  // both carry a CostForecast, so request() resolves either as success.
+  estimateTask: (body: TaskCreate) =>
+    request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
   config: () => request<{ version?: string; timezone?: string }>("/config"),
   me: () => request<{ authenticated: boolean; username?: string; role?: string }>("/me"),

@@ -50,6 +50,20 @@ type Config struct {
 	// (FLEET_TIMEZONE, the server clock); empty defaults to "UTC".
 	DefaultTaskTimezone string
 
+	// Cost-forecast inputs (issue #233): the values the EstimateTask handler
+	// needs to project a scheduled task's cost without running it. They mirror
+	// the runtime selection so the forecast reflects the same model + ceilings a
+	// real dispatch would use. All advisory; the forecast never gates creation.
+	//
+	// DefaultTaskModel is the model a task with no explicit model resolves to
+	// (CUTLASS_TASK_MODEL). MaxCostUSD is the per-turn cost ceiling
+	// (CUTLASS_MAX_COST_USD); 0 disables the would-hit-ceiling check.
+	// DefaultMaxIterations is the loop iteration cap applied when a task omits
+	// one (CUTLASS_TASK_MAX_ITERATIONS, then MAX_ITERATIONS).
+	DefaultTaskModel     string
+	MaxCostUSD           float64
+	DefaultMaxIterations int
+
 	// Sliding-window rate limits for the high-cost orchestrator endpoints
 	// (POST /tasks, POST /upload), enforced by SchedRateLimitMiddleware.
 	// Per-key defaults; a key's own RateLimit (when > 0) overrides the
@@ -126,6 +140,14 @@ type Handlers struct {
 	// no live stream is ever available (every task falls back to the persisted log
 	// one-shot replay). See task_stream.go.
 	taskStreamLookup TaskStreamLookup
+
+	// systemPromptForPersona resolves the assembled scheduled system prompt
+	// (default prompt + persona expertise) for a persona override, exactly as the
+	// runner assembles it before dispatch (#233 cost forecast). Wired by cmd/fleet
+	// via SetSystemPromptProvider from the scheduled runner; nil → the forecast
+	// counts only the task prompt + tool schemas (the system-prompt token line
+	// reads 0). See estimate.go.
+	systemPromptForPersona func(persona string) string
 }
 
 // statsCache caches dashboard statistics.

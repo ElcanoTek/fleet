@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type { McpServer, MCPChoice, TaskCreate } from "@/app/shared/lib/orchestratorApi";
+import type { CostForecast, McpServer, MCPChoice, TaskCreate } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { validateTaskForm } from "@/app/shared/lib/validation";
 import { describeCronExpression } from "@/app/shared/lib/cron";
@@ -9,6 +9,7 @@ import { useToast } from "@/app/shared/ui/Toast";
 import { ModelPicker } from "@/app/shared/ui/ModelPicker";
 import { McpServerPicker } from "@/app/shared/ui/McpServerPicker";
 import { FileUpload, type FileUploadHandle } from "@/app/shared/ui/FileUpload";
+import { CostForecastPanel } from "./CostForecastPanel";
 
 // TaskCreateModal — the create-task form. React port of moc's tasks.js +
 // modals.js create-task modal, with ONE structural change from moc: the
@@ -66,6 +67,10 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  // Cost-estimate state (#233): the latest forecast and whether a request is in
+  // flight. The estimate is advisory and never gates Submit.
+  const [estimating, setEstimating] = useState(false);
+  const [forecast, setForecast] = useState<CostForecast | null>(null);
 
   const fileHandle = useRef<FileUploadHandle | null>(null);
 
@@ -95,23 +100,11 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
     return `${base}\n\n---\nCRITICAL ACTION\nemail:\n  action: send_report\n  tool: email\n  instruction: "The following action is MANDATORY after completing the core task."\n  description: "Send the full report and findings to the listed recipients."\n  recipients:\n${yaml}\n---`;
   };
 
-  const submit = async () => {
-    const finalPrompt = buildFinalPrompt();
-    const validation = validateTaskForm({
-      prompt: finalPrompt,
-      model,
-      fallback_model: fallbackModel,
-      max_iterations: maxIterations,
-      recurrence,
-      scheduled_for: scheduledFor,
-    });
-    if (!validation.valid) {
-      setErrors(validation.errors as Record<string, string>);
-      showToast("Please fix validation errors", "error");
-      return;
-    }
-    setErrors({});
-
+  // buildTaskData assembles the TaskCreate body shared by submit and the cost
+  // estimate. Returns null (after toasting) on a malformed scheduled time so the
+  // caller can abort. Files are handled separately by submit (the estimate does
+  // not need them).
+  const buildTaskData = (finalPrompt: string): TaskCreate | null => {
     const taskData: TaskCreate = { prompt: finalPrompt };
     if (description.trim()) taskData.description = description;
     const tags = tagsInput
@@ -131,10 +124,54 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
         taskData.scheduled_for = new Date(scheduledFor).toISOString();
       } catch {
         showToast("Invalid scheduled time format", "error");
-        return;
+        return null;
       }
     }
     if (recurrence) taskData.recurrence = recurrence;
+    return taskData;
+  };
+
+  // estimate fetches a pre-submission cost forecast (#233) for the current form
+  // values and shows it inline. Advisory only — it never blocks Submit.
+  const estimate = async () => {
+    const finalPrompt = buildFinalPrompt();
+    if (!finalPrompt.trim()) {
+      showToast("Enter a prompt to estimate cost", "error");
+      return;
+    }
+    const taskData = buildTaskData(finalPrompt);
+    if (!taskData) return;
+    setEstimating(true);
+    setForecast(null);
+    try {
+      const fc = await orchestratorApi.estimateTask(taskData);
+      setForecast(fc);
+    } catch (err) {
+      showToast(`Estimate failed: ${(err as Error).message}`, "error");
+    } finally {
+      setEstimating(false);
+    }
+  };
+
+  const submit = async () => {
+    const finalPrompt = buildFinalPrompt();
+    const validation = validateTaskForm({
+      prompt: finalPrompt,
+      model,
+      fallback_model: fallbackModel,
+      max_iterations: maxIterations,
+      recurrence,
+      scheduled_for: scheduledFor,
+    });
+    if (!validation.valid) {
+      setErrors(validation.errors as Record<string, string>);
+      showToast("Please fix validation errors", "error");
+      return;
+    }
+    setErrors({});
+
+    const taskData = buildTaskData(finalPrompt);
+    if (!taskData) return; // a build-time error (e.g. bad date) already toasted
 
     setSubmitting(true);
     try {
@@ -479,9 +516,22 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
               ) : null}
             </div>
 
-            <button type="submit" className="btn btn-primary" aria-label="Launch task" disabled={submitting}>
-              {submitting ? "Launching…" : "Launch Task"}
-            </button>
+            {forecast ? <CostForecastPanel forecast={forecast} /> : null}
+
+            <div className="task-create-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                aria-label="Estimate cost"
+                disabled={estimating}
+                onClick={() => void estimate()}
+              >
+                {estimating ? "Estimating…" : "Estimate Cost"}
+              </button>
+              <button type="submit" className="btn btn-primary" aria-label="Launch task" disabled={submitting}>
+                {submitting ? "Launching…" : "Launch Task"}
+              </button>
+            </div>
           </form>
         </div>
       </div>
