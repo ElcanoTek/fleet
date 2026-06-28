@@ -34,14 +34,16 @@ func TestCleanupOldRuns(t *testing.T) {
 			t.Fatalf("add old[%d]: %v", i, err)
 		}
 	}
-	// A long-stale PENDING task — must NEVER be pruned (non-terminal).
+	// A long-stale PENDING task in the SAME bucket — must NEVER be pruned
+	// (non-terminal, so it is excluded from the ranking entirely).
 	pending := mk("recurring job", "0 9 * * *", models.TaskStatusPending, 200)
 	pending.CompletedAt = nil
 	if _, err := store.AddTaskWithContext(ctx, pending); err != nil {
 		t.Fatalf("add pending: %v", err)
 	}
-	// A recent terminal run (within retention) — must NOT be pruned.
-	recent := mk("recurring job", "0 9 * * *", models.TaskStatusSuccess, 1)
+	// A recent terminal run in a DIFFERENT bucket (distinct prompt) — within
+	// retention, and isolated so it doesn't perturb the old bucket's ranking.
+	recent := mk("recent one-shot", "", models.TaskStatusSuccess, 1)
 	if _, err := store.AddTaskWithContext(ctx, recent); err != nil {
 		t.Fatalf("add recent: %v", err)
 	}
