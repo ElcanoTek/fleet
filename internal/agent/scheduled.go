@@ -236,6 +236,32 @@ func (o *scheduledObserver) Observe(eventType string, payload map[string]any) {
 	}
 }
 
+// multiObserver fans a single Observe to every wrapped Observer in order. It is
+// the seam that lets a scheduled run's events reach BOTH the captain's-log writer
+// (scheduledObserver) AND an optional live SSE buffer attached by the worker pool
+// via agentcore.WithStreamObserver (#200) — the live stream consumes the exact
+// same event stream the persisted log does, with no second governance path. A
+// nil member is skipped so callers can compose without nil-checking.
+type multiObserver []agentcore.Observer
+
+func (m multiObserver) Observe(eventType string, payload map[string]any) {
+	for _, o := range m {
+		if o != nil {
+			o.Observe(eventType, payload)
+		}
+	}
+}
+
+// composeObserver builds the run's Observer: always the captain's-log writer,
+// plus the optional context-carried stream sink (#200). When no stream sink is
+// present it returns the bare scheduledObserver so the common path is unchanged.
+func composeObserver(ctx context.Context, base agentcore.Observer) agentcore.Observer {
+	if stream := agentcore.StreamObserverFromContext(ctx); stream != nil {
+		return multiObserver{base, stream}
+	}
+	return base
+}
+
 // scheduledPolicy layers two host-side finish gates onto agentcore.ScheduledPolicy,
 // in order: the end-of-run verifier, then the "phone a friend" super-LLM review
 // (part of #175). agentcore's audit/finish enforcement gates finishing first;
@@ -421,8 +447,11 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	allow, optional := a.mcpGates()
 
 	deps := agentcore.Deps{
-		Input:           scheduledInput{systemPrompt: systemPrompt, task: task, label: a.logSession.Title},
-		Observer:        &scheduledObserver{session: a.logSession},
+		Input: scheduledInput{systemPrompt: systemPrompt, task: task, label: a.logSession.Title},
+		// Observer is the captain's-log writer, tee'd to a live SSE buffer when the
+		// worker pool attached one via agentcore.WithStreamObserver (#200) so an
+		// in-progress task's run log can be tailed without forking the event path.
+		Observer:        composeObserver(ctx, &scheduledObserver{session: a.logSession}),
 		Policy:          inner, // inner policy exposes orchestration() for confirm_audit + usage
 		Executor:        NewSandboxExecutor(a.sb),
 		Model:           a.model,
