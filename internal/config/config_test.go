@@ -1183,3 +1183,29 @@ func TestLoad_IPAccessControlMalformedIsFatal(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_TaskMemoryDefaultsAndOverride(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TaskMemoryMaxKeys != 100 {
+		t.Errorf("TaskMemoryMaxKeys default: got %d, want 100", cfg.TaskMemoryMaxKeys)
+	}
+	if cfg.TaskMemoryMaxValueBytes != 4096 {
+		t.Errorf("TaskMemoryMaxValueBytes default: got %d, want 4096", cfg.TaskMemoryMaxValueBytes)
+	}
+
+	t.Setenv("FLEET_TASK_MEMORY_MAX_KEYS", "25")
+	t.Setenv("FLEET_TASK_MEMORY_MAX_VALUE_BYTES", "8192")
+	cfg, err = Load("")
+	if err != nil {
+		t.Fatalf("Load (override): %v", err)
+	}
+	if cfg.TaskMemoryMaxKeys != 25 || cfg.TaskMemoryMaxValueBytes != 8192 {
+		t.Errorf("env override: got keys=%d valueBytes=%d, want 25/8192", cfg.TaskMemoryMaxKeys, cfg.TaskMemoryMaxValueBytes)
+	}
+}

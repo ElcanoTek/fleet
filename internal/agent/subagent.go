@@ -474,6 +474,12 @@ func (a *Agent) buildChild(model fantasy.LanguageModel, allowlist agentcore.Cred
 		Sandbox:       a.sb,
 		NotesProvider: a.notesProvider,
 		NoteProposer:  a.noteProposer,
+		// Persistent task memory (#285) is inherited from the parent so a child of a
+		// Captain's Log task shares the same task-scoped memory; nil for a
+		// non-opted-in parent (unchanged default).
+		TaskMemory:       a.taskMemory,
+		TaskID:           a.taskID,
+		TaskMemoryConfig: a.taskMemoryConfig,
 		// Monotonic privilege: the child carries the parent's (copied) credential
 		// allowlist — Gate-3 enforced by the child's own agentcore.Run.
 		CredentialAllowlist: allowlist,
