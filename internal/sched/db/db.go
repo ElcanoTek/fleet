@@ -692,6 +692,202 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 	return err
 }
 
+// taskInsertOnConflict is the static ON CONFLICT (id) DO UPDATE clause appended
+// to every tasks INSERT. Kept in sync with AddTask's upsert. Extracted so the
+// single-row, multi-row, and in-tx paths can never disagree.
+const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
+			prompt = EXCLUDED.prompt,
+			model = EXCLUDED.model,
+			fallback_model = EXCLUDED.fallback_model,
+			max_iterations = EXCLUDED.max_iterations,
+			mcp_selection = EXCLUDED.mcp_selection,
+			priority = EXCLUDED.priority,
+			instruction_self_improve = EXCLUDED.instruction_self_improve,
+			status = EXCLUDED.status,
+			assigned_node_id = EXCLUDED.assigned_node_id,
+			agent_session_id = EXCLUDED.agent_session_id,
+			created_at = EXCLUDED.created_at,
+			started_at = EXCLUDED.started_at,
+			completed_at = EXCLUDED.completed_at,
+			result = EXCLUDED.result,
+			error_message = EXCLUDED.error_message,
+			scheduled_for = EXCLUDED.scheduled_for,
+			recurrence = EXCLUDED.recurrence,
+			created_by = EXCLUDED.created_by,
+			files = EXCLUDED.files,
+			lease_owner = EXCLUDED.lease_owner,
+			lease_expires_at = EXCLUDED.lease_expires_at,
+			attempt_count = EXCLUDED.attempt_count,
+			max_retries = EXCLUDED.max_retries,
+			allow_network = EXCLUDED.allow_network,
+			timezone = EXCLUDED.timezone,
+			created_by_key_id = EXCLUDED.created_by_key_id,
+			trigger_type = EXCLUDED.trigger_type,
+			credential_allowlist = EXCLUDED.credential_allowlist,
+			loop_config = EXCLUDED.loop_config,
+			worktree_config = EXCLUDED.worktree_config,
+			description = EXCLUDED.description,
+			tags = EXCLUDED.tags,
+			retry_policy = EXCLUDED.retry_policy,
+			source_task_id = EXCLUDED.source_task_id,
+			persona = EXCLUDED.persona,
+			workspace_path = EXCLUDED.workspace_path,
+			allow_task_creation = EXCLUDED.allow_task_creation,
+			allow_recurring_task_creation = EXCLUDED.allow_recurring_task_creation,
+			created_by_task_id = EXCLUDED.created_by_task_id,
+			dead_lettered_at = EXCLUDED.dead_lettered_at,
+			dead_letter_reason = EXCLUDED.dead_letter_reason,
+			dead_letter_attempts = EXCLUDED.dead_letter_attempts,
+			run_if = EXCLUDED.run_if,
+			skip_count = EXCLUDED.skip_count,
+			last_skip_at = EXCLUDED.last_skip_at,
+			last_skip_reason = EXCLUDED.last_skip_reason`
+
+// taskInsertColumns is the ordered column list for the tasks INSERT, kept in
+// sync with AddTask / AddTaskBatch / AddTaskTx. Extracted as a constant so the
+// single-row and multi-row builders never drift.
+const taskInsertColumns = `id, prompt, model, fallback_model, max_iterations, mcp_selection,
+			priority, instruction_self_improve, status, assigned_node_id, agent_session_id,
+			created_at, started_at, completed_at, result, error_message,
+			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
+			attempt_count, max_retries, allow_network, timezone, created_by_key_id,
+			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path,
+			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
+			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
+			run_if, skip_count, last_skip_at, last_skip_reason`
+
+// taskInsertArgs returns the 47 positional INSERT values for a task, in the
+// exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
+// the single-row and multi-row paths can never disagree on argument ordering.
+func taskInsertArgs(t *models.Task) []any {
+	return []any{
+		t.ID,
+		t.Prompt,
+		t.Model,
+		t.FallbackModel,
+		t.MaxIterations,
+		marshalJSON(mcpSelectionOrEmpty(t.MCPSelection)),
+		t.Priority,
+		t.InstructionSelfImprove,
+		string(t.Status),
+		t.AssignedNodeID,
+		t.AgentSessionID,
+		t.CreatedAt,
+		t.StartedAt,
+		t.CompletedAt,
+		t.Result,
+		t.ErrorMessage,
+		t.ScheduledFor,
+		nullableString(t.Recurrence),
+		t.CreatedBy,
+		marshalJSON(t.Files),
+		t.LeaseOwner,
+		t.LeaseExpiresAt,
+		t.AttemptCount,
+		t.MaxRetries,
+		t.AllowNetwork,
+		taskTimezoneOrUTC(t.Timezone),
+		t.CreatedByKeyID,
+		triggerTypeOrCron(t.TriggerType),
+		marshalCredentialAllowlist(t.CredentialAllowlist),
+		marshalLoopConfig(t.LoopConfig),
+		marshalWorktreeConfig(t.WorktreeConfig),
+		nullableString(t.Description),
+		marshalTags(t.Tags),
+		marshalRetryPolicy(t.RetryPolicy),
+		sourceTaskIDValue(t.SourceTaskID),
+		nullableString(t.Persona),
+		workspacePathValue(t.WorkspacePath),
+		t.AllowTaskCreation,
+		t.AllowRecurringTaskCreation,
+		createdByTaskIDValue(t.CreatedByTaskID),
+		t.DeadLetteredAt,
+		nullableString(deref(t.DeadLetterReason)),
+		deadLetterAttemptsValue(t.DeadLetterAttempts),
+		marshalRunIf(t.RunIf),
+		t.SkipCount,
+		t.LastSkipAt,
+		nullableString(deref(t.LastSkipReason)),
+	}
+}
+
+// taskInsertColumnsCount is the number of columns in taskInsertColumns. Kept as
+// a named const so the multi-row placeholder builder is self-documenting and
+// a future schema migration that adds a column forces a single touch point.
+const taskInsertColumnsCount = 47
+
+// AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
+// replacing N sequential ExecContext round-trips. It does NOT run inside an
+// explicit transaction — callers that need atomicity wrap the call in BeginTx /
+// Commit (see Storage.AddTaskBatch). An empty slice is a no-op.
+//
+// Each row carries the SAME 47 columns as AddTask (via the shared
+// taskInsertArgs helper), so a row inserted through the batch path is
+// byte-identical to one inserted through the single-row path.
+func (db *Database) AddTaskBatch(ctx context.Context, tasks []*models.Task) error {
+	return db.AddTaskBatchTx(ctx, nil, tasks)
+}
+
+// AddTaskBatchTx inserts a slice of tasks in a single parameterised INSERT within
+// an existing transaction (#227), ensuring atomic multi-row insertions run in
+// a single round-trip. An empty slice is a no-op.
+func (db *Database) AddTaskBatchTx(ctx context.Context, tx *sql.Tx, tasks []*models.Task) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	const cols = taskInsertColumnsCount
+	args := make([]any, 0, len(tasks)*cols)
+	placeholders := make([]string, 0, len(tasks))
+	var b strings.Builder
+	for i, t := range tasks {
+		base := i * cols
+		b.Reset()
+		b.WriteByte('(')
+		for j := 0; j < cols; j++ {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, "$%d", base+j+1)
+		}
+		b.WriteByte(')')
+		placeholders = append(placeholders, b.String())
+		args = append(args, taskInsertArgs(t)...)
+	}
+
+	var q strings.Builder
+	q.WriteString("INSERT INTO tasks (")
+	q.WriteString(taskInsertColumns)
+	q.WriteString(") VALUES ")
+	q.WriteString(strings.Join(placeholders, ","))
+	q.WriteString(taskInsertOnConflict)
+
+	var err error
+	if tx != nil {
+		_, err = tx.ExecContext(ctx, q.String(), args...)
+	} else {
+		_, err = db.conn.ExecContext(ctx, q.String(), args...)
+	}
+	return err
+}
+
+// AddTaskTx inserts a single task within an existing transaction. The atomic
+// batch path (#227) uses this so a multi-row insert lands in the caller's tx.
+func (db *Database) AddTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task) error {
+	args := taskInsertArgs(task)
+	var q strings.Builder
+	q.WriteString("INSERT INTO tasks (")
+	q.WriteString(taskInsertColumns)
+	q.WriteString(") VALUES ($1")
+	for i := 2; i <= taskInsertColumnsCount; i++ {
+		fmt.Fprintf(&q, ",$%d", i)
+	}
+	q.WriteByte(')')
+	q.WriteString(taskInsertOnConflict)
+	_, err := tx.ExecContext(ctx, q.String(), args...)
+	return err
+}
+
 // deref returns the pointed-to string, or "" for a nil pointer. Paired with
 // nullableString so a nil/empty DeadLetterReason persists as SQL NULL (#253).
 func deref(s *string) string {

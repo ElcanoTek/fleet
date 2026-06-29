@@ -908,6 +908,38 @@ func derefOr(p *int, def int) int {
 	return *p
 }
 
+// BatchTaskCreate is the request body for POST /tasks/batch (#227): a slice of
+// TaskCreate recipes plus an atomicity flag. atomic=false (default) is
+// best-effort (207 Multi-Status on partial failure); atomic=true wraps every
+// insert in a single DB transaction so a single validation failure aborts all.
+type BatchTaskCreate struct {
+	Tasks  []TaskCreate `json:"tasks"`
+	Atomic bool         `json:"atomic,omitempty"`
+}
+
+// BatchCreated pairs an assigned task UUID with the index it held in the
+// request slice, so a caller can correlate results without relying on order.
+type BatchCreated struct {
+	ID    uuid.UUID `json:"id"`
+	Index int       `json:"index"`
+}
+
+// BatchFailed records the request index and human-readable error for a task the
+// batch could not create (validation or DB failure).
+type BatchFailed struct {
+	Index int    `json:"index"`
+	Error string `json:"error"`
+}
+
+// BatchTaskResult is the response body for POST /tasks/batch in both modes. The
+// HTTP status carries the outcome class: 200 all-succeeded, 207 partial
+// (non-atomic only), 422 total failure (atomic rollback or every task invalid).
+type BatchTaskResult struct {
+	Created []BatchCreated `json:"created"`
+	Failed  []BatchFailed  `json:"failed"`
+	Count   int            `json:"count"`
+}
+
 // TaskToCreate rebuilds the TaskCreate "recipe" from an existing task — the
 // inverse of NewTask over the create-relevant fields. It is the basis for re-run
 // / clone (#270): the caller adjusts ScheduledFor / Recurrence and applies any
