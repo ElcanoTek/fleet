@@ -194,4 +194,50 @@
   <symbol id="chevron-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
     <path d="m9 18 6-6-6-6"/>
   </symbol>
+
+  <!-- Unified navigation rail (#169): nav, organization, and account-menu glyphs. -->
+  <symbol id="message" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/>
+  </symbol>
+
+  <symbol id="grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="3" width="7" height="7" rx="1"/>
+    <rect x="14" y="3" width="7" height="7" rx="1"/>
+    <rect x="14" y="14" width="7" height="7" rx="1"/>
+    <rect x="3" y="14" width="7" height="7" rx="1"/>
+  </symbol>
+
+  <symbol id="pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 17v5"/>
+    <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>
+  </symbol>
+
+  <symbol id="tag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20.59 13.41 11 3.83A2 2 0 0 0 9.59 3H5a2 2 0 0 0-2 2v4.59A2 2 0 0 0 3.59 11l9.58 9.59a2 2 0 0 0 2.83 0l4.59-4.59a2 2 0 0 0 0-2.83z"/>
+    <path d="M7.5 7.5h.01"/>
+  </symbol>
+
+  <symbol id="folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+  </symbol>
+
+  <symbol id="settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9.7 3.6a1 1 0 0 1 .99-.85h2.62a1 1 0 0 1 .99.85l.22 1.45a6.5 6.5 0 0 1 1.55.9l1.37-.52a1 1 0 0 1 1.22.45l1.31 2.27a1 1 0 0 1-.23 1.28l-1.15.93a6.6 6.6 0 0 1 0 1.8l1.15.93a1 1 0 0 1 .23 1.28l-1.31 2.27a1 1 0 0 1-1.22.45l-1.37-.52a6.5 6.5 0 0 1-1.55.9l-.22 1.45a1 1 0 0 1-.99.85h-2.62a1 1 0 0 1-.99-.85l-.22-1.45a6.5 6.5 0 0 1-1.55-.9l-1.37.52a1 1 0 0 1-1.22-.45l-1.31-2.27a1 1 0 0 1 .23-1.28l1.15-.93a6.6 6.6 0 0 1 0-1.8l-1.15-.93a1 1 0 0 1-.23-1.28l1.31-2.27a1 1 0 0 1 1.22-.45l1.37.52a6.5 6.5 0 0 1 1.55-.9z"/>
+    <path d="M12 9.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6z"/>
+  </symbol>
+
+  <symbol id="dots" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+    <circle cx="12" cy="5" r="1.6"/>
+    <circle cx="12" cy="12" r="1.6"/>
+    <circle cx="12" cy="19" r="1.6"/>
+  </symbol>
+
+  <symbol id="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M5 12l5 5L20 6"/>
+  </symbol>
+
+  <symbol id="selector" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 9l4-4 4 4"/>
+    <path d="M16 15l-4 4-4-4"/>
+  </symbol>
 </svg>

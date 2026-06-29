@@ -36,6 +36,8 @@ function readStoredTheme(): Theme | null {
 export type UseTheme = {
   theme: Theme;
   toggleTheme: () => void;
+  /** Set an explicit theme — used by the account menu's Light/Dark segmented control. */
+  setTheme: (next: Theme) => void;
   /** "Switch to light mode" / "Switch to dark mode" — for the toggle's label. */
   themeLabel: string;
 };
@@ -44,7 +46,7 @@ export function useTheme(): UseTheme {
   // Defaults to "dark" to match the pre-hydration default in
   // /scripts/theme.js; the mount effect below reconciles to the real value
   // synchronously after hydration so SSR markup never mismatches.
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setThemeState] = useState<Theme>("dark");
 
   useEffect(() => {
     const root = document.documentElement;
@@ -61,7 +63,7 @@ export function useTheme(): UseTheme {
 
     const applyTheme = (next: Theme) => {
       root.setAttribute("data-theme", next);
-      setTheme(next);
+      setThemeState(next);
     };
 
     applyTheme(resolveTheme());
@@ -77,8 +79,21 @@ export function useTheme(): UseTheme {
     return () => media.removeEventListener("change", handleSystemChange);
   }, []);
 
+  // applyTheme writes the explicit choice through to the live attribute + the
+  // persisted preference. Shared by toggleTheme and the segmented setter so both
+  // paths persist identically.
+  const applyExplicitTheme = useCallback((next: Theme) => {
+    setThemeState(next);
+    document.documentElement.setAttribute("data-theme", next);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch {
+      // Private-mode / storage-disabled: still flip the live attribute.
+    }
+  }, []);
+
   const toggleTheme = useCallback(() => {
-    setTheme((prev) => {
+    setThemeState((prev) => {
       const next: Theme = prev === "dark" ? "light" : "dark";
       document.documentElement.setAttribute("data-theme", next);
       try {
@@ -92,7 +107,7 @@ export function useTheme(): UseTheme {
 
   const themeLabel = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
 
-  return { theme, toggleTheme, themeLabel };
+  return { theme, toggleTheme, setTheme: applyExplicitTheme, themeLabel };
 }
 
 export default useTheme;

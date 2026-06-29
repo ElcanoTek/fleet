@@ -5,9 +5,12 @@ import type { Task } from "@/app/shared/lib/orchestratorApi";
 import { useOrchestratorSession } from "@/app/shared/hooks/useOrchestratorSession";
 import { useDashboardData } from "@/app/shared/hooks/useDashboardData";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
+import { useClientConfig } from "@/app/lib/useClientConfig";
 import { ToastProvider } from "@/app/shared/ui/Toast";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 import { NavToChat } from "@/app/shared/ui/CrossViewNav";
+import { NavRail } from "@/app/shared/ui/NavRail";
+import { Icon } from "@/app/shared/ui/Icon";
 import { OrchestratorLogin } from "./OrchestratorLogin";
 import { StatsGrid, type StatFilter } from "./StatsGrid";
 import { NodesTable } from "./NodesTable";
@@ -18,22 +21,26 @@ import { ConcurrencyCapSetting } from "./ConcurrencyCapSetting";
 import { CredentialAccountAdmin } from "./CredentialAccountAdmin";
 import { SLAReportPanel } from "./SLAReportPanel";
 
-// OrchestratorClient — the top-level orchestrator view. Re-port of moc's app.js
-// orchestration: gate on login state, render the dashboard, wire stat-card
-// filters, the create-task modal (with the MCP picker + concurrency cap), the
-// log viewer, and credential-account admin. A header link crosses to /chat
-// without re-login (the SAME session cookie gates both views).
+// OrchestratorClient — the top-level orchestrator (Operations Center) view. It
+// now renders inside the shared unified rail (#169): when signed in, the
+// dashboard sits in a two-column shell beside the NavRail, with New Task in the
+// rail and Settings / Theme / Sign out relocated into the rail's account menu
+// (the standalone header buttons are gone). The signed-out login keeps a slim
+// top bar with the theme switch + a cross-link to Chat. Routing, data-fetching,
+// SSE, and the dashboard body are unchanged — this is a shell change.
 
 function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
   const session = useOrchestratorSession();
   const dashboard = useDashboardData(session.signedIn);
   const { servers, reload: reloadServers } = useMcpServers(session.signedIn);
+  const { branding } = useClientConfig();
 
   const [statFilter, setStatFilter] = useState<StatFilter | null>(null);
   const [nodeActiveOnly, setNodeActiveOnly] = useState(false);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [logTask, setLogTask] = useState<Task | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   // Top-level dashboard tab (#274): "tasks" is the legacy Recent Tasks view;
   // "sla" swaps in the SLA report panel. Defaults to tasks so the existing
   // dashboard shape is unchanged on load.
@@ -68,129 +75,165 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
     }
   };
 
-  const header = (
-      <header className="header page-header" role="banner">
-        <div className="ds-app-header">
-          <div className="ds-app-header__brand">
-            <div className="ds-app-header__text">
-              <p className="ds-app-header__eyebrow">Elcano Internal</p>
-              <h1 className="ds-app-header__title">Operations Center</h1>
-            </div>
-          </div>
-          <div className="ds-app-header__actions">
-            {/* Shared shell theme switch — same light/dark control the chat
-                view and login card render, now available here too. */}
-            <ThemeToggle />
-            {/* Cross-view navigation — same session gates both, so no re-login. */}
-            <NavToChat className="btn btn-ghost" />
-            {session.signedIn ? (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  data-testid="new-task-btn"
-                  onClick={() => setTaskModalOpen(true)}
-                >
-                  New Task
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  data-testid="admin-toggle"
-                  onClick={() => setAdminOpen((o) => !o)}
-                >
-                  Settings
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  data-testid="logout-btn"
-                  onClick={() => void session.logout()}
-                >
-                  Logout
-                </button>
-              </>
-            ) : null}
-          </div>
-        </div>
-      </header>
-  );
-
-  return (
-    <div className="container">
-      {header}
-
-      {!session.ready ? (
+  // Initial probe pending — keep the bare loading card (no rail yet).
+  if (!session.ready) {
+    return (
+      <div className="container">
         <div className="loading" data-testid="orchestrator-loading">
           <p>Loading…</p>
         </div>
-      ) : !session.signedIn ? (
+      </div>
+    );
+  }
+
+  // Signed out — slim top bar (theme + cross-link) above the login card; no rail.
+  if (!session.signedIn) {
+    return (
+      <div className="container">
+        <header className="header page-header" role="banner">
+          <div className="ds-app-header">
+            <div className="ds-app-header__brand">
+              <div className="ds-app-header__text">
+                <p className="ds-app-header__eyebrow">Elcano Internal</p>
+                <h1 className="ds-app-header__title">Operations Center</h1>
+              </div>
+            </div>
+            <div className="ds-app-header__actions">
+              <ThemeToggle />
+              <NavToChat className="btn btn-ghost" />
+            </div>
+          </div>
+        </header>
         <OrchestratorLogin
           elcanoLoginEnabled={elcanoLoginEnabled}
           onLogin={session.login}
           error={session.error}
         />
-      ) : (
-        <div className="dashboard-content visible" role="main" data-testid="orchestrator-dashboard">
-          <StatsGrid stats={dashboard.stats} activeFilter={statFilter} onFilter={applyStatFilter} />
+      </div>
+    );
+  }
 
-          <div className="section" role="region" aria-labelledby="nodesHeading">
-            <div className="section-header">
-              <h2 id="nodesHeading">Registered Agents</h2>
-            </div>
-            <NodesTable nodes={dashboard.nodes} activeOnly={nodeActiveOnly} />
-          </div>
+  // Signed in — the unified two-column shell: rail + main dashboard.
+  return (
+    <div
+      className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] overflow-hidden bg-[var(--gradient-bg-ops-console)] text-[var(--color-text-primary)] lg:grid-cols-[18rem_minmax(0,1fr)]"
+    >
+      <NavRail
+        activeView="orchestrator"
+        brandName={branding.app_name}
+        opsCount={dashboard.stats?.running_tasks}
+        sidebarOpen={sidebarOpen}
+        setSidebarOpen={setSidebarOpen}
+        account={{
+          email: session.username ?? "",
+          onSignOut: () => void session.logout(),
+          onSettings: () => setAdminOpen((o) => !o),
+        }}
+      >
+        <button
+          type="button"
+          data-testid="new-task-btn"
+          className="flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
+          onClick={() => setTaskModalOpen(true)}
+        >
+          <Icon name="plus" className="size-4" /> New task
+        </button>
+      </NavRail>
 
-          <div className="dashboard-tabs" role="tablist" aria-label="Operations Center view">
+      <main className="flex min-h-0 flex-col overflow-hidden">
+        <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
             <button
+              aria-label="Open sidebar"
+              className="inline-flex size-9 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] lg:hidden"
               type="button"
-              role="tab"
-              aria-selected={tab === "tasks"}
-              className={`tab-btn${tab === "tasks" ? " tab-btn-active" : ""}`}
-              onClick={() => setTab("tasks")}
+              onClick={() => setSidebarOpen(true)}
             >
-              Recent Tasks
+              <svg
+                aria-hidden="true"
+                className="size-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M4 6h16" />
+                <path d="M4 12h16" />
+                <path d="M4 18h16" />
+              </svg>
             </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "sla"}
-              className={`tab-btn${tab === "sla" ? " tab-btn-active" : ""}`}
-              onClick={() => setTab("sla")}
-            >
-              SLA
-            </button>
+            <h1 className="truncate text-[1.05rem] font-semibold text-[var(--color-text-primary)]">
+              Operations Center
+            </h1>
           </div>
+        </header>
 
-          {tab === "tasks" ? (
-            <TasksTable
-              tasks={dashboard.tasks}
-              total={dashboard.total}
-              page={dashboard.page}
-              pageSize={dashboard.pageSize}
-              filters={dashboard.filters}
-              onFilters={dashboard.setFilters}
-              onPage={dashboard.setPage}
-              onPageSize={dashboard.setPageSize}
-              onOpenLogs={setLogTask}
-            />
-          ) : (
-            <SLAReportPanel />
-          )}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="container">
+            <div className="dashboard-content visible" data-testid="orchestrator-dashboard">
+              <StatsGrid stats={dashboard.stats} activeFilter={statFilter} onFilter={applyStatFilter} />
 
-          {adminOpen ? (
-            <div className="section" role="region" aria-label="Settings" data-testid="settings-section">
-              <div className="section-header">
-                <h2>Settings</h2>
+              <div className="section" role="region" aria-labelledby="nodesHeading">
+                <div className="section-header">
+                  <h2 id="nodesHeading">Registered Agents</h2>
+                </div>
+                <NodesTable nodes={dashboard.nodes} activeOnly={nodeActiveOnly} />
               </div>
-              <ConcurrencyCapSetting />
-              <CredentialAccountAdmin servers={servers} onChanged={reloadServers} />
-            </div>
-          ) : null}
 
-          <p className="refresh-note">Auto-refresh every 30 seconds</p>
+              <div className="dashboard-tabs" role="tablist" aria-label="Operations Center view">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === "tasks"}
+                  className={`tab-btn${tab === "tasks" ? " tab-btn-active" : ""}`}
+                  onClick={() => setTab("tasks")}
+                >
+                  Recent Tasks
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === "sla"}
+                  className={`tab-btn${tab === "sla" ? " tab-btn-active" : ""}`}
+                  onClick={() => setTab("sla")}
+                >
+                  SLA
+                </button>
+              </div>
+
+              {tab === "tasks" ? (
+                <TasksTable
+                  tasks={dashboard.tasks}
+                  total={dashboard.total}
+                  page={dashboard.page}
+                  pageSize={dashboard.pageSize}
+                  filters={dashboard.filters}
+                  onFilters={dashboard.setFilters}
+                  onPage={dashboard.setPage}
+                  onPageSize={dashboard.setPageSize}
+                  onOpenLogs={setLogTask}
+                />
+              ) : (
+                <SLAReportPanel />
+              )}
+
+              {adminOpen ? (
+                <div className="section" role="region" aria-label="Settings" data-testid="settings-section">
+                  <div className="section-header">
+                    <h2>Settings</h2>
+                  </div>
+                  <ConcurrencyCapSetting />
+                  <CredentialAccountAdmin servers={servers} onChanged={reloadServers} />
+                </div>
+              ) : null}
+
+              <p className="refresh-note">Auto-refresh every 30 seconds</p>
+            </div>
+          </div>
         </div>
-      )}
+      </main>
 
       <TaskCreateModal
         open={taskModalOpen}

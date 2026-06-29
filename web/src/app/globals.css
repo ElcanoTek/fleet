@@ -41,6 +41,12 @@
   --color-text-disabled: rgba(210, 217, 222, 0.45);
   --color-overlay-soft: rgba(0, 0, 0, 0.2);
   --color-overlay-strong: rgba(0, 0, 0, 0.4);
+  /* Navigation-rail row states. Distinct from --color-overlay-* (which is a
+     black/white scrim) so rail hover/active read as a light wash on the
+     sidebar surface regardless of theme. The later theming PR repaints these
+     from the per-deployment manifest; the rail reads only these tokens. */
+  --rail-hover: rgba(255, 255, 255, 0.07);
+  --rail-active: rgba(255, 255, 255, 0.1);
   /* Semantic status tokens used by tool-call chips, approval cards,
      stderr text, etc. Redefined in the light-theme block below. */
   --color-success: #8fe7b8;
@@ -130,6 +136,8 @@
   --color-text-disabled: rgba(92, 106, 135, 0.6);
   --color-overlay-soft: rgba(114, 114, 171, 0.08);
   --color-overlay-strong: rgba(20, 24, 36, 0.16);
+  --rail-hover: rgba(38, 55, 92, 0.07);
+  --rail-active: rgba(38, 55, 92, 0.11);
   /* Light-mode status + syntax tokens. Darker saturated values for
      contrast against the light background; the dark-mode defaults
      would wash out here. */
@@ -190,6 +198,54 @@
   --font-sans: var(--font-body);
   --font-mono: var(--font-code);
   --font-heading: var(--font-heading);
+}
+
+/* Shared rail popover (Menu.tsx) entrance — a short rise+fade. Only applied
+   under motion-safe, so prefers-reduced-motion users get no animation. */
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Conversation label chips (#258/#279). The chip color rides on a single
+   --chip custom property set per-chip from the isolated hash palette
+   (shared/lib/labelColors); fill/border/text are color-mixed from it so one
+   variable themes the whole chip. The light-theme override keeps contrast on a
+   light background, where the dark recipe washes out. */
+.conv-label-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--chip) 38%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--chip) 16%, transparent);
+  color: color-mix(in srgb, var(--chip) 72%, white);
+}
+:root[data-theme="light"] .conv-label-chip {
+  border-color: color-mix(in srgb, var(--chip) 48%, white);
+  background: color-mix(in srgb, var(--chip) 18%, white);
+  color: color-mix(in srgb, var(--chip) 42%, #15110e);
+}
+.label-dot {
+  flex: 0 0 auto;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999rem;
+  background: var(--chip);
 }
 
 * {
