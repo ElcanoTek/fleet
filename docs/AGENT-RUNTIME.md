@@ -36,6 +36,41 @@ agent a **no-network** (`--network=none`) per-turn sandbox, so the tool calls
 cannot reach the network while the model loop continues normally. Scheduled
 runs default to this sealed posture — see below.
 
+### `run_python` kernel lifetime (per-turn vs persistent, #213)
+
+`run_python` executes in a long-lived IPython kernel inside the sandbox, so
+multiple calls **within one turn** already share state. What `FLEET_PYTHON_REPL_MODE`
+controls is whether that kernel survives **between turns**:
+
+- **`per-turn` (default):** the kernel dies with the per-turn sandbox at turn
+  end. Variables/imports do **not** carry into the next turn — write to the
+  workspace to persist anything. Unchanged legacy behaviour.
+- **`persistent`:** one sandbox + kernel is kept alive **per conversation**
+  (keyed by conversation ID) and reused across that conversation's turns, so a
+  `DataFrame` built in turn 1 is still in scope in turn 3 with no re-read. It is
+  **never shared across conversations** — that is the real isolation invariant
+  (see [ADR-0008](adr/0008-persistent-python-repl-per-conversation.md)). Lockdown
+  turns and scheduled runs always stay per-turn. Pass `reset_kernel=true` to wipe
+  a persistent kernel back to a clean slate mid-conversation.
+
+A persistent sandbox is reclaimed on conversation delete, on process shutdown,
+and by an idle reaper (`FLEET_PYTHON_REPL_IDLE_TTL`, default **1800s**); the
+number of live persistent sandboxes is capped at `FLEET_PYTHON_REPL_MAX`
+(default **32**, LRU-evicting the least-recently-used idle one). It carries the
+same cgroup memory/CPU/PID/disk caps as a per-turn sandbox.
+
+Independent of mode, `FLEET_PYTHON_CELL_TIMEOUT` (default **0** = disabled) is a
+host-operator ceiling on a single cell; the effective per-cell timeout is
+`min(the call's timeout_seconds, this)`.
+
+**Inline figures.** When the kernel emits an `image/png` (e.g. `plt.show()` /
+`display(fig)`), the bridge writes it to a `figures/` subdir of the conversation
+workspace under a server-generated filename and returns only the small relative
+path in the result's `image_files`. The chat UI renders it inline via the same
+authenticated workspace-file proxy that serves `![](chart.png)` — so the agent
+needs no `plt.savefig()`, and the (large) base64 bytes never enter the model's
+tool result. Bounded to 20 figures / 10 MiB each per cell.
+
 ---
 
 ## Cost and token ceilings

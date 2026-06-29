@@ -41,6 +41,11 @@ func TestMaybeAddEmptyOutputHint(t *testing.T) {
 			resp:     pythonResponse{Status: "error", Error: "NameError: x"},
 			wantHint: false,
 		},
+		{
+			name:     "rendered figure counts as a trace",
+			resp:     pythonResponse{Status: "success", ImageFiles: []string{"figures/fig-abc.png"}},
+			wantHint: false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

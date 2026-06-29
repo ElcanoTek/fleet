@@ -351,7 +351,11 @@ export function ChatTranscript({
                                   {pythonStreams.length > 0 ? (
                                     <div className="grid gap-1.5">
                                       {pythonStreams.map((stream, i) => (
-                                        <PythonOutput key={i} stream={stream} />
+                                        <PythonOutput
+                                          key={i}
+                                          stream={stream}
+                                          conversationId={realConvId(currentConvKey) ?? ""}
+                                        />
                                       ))}
                                     </div>
                                   ) : null}
