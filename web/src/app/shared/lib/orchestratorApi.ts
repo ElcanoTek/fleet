@@ -32,6 +32,13 @@ export type RetryPolicy = {
   no_retry_on?: string[];
 };
 
+export type RunIf = {
+  command: string;
+  exit_code_is?: number;
+  timeout_seconds?: number;
+  on_error?: "run" | "skip";
+};
+
 export type Task = {
   id: string;
   prompt?: string;
@@ -54,6 +61,10 @@ export type Task = {
   scheduled_for?: string;
   recurrence?: string;
   files?: string[];
+  run_if?: RunIf | null;
+  skip_count?: number;
+  last_skip_at?: string | null;
+  last_skip_reason?: string | null;
 };
 
 export type TaskCreate = {
@@ -71,6 +82,7 @@ export type TaskCreate = {
   files?: string[];
   tags?: string[];
   retry_policy?: RetryPolicy;
+  run_if?: RunIf | null;
 };
 
 // CostForecast mirrors agentcore.CostForecast (#233): the pre-submission token +

@@ -1172,6 +1172,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		Timezone:            task.Timezone,
 		Files:               task.Files,
 		Tags:                task.Tags,
+		RunIf:               task.RunIf,
 	})
 	newTask.CreatedBy = task.CreatedBy
 	// Carry the originating API key forward so recurring task cost keeps counting
@@ -1183,6 +1184,48 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	} else {
 		log.Printf("Scheduled next recurrence for task %s at %s", task.ID, nextTime)
 	}
+}
+
+// ComputeNextRun evaluates a task's cron recurrence in its own timezone and
+// returns the next occurrence as an absolute UTC instant. Used by the
+// scheduler's skip path (#269) to advance a skipped task's scheduled_for to
+// the next cron tick. It mirrors scheduleNextRecurrence's tz math but does NOT
+// spawn a new task row (the skip path reuses the SAME occurrence row).
+func (s *Storage) ComputeNextRun(task *models.Task) (time.Time, error) {
+	schedule, err := cron.ParseStandard(task.Recurrence)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse recurrence: %w", err)
+	}
+	loc := s.location
+	if task.Timezone != "" {
+		if l, lerr := time.LoadLocation(task.Timezone); lerr == nil {
+			loc = l
+		}
+	}
+	return schedule.Next(time.Now().In(loc)).UTC(), nil
+}
+
+// RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it
+// re-locks the row inside a transaction, re-checks the task is still scheduled
+// (a concurrent cancel/claim wins and the skip becomes a no-op), advances
+// scheduled_for to nextRun, increments skip_count, and stamps last_skip_at +
+// last_skip_reason. Returns the updated task. nextRun is computed by the
+// caller via ComputeNextRun (so the scheduler owns the cron math).
+func (s *Storage) RecordSkip(ctx context.Context, taskID uuid.UUID, reason string, nextRun time.Time) (*models.Task, error) {
+	tx, err := s.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	task, err := s.db.RecordSkip(ctx, tx, taskID, reason, nextRun)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return task, nil
 }
 
 // Global storage instance
