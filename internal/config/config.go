@@ -224,6 +224,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_CHAT_RATE_LIMIT_ENABLED":    true,
 	"FLEET_CHAT_RATE_LIMIT_CONCURRENT": true,
 	"FLEET_SEARCH_ENABLED":             true,
+	"FLEET_CONVERSATION_SOFT_DELETE":   true,
 
 	// ── admin ──
 	"ADMIN_EMAILS": true,
@@ -438,6 +439,15 @@ type Config struct {
 	// FLEET_SEARCH_ENABLED, default true; set false to drop the GIN index upkeep
 	// on a write-heavy deployment (the endpoint then returns 404).
 	SearchEnabled bool
+
+	// ConversationSoftDelete gates soft-delete behavior for conversations
+	// (#279): when true, DELETE /conversations/{id} and the bulk delete paths
+	// tombstone rows (deleted_at = NOW()) instead of hard-deleting, so a future
+	// restore can undelete them within a 30-day window. List/Get/search hide
+	// tombstoned rows; SweepExpired permanently purges rows older than 30 days.
+	// FLEET_CONVERSATION_SOFT_DELETE, default false (hard delete — no behavior
+	// change for existing deployments).
+	ConversationSoftDelete bool
 
 	// DatabaseURL is the Postgres DSN. URL-form (url.UserPassword) DSN builder.
 	DatabaseURL string
@@ -730,12 +740,13 @@ func Load(envFile string) (*Config, error) {
 		TLSHTTPAddr:  getenvDefault("FLEET_TLS_HTTP_ADDR", ":80"),
 
 		// ── data (interactive) ──
-		DataDir:              getenvFleetDefault("DATA_DIR", "./data"),
-		ConversationTTL:      getenvInt("CONVERSATION_TTL_DAYS", 14),
-		UnpinnedCap:          getenvInt("CONVERSATION_UNPINNED_CAP", 50),
-		AutoArchiveAfterDays: getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
-		SearchEnabled:        getenvBool("FLEET_SEARCH_ENABLED", true),
-		DatabaseURL:          buildDatabaseURL(),
+		DataDir:                getenvFleetDefault("DATA_DIR", "./data"),
+		ConversationTTL:        getenvInt("CONVERSATION_TTL_DAYS", 14),
+		UnpinnedCap:            getenvInt("CONVERSATION_UNPINNED_CAP", 50),
+		AutoArchiveAfterDays:   getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
+		SearchEnabled:          getenvBool("FLEET_SEARCH_ENABLED", true),
+		ConversationSoftDelete: getenvBool("FLEET_CONVERSATION_SOFT_DELETE", false),
+		DatabaseURL:            buildDatabaseURL(),
 
 		// DB connection pools (#276) — defaults reproduce the historical
 		// hard-coded behavior exactly: 25 open / 5 idle, idle-time reaping OFF

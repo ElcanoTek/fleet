@@ -99,9 +99,14 @@ same PR.
   `-p 1`, which the suite expects).
 - **Composer & Textarea heights**: In `web/src/app/chat/ui/Composer.tsx` and `chat-experience.tsx`, avoid mixing JS-based auto-grow style height clamping with Tailwind `max-h-*` CSS classes on the composer textarea, to prevent layout flickering. Use `MAX_COMPOSER_HEIGHT_PX` (200px) as the single source of truth.
 - **Composer keybindings & preferences**: The user's send preference (`fleet.sendKey` in localStorage) controls whether Enter or Ctrl+Enter (with Cmd+Enter) sends a message. The keydown handler adjusts based on this config and skips sending on touch devices to let mobile keyboards use native enter keys.
+- **Bulk Conversation Operations**:
+  - **Soft Delete**: Setting `FLEET_CONVERSATION_SOFT_DELETE=true` switches deletes to soft-deletes (`deleted_at` timestamp). A 30-day background sweeper permanently purges soft-deleted rows. Soft-deleted conversations are excluded from retrieval and search query filters.
+  - **Bulk APIs**: Bulk delete and patch actions are rate-limited to 100 IDs per request. Transactional pre-checks protect ownership; any single foreign ID fails the entire request (403 forbidden) to ensure consistency.
+  - **Bulk UI**: Uses checkboxes for selection, warning users when selecting more than 50 conversations. The confirmation modal enforces a 3-second disabled countdown for delete actions.
 - One focused branch + PR per change; keep diffs scoped. Don't refactor unrelated
   code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions and DCO
   sign-off.
+
 
 ## Where to look
 

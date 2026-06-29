@@ -226,6 +226,14 @@ func run() error {
 	// message-content index for any pre-FTS messages in the background so startup
 	// isn't blocked on a large walk. Idempotent + batched (see BackfillSearchContent).
 	chatStore.SetSearchEnabled(cfg.SearchEnabled)
+	// Conversation soft-delete (#279): honor FLEET_CONVERSATION_SOFT_DELETE. When
+	// enabled, delete operations tombstone rows (deleted_at = NOW()) instead of
+	// hard-deleting; reads hide tombstoned rows and SweepExpired permanently
+	// purges rows older than 30 days. Default off = unchanged hard-delete behavior.
+	chatStore.SetSoftDelete(cfg.ConversationSoftDelete)
+	if cfg.ConversationSoftDelete {
+		log.Printf("conversation soft-delete: ENABLED (deleted rows tombstoned, purged after 30 days)")
+	}
 	if cfg.SearchEnabled {
 		safe.Go("store.fts-backfill", func() {
 			bfCtx, bfCancel := context.WithTimeout(context.Background(), 30*time.Minute)

@@ -55,6 +55,15 @@ export function ConversationSidebar({
   updateAvailable,
   conversations,
   setConfirmBulkDelete,
+  selectedIds,
+  onToggleSelection,
+  onSelectAllVisible,
+  onClearSelection,
+  onBulkDelete,
+  onBulkPin,
+  onBulkUnpin,
+  onBulkMoveFolder,
+  onBulkAddLabel,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
@@ -86,7 +95,23 @@ export function ConversationSidebar({
   updateAvailable: boolean;
   conversations: ConversationSummary[];
   setConfirmBulkDelete: Dispatch<SetStateAction<boolean>>;
+  // Multi-select bulk operations (#279).
+  selectedIds: Set<string>;
+  onToggleSelection: (id: string) => void;
+  onSelectAllVisible: () => void;
+  onClearSelection: () => void;
+  onBulkDelete: () => void;
+  onBulkPin: () => void;
+  onBulkUnpin: () => void;
+  onBulkMoveFolder: (folder: string) => void;
+  onBulkAddLabel: (label: string) => void;
 }) {
+  const selecting = selectedIds.size > 0;
+  const allVisibleSelected =
+    filteredConversations.length > 0 &&
+    filteredConversations.every((c) => selectedIds.has(c.id));
+  // Large-selection warning (#279): non-blocking, shown when >50 are selected.
+  const largeSelection = selectedIds.size > 50;
   return (
     <aside
       className={[
@@ -207,7 +232,85 @@ export function ConversationSidebar({
         <p className="mb-1 px-2 text-[0.6875rem] font-medium text-[var(--color-text-muted)]">
           Conversations
         </p>
-        <div className="mb-1 px-2">
+
+        {/* Multi-select bulk action bar (#279). Slides in above the list when
+            ≥1 conversation is selected; the count in each button label updates
+            live as selection changes. */}
+        {selecting ? (
+          <div className="mb-2 rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1.5">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                className="inline-flex size-5 items-center justify-center rounded border border-[var(--color-border-strong)] text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-strong)]"
+                aria-label={allVisibleSelected ? "Deselect all visible" : "Select all visible"}
+                title={allVisibleSelected ? "Deselect all visible" : "Select all visible"}
+                onClick={onSelectAllVisible}
+              >
+                {allVisibleSelected ? "✓" : ""}
+              </button>
+              <span className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]">
+                {selectedIds.size} selected
+              </span>
+              <button
+                type="button"
+                className="ml-auto text-[0.6875rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
+                onClick={onClearSelection}
+              >
+                Clear
+              </button>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              <button
+                type="button"
+                className="rounded bg-[var(--color-danger)] px-2 py-1 text-[0.6875rem] font-medium text-white transition hover:opacity-90"
+                onClick={onBulkDelete}
+              >
+                Delete {selectedIds.size}
+              </button>
+              <button
+                type="button"
+                className="rounded border border-[var(--color-border-strong)] px-2 py-1 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
+                onClick={onBulkPin}
+              >
+                Pin
+              </button>
+              <button
+                type="button"
+                className="rounded border border-[var(--color-border-strong)] px-2 py-1 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
+                onClick={onBulkUnpin}
+              >
+                Unpin
+              </button>
+              <button
+                type="button"
+                className="rounded border border-[var(--color-border-strong)] px-2 py-1 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
+                onClick={() => {
+                  const folder = window.prompt("Move selected to folder:");
+                  if (folder !== null) onBulkMoveFolder(folder.trim());
+                }}
+              >
+                Move to Folder
+              </button>
+              <button
+                type="button"
+                className="rounded border border-[var(--color-border-strong)] px-2 py-1 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
+                onClick={() => {
+                  const label = window.prompt("Add label to selected:");
+                  if (label !== null) onBulkAddLabel(label.trim());
+                }}
+              >
+                Add Label
+              </button>
+            </div>
+            {largeSelection ? (
+              <p className="mt-1.5 text-[0.6875rem] text-[var(--color-danger)]">
+                Selecting {selectedIds.size} conversations — large bulk deletes are permanent.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="mb-1 flex items-center gap-1.5 px-2">
           <input
             ref={searchRef}
             type="search"
@@ -216,6 +319,17 @@ export function ConversationSidebar({
             placeholder={`Search chats (${searchShortcut})`}
             className="w-full rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
           />
+          {selecting ? (
+            <button
+              type="button"
+              aria-label={allVisibleSelected ? "Deselect all visible" : "Select all visible"}
+              title={allVisibleSelected ? "Deselect all visible" : "Select all visible"}
+              className="inline-flex size-6 shrink-0 items-center justify-center rounded border border-[var(--color-border-strong)] text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-strong)]"
+              onClick={onSelectAllVisible}
+            >
+              {allVisibleSelected ? "✓" : ""}
+            </button>
+          ) : null}
         </div>
 
         {isLoadingHistory ? (
@@ -225,7 +339,9 @@ export function ConversationSidebar({
             {sidebarQuery.trim() ? "No matches." : "No saved chats yet."}
           </p>
         ) : (
-          filteredConversations.map((conversation) => (
+          filteredConversations.map((conversation) => {
+            const checked = selectedIds.has(conversation.id);
+            return (
             <div
               key={conversation.id}
               className={[
@@ -233,11 +349,33 @@ export function ConversationSidebar({
                 activeConversationId === conversation.id
                   ? "bg-[var(--color-overlay-soft)]"
                   : "hover:bg-[var(--color-overlay-soft)]",
+                checked ? "ring-1 ring-inset ring-[var(--color-accent)]/50" : "",
               ].join(" ")}
             >
+              {/* Selection checkbox (#279): revealed on hover (or tap) and
+                  pinned visible while checked, so multi-select mode stays
+                  legible once entered. Stops click propagation so it never
+                  opens the conversation. */}
+              <button
+                type="button"
+                aria-label={checked ? `Deselect ${conversation.title}` : `Select ${conversation.title}`}
+                aria-pressed={checked}
+                className={[
+                  "touch-reveal pointer-events-auto absolute left-0.5 top-1/2 z-10 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded border text-[0.75rem] transition sm:size-4",
+                  checked
+                    ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
+                    : "border-[var(--color-border-strong)] text-transparent opacity-0 hover:border-[var(--color-accent)] group-hover:opacity-100 group-focus-within:opacity-100",
+                ].join(" ")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleSelection(conversation.id);
+                }}
+              >
+                {checked ? "✓" : ""}
+              </button>
               <button
                 className={[
-                  "block w-full min-w-0 rounded-md px-2 py-1.5 pr-44 text-left text-[0.8125rem] transition sm:pr-[8rem]",
+                  "block w-full min-w-0 rounded-md py-1.5 pl-7 pr-44 text-left text-[0.8125rem] transition sm:pr-[8rem]",
                   activeConversationId === conversation.id
                     ? "text-[var(--color-text-primary)]"
                     : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
@@ -333,7 +471,8 @@ export function ConversationSidebar({
                 </button>
               </div>
             </div>
-          ))
+            );
+          })
         )}
 
         {archivedConversations.length > 0 ? (
