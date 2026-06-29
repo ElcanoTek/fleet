@@ -32,6 +32,13 @@ export type RetryPolicy = {
   no_retry_on?: string[];
 };
 
+export type RunIf = {
+  command: string;
+  exit_code_is?: number;
+  timeout_seconds?: number;
+  on_error?: "run" | "skip";
+};
+
 export type Task = {
   id: string;
   prompt?: string;
@@ -56,6 +63,10 @@ export type Task = {
   scheduled_for?: string;
   recurrence?: string;
   files?: string[];
+  run_if?: RunIf | null;
+  skip_count?: number;
+  last_skip_at?: string | null;
+  last_skip_reason?: string | null;
   // SLA monitoring (#274). expected_duration_minutes is null when no SLA is
   // configured; sla_breached is latched true once the fail threshold is crossed;
   // actual_duration_seconds is populated on terminal transition.
@@ -81,6 +92,7 @@ export type TaskCreate = {
   files?: string[];
   tags?: string[];
   retry_policy?: RetryPolicy;
+  run_if?: RunIf | null;
   // SLA monitoring (#274). Omit expected_duration_minutes for no SLA.
   expected_duration_minutes?: number | null;
   sla_warn_multiplier?: number;

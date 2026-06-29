@@ -63,6 +63,7 @@ import {
   type PendingAttachment,
 } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
+import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { Composer } from "./Composer";
 import { ChatTranscript } from "./ChatTranscript";
 // The assistant markdown renderer lives in its own module now. Re-export
@@ -439,6 +440,11 @@ export function ChatExperience() {
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [confirmSummarize, setConfirmSummarize] = useState(false);
+  // Multi-select bulk operations (#279). selectedIds is the set of checked
+  // conversation rows in the sidebar. bulkDeleteConfirm opens the 3-second
+  // countdown confirm modal for a targeted bulk delete of the selection.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [personas, setPersonas] = useState<string[]>([]);
   const [selectedPersona, setSelectedPersona] = useState<string>("");
@@ -1542,6 +1548,94 @@ export function ChatExperience() {
     }
   };
 
+  // ── Multi-select bulk operations (#279) ─────────────────────────────────
+  //
+  // Selection is a Set<string> of conversation IDs checked in the sidebar.
+  // The bulk action bar appears once ≥1 is selected; Escape clears it and
+  // Delete/Backspace opens the confirmation modal (the 3-second countdown is
+  // enforced inside the modal component).
+
+  const toggleConversationSelection = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllVisible = () => {
+    setSelectedIds((prev) => {
+      // Toggling: if every visible conversation is already selected, clear;
+      // otherwise select all visible.
+      const all = filteredConversations.map((c) => c.id);
+      const allSelected = all.length > 0 && all.every((id) => prev.has(id));
+      if (allSelected) return new Set();
+      return new Set(all);
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  // bulkDeleteConversations issues a targeted DELETE /conversations with the
+  // selected IDs. On success it drops them from local state (and the archived
+  // list) and clears the selection. The active conversation, if deleted, is
+  // replaced by the first survivor.
+  const bulkDeleteConversations = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const response = await fetch("/api/conversations", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversation_ids: ids, confirm: true }),
+    });
+    if (!response.ok) throw new Error("Unable to delete conversations.");
+    const removed = new Set(ids);
+    const remaining = conversations.filter((c) => !removed.has(c.id));
+    setConversations(remaining);
+    setArchivedConversations((current) => current.filter((c) => !removed.has(c.id)));
+    setSelectedIds(new Set());
+    if (activeConversationId && removed.has(activeConversationId)) {
+      const next = remaining[0];
+      if (!next) {
+        clearConversation();
+      } else {
+        await loadConversation(next.id);
+      }
+    }
+  };
+
+  // bulkPatchConversations applies additive mutations (pinned / folder / labels)
+  // to the selected IDs in a single PATCH /conversations/bulk call. nil fields
+  // are omitted from the payload so the backend leaves them untouched.
+  const bulkPatchConversations = async (
+    changes: { pinned?: boolean; folder?: string; labels?: string[] },
+  ) => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const payload: Record<string, unknown> = { conversation_ids: ids, changes: {} };
+    if (changes.pinned !== undefined) (payload.changes as Record<string, unknown>).pinned = changes.pinned;
+    if (changes.folder !== undefined) (payload.changes as Record<string, unknown>).folder = changes.folder;
+    if (changes.labels !== undefined) (payload.changes as Record<string, unknown>).labels = changes.labels;
+    const response = await fetch("/api/conversations/bulk", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error("Unable to update conversations.");
+    // Reflect the mutation locally so the sidebar updates without a refetch.
+    setConversations((current) =>
+      current.map((c) => {
+        if (!selectedIds.has(c.id)) return c;
+        const next = { ...c };
+        if (changes.pinned !== undefined) next.pinned = changes.pinned;
+        if (changes.folder !== undefined) (next as ConversationSummary & { folder?: string }).folder = changes.folder;
+        if (changes.labels !== undefined) (next as ConversationSummary & { labels?: string[] }).labels = changes.labels;
+        return next;
+      }),
+    );
+  };
+
   const deleteConversationById = async (conversationId: string) => {
     const response = await fetch(`/api/conversations/${conversationId}`, { method: "DELETE" });
     if (!response.ok) throw new Error("Unable to delete conversation.");
@@ -1870,6 +1964,32 @@ export function ChatExperience() {
     setSearchOpen(false);
     setSidebarOpen(false);
   }, []);
+
+  // Multi-select keyboard support (#279): Escape clears the selection; Delete
+  // / Backspace (when not typing in an input) opens the bulk-delete confirm
+  // modal. The 3-second countdown is enforced inside the modal. Skipped when a
+  // transient overlay (search / shortcuts / pending single-delete) is open so
+  // the keystroke is handled by that surface instead.
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSelectedIds(new Set());
+        return;
+      }
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const target = e.target as HTMLElement | null;
+        const tag = target?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+        if (searchOpen || shortcutsOpen || pendingDeleteConversation) return;
+        e.preventDefault();
+        setBulkDeleteConfirm(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedIds.size, searchOpen, shortcutsOpen, pendingDeleteConversation]);
 
   const shortcuts = useMemo<KeyboardShortcut[]>(
     () => [
@@ -3369,6 +3489,18 @@ export function ChatExperience() {
           updateAvailable={updateAvailable}
           conversations={conversations}
           setConfirmBulkDelete={setConfirmBulkDelete}
+          selectedIds={selectedIds}
+          onToggleSelection={toggleConversationSelection}
+          onSelectAllVisible={selectAllVisible}
+          onClearSelection={clearSelection}
+          onBulkDelete={() => setBulkDeleteConfirm(true)}
+          onBulkPin={() => void bulkPatchConversations({ pinned: true })}
+          onBulkUnpin={() => void bulkPatchConversations({ pinned: false })}
+          onBulkMoveFolder={(folder) => void bulkPatchConversations({ folder })}
+          onBulkAddLabel={(label) => {
+            if (label === "") return;
+            void bulkPatchConversations({ labels: [label] });
+          }}
         />
 
         <button
@@ -3436,6 +3568,21 @@ export function ChatExperience() {
               </div>
             </div>
           </div>
+        ) : null}
+
+        {/* Multi-select bulk delete confirmation (#279). Shows the exact
+            selection count and disables the confirm button for 3 seconds (with
+            a visible countdown) to discourage impulsive bulk wipes. Mounted
+            only while open so the countdown resets on each invocation. */}
+        {bulkDeleteConfirm ? (
+          <BulkDeleteConfirmModal
+            count={selectedIds.size}
+            onCancel={() => setBulkDeleteConfirm(false)}
+            onConfirm={async () => {
+              setBulkDeleteConfirm(false);
+              await bulkDeleteConversations();
+            }}
+          />
         ) : null}
 
         {memoryManagerOpen ? (

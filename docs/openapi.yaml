@@ -386,6 +386,62 @@ paths:
               schema: { $ref: "#/components/schemas/Task" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /tasks/batch:
+    post:
+      summary: Create multiple tasks in a single call.
+      description: >
+        Accepts a slice of TaskCreate recipes (up to 100) and creates them in one
+        API call. When atomic=true the whole batch is validated up front and
+        inserted in a single transaction — any failure rolls back all (422 with
+        per-task errors). When atomic=false (default) valid tasks are created
+        while invalid ones are skipped, yielding 207 Multi-Status with per-task
+        created/failed results. Same auth + rate limiter as POST /tasks; the
+        scoped API key's hourly cap is charged N tokens for a batch of N tasks
+        (one by the auth check, N-1 by the handler) so the batch path is never a
+        rate-limit bypass.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tasks]
+              properties:
+                atomic:
+                  type: boolean
+                  default: false
+                tasks:
+                  type: array
+                  maxItems: 100
+                  items: { $ref: "#/components/schemas/TaskCreate" }
+      responses:
+        "200":
+          description: All tasks created (atomic or non-atomic with no failures).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        index: { type: integer }
+                  failed:
+                    type: array
+                    items: { type: object }
+                  count: { type: integer }
+        "207":
+          description: Partial success (non-atomic only); some tasks were skipped.
+        "413":
+          description: Batch size exceeds the 100-task limit.
+        "422":
+          description: Atomic rollback or every task failed validation.
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
   /tasks/estimate:
     post:
       summary: Pre-submission cost forecast for a task.
@@ -429,6 +485,91 @@ paths:
                   properties:
                     tag: { type: string }
                     task_count: { type: integer }
+  /tasks/export:
+    get:
+      summary: Export task DEFINITIONS (not runs/logs) as a versioned JSON or YAML envelope for backup, cross-box migration, and cloning (#238).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: ids
+          in: query
+          schema: { type: string }
+          description: Comma-separated task UUIDs to export; omit for all tasks.
+        - name: format
+          in: query
+          schema: { type: string, enum: [json, yaml], default: json }
+        - name: recurrence_only
+          in: query
+          schema: { type: boolean, default: false }
+          description: Export only tasks with a non-empty recurrence (cron tasks).
+      responses:
+        "200":
+          description: A versioned envelope of task definitions.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  exported_at: { type: string, format: date-time }
+                  tasks: { type: array, items: { type: object } }
+            application/yaml:
+              schema:
+                type: object
+        "403": { $ref: "#/components/responses/Error" }
+  /tasks/import:
+    post:
+      summary: Import task definitions from a previously exported envelope; creates tasks in a single batch with per-task conflict handling (#238).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: dry_run
+          in: query
+          schema: { type: boolean, default: false }
+          description: Validate and return the plan without writing.
+        - name: conflict
+          in: query
+          schema: { type: string, enum: [error, skip, replace], default: error }
+          description: Name-collision handling. conflict=replace additionally requires admin.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version: { type: string }
+                exported_at: { type: string, format: date-time }
+                tasks: { type: array, items: { type: object } }
+          application/yaml:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Import result (all records created/skipped/replaced, or dry_run).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dry_run: { type: boolean }
+                  total: { type: integer }
+                  created: { type: integer }
+                  skipped: { type: integer }
+                  replaced: { type: integer }
+                  errors: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        status: { type: string, enum: [created, skipped, replaced, error] }
+                        id: { type: string, format: uuid }
+                        reason: { type: string }
+                        error: { type: string }
+        "207":
+          description: Multi-status — one or more records errored but others succeeded.
+        "409": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}:
     parameters:
       - name: task_id

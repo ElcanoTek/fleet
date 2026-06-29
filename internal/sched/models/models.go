@@ -73,6 +73,81 @@ type CredentialAllowlistEntry struct {
 // JSONB column (NULL ⇒ nil) rather than coerced to an empty array.
 type CredentialAllowlist []CredentialAllowlistEntry
 
+// RunIfOnErrorRun and RunIfOnErrorSkip are the two recognized on_error values
+// for a RunIf gate (#269): "run" runs the task anyway when the check itself
+// errors (the safe default), "skip" skips the task when the check errors.
+const (
+	RunIfOnErrorRun  = "run"
+	RunIfOnErrorSkip = "skip"
+)
+
+// RunIf is the optional pre-run shell gate for a scheduled task (#269): when
+// set, the scheduler evaluates Command on the host (NOT in the sandbox — it is
+// a lightweight gate, not an agent tool call) before promoting a due task. The
+// task is promoted only when the command exits with ExitCodeIs; otherwise it is
+// skipped (next_run_at advances, skip_count increments). nil = the legacy
+// unconditional promotion path; existing tasks are unaffected.
+//
+// IMPORTANT (security note encoded in the schema): the check runs on the host
+// as the fleet process user with a restricted PATH. It is NOT a sandboxed agent
+// tool call — by design, so a misconfigured check cannot burn a model budget or
+// touch MCP credentials — but it DOES mean a run_if command has the host-user
+// privileges of the fleet process. Operators must treat run_if commands as
+// trusted, exactly like the fleet binary itself; the validation path rejects
+// empty commands but does not sandbox them.
+type RunIf struct {
+	// Command is the shell command evaluated by `sh -c`. Must be non-empty when
+	// RunIf is present. Bash-specific constructs are NOT guaranteed — use POSIX sh.
+	Command string `json:"command"`
+	// ExitCodeIs is the exit code that means "run the task". Default 0.
+	ExitCodeIs int `json:"exit_code_is,omitempty"`
+	// TimeoutSeconds is the hard wall-clock timeout for the check, enforced via
+	// exec.CommandContext. Clamped to [1, 300] at validation; default 30.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// OnError governs the check-itself-errored case (timeout, crash, signal):
+	//   "run"  (default) — run the task anyway (safe default)
+	//   "skip"           — skip the task
+	OnError string `json:"on_error,omitempty"`
+}
+
+// Validate rejects a statically-broken RunIf at task creation so a misconfigured
+// gate fails fast rather than always-skipping or always-running at runtime. A
+// nil RunIf is always valid (the legacy unconditional path).
+func (r *RunIf) Validate() error {
+	if r == nil {
+		return nil
+	}
+	if strings.TrimSpace(r.Command) == "" {
+		return fmt.Errorf("run_if.command must be non-empty")
+	}
+	if r.TimeoutSeconds < 1 || r.TimeoutSeconds > 300 {
+		return fmt.Errorf("run_if.timeout_seconds must be between 1 and 300")
+	}
+	switch r.OnError {
+	case "", RunIfOnErrorRun, RunIfOnErrorSkip:
+	default:
+		return fmt.Errorf("run_if.on_error must be %q or %q (got %q)", RunIfOnErrorRun, RunIfOnErrorSkip, r.OnError)
+	}
+	return nil
+}
+
+// EffectiveOnError returns the resolved on_error policy, defaulting to "run"
+// (the safe default — run the task anyway when the check itself errors).
+func (r *RunIf) EffectiveOnError() string {
+	if r == nil || r.OnError == "" {
+		return RunIfOnErrorRun
+	}
+	return r.OnError
+}
+
+// EffectiveTimeoutSeconds returns the resolved timeout, defaulting to 30s.
+func (r *RunIf) EffectiveTimeoutSeconds() int {
+	if r == nil || r.TimeoutSeconds <= 0 {
+		return 30
+	}
+	return r.TimeoutSeconds
+}
+
 // DefaultLoopMaxIterations bounds a loop whose config omits MaxIterations.
 const DefaultLoopMaxIterations = 5
 
@@ -577,6 +652,13 @@ func NewNode(reg NodeRegistration) *Node {
 
 // TaskCreate is the request model for creating a new task.
 type TaskCreate struct {
+	// Name is an optional, human-readable label for the task (#238). It is the
+	// identity key used by the task-definition import/export endpoints
+	// (GET /tasks/export, POST /tasks/import) for conflict detection on import.
+	// Empty = unnamed (the historical default); a non-empty name must be unique
+	// across tasks (enforced by a partial DB unique index). Not injected into the
+	// agent prompt; purely an operator convenience + import/export key.
+	Name          string       `json:"name,omitempty"`
 	Prompt        string       `json:"prompt"`
 	Model         *string      `json:"model,omitempty"`
 	FallbackModel *string      `json:"fallback_model,omitempty"`
@@ -651,6 +733,10 @@ type TaskCreate struct {
 	// create_task (#277), for audit/lineage. Set server-side by the create_task
 	// tool, NOT by external clients (it is ignored on the public POST /tasks path).
 	CreatedByTaskID *uuid.UUID `json:"created_by_task_id,omitempty"`
+	// RunIf, when non-nil, is the pre-run shell gate (#269): the scheduler
+	// evaluates Command on the host before promoting a due task and skips it when
+	// the check fails. nil = the legacy unconditional promotion path. See RunIf.
+	RunIf *RunIf `json:"run_if,omitempty"`
 	// ExpectedDurationMinutes is the operator's expectation for typical runtime
 	// (#274 SLA monitoring). Nil means no SLA is configured for this task; the
 	// SLA monitor goroutine ignores it. When set, the warn/fail thresholds are
@@ -684,7 +770,10 @@ const (
 
 // Task represents a task to be executed by a worker.
 type Task struct {
-	ID            uuid.UUID    `json:"id"`
+	ID uuid.UUID `json:"id"`
+	// Name is the optional operator label / import-export identity key (#238).
+	// Empty = unnamed. See TaskCreate.Name.
+	Name          string       `json:"name,omitempty"`
 	Prompt        string       `json:"prompt"`
 	Model         *string      `json:"model,omitempty"`
 	FallbackModel *string      `json:"fallback_model,omitempty"`
@@ -779,6 +868,19 @@ type Task struct {
 	// create_task (#277). nil for tasks not spawned by a task. Persisted; set
 	// server-side, not settable by external clients.
 	CreatedByTaskID *uuid.UUID `json:"created_by_task_id,omitempty"`
+	// RunIf, when non-nil, is the pre-run shell gate (#269). See TaskCreate.RunIf.
+	RunIf *RunIf `json:"run_if,omitempty"`
+	// SkipCount is how many times this task's RunIf gate has failed and the
+	// occurrence was skipped (#269). The task stays `scheduled` and its
+	// scheduled_for advances to the next cron tick; this counter accumulates.
+	SkipCount int `json:"skip_count,omitempty"`
+	// LastSkipAt is when the most recent RunIf failure skipped this task (#269).
+	// nil when the task has never been skipped. Persisted; set server-side.
+	LastSkipAt *time.Time `json:"last_skip_at,omitempty"`
+	// LastSkipReason is the human-readable reason captured on the most recent skip
+	// (#269): the failing command's exit code + stderr, or "check timed out".
+	// nil when the task has never been skipped. Persisted; set server-side.
+	LastSkipReason *string `json:"last_skip_reason,omitempty"`
 	// ExpectedDurationMinutes is the operator's expectation for typical runtime
 	// (#274 SLA monitoring). Nil means no SLA is configured; the monitor ignores
 	// the task. See TaskCreate.ExpectedDurationMinutes.
@@ -837,6 +939,7 @@ func NewTask(tc TaskCreate) *Task {
 
 	return &Task{
 		ID:                         uuid.New(),
+		Name:                       tc.Name,
 		Prompt:                     tc.Prompt,
 		Model:                      tc.Model,
 		FallbackModel:              tc.FallbackModel,
@@ -863,6 +966,7 @@ func NewTask(tc TaskCreate) *Task {
 		AllowTaskCreation:          tc.AllowTaskCreation,
 		AllowRecurringTaskCreation: tc.AllowRecurringTaskCreation,
 		CreatedByTaskID:            tc.CreatedByTaskID,
+		RunIf:                      tc.RunIf,
 		ExpectedDurationMinutes:    tc.ExpectedDurationMinutes,
 		SLAWarnMultiplier:          warnMul,
 		SLAFailMultiplier:          failMul,
@@ -907,6 +1011,38 @@ func derefOr(p *int, def int) int {
 	return *p
 }
 
+// BatchTaskCreate is the request body for POST /tasks/batch (#227): a slice of
+// TaskCreate recipes plus an atomicity flag. atomic=false (default) is
+// best-effort (207 Multi-Status on partial failure); atomic=true wraps every
+// insert in a single DB transaction so a single validation failure aborts all.
+type BatchTaskCreate struct {
+	Tasks  []TaskCreate `json:"tasks"`
+	Atomic bool         `json:"atomic,omitempty"`
+}
+
+// BatchCreated pairs an assigned task UUID with the index it held in the
+// request slice, so a caller can correlate results without relying on order.
+type BatchCreated struct {
+	ID    uuid.UUID `json:"id"`
+	Index int       `json:"index"`
+}
+
+// BatchFailed records the request index and human-readable error for a task the
+// batch could not create (validation or DB failure).
+type BatchFailed struct {
+	Index int    `json:"index"`
+	Error string `json:"error"`
+}
+
+// BatchTaskResult is the response body for POST /tasks/batch in both modes. The
+// HTTP status carries the outcome class: 200 all-succeeded, 207 partial
+// (non-atomic only), 422 total failure (atomic rollback or every task invalid).
+type BatchTaskResult struct {
+	Created []BatchCreated `json:"created"`
+	Failed  []BatchFailed  `json:"failed"`
+	Count   int            `json:"count"`
+}
+
 // TaskToCreate rebuilds the TaskCreate "recipe" from an existing task — the
 // inverse of NewTask over the create-relevant fields. It is the basis for re-run
 // / clone (#270): the caller adjusts ScheduledFor / Recurrence and applies any
@@ -915,6 +1051,7 @@ func derefOr(p *int, def int) int {
 func TaskToCreate(t *Task) TaskCreate {
 	maxRetries := t.MaxRetries
 	return TaskCreate{
+		Name:                   t.Name,
 		Prompt:                 t.Prompt,
 		Model:                  t.Model,
 		FallbackModel:          t.FallbackModel,
@@ -940,6 +1077,10 @@ func TaskToCreate(t *Task) TaskCreate {
 		// like SourceTaskID, and is intentionally NOT carried.
 		AllowTaskCreation:          t.AllowTaskCreation,
 		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
+		// RunIf is part of the create-recipe so a re-run/clone keeps the same
+		// pre-run gate (#269). Skip tracking fields (SkipCount, LastSkipAt,
+		// LastSkipReason) are per-occurrence telemetry, NOT carried.
+		RunIf: t.RunIf,
 		// SLA config is part of the recipe so a re-run/clone keeps the same
 		// expected-duration + multiplier posture (#274). SLABreached /
 		// ActualDurationSeconds are runtime-only (like Status / AttemptCount)
@@ -947,6 +1088,181 @@ func TaskToCreate(t *Task) TaskCreate {
 		ExpectedDurationMinutes: t.ExpectedDurationMinutes,
 		SLAWarnMultiplier:       t.SLAWarnMultiplier,
 		SLAFailMultiplier:       t.SLAFailMultiplier,
+	}
+}
+
+// TaskExportRecord is the portable definition of a single scheduled task (#238).
+// It is a subset of TaskCreate — every field here maps 1:1 to a TaskCreate
+// field. Runtime state (id, created_at, status, attempt_count, lease, result,
+// created_by, …) is intentionally excluded so an export envelope carries only
+// the configuration needed to recreate a task on a target box.
+type TaskExportRecord struct {
+	// Name is the human-readable label used for conflict detection on import.
+	// Empty = unnamed (the task is always created fresh on import). Non-empty
+	// must be unique within the target deployment (enforced by a partial DB
+	// unique index). It maps to TaskCreate.Name.
+	Name                       string              `json:"name,omitempty"                       yaml:"name,omitempty"`
+	Prompt                     string              `json:"prompt"                               yaml:"prompt"`
+	Model                      *string             `json:"model,omitempty"                      yaml:"model,omitempty"`
+	FallbackModel              *string             `json:"fallback_model,omitempty"             yaml:"fallback_model,omitempty"`
+	MaxIterations              *int                `json:"max_iterations,omitempty"             yaml:"max_iterations,omitempty"`
+	MCPSelection               MCPSelection        `json:"mcp_selection,omitempty"              yaml:"mcp_selection,omitempty"`
+	CredentialAllowlist        CredentialAllowlist `json:"credential_allowlist,omitempty" yaml:"credential_allowlist,omitempty"`
+	LoopConfig                 *LoopConfig         `json:"loop_config,omitempty"                yaml:"loop_config,omitempty"`
+	WorktreeConfig             *WorktreeConfig     `json:"worktree_config,omitempty"         yaml:"worktree_config,omitempty"`
+	Priority                   int                 `json:"priority,omitempty"                   yaml:"priority,omitempty"`
+	InstructionSelfImprove     bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
+	AllowNetwork               bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
+	Persona                    string              `json:"persona,omitempty"                    yaml:"persona,omitempty"`
+	Description                string              `json:"description,omitempty"                yaml:"description,omitempty"`
+	ScheduledFor               *time.Time          `json:"scheduled_for,omitempty"              yaml:"scheduled_for,omitempty"`
+	Recurrence                 string              `json:"recurrence,omitempty"                 yaml:"recurrence,omitempty"`
+	Timezone                   string              `json:"timezone,omitempty"                   yaml:"timezone,omitempty"`
+	Files                      []string            `json:"files,omitempty"                      yaml:"files,omitempty"`
+	Tags                       []string            `json:"tags,omitempty"                       yaml:"tags,omitempty"`
+	MaxRetries                 *int                `json:"max_retries,omitempty"                yaml:"max_retries,omitempty"`
+	RetryPolicy                *RetryPolicy        `json:"retry_policy,omitempty"               yaml:"retry_policy,omitempty"`
+	TriggerType                TriggerType         `json:"trigger_type,omitempty"               yaml:"trigger_type,omitempty"`
+	AllowTaskCreation          bool                `json:"allow_task_creation,omitempty"        yaml:"allow_task_creation,omitempty"`
+	AllowRecurringTaskCreation bool                `json:"allow_recurring_task_creation,omitempty" yaml:"allow_recurring_task_creation,omitempty"`
+}
+
+// TaskExportVersion is the current envelope schema version. Bump only on an
+// incompatible shape change; import rejects an unknown version rather than
+// guessing. v1 is the initial format (#238).
+const TaskExportVersion = "1"
+
+// TaskExportEnvelope is the top-level container for exported task definitions
+// (#238). The version field allows format evolution without breaking importers;
+// exported_at is a server-side timestamp.
+type TaskExportEnvelope struct {
+	Version    string             `json:"version"      yaml:"version"`
+	ExportedAt time.Time          `json:"exported_at"  yaml:"exported_at"`
+	Tasks      []TaskExportRecord `json:"tasks"        yaml:"tasks"`
+}
+
+// TaskImportConflict controls what happens when an imported task name collides
+// with an existing task on the target (#238).
+type TaskImportConflict string
+
+const (
+	// TaskImportConflictError (default) aborts the entire import (HTTP 409)
+	// before any writes when any name collides.
+	TaskImportConflictError TaskImportConflict = "error"
+	// TaskImportConflictSkip leaves the existing task untouched and creates the
+	// non-colliding records.
+	TaskImportConflictSkip TaskImportConflict = "skip"
+	// TaskImportConflictReplace updates the colliding task in place (matched by
+	// name); non-colliding tasks are created. Requires admin permission.
+	TaskImportConflictReplace TaskImportConflict = "replace"
+)
+
+// TaskImportResultStatus is the per-task outcome of an import.
+type TaskImportResultStatus string
+
+const (
+	TaskImportCreated  TaskImportResultStatus = "created"
+	TaskImportSkipped  TaskImportResultStatus = "skipped"
+	TaskImportReplaced TaskImportResultStatus = "replaced"
+	TaskImportErrored  TaskImportResultStatus = "error"
+)
+
+// TaskImportResult is the per-task outcome returned by POST /tasks/import (#238).
+type TaskImportResult struct {
+	Name   string                 `json:"name"`
+	Status TaskImportResultStatus `json:"status"`
+	ID     *uuid.UUID             `json:"id,omitempty"`
+	Reason string                 `json:"reason,omitempty"`
+	Error  string                 `json:"error,omitempty"`
+}
+
+// TaskImportResponse is the full response from POST /tasks/import (#238).
+type TaskImportResponse struct {
+	DryRun   bool               `json:"dry_run"`
+	Total    int                `json:"total"`
+	Created  int                `json:"created"`
+	Skipped  int                `json:"skipped"`
+	Replaced int                `json:"replaced"`
+	Errors   int                `json:"errors"`
+	Results  []TaskImportResult `json:"results"`
+}
+
+// ExportRecordToTaskCreate converts a portable TaskExportRecord back into the
+// TaskCreate "recipe" used to mint a fresh task (#238). It is the inverse of
+// TaskToExportRecord over the definition fields; runtime state is never carried
+// (NewTask assigns id/status/timestamps fresh on the target).
+func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
+	var maxRetries *int
+	if rec.MaxRetries != nil {
+		v := *rec.MaxRetries
+		maxRetries = &v
+	}
+	return TaskCreate{
+		Name:                       rec.Name,
+		Prompt:                     rec.Prompt,
+		Model:                      rec.Model,
+		FallbackModel:              rec.FallbackModel,
+		MaxIterations:              rec.MaxIterations,
+		MCPSelection:               rec.MCPSelection,
+		CredentialAllowlist:        rec.CredentialAllowlist,
+		LoopConfig:                 rec.LoopConfig,
+		WorktreeConfig:             rec.WorktreeConfig,
+		Priority:                   rec.Priority,
+		InstructionSelfImprove:     rec.InstructionSelfImprove,
+		AllowNetwork:               rec.AllowNetwork,
+		Persona:                    rec.Persona,
+		Description:                rec.Description,
+		ScheduledFor:               rec.ScheduledFor,
+		Recurrence:                 rec.Recurrence,
+		Timezone:                   rec.Timezone,
+		Files:                      rec.Files,
+		Tags:                       rec.Tags,
+		MaxRetries:                 maxRetries,
+		RetryPolicy:                rec.RetryPolicy,
+		TriggerType:                rec.TriggerType,
+		AllowTaskCreation:          rec.AllowTaskCreation,
+		AllowRecurringTaskCreation: rec.AllowRecurringTaskCreation,
+	}
+}
+
+// TaskToExportRecord extracts the portable definition of a Task — the inverse of
+// ExportRecordToTaskCreate. Runtime fields (id, status, attempt_count, lease,
+// results, created_by, timestamps, dead-letter, lineage) are dropped so an
+// export envelope carries only the configuration needed to recreate the task.
+func TaskToExportRecord(t *Task) TaskExportRecord {
+	// MaxRetries is an int on Task (0 = no retries) but a *int on the export
+	// record. Preserve a non-zero value; drop 0 (omitempty) so the default
+	// round-trips as "unset" rather than a redundant explicit zero.
+	var maxRetries *int
+	if t.MaxRetries != 0 {
+		v := t.MaxRetries
+		maxRetries = &v
+	}
+	return TaskExportRecord{
+		Name:                       t.Name,
+		Prompt:                     t.Prompt,
+		Model:                      t.Model,
+		FallbackModel:              t.FallbackModel,
+		MaxIterations:              t.MaxIterations,
+		MCPSelection:               t.MCPSelection,
+		CredentialAllowlist:        t.CredentialAllowlist,
+		LoopConfig:                 t.LoopConfig,
+		WorktreeConfig:             t.WorktreeConfig,
+		Priority:                   t.Priority,
+		InstructionSelfImprove:     t.InstructionSelfImprove,
+		AllowNetwork:               t.AllowNetwork,
+		Persona:                    t.Persona,
+		Description:                t.Description,
+		ScheduledFor:               t.ScheduledFor,
+		Recurrence:                 t.Recurrence,
+		Timezone:                   t.Timezone,
+		Files:                      t.Files,
+		Tags:                       t.Tags,
+		MaxRetries:                 maxRetries,
+		RetryPolicy:                t.RetryPolicy,
+		TriggerType:                t.TriggerType,
+		AllowTaskCreation:          t.AllowTaskCreation,
+		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
 	}
 }
 

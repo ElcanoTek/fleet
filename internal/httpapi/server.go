@@ -843,15 +843,77 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 		}
 		writeJSON(w, map[string]any{"conversations": list})
 	case http.MethodDelete:
-		// Bulk delete — removes every unpinned conversation for this user.
-		// Pinned conversations are intentionally untouched; a user who
-		// wants those gone clicks Delete on each individually.
-		n, err := s.store.DeleteAllUnpinned(r.Context(), user)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		// Bulk delete (#279). Two modes, mutually exclusive:
+		//
+		//   • targeted:  { "conversation_ids": [...], "confirm": true }
+		//     deletes exactly those IDs (max 100). A foreign or unknown ID
+		//     aborts the whole request with 403 and deletes nothing.
+		//
+		//   • all_matching: { "all_matching": true, "confirm": true }
+		//     with optional ?folder=&label= query filters. Requires
+		//     confirm:true so an accidental bulk wipe can't fire. With no
+		//     filter this replicates the legacy "nuke all unpinned" behavior.
+		//
+		// A request with neither conversation_ids nor all_matching falls
+		// back to the legacy DeleteAllUnpinned path (back-compat for older
+		// clients that issued a bare DELETE /conversations), preserving the
+		// historical affordance.
+		var req struct {
+			ConversationIDs []string `json:"conversation_ids"`
+			AllMatching     bool     `json:"all_matching"`
+			Confirm         bool     `json:"confirm"`
 		}
-		writeJSON(w, map[string]any{"deleted": n})
+		if r.Body != nil {
+			// An empty body is allowed (legacy bare DELETE → DeleteAllUnpinned);
+			// decode errors on a truly empty reader are swallowed.
+			_ = json.NewDecoder(r.Body).Decode(&req)
+		}
+
+		switch {
+		case req.AllMatching:
+			// Filter-based bulk delete. confirm:true is mandatory so a stray
+			// request can't wipe a user's history.
+			if !req.Confirm {
+				http.Error(w, `"confirm": true required for all_matching bulk delete`, http.StatusBadRequest)
+				return
+			}
+			if len(req.ConversationIDs) > 0 {
+				http.Error(w, "conversation_ids is mutually exclusive with all_matching", http.StatusBadRequest)
+				return
+			}
+			folder := r.URL.Query().Get("folder")
+			label := r.URL.Query().Get("label")
+			n, err := s.store.DeleteAllMatching(r.Context(), user, folder, label)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]any{"deleted": n})
+		case len(req.ConversationIDs) > 0:
+			// Targeted bulk delete by explicit ID list.
+			if len(req.ConversationIDs) > 100 {
+				http.Error(w, "max 100 conversation_ids per request", http.StatusBadRequest)
+				return
+			}
+			n, err := s.store.DeleteByIDs(r.Context(), user, req.ConversationIDs)
+			if errors.Is(err, store.ErrForeignConversation) {
+				http.Error(w, "one or more conversation IDs not owned by caller", http.StatusForbidden)
+				return
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]any{"deleted": n})
+		default:
+			// Legacy bare DELETE /conversations → DeleteAllUnpinned.
+			n, err := s.store.DeleteAllUnpinned(r.Context(), user)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]any{"deleted": n})
+		}
 	case http.MethodPost:
 		var req createConversationRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -887,9 +949,51 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// bulkPatchConversations handles PATCH /conversations/bulk (#279): applies the
+// same additive mutation (pinned / folder / labels) to up to 100 conversations
+// in a single transaction. A nil pointer in `changes` (an omitted field) means
+// "leave untouched"; a non-nil pointer — including an empty labels slice —
+// overwrites the stored value. A foreign or unknown ID returns 403 and rolls
+// the whole transaction back so nothing is partially mutated.
+func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) {
+	user := userFromCtx(r.Context())
+	var req struct {
+		ConversationIDs []string `json:"conversation_ids"`
+		Changes         struct {
+			Pinned *bool    `json:"pinned"`
+			Folder *string  `json:"folder"`
+			Labels []string `json:"labels"`
+		} `json:"changes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(req.ConversationIDs) == 0 || len(req.ConversationIDs) > 100 {
+		http.Error(w, "conversation_ids must be 1–100 items", http.StatusBadRequest)
+		return
+	}
+	// At least one change must be supplied — a bare PATCH with an empty changes
+	// object is a no-op the caller almost certainly didn't intend.
+	if req.Changes.Pinned == nil && req.Changes.Folder == nil && req.Changes.Labels == nil {
+		http.Error(w, "changes must include at least one of pinned, folder, labels", http.StatusBadRequest)
+		return
+	}
+	n, err := s.store.BulkPatch(r.Context(), user, req.ConversationIDs, req.Changes.Pinned, req.Changes.Folder, req.Changes.Labels)
+	if errors.Is(err, store.ErrForeignConversation) {
+		http.Error(w, "one or more conversation IDs not owned by caller", http.StatusForbidden)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"updated": n})
+}
+
 // /conversations/{id}
 // /conversations/{id}/pin
-// /conversations/{id}/messages
+// /conversations/{id}/messages//
 //
 //nolint:gocyclo // sub-route dispatcher: complexity tracks the number of routes, not branch density
 func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
@@ -908,6 +1012,16 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 3 {
 		subArg = parts[2]
+	}
+
+	// Bulk patch (#279): PATCH /conversations/bulk applies the same additive
+	// mutation (pinned / folder / labels) to multiple conversations in a single
+	// transaction. Routed here because /conversations/bulk falls under the
+	// /conversations/ prefix; "bulk" is a reserved pseudo-id, never a UUID, so
+	// it can't collide with a real conversation.
+	if rest == "bulk" && r.Method == http.MethodPatch {
+		s.bulkPatchConversations(w, r)
+		return
 	}
 
 	// Approval resolution lives at /conversations/{id}/approvals/{approvalId}.

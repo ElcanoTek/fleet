@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	// Register pgx as the "pgx" database/sql driver.
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/lib/pq"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 )
@@ -36,12 +37,25 @@ type Store struct {
 	// no-op, so a high-write deployment can opt out of GIN index upkeep
 	// (FLEET_SEARCH_ENABLED=false). Defaults to true. Set via SetSearchEnabled.
 	searchEnabled bool
+	// softDelete gates soft-delete behavior (#279): when true, Delete / DeleteByIDs
+	// / DeleteAllUnpinned set deleted_at = NOW() instead of issuing a hard DELETE,
+	// and List / Get / search hide rows whose deleted_at is set. Defaults to false
+	// (hard delete — no behavior change for existing deployments). Set via
+	// SetSoftDelete from FLEET_CONVERSATION_SOFT_DELETE.
+	softDelete bool
 }
 
 // SetSearchEnabled toggles full-text search index maintenance. cmd/fleet calls
 // this from config (FLEET_SEARCH_ENABLED) right after Open. Off → AppendHistory
 // stops populating message_search_content and BackfillSearchContent no-ops.
 func (s *Store) SetSearchEnabled(enabled bool) { s.searchEnabled = enabled }
+
+// SetSoftDelete toggles soft-delete mode. cmd/fleet calls this from config
+// (FLEET_CONVERSATION_SOFT_DELETE) right after Open. On → delete operations
+// tombstone rows via deleted_at and reads hide them; a 30-day sweeper (run
+// inside SweepExpired) permanently removes expired tombstones. Off (default)
+// → delete is a hard DELETE, unchanged from the historical behavior.
+func (s *Store) SetSoftDelete(enabled bool) { s.softDelete = enabled }
 
 // Conversation is the list-item shape exposed to handlers.
 type Conversation struct {
@@ -79,7 +93,24 @@ type Conversation struct {
 	// While true, the background auto-titler skips it so a manual name is never
 	// silently overwritten.
 	TitleLocked bool `json:"title_locked"`
+	// Folder is a free-form bucket name (e.g. "Archive", "Old work") used by
+	// bulk move (#279). Empty string is the default "no folder" state. Set via
+	// PATCH /conversations/bulk with changes.folder.
+	Folder string `json:"folder,omitempty"`
+	// Labels is a tag set for grouping/filtering (#279). Empty = unlabeled.
+	// Set via PATCH /conversations/bulk with changes.labels.
+	Labels []string `json:"labels,omitempty"`
+	// DeletedAt is the soft-delete tombstone (#279). nil = live; non-nil unix
+	// seconds = soft-deleted (hidden from GET /conversations and search). Only
+	// ever set when FLEET_CONVERSATION_SOFT_DELETE=true; the default hard-delete
+	// path removes the row outright so this stays nil.
+	DeletedAt *int64 `json:"deleted_at,omitempty"`
 }
+
+// ErrForeignConversation is returned by DeleteByIDs / BulkPatch when one or
+// more of the supplied IDs do not belong to the caller (or do not exist). The
+// HTTP layer surfaces it as 403 and the whole operation is a no-op.
+var ErrForeignConversation = errors.New("one or more conversation IDs not owned by caller")
 
 // ErrTitleLocked is returned by UpdateTitle when the conversation's title is
 // locked by a manual rename (#302) — the auto-titler treats it as "skip", not a
@@ -380,8 +411,25 @@ func (s *Store) AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int,
 	return int(n), nil
 }
 
-// Delete removes a conversation and (via FK cascade) its messages.
+// Delete removes a conversation and (via FK cascade) its messages. When
+// FLEET_CONVERSATION_SOFT_DELETE=true it instead tombstones the row
+// (deleted_at = NOW()) so a future restore can undelete it; the hard DELETE
+// is deferred to the 30-day sweeper in SweepExpired.
 func (s *Store) Delete(ctx context.Context, userEmail, convID string) error {
+	if s.softDelete {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1 WHERE id = $2 AND user_email = $3 AND deleted_at IS NULL`,
+			time.Now().Unix(), convID, userEmail,
+		)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return errors.New("conversation not found")
+		}
+		return nil
+	}
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM conversations WHERE id = $1 AND user_email = $2`,
 		convID, userEmail,
@@ -399,13 +447,160 @@ func (s *Store) Delete(ctx context.Context, userEmail, convID string) error {
 // DeleteAllUnpinned removes every unpinned conversation for a user. Pinned
 // conversations — and archived ones (#282), which the user can't see when
 // triggering this from the sidebar and which represent an intentional "keep"
-// state — are untouched. Returns the count removed.
+// state — are untouched. Returns the count removed. In soft-delete mode it
+// tombstones instead of hard-deleting.
 func (s *Store) DeleteAllUnpinned(ctx context.Context, userEmail string) (int, error) {
+	if s.softDelete {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
+			 WHERE user_email = $2 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL`,
+			time.Now().Unix(), userEmail,
+		)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		return int(n), nil
+	}
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM conversations WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL`,
 		userEmail,
 	)
 	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// DeleteByIDs removes the conversations identified by ids, scoped by ownership.
+// Returns ErrForeignConversation (mapped to 403 by the HTTP layer) if any
+// supplied ID is not owned by the caller or does not exist — in that case the
+// whole operation is a no-op. In soft-delete mode it tombstones instead of
+// hard-deleting. The caller is responsible for capping len(ids) (HTTP layer
+// enforces 100).
+func (s *Store) DeleteByIDs(ctx context.Context, userEmail string, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	// Ownership pre-check: every supplied ID must exist and belong to the
+	// caller. A foreign or unknown ID aborts the whole request — never a
+	// partial delete — matching the issue's "one foreign ID aborts the whole
+	// request" policy.
+	var owned int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM conversations WHERE id = ANY($1) AND user_email = $2 AND deleted_at IS NULL`,
+		pq.Array(ids), userEmail,
+	).Scan(&owned); err != nil {
+		return 0, err
+	}
+	if owned != len(ids) {
+		return 0, ErrForeignConversation
+	}
+	if s.softDelete {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
+			 WHERE id = ANY($2) AND user_email = $3 AND deleted_at IS NULL`,
+			time.Now().Unix(), pq.Array(ids), userEmail,
+		)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		return int(n), nil
+	}
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM conversations WHERE id = ANY($1) AND user_email = $2`,
+		pq.Array(ids), userEmail,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// DeleteAllMatching removes (or, in soft-delete mode, tombstones) every
+// conversation for the user matching the optional folder and label filters.
+// An empty folder string is treated as "no folder filter"; pass a non-empty
+// folder to target a bucket. An empty label is "no label filter". Returns the
+// count affected.
+//
+// The query binds both filters as parameters with an `$n = ”` short-circuit so
+// no SQL is concatenated from the inputs (defense against injection-by-clause).
+func (s *Store) DeleteAllMatching(ctx context.Context, userEmail, folder, label string) (int, error) {
+	now := time.Now().Unix()
+	if s.softDelete {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
+			 WHERE user_email = $2 AND pinned = FALSE AND deleted_at IS NULL
+			   AND ($3 = '' OR folder = $3)
+			   AND ($4 = '' OR $4 = ANY(labels))`,
+			now, userEmail, folder, label,
+		)
+		if err != nil {
+			return 0, err
+		}
+		c, _ := res.RowsAffected()
+		return int(c), nil
+	}
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM conversations
+		 WHERE user_email = $1 AND pinned = FALSE AND deleted_at IS NULL
+		   AND ($2 = '' OR folder = $2)
+		   AND ($3 = '' OR $3 = ANY(labels))`,
+		userEmail, folder, label,
+	)
+	if err != nil {
+		return 0, err
+	}
+	c, _ := res.RowsAffected()
+	return int(c), nil
+}
+
+// BulkPatch applies the supplied mutations to the conversations identified by
+// ids in a single transaction. A nil pointer (pinned / folder / labels) means
+// "leave that field untouched"; a non-nil pointer — including an empty labels
+// slice — overwrites the stored value. Returns ErrForeignConversation (mapped to
+// 403) if any supplied ID is foreign or unknown; the transaction rolls back so
+// nothing is mutated. The caller caps len(ids) (HTTP layer enforces 100).
+func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, pinned *bool, folder *string, labels []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Ownership pre-check: count rows the caller owns (and that are live).
+	var owned int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM conversations WHERE id = ANY($1) AND user_email = $2 AND deleted_at IS NULL`,
+		pq.Array(ids), userEmail,
+	).Scan(&owned); err != nil {
+		return 0, err
+	}
+	if owned != len(ids) {
+		return 0, ErrForeignConversation
+	}
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE conversations
+         SET pinned     = COALESCE($3, pinned),
+             folder     = COALESCE($4, folder),
+             labels     = COALESCE($5, labels),
+             updated_at = $6
+         WHERE id = ANY($1) AND user_email = $2 AND deleted_at IS NULL`,
+		pq.Array(ids), userEmail,
+		pinned, folder, pq.Array(labels),
+		time.Now().Unix(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
@@ -423,8 +618,8 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 		archivedFilter = "archived_at IS NOT NULL"
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled
-		 FROM conversations WHERE user_email = $1 AND `+archivedFilter+`
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels
+		 FROM conversations WHERE user_email = $1 AND `+archivedFilter+` AND deleted_at IS NULL
 		 ORDER BY pinned DESC, updated_at DESC, id DESC`,
 		userEmail,
 	)
@@ -437,7 +632,7 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 	for rows.Next() {
 		var c Conversation
 		var optionalRaw []byte
-		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels)); err != nil {
 			return nil, err
 		}
 		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
@@ -449,13 +644,13 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 // Get fetches a single conversation (without messages).
 func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled
-		 FROM conversations WHERE id = $1 AND user_email = $2`,
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels
+		 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
 		convID, userEmail,
 	)
 	var c Conversation
 	var optionalRaw []byte
-	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw); err != nil {
+	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels)); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1027,6 +1222,13 @@ func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 // unpinnedCap per user. Returns counts (for logging) and any error.
 //
 // Called at server startup and after every successful turn.
+//
+// Soft-delete (#279): when enabled, the TTL sweep tombstones rows
+// (deleted_at = NOW()) instead of hard-deleting, and an additional 30-day
+// purge step permanently removes rows whose deleted_at fell out of window —
+// the deferred half of the soft-delete contract. The per-user cap path still
+// hard-evicts (cap overflow is an operator-set retention limit, not a user
+// action), and skips already-tombstoned rows so the count stays honest.
 func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap int) (expired int, evicted int, err error) {
 	cutoff := time.Now().Add(-ttl).Unix()
 
@@ -1034,25 +1236,55 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	// like pinned ones: archiving is a user-intentional "keep, but decluttered"
 	// state, so it must not be hard-deleted by the TTL or evicted by the cap.
 
-	// 1. TTL sweep.
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND updated_at < $1`,
-		cutoff,
+	// 0. Soft-delete tombstone purge (#279): permanently remove rows soft-deleted
+	//    more than 30 days ago. Runs regardless of the soft-delete flag so a
+	//    deployment that toggles it off still reaps any prior tombstones; a no-op
+	//    when no rows match. Counted in `expired` so the log line reflects total
+	//    reaped rows.
+	purgeRes, err := s.db.ExecContext(ctx,
+		`DELETE FROM conversations WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days'`,
 	)
 	if err != nil {
-		return 0, 0, fmt.Errorf("ttl sweep: %w", err)
+		return 0, 0, fmt.Errorf("soft-delete purge: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	expired = int(n)
+	pn, _ := purgeRes.RowsAffected()
+	expired += int(pn)
+
+	// 1. TTL sweep.
+	if s.softDelete {
+		// Tombstone instead of hard-delete: the row survives for the 30-day
+		// restore window. Only touches live rows (deleted_at IS NULL) so a
+		// re-sweep never re-tombstones.
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
+			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND updated_at < $2`,
+			time.Now().Unix(), cutoff,
+		)
+		if err != nil {
+			return expired, 0, fmt.Errorf("ttl sweep: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		expired += int(n)
+	} else {
+		res, err := s.db.ExecContext(ctx,
+			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND updated_at < $1`,
+			cutoff,
+		)
+		if err != nil {
+			return expired, 0, fmt.Errorf("ttl sweep: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		expired += int(n)
+	}
 
 	// 2. Per-user cap. Find user emails that have >unpinnedCap unpinned,
-	//    non-archived rows.
+	//    non-archived, live rows.
 	if unpinnedCap <= 0 {
 		return expired, 0, nil
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT user_email, COUNT(*) FROM conversations
-		 WHERE pinned = FALSE AND archived_at IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
+		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
 		unpinnedCap,
 	)
 	if err != nil {
@@ -1077,7 +1309,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		res, err := s.db.ExecContext(ctx,
 			`DELETE FROM conversations WHERE id IN (
 			    SELECT id FROM conversations
-			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL
+			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL
 			    ORDER BY updated_at DESC, id DESC
 			    OFFSET $2
 			 )`,

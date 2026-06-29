@@ -227,6 +227,14 @@ func run() error {
 	// message-content index for any pre-FTS messages in the background so startup
 	// isn't blocked on a large walk. Idempotent + batched (see BackfillSearchContent).
 	chatStore.SetSearchEnabled(cfg.SearchEnabled)
+	// Conversation soft-delete (#279): honor FLEET_CONVERSATION_SOFT_DELETE. When
+	// enabled, delete operations tombstone rows (deleted_at = NOW()) instead of
+	// hard-deleting; reads hide tombstoned rows and SweepExpired permanently
+	// purges rows older than 30 days. Default off = unchanged hard-delete behavior.
+	chatStore.SetSoftDelete(cfg.ConversationSoftDelete)
+	if cfg.ConversationSoftDelete {
+		log.Printf("conversation soft-delete: ENABLED (deleted rows tombstoned, purged after 30 days)")
+	}
 	if cfg.SearchEnabled {
 		safe.Go("store.fts-backfill", func() {
 			bfCtx, bfCancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -682,8 +690,12 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Get("/nodes/{node_id}", h.GetNode)
 		r.Get("/tasks", h.ListTasks)
 		// /tasks/tags is registered before /tasks/{task_id} so the static segment
-		// wins over the wildcard (#212 tag catalogue).
+		// wins over the wildcard (#212 tag catalogue). /tasks/export and
+		// /tasks/import are likewise static segments that must precede the
+		// {task_id} wildcard (#238).
 		r.Get("/tasks/tags", h.GetTagCatalogue)
+		r.Get("/tasks/export", h.HandleTaskExport)
+		r.Post("/tasks/import", h.HandleTaskImport)
 		r.Get("/tasks/{task_id}", h.GetTask)
 		r.Put("/tasks/{task_id}", h.UpdateTask)
 		r.Post("/tasks/{task_id}/tags", h.UpdateTaskTags)
@@ -736,6 +748,13 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 	// (per-API-key + global), so a runaway key can't flood the task queue or
 	// drain the LLM budget. The admin key bypasses it (see SchedRateLimitMiddleware).
 	r.With(h.SchedRateLimitMiddleware).Post("/tasks", h.CreateTask)
+	// Batch task submission (#227): accepts up to MaxBatchSize TaskCreate recipes
+	// in one call. Atomic mode wraps the insert in a single transaction; the
+	// default (non-atomic) is best-effort with a 207 Multi-Status. Same auth +
+	// rate limiter as POST /tasks; the handler additionally charges the scoped
+	// key's hourly cap for (N-1) extra tasks so a batch is never a rate-limit
+	// bypass.
+	r.With(h.SchedRateLimitMiddleware).Post("/tasks/batch", h.CreateTaskBatch)
 	// Pre-submission cost forecast (#233): same body, auth, and rate limiter as
 	// POST /tasks, but pure local computation — it creates nothing.
 	r.With(h.SchedRateLimitMiddleware).Post("/tasks/estimate", h.EstimateTask)
