@@ -19,6 +19,15 @@ const (
 	nameDeadLettered  = "fleet_dead_letter_queued_total"
 	nameTasksSkipped  = "fleet_tasks_skipped_total"
 
+	// SLA monitoring (#274). Labeled by a BOUNDED task-name (the prompt's first
+	// line truncated to 64 chars — see slamonitor.TaskName), NOT a free-form
+	// prompt or per-run id, so the series set stays bounded across recurring
+	// tasks. A raw prompt label would grow the time-series set without bound
+	// (the cardinality anti-pattern the #263 sandbox gauges call out). Per-task
+	// attribution lives in the structured task log + the SLA report.
+	nameSLAWarn = "fleet_task_sla_warn_total"
+	nameSLAFail = "fleet_task_sla_fail_total"
+
 	// Per-task sandbox resource telemetry (#263). These are last-write-wins
 	// gauges reflecting the most recently FINISHED sandbox run, deliberately
 	// WITHOUT a task_id label: a task_id label would grow the time-series set
@@ -56,6 +65,32 @@ func RecordDeadLetterQueued(reason string) {
 	}
 	incCounter(nameDeadLettered, "Total tasks routed to the dead-letter queue, by reason class.",
 		[]string{"reason"}, []string{reason}, 1)
+}
+
+// RecordSLAWarn counts one in-flight task that crossed its SLA warn threshold
+// (#274), labeled by the bounded task-name (the prompt's first line, capped —
+// see slamonitor.TaskName). The count is per-tick: a task running past its warn
+// threshold for N consecutive ticks increments N times, so the counter reflects
+// sustained overruns, not just the first crossing.
+func RecordSLAWarn(taskName string) {
+	if taskName == "" {
+		taskName = "untitled"
+	}
+	incCounter(nameSLAWarn, "Number of SLA warn-threshold crossings by in-flight tasks, by task name.",
+		[]string{"task_name"}, []string{taskName}, 1)
+}
+
+// RecordSLAFail counts one in-flight task that crossed its SLA fail threshold
+// (#274), labeled by the bounded task-name. The fail crossing also latches
+// sla_breached=true on the task row (the monitor's one write); this counter is
+// the alerting surface operators route from. A task is counted once per fail
+// crossing until it leaves the in-flight set (terminal or re-queued).
+func RecordSLAFail(taskName string) {
+	if taskName == "" {
+		taskName = "untitled"
+	}
+	incCounter(nameSLAFail, "Number of SLA fail-threshold breaches by in-flight tasks, by task name.",
+		[]string{"task_name"}, []string{taskName}, 1)
 }
 
 // RecordTaskSkipped counts one scheduled task whose pre-run gate (#269) declined

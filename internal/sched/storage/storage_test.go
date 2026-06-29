@@ -344,4 +344,75 @@ func TestUpdateTaskStatusAtomicIgnoresStaleRunningAfterSuccess(t *testing.T) {
 	}
 }
 
+// TestTerminalTransitionComputesActualDuration (#274) confirms the SLA
+// actual-duration field is populated when a task reaches a terminal status
+// (StartedAt + CompletedAt both present), so the SLA report has real data to
+// aggregate. It also confirms an SLA-configured task round-trips its expected
+// duration + multipliers through the DB.
+func TestTerminalTransitionComputesActualDuration(t *testing.T) {
+	store, _ := newTestStore(t)
+
+	node := &models.Node{ID: uuid.New(), Hostname: "dur-node", Name: "dur-node", APIKey: uuid.New().String(), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
+	if _, err := store.AddNode(node); err != nil {
+		t.Fatalf("Failed to add node: %v", err)
+	}
+
+	expected := 15
+	task := &models.Task{
+		ID:                      uuid.New(),
+		Prompt:                  "sla-round-trip",
+		Status:                  models.TaskStatusPending,
+		Priority:                1,
+		CreatedAt:               time.Now().UTC(),
+		ExpectedDurationMinutes: &expected,
+	}
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatalf("Failed to add task: %v", err)
+	}
+
+	assigned, err := store.AssignTaskToNode(task.ID, node.ID)
+	if err != nil {
+		t.Fatalf("Failed to assign task: %v", err)
+	}
+
+	// Promote to running so StartedAt is recorded, then to success so
+	// CompletedAt is recorded and the actual duration is derived.
+	if _, err := store.UpdateTaskStatusAtomic(assigned.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusRunning}); err != nil {
+		t.Fatalf("running update failed: %v", err)
+	}
+	// Force a non-trivial StartedAt gap so the derived seconds are > 0.
+	running, err := store.GetTask(assigned.ID)
+	if err != nil || running.StartedAt == nil {
+		t.Fatalf("expected StartedAt set, err=%v", err)
+	}
+	startedCopy := running.StartedAt.Add(-90 * time.Second) // 90s ago
+	running.StartedAt = &startedCopy
+	if _, err := store.UpdateTask(running); err != nil {
+		t.Fatalf("UpdateTask (back-dated start) failed: %v", err)
+	}
+	completed, err := store.UpdateTaskStatusAtomic(assigned.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusSuccess})
+	if err != nil {
+		t.Fatalf("success update failed: %v", err)
+	}
+	if completed.ActualDurationSeconds == nil || *completed.ActualDurationSeconds < 60 {
+		t.Fatalf("expected ActualDurationSeconds >= 60, got %v", completed.ActualDurationSeconds)
+	}
+
+	// Round-trip the SLA config: reload and confirm expected_duration_minutes
+	// + the default multipliers survived the write/read.
+	reloaded, err := store.GetTask(assigned.ID)
+	if err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+	if reloaded.ExpectedDurationMinutes == nil || *reloaded.ExpectedDurationMinutes != expected {
+		t.Fatalf("expected_duration_minutes round-trip = %v, want %d", reloaded.ExpectedDurationMinutes, expected)
+	}
+	if reloaded.SLAWarnMultiplier != models.DefaultSLAWarnMultiplier {
+		t.Fatalf("sla_warn_multiplier = %v, want default %.2f", reloaded.SLAWarnMultiplier, models.DefaultSLAWarnMultiplier)
+	}
+	if reloaded.SLAFailMultiplier != models.DefaultSLAFailMultiplier {
+		t.Fatalf("sla_fail_multiplier = %v, want default %.2f", reloaded.SLAFailMultiplier, models.DefaultSLAFailMultiplier)
+	}
+}
+
 func strPtr(s string) *string { return &s }

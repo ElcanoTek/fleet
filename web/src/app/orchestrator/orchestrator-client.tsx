@@ -16,6 +16,7 @@ import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
 import { ConcurrencyCapSetting } from "./ConcurrencyCapSetting";
 import { CredentialAccountAdmin } from "./CredentialAccountAdmin";
+import { SLAReportPanel } from "./SLAReportPanel";
 
 // OrchestratorClient — the top-level orchestrator view. Re-port of moc's app.js
 // orchestration: gate on login state, render the dashboard, wire stat-card
@@ -33,6 +34,10 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [logTask, setLogTask] = useState<Task | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
+  // Top-level dashboard tab (#274): "tasks" is the legacy Recent Tasks view;
+  // "sla" swaps in the SLA report panel. Defaults to tasks so the existing
+  // dashboard shape is unchanged on load.
+  const [tab, setTab] = useState<"tasks" | "sla">("tasks");
 
   const applyStatFilter = (filter: StatFilter) => {
     if (statFilter === filter) {
@@ -136,17 +141,42 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
             <NodesTable nodes={dashboard.nodes} activeOnly={nodeActiveOnly} />
           </div>
 
-          <TasksTable
-            tasks={dashboard.tasks}
-            total={dashboard.total}
-            page={dashboard.page}
-            pageSize={dashboard.pageSize}
-            filters={dashboard.filters}
-            onFilters={dashboard.setFilters}
-            onPage={dashboard.setPage}
-            onPageSize={dashboard.setPageSize}
-            onOpenLogs={setLogTask}
-          />
+          <div className="dashboard-tabs" role="tablist" aria-label="Operations Center view">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "tasks"}
+              className={`tab-btn${tab === "tasks" ? " tab-btn-active" : ""}`}
+              onClick={() => setTab("tasks")}
+            >
+              Recent Tasks
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "sla"}
+              className={`tab-btn${tab === "sla" ? " tab-btn-active" : ""}`}
+              onClick={() => setTab("sla")}
+            >
+              SLA
+            </button>
+          </div>
+
+          {tab === "tasks" ? (
+            <TasksTable
+              tasks={dashboard.tasks}
+              total={dashboard.total}
+              page={dashboard.page}
+              pageSize={dashboard.pageSize}
+              filters={dashboard.filters}
+              onFilters={dashboard.setFilters}
+              onPage={dashboard.setPage}
+              onPageSize={dashboard.setPageSize}
+              onOpenLogs={setLogTask}
+            />
+          ) : (
+            <SLAReportPanel />
+          )}
 
           {adminOpen ? (
             <div className="section" role="region" aria-label="Settings" data-testid="settings-section">

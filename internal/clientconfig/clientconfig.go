@@ -375,6 +375,11 @@ type TaskTemplateTask struct {
 	Persona                string   `yaml:"persona,omitempty" json:"persona,omitempty"`
 	Description            string   `yaml:"description,omitempty" json:"description,omitempty"`
 	Tags                   []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+	// SLA expectation (#274); omit for no SLA. The multipliers default to 1.5 /
+	// 2.0 server-side when a template sets ExpectedDurationMinutes without them.
+	ExpectedDurationMinutes *int     `yaml:"expected_duration_minutes,omitempty" json:"expected_duration_minutes,omitempty"`
+	SLAWarnMultiplier       *float64 `yaml:"sla_warn_multiplier,omitempty" json:"sla_warn_multiplier,omitempty"`
+	SLAFailMultiplier       *float64 `yaml:"sla_fail_multiplier,omitempty" json:"sla_fail_multiplier,omitempty"`
 }
 
 // ServerDef is one declarative MCP server in the catalog.

@@ -67,6 +67,9 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
   const [runIfCommand, setRunIfCommand] = useState("");
   const [runIfOnError, setRunIfOnError] = useState<"run" | "skip">("run");
   const [runIfTimeout, setRunIfTimeout] = useState(30);
+  // SLA expected duration (#274): blank = no SLA. Stored as a string so the
+  // empty/typing states round-trip cleanly; parsed to int on submit.
+  const [expectedDuration, setExpectedDuration] = useState("");
 
   // The NEW per-task MCP selection (replaces target_node_name).
   const [mcpSelection, setMcpSelection] = useState<MCPChoice[]>([]);
@@ -125,6 +128,11 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
     setFallbackModel(t.fallback_model ?? DEFAULT_FALLBACK_MODEL);
     setAllowNetwork(Boolean(t.allow_network));
     setCaptainsLog(Boolean(t.instruction_self_improve));
+    setExpectedDuration(
+      typeof t.expected_duration_minutes === "number" && t.expected_duration_minutes > 0
+        ? String(t.expected_duration_minutes)
+        : "",
+    );
     if (typeof t.max_iterations === "number") {
       const known = MAX_ITER_OPTIONS.some((o) => o.value === String(t.max_iterations));
       if (known) {
@@ -205,6 +213,10 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
         on_error: runIfOnError,
         timeout_seconds: runIfTimeout,
       };
+    }
+    if (expectedDuration.trim()) {
+      const mins = Number.parseInt(expectedDuration, 10);
+      if (Number.isFinite(mins) && mins > 0) taskData.expected_duration_minutes = mins;
     }
     return taskData;
   };
@@ -622,6 +634,25 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                       </label>
                       <div className="advanced-setting-meta">
                         Allow network egress — let this task&apos;s sandbox reach the internet (off = sealed, <code>--network=none</code>).
+                      </div>
+                    </div>
+                    <div className="advanced-switch-row">
+                      <div className="advanced-setting-field">
+                        <label htmlFor="taskExpectedDuration">Expected duration (min)</label>
+                        <input
+                          id="taskExpectedDuration"
+                          type="number"
+                          min={1}
+                          step={1}
+                          className="filter-input"
+                          inputMode="numeric"
+                          placeholder="e.g. 15"
+                          value={expectedDuration}
+                          onChange={(e) => setExpectedDuration(e.target.value)}
+                        />
+                      </div>
+                      <div className="advanced-setting-meta">
+                        SLA expectation (#274). Blank = no SLA. The monitor warns at 1.5× and breaches at 2× (configurable per task via the API).
                       </div>
                     </div>
                   </div>

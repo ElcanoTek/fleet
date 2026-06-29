@@ -1643,6 +1643,26 @@ func (h *Handlers) GetTagCatalogue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, catalogue)
 }
 
+// GetSLAReport handles GET /admin/sla-report (#274): the per-prompt SLA
+// actuals (p50/p95 actual duration + breach rate) over a window. The window is
+// optional via ?days= (default 7, clamped to [1, 90] by the storage layer).
+// Admin-gated (registered behind AdminAuthMiddleware) — duration/breach data
+// is operator-sensitive, not public.
+func (h *Handlers) GetSLAReport(w http.ResponseWriter, r *http.Request) {
+	days := 7
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			days = n
+		}
+	}
+	report, err := h.storage.GetSLAReport(r.Context(), days)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to load SLA report")
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
 // tagMutation is the POST /tasks/{task_id}/tags body: tags to add and/or remove.
 type tagMutation struct {
 	Add    []string `json:"add"`
