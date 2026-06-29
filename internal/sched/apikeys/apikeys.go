@@ -51,6 +51,11 @@ type APIKey struct {
 	CostThisMonthUSD   float64   `json:"cost_this_month_usd"`
 	CostDayResetAt     time.Time `json:"cost_day_reset_at"`   // UTC day the daily counter is current for
 	CostMonthResetAt   time.Time `json:"cost_month_reset_at"` // first of the UTC month the monthly counter is current for
+
+	// MaxPriority caps the task urgency this key may submit (#230): a task at a
+	// priority MORE urgent (lower integer) than this value is rejected. nil =
+	// uncapped. Range [models.PriorityMin, models.PriorityMax].
+	MaxPriority *int `json:"max_priority,omitempty"`
 }
 
 // CanTargetNode checks if this key can target a node with the given name.
@@ -114,6 +119,7 @@ func (k *APIKey) ToResponse() models.APIKeyResponse {
 		MaxCostPerMonthUSD:  k.MaxCostPerMonthUSD,
 		CostTodayUSD:        k.CostTodayUSD,
 		CostThisMonthUSD:    k.CostThisMonthUSD,
+		MaxPriority:         k.MaxPriority,
 	}
 }
 
@@ -574,6 +580,20 @@ func (m *Manager) SetBudgets(keyID string, daily, monthly *float64) error {
 	}
 	key.MaxCostPerDayUSD = daily
 	key.MaxCostPerMonthUSD = monthly
+	return m.save()
+}
+
+// SetMaxPriority sets (or clears, when max is nil) a key's task-urgency ceiling
+// (#230) and persists it. Used by the create/update handlers. Returns an error
+// for an unknown key.
+func (m *Manager) SetMaxPriority(keyID string, ceiling *int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key, ok := m.keys[keyID]
+	if !ok {
+		return fmt.Errorf("api key not found: %s", keyID)
+	}
+	key.MaxPriority = ceiling
 	return m.save()
 }
 

@@ -31,6 +31,20 @@ type taskCreator struct {
 	isAdmin    bool
 	creatorID  *uuid.UUID
 	creatorKey *string
+	// creatorKeyMaxPriority is the authorizing scoped key's task-urgency ceiling
+	// (#230), copied by value. nil = admin/user submission or an uncapped key.
+	creatorKeyMaxPriority *int
+}
+
+// priorityCapError returns a non-nil error when a task's (post-default) priority
+// is MORE urgent (lower integer) than the authorizing key's ceiling (#230); nil
+// cap = no limit. Shared by the single-task and batch create paths so the two
+// cannot drift on how the per-key ceiling is enforced.
+func priorityCapError(maxPriority *int, priority int) error {
+	if maxPriority != nil && priority < *maxPriority {
+		return fmt.Errorf("priority %d exceeds this API key's ceiling (the most urgent it may submit is %d)", priority, *maxPriority)
+	}
+	return nil
 }
 
 // authorizeTaskCreator is the SAME authorization as CreateTask: an admin API
@@ -55,6 +69,10 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 			creator.isAdmin = true
 			keyID := key.KeyID
 			creator.creatorKey = &keyID
+			if key.MaxPriority != nil {
+				capVal := *key.MaxPriority
+				creator.creatorKeyMaxPriority = &capVal
+			}
 			return creator, true
 		}
 	}
@@ -163,13 +181,22 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 		if err := h.validateTaskCreate(tc); err != nil {
 			failedList = append(failedList, models.BatchFailed{Index: i, Error: err.Error()})
 			validationFailed = true
-		} else {
-			t := models.NewTask(*tc)
-			t.CreatedBy = creator.creatorID
-			t.CreatedByKeyID = creator.creatorKey
-			toInsert = append(toInsert, t)
-			createdList = append(createdList, models.BatchCreated{ID: t.ID, Index: i})
+			continue
 		}
+		t := models.NewTask(*tc)
+		// Per-key priority ceiling (#230): enforce the SAME cap as the single-task
+		// path, treating an over-cap task as a per-task failure (atomic → whole
+		// batch aborts; non-atomic → just this one is skipped) so /tasks/batch
+		// can't be a weaker route around the key's max_priority.
+		if err := priorityCapError(creator.creatorKeyMaxPriority, t.Priority); err != nil {
+			failedList = append(failedList, models.BatchFailed{Index: i, Error: err.Error()})
+			validationFailed = true
+			continue
+		}
+		t.CreatedBy = creator.creatorID
+		t.CreatedByKeyID = creator.creatorKey
+		toInsert = append(toInsert, t)
+		createdList = append(createdList, models.BatchCreated{ID: t.ID, Index: i})
 	}
 
 	if req.Atomic && validationFailed {

@@ -711,6 +711,10 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// creatorKeyID is the scoped API key that authorized this task (if any), used
 	// to attribute completion cost back to the key for spending caps.
 	var creatorKeyID *string
+	// creatorKeyMaxPriority is the authorizing key's task-urgency ceiling (#230),
+	// copied by value so a later cap check can't be affected by the cached key
+	// being mutated. nil = admin/user submission or an uncapped key.
+	var creatorKeyMaxPriority *int
 
 	if !isAdmin {
 		// Check for scoped API key
@@ -722,6 +726,10 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 				isAdmin = true // Treat as authorized
 				keyID := key.KeyID
 				creatorKeyID = &keyID
+				if key.MaxPriority != nil {
+					capVal := *key.MaxPriority
+					creatorKeyMaxPriority = &capVal
+				}
 			}
 		}
 
@@ -794,6 +802,15 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	task.CreatedBy = creatorID
 	task.CreatedByKeyID = creatorKeyID
 
+	// Per-key priority ceiling (#230): a scoped key capped at max_priority may not
+	// submit a task MORE urgent (lower integer) than that. task.Priority is the
+	// post-default value (0→Normal), so the comparison reflects what would run.
+	// Shares priorityCapError with the batch path so the two can't drift.
+	if err := priorityCapError(creatorKeyMaxPriority, task.Priority); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+
 	if _, err := h.storage.AddTask(task); err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create task")
 		return
@@ -802,6 +819,54 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, task.Prompt)
 	localizeTask(task)
 	writeJSON(w, http.StatusOK, task)
+}
+
+// queueTierBands groups the 0–100 priority scale into the named reporting tiers
+// for GET /admin/queue (#230). Inclusive [lo,hi], ordered most→least urgent;
+// each named constant (Critical=10, High=25, Normal=50, Low=75, Bulk=90) and the
+// starvation floor (25) falls inside its band, and the bands tile [0,100] with
+// no gaps so every pending row is counted exactly once.
+var queueTierBands = []struct {
+	name   string
+	lo, hi int
+}{
+	{"critical", 0, 19},
+	{"high", 20, 39},
+	{"normal", 40, 59},
+	{"low", 60, 79},
+	{"bulk", 80, 100},
+}
+
+// QueueStats handles GET /admin/queue: the operator's view of the pending task
+// queue (#230) — total depth, the oldest pending wait, and the depth + oldest
+// wait per named priority tier, so backlog and starvation are visible at a
+// glance. Admin-gated by the route group.
+func (h *Handlers) QueueStats(w http.ResponseWriter, r *http.Request) {
+	buckets, err := h.storage.PendingQueueStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to read queue stats")
+		return
+	}
+	stats := models.QueueStats{Tiers: make([]models.QueueTierStat, len(queueTierBands))}
+	for i, band := range queueTierBands {
+		stats.Tiers[i] = models.QueueTierStat{Tier: band.name, MinPriority: band.lo, MaxPriority: band.hi}
+	}
+	for _, b := range buckets {
+		stats.PendingTotal += b.Count
+		if b.OldestAgeSeconds > stats.OldestAgeSeconds {
+			stats.OldestAgeSeconds = b.OldestAgeSeconds
+		}
+		for i := range queueTierBands {
+			if b.Priority >= queueTierBands[i].lo && b.Priority <= queueTierBands[i].hi {
+				stats.Tiers[i].Count += b.Count
+				if b.OldestAgeSeconds > stats.Tiers[i].OldestAgeSeconds {
+					stats.Tiers[i].OldestAgeSeconds = b.OldestAgeSeconds
+				}
+				break
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
 
 // validateTaskLimits bounds the per-task numeric ceilings. max_retries is
@@ -814,6 +879,11 @@ func validateTaskLimits(tc *models.TaskCreate) error {
 	}
 	if tc.MaxRetries != nil && (*tc.MaxRetries < 0 || *tc.MaxRetries > 10) {
 		return fmt.Errorf("max_retries must be between 0 and 10")
+	}
+	// Priority is bounded to [0,100] (#230); lower = more urgent. 0 is the unset
+	// sentinel that NewTask maps to Normal (50), so it is accepted here.
+	if tc.Priority < models.PriorityMin || tc.Priority > models.PriorityMax {
+		return fmt.Errorf("priority must be between %d and %d", models.PriorityMin, models.PriorityMax)
 	}
 	return nil
 }
@@ -2056,6 +2126,13 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate the optional task-urgency ceiling (#230) BEFORE creating the key,
+	// so a bad value never leaves a half-created (uncapped) key behind.
+	if keyCreate.MaxPriority != nil && (*keyCreate.MaxPriority < models.PriorityMin || *keyCreate.MaxPriority > models.PriorityMax) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("max_priority must be between %d and %d", models.PriorityMin, models.PriorityMax))
+		return
+	}
+
 	key, rawKey, err := h.apiKeys.CreateKey(
 		keyCreate.Name,
 		keyCreate.AllowedNodePatterns,
@@ -2075,6 +2152,13 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	if keyCreate.MaxCostPerDayUSD != nil || keyCreate.MaxCostPerMonthUSD != nil {
 		if err := h.apiKeys.SetBudgets(key.KeyID, keyCreate.MaxCostPerDayUSD, keyCreate.MaxCostPerMonthUSD); err != nil {
 			log.Printf("Warning: failed to set budgets on new key %s: %v", key.KeyID, err)
+		}
+	}
+
+	// Apply the optional task-urgency ceiling (#230), validated above.
+	if keyCreate.MaxPriority != nil {
+		if err := h.apiKeys.SetMaxPriority(key.KeyID, keyCreate.MaxPriority); err != nil {
+			log.Printf("Warning: failed to set max_priority on new key %s: %v", key.KeyID, err)
 		}
 	}
 
