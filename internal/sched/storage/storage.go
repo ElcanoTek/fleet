@@ -976,6 +976,11 @@ func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, no
 	task.ScheduledFor = &scheduledFor
 	task.StartedAt = nil
 	task.CompletedAt = nil
+	// Reset the per-run SLA artifacts (#274): the prior attempt's actual
+	// duration is now stale (no completion) and a fresh attempt should not
+	// inherit the prior attempt's breach latch.
+	task.ActualDurationSeconds = nil
+	task.SLABreached = false
 	task.LeaseOwner = nil
 	task.LeaseExpiresAt = nil
 	if msg != "" {
@@ -1089,6 +1094,24 @@ func (s *Storage) GetDeadLetteredTasks(ctx context.Context, limit, offset int) (
 	return s.db.GetDeadLetteredTasks(ctx, limit, offset)
 }
 
+// GetRunningTasksWithSLA returns the in-flight tasks that carry an SLA (#274),
+// for the SLA monitor goroutine. See db.GetRunningTasksWithSLA.
+func (s *Storage) GetRunningTasksWithSLA(ctx context.Context) ([]*models.Task, error) {
+	return s.db.GetRunningTasksWithSLA(ctx)
+}
+
+// MarkSLABreached latches sla_breached=true on a task the SLA monitor flagged
+// as having crossed its fail threshold (#274). See db.MarkSLABreached.
+func (s *Storage) MarkSLABreached(ctx context.Context, taskID uuid.UUID) error {
+	return s.db.MarkSLABreached(ctx, taskID)
+}
+
+// GetSLAReport aggregates the per-prompt SLA actuals over windowDays (#274).
+// See db.GetSLAReport.
+func (s *Storage) GetSLAReport(ctx context.Context, windowDays int) (*models.SLAReport, error) {
+	return s.db.GetSLAReport(ctx, windowDays)
+}
+
 // ReplayDeadLetteredTask re-enqueues a dead-lettered task (#253): it resets the
 // SAME row to a fresh pending slate — AttemptCount=0, the DLQ columns cleared,
 // status=pending, scheduled_for/started_at/completed_at/error cleared — so the
@@ -1116,6 +1139,10 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 	task.StartedAt = nil
 	task.CompletedAt = nil
 	task.ErrorMessage = nil
+	// Reset the SLA artifacts (#274): a replayed task is a fresh slate, so
+	// neither the prior attempt's actual duration nor its breach latch carries.
+	task.ActualDurationSeconds = nil
+	task.SLABreached = false
 	task.DeadLetteredAt = nil
 	task.DeadLetterReason = nil
 	task.DeadLetterAttempts = 0

@@ -59,6 +59,7 @@ import (
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
 	"github.com/ElcanoTek/fleet/internal/sched/scheduler"
+	"github.com/ElcanoTek/fleet/internal/sched/slamonitor"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -486,6 +487,16 @@ func run() error {
 	// through their own decoupled contexts so the grace period is meaningful.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// SLA monitor (#274): a 60s sweep that warns/fails in-flight tasks running
+	// past their expected_duration_minutes threshold. Started alongside the
+	// scheduler ticker; stops on ctx cancel OR explicit Stop (whichever the
+	// shutdown path reaches first). Like the scheduler, a panic in one tick is
+	// contained (safe.Recover) so it never kills the process.
+	slaMon := slamonitor.New(schedStorage)
+	slaMon.Start(ctx)
+	defer slaMon.Stop()
+
 	sigCh := make(chan os.Signal, 4)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
 	defer signal.Stop(sigCh)
@@ -641,6 +652,10 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Delete("/nodes/{node_id}", h.UnregisterNode)
 		r.Post("/tasks/cleanup", h.CleanupHistory)
 		r.Post("/tasks/model", h.BulkSetTaskModel) // fleet-wide model re-assignment (admin-gated)
+		// SLA report (#274): per-prompt actual-duration p50/p95 + breach rate over
+		// a window. Admin-gated like the other sensitive reads (cost/duration
+		// data must not be public).
+		r.Get("/sla-report", h.GetSLAReport)
 		r.Post("/users", h.CreateUser)
 		r.Post("/keys", h.CreateAPIKey)
 		r.Get("/keys", h.ListAPIKeys)

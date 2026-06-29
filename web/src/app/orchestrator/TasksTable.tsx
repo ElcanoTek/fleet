@@ -47,6 +47,19 @@ function scheduleLabel(task: Task): string {
   return "-";
 }
 
+// slaBadge returns {label, tone} when a task carries SLA state worth surfacing
+// in the table (#274), or null when the task has no SLA / no breach. tone is
+// the CSS class suffix appended to `sla-badge-` (amber for warn, red for fail).
+function slaBadge(task: Task): { label: string; tone: string } | null {
+  if (!task.expected_duration_minutes) return null;
+  if (task.sla_breached) return { label: "SLA breached", tone: "fail" };
+  // Without a live elapsed probe on the client, the in-progress warn state is
+  // surfaced only when the server has already latched a breach. A running task
+  // that has merely CROSSED the warn threshold (but not fail) is not latched,
+  // so we don't render a spurious warn here; the SLA tab carries the live view.
+  return null;
+}
+
 export function TasksTable({
   tasks,
   total,
@@ -164,6 +177,7 @@ export function TasksTable({
               <th scope="col">ID</th>
               <th scope="col">Prompt</th>
               <th scope="col">Status</th>
+              <th scope="col">SLA</th>
               <th scope="col">Schedule</th>
               <th scope="col">Created By</th>
               <th scope="col">Created</th>
@@ -173,18 +187,20 @@ export function TasksTable({
           <tbody>
             {tasks.length === 0 ? (
               <tr>
-                <td colSpan={7} className="table-empty">
+                <td colSpan={8} className="table-empty">
                   No tasks created yet
                 </td>
               </tr>
             ) : (
               tasks.map((task) => {
                 const hasLogs = !!task.agent_session_id;
+                const badge = slaBadge(task);
                 return (
                   <tr
                     key={task.id}
-                    className="clickable"
+                    className={`clickable${badge ? ` sla-row-${badge.tone}` : ""}`}
                     data-task-id={task.id}
+                    data-sla-breached={task.sla_breached ? "true" : undefined}
                     role="button"
                     tabIndex={0}
                     aria-label={`View task ${task.id.slice(0, 8)}`}
@@ -206,6 +222,21 @@ export function TasksTable({
                       <span className={`status-badge status-${task.status ?? "unknown"}`}>
                         {task.status ?? "-"}
                       </span>
+                    </td>
+                    <td>
+                      {badge ? (
+                        <span className={`sla-badge sla-badge-${badge.tone}`} title={badge.label}>
+                          {badge.label}
+                        </span>
+                      ) : task.expected_duration_minutes ? (
+                        <span className="sla-badge sla-badge-ok" title={`Expected ${task.expected_duration_minutes}m`}>
+                          {task.actual_duration_seconds != null
+                            ? `${Math.round(task.actual_duration_seconds / 60)}m / ${task.expected_duration_minutes}m`
+                            : `${task.expected_duration_minutes}m`}
+                        </span>
+                      ) : (
+                        <span className="sla-badge sla-badge-none">—</span>
+                      )}
                     </td>
                     <td>{scheduleLabel(task)}</td>
                     <td>{createdByLabel(task)}</td>

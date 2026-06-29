@@ -51,9 +51,19 @@ export type Task = {
   created_by_username?: string;
   agent_session_id?: string;
   created_at?: string;
+  started_at?: string;
+  completed_at?: string;
   scheduled_for?: string;
   recurrence?: string;
   files?: string[];
+  // SLA monitoring (#274). expected_duration_minutes is null when no SLA is
+  // configured; sla_breached is latched true once the fail threshold is crossed;
+  // actual_duration_seconds is populated on terminal transition.
+  expected_duration_minutes?: number | null;
+  sla_warn_multiplier?: number;
+  sla_fail_multiplier?: number;
+  sla_breached?: boolean;
+  actual_duration_seconds?: number | null;
 };
 
 export type TaskCreate = {
@@ -71,6 +81,28 @@ export type TaskCreate = {
   files?: string[];
   tags?: string[];
   retry_policy?: RetryPolicy;
+  // SLA monitoring (#274). Omit expected_duration_minutes for no SLA.
+  expected_duration_minutes?: number | null;
+  sla_warn_multiplier?: number;
+  sla_fail_multiplier?: number;
+};
+
+// SLAReport / SLAReportTask mirror models.SLAReport (#274): the
+// GET /admin/sla-report response. task_name is the prompt's first line (fleet
+// has no separate `name` column).
+export type SLAReportTask = {
+  task_name: string;
+  expected_minutes: number;
+  p50_actual_minutes: number;
+  p95_actual_minutes: number;
+  breach_rate_pct: number;
+  sample_count: number;
+};
+
+export type SLAReport = {
+  period: string;
+  window_days: number;
+  tasks: SLAReportTask[];
 };
 
 // CostForecast mirrors agentcore.CostForecast (#233): the pre-submission token +
@@ -110,6 +142,10 @@ export type TaskTemplateTask = {
   persona?: string;
   description?: string;
   tags?: string[];
+  // SLA expectation (#274); omit for no SLA.
+  expected_duration_minutes?: number | null;
+  sla_warn_multiplier?: number;
+  sla_fail_multiplier?: number;
 };
 
 // TaskTemplate is one "new task from a template" entry from the bundle's
@@ -218,6 +254,11 @@ export const orchestratorApi = {
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
   config: () => request<{ version?: string; timezone?: string }>("/config"),
   me: () => request<{ authenticated: boolean; username?: string; role?: string }>("/me"),
+
+  // SLA report (#274): admin-only per-task actual-duration p50/p95 + breach
+  // rate over a window. days defaults to 7 (clamped to [1, 90] server-side).
+  slaReport: (days = 7) =>
+    request<SLAReport>(`/sla-report?days=${encodeURIComponent(days)}`),
 
   // Read-only task-template catalog for "new task from a template" (#262).
   taskTemplates: () => request<TaskTemplate[]>("/task-templates"),

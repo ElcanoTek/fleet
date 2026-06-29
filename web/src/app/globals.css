@@ -1082,6 +1082,129 @@ tr.clickable:hover td {
   color: var(--color-text-muted);
 }
 
+/* SLA monitoring (#274): table badges, log-modal progress bar, report tab. */
+.sla-badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 0.4rem;
+  font-size: 0.72rem;
+  border: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.sla-badge-ok {
+  color: var(--color-success, #7bdca0);
+  border-color: var(--color-success, #7bdca0);
+}
+.sla-badge-warn {
+  color: #d9a441;
+  border-color: #d9a441;
+  background: rgba(217, 164, 65, 0.12);
+}
+.sla-badge-fail {
+  color: var(--color-danger, #e08080);
+  border-color: var(--color-danger, #e08080);
+  background: rgba(224, 128, 128, 0.12);
+}
+.sla-badge-none {
+  color: var(--color-text-muted);
+  border-color: transparent;
+}
+tr.sla-row-fail {
+  background: rgba(224, 128, 128, 0.08);
+}
+.sla-detail {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.sla-detail-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+.sla-progress {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--color-border);
+  overflow: visible;
+}
+.sla-progress-bar {
+  height: 100%;
+  border-radius: 4px;
+}
+.sla-progress-ok {
+  background: var(--color-success, #7bdca0);
+}
+.sla-progress-warn {
+  background: #d9a441;
+}
+.sla-progress-fail {
+  background: var(--color-danger, #e08080);
+}
+.sla-progress-mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+}
+.sla-progress-mark-warn {
+  background: #d9a441;
+  opacity: 0.7;
+}
+.sla-progress-mark-fail {
+  background: var(--color-danger, #e08080);
+  opacity: 0.7;
+}
+.dashboard-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.4rem 0.9rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.tab-btn:hover {
+  color: var(--color-text);
+}
+.tab-btn-active {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+.sla-window-select {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+.sla-spark {
+  fill: var(--color-success, #7bdca0);
+  opacity: 0.6;
+}
+.sla-spark-warn {
+  fill: #d9a441;
+}
+.sla-spark-fail {
+  fill: var(--color-danger, #e08080);
+}
+.sla-spark-expected {
+  stroke: var(--color-text-muted);
+  stroke-width: 1.5;
+}
+.sla-spark-dot {
+  fill: var(--color-text);
+}
+
 /* Filters + pagination */
 .tasks-filter-bar {
   display: flex;

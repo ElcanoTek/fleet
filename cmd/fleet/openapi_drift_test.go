@@ -239,6 +239,10 @@ var schemaModelRegistry = map[string]any{
 	"LoginRequest":     models.UserLogin{},
 	"LoginResponse":    models.LoginResponse{},
 	"DashboardStats":   models.DashboardStats{},
+	// SLA report (#274): GET /admin/sla-report returns these two reusable
+	// schemas verbatim via writeJSON, backed by exported reflectable models.
+	"SLAReport":     models.SLAReport{},
+	"SLAReportTask": models.SLAReportTask{},
 	// Pre-submission cost forecast (#233/#405). The estimate handler returns
 	// agentcore.CostForecast verbatim via writeJSON, so these three reusable
 	// schemas are backed by the exported, reflectable agentcore types.

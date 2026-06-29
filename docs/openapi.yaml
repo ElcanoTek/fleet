@@ -244,6 +244,30 @@ components:
     LogSession:
       type: object
       description: A captain's-log session (the recorded transcript of one task run).
+    SLAReport:
+      type: object
+      description: >-
+        The GET /sla-report response (#274): per-bucket SLA actuals over a
+        window. The bucket key is the task's prompt (fleet has no separate
+        `name` column).
+      properties:
+        period: { type: string, description: "Human label, e.g. last_7_days." }
+        window_days: { type: integer, description: "Numeric window bound (1–90)." }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/SLAReportTask" }
+      required: [period, window_days, tasks]
+    SLAReportTask:
+      type: object
+      description: One row of the SLA report (#274).
+      properties:
+        task_name: { type: string }
+        expected_minutes: { type: integer }
+        p50_actual_minutes: { type: number }
+        p95_actual_minutes: { type: number }
+        breach_rate_pct: { type: number }
+        sample_count: { type: integer }
+      required: [task_name, expected_minutes, p50_actual_minutes, p95_actual_minutes, breach_rate_pct, sample_count]
 
   responses:
     Error:
@@ -647,6 +671,29 @@ paths:
       responses:
         "200": { description: OK }
         "400": { $ref: "#/components/responses/Error" }
+
+  /sla-report:
+    get:
+      summary: SLA report — per-task actual-duration p50/p95 + breach rate (#274).
+      description: >-
+        Aggregates the per-prompt SLA actuals over a window: the expected
+        duration, the p50/p95 actual run duration (completed_at - started_at),
+        and the breach rate (fraction of runs that crossed the fail threshold).
+        Admin-only — duration/breach data is operator-sensitive, not public.
+        days= (default 7, clamped to [1, 90]) selects the window.
+      security: [{ adminApiKey: [] }]
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 90, default: 7 }
+      responses:
+        "200":
+          description: The SLA report for the window.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SLAReport" }
+        "500": { $ref: "#/components/responses/Error" }
 
   /status:
     post:

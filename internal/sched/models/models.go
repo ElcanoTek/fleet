@@ -651,7 +651,36 @@ type TaskCreate struct {
 	// create_task (#277), for audit/lineage. Set server-side by the create_task
 	// tool, NOT by external clients (it is ignored on the public POST /tasks path).
 	CreatedByTaskID *uuid.UUID `json:"created_by_task_id,omitempty"`
+	// ExpectedDurationMinutes is the operator's expectation for typical runtime
+	// (#274 SLA monitoring). Nil means no SLA is configured for this task; the
+	// SLA monitor goroutine ignores it. When set, the warn/fail thresholds are
+	// expected * SLAWarnMultiplier / expected * SLAFailMultiplier.
+	ExpectedDurationMinutes *int `json:"expected_duration_minutes,omitempty"`
+	// SLAWarnMultiplier scales ExpectedDurationMinutes to the WARN threshold.
+	// Defaults to DefaultSLAWarnMultiplier (1.5) when a task carries an expected
+	// duration but omits an explicit multiplier.
+	SLAWarnMultiplier float64 `json:"sla_warn_multiplier,omitempty"`
+	// SLAFailMultiplier scales ExpectedDurationMinutes to the FAIL threshold.
+	// Defaults to DefaultSLAFailMultiplier (2.0); crossing it latches
+	// SLABreached.
+	SLAFailMultiplier float64 `json:"sla_fail_multiplier,omitempty"`
+	// SLABreached is latched true once the fail threshold is crossed (#274). It
+	// is set server-side by the SLA monitor, never by clients; cleared on
+	// replay/re-run.
+	SLABreached bool `json:"sla_breached,omitempty"`
+	// ActualDurationSeconds is completed_at - started_at in whole seconds
+	// (#274), populated server-side on the terminal transition. nil until the
+	// task reaches a terminal status (or if StartedAt was never recorded).
+	ActualDurationSeconds *int `json:"actual_duration_seconds,omitempty"`
 }
+
+// SLA monitoring defaults (#274). Applied in NewTask when a task carries an
+// ExpectedDurationMinutes but omits the corresponding multiplier, and consulted
+// by the SLA monitor when a row's multiplier is the column default.
+const (
+	DefaultSLAWarnMultiplier = 1.5
+	DefaultSLAFailMultiplier = 2.0
+)
 
 // Task represents a task to be executed by a worker.
 type Task struct {
@@ -750,6 +779,21 @@ type Task struct {
 	// create_task (#277). nil for tasks not spawned by a task. Persisted; set
 	// server-side, not settable by external clients.
 	CreatedByTaskID *uuid.UUID `json:"created_by_task_id,omitempty"`
+	// ExpectedDurationMinutes is the operator's expectation for typical runtime
+	// (#274 SLA monitoring). Nil means no SLA is configured; the monitor ignores
+	// the task. See TaskCreate.ExpectedDurationMinutes.
+	ExpectedDurationMinutes *int `json:"expected_duration_minutes,omitempty"`
+	// SLAWarnMultiplier / SLAFailMultiplier scale the expectation to the warn/fail
+	// thresholds (#274). Resolved to the defaults in NewTask when an expected
+	// duration is set but the multiplier is 0; otherwise persisted as written.
+	SLAWarnMultiplier float64 `json:"sla_warn_multiplier,omitempty"`
+	SLAFailMultiplier float64 `json:"sla_fail_multiplier,omitempty"`
+	// SLABreached is latched true once the fail threshold is crossed (#274). Set
+	// server-side by the SLA monitor; cleared on replay/re-run.
+	SLABreached bool `json:"sla_breached,omitempty"`
+	// ActualDurationSeconds is completed_at - started_at in whole seconds
+	// (#274), populated server-side on the terminal transition. nil until then.
+	ActualDurationSeconds *int `json:"actual_duration_seconds,omitempty"`
 }
 
 // NewTask creates a new Task with defaults.
@@ -774,6 +818,21 @@ func NewTask(tc TaskCreate) *Task {
 	tz := tc.Timezone
 	if tz == "" {
 		tz = "UTC"
+	}
+
+	// Resolve the SLA multipliers once, at task creation, so the monitor and
+	// report read stable values from the row (#274). A task with no
+	// ExpectedDurationMinutes has no SLA; the multipliers are still persisted
+	// (their column is NOT NULL DEFAULT) so a later edit that adds an expected
+	// duration doesn't have to backfill them. 0 / negative values map to the
+	// defaults; explicit non-default values are validated by ValidateSLA.
+	warnMul := tc.SLAWarnMultiplier
+	if warnMul <= 0 {
+		warnMul = DefaultSLAWarnMultiplier
+	}
+	failMul := tc.SLAFailMultiplier
+	if failMul <= 0 {
+		failMul = DefaultSLAFailMultiplier
 	}
 
 	return &Task{
@@ -804,7 +863,40 @@ func NewTask(tc TaskCreate) *Task {
 		AllowTaskCreation:          tc.AllowTaskCreation,
 		AllowRecurringTaskCreation: tc.AllowRecurringTaskCreation,
 		CreatedByTaskID:            tc.CreatedByTaskID,
+		ExpectedDurationMinutes:    tc.ExpectedDurationMinutes,
+		SLAWarnMultiplier:          warnMul,
+		SLAFailMultiplier:          failMul,
 	}
+}
+
+// ValidateSLA checks an expected-duration / multiplier triple for internal
+// consistency so a statically-broken SLA config is rejected at task creation
+// rather than firing spurious alerts at runtime (#274). nil expected duration
+// is always valid (no SLA); a non-positive multiplier is normalized to the
+// default by NewTask, but an explicit fail multiplier at or below the warn
+// multiplier is rejected (the fail threshold would never be reachable
+// independently of the warn).
+func ValidateSLA(expected *int, warnMul, failMul float64) error {
+	if expected == nil {
+		return nil
+	}
+	if *expected <= 0 {
+		return fmt.Errorf("expected_duration_minutes must be > 0")
+	}
+	if warnMul < 0 || failMul < 0 {
+		return fmt.Errorf("sla multipliers must be >= 0")
+	}
+	// Resolve the same defaults NewTask applies before comparing thresholds.
+	if warnMul <= 0 {
+		warnMul = DefaultSLAWarnMultiplier
+	}
+	if failMul <= 0 {
+		failMul = DefaultSLAFailMultiplier
+	}
+	if failMul <= warnMul {
+		return fmt.Errorf("sla_fail_multiplier (%.2f) must exceed sla_warn_multiplier (%.2f)", failMul, warnMul)
+	}
+	return nil
 }
 
 // derefOr returns *p, or def when p is nil.
@@ -848,6 +940,13 @@ func TaskToCreate(t *Task) TaskCreate {
 		// like SourceTaskID, and is intentionally NOT carried.
 		AllowTaskCreation:          t.AllowTaskCreation,
 		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
+		// SLA config is part of the recipe so a re-run/clone keeps the same
+		// expected-duration + multiplier posture (#274). SLABreached /
+		// ActualDurationSeconds are runtime-only (like Status / AttemptCount)
+		// and are intentionally NOT carried.
+		ExpectedDurationMinutes: t.ExpectedDurationMinutes,
+		SLAWarnMultiplier:       t.SLAWarnMultiplier,
+		SLAFailMultiplier:       t.SLAFailMultiplier,
 	}
 }
 
@@ -1087,4 +1186,28 @@ type PaginatedResponse struct {
 	Total  int         `json:"total"`
 	Limit  int         `json:"limit"`
 	Offset int         `json:"offset"`
+}
+
+// SLAReportTask is one row of the SLA report (#274): the actual-duration
+// distribution (p50/p95) and breach rate for a (prompt, expected_duration)
+// bucket over the report window. Tasks without an expected_duration_minutes
+// are excluded; the bucket key is the task's prompt (fleet has no separate
+// `name` column, so prompt is the closest stable grouping key — recurring
+// tasks repeat the same prompt verbatim).
+type SLAReportTask struct {
+	TaskName          string  `json:"task_name"`
+	ExpectedMinutes   int     `json:"expected_minutes"`
+	P50ActualMinutes  float64 `json:"p50_actual_minutes"`
+	P95ActualMinutes  float64 `json:"p95_actual_minutes"`
+	BreachRatePercent float64 `json:"breach_rate_pct"`
+	SampleCount       int     `json:"sample_count"`
+}
+
+// SLAReport is the GET /admin/sla-report response (#274): the per-bucket SLA
+// actuals for the report window. Period is the human label ("last_7_days");
+// WindowDays is the numeric bound (default 7, capped at 90).
+type SLAReport struct {
+	Period     string          `json:"period"`
+	WindowDays int             `json:"window_days"`
+	Tasks      []SLAReportTask `json:"tasks"`
 }

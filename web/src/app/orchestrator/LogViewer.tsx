@@ -67,6 +67,7 @@ function LogViewerBody({ task, onClose }: { task: Task; onClose: () => void }) {
             ×
           </button>
         </div>
+        {task.expected_duration_minutes ? <SLADetail task={task} /> : null}
         <div className="modal-body" data-testid="log-modal-body">
           {loading ? (
             <div className="loading">
@@ -196,5 +197,46 @@ const LogImage = memo(function LogImage({
     />
   );
 });
+
+// SLADetail renders the task's actual vs. expected duration as a labeled
+// progress bar (#274). Shown in the log modal header only when the task has an
+// expected_duration_minutes. A breach (actual > expected * fail multiplier, or
+// the latched sla_breached flag) turns the bar red; a warn crossing (actual >
+// expected * warn multiplier) turns it amber; otherwise it stays green. The bar
+// caps at 200% so a 10x overrun doesn't overflow the modal.
+function SLADetail({ task }: { task: Task }) {
+  const expected = task.expected_duration_minutes ?? 0;
+  const actualSecs = task.actual_duration_seconds ?? 0;
+  const actualMin = actualSecs / 60;
+  const warnMul = task.sla_warn_multiplier || 1.5;
+  const failMul = task.sla_fail_multiplier || 2.0;
+  const warnMin = expected * warnMul;
+  const failMin = expected * failMul;
+
+  let tone = "ok";
+  if (task.sla_breached || (expected > 0 && actualMin >= failMin)) tone = "fail";
+  else if (expected > 0 && actualMin >= warnMin) tone = "warn";
+
+  // Bar width: 100% == actual === expected. Cap at 200% so a runaway task
+  // doesn't blow out the modal layout; the numeric label still shows the truth.
+  const pct = expected > 0 ? Math.min((actualMin / expected) * 100, 200) : 0;
+  const label = actualSecs > 0
+    ? `${actualMin.toFixed(1)}m / ${expected}m expected`
+    : `${expected}m expected (not yet complete)`;
+
+  return (
+    <div className="sla-detail" data-testid="sla-detail" data-sla-tone={tone}>
+      <div className="sla-detail-label">
+        <span>SLA</span>
+        <span>{label}</span>
+      </div>
+      <div className="sla-progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={200} aria-label="Actual vs expected duration">
+        <div className={`sla-progress-bar sla-progress-${tone}`} style={{ width: `${pct}%` }} />
+        <div className="sla-progress-mark sla-progress-mark-warn" style={{ left: `${Math.min(warnMul * 100, 200)}%` }} title={`warn @ ${warnMul}×`} />
+        <div className="sla-progress-mark sla-progress-mark-fail" style={{ left: `${Math.min(failMul * 100, 200)}%` }} title={`fail @ ${failMul}×`} />
+      </div>
+    </div>
+  );
+}
 
 export default LogViewer;

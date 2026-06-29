@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -549,7 +551,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -582,6 +584,12 @@ func marshalTags(tags []string) string {
 
 // AddTask adds or updates a task.
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
+	// Populate actual_duration_seconds (#274) whenever a completion timestamp
+	// is present alongside a start. Done here (and in UpdateTaskTx) so EVERY
+	// write path that persists a completed_at also persists the derived actual,
+	// without each storage call site having to remember it. Idempotent: a
+	// pre-set value (e.g. a test seed) is left untouched.
+	maybeComputeActualDuration(task)
 	_, err := db.conn.ExecContext(ctx, `
 		INSERT INTO tasks (
 			id, prompt, model, fallback_model, max_iterations, mcp_selection,
@@ -591,8 +599,10 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			attempt_count, max_retries, allow_network, timezone, created_by_key_id,
 			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path,
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
-			dead_lettered_at, dead_letter_reason, dead_letter_attempts
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43)
+			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
+			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
+			sla_breached, actual_duration_seconds
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -635,7 +645,12 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_by_task_id = EXCLUDED.created_by_task_id,
 			dead_lettered_at = EXCLUDED.dead_lettered_at,
 			dead_letter_reason = EXCLUDED.dead_letter_reason,
-			dead_letter_attempts = EXCLUDED.dead_letter_attempts`,
+			dead_letter_attempts = EXCLUDED.dead_letter_attempts,
+			expected_duration_minutes = EXCLUDED.expected_duration_minutes,
+			sla_warn_multiplier = EXCLUDED.sla_warn_multiplier,
+			sla_fail_multiplier = EXCLUDED.sla_fail_multiplier,
+			sla_breached = EXCLUDED.sla_breached,
+			actual_duration_seconds = EXCLUDED.actual_duration_seconds`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -679,8 +694,52 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.DeadLetteredAt,
 		nullableString(deref(task.DeadLetterReason)),
 		deadLetterAttemptsValue(task.DeadLetterAttempts),
+		expectedDurationValue(task.ExpectedDurationMinutes),
+		slaMultiplierValue(task.SLAWarnMultiplier, models.DefaultSLAWarnMultiplier),
+		slaMultiplierValue(task.SLAFailMultiplier, models.DefaultSLAFailMultiplier),
+		task.SLABreached,
+		task.ActualDurationSeconds,
 	)
 	return err
+}
+
+// expectedDurationValue maps the optional expected-duration pointer (#274) to a
+// nullable column value: nil → SQL NULL (no SLA), set → the int.
+func expectedDurationValue(p *int) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// slaMultiplierValue defends the NOT NULL multiplier columns against a
+// directly-constructed Task that bypassed NewTask (e.g. an internal caller or a
+// test seed), where the field would otherwise be the zero value. 0/negative
+// maps to the supplied default (matching NewTask's normalization); a positive
+// value passes through verbatim.
+func slaMultiplierValue(v, def float64) float64 {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+// maybeComputeActualDuration sets task.ActualDurationSeconds from
+// CompletedAt - StartedAt (whole seconds) when both are present and the field
+// is not already populated (#274). It never overwrites a caller-set value so a
+// test seed or an explicit write is preserved.
+func maybeComputeActualDuration(task *models.Task) {
+	if task.ActualDurationSeconds != nil {
+		return
+	}
+	if task.StartedAt == nil || task.CompletedAt == nil {
+		return
+	}
+	secs := int(task.CompletedAt.Sub(*task.StartedAt).Seconds())
+	if secs < 0 {
+		secs = 0
+	}
+	task.ActualDurationSeconds = &secs
 }
 
 // deref returns the pointed-to string, or "" for a nil pointer. Paired with
@@ -891,6 +950,11 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		deadLetteredAt         sql.NullTime
 		deadLetterReason       sql.NullString
 		deadLetterAttempts     sql.NullInt64
+		expectedDur            sql.NullInt64
+		slaWarnMul             sql.NullFloat64
+		slaFailMul             sql.NullFloat64
+		slaBreached            bool
+		actualDurSecs          sql.NullInt64
 	)
 
 	err := scanner.Scan(
@@ -902,6 +966,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy, &sourceTaskID, &persona, &workspacePath,
 		&allowTaskCreation, &allowRecurringTaskCre, &createdByTaskID,
 		&deadLetteredAt, &deadLetterReason, &deadLetterAttempts,
+		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
 	)
 	if err != nil {
 		return nil, err
@@ -1008,6 +1073,21 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	}
 	if deadLetterAttempts.Valid {
 		task.DeadLetterAttempts = int(deadLetterAttempts.Int64)
+	}
+	// SLA columns (#274). expected_duration_minutes / actual_duration_seconds
+	// are NULLable (NULL = no SLA / not-yet-terminal); the multipliers are NOT
+	// NULL DEFAULT so they are always present — normalize a stray zero to the
+	// default so a downstream monitor / report never divides by zero.
+	if expectedDur.Valid {
+		v := int(expectedDur.Int64)
+		task.ExpectedDurationMinutes = &v
+	}
+	task.SLAWarnMultiplier = slaMultiplierValue(slaWarnMul.Float64, models.DefaultSLAWarnMultiplier)
+	task.SLAFailMultiplier = slaMultiplierValue(slaFailMul.Float64, models.DefaultSLAFailMultiplier)
+	task.SLABreached = slaBreached
+	if actualDurSecs.Valid {
+		v := int(actualDurSecs.Int64)
+		task.ActualDurationSeconds = &v
 	}
 	return task, nil
 }
@@ -1236,6 +1316,112 @@ func (db *Database) GetDeadLetteredTasks(ctx context.Context, limit, offset int)
 	}
 	defer rows.Close()
 	return db.rowsToTasks(rows)
+}
+
+// GetRunningTasksWithSLA returns the in-flight tasks that carry an SLA
+// (expected_duration_minutes IS NOT NULL) for the SLA monitor goroutine (#274).
+// "In-flight" mirrors GetRunningTasks: leased / running / analyzing — the
+// statuses where StartedAt is set and the task has not yet reached a terminal
+// state. The partial index idx_tasks_sla does NOT cover this query (it is
+// keyed on completed_at), but the in-flight set is small (one host, capped
+// pool) so a seq scan filtered by status + expected_duration_minutes IS NOT
+// NULL is cheap; an extra index would not pay for itself.
+func (db *Database) GetRunningTasksWithSLA(ctx context.Context) ([]*models.Task, error) {
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT `+taskColumns+` FROM tasks
+		WHERE status IN ($1, $2, $3)
+		AND expected_duration_minutes IS NOT NULL`,
+		string(models.TaskStatusLeased),
+		string(models.TaskStatusRunning),
+		string(models.TaskStatusAnalyzing))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return db.rowsToTasks(rows)
+}
+
+// MarkSLABreached latches sla_breached=true on a task the SLA monitor flagged
+// as having crossed its fail threshold (#274). It is a narrow, single-column
+// UPDATE so it cannot race a concurrent terminal-status write on the broader
+// row. Idempotent: setting true on an already-breached row is a no-op.
+func (db *Database) MarkSLABreached(ctx context.Context, taskID uuid.UUID) error {
+	_, err := db.conn.ExecContext(ctx,
+		`UPDATE tasks SET sla_breached = TRUE WHERE id = $1`, taskID)
+	return err
+}
+
+// GetSLAReport aggregates the per-prompt SLA actuals over the last windowDays
+// (#274): the p50/p95 actual run duration and the breach rate for each
+// (prompt, expected_duration_minutes) bucket. Rows without an expected duration
+// or an actual duration are excluded. windowDays is clamped to [1, 90]; the
+// partial index idx_tasks_sla backs the WHERE filter. Buckets are ordered by
+// breach rate (worst first) so the most violated SLAs surface at the top.
+func (db *Database) GetSLAReport(ctx context.Context, windowDays int) (*models.SLAReport, error) {
+	if windowDays <= 0 {
+		windowDays = 7
+	}
+	if windowDays > 90 {
+		windowDays = 90
+	}
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT
+			prompt                                                  AS task_name,
+			expected_duration_minutes,
+			COALESCE(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY actual_duration_seconds), 0) / 60.0,
+			COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY actual_duration_seconds), 0) / 60.0,
+			CASE WHEN COUNT(*) = 0 THEN 0.0
+			     ELSE 100.0 * SUM(CASE WHEN sla_breached THEN 1 ELSE 0 END) / COUNT(*) END,
+			COUNT(*)
+		FROM tasks
+		WHERE completed_at >= NOW() - ($1 || ' days')::INTERVAL
+		AND expected_duration_minutes IS NOT NULL
+		AND actual_duration_seconds IS NOT NULL
+		GROUP BY prompt, expected_duration_minutes
+		ORDER BY 5 DESC, prompt ASC`,
+		windowDays)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := &models.SLAReport{
+		Period:     "last_" + strconv.Itoa(windowDays) + "_days",
+		WindowDays: windowDays,
+		Tasks:      []models.SLAReportTask{},
+	}
+	for rows.Next() {
+		var (
+			taskName    string
+			expectedMin sql.NullInt64
+			p50Min      sql.NullFloat64
+			p95Min      sql.NullFloat64
+			breachRate  sql.NullFloat64
+			sampleCount sql.NullInt64
+		)
+		if err := rows.Scan(&taskName, &expectedMin, &p50Min, &p95Min, &breachRate, &sampleCount); err != nil {
+			return nil, err
+		}
+		row := models.SLAReportTask{TaskName: taskName}
+		if expectedMin.Valid {
+			row.ExpectedMinutes = int(expectedMin.Int64)
+		}
+		if p50Min.Valid {
+			row.P50ActualMinutes = p50Min.Float64
+		}
+		if p95Min.Valid {
+			row.P95ActualMinutes = p95Min.Float64
+		}
+		if breachRate.Valid {
+			// Round to 1 decimal place, mirroring the SQL ROUND(...,1) in the issue.
+			row.BreachRatePercent = math.Round(breachRate.Float64*10) / 10
+		}
+		if sampleCount.Valid {
+			row.SampleCount = int(sampleCount.Int64)
+		}
+		out.Tasks = append(out.Tasks, row)
+	}
+	return out, rows.Err()
 }
 
 // GetTasksCompletedToday gets tasks completed today.
@@ -1675,6 +1861,11 @@ func (db *Database) GetTaskForUpdate(ctx context.Context, tx *sql.Tx, taskID uui
 
 // UpdateTaskTx updates a task within a transaction.
 func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.Task) error {
+	// Populate actual_duration_seconds (#274) on the same write that persists a
+	// completed_at — mirrors AddTask so the storage call sites that go through
+	// UpdateTaskTx (the terminal-status transitions) record the derived actual
+	// without each one having to remember it.
+	maybeComputeActualDuration(task)
 	_, err := tx.ExecContext(ctx, `
 		UPDATE tasks SET
 			prompt = $2,
@@ -1716,7 +1907,12 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			created_by_task_id = $38,
 			dead_lettered_at = $39,
 			dead_letter_reason = $40,
-			dead_letter_attempts = $41
+			dead_letter_attempts = $41,
+			expected_duration_minutes = $42,
+			sla_warn_multiplier = $43,
+			sla_fail_multiplier = $44,
+			sla_breached = $45,
+			actual_duration_seconds = $46
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1759,6 +1955,11 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.DeadLetteredAt,
 		nullableString(deref(task.DeadLetterReason)),
 		deadLetterAttemptsValue(task.DeadLetterAttempts),
+		expectedDurationValue(task.ExpectedDurationMinutes),
+		slaMultiplierValue(task.SLAWarnMultiplier, models.DefaultSLAWarnMultiplier),
+		slaMultiplierValue(task.SLAFailMultiplier, models.DefaultSLAFailMultiplier),
+		task.SLABreached,
+		task.ActualDurationSeconds,
 	)
 	return err
 }
