@@ -690,6 +690,18 @@ type MCPServerConfig struct {
 	// (creds.AccountsFor). Surfaced (names only) in the MCP catalog + the
 	// model-facing roster so a task/agent can discover valid account names.
 	AccountVars []string
+
+	// Optional-server metadata, carried from the bundle manifest (#205-adjacent
+	// fix): Optional gates a server out of every turn unless the conversation
+	// opted in (chat's Optional-server semantics); the rest drive the settings-UI
+	// catalog. These MUST be propagated all the way to agent.MCPServerSpec or the
+	// Gate-1 opt-in never fires and every connector's tools load on every turn,
+	// blowing past the model's tool-count ceiling.
+	Optional         bool
+	DisplayName      string
+	Description      string
+	Beta             bool
+	EnabledByDefault bool
 }
 
 // HTTPToolConfig is one resolved inline HTTP tool (the manifest http_tools[]

@@ -329,6 +329,11 @@ mcp_servers:
     command: python3
     args: ["mcp/a.py"]
     always: true
+    optional: true
+    enabled_by_default: true
+    display_name: "Always On"
+    description: "an optional connector"
+    beta: true
     env:
       A_OUT: "${A_SECRET}"
       A_LITERAL: "fixed"
@@ -397,6 +402,14 @@ mcp_servers:
 	}
 	if len(a.ToolAllowlist) != 2 {
 		t.Errorf("always_on tools = %v", a.ToolAllowlist)
+	}
+	// Optional-server metadata must propagate into the runtime config (the
+	// 128-tool-ceiling regression: these were silently dropped here).
+	if !a.Optional || !a.EnabledByDefault || !a.Beta {
+		t.Errorf("always_on optional flags dropped: optional=%v enabled_by_default=%v beta=%v", a.Optional, a.EnabledByDefault, a.Beta)
+	}
+	if a.DisplayName != "Always On" || a.Description != "an optional connector" {
+		t.Errorf("always_on optional labels dropped: display=%q desc=%q", a.DisplayName, a.Description)
 	}
 
 	h := cfgs["http_one"]
