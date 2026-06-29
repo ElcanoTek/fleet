@@ -27,6 +27,15 @@ type chatStore interface {
 	List(ctx context.Context, userEmail string, archivedOnly bool) ([]store.Conversation, error)
 	Delete(ctx context.Context, userEmail, convID string) error
 	DeleteAllUnpinned(ctx context.Context, userEmail string) (int, error)
+	// Bulk conversation operations (#279). DeleteByIDs hard-deletes (or, when
+	// soft-delete is enabled, tombstones) the supplied IDs scoped by ownership;
+	// a foreign or unknown ID returns store.ErrForeignConversation (→ 403) and
+	// the whole operation is a no-op. BulkPatch applies additive mutations
+	// (nil pointer = leave the field untouched) to the supplied IDs in a single
+	// transaction with the same ownership pre-check.
+	DeleteByIDs(ctx context.Context, userEmail string, ids []string) (int, error)
+	DeleteAllMatching(ctx context.Context, userEmail, folder, label string) (int, error)
+	BulkPatch(ctx context.Context, userEmail string, ids []string, pinned *bool, folder *string, labels []string) (int, error)
 	SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error
 	SetArchived(ctx context.Context, userEmail, convID string, archived bool) error
 	SetModel(ctx context.Context, userEmail, convID, model string) error

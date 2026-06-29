@@ -99,6 +99,8 @@ func (s *Store) SearchConversations(ctx context.Context, userEmail, query string
 	}
 
 	// total: distinct conversations that match in title OR any message body.
+	// Soft-deleted rows (#279) are excluded so a tombstoned conversation never
+	// surfaces in search (the restore window is a future endpoint, not search).
 	const countSQL = `
 SELECT COUNT(DISTINCT c.id)
 FROM conversations c
@@ -106,6 +108,7 @@ CROSS JOIN websearch_to_tsquery('english', $1) AS q
 LEFT JOIN message_search_content m
        ON m.conversation_id = c.id AND m.search_vector @@ q
 WHERE c.user_email = $2
+  AND c.deleted_at IS NULL
   AND (c.search_vector @@ q OR m.search_vector @@ q)`
 	var total int
 	if err := s.db.QueryRowContext(ctx, countSQL, q, userEmail).Scan(&total); err != nil {
@@ -127,6 +130,7 @@ CROSS JOIN websearch_to_tsquery('english', $1) AS q
 LEFT JOIN message_search_content m
        ON m.conversation_id = c.id AND m.search_vector @@ q
 WHERE c.user_email = $2
+  AND c.deleted_at IS NULL
   AND (c.search_vector @@ q OR m.search_vector @@ q)
 GROUP BY c.id, c.title, c.updated_at, c.search_vector, q
 ORDER BY (ts_rank_cd(c.search_vector, q) + COALESCE(MAX(ts_rank_cd(m.search_vector, q)), 0)) DESC,

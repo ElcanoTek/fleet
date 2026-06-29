@@ -208,6 +208,18 @@ func (s *fakeChatStore) SetOptionalMCPServers(context.Context, string, string, [
 }
 func (s *fakeChatStore) UpdateTitle(context.Context, string, string, string) error { return nil }
 
+// Bulk conversation operations (#279) — default no-ops; the /chat turn path
+// never touches these, so a nil-safe stub keeps the always-on fake compiling.
+func (s *fakeChatStore) DeleteByIDs(_ context.Context, _ string, ids []string) (int, error) {
+	return len(ids), nil
+}
+func (s *fakeChatStore) DeleteAllMatching(_ context.Context, _ string, _, _ string) (int, error) {
+	return 0, nil
+}
+func (s *fakeChatStore) BulkPatch(_ context.Context, _ string, ids []string, _ *bool, _ *string, _ []string) (int, error) {
+	return len(ids), nil
+}
+
 func newDefaultChatServer(t *testing.T, engine turnEngine, st chatStore) *Server {
 	t.Helper()
 	cfg := &config.Config{
