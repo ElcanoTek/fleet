@@ -93,6 +93,10 @@ export type ConversationSummary = {
   // archived ones (#282). Archived conversations live in the collapsed
   // "Archived" sidebar section, not the main list.
   archived_at?: number | null;
+  // share_token is the public read-only share token (#226). Empty/undefined =
+  // not shared; non-empty = a 🔗 badge shows in the sidebar and the menu offers
+  // Copy link / Unshare. The owner's own GET /conversations carries it.
+  share_token?: string;
 };
 
 export type ServerConfig = {
@@ -1646,6 +1650,69 @@ export function ChatExperience() {
     }
   };
 
+  // buildShareUrl turns a share token into the absolute, copy-paste link a
+  // recipient opens. window.origin is the deployment origin the user is on (#226).
+  const buildShareUrl = (token: string) =>
+    typeof window !== "undefined" ? `${window.location.origin}/shared/${token}` : `/shared/${token}`;
+
+  // patchShareToken updates a conversation's share_token in BOTH the active and
+  // archived lists so the 🔗 badge + Share/Unshare menu reflect reality whichever
+  // section the row lives in.
+  const patchShareToken = (id: string, token: string) => {
+    const patch = (c: ConversationSummary) => (c.id === id ? { ...c, share_token: token } : c);
+    setConversations((current) => current.map(patch));
+    setArchivedConversations((current) => current.map(patch));
+  };
+
+  // shareConversation issues a public read-only link and copies it to the
+  // clipboard (#226). Optimistic; reverts via refetch on backend failure.
+  // Returns true only when the link was both created AND copied, so the sidebar
+  // shows "Copied!" honestly (a blocked clipboard returns false → no flash, but
+  // the 🔗 badge still appears as the share succeeded).
+  const shareConversation = async (conversation: ConversationSummary): Promise<boolean> => {
+    const response = await fetch(`/api/conversations/${conversation.id}/share`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!response.ok) {
+      await refreshConversations();
+      return false;
+    }
+    const data = (await response.json()) as { token?: string };
+    const token = data.token ?? "";
+    patchShareToken(conversation.id, token);
+    if (!token) return false;
+    try {
+      await navigator.clipboard.writeText(buildShareUrl(token));
+      return true;
+    } catch {
+      // Clipboard may be blocked (no user gesture / insecure context); the link
+      // is still reachable via the Copy-link action once the badge appears.
+      return false;
+    }
+  };
+
+  // unshareConversation revokes the public link (#226).
+  const unshareConversation = async (conversation: ConversationSummary) => {
+    patchShareToken(conversation.id, "");
+    const response = await fetch(`/api/conversations/${conversation.id}/share`, { method: "DELETE" });
+    if (!response.ok) {
+      await refreshConversations();
+    }
+  };
+
+  // copyShareLink re-copies an already-shared conversation's link (#226).
+  const copyShareLink = async (conversation: ConversationSummary): Promise<boolean> => {
+    if (!conversation.share_token) return false;
+    try {
+      await navigator.clipboard.writeText(buildShareUrl(conversation.share_token));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   // toggleArchive moves a conversation between the active and archived lists
   // (#282). Optimistic: the row hops sections immediately; on a backend error
   // we re-fetch to restore the truth. Archiving also clears the pin (the
@@ -2257,6 +2324,9 @@ export function ChatExperience() {
           toggleArchive={toggleArchive}
           setPendingDeleteConversation={setPendingDeleteConversation}
           togglePin={togglePin}
+          shareConversation={shareConversation}
+          unshareConversation={unshareConversation}
+          copyShareLink={copyShareLink}
           archivedConversations={archivedConversations}
           showArchived={showArchived}
           setShowArchived={setShowArchived}

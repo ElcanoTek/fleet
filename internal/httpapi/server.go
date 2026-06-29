@@ -47,6 +47,11 @@ type Server struct {
 	// rateLimitHits tallies 429s by reason ("rpm"|"day"|"concurrent"). Pointer-held
 	// so a Server value stays copyable. A Prometheus surface is deferred to #176.
 	rateLimitHits *rateHitCounter
+	// shareRL throttles the public read-only share endpoint (#226), keyed by
+	// share TOKEN (not IP — the endpoint sits behind the Next proxy, so per-IP
+	// would see only the proxy's address). Always on, independent of the per-user
+	// rate-limit master switch, because /shared is the most exposed surface.
+	shareRL       *ratelimit.Limiter
 	hasUsers      atomic.Bool
 	lastUserCheck atomic.Int64
 
@@ -300,6 +305,10 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		inflight:         make(map[string]inflightEntry),
 		sessionApprovals: NewSessionApprovalRegistry(),
 		sseReconnects:    newReconnectCounter(),
+		// Per-token cap on the public /shared read endpoint (#226): generous for
+		// real viewers, a hard ceiling against scraping/DDoS amplification of a
+		// single link. No daily window.
+		shareRL: ratelimit.New(sharedReadsPerMinutePerToken, 0),
 	}
 	// Rate limiting is a single master switch. When on, the RPM/day window and
 	// the per-user concurrent-turn cap are both live; when off, both limiters are
@@ -513,6 +522,12 @@ func (s *Server) Routes() http.Handler {
 	// /theme.css themes the shell (incl. the pre-auth login page) from the
 	// bundle palette, so it is token-gated but identity-less — see themeCSS.
 	mux.Handle("/theme.css", s.tokenOnlyMiddleware(http.HandlerFunc(s.themeCSS)))
+	// Public read-only conversation sharing (#226). Token-gated (shared secret —
+	// only the trusted Next proxy reaches it) but IDENTITY-less, like /theme.css:
+	// the share token in the path is the authorization, and the handler enforces
+	// its own per-token rate limit + expiry. The Next layer exposes /shared/{token}
+	// to logged-out viewers.
+	mux.Handle("/shared/", s.tokenOnlyMiddleware(http.HandlerFunc(s.handleSharedConversation)))
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
@@ -1306,6 +1321,12 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case sub == "share" && r.Method == http.MethodPost:
+		// Issue (or rotate) a public read-only share token (#226).
+		s.handleConversationShare(w, r, id, user)
+	case sub == "share" && r.Method == http.MethodDelete:
+		// Revoke sharing for this conversation (#226).
+		s.handleConversationUnshare(w, r, id, user)
 	case sub == "mcp-servers" && r.Method == http.MethodGet:
 		// Per-conversation MCP-server catalog. Response shape:
 		//   { "servers": [{ name, description, tools: [...], tool_count,
