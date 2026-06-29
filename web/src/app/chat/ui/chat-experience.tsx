@@ -27,7 +27,7 @@ import { parseSseChunk } from "@/app/lib/sse";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import { SearchBar } from "./SearchBar";
 import { useClientConfig } from "@/app/lib/useClientConfig";
-import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
+import { filterConversations } from "./conversationOrganization";
 import {
   useKeyboardShortcuts,
   type KeyboardShortcut,
@@ -93,6 +93,13 @@ export type ConversationSummary = {
   // archived ones (#282). Archived conversations live in the collapsed
   // "Archived" sidebar section, not the main list.
   archived_at?: number | null;
+  // folder is the single flat bucket this conversation is filed under (#279).
+  // Empty/undefined = unfiled. Folders are derived from these values in the
+  // rail — there is no folders table. Filing a conversation auto-pins it.
+  folder?: string;
+  // labels is the conversation's tag set (#279) — up to 10, 32 chars each,
+  // colored by name-hash. Undefined/empty = unlabeled.
+  labels?: string[];
 };
 
 export type ServerConfig = {
@@ -414,6 +421,10 @@ export function ChatExperience() {
   const [isLoadingMemories, setIsLoadingMemories] = useState(false);
   const [isSavingMemory, setIsSavingMemory] = useState(false);
   const [sidebarQuery, setSidebarQuery] = useState("");
+  // Rail organization filters (#258/#279): a single active folder and a set of
+  // labels (AND). Driving the sectioned-vs-filtered view in the rail.
+  const [filterFolder, setFilterFolder] = useState<string | null>(null);
+  const [filterLabels, setFilterLabels] = useState<string[]>([]);
   // pendingAttachments holds files the user has picked but not yet sent.
   // We upload them to the server on submit, get back metadata with a
   // server-trusted path, and forward that in the /api/chat body. The
@@ -869,11 +880,17 @@ export function ChatExperience() {
   // (Initial-load mount effect moved below its callback dependencies — see
   // "mount effects, hoisted below their callback dependencies".)
 
-  const filteredConversations = useMemo(() => {
-    const q = sidebarQuery.trim().toLowerCase();
-    if (!q) return conversations;
-    return conversations.filter((c) => c.title.toLowerCase().includes(q));
-  }, [conversations, sidebarQuery]);
+  // The flat filtered list (folder + labels + title query). When no filter is
+  // active this is the full active list, so "select all visible" stays correct.
+  const filteredConversations = useMemo(
+    () =>
+      filterConversations(conversations, {
+        folder: filterFolder,
+        labels: filterLabels,
+        query: sidebarQuery,
+      }),
+    [conversations, filterFolder, filterLabels, sidebarQuery],
+  );
 
   // With no query, show "default" + "advanced" + the top-ranked list. As
   // soon as the user types, expand the search to the full budget-filtered
@@ -1456,35 +1473,63 @@ export function ChatExperience() {
     }
   };
 
-  // bulkPatchConversations applies additive mutations (pinned / folder / labels)
-  // to the selected IDs in a single PATCH /conversations/bulk call. nil fields
-  // are omitted from the payload so the backend leaves them untouched.
-  const bulkPatchConversations = async (
+  // patchConversationIds applies pinned/folder/labels to the given conversation
+  // IDs via the live PATCH /conversations/bulk endpoint (#279) and reflects the
+  // change locally so the rail updates without a refetch. Undefined fields are
+  // dropped by JSON.stringify, so the backend leaves them untouched (COALESCE);
+  // folder "" clears the folder, and labels is a full replace.
+  const patchConversationIds = async (
+    ids: string[],
     changes: { pinned?: boolean; folder?: string; labels?: string[] },
   ) => {
-    const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
-    const payload: Record<string, unknown> = { conversation_ids: ids, changes: {} };
-    if (changes.pinned !== undefined) (payload.changes as Record<string, unknown>).pinned = changes.pinned;
-    if (changes.folder !== undefined) (payload.changes as Record<string, unknown>).folder = changes.folder;
-    if (changes.labels !== undefined) (payload.changes as Record<string, unknown>).labels = changes.labels;
     const response = await fetch("/api/conversations/bulk", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ conversation_ids: ids, changes }),
     });
     if (!response.ok) throw new Error("Unable to update conversations.");
-    // Reflect the mutation locally so the sidebar updates without a refetch.
+    const idSet = new Set(ids);
     setConversations((current) =>
       current.map((c) => {
-        if (!selectedIds.has(c.id)) return c;
+        if (!idSet.has(c.id)) return c;
         const next = { ...c };
         if (changes.pinned !== undefined) next.pinned = changes.pinned;
-        if (changes.folder !== undefined) (next as ConversationSummary & { folder?: string }).folder = changes.folder;
-        if (changes.labels !== undefined) (next as ConversationSummary & { labels?: string[] }).labels = changes.labels;
+        if (changes.folder !== undefined) next.folder = changes.folder;
+        if (changes.labels !== undefined) next.labels = changes.labels;
         return next;
       }),
     );
+  };
+
+  // bulkPatchConversations targets the current multi-select set.
+  const bulkPatchConversations = (changes: { pinned?: boolean; folder?: string; labels?: string[] }) =>
+    patchConversationIds(Array.from(selectedIds), changes);
+
+  // setConversationFolder files (folder=name) or unfiles (folder=null) a single
+  // conversation from the rail's kebab. Filing auto-pins it — matching the rail's
+  // "filing pins it" model; unfiling clears the folder and leaves the pin alone.
+  const setConversationFolder = (conversationId: string, folder: string | null) => {
+    const changes: { pinned?: boolean; folder?: string } = { folder: folder ?? "" };
+    if (folder) changes.pinned = true;
+    void patchConversationIds([conversationId], changes);
+  };
+
+  // setConversationLabels replaces a single conversation's label set. The bulk
+  // endpoint replaces (not appends), so the rail computes the next full set
+  // (add/remove) before calling.
+  const setConversationLabels = (conversationId: string, labels: string[]) => {
+    void patchConversationIds([conversationId], { labels });
+  };
+
+  // signOut posts the logout form (preserving the prior <form> POST semantics:
+  // the browser navigates to /api/auth/logout, clearing the session cookie).
+  const signOut = () => {
+    const form = document.createElement("form");
+    form.method = "post";
+    form.action = "/api/auth/logout";
+    document.body.appendChild(form);
+    form.submit();
   };
 
   const deleteConversationById = async (conversationId: string) => {
@@ -2240,28 +2285,33 @@ export function ChatExperience() {
           setSidebarOpen={setSidebarOpen}
           branding={branding}
           serverConfig={serverConfig}
-          clearConversation={clearConversation}
-          setSearchOpen={setSearchOpen}
-          setShortcutsOpen={setShortcutsOpen}
           userEmail={userEmail}
+          onSignOut={signOut}
+          clearConversation={clearConversation}
           sidebarQuery={sidebarQuery}
           setSidebarQuery={setSidebarQuery}
           searchRef={searchRef}
-          searchShortcut={searchShortcut}
+          filterFolder={filterFolder}
+          setFilterFolder={setFilterFolder}
+          filterLabels={filterLabels}
+          setFilterLabels={setFilterLabels}
           isLoadingHistory={isLoadingHistory}
+          conversations={conversations}
           filteredConversations={filteredConversations}
           activeConversationId={activeConversationId}
           loadConversation={loadConversation}
           streamingConvs={streamingConvs}
-          downloadConversation={downloadConversation}
-          toggleArchive={toggleArchive}
-          setPendingDeleteConversation={setPendingDeleteConversation}
           togglePin={togglePin}
+          toggleArchive={toggleArchive}
+          renameConversation={renameConversation}
+          downloadConversation={downloadConversation}
+          setPendingDeleteConversation={setPendingDeleteConversation}
+          setConversationFolder={setConversationFolder}
+          setConversationLabels={setConversationLabels}
           archivedConversations={archivedConversations}
           showArchived={showArchived}
           setShowArchived={setShowArchived}
           updateAvailable={updateAvailable}
-          conversations={conversations}
           setConfirmBulkDelete={setConfirmBulkDelete}
           selectedIds={selectedIds}
           onToggleSelection={toggleConversationSelection}
@@ -2270,21 +2320,14 @@ export function ChatExperience() {
           onBulkDelete={() => setBulkDeleteConfirm(true)}
           onBulkPin={() => void bulkPatchConversations({ pinned: true })}
           onBulkUnpin={() => void bulkPatchConversations({ pinned: false })}
-          onBulkMoveFolder={(folder) => void bulkPatchConversations({ folder })}
+          onBulkMoveFolder={(folder) => {
+            if (folder === "") return;
+            void bulkPatchConversations({ folder, pinned: true });
+          }}
           onBulkAddLabel={(label) => {
             if (label === "") return;
             void bulkPatchConversations({ labels: [label] });
           }}
-        />
-
-        <button
-          aria-label="Close sidebar"
-          className={[
-            "fixed inset-0 z-20 bg-[color-mix(in_srgb,var(--color-overlay-strong)_120%,black)] backdrop-blur-[2px] transition lg:hidden",
-            sidebarOpen ? "block" : "hidden",
-          ].join(" ")}
-          type="button"
-          onClick={() => setSidebarOpen(false)}
         />
 
         {searchOpen ? (
@@ -2656,6 +2699,32 @@ export function ChatExperience() {
             </div>
 
             <div className="inline-flex items-center gap-1">
+              {/* Unified page-header search (#169): opens the full-text command
+                  palette (⌘K). The rail's own "Search chats…" input is a local
+                  filter; this is the cross-conversation search. */}
+              <button
+                aria-label="Search conversations"
+                className="inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                title="Search conversations"
+                type="button"
+                onClick={() => setSearchOpen(true)}
+              >
+                <Icon name="search" className="size-4" />
+                <span className="hidden sm:inline">Search</span>
+                <kbd className="hidden font-[family-name:var(--font-code)] text-[0.6875rem] text-[var(--color-text-muted)] sm:inline">
+                  {searchShortcut}
+                </kbd>
+              </button>
+              <button
+                aria-label="Keyboard shortcuts"
+                className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                title="Keyboard shortcuts (?)"
+                data-testid="shortcuts-button"
+                type="button"
+                onClick={() => setShortcutsOpen(true)}
+              >
+                <Icon name="info" className="size-5" />
+              </button>
               <button
                 aria-label="Manage memories"
                 className="relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
@@ -2697,10 +2766,6 @@ export function ChatExperience() {
                   />
                 </span>
               </button>
-              {/* Shared shell theme switch (same control as the orchestrator
-                  header + login card). Default chrome matches this header's
-                  square icon-button exactly. */}
-              <ThemeToggle />
             </div>
           </header>
 
