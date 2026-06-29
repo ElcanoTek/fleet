@@ -10,6 +10,8 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/google/uuid"
+
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -63,6 +65,16 @@ type Agent struct {
 	sb            *sandbox.Sandbox
 	notesProvider agentcore.NotesProvider
 	noteProposer  agentcore.NoteProposer
+
+	// ── agent self-improvement (#285), gated by the per-task Captain's Log opt-in
+	// (instruction_self_improve). The DRIVER (scheduledrun) leaves these nil unless
+	// the task opted in, so config/default behaviour is unchanged. ──
+	//
+	// taskMemory + taskID + taskMemoryConfig back the remember/recall tools and the
+	// run-start memory injection (#198).
+	taskMemory       tools.TaskMemoryStore
+	taskID           uuid.UUID
+	taskMemoryConfig tools.TaskMemoryConfig
 
 	// phoneAFriendEnabled gates the one-time "phone a friend" super-LLM review
 	// (part of #175). OFF by default — config/default behaviour is unchanged.
@@ -128,6 +140,16 @@ type Options struct {
 	// NoteProposer stages agent-proposed note edits (propose_note). Nil leaves
 	// the tool reporting "not wired".
 	NoteProposer agentcore.NoteProposer
+
+	// ── agent self-improvement (#285) — set by the driver ONLY when the task
+	// opted into Captain's Log (instruction_self_improve); nil otherwise. ──
+	//
+	// TaskMemory + TaskID enable the remember/recall tools and the run-start
+	// memory injection (#198); TaskMemoryConfig caps how much a task accumulates.
+	// Wired by the driver only when the task opted into Captain's Log.
+	TaskMemory       tools.TaskMemoryStore
+	TaskID           uuid.UUID
+	TaskMemoryConfig tools.TaskMemoryConfig
 
 	// CredentialAllowlist scopes which (server, account) MCP pairs this task may
 	// call (Gate-3, #184). nil = inherit global. Threaded into RunConfig so the
@@ -214,6 +236,9 @@ func NewAgent(opts Options) *Agent {
 		logFile:             opts.LogFile,
 		notesProvider:       opts.NotesProvider,
 		noteProposer:        opts.NoteProposer,
+		taskMemory:          opts.TaskMemory,
+		taskID:              opts.TaskID,
+		taskMemoryConfig:    opts.TaskMemoryConfig,
 		credentialAllowlist: opts.CredentialAllowlist,
 		personaPolicy:       opts.PersonaPolicy,
 		phoneAFriendEnabled: opts.PhoneAFriendEnabled,
@@ -409,6 +434,20 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		}
 	}
 
+	// Captain's Log (#285) prompt section, in lockstep with the remember/recall
+	// tools wired below and gated by the driver opting the task in. Persistent
+	// memory from prior runs is injected here (the section also advertises the
+	// remember/recall tools). A read failure is non-fatal — the run proceeds
+	// without the section.
+	if a.taskMemory != nil {
+		mems, err := a.taskMemory.ListTaskMemories(ctx, a.taskID)
+		if err != nil {
+			log.Printf("task memory unavailable; running without the persistent-memory section: %v", err)
+			mems = nil
+		}
+		systemPrompt = appendTaskMemorySection(systemPrompt, mems)
+	}
+
 	// Scheduled policy: audit gating + finish enforcement (agentcore) + verifier.
 	var maxCostUSD float64
 	var maxTotalTokens int
@@ -445,6 +484,17 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	nativeTools := a.nativeTools
 	if a.noteProposer != nil {
 		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeNoteTool())
+	}
+
+	// Captain's Log persistent memory (#198, #285): the remember/recall tools are
+	// registered in lockstep with their prompt advertisement and ONLY when the
+	// driver opted the task in (it leaves taskMemory nil otherwise, so the default
+	// roster is unchanged). propose_note above stays unconditional (gated only on
+	// its proposer) to preserve pre-#285 scheduled behaviour.
+	if a.taskMemory != nil {
+		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...),
+			tools.NewRememberTool(a.taskMemory, a.taskID, a.taskMemoryConfig),
+			tools.NewRecallTool(a.taskMemory, a.taskID))
 	}
 
 	// spawn_subagent (#175, part b): register the tool ONLY when the feature is
@@ -584,6 +634,34 @@ func appendScheduledAgentNotes(base string, notes []agentcore.Note) string {
 	}
 	appendAgentNotes(&sb, notes)
 	appendNoteProposalTool(&sb)
+	return sb.String()
+}
+
+// appendTaskMemorySection appends the "Your Persistent Memory" block (#198) to
+// the scheduled base prompt: the facts saved by prior runs of this task, plus a
+// short note about the remember/recall tools. When the task has no memories yet
+// (first run) the facts list is omitted but the tool note still renders, so the
+// agent knows the capability exists.
+func appendTaskMemorySection(base string, mems []tools.TaskMemory) string {
+	var sb strings.Builder
+	sb.WriteString(base)
+	if !strings.HasSuffix(base, "\n\n") {
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString("## Your Persistent Memory\n\n")
+	sb.WriteString("This is YOUR memory across runs of this scheduled task. Facts you save with " +
+		"`remember` are reloaded here at the start of every future run; use `recall` to re-read them " +
+		"mid-run. Use this to track state across time (e.g. the last value you saw, items already " +
+		"processed). Do NOT store secrets or credentials.\n\n")
+	if len(mems) == 0 {
+		sb.WriteString("_No facts saved yet — this is the first run, or memory was cleared._\n\n")
+		return sb.String()
+	}
+	sb.WriteString("Facts saved by previous runs:\n\n")
+	for _, m := range mems {
+		fmt.Fprintf(&sb, "- **%s**: %s\n", m.Key, strings.TrimSpace(m.Value))
+	}
+	sb.WriteString("\n")
 	return sb.String()
 }
 

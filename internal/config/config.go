@@ -121,31 +121,33 @@ var allowedEnvVars = map[string]bool{
 	"DB_SSLMODE":                        true,
 
 	// ── LLM (shared) ──
-	"OPENROUTER_API_KEY":             true,
-	"OPENROUTER_BASE_URL":            true,
-	"FLEET_OPENROUTER_BASE_URL":      true,
-	"CHAT_MAX_ITERATIONS":            true,
-	"CHAT_MAX_COST_USD":              true,
-	"CHAT_MAX_TOTAL_TOKENS":          true,
-	"CHAT_TURN_TIMEOUT_SECONDS":      true,
-	"CHAT_TEMPERATURE":               true,
-	"CHAT_TITLE_MODEL":               true,
-	"FLEET_MAX_ITERATIONS":           true,
-	"FLEET_MAX_COST_USD":             true,
-	"FLEET_MAX_TOTAL_TOKENS":         true,
-	"FLEET_TEMPERATURE":              true,
-	"FLEET_TITLE_MODEL":              true,
-	"FLEET_AUTO_TITLE":               true,
-	"FLEET_APPROVAL_TIMEOUT_SECONDS": true,
-	"FLEET_AUTO_APPROVE_IN_TEST":     true,
-	"FLEET_MAX_CONCURRENT_AGENTS":    true,
-	"FLEET_RUN_LOG_RETENTION_DAYS":   true,
-	"FLEET_KEEP_RUNS_PER_TASK":       true,
-	"FLEET_CLEANUP_HOUR":             true,
-	"LLM_MAX_TOKENS":                 true,
-	"REASONING_ENABLED":              true,
-	"REASONING_EFFORT":               true,
-	"FLEET_MAX_TOOL_OUTPUT_BYTES":    true,
+	"OPENROUTER_API_KEY":                true,
+	"OPENROUTER_BASE_URL":               true,
+	"FLEET_OPENROUTER_BASE_URL":         true,
+	"CHAT_MAX_ITERATIONS":               true,
+	"CHAT_MAX_COST_USD":                 true,
+	"CHAT_MAX_TOTAL_TOKENS":             true,
+	"CHAT_TURN_TIMEOUT_SECONDS":         true,
+	"CHAT_TEMPERATURE":                  true,
+	"CHAT_TITLE_MODEL":                  true,
+	"FLEET_MAX_ITERATIONS":              true,
+	"FLEET_MAX_COST_USD":                true,
+	"FLEET_MAX_TOTAL_TOKENS":            true,
+	"FLEET_TEMPERATURE":                 true,
+	"FLEET_TITLE_MODEL":                 true,
+	"FLEET_AUTO_TITLE":                  true,
+	"FLEET_APPROVAL_TIMEOUT_SECONDS":    true,
+	"FLEET_AUTO_APPROVE_IN_TEST":        true,
+	"FLEET_MAX_CONCURRENT_AGENTS":       true,
+	"FLEET_RUN_LOG_RETENTION_DAYS":      true,
+	"FLEET_KEEP_RUNS_PER_TASK":          true,
+	"FLEET_TASK_MEMORY_MAX_KEYS":        true,
+	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES": true,
+	"FLEET_CLEANUP_HOUR":                true,
+	"LLM_MAX_TOKENS":                    true,
+	"REASONING_ENABLED":                 true,
+	"REASONING_EFFORT":                  true,
+	"FLEET_MAX_TOOL_OUTPUT_BYTES":       true,
 
 	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
 	"FLEET_LOG_FILE":         true,
@@ -559,6 +561,16 @@ type Config struct {
 	SubagentsMaxChildren int
 	SubagentsModel       string
 
+	// ── agent self-improvement: persistent task memory (#198, #285) ──
+	// A scheduled task that opts into Captain's Log (instruction_self_improve) gets
+	// remember/recall tools backed by the task_memories table. These caps bound how
+	// much a single task may accumulate so a long-lived recurring task cannot grow
+	// its memory unbounded. TaskMemoryMaxKeys (>0) bounds the number of distinct
+	// keys (oldest evicted LRU-style); TaskMemoryMaxValueBytes (>0) hard-rejects an
+	// oversized value. Defaults: 100 keys, 4096 bytes.
+	TaskMemoryMaxKeys       int
+	TaskMemoryMaxValueBytes int
+
 	// ── run-history retention (#252) ──
 	// RunLogRetentionDays prunes terminal task runs (and their logs) older than
 	// this many days in a daily sweep. <=0 disables pruning. Default 90.
@@ -860,6 +872,10 @@ func Load(envFile string) (*Config, error) {
 		SubagentsMaxDepth:    getenvFleetInt("SUBAGENTS_MAX_DEPTH", defaultSubagentsMaxDepth),
 		SubagentsMaxChildren: getenvFleetInt("SUBAGENTS_MAX_CHILDREN", defaultSubagentsMaxChildren),
 		SubagentsModel:       getenvFleet("SUBAGENTS_MODEL"),
+
+		// ── agent self-improvement: persistent task memory (#198, #285) ──
+		TaskMemoryMaxKeys:       getenvFleetInt("TASK_MEMORY_MAX_KEYS", 100),
+		TaskMemoryMaxValueBytes: getenvFleetInt("TASK_MEMORY_MAX_VALUE_BYTES", 4096),
 
 		// ── run-history retention (#252) ──
 		RunLogRetentionDays: getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),

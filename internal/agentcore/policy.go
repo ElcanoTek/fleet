@@ -46,7 +46,7 @@ func (p *InteractivePolicy) SetNoteProposer(np NoteProposer) { p.orch.setNotePro
 // email safety (rate-limit/dedup/approval staging) → risky-bash approval →
 // preview_email staging → suggest_advanced_model staging → memory proposal →
 // note proposal. The bash/preview/suggest gates are inert when no approval sink
-// is wired.
+// is wired; the proposal gates are inert when no proposer is.
 func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
 	if blocked, msg := p.orch.checkCeilings(); blocked {
 		return true, msg
@@ -121,9 +121,12 @@ func (p *ScheduledPolicy) Budget() BudgetState { return p.orch.budgetState() }
 func (p *ScheduledPolicy) ChargeChildUsage(u RunUsage) { p.orch.chargeChildUsage(u) }
 
 // BeforeToolCall runs the scheduled gate chain: cost/token ceiling → repeat-call
-// guard → critical-tool audit gating → note proposal. The ceiling check is FIRST
-// (matching the interactive policy) so an unattended run that blows its budget
-// stops calling tools and ends with what it has, rather than running unbounded.
+// guard → critical-tool audit gating → memory-proposal backstop → note proposal.
+// The ceiling check is FIRST (matching the interactive policy) so an unattended
+// run that blows its budget stops calling tools and ends with what it has,
+// rather than running unbounded. The memory-proposal gate is an honest
+// "unavailable" backstop (scheduled tasks use remember/recall, not
+// propose_memory — interactive-only).
 func (p *ScheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
 	if blocked, msg := p.orch.checkCeilings(); blocked {
 		return true, msg
@@ -132,6 +135,15 @@ func (p *ScheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) 
 		return true, msg
 	}
 	if blocked, msg := p.orch.checkCriticalTool(toolName, toolCallID, rawInput); blocked {
+		return true, msg
+	}
+	// Honest backstop for propose_memory (#285): the scheduled orchestration never
+	// wires a memoryProposer (user memories are interactive-only — scheduled tasks
+	// use the remember/recall task-memory tools instead), so this returns
+	// MEMORY_PROPOSAL_UNAVAILABLE rather than letting the no-op tool body falsely
+	// report "Memory proposal created". The scheduled prompt does not advertise
+	// propose_memory, so this only fires if the model calls it unprompted.
+	if blocked, msg := p.orch.checkMemoryProposal(toolName, rawInput); blocked {
 		return true, msg
 	}
 	if blocked, msg := p.orch.checkNoteProposal(toolName, rawInput); blocked {
