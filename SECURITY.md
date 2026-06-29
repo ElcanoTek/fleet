@@ -64,6 +64,13 @@ keep a compromised or fresh-and-unvetted release from reaching `main`:
 - **Dependency-CVE scanning.** CI runs `govulncheck` against the Go module on
   every PR (the `govulncheck` job in `.github/workflows/ci.yml`), failing the
   build on a known-vulnerable dependency that fleet actually calls into.
+- **Container-image CVE scanning.** CI also scans the rootless-Podman sandbox
+  image (built from `config/default/sandbox/Containerfile`) with Grype on every
+  non-docs PR (the `grype-scan` job), failing the build on a *fixable* CRITICAL
+  CVE in the image's RPM or Python packages — a surface `govulncheck` (Go modules
+  only) cannot see. Findings upload to GitHub Security → Code scanning, and a
+  weekly scheduled scan (`.github/workflows/grype-scheduled.yml`) catches
+  newly-disclosed CVEs against the existing image between PRs.
 - **Release cooldown.** `.github/dependabot.yml` applies a `cooldown` to the gomod
   and npm surfaces so Dependabot waits a few days (3 for patch, 7 for minor, 14
   for major) before proposing a freshly published release. This blunts fast
