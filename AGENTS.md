@@ -119,6 +119,10 @@ same PR.
   - **Payload Limits**: Imports are rate-limited/capped to at most 100 task records per request (matching bulk API policies). Payload-internal duplicate name entries are validation errors.
   - **Conflict Behaviors**: Mode `conflict=error` aborts the batch on any collision; `conflict=skip` skips colliding entries and writes others; `conflict=replace` performs an in-place update of colliding entries. Mode `conflict=replace` requires admin permission.
   - **Formats**: Support both JSON and YAML envelopes (via `github.com/goccy/go-yaml`). Version is set to `"1"`.
+- **Read-only conversation sharing (#226)**:
+  - **Opt-in public links**: `POST /conversations/{id}/share` mints a 256-bit `crypto/rand` (base64url) token stored in `conversations.share_token`; `DELETE` revokes it. `GET /shared/{token}` returns a read-only snapshot (title/model/messages) that **deliberately omits the conversation id and owner email**. Optional `share_expires_at` is enforced server-side.
+  - **Public-but-proxied**: `/shared/{token}` is token-only-gated (shared secret — only the Next proxy reaches it, not the open internet) and IDENTITY-less; the share token is the authorization, token entropy is the confidentiality guarantee, and a per-TOKEN rate limit (`shareRL`, 120/min) is the abuse gate (per-IP would see only the proxy). The Next page `/shared/[token]` is account-less (middleware bypass) and fetches via `chatServerFetchPublic` (secret, no user email).
+  - **Sweep exemption**: `SweepExpired` skips `share_token IS NOT NULL` rows (TTL delete + per-user cap) so a live share link is never silently revoked by retention.
 - One focused branch + PR per change; keep diffs scoped. Don't refactor unrelated
   code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions and DCO
   sign-off.

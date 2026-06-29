@@ -15,7 +15,7 @@
 // Delete/Download <title>") are preserved verbatim — they now live inside the
 // kebab menu, and the live conversation-mgmt e2e opens the kebab to reach them.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import type { ClientBranding } from "@/app/lib/useClientConfig";
 import { NavRail } from "@/app/shared/ui/NavRail";
@@ -36,6 +36,28 @@ import {
   type LabelSummary,
 } from "./conversationOrganization";
 import type { ConversationSummary, PendingDeleteConversation, ServerConfig } from "./chat-experience";
+
+// ── Share glyph (#226) ───────────────────────────────────────────────────────
+// The chain-link icon used for share affordances; `off` adds the slash for the
+// "stop sharing" variant.
+function ShareGlyph({ className, off }: { className?: string; off?: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M10 13a5 5 0 0 0 7.07 0l2-2a5 5 0 0 0-7.07-7.07l-1 1" />
+      <path d="M14 11a5 5 0 0 0-7.07 0l-2 2a5 5 0 0 0 7.07 7.07l1-1" />
+      {off ? <path d="M4 4l16 16" /> : null}
+    </svg>
+  );
+}
 
 // ── Label chips ────────────────────────────────────────────────────────────
 function LabelChip({
@@ -222,6 +244,10 @@ function ConversationKebab({
   onDownload,
   onSetFolder,
   onSetLabels,
+  onShare,
+  onCopyLink,
+  onUnshare,
+  isShared,
   onArchive,
   onDelete,
 }: {
@@ -233,6 +259,10 @@ function ConversationKebab({
   onDownload: () => void;
   onSetFolder: (folder: string | null) => void;
   onSetLabels: (labels: string[]) => void;
+  onShare: () => void;
+  onCopyLink: () => void;
+  onUnshare: () => void;
+  isShared: boolean;
   onArchive: () => void;
   onDelete: () => void;
 }) {
@@ -322,6 +352,39 @@ function ConversationKebab({
               Labels
             </MenuItem>
             <MenuSeparator />
+            {isShared ? (
+              <>
+                <MenuItem
+                  icon={<ShareGlyph className="size-4" />}
+                  onClick={() => {
+                    onCopyLink();
+                    close();
+                  }}
+                >
+                  Copy share link
+                </MenuItem>
+                <MenuItem
+                  icon={<ShareGlyph off className="size-4" />}
+                  onClick={() => {
+                    onUnshare();
+                    close();
+                  }}
+                >
+                  Stop sharing {conversation.title}
+                </MenuItem>
+              </>
+            ) : (
+              <MenuItem
+                icon={<ShareGlyph className="size-4" />}
+                onClick={() => {
+                  onShare();
+                  close();
+                }}
+              >
+                Share {conversation.title}
+              </MenuItem>
+            )}
+            <MenuSeparator />
             <MenuItem
               icon={
                 <svg
@@ -399,6 +462,7 @@ function ConvRow({
   editing,
   selecting,
   checked,
+  copied,
   onOpen,
   onToggleSelect,
   onCommitRename,
@@ -411,6 +475,7 @@ function ConvRow({
   editing: boolean;
   selecting: boolean;
   checked: boolean;
+  copied: boolean;
   onOpen: () => void;
   onToggleSelect: () => void;
   onCommitRename: (title: string) => void;
@@ -490,6 +555,15 @@ function ConvRow({
               />
             ) : null}
             {conversation.lockdown ? <Icon name="lock" className="size-3 shrink-0 text-[var(--color-accent)]" /> : null}
+            {copied ? (
+              <span aria-label="Link copied" title="Link copied!">
+                <Icon name="check" className="size-3 shrink-0 text-[var(--color-accent)]" />
+              </span>
+            ) : conversation.share_token ? (
+              <span aria-label="Shared" title="Shared — read-only link is live">
+                <ShareGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
+              </span>
+            ) : null}
             <span className="block truncate">{conversation.title}</span>
           </span>
           {labels.length > 0 ? (
@@ -569,6 +643,9 @@ export function ConversationSidebar({
   setPendingDeleteConversation,
   setConversationFolder,
   setConversationLabels,
+  shareConversation,
+  unshareConversation,
+  copyShareLink,
   archivedConversations,
   showArchived,
   setShowArchived,
@@ -611,6 +688,10 @@ export function ConversationSidebar({
   setPendingDeleteConversation: Dispatch<SetStateAction<PendingDeleteConversation | null>>;
   setConversationFolder: (conversationId: string, folder: string | null) => void;
   setConversationLabels: (conversationId: string, labels: string[]) => void;
+  // Read-only sharing (#226): issue+copy a public link, revoke it, or re-copy.
+  shareConversation: (conversation: ConversationSummary) => Promise<boolean>;
+  unshareConversation: (conversation: ConversationSummary) => Promise<void>;
+  copyShareLink: (conversation: ConversationSummary) => Promise<boolean>;
   archivedConversations: ConversationSummary[];
   showArchived: boolean;
   setShowArchived: Dispatch<SetStateAction<boolean>>;
@@ -632,6 +713,22 @@ export function ConversationSidebar({
   const [bulkPanel, setBulkPanel] = useState<"none" | "folder" | "labels">("none");
   const bulkFolderRef = useRef<HTMLButtonElement | null>(null);
   const bulkLabelsRef = useRef<HTMLButtonElement | null>(null);
+  // Transient "copied" feedback for share/copy actions (#226), keyed by conv id.
+  // The only effect just clears the pending timer on unmount — setState happens
+  // in handlers + the timeout callback, never synchronously in the effect body.
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copiedTimer = useRef<number | null>(null);
+  const flashCopied = (id: string) => {
+    setCopiedId(id);
+    if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
+    copiedTimer.current = window.setTimeout(() => setCopiedId(null), 1500);
+  };
+  useEffect(
+    () => () => {
+      if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
 
   const folders = deriveFolders(conversations);
   const labelSummaries: LabelSummary[] = deriveLabels(conversations);
@@ -668,6 +765,10 @@ export function ConversationSidebar({
       onDownload={() => void downloadConversation(conversation)}
       onSetFolder={(folder) => setConversationFolder(conversation.id, folder)}
       onSetLabels={(labels) => setConversationLabels(conversation.id, labels)}
+      isShared={Boolean(conversation.share_token)}
+      onShare={() => void shareConversation(conversation).then((ok) => ok && flashCopied(conversation.id))}
+      onCopyLink={() => void copyShareLink(conversation).then((ok) => ok && flashCopied(conversation.id))}
+      onUnshare={() => void unshareConversation(conversation)}
       onArchive={() => void toggleArchive(conversation, true)}
       onDelete={() => setPendingDeleteConversation({ id: conversation.id, title: conversation.title })}
     />
@@ -682,6 +783,7 @@ export function ConversationSidebar({
       editing={editingId === conversation.id}
       selecting={selecting}
       checked={selectedIds.has(conversation.id)}
+      copied={copiedId === conversation.id}
       onOpen={() => void loadConversation(conversation.id)}
       onToggleSelect={() => onToggleSelection(conversation.id)}
       onCommitRename={(title) => commitRename(conversation.id, title)}

@@ -100,6 +100,7 @@ test("the per-row kebab exposes pin / rename / folder / labels / archive / delet
   await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Add to folder" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Labels" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Share Loose Recent" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Archive Loose Recent" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Delete Loose Recent" })).toBeVisible();
 });
