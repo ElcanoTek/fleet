@@ -12,7 +12,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/itchyny/gojq v0.12.19
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/lib/pq v1.10.9
+	github.com/lib/pq v1.12.3
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.56.0
