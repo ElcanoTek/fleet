@@ -461,6 +461,91 @@ paths:
                   properties:
                     tag: { type: string }
                     task_count: { type: integer }
+  /tasks/export:
+    get:
+      summary: Export task DEFINITIONS (not runs/logs) as a versioned JSON or YAML envelope for backup, cross-box migration, and cloning (#238).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: ids
+          in: query
+          schema: { type: string }
+          description: Comma-separated task UUIDs to export; omit for all tasks.
+        - name: format
+          in: query
+          schema: { type: string, enum: [json, yaml], default: json }
+        - name: recurrence_only
+          in: query
+          schema: { type: boolean, default: false }
+          description: Export only tasks with a non-empty recurrence (cron tasks).
+      responses:
+        "200":
+          description: A versioned envelope of task definitions.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  exported_at: { type: string, format: date-time }
+                  tasks: { type: array, items: { type: object } }
+            application/yaml:
+              schema:
+                type: object
+        "403": { $ref: "#/components/responses/Error" }
+  /tasks/import:
+    post:
+      summary: Import task definitions from a previously exported envelope; creates tasks in a single batch with per-task conflict handling (#238).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: dry_run
+          in: query
+          schema: { type: boolean, default: false }
+          description: Validate and return the plan without writing.
+        - name: conflict
+          in: query
+          schema: { type: string, enum: [error, skip, replace], default: error }
+          description: Name-collision handling. conflict=replace additionally requires admin.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version: { type: string }
+                exported_at: { type: string, format: date-time }
+                tasks: { type: array, items: { type: object } }
+          application/yaml:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Import result (all records created/skipped/replaced, or dry_run).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dry_run: { type: boolean }
+                  total: { type: integer }
+                  created: { type: integer }
+                  skipped: { type: integer }
+                  replaced: { type: integer }
+                  errors: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        status: { type: string, enum: [created, skipped, replaced, error] }
+                        id: { type: string, format: uuid }
+                        reason: { type: string }
+                        error: { type: string }
+        "207":
+          description: Multi-status — one or more records errored but others succeeded.
+        "409": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}:
     parameters:
       - name: task_id

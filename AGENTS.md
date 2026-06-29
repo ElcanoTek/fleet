@@ -114,6 +114,11 @@ same PR.
   - **Rate Limiting**: Rate limiter consumes `N` tokens for `N` tasks in a batch (instead of 1 token per batch request) via `apikeys.Manager.ConsumeN`.
   - **Single Multi-row Insert**: `db.AddTaskBatch` inserts multiple tasks in a single query via parameterized multi-row insert rather than individual sequential inserts.
   - **CLI**: `fleet-admin task batch-create --from-file tasks.json [--atomic]` allows creating tasks from a JSON file (or stdin via `-`).
+- **Task Definition Import/Export**:
+  - **Task Names**: Scheduled tasks now support an optional `name` field (mapped to the database `tasks.name` column with a partial unique index). Empty/empty-string names represent "unnamed" tasks and are always created fresh on import. Non-empty names are unique and serve as conflict keys.
+  - **Payload Limits**: Imports are rate-limited/capped to at most 100 task records per request (matching bulk API policies). Payload-internal duplicate name entries are validation errors.
+  - **Conflict Behaviors**: Mode `conflict=error` aborts the batch on any collision; `conflict=skip` skips colliding entries and writes others; `conflict=replace` performs an in-place update of colliding entries. Mode `conflict=replace` requires admin permission.
+  - **Formats**: Support both JSON and YAML envelopes (via `github.com/goccy/go-yaml`). Version is set to `"1"`.
 - One focused branch + PR per change; keep diffs scoped. Don't refactor unrelated
   code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions and DCO
   sign-off.
