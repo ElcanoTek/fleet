@@ -51,6 +51,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/notify"
+	"github.com/ElcanoTek/fleet/internal/observability"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -115,6 +116,22 @@ func run() error {
 	cfg, err := config.Load(os.Getenv("FLEET_ENV_FILE"))
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	// Sentry error tracking (#193): OPT-IN via FLEET_SENTRY_DSN. With the DSN
+	// unset (the default) this is a complete no-op — no SDK init, no transport,
+	// zero per-call overhead — and the startup log says "sentry: disabled".
+	// When set, Init wires RedactEvent as the BeforeSend hook so no secret
+	// (MCP/connector credentials, auth headers) ever leaves the host via the
+	// Sentry transport. The deferred Flush is registered BEFORE any goroutine
+	// starts so a panic anywhere downstream is captured and drained at shutdown.
+	sentryActive := observability.Init(observability.Options{
+		DSN:         cfg.SentryDSN,
+		Environment: cfg.Environment,
+		Redact:      agentcore.RedactSecrets,
+	})
+	if sentryActive {
+		defer observability.Flush(2 * time.Second)
 	}
 
 	// Process log file sink (#298): OPT-IN. With FLEET_LOG_FILE unset (the

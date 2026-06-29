@@ -7,6 +7,8 @@ import (
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openrouter"
+
+	"github.com/ElcanoTek/fleet/internal/observability"
 )
 
 // engine holds the per-run model + resilience state the enforcement loop and
@@ -430,6 +432,11 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	}
 	r.activeModelSlug = modelSlug
 	sink := r.sink
+	// Sentry breadcrumb (#193): the LLM request trail so a captured exception's
+	// event shows which model the agent was driving immediately before the
+	// crash. The prompt itself is NEVER attached — only the model slug. No-op
+	// when FLEET_SENTRY_DSN is unset (the SDK checks internally).
+	observability.AddBreadcrumb(ctx, "llm", "llm request: "+modelSlug, nil)
 	return ag.Stream(ctx, fantasy.AgentStreamCall{
 		Messages:        messages,
 		MaxOutputTokens: &r.maxTokens,

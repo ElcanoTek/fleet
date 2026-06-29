@@ -12,6 +12,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/observability"
 )
 
 // MCP tool wrapping + the ONE buildFantasyTools skeleton both modes feed
@@ -326,6 +327,12 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	// fast.io response trim. mcpTool keeps only the per-call framing.
 	callCtx, cancel := context.WithTimeout(ctx, toolCallTimeout)
 	defer cancel()
+	// Sentry breadcrumb (#193): a trail of every MCP call so a captured
+	// exception's Sentry event shows the agent's tool history. Tool ARGS are
+	// deliberately NOT attached (they may carry connector params); the
+	// BeforeSend hook is the last-line scrubber, but breadcrumbs stay lean.
+	// No-op when FLEET_SENTRY_DSN is unset.
+	observability.AddBreadcrumb(callCtx, "mcp", "mcp call: "+toolName, nil)
 	resultText, isErr, err := m.broker.CallMCP(callCtx, m.serverName, m.tool.Name, args)
 	if err != nil {
 		m.record(toolName, params.Input, "", false)
