@@ -508,6 +508,11 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/attachments", auth(member(http.HandlerFunc(s.postAttachments))))
 	mux.Handle("/conversations", auth(member(http.HandlerFunc(s.listOrCreateConversations))))
 	mux.Handle("/conversations/", auth(member(http.HandlerFunc(s.conversationByID))))
+	// Folders (#258): enumerate folders + counts, and rename (a bulk re-tag).
+	// Both are exact (no trailing slash) patterns, so they never shadow each other
+	// regardless of order; /folders/{anything else} simply 404s.
+	mux.Handle("/folders/rename", auth(member(http.HandlerFunc(s.renameFolder))))
+	mux.Handle("/folders", auth(member(http.HandlerFunc(s.listFolders))))
 	mux.Handle("/search", auth(member(http.HandlerFunc(s.search))))
 	mux.Handle("/memories", auth(member(http.HandlerFunc(s.memories))))
 	mux.Handle("/memories/", auth(member(http.HandlerFunc(s.memoryByID))))
@@ -864,8 +869,18 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 	case http.MethodGet:
 		// ?archived=true returns the archived conversations (the collapsed
 		// "Archived" sidebar section, #282); default returns active ones.
-		archivedOnly := r.URL.Query().Get("archived") == "true"
-		list, err := s.store.List(r.Context(), user, archivedOnly)
+		// ?folder= restricts to one folder, and ?label= (repeatable, AND
+		// semantics) restricts to conversations carrying every listed label (#258).
+		q := r.URL.Query()
+		filter := store.ListFilter{
+			ArchivedOnly: q.Get("archived") == "true",
+			Labels:       q["label"],
+		}
+		if q.Has("folder") {
+			folder := q.Get("folder")
+			filter.Folder = &folder
+		}
+		list, err := s.store.ListFiltered(r.Context(), user, filter)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1013,6 +1028,11 @@ func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) 
 	// object is a no-op the caller almost certainly didn't intend.
 	if req.Changes.Pinned == nil && req.Changes.Folder == nil && req.Changes.Labels == nil {
 		http.Error(w, "changes must include at least one of pinned, folder, labels", http.StatusBadRequest)
+		return
+	}
+	// Bound + normalize the folder/label metadata (#258) before persisting.
+	if err := normalizeAndValidateFolderLabels(req.Changes.Folder, req.Changes.Labels); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	n, err := s.store.BulkPatch(r.Context(), user, req.ConversationIDs, req.Changes.Pinned, req.Changes.Folder, req.Changes.Labels)
