@@ -105,6 +105,11 @@ type Conversation struct {
 	// ever set when FLEET_CONVERSATION_SOFT_DELETE=true; the default hard-delete
 	// path removes the row outright so this stays nil.
 	DeletedAt *int64 `json:"deleted_at,omitempty"`
+	// ApprovalTimeoutSeconds overrides the global FLEET_APPROVAL_TIMEOUT_SECONDS
+	// default-deny window for critical-tool approval cards in this conversation
+	// (#225). nil = use the global default; a positive value sets a per-chat
+	// override. Set via POST /conversations/{id}/approval-timeout.
+	ApprovalTimeoutSeconds *int `json:"approval_timeout_seconds,omitempty"`
 }
 
 // ErrForeignConversation is returned by DeleteByIDs / BulkPatch when one or
@@ -388,6 +393,42 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	return nil
 }
 
+// nullableSeconds converts a scanned nullable INTEGER column into the *int the
+// Conversation struct uses: NULL → nil ("use the global default"), present →
+// a heap-allocated copy. Kept narrow so List/Get scan the per-conversation
+// approval-timeout override identically (#225).
+func nullableSeconds(v sql.NullInt64) *int {
+	if !v.Valid {
+		return nil
+	}
+	n := int(v.Int64)
+	return &n
+}
+
+// SetApprovalTimeout sets (or clears) the per-conversation approval-timeout
+// override (#225). seconds == nil clears it back to the global default; a
+// non-nil pointer stores that many seconds. Callers validate the range at the
+// HTTP layer; the store only persists. Scoped by user_email so a caller can
+// only touch their own conversations.
+func (s *Store) SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error {
+	var arg any // NULL when clearing
+	if seconds != nil {
+		arg = *seconds
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET approval_timeout_seconds = $1, updated_at = $2 WHERE id = $3 AND user_email = $4`,
+		arg, time.Now().Unix(), convID, userEmail,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errors.New("conversation not found")
+	}
+	return nil
+}
+
 // AutoArchiveOlderThan archives unpinned, not-already-archived conversations
 // whose updated_at is older than d (#282). Returns the count archived. A zero or
 // negative duration is a no-op (the feature is disabled). This is a softer
@@ -618,7 +659,7 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 		archivedFilter = "archived_at IS NOT NULL"
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds
 		 FROM conversations WHERE user_email = $1 AND `+archivedFilter+` AND deleted_at IS NULL
 		 ORDER BY pinned DESC, updated_at DESC, id DESC`,
 		userEmail,
@@ -632,10 +673,12 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 	for rows.Next() {
 		var c Conversation
 		var optionalRaw []byte
-		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels)); err != nil {
+		var approvalTimeout sql.NullInt64
+		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout); err != nil {
 			return nil, err
 		}
 		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
+		c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -644,19 +687,21 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 // Get fetches a single conversation (without messages).
 func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds
 		 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
 		convID, userEmail,
 	)
 	var c Conversation
 	var optionalRaw []byte
-	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels)); err != nil {
+	var approvalTimeout sql.NullInt64
+	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
+	c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
 	return &c, nil
 }
 
@@ -849,6 +894,12 @@ type Approval struct {
 	// same id the chip is keyed on, so the UI updates instead of
 	// orphaning the result row.
 	ToolCallID string
+	// ExpiresAt is the unix-seconds deadline after which a still-pending
+	// approval is auto-denied by the server-side expiry sweep — the
+	// default-DENY-on-timeout contract for the web approval path (#225).
+	// 0 means "no expiry" (legacy rows, or a non-positive resolved timeout);
+	// the sweep and the UI countdown both treat 0 as "never expires".
+	ExpiresAt int64
 }
 
 // ListPendingApprovals returns every pending approval for a conversation,
@@ -858,7 +909,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, '')
+		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0)
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status = 'pending'
 		 ORDER BY created_at ASC`,
@@ -872,7 +923,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 	for rows.Next() {
 		var a Approval
 		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID); err != nil {
+			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -885,13 +936,20 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 // staged; empty is allowed (older code paths) but populating it lets
 // the post-approval resolver write its tool_result back under the same
 // id the UI chip is keyed on.
-func (s *Store) CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string) (*Approval, error) {
+// expiresAt is the unix-seconds default-deny deadline for the staged approval
+// (#225); pass 0 for "no expiry" (the column is stored NULL and the server-side
+// expiry sweep skips the row).
+func (s *Store) CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string, expiresAt int64) (*Approval, error) {
 	id := uuid.NewString()
 	now := time.Now().Unix()
+	var expiresArg any // NULL when there is no timeout
+	if expiresAt > 0 {
+		expiresArg = expiresAt
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO approvals (id, conversation_id, user_email, tool_name, tool_call_id, args_json, status, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
-		id, convID, userEmail, toolName, toolCallID, argsJSON, now,
+		`INSERT INTO approvals (id, conversation_id, user_email, tool_name, tool_call_id, args_json, status, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)`,
+		id, convID, userEmail, toolName, toolCallID, argsJSON, now, expiresArg,
 	)
 	if err != nil {
 		return nil, err
@@ -899,7 +957,7 @@ func (s *Store) CreateApproval(ctx context.Context, convID, userEmail, toolName,
 	return &Approval{
 		ID: id, ConversationID: convID, UserEmail: userEmail,
 		ToolName: toolName, ToolCallID: toolCallID, ArgsJSON: argsJSON, Status: approvalStatusPending,
-		CreatedAt: now,
+		CreatedAt: now, ExpiresAt: expiresAt,
 	}, nil
 }
 
@@ -908,19 +966,57 @@ func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, '')
+		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0)
 		 FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID); err != nil {
+		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
 	return &a, nil
+}
+
+// MaxExpiredApprovalsPerSweep bounds a single expiry-sweep batch so one sweep
+// can't load an unbounded backlog into memory. A sweep that hits the cap logs
+// and the next tick picks up the remainder (#225). Exported so the httpapi
+// sweep can detect a full batch from a single source of truth.
+const MaxExpiredApprovalsPerSweep = 500
+
+// ListExpiredApprovals returns pending approvals whose expires_at deadline has
+// passed (expires_at > 0 AND < now), oldest-deadline first, across ALL users
+// and conversations. This is the read half of the server-side expiry sweep; the
+// caller atomically claims and auto-denies each row (default-DENY-on-timeout).
+// Rows with NULL/0 expires_at never expire and are excluded.
+func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
+		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
+		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0)
+		 FROM approvals
+		 WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at > 0 AND expires_at < $1
+		 ORDER BY expires_at ASC
+		 LIMIT $2`,
+		now, MaxExpiredApprovalsPerSweep,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Approval
+	for rows.Next() {
+		var a Approval
+		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
+			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // Approval lifecycle statuses.
@@ -996,7 +1092,7 @@ func (s *Store) LatestApprovalByTool(ctx context.Context, convID, toolName strin
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
 		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, '')
+		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0)
 		 FROM approvals
 		 WHERE conversation_id = $1 AND tool_name = $2
 		 ORDER BY created_at DESC
@@ -1005,7 +1101,7 @@ func (s *Store) LatestApprovalByTool(ctx context.Context, convID, toolName strin
 	)
 	var a Approval
 	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID); err != nil {
+		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

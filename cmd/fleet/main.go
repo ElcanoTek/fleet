@@ -67,6 +67,11 @@ import (
 	"github.com/ElcanoTek/fleet/internal/version"
 )
 
+// approvalExpirySweepInterval is how often the background sweep auto-denies
+// pending approvals past their default-deny deadline (#225). Bounded by the
+// approval card's expectation that a stale request closes within a minute.
+const approvalExpirySweepInterval = 30 * time.Second
+
 func main() {
 	// Subcommand dispatch. With no args (or any non-subcommand arg) fleet boots
 	// THE fleet server (run).
@@ -191,6 +196,7 @@ func run() error {
 		ParallelSafeTools:       bundlePolicy.ParallelSafeTools,
 		CriticalToolSuffixes:    bundlePolicy.CriticalToolSuffixes,
 		CriticalToolSubstitutes: bundlePolicy.CriticalToolSubstitutes,
+		CriticalToolTimeouts:    bundlePolicy.CriticalToolTimeouts,
 	})
 
 	// Install the bundle's custom model-pricing overrides (#297). The generic
@@ -334,6 +340,13 @@ func run() error {
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
 	)
+
+	// Auto-approve-in-test (#225) bypasses the human-in-the-loop approval gate.
+	// It is off by default and intended only for CI/test pipelines with a mocked
+	// backend; log loudly so it can never be on in production unnoticed.
+	if cfg.AutoApproveInTest {
+		log.Printf("WARNING: FLEET_AUTO_APPROVE_IN_TEST is ON — every staged critical tool is auto-approved without human review. Do NOT use this in production.")
+	}
 
 	// ── orchestrator HTTP (sched/handlers) ──
 	keyMgr, err := apikeys.NewManager(filepath.Join(cfg.DataDir, "api_keys.json"), "")
@@ -552,6 +565,31 @@ func run() error {
 		log.Printf("orchestrator listening on %s", orchAddr)
 		if err := orchServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("orchestrator: %w", err)
+		}
+	}()
+	// Approval expiry sweep (#225): enforces the default-DENY-on-timeout contract
+	// for the web approval path. The per-turn SweepExpired only fires when a turn
+	// runs, so an idle conversation with a staged card would never auto-deny — this
+	// ticker closes that gap. Bound to ctx so it stops on shutdown; a panic is
+	// contained so the sweep can't crash the process.
+	go func() {
+		defer safe.Recover("cmd.approval-expiry-sweep", nil)
+		ticker := time.NewTicker(approvalExpirySweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				if n, err := chatSrv.SweepExpiredApprovals(sweepCtx); err != nil {
+					log.Printf("approval expiry sweep: %v", err)
+				} else if n > 0 {
+					//nolint:gosec // G706: only an integer count is formatted (%d) — no request-derived string is logged, so no CR/LF log-line forgery is possible.
+					log.Printf("approval expiry sweep: auto-denied %d timed-out approval(s)", n)
+				}
+				cancel()
+			}
 		}
 	}()
 

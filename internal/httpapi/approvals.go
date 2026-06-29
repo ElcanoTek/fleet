@@ -54,9 +54,69 @@ type approvalStager struct {
 	// sessionRegistry holds per-conversation pre-approvals (#300). nil disables
 	// batch approval (every call stages a card, the prior behavior).
 	sessionRegistry *SessionApprovalRegistry
+	// globalTimeoutSeconds is the server-wide approval default-deny window
+	// (config.ApprovalTimeoutSeconds / FLEET_APPROVAL_TIMEOUT_SECONDS). It is
+	// the lowest-priority layer of the resolution chain (#225).
+	globalTimeoutSeconds int
+	// convTimeoutSeconds is this conversation's per-chat override (nil = none).
+	// It sits above the global default and below per-tool manifest overrides.
+	convTimeoutSeconds *int
+	// autoApproveInTest auto-approves every staged critical tool instead of
+	// waiting for a human (FLEET_AUTO_APPROVE_IN_TEST). A CI/test escape hatch,
+	// off by default; see config.Config.AutoApproveInTest.
+	autoApproveInTest bool
+}
+
+// maxApprovalTimeoutSeconds bounds a per-conversation approval-timeout override
+// to a sane ceiling (24h). The POST /conversations/{id}/approval-timeout handler
+// rejects anything larger so a typo can't leave a card effectively un-expiring.
+const maxApprovalTimeoutSeconds = 86400
+
+// defaultApprovalTimeoutSeconds is the hardcoded fallback at the bottom of the
+// resolution chain — used when neither a per-tool, per-conversation, nor a
+// positive global value applies. Treating a non-positive global as "use this
+// default" (rather than "deny instantly") is the safe reading of a
+// mis-set/empty FLEET_APPROVAL_TIMEOUT_SECONDS (#225).
+const defaultApprovalTimeoutSeconds = 300
+
+// resolveTimeoutSeconds applies the #225 resolution chain for toolName, highest
+// priority first: per-tool manifest override → per-conversation override →
+// global env default → hardcoded default. Always returns a positive value.
+func (a *approvalStager) resolveTimeoutSeconds(toolName string) int {
+	if t := agentcore.ApprovalTimeoutForTool(toolName); t > 0 {
+		return t
+	}
+	if a.convTimeoutSeconds != nil && *a.convTimeoutSeconds > 0 {
+		return *a.convTimeoutSeconds
+	}
+	if a.globalTimeoutSeconds > 0 {
+		return a.globalTimeoutSeconds
+	}
+	return defaultApprovalTimeoutSeconds
+}
+
+// expiryUnixFor resolves the timeout for toolName and returns the absolute
+// unix-seconds deadline to persist on the approval row (always > 0 here, since
+// resolveTimeoutSeconds never returns a non-positive value).
+func (a *approvalStager) expiryUnixFor(toolName string) int64 {
+	return time.Now().Unix() + int64(a.resolveTimeoutSeconds(toolName))
 }
 
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
+	// Auto-approve-in-test (#225): a CI/test escape hatch (FLEET_AUTO_APPROVE_IN_TEST,
+	// off by default) for pipelines that have no human present and run against a
+	// mocked backend. Return the pre-approved sentinel so the tool runs normally,
+	// after surfacing a tool.auto_resolved event so an observing stream still sees
+	// the decision. Runs before staging so no approval row or card is created.
+	// NEVER enable this in production — it bypasses the human-in-the-loop gate.
+	if a.autoApproveInTest {
+		a.sink.Emit("tool.auto_resolved", map[string]any{
+			"tool": toolName,
+			"mode": "approve",
+			"via":  "auto_approve_in_test",
+		})
+		return agentcore.PreApprovedSentinel, nil
+	}
 	// Session pre-approval (#300): if the user previously chose "approve/deny all
 	// <tool>" for this conversation, short-circuit the card by returning a
 	// sentinel the orchestration gate interprets — pre-approved → run the tool
@@ -135,7 +195,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		})
 	}
 
-	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput)
+	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail, toolName, toolCallID, rawInput, a.expiryUnixFor(toolName))
 	if err != nil {
 		return "", err
 	}
@@ -148,6 +208,9 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		"approval_id": approval.ID,
 		"tool":        toolName,
 		"summary":     summary,
+		// Unix-seconds default-deny deadline (#225); the UI renders a countdown
+		// and transitions the card to a timed-out state at this instant.
+		"expires_at": approval.ExpiresAt,
 	})
 	return approval.ID, nil
 }
@@ -279,7 +342,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 	// back to — it's a server-staged card. Empty toolCallID is fine;
 	// resolutionCallID falls back to the approval id at write time.
 	approval, err := a.store.CreateApproval(a.ctx, a.conversationID, a.userEmail,
-		tools.SuggestAdvancedModelToolName, "", string(rawInput))
+		tools.SuggestAdvancedModelToolName, "", string(rawInput), a.expiryUnixFor(tools.SuggestAdvancedModelToolName))
 	if err != nil {
 		return "", "", err
 	}
@@ -292,6 +355,7 @@ func (a *approvalStager) StageSuggestion(reason string) (string, string, error) 
 			"reason":          reason,
 			"recommend_model": agentcore.AdvancedModelSlug,
 		},
+		"expires_at": approval.ExpiresAt,
 	})
 
 	msg := fmt.Sprintf(
@@ -841,6 +905,64 @@ func resolutionCallID(a *store.Approval) string {
 		return a.ID
 	}
 	return ""
+}
+
+// approvalTimeoutResultText is the canned result recorded when an approval is
+// auto-denied for exceeding its default-deny window (#225). Mirrors the manual
+// "User declined" path so the next turn's model sees the action was not taken.
+const approvalTimeoutResultText = "Approval timed out — auto-denied. The action was not taken."
+
+// SweepExpiredApprovals enforces the default-DENY-on-timeout contract for the
+// web approval path (#225): every pending approval whose expires_at deadline has
+// passed is atomically claimed as rejected and a tool_result is appended to the
+// conversation so the next turn's model knows the action was not taken. It
+// mirrors the manual-reject path in handleApproval exactly, minus the live SSE
+// emit (the staging turn is long over; the card resolves to its rejected state
+// on the next reload, and the client-side countdown has already greyed it out).
+//
+// Claiming via ClaimApproval is the race gate: if the user clicked Send in the
+// grace window before this sweep, their claim already flipped the row and the
+// sweep's claim returns not-claimed, so a late human decision wins. Returns the
+// number of approvals auto-denied (for logging). Run on a periodic ticker by
+// cmd/fleet; safe to call concurrently with user resolutions.
+func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
+	expired, err := s.store.ListExpiredApprovals(ctx, time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	if len(expired) == store.MaxExpiredApprovalsPerSweep {
+		// The batch is capped (store.MaxExpiredApprovalsPerSweep). More may be
+		// pending past their deadline; the next tick picks up the remainder. Log
+		// rather than silently bounding coverage.
+		log.Printf("approval expiry sweep: batch hit the %d-row cap; remainder handled next tick", store.MaxExpiredApprovalsPerSweep)
+	}
+	denied := 0
+	for i := range expired {
+		// Bail cleanly if our context is cancelled or the per-tick deadline is
+		// near: claiming a row we can't then write a history result for would
+		// leave it rejected (default-deny still holds — nothing executes) but
+		// without the tool_result breadcrumb the next turn reads. Stopping here
+		// keeps each processed row's claim+append atomic-in-practice; the
+		// unprocessed rows stay pending and are swept on the next tick.
+		if err := ctx.Err(); err != nil {
+			log.Printf("approval expiry sweep: stopping after %d/%d (%v); remainder handled next tick", denied, len(expired), err)
+			break
+		}
+		a := expired[i]
+		claimed, err := s.store.ClaimApproval(ctx, a.UserEmail, a.ID, "rejected", approvalTimeoutResultText)
+		if err != nil {
+			log.Printf("approval expiry sweep: claim %s: %v", a.ID, err)
+			continue
+		}
+		if !claimed {
+			// A user action (or a concurrent sweep) already resolved it.
+			continue
+		}
+		appendToolResultToHistory(ctx, s.store, a.ConversationID, a.ToolName,
+			resolutionCallID(&a), approvalTimeoutResultText, false)
+		denied++
+	}
+	return denied, nil
 }
 
 // runStagedTool executes the staged tool one-shot outside the agent

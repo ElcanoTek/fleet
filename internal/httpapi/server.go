@@ -1093,6 +1093,8 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 				"approval_id": a.ID,
 				"tool":        a.ToolName,
 				"summary":     summarizeApprovalInput(a.ToolName, a.ArgsJSON, id),
+				// Re-hydrate the countdown on reload (#225); 0 = no expiry.
+				"expires_at": a.ExpiresAt,
 			})
 		}
 		// Pending memory proposals — same pattern as approvals. Without
@@ -1236,6 +1238,47 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := s.store.SetModel(r.Context(), user, id, model); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case sub == "approval-timeout" && r.Method == http.MethodGet:
+		// Per-conversation approval default-deny window override (#225).
+		// approval_timeout_seconds == null means "use the global default".
+		conv, err := s.store.Get(r.Context(), user, id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if conv == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"approval_timeout_seconds": conv.ApprovalTimeoutSeconds,
+			"default_seconds":          s.cfg.ApprovalTimeoutSeconds,
+		})
+	case sub == "approval-timeout" && r.Method == http.MethodPost:
+		// Set or clear the per-conversation override (#225). A null/omitted
+		// value clears it back to the global default; a positive value (bounded
+		// to a sane range) sets the per-chat window. Zero/negative is rejected
+		// rather than silently meaning "no timeout" — an explicit error avoids an
+		// accidental instant-deny.
+		var req struct {
+			ApprovalTimeoutSeconds *int `json:"approval_timeout_seconds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.ApprovalTimeoutSeconds != nil {
+			v := *req.ApprovalTimeoutSeconds
+			if v <= 0 || v > maxApprovalTimeoutSeconds {
+				http.Error(w, "approval_timeout_seconds must be between 1 and 86400, or null to clear", http.StatusBadRequest)
+				return
+			}
+		}
+		if err := s.store.SetApprovalTimeout(r.Context(), user, id, req.ApprovalTimeoutSeconds); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1714,13 +1757,16 @@ func (s *Server) runTurnAsync(
 		Lockdown:                  conv.Lockdown,
 		ImageAttachments:          imageAttachments,
 		ApprovalStager: &approvalStager{
-			ctx:             turnCtx,
-			store:           s.store,
-			conversationID:  conv.ID,
-			userEmail:       user,
-			sink:            buf,
-			mcpClient:       s.agent.MCPClient(),
-			sessionRegistry: s.sessionApprovals,
+			ctx:                  turnCtx,
+			store:                s.store,
+			conversationID:       conv.ID,
+			userEmail:            user,
+			sink:                 buf,
+			mcpClient:            s.agent.MCPClient(),
+			sessionRegistry:      s.sessionApprovals,
+			globalTimeoutSeconds: s.cfg.ApprovalTimeoutSeconds,
+			convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
+			autoApproveInTest:    s.cfg.AutoApproveInTest,
 		},
 		MemoryProposer: &memoryProposer{
 			ctx:            turnCtx,

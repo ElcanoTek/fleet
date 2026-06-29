@@ -50,6 +50,35 @@ what did it cost?".
 
 ---
 
+## Approval timeouts: default-deny on no answer (#225)
+
+High-risk tool calls (outbound email, risky shell commands, the advanced-model
+nudge) are **staged** for human approval rather than executed directly. A staged
+approval carries an `expires_at` deadline; if no one answers in time it is
+**auto-denied** — a default-DENY-on-timeout contract so a card a user walks away
+from never silently lingers as an executable action. A background sweep
+(every 30s) flips expired pending approvals to *rejected* and writes the outcome
+into the conversation so the next turn knows the action was not taken. A human
+who clicks Send in the brief grace window before the sweep still wins the race
+(the atomic claim decides), so a late decision is honored rather than lost.
+
+The wait window resolves highest-priority-first:
+
+1. **Per-tool** — `agent_policy.critical_tool_timeouts` in the client bundle
+   manifest (keyed by the same bare tool-name suffix as `critical_tools`).
+2. **Per-conversation** — `POST /conversations/{id}/approval-timeout` with
+   `{"approval_timeout_seconds": N}` (or `null` to clear).
+3. **Global** — `FLEET_APPROVAL_TIMEOUT_SECONDS` (default **300**). A non-positive
+   value is treated as "use the 300s default", never as "deny instantly".
+
+`FLEET_AUTO_APPROVE_IN_TEST` (default **false**) is a CI/test escape hatch that
+auto-approves every staged critical tool instead of waiting for a human. It
+**bypasses the human-in-the-loop gate** and is intended only for pipelines with
+no human present and a mocked backend — never enable it in production. fleet logs
+a loud warning at startup when it is on.
+
+---
+
 ## Context-window pressure (proactive compaction)
 
 Before each round's model call the run loop compares the prompt size against the

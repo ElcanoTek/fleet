@@ -95,6 +95,12 @@ export type Approval = {
   };
   status: ApprovalStatus;
   resultText?: string;
+  /**
+   * Unix-seconds default-deny deadline (#225). When > 0 the card renders a
+   * countdown and transitions to a timed-out state at this instant; the
+   * server-side sweep auto-denies it. 0 / undefined = no expiry (no countdown).
+   */
+  expiresAt?: number;
 };
 
 /** Per-turn cost + tokens + duration for the inline chip under assistant messages. */

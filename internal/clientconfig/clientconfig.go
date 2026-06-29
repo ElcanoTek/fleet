@@ -159,6 +159,17 @@ type AgentPolicy struct {
 	ParallelSafeTools       []string            `yaml:"parallel_safe_tools"`
 	CriticalToolSuffixes    []string            `yaml:"critical_tools"`
 	CriticalToolSubstitutes map[string][]string `yaml:"critical_tool_substitutes"`
+	// CriticalToolTimeouts is an OPTIONAL per-tool approval default-deny window
+	// (#225): a map from bare tool-name suffix (the same suffix form as
+	// critical_tools) to seconds. It is additive and backward-compatible —
+	// critical_tools stays a plain string list, so existing manifests are
+	// unaffected. cmd/fleet threads it into agentcore.AgentPolicy.
+	//
+	//	agent_policy:
+	//	  critical_tool_timeouts:
+	//	    send_email: 600   # user reads the draft carefully
+	//	    bash: 60          # risky shell commands decide fast
+	CriticalToolTimeouts map[string]int `yaml:"critical_tool_timeouts"`
 }
 
 // PersonaToolPermissions is the per-persona tool policy declared in the
@@ -955,6 +966,12 @@ func (b *Bundle) AgentPolicy() AgentPolicy {
 		p.CriticalToolSubstitutes = make(map[string][]string, len(b.AgentPolicyConfig.CriticalToolSubstitutes))
 		for k, v := range b.AgentPolicyConfig.CriticalToolSubstitutes {
 			p.CriticalToolSubstitutes[k] = append([]string(nil), v...)
+		}
+	}
+	if len(b.AgentPolicyConfig.CriticalToolTimeouts) > 0 {
+		p.CriticalToolTimeouts = make(map[string]int, len(b.AgentPolicyConfig.CriticalToolTimeouts))
+		for k, v := range b.AgentPolicyConfig.CriticalToolTimeouts {
+			p.CriticalToolTimeouts[k] = v
 		}
 	}
 	return p

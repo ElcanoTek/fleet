@@ -41,6 +41,71 @@ const PREVIEW_WIDTHS: Record<PreviewViewport, number> = {
 // attribute we rely on for safety.
 type PreviewInbox = "light" | "dark";
 
+// useApprovalCountdown ticks once a second while a pending approval carries a
+// future expires_at (#225), returning the seconds remaining and whether the
+// deadline has lapsed. The SERVER-side sweep is the real enforcement; this is
+// the visual countdown plus an at-expiry disable so the user can't click Send
+// on a card the server is about to auto-deny. expires_at from the server is the
+// ground truth — local clock skew only shifts the displayed mm:ss slightly.
+function useApprovalCountdown(
+  expiresAt: number | undefined,
+  status: ApprovalStatus,
+): { remaining: number | null; expired: boolean } {
+  const hasDeadline =
+    typeof expiresAt === "number" && expiresAt > 0 && status === "pending";
+  const [remaining, setRemaining] = useState<number | null>(null);
+  // Mirrors BulkDeleteConfirmModal's lint-clean countdown: read the clock and
+  // call setState only inside the interval callback (never synchronously in the
+  // effect body, never during render). The server-sent expires_at is the source
+  // of truth, so a brief local clock skew only shifts the displayed m:ss. The
+  // sub-second poll makes the first tick appear promptly.
+  useEffect(() => {
+    if (!hasDeadline) return undefined;
+    const tick = () =>
+      setRemaining(Math.max(0, expiresAt! - Math.floor(Date.now() / 1000)));
+    const id = window.setInterval(tick, 250);
+    return () => window.clearInterval(id);
+  }, [hasDeadline, expiresAt]);
+  // Mask the (possibly stale) stored value to null whenever there's no live
+  // deadline, so a resolved card never shows a leftover countdown.
+  const active = hasDeadline ? remaining : null;
+  return { remaining: active, expired: active !== null && active <= 0 };
+}
+
+function formatCountdown(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+// ApprovalCountdown renders the inline "Auto-denying in m:ss" line (or the
+// timed-out notice once the deadline passes). Renders nothing when the approval
+// has no deadline (remaining === null), preserving the prior no-timeout UI.
+function ApprovalCountdown({
+  remaining,
+  expired,
+}: {
+  remaining: number | null;
+  expired: boolean;
+}) {
+  if (remaining === null) return null;
+  return (
+    <div
+      data-testid="approval-countdown"
+      className="flex items-center gap-1.5 text-[0.72rem]"
+      style={{ color: expired ? "var(--color-danger)" : "var(--color-text-muted)" }}
+    >
+      {expired ? (
+        <span>⏱ Timed out — the action was not taken.</span>
+      ) : (
+        <span>
+          ⏱ Auto-denying in <span className="font-mono">{formatCountdown(remaining)}</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function ApprovalCard({
   approval,
   conversationId,
@@ -74,6 +139,12 @@ export function ApprovalCard({
   // subsequent call to this tool in the conversation (approve-all / deny-all)
   // so the agent isn't gated per call.
   const [applyAll, setApplyAll] = useState(false);
+
+  // Approval timeout countdown (#225). Called unconditionally before the
+  // bash/suggest early-returns to satisfy the rules of hooks; the bash card
+  // runs its own countdown, and the suggest_advanced_model nudge intentionally
+  // shows none.
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
 
   const resolve = async (approved: boolean) => {
     if (submitting || approval.status !== "pending" || !conversationId) return;
@@ -277,7 +348,7 @@ export function ApprovalCard({
               <button
                 type="button"
                 className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
-                disabled={submitting !== null}
+                disabled={submitting !== null || countdown.expired}
                 onClick={() => void resolve(true)}
               >
                 {submitting === "send" ? "Sending…" : applyAll ? "Send + allow all" : "Send"}
@@ -291,6 +362,7 @@ export function ApprovalCard({
                 {submitting === "cancel" ? "Cancelling…" : applyAll ? "Deny + block all" : "Cancel"}
               </button>
             </div>
+            <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
             {/* Batch approval (#300): pre-approve/deny the rest of this tool's
                 calls for the conversation so the agent isn't gated per call. */}
             <label className="flex items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
@@ -325,6 +397,7 @@ function BashApprovalCard({
   const command = approval.summary.command ?? approval.summary.preview ?? "";
   const workingDir = approval.summary.working_dir ?? "";
   const timeoutSec = approval.summary.timeout_seconds ?? 0;
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
 
   const statusStyle: React.CSSProperties =
     approval.status === "approved"
@@ -365,23 +438,26 @@ function BashApprovalCard({
       ) : null}
 
       {approval.status === "pending" ? (
-        <div className="mt-3 flex items-center gap-2">
-          <button
-            type="button"
-            className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
-            disabled={submitting !== null}
-            onClick={() => onResolve(true)}
-          >
-            {submitting === "send" ? "Running…" : "Approve & run"}
-          </button>
-          <button
-            type="button"
-            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
-            disabled={submitting !== null}
-            onClick={() => onResolve(false)}
-          >
-            {submitting === "cancel" ? "Cancelling…" : "Cancel"}
-          </button>
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+              disabled={submitting !== null || countdown.expired}
+              onClick={() => onResolve(true)}
+            >
+              {submitting === "send" ? "Running…" : "Approve & run"}
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              disabled={submitting !== null}
+              onClick={() => onResolve(false)}
+            >
+              {submitting === "cancel" ? "Cancelling…" : "Cancel"}
+            </button>
+          </div>
+          <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
         </div>
       ) : approval.resultText ? (
         <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-overlay-strong)] p-2 font-mono text-[0.72rem] text-[var(--color-text-muted)]">
