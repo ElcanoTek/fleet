@@ -68,6 +68,7 @@ function LogViewerBody({ task, onClose }: { task: Task; onClose: () => void }) {
           </button>
         </div>
         <div className="modal-body" data-testid="log-modal-body">
+          <TaskRunIfBanner task={task} />
           {loading ? (
             <div className="loading">
               <p>Loading logs...</p>
@@ -196,5 +197,46 @@ const LogImage = memo(function LogImage({
     />
   );
 });
+
+// TaskRunIfBanner renders the optional pre-run shell gate (#269) as a read-only
+// code block + a collapsible skip badge. Shown at the top of the log modal so
+// an operator sees the gate that gates this task and its recent skip history at
+// a glance. Renders nothing when the task has no run_if.
+function TaskRunIfBanner({ task }: { task: Task }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!task.run_if) return null;
+  const exitCode = task.run_if.exit_code_is ?? 0;
+  const timeout = task.run_if.timeout_seconds ?? 30;
+  const onError = task.run_if.on_error ?? "run";
+  const skipped = (task.skip_count ?? 0) > 0;
+  return (
+    <div className="task-run-if-banner" data-testid="task-run-if-banner">
+      <div className="task-run-if-banner__header">
+        <span className="task-run-if-banner__title">Pre-run gate</span>
+        <code className="task-run-if-banner__command">{task.run_if.command}</code>
+        <span className="task-run-if-banner__meta">
+          exit={exitCode} · timeout={timeout}s · on_error={onError}
+        </span>
+        {skipped ? (
+          <button
+            type="button"
+            className="task-run-if-banner__skip-toggle"
+            aria-expanded={expanded}
+            aria-controls="task-run-if-skip-detail"
+            onClick={() => setExpanded((v) => !v)}
+          >
+            Skipped {task.skip_count}×{expanded ? " ▾" : " ▸"}
+          </button>
+        ) : null}
+      </div>
+      {skipped && expanded ? (
+        <div id="task-run-if-skip-detail" className="task-run-if-banner__skip-detail">
+          <div>Last skip: {task.last_skip_at ? new Date(task.last_skip_at).toLocaleString() : "—"}</div>
+          <div>Reason: {task.last_skip_reason ?? "—"}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export default LogViewer;

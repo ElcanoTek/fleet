@@ -17,6 +17,7 @@ const (
 	nameLogsArchBytes = "fleet_sched_logs_archived_bytes_saved_total"
 	nameIPBlocked     = "fleet_ip_blocked_total"
 	nameDeadLettered  = "fleet_dead_letter_queued_total"
+	nameTasksSkipped  = "fleet_tasks_skipped_total"
 
 	// Per-task sandbox resource telemetry (#263). These are last-write-wins
 	// gauges reflecting the most recently FINISHED sandbox run, deliberately
@@ -54,6 +55,21 @@ func RecordDeadLetterQueued(reason string) {
 		reason = "unknown"
 	}
 	incCounter(nameDeadLettered, "Total tasks routed to the dead-letter queue, by reason class.",
+		[]string{"reason"}, []string{reason}, 1)
+}
+
+// RecordTaskSkipped counts one scheduled task whose pre-run gate (#269) declined
+// to run it, labeled by the bounded outcome class: "check_failed" (the command
+// exited with an unexpected code) or "check_error" (the check itself errored —
+// timeout/crash — and on_error was "skip"). The label is a small fixed set
+// rather than a per-task name to bound the time-series cardinality (see
+// RecordDeadLetterQueued). Pair with fleet_tasks_completed_total /
+// fleet_tasks_failed_total so skip rate is visible in dashboards.
+func RecordTaskSkipped(reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	incCounter(nameTasksSkipped, "Total scheduled tasks skipped by the pre-run gate, by reason class.",
 		[]string{"reason"}, []string{reason}, 1)
 }
 

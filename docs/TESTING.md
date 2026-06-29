@@ -28,7 +28,8 @@ fix this doc (and the `make` targets) to match.
 | Go build | `go` | Release binary compiles (host executor fenced out) | `make compile` |
 | Go vet | `go` | `go vet` clean (tagged) | part of `make ci-go` |
 | Go lint | `go` | `golangci-lint` full gate (zero findings) | `make lint` |
-| Go test | `go` | Unit + integration suites (needs Postgres) | `make test` |
+| Go test | `go` | Unit + integration suites + coverage profile (needs Postgres) | `make test` |
+| Go coverage | `go` | Coverage uploaded to Codecov; project drops >2% fail the check | `make test-cover` |
 | Go test -race | `go` | Race detector on the same suites | `make test-race` |
 | govulncheck | `go` | Dependency CVEs reachable from fleet | `make govulncheck` |
 | Grype (image) | `grype-scan` | CVEs in the sandbox container image (fail on a fixable CRITICAL) | see below |
@@ -153,10 +154,15 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
 
 4. **go test** — tagged, so the host-mode fixtures and MockMode tests compile.
    `-p 1` is required (the suite expects serial package execution); CI also adds
-   `-count=1` to defeat the test cache:
+   `-count=1` to defeat the test cache. CI instruments this step with
+   `-coverprofile=coverage.out -covermode=atomic` (issue #249); the race step
+   below is intentionally NOT instrumented — the non-race profile is enough for
+   trend tracking, and `-coverprofile` under `-race` would double its run.
 
    ```sh
    go test -p 1 -tags fleet_host_executor ./... -count=1   # `make test` runs this without -count=1
+   # with coverage (matches CI's 'go test' step):
+   make test-cover   # writes coverage.out, prints the project total
    ```
 
 5. **go test -race** — the race detector is the gate for fleet's in-process
@@ -173,6 +179,16 @@ PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
    ```sh
    go run golang.org/x/vuln/cmd/govulncheck@latest ./...   # or: make govulncheck
    ```
+
+> **Coverage (CI-only steps).** After the `go test` step CI runs three
+> coverage steps (issue #249): `Coverage summary` (prints the project total +
+> writes `coverage.html`), `Per-package coverage summary` (writes the
+> `go tool cover -func` table to `$GITHUB_STEP_SUMMARY`), and
+> `Upload coverage to Codecov` (`codecov/codecov-action@v4`). Thresholds live in
+> [`codecov.yml`](../codecov.yml): project coverage may drop at most 2% relative
+> to the base branch (`target: auto`), and new code in a PR must be 60% covered.
+> These have no local `make` equivalent beyond `make test-cover` (which produces
+> the same `coverage.out`); the Codecov upload itself is CI-side.
 
 > **Podman in this lane.** CI masks `podman` so the container-sandbox
 > integration tests in `internal/sandbox` cleanly self-skip (building the

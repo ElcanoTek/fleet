@@ -733,6 +733,13 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 	// (per-API-key + global), so a runaway key can't flood the task queue or
 	// drain the LLM budget. The admin key bypasses it (see SchedRateLimitMiddleware).
 	r.With(h.SchedRateLimitMiddleware).Post("/tasks", h.CreateTask)
+	// Batch task submission (#227): accepts up to MaxBatchSize TaskCreate recipes
+	// in one call. Atomic mode wraps the insert in a single transaction; the
+	// default (non-atomic) is best-effort with a 207 Multi-Status. Same auth +
+	// rate limiter as POST /tasks; the handler additionally charges the scoped
+	// key's hourly cap for (N-1) extra tasks so a batch is never a rate-limit
+	// bypass.
+	r.With(h.SchedRateLimitMiddleware).Post("/tasks/batch", h.CreateTaskBatch)
 	// Pre-submission cost forecast (#233): same body, auth, and rate limiter as
 	// POST /tasks, but pure local computation — it creates nothing.
 	r.With(h.SchedRateLimitMiddleware).Post("/tasks/estimate", h.EstimateTask)

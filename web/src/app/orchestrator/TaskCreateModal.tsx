@@ -62,6 +62,11 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
   const [maxIterCustom, setMaxIterCustom] = useState("");
   const [captainsLog, setCaptainsLog] = useState(false);
   const [allowNetwork, setAllowNetwork] = useState(false);
+  // Pre-run shell gate (#269): empty = no gate (legacy unconditional promotion).
+  // runIfError holds the server-side validation message (empty string = none).
+  const [runIfCommand, setRunIfCommand] = useState("");
+  const [runIfOnError, setRunIfOnError] = useState<"run" | "skip">("run");
+  const [runIfTimeout, setRunIfTimeout] = useState(30);
 
   // The NEW per-task MCP selection (replaces target_node_name).
   const [mcpSelection, setMcpSelection] = useState<MCPChoice[]>([]);
@@ -192,6 +197,15 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
       }
     }
     if (recurrence) taskData.recurrence = recurrence;
+    // Pre-run shell gate (#269): only attach when a command is set so the
+    // default (no gate) round-trips as run_if: null.
+    if (runIfCommand.trim()) {
+      taskData.run_if = {
+        command: runIfCommand.trim(),
+        on_error: runIfOnError,
+        timeout_seconds: runIfTimeout,
+      };
+    }
     return taskData;
   };
 
@@ -610,6 +624,64 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                         Allow network egress — let this task&apos;s sandbox reach the internet (off = sealed, <code>--network=none</code>).
                       </div>
                     </div>
+                  </div>
+
+                  <div className="form-group advanced-section-group">
+                    <div className="form-label-row">
+                      <span className="form-label">Pre-run gate (run_if)</span>
+                      <span className="optional-badge">Optional</span>
+                    </div>
+                    <div className="advanced-setting-meta" style={{ marginBottom: "0.4rem" }}>
+                      A host-side shell command evaluated before the task is promoted. The task runs
+                      only when the command exits with the expected code; otherwise the occurrence is
+                      skipped. Runs as the fleet process user with a restricted PATH — treat the command
+                      as trusted.
+                    </div>
+                    <input
+                      id="runIfCommandInput"
+                      type="text"
+                      name="run_if_command"
+                      maxLength={2000}
+                      placeholder='e.g. git -C /workspace log --since="24 hours ago" --oneline | grep -q .'
+                      value={runIfCommand}
+                      onChange={(e) => setRunIfCommand(e.target.value)}
+                      aria-label="Pre-run shell command"
+                    />
+                    <div className="advanced-switch-row" style={{ marginTop: "0.4rem" }}>
+                      <label htmlFor="runIfTimeoutInput" className="advanced-setting-meta">
+                        Timeout (s):
+                      </label>
+                      <input
+                        id="runIfTimeoutInput"
+                        type="number"
+                        min={1}
+                        max={300}
+                        step={1}
+                        value={runIfTimeout}
+                        onChange={(e) => {
+                          const n = Number.parseInt(e.target.value, 10);
+                          if (!Number.isNaN(n)) setRunIfTimeout(n);
+                        }}
+                        style={{ width: "5rem" }}
+                        aria-label="Pre-run gate timeout seconds"
+                      />
+                      <label htmlFor="runIfOnErrorSelect" className="advanced-setting-meta">
+                        On error:
+                      </label>
+                      <select
+                        id="runIfOnErrorSelect"
+                        value={runIfOnError}
+                        onChange={(e) => setRunIfOnError(e.target.value as "run" | "skip")}
+                      >
+                        <option value="run">run anyway</option>
+                        <option value="skip">skip</option>
+                      </select>
+                    </div>
+                    {errors.run_if ? (
+                      <div className="validation-error" data-testid="error-run-if">
+                        {errors.run_if}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ) : null}

@@ -73,6 +73,81 @@ type CredentialAllowlistEntry struct {
 // JSONB column (NULL ⇒ nil) rather than coerced to an empty array.
 type CredentialAllowlist []CredentialAllowlistEntry
 
+// RunIfOnErrorRun and RunIfOnErrorSkip are the two recognized on_error values
+// for a RunIf gate (#269): "run" runs the task anyway when the check itself
+// errors (the safe default), "skip" skips the task when the check errors.
+const (
+	RunIfOnErrorRun  = "run"
+	RunIfOnErrorSkip = "skip"
+)
+
+// RunIf is the optional pre-run shell gate for a scheduled task (#269): when
+// set, the scheduler evaluates Command on the host (NOT in the sandbox — it is
+// a lightweight gate, not an agent tool call) before promoting a due task. The
+// task is promoted only when the command exits with ExitCodeIs; otherwise it is
+// skipped (next_run_at advances, skip_count increments). nil = the legacy
+// unconditional promotion path; existing tasks are unaffected.
+//
+// IMPORTANT (security note encoded in the schema): the check runs on the host
+// as the fleet process user with a restricted PATH. It is NOT a sandboxed agent
+// tool call — by design, so a misconfigured check cannot burn a model budget or
+// touch MCP credentials — but it DOES mean a run_if command has the host-user
+// privileges of the fleet process. Operators must treat run_if commands as
+// trusted, exactly like the fleet binary itself; the validation path rejects
+// empty commands but does not sandbox them.
+type RunIf struct {
+	// Command is the shell command evaluated by `sh -c`. Must be non-empty when
+	// RunIf is present. Bash-specific constructs are NOT guaranteed — use POSIX sh.
+	Command string `json:"command"`
+	// ExitCodeIs is the exit code that means "run the task". Default 0.
+	ExitCodeIs int `json:"exit_code_is,omitempty"`
+	// TimeoutSeconds is the hard wall-clock timeout for the check, enforced via
+	// exec.CommandContext. Clamped to [1, 300] at validation; default 30.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// OnError governs the check-itself-errored case (timeout, crash, signal):
+	//   "run"  (default) — run the task anyway (safe default)
+	//   "skip"           — skip the task
+	OnError string `json:"on_error,omitempty"`
+}
+
+// Validate rejects a statically-broken RunIf at task creation so a misconfigured
+// gate fails fast rather than always-skipping or always-running at runtime. A
+// nil RunIf is always valid (the legacy unconditional path).
+func (r *RunIf) Validate() error {
+	if r == nil {
+		return nil
+	}
+	if strings.TrimSpace(r.Command) == "" {
+		return fmt.Errorf("run_if.command must be non-empty")
+	}
+	if r.TimeoutSeconds < 1 || r.TimeoutSeconds > 300 {
+		return fmt.Errorf("run_if.timeout_seconds must be between 1 and 300")
+	}
+	switch r.OnError {
+	case "", RunIfOnErrorRun, RunIfOnErrorSkip:
+	default:
+		return fmt.Errorf("run_if.on_error must be %q or %q (got %q)", RunIfOnErrorRun, RunIfOnErrorSkip, r.OnError)
+	}
+	return nil
+}
+
+// EffectiveOnError returns the resolved on_error policy, defaulting to "run"
+// (the safe default — run the task anyway when the check itself errors).
+func (r *RunIf) EffectiveOnError() string {
+	if r == nil || r.OnError == "" {
+		return RunIfOnErrorRun
+	}
+	return r.OnError
+}
+
+// EffectiveTimeoutSeconds returns the resolved timeout, defaulting to 30s.
+func (r *RunIf) EffectiveTimeoutSeconds() int {
+	if r == nil || r.TimeoutSeconds <= 0 {
+		return 30
+	}
+	return r.TimeoutSeconds
+}
+
 // DefaultLoopMaxIterations bounds a loop whose config omits MaxIterations.
 const DefaultLoopMaxIterations = 5
 
@@ -658,6 +733,10 @@ type TaskCreate struct {
 	// create_task (#277), for audit/lineage. Set server-side by the create_task
 	// tool, NOT by external clients (it is ignored on the public POST /tasks path).
 	CreatedByTaskID *uuid.UUID `json:"created_by_task_id,omitempty"`
+	// RunIf, when non-nil, is the pre-run shell gate (#269): the scheduler
+	// evaluates Command on the host before promoting a due task and skips it when
+	// the check fails. nil = the legacy unconditional promotion path. See RunIf.
+	RunIf *RunIf `json:"run_if,omitempty"`
 }
 
 // Task represents a task to be executed by a worker.
@@ -760,6 +839,19 @@ type Task struct {
 	// create_task (#277). nil for tasks not spawned by a task. Persisted; set
 	// server-side, not settable by external clients.
 	CreatedByTaskID *uuid.UUID `json:"created_by_task_id,omitempty"`
+	// RunIf, when non-nil, is the pre-run shell gate (#269). See TaskCreate.RunIf.
+	RunIf *RunIf `json:"run_if,omitempty"`
+	// SkipCount is how many times this task's RunIf gate has failed and the
+	// occurrence was skipped (#269). The task stays `scheduled` and its
+	// scheduled_for advances to the next cron tick; this counter accumulates.
+	SkipCount int `json:"skip_count,omitempty"`
+	// LastSkipAt is when the most recent RunIf failure skipped this task (#269).
+	// nil when the task has never been skipped. Persisted; set server-side.
+	LastSkipAt *time.Time `json:"last_skip_at,omitempty"`
+	// LastSkipReason is the human-readable reason captured on the most recent skip
+	// (#269): the failing command's exit code + stderr, or "check timed out".
+	// nil when the task has never been skipped. Persisted; set server-side.
+	LastSkipReason *string `json:"last_skip_reason,omitempty"`
 }
 
 // NewTask creates a new Task with defaults.
@@ -815,6 +907,7 @@ func NewTask(tc TaskCreate) *Task {
 		AllowTaskCreation:          tc.AllowTaskCreation,
 		AllowRecurringTaskCreation: tc.AllowRecurringTaskCreation,
 		CreatedByTaskID:            tc.CreatedByTaskID,
+		RunIf:                      tc.RunIf,
 	}
 }
 
@@ -824,6 +917,38 @@ func derefOr(p *int, def int) int {
 		return def
 	}
 	return *p
+}
+
+// BatchTaskCreate is the request body for POST /tasks/batch (#227): a slice of
+// TaskCreate recipes plus an atomicity flag. atomic=false (default) is
+// best-effort (207 Multi-Status on partial failure); atomic=true wraps every
+// insert in a single DB transaction so a single validation failure aborts all.
+type BatchTaskCreate struct {
+	Tasks  []TaskCreate `json:"tasks"`
+	Atomic bool         `json:"atomic,omitempty"`
+}
+
+// BatchCreated pairs an assigned task UUID with the index it held in the
+// request slice, so a caller can correlate results without relying on order.
+type BatchCreated struct {
+	ID    uuid.UUID `json:"id"`
+	Index int       `json:"index"`
+}
+
+// BatchFailed records the request index and human-readable error for a task the
+// batch could not create (validation or DB failure).
+type BatchFailed struct {
+	Index int    `json:"index"`
+	Error string `json:"error"`
+}
+
+// BatchTaskResult is the response body for POST /tasks/batch in both modes. The
+// HTTP status carries the outcome class: 200 all-succeeded, 207 partial
+// (non-atomic only), 422 total failure (atomic rollback or every task invalid).
+type BatchTaskResult struct {
+	Created []BatchCreated `json:"created"`
+	Failed  []BatchFailed  `json:"failed"`
+	Count   int            `json:"count"`
 }
 
 // TaskToCreate rebuilds the TaskCreate "recipe" from an existing task — the
@@ -860,6 +985,10 @@ func TaskToCreate(t *Task) TaskCreate {
 		// like SourceTaskID, and is intentionally NOT carried.
 		AllowTaskCreation:          t.AllowTaskCreation,
 		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
+		// RunIf is part of the create-recipe so a re-run/clone keeps the same
+		// pre-run gate (#269). Skip tracking fields (SkipCount, LastSkipAt,
+		// LastSkipReason) are per-occurrence telemetry, NOT carried.
+		RunIf: t.RunIf,
 	}
 }
 
