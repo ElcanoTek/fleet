@@ -383,6 +383,11 @@ func run() error {
 		DefaultTaskModel:     cfg.TaskModel,
 		MaxCostUSD:           cfg.MaxCostUSD,
 		DefaultMaxIterations: cfg.MaxIterations,
+		// Per-task sandbox-limit ceilings (#205): validateSandboxLimits rejects an
+		// override above these. 0 = no ceiling.
+		SandboxMemoryMaxMB: cfg.SandboxMemoryMaxMB,
+		SandboxCPUsMax:     cfg.SandboxCPUsMax,
+		SandboxPidsMax:     cfg.SandboxPidsMax,
 	}
 	h := handlers.New(hcfg, schedStorage, keyMgr)
 	// Wire the orchestrator's read-only Optional-MCP catalog + credential-account
