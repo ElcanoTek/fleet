@@ -585,6 +585,13 @@ type Config struct {
 	// CleanupHour is the UTC hour (0–23) the daily retention sweep runs. Default 4.
 	CleanupHour int
 
+	// ── task priority queues: anti-starvation (#230) ──
+	// TaskStarvationWindowMinutes promotes a pending task that has waited longer
+	// than this (and is still less urgent than the High floor) up to High, so a
+	// sustained stream of higher-priority work can never starve it. <=0 disables
+	// promotion. Default 30.
+	TaskStarvationWindowMinutes int
+
 	// ── process log file sink (#298) ──
 	// Log is the OPT-IN rotating-file sink for fleet's process log. Default OFF
 	// (LogFile empty): the process keeps writing to stderr exactly as before, which
@@ -911,6 +918,9 @@ func Load(envFile string) (*Config, error) {
 		RunLogRetentionDays: getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),
 		KeepRunsPerTask:     getenvFleetInt("KEEP_RUNS_PER_TASK", 10),
 		CleanupHour:         getenvFleetInt("CLEANUP_HOUR", 4),
+
+		// ── task priority queues: anti-starvation (#230) ── default 30m; 0 = OFF.
+		TaskStarvationWindowMinutes: getenvFleetInt("TASK_STARVATION_WINDOW_MINUTES", 30),
 
 		// ── process log file sink (#298) ── default OFF (LogFile empty): opt in
 		// with FLEET_LOG_FILE. The size/age/backup/compress knobs only apply once

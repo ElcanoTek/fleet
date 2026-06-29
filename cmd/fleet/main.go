@@ -432,6 +432,10 @@ func run() error {
 	// the storage layer and never logged.
 	schedStorage.SetLogArchiveKey(cfg.LogArchiveEncryptionKey)
 	sch.SetLogArchival(cfg.LogArchiveAfterDays)
+	// Anti-starvation promotion (#230): each tick promotes pending tasks that have
+	// waited past the window up to the High floor so a stream of higher-priority
+	// work can't starve them. Off when TaskStarvationWindowMinutes<=0.
+	sch.SetStarvationWindow(cfg.TaskStarvationWindowMinutes)
 	sch.Start()
 	defer sch.Stop()
 
@@ -734,6 +738,10 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		// a window. Admin-gated like the other sensitive reads (cost/duration
 		// data must not be public).
 		r.Get("/sla-report", h.GetSLAReport)
+		// Pending-queue inspection (#230): per-tier depth + oldest wait, so an
+		// operator can see backlog and starvation. Admin-gated like the other
+		// sensitive reads.
+		r.Get("/admin/queue", h.QueueStats)
 		r.Post("/users", h.CreateUser)
 		r.Post("/keys", h.CreateAPIKey)
 		r.Get("/keys", h.ListAPIKeys)

@@ -60,6 +60,18 @@ them.
   AES-256-GCM encrypt the archived payloads. It runs on the same daily
   `FLEET_CLEANUP_HOUR` timer; `0` (the default) leaves it off.
 
+- **Task priority queues.** Each task carries a `priority` in `[0, 100]` where
+  **lower = more urgent** (POSIX `nice`-style; an unset priority defaults to
+  `50`/normal). The scheduler claims pending work in ascending priority, FIFO
+  within a tier, so a `critical` (10) task that arrives later still jumps ahead of
+  an already-queued `bulk` (90) batch job. An anti-starvation sweep promotes any
+  task that has waited past `FLEET_TASK_STARVATION_WINDOW_MINUTES` (default
+  **30**; `0` disables) up to the High tier so a sustained stream of urgent work
+  can never starve it — without rewriting the priority the submitter requested. A
+  scoped API key can carry a `max_priority` ceiling (it cannot submit work more
+  urgent than that), and the admin-only `GET /admin/queue` shows per-tier depth
+  and the oldest pending wait.
+
 - **Connected to your data and tools, wherever they live.** fleet speaks
   [MCP](#standards) and ships a per-deployment **MCP catalog**. Tasks select
   which MCP servers they need, with **multi-account credentials** brokered
