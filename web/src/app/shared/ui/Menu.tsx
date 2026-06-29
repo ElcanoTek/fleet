@@ -29,6 +29,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 
 export type MenuPlacement = "bottom-end" | "top-stretch";
 
@@ -46,24 +47,36 @@ function focusableItems(container: HTMLElement): HTMLElement[] {
 }
 
 function positionMenu(menu: HTMLElement, anchor: DOMRect, placement: MenuPlacement) {
+  // The menu is portaled to <body>, so these are true viewport coordinates.
+  // offsetWidth/offsetHeight are measurable while visibility:hidden (still laid out).
+  const w = menu.offsetWidth;
+  const h = menu.offsetHeight;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const clamp = (v: number, max: number) => Math.min(Math.max(v, VIEWPORT_MARGIN), Math.max(VIEWPORT_MARGIN, max));
+
   menu.style.position = "fixed";
   if (placement === "top-stretch") {
+    menu.style.right = "auto";
+    menu.style.top = "auto";
     menu.style.left = `${Math.round(anchor.left)}px`;
     menu.style.width = `${Math.round(anchor.width)}px`;
-    menu.style.bottom = `${Math.round(window.innerHeight - anchor.top + 6)}px`;
+    menu.style.bottom = `${Math.round(vh - anchor.top + 6)}px`;
   } else {
-    // bottom-end: hang below the anchor, right edges aligned. If the menu would
-    // overflow the viewport bottom (e.g. a kebab on the last row), flip above the
-    // anchor; if it fits neither way, clamp to the viewport so no item clips.
-    const right = Math.max(VIEWPORT_MARGIN, Math.round(window.innerWidth - anchor.right));
-    const menuH = menu.offsetHeight; // measurable while visibility:hidden (still laid out)
+    // bottom-end: right edges aligned to the anchor, but clamped fully on-screen
+    // (a rail kebab sits near the left edge, so a right-aligned menu would
+    // otherwise overflow off the left). Vertically: below the anchor, flipping
+    // above it when there is no room below.
+    const left = clamp(anchor.right - w, vw - w - VIEWPORT_MARGIN);
     let top = anchor.bottom + 4;
-    if (top + menuH > window.innerHeight - VIEWPORT_MARGIN) {
-      const above = anchor.top - 4 - menuH;
-      top = above >= VIEWPORT_MARGIN ? above : Math.max(VIEWPORT_MARGIN, window.innerHeight - VIEWPORT_MARGIN - menuH);
+    if (top + h > vh - VIEWPORT_MARGIN) {
+      const above = anchor.top - 4 - h;
+      top = above >= VIEWPORT_MARGIN ? above : clamp(vh - h - VIEWPORT_MARGIN, vh - h - VIEWPORT_MARGIN);
     }
+    menu.style.right = "auto";
+    menu.style.bottom = "auto";
+    menu.style.left = `${Math.round(left)}px`;
     menu.style.top = `${Math.round(top)}px`;
-    menu.style.right = `${right}px`;
   }
   menu.style.visibility = "visible";
 }
@@ -88,13 +101,18 @@ export function Menu({
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   // Measure against the anchor and reveal before paint — no flash, no state.
+  // Intentionally runs after EVERY render (no dep array): the element renders
+  // with visibility:hidden in JSX, so each re-render of a parent (e.g. the chat
+  // conversation-list poll) re-applies that hidden style; re-positioning on
+  // every commit re-reveals it before paint, so an open menu never blinks out
+  // when unrelated state updates. Cheap — it early-returns while closed.
   useLayoutEffect(() => {
     if (!open) return;
     const anchor = anchorRef.current;
     const menu = menuRef.current;
     if (!anchor || !menu) return;
     positionMenu(menu, anchor.getBoundingClientRect(), placement);
-  }, [open, placement, anchorRef]);
+  });
 
   // Focus the first item on open. (Focus return is handled synchronously in the
   // Escape handler — by the time a passive cleanup runs the menu has already
@@ -167,9 +185,14 @@ export function Menu({
     [onClose, anchorRef],
   );
 
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
-  return (
+  // Portal to <body>: the rail <aside> sets a transform (mobile drawer slide)
+  // and a backdrop-filter, either of which makes it the containing block for
+  // position:fixed descendants — which would resolve the menu's viewport
+  // coordinates against the 288px rail instead, flinging it off-screen. Rendering
+  // at the document root keeps `fixed` truly viewport-relative.
+  return createPortal(
     <div
       ref={menuRef}
       role="menu"
@@ -185,7 +208,8 @@ export function Menu({
       ].join(" ")}
     >
       {children}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
