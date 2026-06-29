@@ -9,6 +9,7 @@
 // moved verbatim so the live specs (send flow, Enter-vs-Shift+Enter,
 // attachments, model/persona/MCP pickers, Stop) keep driving identical DOM.
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
+import { useEffect, useState } from "react";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { Icon } from "./Icon";
 import {
@@ -46,6 +47,31 @@ function isNewlyReleased(createdSeconds: number | undefined): boolean {
   const ageDays = (Date.now() / 1000 - createdSeconds) / 86400;
   return ageDays >= 0 && ageDays < NEW_MODEL_WINDOW_DAYS;
 }
+
+// looksLikeCode is a cheap heuristic used by the paste handler to decide
+// whether to surface the "Format as code" nudge. It's deliberately
+// permissive: a false positive just shows a dismissible hint, while a
+// false negative only means the user has to wrap the snippet by hand.
+// Short pastes (<40 chars) never trigger — almost any single line that
+// short is plain prose. The checks look for indentation patterns and the
+// punctuation/keywords that are rare in natural language but ubiquitous
+// in code.
+function looksLikeCode(text: string): boolean {
+  if (text.length < 40) return false;
+  return (
+    /^ {4}/m.test(text) || // 4-space indent (Markdown-style code block)
+    /^\t/m.test(text) || // tab indent
+    /[{};=>]/.test(text) || // common code punctuation
+    /\bfunction\b|\bconst\b|\bimport\b|\bdef\b|\bclass\b/.test(text)
+  );
+}
+
+// localStorage key for the "Send on Enter" vs "Send on Ctrl/Cmd+Enter"
+// preference. Read once at composer mount; written whenever the toggle
+// pill next to the Send button is clicked. Defaults to "enter" (the
+// muscle-memory default for every major chat UI).
+const SEND_KEY_STORAGE = "fleet.sendKey";
+const CODE_NUDGE_TIMEOUT_MS = 6000;
 
 export type ComposerProps = {
   // Textarea value + draft handling
@@ -177,12 +203,54 @@ export function Composer({
   abortControllersRef,
   isPendingKey,
 }: ComposerProps) {
+  // Multi-line composer UX (issue #315):
+  // - `hasEverSentMessage` hides the "Enter to send · Shift+Enter for new
+  //   line" hint after the first send in this session. It's state (not a
+  //   ref) so the hint re-renders away on the first send. The hint
+  //   reappears on a fresh page load, which is fine — by then the user
+  //   has internalized it anyway.
+  // - `sendOnEnter` is the localStorage-backed send-key preference. Read
+  //   once at mount; the toggle pill next to Send flips it and persists.
+  // - `showCodeNudge` is the transient "Format as code" banner fired when
+  //   a paste looks like source. Auto-dismisses after CODE_NUDGE_TIMEOUT_MS.
+  const [hasEverSentMessage, setHasEverSentMessage] = useState(false);
+  const [showCodeNudge, setShowCodeNudge] = useState(false);
+  const [sendOnEnter, setSendOnEnter] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      return (localStorage.getItem(SEND_KEY_STORAGE) ?? "enter") === "enter";
+    } catch {
+      return true;
+    }
+  });
+
+  // Persist the send-key preference whenever it changes. Wrapped in a
+  // try/catch because localStorage can throw in private-browsing modes
+  // (Safari) and we don't want a settings toggle to take down the chat.
+  useEffect(() => {
+    try {
+      localStorage.setItem(SEND_KEY_STORAGE, sendOnEnter ? "enter" : "ctrl+enter");
+    } catch {
+      /* private mode / quota — preference stays session-only, which is fine */
+    }
+  }, [sendOnEnter]);
+
+  // Auto-dismiss the code-paste nudge after CODE_NUDGE_TIMEOUT_MS. Each
+  // appearance re-arms the timer; dismissal (click or ✕) clears state
+  // directly and the cleanup here is a no-op once it's already false.
+  useEffect(() => {
+    if (!showCodeNudge) return;
+    const timer = window.setTimeout(() => setShowCodeNudge(false), CODE_NUDGE_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [showCodeNudge]);
+
   return (
             <form
               className={`relative mx-auto w-full max-w-[52rem] rounded-[1.2rem] border bg-[var(--composer-surface)] px-3 pt-3 pb-2.5 shadow-[var(--composer-shadow)] sm:rounded-[1.75rem] sm:px-4 sm:pt-4 sm:pb-3 transition-colors ${isDraggingOver ? "border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/30" : "border-[var(--color-border)]"}`}
               suppressHydrationWarning
               onSubmit={(event) => {
                 event.preventDefault();
+                setHasEverSentMessage(true);
                 void submitPrompt(prompt);
               }}
               onDragEnter={(event) => {
@@ -213,22 +281,35 @@ export function Composer({
               <textarea
                 id="promptInput"
                 ref={promptRef}
-                className="min-h-[2.6rem] max-h-[10rem] w-full resize-none bg-transparent px-0 pt-0 pb-2 text-[16px] leading-[1.45] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-muted)] sm:min-h-[3rem] sm:max-h-[13rem] sm:pb-3 sm:text-[var(--font-size-body)]"
+                className="min-h-[2.6rem] w-full resize-none overflow-y-auto bg-transparent px-0 pt-0 pb-2 text-[16px] leading-[1.45] text-[var(--color-text-primary)] outline-none transition-[height] duration-100 placeholder:text-[var(--color-text-muted)] sm:min-h-[3rem] sm:pb-3 sm:text-[var(--font-size-body)]"
                 placeholder={promptPlaceholder}
                 rows={1}
                 suppressHydrationWarning
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
                 onKeyDown={(event) => {
-                  // Enter sends; Shift+Enter is a natural newline (textarea
-                  // default). Cmd/Ctrl+Enter is an explicit "send" alias (#306)
-                  // for users who prefer it — it also fires when the bare-Enter
-                  // branch wouldn't (e.g. with Shift held it still sends).
-                  const sendCombo =
-                    (event.key === "Enter" && !event.shiftKey) ||
-                    (event.key === "Enter" && (event.metaKey || event.ctrlKey));
-                  if (sendCombo) {
+                  // Enter sends according to the user's send-key preference:
+                  //   - "enter" (default): bare Enter sends, Shift+Enter is
+                  //     a natural newline (textarea default).
+                  //   - "ctrl+enter": Enter is always a newline; only
+                  //     Cmd/Ctrl+Enter sends.
+                  // Touch devices are special-cased: their soft keyboards
+                  // send a bare Enter to insert a newline, so we never
+                  // intercept Enter there — submission stays on the Send
+                  // button. Cmd/Ctrl+Enter still works on a touch device
+                  // with a hardware keyboard attached (rare but cheap to
+                  // support).
+                  if (event.key !== "Enter") return;
+                  const isTouchDevice =
+                    typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
+                  const modifierSend = event.metaKey || event.ctrlKey;
+                  if (isTouchDevice && !modifierSend) return; // let the IME insert its newline
+                  const shouldSend = sendOnEnter
+                    ? !event.shiftKey
+                    : modifierSend;
+                  if (shouldSend) {
                     event.preventDefault();
+                    setHasEverSentMessage(true);
                     void submitPrompt(prompt);
                   }
                 }}
@@ -245,9 +326,63 @@ export function Composer({
                   if (files && files.length > 0) {
                     event.preventDefault();
                     addAttachmentFiles(files);
+                    return;
+                  }
+                  // Plain-text paste: let the browser insert it, then
+                  // (next tick, after React has committed the new value)
+                  // surface a "Format as code" nudge if it looks like
+                  // source. The autosize `useEffect` in ChatExperience
+                  // already grows the textarea in response to the prompt
+                  // state change, so no manual resize is needed here.
+                  const text = event.clipboardData?.getData("text/plain") ?? "";
+                  if (looksLikeCode(text)) {
+                    setTimeout(() => setShowCodeNudge(true), 0);
                   }
                 }}
               />
+
+              {/* Hint text — visible until the first send in this session.
+                  It flips off on the first submitPrompt call (via the
+                  `hasEverSentMessage` state) and stays hidden for the
+                  session. The wording adapts to the send-key preference so
+                  the Ctrl+Enter mode is self-documenting. */}
+              {!hasEverSentMessage ? (
+                <p className="mt-1 select-none text-[0.7rem] text-[var(--color-text-muted)]">
+                  {sendOnEnter
+                    ? "Enter to send · Shift+Enter for new line"
+                    : "Ctrl+Enter to send · Enter for new line"}
+                </p>
+              ) : null}
+
+              {/* Code-paste nudge — surfaced when a paste looks like source
+                  (see `looksLikeCode`). Auto-dismisses after
+                  CODE_NUDGE_TIMEOUT_MS; the ✕ and "Format as code" actions
+                  clear it immediately. "Format as code" wraps the entire
+                  draft in a fenced block so the model renders it as code
+                  rather than inlining the snippet as prose. */}
+              {showCodeNudge ? (
+                <div className="mt-1.5 flex items-center gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]">
+                  <span>Pasted code? Wrap in triple backticks for better formatting.</span>
+                  <button
+                    type="button"
+                    className="font-medium text-[var(--color-accent)] hover:underline"
+                    onClick={() => {
+                      setPrompt((p) => `\`\`\`\n${p}\n\`\`\``);
+                      setShowCodeNudge(false);
+                    }}
+                  >
+                    Format as code
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Dismiss code-format suggestion"
+                    className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
+                    onClick={() => setShowCodeNudge(false)}
+                  >
+                    <Icon name="close" className="size-3" />
+                  </button>
+                </div>
+              ) : null}
 
               {pendingAttachments.length > 0 || attachmentError ? (
                 <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -739,6 +874,32 @@ export function Composer({
                       Stop
                     </button>
                   ) : null}
+                  {/* Send-key preference toggle (issue #315). A small ⚙ pill
+                      cycles between "Send on Enter" (default) and "Send on
+                      Ctrl/Cmd+Enter". The active mode is shown as the pill's
+                      title/aria-label so it's discoverable on hover and
+                      screen-reader friendly; clicking flips + persists it.
+                      Sits right next to Send so the toggle is in the same
+                      glance as the key it configures. */}
+                  <button
+                    type="button"
+                    aria-label={
+                      sendOnEnter
+                        ? "Send on Enter (click to switch to Ctrl+Enter)"
+                        : "Send on Ctrl+Enter (click to switch to Enter)"
+                    }
+                    title={
+                      sendOnEnter
+                        ? "Send on Enter — click to use Ctrl+Enter"
+                        : "Send on Ctrl+Enter — click to use Enter"
+                    }
+                    aria-pressed={sendOnEnter}
+                    className="inline-flex h-7 shrink-0 items-center justify-center rounded-full border border-[var(--color-border-strong)] px-2 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                    onClick={() => setSendOnEnter((v) => !v)}
+                  >
+                    <span aria-hidden="true" className="leading-none">⏎</span>
+                    <span className="sr-only">{sendOnEnter ? "Enter" : "Ctrl+Enter"}</span>
+                  </button>
                   <button
                     aria-label="Send message"
                     className="inline-flex min-w-[3rem] items-center justify-center rounded-full bg-[var(--color-text-primary)] px-3 py-2 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-30 sm:min-w-[3.25rem]"
