@@ -19,7 +19,7 @@ func TestClaimApproval_OnlyOneWinner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
-	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_sendgrid_send_email", "call_1", `{}`)
+	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_sendgrid_send_email", "call_1", `{}`, 0)
 	if err != nil {
 		t.Fatalf("CreateApproval: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestClaimApproval_UserScopedAndValidated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
-	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_sendgrid_send_email", "call_1", `{}`)
+	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_sendgrid_send_email", "call_1", `{}`, 0)
 	if err != nil {
 		t.Fatalf("CreateApproval: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestSetApprovalResult_UpdatesClaimedRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
-	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_sendgrid_send_email", "call_1", `{}`)
+	a, err := s.CreateApproval(ctx, conv.ID, "alice@example.com", "mcp_sendgrid_send_email", "call_1", `{}`, 0)
 	if err != nil {
 		t.Fatalf("CreateApproval: %v", err)
 	}

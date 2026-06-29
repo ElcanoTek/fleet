@@ -26,9 +26,12 @@ func runMockTurn(ctx context.Context, st chatStore, conv *store.Conversation, us
 	// stage a fake sendgrid approval so Playwright can exercise the
 	// approval card + /approvals endpoint without a real SendGrid key.
 	if shouldStageMockApproval(userMessage) {
+		// Give the mock card a fixed 5-minute default-deny window (#225) so the
+		// mocked Playwright lane can assert the approval countdown renders.
+		expiresAt := time.Now().Add(5 * time.Minute).Unix()
 		approval, err := st.CreateApproval(ctx, conv.ID, conv.UserEmail,
 			"mcp_sendgrid_send_email", "mock-tool-call",
-			`{"to_email":"demo@example.com","subject":"Mock subject","content":"<p>Hi from the mock turn.</p>"}`)
+			`{"to_email":"demo@example.com","subject":"Mock subject","content":"<p>Hi from the mock turn.</p>"}`, expiresAt)
 		if err == nil {
 			sink.Emit("tool.approval_required", map[string]any{
 				"approval_id": approval.ID,
@@ -39,6 +42,7 @@ func runMockTurn(ctx context.Context, st chatStore, conv *store.Conversation, us
 					"subject": "Mock subject",
 					"preview": "<p>Hi from the mock turn.</p>",
 				},
+				"expires_at": approval.ExpiresAt,
 			})
 		}
 	}
