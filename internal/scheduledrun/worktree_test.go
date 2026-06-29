@@ -162,11 +162,12 @@ func TestPrepareWorktree_CreatesIsolatedWorktree(t *testing.T) {
 
 func TestPrepareWorktree_CustomPrefixAndBase(t *testing.T) {
 	repo := initGitRepo(t)
+	initBranch := strings.TrimSpace(gitOut(t, repo, "symbolic-ref", "--short", "HEAD"))
 	// A second commit on a named base branch to branch from.
 	gitOut(t, repo, "checkout", "-q", "-b", "develop")
 	gitOut(t, repo, "commit", "--allow-empty", "-q", "-m", "second")
 	developHead := strings.TrimSpace(gitOut(t, repo, "rev-parse", "develop"))
-	gitOut(t, repo, "checkout", "-q", "master")
+	gitOut(t, repo, "checkout", "-q", initBranch)
 
 	task := worktreeTask(&models.WorktreeConfig{Enabled: true, BranchPrefix: "iso/", BaseBranch: "develop"})
 	wt, branch, cleanup, err := prepareWorktree(context.Background(), repo, task, "run9")

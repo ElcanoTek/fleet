@@ -28,7 +28,8 @@
 #     SINGLE required check is the `CI gate` job in .github/workflows/ci.yml: it
 #     `needs` every other CI job (Go build / vet / lint / test — which also runs
 #     vet, the -race lane and govulncheck; Web lint / test / build; Playwright
-#     mocked; Playwright live; and the gitleaks secret scan) and fails unless each
+#     mocked; Playwright live; the gitleaks secret scan; and the Grype
+#     container-image CVE scan) and fails unless each
 #     one succeeded or was cleanly skipped. Requiring that one aggregate check
 #     rather than each job by name is what lets a docs-only PR skip the heavy jobs
 #     without being left blocked on a required check that never reported.

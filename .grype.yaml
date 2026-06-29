@@ -1,0 +1,26 @@
+# .grype.yaml — Grype configuration + CVE suppression list for fleet.
+#
+# Grype scans the sandbox container image (built from
+# config/default/sandbox/Containerfile) for known CVEs in its RPM and Python
+# packages. The per-PR `grype-scan` job (.github/workflows/ci.yml) fails the
+# build on a fixable CRITICAL; the weekly `.github/workflows/grype-scheduled.yml`
+# scan is report-only. Grype auto-reads this file from the repo root, so both
+# scans honour the same suppressions.
+#
+# Why Grype and not Trivy: the sandbox base is registry.fedoraproject.org/
+# fedora-minimal, and Trivy has no Fedora advisory feed — it scans 0 of the
+# image's ~400 RPMs (a false-green gate). Grype matches RPM + Python packages
+# against NVD/GHSA, so it actually covers this image.
+#
+# To accept/suppress a specific CVE, add an `ignore:` entry with a rationale
+# comment. Keep this list MINIMAL — prefer rebuilding the image (the unpinned
+# fedora-minimal base + its packages pick up upstream fixes on every rebuild)
+# over suppressing a CVE here. A suppressed CVE is dropped from BOTH the blocking
+# gate and the SARIF upload, so only suppress one you have consciously accepted.
+# Review this list quarterly, or whenever the affected package is upgraded.
+
+ignore: []
+  # Example — one block per accepted CVE:
+  # - vulnerability: CVE-2024-12345
+  #   # Accepted: not reachable in fleet's runtime path. Tracking in issue #NNN.
+  #   # Review by 2026-12-31.

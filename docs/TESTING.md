@@ -13,6 +13,9 @@ workflow files themselves:
   (every job must be green to merge).
 - [`.github/workflows/e2e-canary.yml`](../.github/workflows/e2e-canary.yml) —
   the nightly real-model canary (never a PR gate).
+- [`.github/workflows/grype-scheduled.yml`](../.github/workflows/grype-scheduled.yml)
+  — a weekly, non-blocking container-image vulnerability scan (never a PR
+  gate).
 
 If a command here ever disagrees with those files, the workflow wins — please
 fix this doc (and the `make` targets) to match.
@@ -28,6 +31,7 @@ fix this doc (and the `make` targets) to match.
 | Go test | `go` | Unit + integration suites (needs Postgres) | `make test` |
 | Go test -race | `go` | Race detector on the same suites | `make test-race` |
 | govulncheck | `go` | Dependency CVEs reachable from fleet | `make govulncheck` |
+| Grype (image) | `grype-scan` | CVEs in the sandbox container image (fail on a fixable CRITICAL) | see below |
 | Web lint/test/build | `web` | ESLint + vitest + `next build` | `make ci-web` |
 | Playwright (mocked) | `playwright` | Deterministic browser e2e, no backend | `make ci-e2e-mocked` |
 | Playwright (live) | `e2e-live` | Real stack + rootless-Podman sandbox, fake LLM | `npm run test:e2e:live` |
@@ -228,6 +232,73 @@ Or, once browsers and deps are installed, from the repo root:
 ```sh
 make ci-e2e-mocked
 ```
+
+---
+
+## Container image vulnerability scan (Grype) — CI job `grype-scan`
+
+`govulncheck` only sees Go modules; it cannot see the ~400 RPMs (and the Python
+packages they ship) the sandbox image installs via `microdnf` from
+`config/default/sandbox/Containerfile` (Python 3, the scientific Python stack,
+ImageMagick, pandoc, git, …). That large image attack surface is what this scan
+covers. The job runs after `e2e-live` (which already builds the image), rebuilds
+the same default-bundle sandbox image, `podman save`s it to a docker-archive
+tarball, and scans the tarball — so the scan is self-contained and needs no
+running container daemon or socket.
+
+**Why Grype and not Trivy.** The sandbox base is
+`registry.fedoraproject.org/fedora-minimal:latest`, and **Trivy has no Fedora
+advisory feed**: it detects the OS but then logs `WARN Unsupported os
+family="fedora"` and scans **0** of the image's packages — a gate that always
+passes regardless of what CVEs ship (a false green). Grype matches the image's
+RPM **and** Python packages against NVD/GHSA, so it actually covers this image.
+Grype is pinned to a release version and verified by `sha256sum` (the same
+supply-chain discipline as the gitleaks gate) rather than run as a third-party
+action on a mutable ref — the scanner is part of the merge gate, so its own
+supply chain matters as much as what it scans.
+
+The per-PR job FAILS only on a **CRITICAL** CVE that has an available upstream fix
+(`--fail-on critical --only-fixed`). `--only-fixed` filters Grype's entire match
+set — the SARIF included — so the per-PR scan neither blocks on **nor reports** an
+unfixed CVE: there is nothing the team can do about one immediately, and blocking
+would just noise the gate (the most common cause of false-positive scanner
+failures). Fixed findings of **all** severities (the blocking CRITICALs plus
+informational HIGH/MEDIUM/LOW) are uploaded to the Security tab. Unfixed CVEs are
+surfaced by the weekly scheduled scan, which omits `--only-fixed` (see below).
+Suppressions live in [`.grype.yaml`](../.grype.yaml) (one `ignore:` entry per CVE,
+with a rationale comment); Grype auto-reads that file from the repo root.
+
+Findings are uploaded as SARIF to **GitHub Security → Code scanning** (category
+`grype-sandbox-image`) so CVE details, affected packages, and fix versions are
+visible without parsing log output. (Secret scanning stays with `gitleaks`, the
+authoritative gate; misconfig/IaC scanning is out of scope for this lane. Grype
+downloads its vulnerability DB from Anchore's CDN at scan time, so a transient CDN
+outage can redden the gate independent of any code change.)
+
+It needs `security-events: write` (scoped to the job, not the workflow) to upload
+SARIF. Reproduce locally (needs podman + the Grype binary):
+
+```sh
+# Build the same image the job scans, and export it to a docker-archive tarball.
+IMAGE_NAME=localhost/fleet-sandbox scripts/build-sandbox-image.sh latest
+podman save --format docker-archive -o sandbox-image.tar localhost/fleet-sandbox:latest
+# Install grype first (see .github/workflows/ci.yml for the pinned version+sha),
+# then scan exactly as the gate does:
+grype docker-archive:sandbox-image.tar --only-fixed --fail-on critical \
+  --output table --output sarif=grype-results.sarif
+```
+
+There is no `make` target for this lane because it boots a podman image build;
+run it in CI or with the commands above.
+
+### Weekly scheduled scan — `.github/workflows/grype-scheduled.yml`
+
+A **non-blocking** weekly scan (Mondays 09:00 UTC; also `workflow_dispatch`)
+rebuilds the image against the latest unpinned `fedora-minimal:latest` base and
+reports **all** findings — including unfixed ones, with no `--fail-on` /
+`--only-fixed` — to the Security tab (category `grype-scheduled`), so a
+newly-disclosed CVE against the existing image surfaces as an informational alert
+rather than blocking `main`. It is never a PR gate.
 
 ---
 

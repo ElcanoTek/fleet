@@ -500,6 +500,109 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  grype-scan:
+    name: Container image vulnerability scan (Grype)
+    runs-on: ubuntu-latest
+    needs: [e2e-live]  # runs after e2e-live succeeds (which already builds the image)
+    # When e2e-live is skipped for a docs-only change, this job is skipped too
+    # (a job that `needs` a skipped job is itself skipped); the `CI gate` job
+    # treats a skip as a pass, so docs-only PRs are not blocked.
+    permissions:
+      # Least-privilege: only this job can write SARIF to the Security tab.
+      contents: read
+      security-events: write
+    env:
+      SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Grype
+        # Pin a specific Grype release and verify its checksum, exactly as the
+        # gitleaks gate above pins its binary: the scanner is part of the merge
+        # gate, so its OWN supply chain matters as much as what it scans. We run
+        # the pinned, checksum-verified upstream binary — NOT a third-party
+        # composite action on a mutable @master ref — so an upstream re-tag can't
+        # silently change what runs in the gate. Bump GRYPE_VERSION + GRYPE_SHA256
+        # together (the checksum is published as grype_<ver>_checksums.txt).
+        #
+        # Why Grype and not Trivy: the sandbox base is fedora-minimal, and Trivy
+        # has no Fedora advisory feed — it detects the OS but scans 0 of the ~400
+        # RPMs ("WARN Unsupported os family=fedora"), which would be a false-green
+        # gate. Grype matches the image's RPM AND Python packages against NVD/GHSA,
+        # so it actually covers this image. See docs/TESTING.md for the rationale.
+        env:
+          GRYPE_VERSION: '0.115.0'
+          GRYPE_SHA256: '3fad92940650e514c0aa2dad83526942a055e210cec09a8a59d9c024adc2b90e'
+        run: |
+          set -euo pipefail
+          tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          curl -sSL -o "$tarball" \
+            "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/${tarball}"
+          echo "${GRYPE_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" grype
+          sudo install -m 0755 grype /usr/local/bin/grype
+          grype version
+
+      - name: Ensure podman
+        # The sandbox image is built with podman (scripts/build-sandbox-image.sh);
+        # ubuntu-latest ships podman, but install defensively so the job is robust
+        # to runner image changes (mirrors the e2e-live job's approach).
+        run: |
+          sudo apt-get update -qq
+          command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
+          podman --version
+
+      - name: Build the sandbox image and export it to an archive
+        # Rebuilds the same default-bundle sandbox image the e2e-live job builds
+        # (config/default/sandbox/Containerfile, a vanilla fedora-minimal base),
+        # then `podman save`s it to a docker-archive tarball. Scanning the archive
+        # (grype docker-archive:...) needs no running container daemon or socket —
+        # hermetic and robust. This is a separate runner with a cold podman store
+        # (GitHub shares no layer cache between jobs), so it is a full rebuild —
+        # the ~1.3GB build is the cost of a self-contained, registry-independent
+        # gate. govulncheck covers Go module CVEs; it cannot see the ~400 RPMs (and the
+        # Python packages they ship) this image installs via microdnf — that
+        # surface is what this scan covers.
+        run: |
+          set -euo pipefail
+          IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
+          podman save --format docker-archive -o sandbox-image.tar "$SANDBOX_IMAGE_LOCAL"
+
+      - name: Scan the sandbox image (fail on a fixable CRITICAL)
+        # --fail-on critical: a CRITICAL CVE fails the job (exit 2); fixed HIGH/
+        #   MEDIUM/LOW are recorded in the SARIF upload but do not block the PR.
+        # --only-fixed: only a CVE WITH an available fix is considered, so this
+        #   per-PR scan neither blocks on NOR reports an unfixed CVE — --only-fixed
+        #   filters the whole match set, the SARIF included. An unfixed CVE is not
+        #   actionable now, and blocking on it would just noise the gate (the most
+        #   common cause of false-positive scanner failures); the weekly
+        #   grype-scheduled.yml scan omits --only-fixed and surfaces unfixed CVEs
+        #   to the Security tab. Accepted CVEs are suppressed in .grype.yaml (Grype
+        #   auto-reads it from the repo root; one `ignore:` entry per CVE, with a
+        #   rationale). The table output is for the CI log; the SARIF is uploaded.
+        run: |
+          set -euo pipefail
+          grype "docker-archive:sandbox-image.tar" \
+            --only-fixed \
+            --fail-on critical \
+            --output table \
+            --output sarif=grype-results.sarif
+
+      - name: Upload Grype SARIF results to the GitHub Security tab
+        # Upload whenever the scan produced a SARIF — including when grype exited
+        # non-zero on a fixable CRITICAL (it writes the file before exiting), so
+        # findings reach GitHub Security → Code scanning with full CVE details,
+        # affected packages, and fix versions rather than only a red CI job. The
+        # hashFiles guard skips this step (instead of erroring "file not found")
+        # when an EARLIER step failed before grype could write the SARIF.
+        uses: github/codeql-action/upload-sarif@v3
+        if: ${{ !cancelled() && hashFiles('grype-results.sarif') != '' }}
+        with:
+          sarif_file: 'grype-results.sarif'
+          category: 'grype-sandbox-image'
+
   ci-gate:
     # The SINGLE required status check on `main` (see .github/CODEOWNERS). It
     # `needs` every other job and ALWAYS runs, so it always reports a result —
@@ -510,7 +613,7 @@ jobs:
     # allowed (docs-only), but any failure or cancellation fails the gate.
     name: CI gate
     if: ${{ always() }}
-    needs: [changes, gitleaks, go, web, playwright, e2e-live]
+    needs: [changes, gitleaks, go, web, playwright, e2e-live, grype-scan]
     runs-on: ubuntu-latest
     steps:
       - name: Require all upstream jobs to have succeeded or been skipped

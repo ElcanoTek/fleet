@@ -1,0 +1,88 @@
+# Weekly container image vulnerability scan (Grype) — NON-BLOCKING.
+#
+# The per-PR `grype-scan` job in ci.yml catches CVEs a PR introduces, but the
+# base image (registry.fedoraproject.org/fedora-minimal:latest, intentionally
+# unpinned to track upstream patches) and its packages get new CVEs disclosed
+# continuously, and a week can pass between PRs. This scheduled scan rebuilds the
+# sandbox image from the tip of main and reports ALL findings (including unfixed)
+# to GitHub Security → Code scanning WITHOUT failing (no --fail-on / --only-fixed)
+# — so a newly-disclosed CVE against the existing image surfaces as an
+# informational alert rather than blocking `main`. It is never a PR gate.
+#
+# Why Grype (not Trivy): Trivy has no Fedora advisory feed and scans 0 of the
+# fedora-minimal image's RPMs; Grype matches RPM + Python packages against
+# NVD/GHSA. See docs/TESTING.md for the full rationale.
+name: Weekly container vulnerability scan
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 09:00 UTC
+  workflow_dispatch:       # Allow a manual trigger (e.g. after a base-image bump)
+
+permissions:
+  contents: read
+  security-events: write  # required to upload SARIF to the Security tab
+
+jobs:
+  grype-scheduled:
+    name: Weekly container vulnerability scan
+    runs-on: ubuntu-latest
+    env:
+      SANDBOX_IMAGE_LOCAL: localhost/fleet-sandbox:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: main  # always scan the tip of main, not a PR branch
+
+      - name: Install Grype
+        # Pinned + checksum-verified, exactly like the per-PR gate in ci.yml.
+        # Keep GRYPE_VERSION + GRYPE_SHA256 in sync with that job.
+        env:
+          GRYPE_VERSION: '0.115.0'
+          GRYPE_SHA256: '3fad92940650e514c0aa2dad83526942a055e210cec09a8a59d9c024adc2b90e'
+        run: |
+          set -euo pipefail
+          tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          curl -sSL -o "$tarball" \
+            "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/${tarball}"
+          echo "${GRYPE_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" grype
+          sudo install -m 0755 grype /usr/local/bin/grype
+          grype version
+
+      - name: Ensure podman
+        run: |
+          sudo apt-get update -qq
+          command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
+          podman --version
+
+      - name: Build the sandbox image and export it to an archive
+        # Rebuilds the default-bundle sandbox image from the tip of main so the
+        # scan reflects what a deployment box would build today (the unpinned
+        # fedora-minimal base picks up the latest upstream patches), then exports
+        # it to a docker-archive tarball for a daemon-independent scan.
+        run: |
+          set -euo pipefail
+          IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
+          podman save --format docker-archive -o sandbox-image.tar "$SANDBOX_IMAGE_LOCAL"
+
+      - name: Scan (weekly — report only, never fail)
+        # No --fail-on and no --only-fixed: a newly-disclosed CVE (even one with no
+        # fix yet) surfaces as an informational alert in the Security tab rather
+        # than turning the scheduled run red. .grype.yaml suppressions still apply.
+        run: |
+          set -euo pipefail
+          grype "docker-archive:sandbox-image.tar" \
+            --output table \
+            --output sarif=grype-results.sarif
+
+      - name: Upload weekly scan results
+        uses: github/codeql-action/upload-sarif@v3
+        # Skip cleanly (rather than error "file not found") if an earlier step
+        # failed before grype could write the SARIF.
+        if: ${{ !cancelled() && hashFiles('grype-results.sarif') != '' }}
+        with:
+          sarif_file: 'grype-results.sarif'
+          category: 'grype-scheduled'

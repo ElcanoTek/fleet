@@ -100,6 +100,13 @@ Every pull request must be green before merge. CI runs:
 - **Playwright** — the mocked suite, plus a live suite against a real backend
   with a stubbed LLM (no OpenRouter spend).
 - **Secret scan (gitleaks)** — fails the build on any new, un-ignored secret.
+- **Container image scan (Grype)** — fails the build on a fixable CRITICAL CVE in
+  the sandbox image built from `config/default/sandbox/Containerfile` (HIGH and
+  below are reported, not blocking). Findings upload to GitHub Security → Code
+  scanning. A separate weekly scheduled scan (non-blocking) catches new CVEs
+  against the existing image between PRs. (Grype, not Trivy: the image's
+  `fedora-minimal` base has no Trivy advisory feed, so Trivy would scan none of
+  its packages; Grype matches its RPM + Python packages against NVD/GHSA.)
 
 If golangci-lint flags something, either fix it or add a `//nolint` with a
 reason (the `nolintlint` linter requires the reason). The lint backlog is at
