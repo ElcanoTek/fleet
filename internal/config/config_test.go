@@ -1183,3 +1183,108 @@ func TestLoad_IPAccessControlMalformedIsFatal(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_TaskMemoryDefaultsAndOverride(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TaskMemoryMaxKeys != 100 {
+		t.Errorf("TaskMemoryMaxKeys default: got %d, want 100", cfg.TaskMemoryMaxKeys)
+	}
+	if cfg.TaskMemoryMaxValueBytes != 4096 {
+		t.Errorf("TaskMemoryMaxValueBytes default: got %d, want 4096", cfg.TaskMemoryMaxValueBytes)
+	}
+
+	t.Setenv("FLEET_TASK_MEMORY_MAX_KEYS", "25")
+	t.Setenv("FLEET_TASK_MEMORY_MAX_VALUE_BYTES", "8192")
+	cfg, err = Load("")
+	if err != nil {
+		t.Fatalf("Load (override): %v", err)
+	}
+	if cfg.TaskMemoryMaxKeys != 25 || cfg.TaskMemoryMaxValueBytes != 8192 {
+		t.Errorf("env override: got keys=%d valueBytes=%d, want 25/8192", cfg.TaskMemoryMaxKeys, cfg.TaskMemoryMaxValueBytes)
+	}
+}
+
+// NOTE: these #213 tests live at the END of the file on purpose. config_test.go
+// carries fake "sk-or-v1-..." fixtures whose .gitleaksignore fingerprints are
+// pinned by LINE NUMBER (generic-api-key:1095 / :1113); inserting code above
+// them shifts those lines and breaks the ignore, failing the gitleaks gate.
+// Appending here keeps those fingerprints valid.
+
+func TestLoad_PythonREPL(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+
+	// Defaults: per-turn, no cell ceiling, 30m idle TTL, 32 sessions.
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PythonREPLMode != "per-turn" {
+		t.Errorf("PythonREPLMode default = %q, want per-turn", cfg.PythonREPLMode)
+	}
+	if cfg.PersistentPythonREPL() {
+		t.Error("PersistentPythonREPL() must be false by default")
+	}
+	if cfg.PythonCellTimeoutSeconds != 0 {
+		t.Errorf("PythonCellTimeoutSeconds default = %d, want 0", cfg.PythonCellTimeoutSeconds)
+	}
+	if cfg.PythonREPLIdleTTLSeconds != 1800 {
+		t.Errorf("PythonREPLIdleTTLSeconds default = %d, want 1800", cfg.PythonREPLIdleTTLSeconds)
+	}
+	if cfg.PythonREPLMaxSessions != 32 {
+		t.Errorf("PythonREPLMaxSessions default = %d, want 32", cfg.PythonREPLMaxSessions)
+	}
+
+	t.Setenv("FLEET_PYTHON_REPL_MODE", "persistent")
+	t.Setenv("FLEET_PYTHON_CELL_TIMEOUT", "120")
+	t.Setenv("FLEET_PYTHON_REPL_IDLE_TTL", "600")
+	t.Setenv("FLEET_PYTHON_REPL_MAX", "8")
+	cfg, err = Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PythonREPLMode != "persistent" || !cfg.PersistentPythonREPL() {
+		t.Errorf("PythonREPLMode = %q persistent=%v, want persistent/true", cfg.PythonREPLMode, cfg.PersistentPythonREPL())
+	}
+	if cfg.PythonCellTimeoutSeconds != 120 {
+		t.Errorf("PythonCellTimeoutSeconds = %d, want 120", cfg.PythonCellTimeoutSeconds)
+	}
+	if cfg.PythonREPLIdleTTLSeconds != 600 {
+		t.Errorf("PythonREPLIdleTTLSeconds = %d, want 600", cfg.PythonREPLIdleTTLSeconds)
+	}
+	if cfg.PythonREPLMaxSessions != 8 {
+		t.Errorf("PythonREPLMaxSessions = %d, want 8", cfg.PythonREPLMaxSessions)
+	}
+}
+
+func TestLoad_PythonREPLModeFailsClosed(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+
+	// An unrecognized mode must fall back to the conservative per-turn default
+	// rather than silently keeping a kernel alive across turns.
+	t.Setenv("FLEET_PYTHON_REPL_MODE", "PERSISTENT-typo")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PythonREPLMode != "per-turn" || cfg.PersistentPythonREPL() {
+		t.Errorf("unknown REPL mode must fall back to per-turn; got %q persistent=%v", cfg.PythonREPLMode, cfg.PersistentPythonREPL())
+	}
+
+	// Case-insensitive acceptance of the valid value.
+	t.Setenv("FLEET_PYTHON_REPL_MODE", "Persistent")
+	cfg, err = Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.PersistentPythonREPL() {
+		t.Errorf("mixed-case 'Persistent' must be accepted; got %q", cfg.PythonREPLMode)
+	}
+}

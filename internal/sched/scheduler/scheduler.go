@@ -43,6 +43,13 @@ type Scheduler struct {
 	// terminal tasks older than archiveAfterDays are compressed (optionally
 	// encrypted) in place daily at cleanupHour:00 UTC. Reads stay transparent.
 	archiveAfterDays int
+
+	// Anti-starvation promotion (#230). starvationWindowMin<=0 disables it;
+	// otherwise every runLoop tick promotes pending tasks that have waited longer
+	// than this many minutes (and are still less urgent than the starvation
+	// floor) up to that floor, so a sustained stream of higher-priority work can
+	// never queue a low-priority task forever.
+	starvationWindowMin int
 }
 
 // SetRetention configures the automatic daily run-history pruning sweep (#252).
@@ -64,6 +71,14 @@ func (s *Scheduler) SetRetention(retentionDays, keepPerTask, hour int) {
 // archived payloads transparently, so it never changes what a caller sees.
 func (s *Scheduler) SetLogArchival(archiveAfterDays int) {
 	s.archiveAfterDays = archiveAfterDays
+}
+
+// SetStarvationWindow configures the anti-starvation promotion sweep (#230).
+// Call before Start. windowMinutes<=0 leaves promotion OFF; otherwise a pending
+// task that has waited longer than this is promoted to the starvation floor so
+// it can't be starved indefinitely by a stream of higher-priority work.
+func (s *Scheduler) SetStarvationWindow(windowMinutes int) {
+	s.starvationWindowMin = windowMinutes
 }
 
 // New creates a new Scheduler.
@@ -112,6 +127,10 @@ func (s *Scheduler) runLoop() {
 		log.Printf("scheduler: log archival ON (archive after %dd, sweep daily at %02d:00 UTC)",
 			s.archiveAfterDays, s.cleanupHour)
 	}
+	if s.starvationWindowMin > 0 {
+		log.Printf("scheduler: anti-starvation promotion ON (promote pending tasks waiting > %dm to priority %d)",
+			s.starvationWindowMin, models.StarvationFloorPriority)
+	}
 
 	for {
 		select {
@@ -122,6 +141,7 @@ func (s *Scheduler) runLoop() {
 				defer safe.Recover("scheduler.tick", nil)
 				s.ProcessScheduledTasks()
 				s.RecoverExpiredLeases()
+				s.runStarvationPromotion()
 			}()
 		case <-cleanupC:
 			func() {
@@ -133,6 +153,26 @@ func (s *Scheduler) runLoop() {
 		case <-s.stop:
 			return
 		}
+	}
+}
+
+// runStarvationPromotion performs one anti-starvation sweep (#230): it promotes
+// pending tasks that have waited past the window up to the starvation floor.
+// No-op when disabled. Logs only when it actually promotes something, so a quiet
+// queue stays quiet in the logs; a failure is logged but never fatal — the next
+// tick retries.
+func (s *Scheduler) runStarvationPromotion() {
+	if s.starvationWindowMin <= 0 {
+		return
+	}
+	n, err := s.storage.PromoteStarvedTasks(context.Background(), s.starvationWindowMin)
+	if err != nil {
+		log.Printf("scheduler: starvation promotion failed: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("scheduler: promoted %d starving task(s) to priority %d (waited > %dm)",
+			n, models.StarvationFloorPriority, s.starvationWindowMin)
 	}
 }
 

@@ -202,7 +202,12 @@ func TestScheduledRunner_UnknownServerFailsFast(t *testing.T) {
 type recordingTaker struct {
 	tookWarm   bool // Take() — warm pool, network ENABLED
 	tookSealed bool // TakeContainer() — cold start, --network=none
-	// containerUnavailable makes TakeContainer report ErrContainerUnavailable,
+	// tookOverrides records a TakeContainerWithOverrides call (#205) and what it
+	// received, so a test can assert the per-task limits + network posture applied.
+	tookOverrides bool
+	gotOverride   sandbox.ResourceOverride
+	gotNoNetwork  bool
+	// containerUnavailable makes the container takes report ErrContainerUnavailable,
 	// modeling a host-mode / mock pool with no container backend.
 	containerUnavailable bool
 }
@@ -214,6 +219,16 @@ func (rt *recordingTaker) Take() (*sandbox.Sandbox, func(), error) {
 
 func (rt *recordingTaker) TakeContainer(_ context.Context) (*sandbox.Sandbox, func(), error) {
 	rt.tookSealed = true
+	if rt.containerUnavailable {
+		return nil, func() {}, sandbox.ErrContainerUnavailable
+	}
+	return nil, func() {}, nil
+}
+
+func (rt *recordingTaker) TakeContainerWithOverrides(_ context.Context, ov sandbox.ResourceOverride, noNetwork bool) (*sandbox.Sandbox, func(), error) {
+	rt.tookOverrides = true
+	rt.gotOverride = ov
+	rt.gotNoNetwork = noNetwork
 	if rt.containerUnavailable {
 		return nil, func() {}, sandbox.ErrContainerUnavailable
 	}
@@ -255,6 +270,72 @@ func TestTakeTaskSandbox_NetworkPosture(t *testing.T) {
 		}
 		if !rt.tookSealed || !rt.tookWarm {
 			t.Fatalf("host-mode default must try sealed then fall back to warm; got warm=%v sealed=%v", rt.tookWarm, rt.tookSealed)
+		}
+	})
+}
+
+// TestTakeTaskSandbox_PerTaskLimits is the #205 acceptance test: a task carrying
+// SandboxLimits cold-starts through the override path with the converted
+// podman-ready values, keeps its network posture (sealed unless AllowNetwork),
+// and falls back to the host take on a container-less pool.
+func TestTakeTaskSandbox_PerTaskLimits(t *testing.T) {
+	limits := &models.TaskSandboxLimits{MemoryMB: 2048, CPUs: 2.0, Pids: 512}
+
+	t.Run("sealed task applies overrides", func(t *testing.T) {
+		rt := &recordingTaker{}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: limits}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookOverrides || rt.tookWarm || rt.tookSealed {
+			t.Fatalf("limited task must take the override path; got overrides=%v warm=%v sealed=%v", rt.tookOverrides, rt.tookWarm, rt.tookSealed)
+		}
+		if !rt.gotNoNetwork {
+			t.Error("a non-AllowNetwork limited task must stay sealed (noNetwork=true)")
+		}
+		want := sandbox.ResourceOverride{MemoryLimit: "2048m", CPULimit: "2.00", PidsLimit: 512}
+		if rt.gotOverride != want {
+			t.Errorf("override = %+v, want %+v", rt.gotOverride, want)
+		}
+	})
+
+	t.Run("AllowNetwork limited task keeps egress", func(t *testing.T) {
+		rt := &recordingTaker{}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true, SandboxLimits: limits}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookOverrides || rt.gotNoNetwork {
+			t.Fatalf("AllowNetwork limited task must use the override path with egress on; got overrides=%v noNetwork=%v", rt.tookOverrides, rt.gotNoNetwork)
+		}
+	})
+
+	t.Run("partial limits convert only set fields", func(t *testing.T) {
+		rt := &recordingTaker{}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: &models.TaskSandboxLimits{CPUs: 4}}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		want := sandbox.ResourceOverride{CPULimit: "4.00"} // memory/pids left to the pool default
+		if rt.gotOverride != want {
+			t.Errorf("partial override = %+v, want %+v", rt.gotOverride, want)
+		}
+	})
+
+	t.Run("container-less pool falls back to host take", func(t *testing.T) {
+		rt := &recordingTaker{containerUnavailable: true}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: limits}); err != nil {
+			t.Fatalf("takeTaskSandbox should fall back, not error: %v", err)
+		}
+		if !rt.tookOverrides || !rt.tookWarm {
+			t.Fatalf("must try overrides then fall back to warm; got overrides=%v warm=%v", rt.tookOverrides, rt.tookWarm)
+		}
+	})
+
+	t.Run("all-zero limits use the normal path", func(t *testing.T) {
+		rt := &recordingTaker{}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{SandboxLimits: &models.TaskSandboxLimits{}}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if rt.tookOverrides || !rt.tookSealed {
+			t.Fatalf("all-zero limits must NOT take the override path; got overrides=%v sealed=%v", rt.tookOverrides, rt.tookSealed)
 		}
 	})
 }

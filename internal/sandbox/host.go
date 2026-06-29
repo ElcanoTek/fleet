@@ -135,6 +135,7 @@ func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResu
 		ReturnVars:     req.ReturnVars,
 		TimeoutSeconds: int(timeout.Seconds()),
 		WorkspaceDir:   req.WorkspaceDir,
+		ResetKernel:    req.ResetKernel,
 	}
 	reqBytes, err := json.Marshal(wireReq)
 	if err != nil {
