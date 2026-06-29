@@ -392,7 +392,11 @@ lowers the host's base footprint.
 > workloads above, raise it to match the per-agent RAM you provisioned via
 > `FLEET_SANDBOX_MEMORY` (e.g. `2g`), `FLEET_SANDBOX_CPUS`, and
 > `FLEET_SANDBOX_PIDS` — otherwise those workloads are OOM-killed against the
-> 512 MiB default, not your host's free RAM.
+> 512 MiB default, not your host's free RAM. A scheduled **task can override**
+> these per run with `sandbox_limits: {memory_mb, cpus, pids}` (#205) — a heavy
+> task gets 4 GiB while the common case keeps the lean default — bounded by the
+> operator ceilings `FLEET_SANDBOX_{MEMORY_MAX_MB,CPUS_MAX,PIDS_MAX}` (defaults
+> 8192 / 16 / 1024). A per-task override always cold-starts that run's container.
 
 > **Per-task resource telemetry.** To help right-size those caps, fleet samples
 > `podman stats` read-only over each sandbox container's lifetime and records the

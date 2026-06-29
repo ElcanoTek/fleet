@@ -93,6 +93,13 @@ type Config struct {
 	AuthLoginURL       string // e.g. https://auth.elcanotek.com (no trailing slash)
 	ElcanoCookieName   string // default "elcano_auth"
 	ElcanoCookieDomain string // AUTH_COOKIE_DOMAIN (e.g. "elcanotek.com"); "" = host-only. Needed to delete the shared cookie on logout.
+
+	// Per-task sandbox-limit ceilings (#205): the maxima a task's SandboxLimits
+	// override may request (FLEET_SANDBOX_*_MAX). 0 = no ceiling. Mirrors the
+	// config.Config values; threaded here so validateSandboxLimits can enforce them.
+	SandboxMemoryMaxMB int
+	SandboxCPUsMax     float64
+	SandboxPidsMax     int
 }
 
 // Handlers contains all HTTP handlers.
@@ -888,6 +895,48 @@ func validateTaskLimits(tc *models.TaskCreate) error {
 	return nil
 }
 
+// minSandboxMemoryMB / minSandboxPids are the per-task floors below which a
+// container is too small to be useful; the operator ceilings come from config (#205).
+const (
+	minSandboxMemoryMB = 128
+	minSandboxPids     = 16
+)
+
+// validateSandboxLimits bounds an optional per-task sandbox override (#205): each
+// set field must clear a sane floor and must not exceed the operator-configured
+// ceiling (FLEET_SANDBOX_*_MAX). A zero field means "use the global default" and
+// is left alone. nil = no override.
+func (h *Handlers) validateSandboxLimits(l *models.TaskSandboxLimits) error {
+	if l == nil {
+		return nil
+	}
+	if l.MemoryMB != 0 {
+		if l.MemoryMB < minSandboxMemoryMB {
+			return fmt.Errorf("sandbox_limits.memory_mb must be >= %d", minSandboxMemoryMB)
+		}
+		if ceiling := h.config.SandboxMemoryMaxMB; ceiling > 0 && l.MemoryMB > ceiling {
+			return fmt.Errorf("sandbox_limits.memory_mb %d exceeds operator ceiling %d", l.MemoryMB, ceiling)
+		}
+	}
+	if l.CPUs != 0 {
+		if l.CPUs < 0 {
+			return fmt.Errorf("sandbox_limits.cpus must be > 0")
+		}
+		if ceiling := h.config.SandboxCPUsMax; ceiling > 0 && l.CPUs > ceiling {
+			return fmt.Errorf("sandbox_limits.cpus %.2f exceeds operator ceiling %.2f", l.CPUs, ceiling)
+		}
+	}
+	if l.Pids != 0 {
+		if l.Pids < minSandboxPids {
+			return fmt.Errorf("sandbox_limits.pids must be >= %d", minSandboxPids)
+		}
+		if ceiling := h.config.SandboxPidsMax; ceiling > 0 && l.Pids > ceiling {
+			return fmt.Errorf("sandbox_limits.pids %d exceeds operator ceiling %d", l.Pids, ceiling)
+		}
+	}
+	return nil
+}
+
 // defaultTaskTimezone is the IANA timezone applied to a task created without an
 // explicit one. FLEET_DEFAULT_TIMEZONE, then "UTC".
 func (h *Handlers) defaultTaskTimezone() string {
@@ -1033,6 +1082,9 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 		return err
 	}
 	if err := validateTaskLimits(tc); err != nil {
+		return err
+	}
+	if err := h.validateSandboxLimits(tc.SandboxLimits); err != nil {
 		return err
 	}
 

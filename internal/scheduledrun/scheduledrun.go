@@ -19,6 +19,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -285,6 +286,9 @@ type sandboxTaker interface {
 	// TakeContainer cold-starts a fresh sandbox with egress SEALED
 	// (--network=none) — the lockdown boundary.
 	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
+	// TakeContainerWithOverrides cold-starts a fresh sandbox applying per-task
+	// resource overrides (#205), with the caller's chosen network posture.
+	TakeContainerWithOverrides(ctx context.Context, ov sandbox.ResourceOverride, noNetwork bool) (*sandbox.Sandbox, func(), error)
 }
 
 // takeTaskSandbox acquires the bash/run_python execution sandbox for a
@@ -303,6 +307,17 @@ type sandboxTaker interface {
 // the host take. This is not a production downgrade — buildSandboxPool requires
 // a container image outside mock mode, so a real deployment always seals here.
 func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task) (*sandbox.Sandbox, func(), error) {
+	// Per-task sandbox limits (#205) require a cold start (a warm pooled container
+	// is already running with the pool's ceilings), so route through the override
+	// path — applying the task's own network posture (sealed unless AllowNetwork).
+	if !task.SandboxLimits.IsZero() {
+		sb, cleanup, err := pool.TakeContainerWithOverrides(ctx, sandboxOverride(task.SandboxLimits), !task.AllowNetwork)
+		if errors.Is(err, sandbox.ErrContainerUnavailable) {
+			// Host/mock pool: no container to size — fall back to the host take.
+			return pool.Take()
+		}
+		return sb, cleanup, err
+	}
 	if task.AllowNetwork {
 		return pool.Take()
 	}
@@ -311,6 +326,24 @@ func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task) 
 		return pool.Take()
 	}
 	return sb, cleanup, err
+}
+
+// sandboxOverride converts a task's optional per-task limits (#205) into the
+// sandbox package's podman-ready override shape. A zero field maps to "" / 0,
+// which the pool leaves at its default. memory is emitted in MiB ("Nm"), cpus
+// with two decimals to match the global SandboxCPUs string format.
+func sandboxOverride(l *models.TaskSandboxLimits) sandbox.ResourceOverride {
+	if l == nil {
+		return sandbox.ResourceOverride{}
+	}
+	ov := sandbox.ResourceOverride{PidsLimit: l.Pids}
+	if l.MemoryMB > 0 {
+		ov.MemoryLimit = fmt.Sprintf("%dm", l.MemoryMB)
+	}
+	if l.CPUs > 0 {
+		ov.CPULimit = strconv.FormatFloat(l.CPUs, 'f', 2, 64)
+	}
+	return ov
 }
 
 // Run executes one task and returns the converted session log. It satisfies

@@ -302,6 +302,7 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	existing.CredentialAllowlist = tc.CredentialAllowlist
 	existing.LoopConfig = tc.LoopConfig
 	existing.WorktreeConfig = tc.WorktreeConfig
+	existing.SandboxLimits = tc.SandboxLimits
 	existing.Priority = tc.Priority
 	existing.InstructionSelfImprove = tc.InstructionSelfImprove
 	existing.AllowNetwork = tc.AllowNetwork

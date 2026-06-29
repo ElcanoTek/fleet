@@ -268,6 +268,24 @@ func (wc *WorktreeConfig) Validate() error {
 	return nil
 }
 
+// TaskSandboxLimits overrides the global FLEET_SANDBOX_* cgroup ceilings for a
+// single task's execution container (#205). Each field is optional; a zero value
+// means "use the global default". Stored as the nullable sandbox_limits JSONB
+// column (NULL = all-global), and applied by the scheduled runner when it
+// cold-starts the task's container — a tightening of the mandatory sandbox, never
+// a way to escape it.
+type TaskSandboxLimits struct {
+	MemoryMB int     `json:"memory_mb,omitempty"` // container memory ceiling in MiB (e.g. 2048)
+	CPUs     float64 `json:"cpus,omitempty"`      // fractional CPU ceiling (e.g. 2.0)
+	Pids     int     `json:"pids,omitempty"`      // max process IDs (e.g. 512)
+}
+
+// IsZero reports whether no override is set (every field is the zero value), so a
+// caller can treat an all-zero struct the same as nil (#205).
+func (l *TaskSandboxLimits) IsZero() bool {
+	return l == nil || (l.MemoryMB == 0 && l.CPUs == 0 && l.Pids == 0)
+}
+
 // Failure classes (#201): the vocabulary the runner classifies a clean run
 // failure into, and that a RetryPolicy's retry_on/no_retry_on lists reference.
 // Only classes backed by a distinct agentcore sentinel today are
@@ -745,12 +763,15 @@ type TaskCreate struct {
 	// WorktreeConfig, when non-nil with Enabled, gives each run its own git
 	// worktree + branch for filesystem isolation (#180). nil = shared workspace
 	// (current behaviour). See WorktreeConfig.
-	WorktreeConfig         *WorktreeConfig `json:"worktree_config,omitempty"`
-	Priority               int             `json:"priority"`
-	InstructionSelfImprove bool            `json:"instruction_self_improve,omitempty"`
-	ScheduledFor           *time.Time      `json:"scheduled_for,omitempty"`
-	Recurrence             string          `json:"recurrence,omitempty"`
-	Files                  []string        `json:"files,omitempty"`
+	WorktreeConfig *WorktreeConfig `json:"worktree_config,omitempty"`
+	// SandboxLimits, when non-nil, overrides the global FLEET_SANDBOX_* cgroup
+	// ceilings for this task's container (#205). nil = use the global defaults.
+	SandboxLimits          *TaskSandboxLimits `json:"sandbox_limits,omitempty"`
+	Priority               int                `json:"priority"`
+	InstructionSelfImprove bool               `json:"instruction_self_improve,omitempty"`
+	ScheduledFor           *time.Time         `json:"scheduled_for,omitempty"`
+	Recurrence             string             `json:"recurrence,omitempty"`
+	Files                  []string           `json:"files,omitempty"`
 	// Tags are user-defined labels for organizing and filtering tasks (#212):
 	// lowercase alphanumeric + '-'/'.', ≤64 chars each, ≤20 per task. Normalized
 	// and validated at create/edit. nil/empty = untagged.
@@ -859,7 +880,10 @@ type Task struct {
 	// WorktreeConfig, when non-nil with Enabled, runs each occurrence in its own
 	// git worktree + branch (#180). nil = shared workspace. See WorktreeConfig.
 	WorktreeConfig *WorktreeConfig `json:"worktree_config,omitempty"`
-	Priority       int             `json:"priority"`
+	// SandboxLimits overrides the global sandbox cgroup ceilings for this task's
+	// container (#205). nil = global defaults. See TaskCreate.SandboxLimits.
+	SandboxLimits *TaskSandboxLimits `json:"sandbox_limits,omitempty"`
+	Priority      int                `json:"priority"`
 	// EffectivePriority is the value the scheduler actually orders the pending
 	// queue by (#230). Equal to Priority at creation; only the anti-starvation
 	// sweep lowers it (never Priority) so a long-waiting task is eventually
@@ -1029,6 +1053,7 @@ func NewTask(tc TaskCreate) *Task {
 		CredentialAllowlist:        tc.CredentialAllowlist,
 		LoopConfig:                 tc.LoopConfig,
 		WorktreeConfig:             tc.WorktreeConfig,
+		SandboxLimits:              tc.SandboxLimits,
 		Priority:                   priority,
 		EffectivePriority:          priority,
 		InstructionSelfImprove:     tc.InstructionSelfImprove,
@@ -1142,6 +1167,7 @@ func TaskToCreate(t *Task) TaskCreate {
 		CredentialAllowlist:    t.CredentialAllowlist,
 		LoopConfig:             t.LoopConfig,
 		WorktreeConfig:         t.WorktreeConfig,
+		SandboxLimits:          t.SandboxLimits,
 		RetryPolicy:            t.RetryPolicy,
 		Description:            t.Description,
 		Tags:                   t.Tags,
@@ -1192,6 +1218,7 @@ type TaskExportRecord struct {
 	CredentialAllowlist        CredentialAllowlist `json:"credential_allowlist,omitempty" yaml:"credential_allowlist,omitempty"`
 	LoopConfig                 *LoopConfig         `json:"loop_config,omitempty"                yaml:"loop_config,omitempty"`
 	WorktreeConfig             *WorktreeConfig     `json:"worktree_config,omitempty"         yaml:"worktree_config,omitempty"`
+	SandboxLimits              *TaskSandboxLimits  `json:"sandbox_limits,omitempty"          yaml:"sandbox_limits,omitempty"`
 	Priority                   int                 `json:"priority,omitempty"                   yaml:"priority,omitempty"`
 	InstructionSelfImprove     bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
 	AllowNetwork               bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
@@ -1298,6 +1325,7 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		CredentialAllowlist:        rec.CredentialAllowlist,
 		LoopConfig:                 rec.LoopConfig,
 		WorktreeConfig:             rec.WorktreeConfig,
+		SandboxLimits:              rec.SandboxLimits,
 		Priority:                   rec.Priority,
 		InstructionSelfImprove:     rec.InstructionSelfImprove,
 		AllowNetwork:               rec.AllowNetwork,
@@ -1346,6 +1374,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		CredentialAllowlist:        t.CredentialAllowlist,
 		LoopConfig:                 t.LoopConfig,
 		WorktreeConfig:             t.WorktreeConfig,
+		SandboxLimits:              t.SandboxLimits,
 		Priority:                   t.Priority,
 		InstructionSelfImprove:     t.InstructionSelfImprove,
 		AllowNetwork:               t.AllowNetwork,

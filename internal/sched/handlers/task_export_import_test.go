@@ -333,6 +333,54 @@ func TestExportImport_ConflictSemantics(t *testing.T) {
 	}
 }
 
+// TestImportReplace_RoundTripsSandboxLimits guards the #205 fix: conflict=replace
+// is a full definition replacement, so it must overlay sandbox_limits like the
+// sibling LoopConfig/WorktreeConfig — applying new limits and clearing them when
+// the replacing record omits them.
+func TestImportReplace_RoundTripsSandboxLimits(t *testing.T) {
+	r, store, cleanup := setupExportImportHandler(t)
+	defer cleanup()
+
+	// Seed a task that already has a per-task limit.
+	orig := models.NewTask(models.TaskCreate{
+		Name: "limited", Prompt: "seed limited task",
+		SandboxLimits: &models.TaskSandboxLimits{MemoryMB: 2048, CPUs: 2, Pids: 512},
+	})
+	if _, err := store.AddTask(orig); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	importReplace := func(rec models.TaskExportRecord) {
+		t.Helper()
+		env := models.TaskExportEnvelope{Version: models.TaskExportVersion, ExportedAt: time.Now().UTC(), Tasks: []models.TaskExportRecord{rec}}
+		body, _ := json.Marshal(env)
+		req := httptest.NewRequest(http.MethodPost, "/tasks/import?conflict=replace", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", "test-admin-key")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("import replace: %d (%s)", w.Code, w.Body.String())
+		}
+	}
+
+	// Replace with NEW limits → they take effect.
+	importReplace(models.TaskExportRecord{
+		Name: "limited", Prompt: "replaced with new limits",
+		SandboxLimits: &models.TaskSandboxLimits{MemoryMB: 4096, CPUs: 4, Pids: 1024},
+	})
+	got := mustFindTask(t, store, "limited")
+	if got.SandboxLimits == nil || got.SandboxLimits.MemoryMB != 4096 || got.SandboxLimits.CPUs != 4 || got.SandboxLimits.Pids != 1024 {
+		t.Fatalf("replace did not apply new sandbox_limits: %+v", got.SandboxLimits)
+	}
+
+	// Replace with NO limits → cleared (a full definition replacement).
+	importReplace(models.TaskExportRecord{Name: "limited", Prompt: "replaced with no limits"})
+	if got = mustFindTask(t, store, "limited"); got.SandboxLimits != nil {
+		t.Errorf("replace omitting sandbox_limits must clear them, got %+v", got.SandboxLimits)
+	}
+}
+
 func TestExportImport_PermissionGates(t *testing.T) {
 	r, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
