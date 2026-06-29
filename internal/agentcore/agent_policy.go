@@ -1,6 +1,9 @@
 package agentcore
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // AgentPolicy carries the client-bundle-configurable tool-behavior lists:
 // which MCP tools are safe to dispatch in parallel, which tool-name suffixes are
@@ -24,6 +27,14 @@ type AgentPolicy struct {
 	// suffixes that may discharge its commitment (e.g. a high-level
 	// execute_deal_from_prompt_inputs discharged by a lower-level create_deal).
 	CriticalToolSubstitutes map[string][]string
+	// CriticalToolTimeouts maps a bare tool-name suffix to a per-tool approval
+	// default-deny window in seconds (#225). Matched by suffix exactly like
+	// CriticalToolSuffixes ("send_email" matches "<server>_send_email"); the
+	// longest matching suffix wins. It is the highest-priority layer of the
+	// approval-timeout resolution chain (per-tool > per-conversation > global
+	// FLEET_APPROVAL_TIMEOUT_SECONDS > hardcoded default). Empty = no per-tool
+	// overrides, so every tool falls through to the per-conversation/global value.
+	CriticalToolTimeouts map[string]int
 }
 
 // baseCriticalToolSuffixes are ALWAYS critical regardless of the configured
@@ -51,6 +62,12 @@ var (
 	// activeCriticalSubstitutes maps committed suffix -> allowed executed
 	// substitutes. Empty by default.
 	activeCriticalSubstitutes = map[string][]string{}
+
+	// activeCriticalTimeouts maps a critical-tool suffix -> per-tool approval
+	// default-deny window in seconds (#225). Empty by default (no per-tool
+	// overrides); ApprovalTimeoutForTool returns 0 then, and callers fall back
+	// to the per-conversation / global timeout.
+	activeCriticalTimeouts = map[string]int{}
 )
 
 // ConfigureAgentPolicy installs the client bundle's tool-behavior policy. Call
@@ -92,6 +109,37 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 		subs[k] = append([]string(nil), v...)
 	}
 	activeCriticalSubstitutes = subs
+
+	timeouts := make(map[string]int, len(p.CriticalToolTimeouts))
+	for k, v := range p.CriticalToolTimeouts {
+		if k != "" && v > 0 {
+			timeouts[k] = v
+		}
+	}
+	activeCriticalTimeouts = timeouts
+}
+
+// ApprovalTimeoutForTool returns the per-tool approval default-deny window (in
+// seconds) configured for toolName via the bundle's
+// agent_policy.critical_tool_timeouts, or 0 if none applies (#225). Matching
+// mirrors isCriticalTool — a suffix matches when the tool name equals it or ends
+// with "_<suffix>" — and the LONGEST matching suffix wins so a specific
+// "execute_deal" pins over a generic "deal". 0 tells the caller to fall back to
+// the per-conversation / global timeout.
+func ApprovalTimeoutForTool(toolName string) int {
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+	bestLen := -1
+	best := 0
+	for suffix, secs := range activeCriticalTimeouts {
+		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
+			if len(suffix) > bestLen {
+				bestLen = len(suffix)
+				best = secs
+			}
+		}
+	}
+	return best
 }
 
 // isParallelSafeTool reports whether the fully-prefixed MCP tool name is safe to

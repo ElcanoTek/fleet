@@ -435,7 +435,12 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
 
     if (event.event === "tool.approval_required") {
-      const p = payload as { approval_id: string; tool: string; summary: Approval["summary"] };
+      const p = payload as {
+        approval_id: string;
+        tool: string;
+        summary: Approval["summary"];
+        expires_at?: number;
+      };
       // send_email cards can land below an expanded preview iframe — queue
       // a scroll-into-view so the user sees the action card without
       // hunting for it. Bash/preview cards stay quiet (preview is always
@@ -446,7 +451,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         ...m,
         approvals: [
           ...(m.approvals ?? []),
-          { id: p.approval_id, tool: p.tool, summary: p.summary, status: "pending" },
+          { id: p.approval_id, tool: p.tool, summary: p.summary, status: "pending", expiresAt: p.expires_at },
         ],
       }));
       return;

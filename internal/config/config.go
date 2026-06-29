@@ -121,29 +121,31 @@ var allowedEnvVars = map[string]bool{
 	"DB_SSLMODE":                        true,
 
 	// ── LLM (shared) ──
-	"OPENROUTER_API_KEY":           true,
-	"OPENROUTER_BASE_URL":          true,
-	"FLEET_OPENROUTER_BASE_URL":    true,
-	"CHAT_MAX_ITERATIONS":          true,
-	"CHAT_MAX_COST_USD":            true,
-	"CHAT_MAX_TOTAL_TOKENS":        true,
-	"CHAT_TURN_TIMEOUT_SECONDS":    true,
-	"CHAT_TEMPERATURE":             true,
-	"CHAT_TITLE_MODEL":             true,
-	"FLEET_MAX_ITERATIONS":         true,
-	"FLEET_MAX_COST_USD":           true,
-	"FLEET_MAX_TOTAL_TOKENS":       true,
-	"FLEET_TEMPERATURE":            true,
-	"FLEET_TITLE_MODEL":            true,
-	"FLEET_AUTO_TITLE":             true,
-	"FLEET_MAX_CONCURRENT_AGENTS":  true,
-	"FLEET_RUN_LOG_RETENTION_DAYS": true,
-	"FLEET_KEEP_RUNS_PER_TASK":     true,
-	"FLEET_CLEANUP_HOUR":           true,
-	"LLM_MAX_TOKENS":               true,
-	"REASONING_ENABLED":            true,
-	"REASONING_EFFORT":             true,
-	"FLEET_MAX_TOOL_OUTPUT_BYTES":  true,
+	"OPENROUTER_API_KEY":             true,
+	"OPENROUTER_BASE_URL":            true,
+	"FLEET_OPENROUTER_BASE_URL":      true,
+	"CHAT_MAX_ITERATIONS":            true,
+	"CHAT_MAX_COST_USD":              true,
+	"CHAT_MAX_TOTAL_TOKENS":          true,
+	"CHAT_TURN_TIMEOUT_SECONDS":      true,
+	"CHAT_TEMPERATURE":               true,
+	"CHAT_TITLE_MODEL":               true,
+	"FLEET_MAX_ITERATIONS":           true,
+	"FLEET_MAX_COST_USD":             true,
+	"FLEET_MAX_TOTAL_TOKENS":         true,
+	"FLEET_TEMPERATURE":              true,
+	"FLEET_TITLE_MODEL":              true,
+	"FLEET_AUTO_TITLE":               true,
+	"FLEET_APPROVAL_TIMEOUT_SECONDS": true,
+	"FLEET_AUTO_APPROVE_IN_TEST":     true,
+	"FLEET_MAX_CONCURRENT_AGENTS":    true,
+	"FLEET_RUN_LOG_RETENTION_DAYS":   true,
+	"FLEET_KEEP_RUNS_PER_TASK":       true,
+	"FLEET_CLEANUP_HOUR":             true,
+	"LLM_MAX_TOKENS":                 true,
+	"REASONING_ENABLED":              true,
+	"REASONING_EFFORT":               true,
+	"FLEET_MAX_TOOL_OUTPUT_BYTES":    true,
 
 	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
 	"FLEET_LOG_FILE":         true,
@@ -488,6 +490,23 @@ type Config struct {
 	// title-model call is made (cost/latency escape hatch).
 	AutoTitle bool
 
+	// ApprovalTimeoutSeconds is the global default-deny window (in seconds) for
+	// critical-tool approval cards on the web path (#225). FLEET_APPROVAL_TIMEOUT_SECONDS,
+	// default 300. A still-pending approval older than this is auto-denied by the
+	// server-side expiry sweep. It is the lowest-priority layer of the resolution
+	// chain (per-tool manifest > per-conversation > this global > the hardcoded
+	// 300s fallback). A value <= 0 is treated as "use the hardcoded default" at
+	// resolution time, never as "deny instantly".
+	ApprovalTimeoutSeconds int
+
+	// AutoApproveInTest, when true, makes the approval stager auto-approve every
+	// staged critical tool instead of waiting for a human (#225).
+	// FLEET_AUTO_APPROVE_IN_TEST, default FALSE. This is a CI/test escape hatch
+	// for pipelines with no human present and a mocked backend — it WEAKENS the
+	// human-in-the-loop gate, so it must NEVER be enabled in production. Off by
+	// default; a loud warning is logged at startup when it is on.
+	AutoApproveInTest bool
+
 	// MaxConcurrentAgents is the configured concurrency cap (FLEET_MAX_CONCURRENT_AGENTS,
 	// default 8). It bounds simultaneous SCHEDULED tasks (the worker-pool semaphore)
 	// and sizes the sandbox warm pool; interactive chat turns are NOT gated by it —
@@ -812,14 +831,16 @@ func Load(envFile string) (*Config, error) {
 
 		ShutdownGraceSeconds: getenvFleetInt("SHUTDOWN_GRACE_SECONDS", 30),
 
-		TurnTimeoutSeconds:  getenvFleetInt("TURN_TIMEOUT_SECONDS", 1800),
-		Temperature:         getenvFleetFloat("TEMPERATURE", 0.3),
-		LLMMaxTokens:        getenvInt("LLM_MAX_TOKENS", 16384),
-		ReasoningEnabled:    getenvBool("REASONING_ENABLED", true),
-		ReasoningEffort:     getenvDefault("REASONING_EFFORT", "medium"),
-		TitleModel:          getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
-		AutoTitle:           getenvFleetBool("AUTO_TITLE", true),
-		MaxConcurrentAgents: getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
+		TurnTimeoutSeconds:     getenvFleetInt("TURN_TIMEOUT_SECONDS", 1800),
+		Temperature:            getenvFleetFloat("TEMPERATURE", 0.3),
+		LLMMaxTokens:           getenvInt("LLM_MAX_TOKENS", 16384),
+		ReasoningEnabled:       getenvBool("REASONING_ENABLED", true),
+		ReasoningEffort:        getenvDefault("REASONING_EFFORT", "medium"),
+		TitleModel:             getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
+		AutoTitle:              getenvFleetBool("AUTO_TITLE", true),
+		ApprovalTimeoutSeconds: getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 300),
+		AutoApproveInTest:      getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
+		MaxConcurrentAgents:    getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
 
 		// ── personas ──
 		PersonaDefault: getenvDefault("PERSONA_DEFAULT", "assistant"),

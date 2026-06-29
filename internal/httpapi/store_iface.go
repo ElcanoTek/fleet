@@ -39,6 +39,7 @@ type chatStore interface {
 	SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error
 	SetArchived(ctx context.Context, userEmail, convID string, archived bool) error
 	SetModel(ctx context.Context, userEmail, convID, model string) error
+	SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
 	UpdateTitle(ctx context.Context, userEmail, convID, title string) error
 	RenameTitle(ctx context.Context, userEmail, convID, title string) error
@@ -83,12 +84,15 @@ type chatStore interface {
 	ListPendingMemoryProposalsForConversation(ctx context.Context, userEmail, conversationID string) ([]store.Memory, error)
 
 	// Approvals.
-	CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string) (*store.Approval, error)
+	CreateApproval(ctx context.Context, convID, userEmail, toolName, toolCallID, argsJSON string, expiresAt int64) (*store.Approval, error)
 	GetApproval(ctx context.Context, userEmail, approvalID string) (*store.Approval, error)
 	ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error)
 	ResolveApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) error
 	SetApprovalResult(ctx context.Context, userEmail, approvalID, resultText string) error
 	ListPendingApprovals(ctx context.Context, userEmail, convID string) ([]store.Approval, error)
+	// ListExpiredApprovals + ClaimApproval back the server-side expiry sweep
+	// (#225): pending approvals past their expires_at deadline are auto-denied.
+	ListExpiredApprovals(ctx context.Context, now int64) ([]store.Approval, error)
 	LatestApprovalByTool(ctx context.Context, convID, toolName string) (*store.Approval, error)
 	SupersedePendingApprovals(ctx context.Context, convID, toolName string) (int64, error)
 	CountUserMessagesAfterTimestamp(ctx context.Context, convID string, ts int64) (int64, error)
