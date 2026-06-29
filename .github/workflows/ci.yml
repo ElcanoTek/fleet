@@ -262,7 +262,7 @@ jobs:
         # live in codecov.yml at the repo root. Requires the CODECOV_TOKEN repo
         # secret (Settings → Secrets → Actions). fail_ci_if_error is false so a
         # transient Codecov outage can't break the merge gate.
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out
