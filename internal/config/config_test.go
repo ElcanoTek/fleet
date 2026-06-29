@@ -192,6 +192,79 @@ func TestLoad_LogSinkOverrides(t *testing.T) {
 	}
 }
 
+func TestLoad_PythonREPL(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+
+	// Defaults: per-turn, no cell ceiling, 30m idle TTL, 32 sessions.
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PythonREPLMode != "per-turn" {
+		t.Errorf("PythonREPLMode default = %q, want per-turn", cfg.PythonREPLMode)
+	}
+	if cfg.PersistentPythonREPL() {
+		t.Error("PersistentPythonREPL() must be false by default")
+	}
+	if cfg.PythonCellTimeoutSeconds != 0 {
+		t.Errorf("PythonCellTimeoutSeconds default = %d, want 0", cfg.PythonCellTimeoutSeconds)
+	}
+	if cfg.PythonREPLIdleTTLSeconds != 1800 {
+		t.Errorf("PythonREPLIdleTTLSeconds default = %d, want 1800", cfg.PythonREPLIdleTTLSeconds)
+	}
+	if cfg.PythonREPLMaxSessions != 32 {
+		t.Errorf("PythonREPLMaxSessions default = %d, want 32", cfg.PythonREPLMaxSessions)
+	}
+
+	t.Setenv("FLEET_PYTHON_REPL_MODE", "persistent")
+	t.Setenv("FLEET_PYTHON_CELL_TIMEOUT", "120")
+	t.Setenv("FLEET_PYTHON_REPL_IDLE_TTL", "600")
+	t.Setenv("FLEET_PYTHON_REPL_MAX", "8")
+	cfg, err = Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PythonREPLMode != "persistent" || !cfg.PersistentPythonREPL() {
+		t.Errorf("PythonREPLMode = %q persistent=%v, want persistent/true", cfg.PythonREPLMode, cfg.PersistentPythonREPL())
+	}
+	if cfg.PythonCellTimeoutSeconds != 120 {
+		t.Errorf("PythonCellTimeoutSeconds = %d, want 120", cfg.PythonCellTimeoutSeconds)
+	}
+	if cfg.PythonREPLIdleTTLSeconds != 600 {
+		t.Errorf("PythonREPLIdleTTLSeconds = %d, want 600", cfg.PythonREPLIdleTTLSeconds)
+	}
+	if cfg.PythonREPLMaxSessions != 8 {
+		t.Errorf("PythonREPLMaxSessions = %d, want 8", cfg.PythonREPLMaxSessions)
+	}
+}
+
+func TestLoad_PythonREPLModeFailsClosed(t *testing.T) {
+	isolateEnv(t)
+	chdir(t, t.TempDir())
+
+	// An unrecognized mode must fall back to the conservative per-turn default
+	// rather than silently keeping a kernel alive across turns.
+	t.Setenv("FLEET_PYTHON_REPL_MODE", "PERSISTENT-typo")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PythonREPLMode != "per-turn" || cfg.PersistentPythonREPL() {
+		t.Errorf("unknown REPL mode must fall back to per-turn; got %q persistent=%v", cfg.PythonREPLMode, cfg.PersistentPythonREPL())
+	}
+
+	// Case-insensitive acceptance of the valid value.
+	t.Setenv("FLEET_PYTHON_REPL_MODE", "Persistent")
+	cfg, err = Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.PersistentPythonREPL() {
+		t.Errorf("mixed-case 'Persistent' must be accepted; got %q", cfg.PythonREPLMode)
+	}
+}
+
 func TestLoad_SandboxDiskGB(t *testing.T) {
 	isolateEnv(t)
 	chdir(t, t.TempDir())
