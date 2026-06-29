@@ -119,7 +119,7 @@ components:
         max_iterations: { type: integer }
         mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
         priority: { type: integer }
-        instruction_self_improve: { type: boolean }
+        instruction_self_improve: { type: boolean, default: false, description: "Captain's Log: give this scheduled task persistent memory across runs (the remember/recall tools + run-start injection, stored in fleet's DB and scoped to this task). Default false = each run starts fresh. Never touches the operator-owned config bundle." }
         allow_network: { type: boolean, default: false, description: "Allow this scheduled task's execution sandbox outbound network egress. Default false seals it with --network=none, matching the interactive lockdown path." }
         allow_task_creation: { type: boolean, default: false, description: "Grant this task's SCHEDULED runs the built-in create_task tool so they can enqueue follow-up tasks. Default false: the tool is never registered, so interactive/unprivileged runs cannot self-schedule (no privilege escalation)." }
         allow_recurring_task_creation: { type: boolean, default: false, description: "Stricter, separately-toggled grant that additionally lets create_task set a cron recurrence on a spawned task. Meaningless without allow_task_creation; default false." }
@@ -812,6 +812,37 @@ paths:
       responses:
         "200": { description: OK }
         "400": { $ref: "#/components/responses/Error" }
+
+  /admin/queue:
+    get:
+      summary: Pending task-queue stats — per-tier depth + oldest wait (#230).
+      description: >-
+        Operator view of the pending task queue: total depth, the oldest pending
+        wait, and the count + oldest wait per named priority tier
+        (critical/high/normal/low/bulk). Lower priority integer = higher urgency.
+        Admin-only — backlog data is operator-sensitive.
+      security: [{ adminApiKey: [] }]
+      responses:
+        "200":
+          description: Pending-queue depth and oldest wait, overall and per tier.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pending_total: { type: integer }
+                  oldest_age_seconds: { type: integer }
+                  tiers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tier: { type: string }
+                        min_priority: { type: integer }
+                        max_priority: { type: integer }
+                        count: { type: integer }
+                        oldest_age_seconds: { type: integer }
+        "500": { $ref: "#/components/responses/Error" }
 
   /sla-report:
     get:

@@ -121,31 +121,33 @@ var allowedEnvVars = map[string]bool{
 	"DB_SSLMODE":                        true,
 
 	// ── LLM (shared) ──
-	"OPENROUTER_API_KEY":             true,
-	"OPENROUTER_BASE_URL":            true,
-	"FLEET_OPENROUTER_BASE_URL":      true,
-	"CHAT_MAX_ITERATIONS":            true,
-	"CHAT_MAX_COST_USD":              true,
-	"CHAT_MAX_TOTAL_TOKENS":          true,
-	"CHAT_TURN_TIMEOUT_SECONDS":      true,
-	"CHAT_TEMPERATURE":               true,
-	"CHAT_TITLE_MODEL":               true,
-	"FLEET_MAX_ITERATIONS":           true,
-	"FLEET_MAX_COST_USD":             true,
-	"FLEET_MAX_TOTAL_TOKENS":         true,
-	"FLEET_TEMPERATURE":              true,
-	"FLEET_TITLE_MODEL":              true,
-	"FLEET_AUTO_TITLE":               true,
-	"FLEET_APPROVAL_TIMEOUT_SECONDS": true,
-	"FLEET_AUTO_APPROVE_IN_TEST":     true,
-	"FLEET_MAX_CONCURRENT_AGENTS":    true,
-	"FLEET_RUN_LOG_RETENTION_DAYS":   true,
-	"FLEET_KEEP_RUNS_PER_TASK":       true,
-	"FLEET_CLEANUP_HOUR":             true,
-	"LLM_MAX_TOKENS":                 true,
-	"REASONING_ENABLED":              true,
-	"REASONING_EFFORT":               true,
-	"FLEET_MAX_TOOL_OUTPUT_BYTES":    true,
+	"OPENROUTER_API_KEY":                true,
+	"OPENROUTER_BASE_URL":               true,
+	"FLEET_OPENROUTER_BASE_URL":         true,
+	"CHAT_MAX_ITERATIONS":               true,
+	"CHAT_MAX_COST_USD":                 true,
+	"CHAT_MAX_TOTAL_TOKENS":             true,
+	"CHAT_TURN_TIMEOUT_SECONDS":         true,
+	"CHAT_TEMPERATURE":                  true,
+	"CHAT_TITLE_MODEL":                  true,
+	"FLEET_MAX_ITERATIONS":              true,
+	"FLEET_MAX_COST_USD":                true,
+	"FLEET_MAX_TOTAL_TOKENS":            true,
+	"FLEET_TEMPERATURE":                 true,
+	"FLEET_TITLE_MODEL":                 true,
+	"FLEET_AUTO_TITLE":                  true,
+	"FLEET_APPROVAL_TIMEOUT_SECONDS":    true,
+	"FLEET_AUTO_APPROVE_IN_TEST":        true,
+	"FLEET_MAX_CONCURRENT_AGENTS":       true,
+	"FLEET_RUN_LOG_RETENTION_DAYS":      true,
+	"FLEET_KEEP_RUNS_PER_TASK":          true,
+	"FLEET_TASK_MEMORY_MAX_KEYS":        true,
+	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES": true,
+	"FLEET_CLEANUP_HOUR":                true,
+	"LLM_MAX_TOKENS":                    true,
+	"REASONING_ENABLED":                 true,
+	"REASONING_EFFORT":                  true,
+	"FLEET_MAX_TOOL_OUTPUT_BYTES":       true,
 
 	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
 	"FLEET_LOG_FILE":         true,
@@ -264,8 +266,15 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SANDBOX_CPUS":           true,
 	"FLEET_SANDBOX_PIDS":           true,
 	"FLEET_SANDBOX_DISK_GB":        true,
+	"FLEET_SANDBOX_MEMORY_MAX_MB":  true,
+	"FLEET_SANDBOX_CPUS_MAX":       true,
+	"FLEET_SANDBOX_PIDS_MAX":       true,
 	"FLEET_SANDBOX_WARM_SIZE":      true,
 	"FLEET_SANDBOX_WARM_TTL":       true,
+	"FLEET_PYTHON_REPL_MODE":       true,
+	"FLEET_PYTHON_CELL_TIMEOUT":    true,
+	"FLEET_PYTHON_REPL_IDLE_TTL":   true,
+	"FLEET_PYTHON_REPL_MAX":        true,
 	"FLEET_WORKSPACE_ROOT":         true,
 	"CHAT_LOCKDOWN_ONLY":           true,
 	"CHAT_LOCKDOWN_ALLOWED_MODELS": true,
@@ -559,6 +568,16 @@ type Config struct {
 	SubagentsMaxChildren int
 	SubagentsModel       string
 
+	// ── agent self-improvement: persistent task memory (#198, #285) ──
+	// A scheduled task that opts into Captain's Log (instruction_self_improve) gets
+	// remember/recall tools backed by the task_memories table. These caps bound how
+	// much a single task may accumulate so a long-lived recurring task cannot grow
+	// its memory unbounded. TaskMemoryMaxKeys (>0) bounds the number of distinct
+	// keys (oldest evicted LRU-style); TaskMemoryMaxValueBytes (>0) hard-rejects an
+	// oversized value. Defaults: 100 keys, 4096 bytes.
+	TaskMemoryMaxKeys       int
+	TaskMemoryMaxValueBytes int
+
 	// ── run-history retention (#252) ──
 	// RunLogRetentionDays prunes terminal task runs (and their logs) older than
 	// this many days in a daily sweep. <=0 disables pruning. Default 90.
@@ -568,6 +587,13 @@ type Config struct {
 	KeepRunsPerTask int
 	// CleanupHour is the UTC hour (0–23) the daily retention sweep runs. Default 4.
 	CleanupHour int
+
+	// ── task priority queues: anti-starvation (#230) ──
+	// TaskStarvationWindowMinutes promotes a pending task that has waited longer
+	// than this (and is still less urgent than the High floor) up to High, so a
+	// sustained stream of higher-priority work can never starve it. <=0 disables
+	// promotion. Default 30.
+	TaskStarvationWindowMinutes int
 
 	// ── process log file sink (#298) ──
 	// Log is the OPT-IN rotating-file sink for fleet's process log. Default OFF
@@ -654,6 +680,13 @@ type Config struct {
 	SandboxMemory string
 	SandboxCPUs   string
 	SandboxPids   int
+	// Per-task override ceilings (#205): a scheduled task's SandboxLimits may
+	// raise its container above the global SandboxMemory/CPUs/Pids, but never
+	// past these operator-set maxima. 0 = no ceiling (any override accepted).
+	// Defaults 8192 MiB / 16.0 CPUs / 1024 pids.
+	SandboxMemoryMaxMB int
+	SandboxCPUsMax     float64
+	SandboxPidsMax     int
 	// SandboxDiskGB caps each sandbox's writable disk usage, in GiB
 	// (FLEET_SANDBOX_DISK_GB). 0 → sandbox default (5); negative disables the
 	// quota. Stops an agent from filling the host disk (#216).
@@ -666,6 +699,32 @@ type Config struct {
 	// it is reaped and replaced (FLEET_SANDBOX_WARM_TTL, default 300). 0 disables
 	// TTL reaping (#181).
 	SandboxWarmTTLSeconds int
+
+	// ── python REPL (#213) ──
+	// PythonREPLMode selects the run_python kernel lifetime
+	// (FLEET_PYTHON_REPL_MODE). "per-turn" (the default) keeps the legacy
+	// behaviour: a fresh sandbox + kernel each turn, destroyed at turn end.
+	// "persistent" reuses ONE sandbox+kernel per conversation across turns so
+	// variables/imports survive between turns. Persistent mode applies only to
+	// non-lockdown interactive chat; lockdown and scheduled runs always stay
+	// per-turn. Any other value falls back to "per-turn" with a warning.
+	PythonREPLMode string
+	// PythonCellTimeoutSeconds is a host-operator ceiling on a single run_python
+	// cell (FLEET_PYTHON_CELL_TIMEOUT). 0 (default) disables the ceiling, leaving
+	// the per-call timeout_seconds param (default 300) in charge. When >0, the
+	// effective per-cell timeout is min(timeout_seconds, this).
+	PythonCellTimeoutSeconds int
+	// PythonREPLIdleTTLSeconds bounds how long a persistent per-conversation
+	// sandbox may sit idle (no run_python call) before the reaper closes it
+	// (FLEET_PYTHON_REPL_IDLE_TTL, default 1800 = 30m). Only meaningful when
+	// PythonREPLMode == "persistent".
+	PythonREPLIdleTTLSeconds int
+	// PythonREPLMaxSessions caps how many persistent per-conversation sandboxes
+	// may be live at once (FLEET_PYTHON_REPL_MAX, default 32). Past the cap the
+	// least-recently-used idle session is evicted. Only meaningful when
+	// PythonREPLMode == "persistent". 0 disables the cap.
+	PythonREPLMaxSessions int
+
 	WorkspaceRoot         string
 	LockdownOnly          bool
 	LockdownAllowedModels []string
@@ -861,10 +920,17 @@ func Load(envFile string) (*Config, error) {
 		SubagentsMaxChildren: getenvFleetInt("SUBAGENTS_MAX_CHILDREN", defaultSubagentsMaxChildren),
 		SubagentsModel:       getenvFleet("SUBAGENTS_MODEL"),
 
+		// ── agent self-improvement: persistent task memory (#198, #285) ──
+		TaskMemoryMaxKeys:       getenvFleetInt("TASK_MEMORY_MAX_KEYS", 100),
+		TaskMemoryMaxValueBytes: getenvFleetInt("TASK_MEMORY_MAX_VALUE_BYTES", 4096),
+
 		// ── run-history retention (#252) ──
 		RunLogRetentionDays: getenvFleetInt("RUN_LOG_RETENTION_DAYS", 90),
 		KeepRunsPerTask:     getenvFleetInt("KEEP_RUNS_PER_TASK", 10),
 		CleanupHour:         getenvFleetInt("CLEANUP_HOUR", 4),
+
+		// ── task priority queues: anti-starvation (#230) ── default 30m; 0 = OFF.
+		TaskStarvationWindowMinutes: getenvFleetInt("TASK_STARVATION_WINDOW_MINUTES", 30),
 
 		// ── process log file sink (#298) ── default OFF (LogFile empty): opt in
 		// with FLEET_LOG_FILE. The size/age/backup/compress knobs only apply once
@@ -897,14 +963,24 @@ func Load(envFile string) (*Config, error) {
 		AdminEmails: splitEmails(os.Getenv("ADMIN_EMAILS")),
 
 		// ── sandbox ──
-		SandboxImage:          getenvFleet("SANDBOX_IMAGE"),
-		SandboxRuntime:        getenvFleet("SANDBOX_RUNTIME"),
-		SandboxMemory:         getenvFleet("SANDBOX_MEMORY"),
-		SandboxCPUs:           getenvFleet("SANDBOX_CPUS"),
-		SandboxPids:           getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
-		SandboxDiskGB:         getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+		SandboxImage:   getenvFleet("SANDBOX_IMAGE"),
+		SandboxRuntime: getenvFleet("SANDBOX_RUNTIME"),
+		SandboxMemory:  getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:    getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:    getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB:  getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+		// Per-task override ceilings (#205).
+		SandboxMemoryMaxMB:    getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
+		SandboxCPUsMax:        getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),
+		SandboxPidsMax:        getenvFleetInt("SANDBOX_PIDS_MAX", 1024),
 		SandboxWarmSize:       getenvFleetInt("SANDBOX_WARM_SIZE", 0),
 		SandboxWarmTTLSeconds: getenvFleetInt("SANDBOX_WARM_TTL", 300),
+
+		PythonREPLMode:           normalizePythonREPLMode(getenvFleetDefault("PYTHON_REPL_MODE", pythonREPLModePerTurn)),
+		PythonCellTimeoutSeconds: getenvFleetInt("PYTHON_CELL_TIMEOUT", 0),
+		PythonREPLIdleTTLSeconds: getenvFleetInt("PYTHON_REPL_IDLE_TTL", 1800),
+		PythonREPLMaxSessions:    getenvFleetInt("PYTHON_REPL_MAX", 32),
+
 		WorkspaceRoot:         getenvFleet("WORKSPACE_ROOT"),
 		LockdownOnly:          getenvBool("CHAT_LOCKDOWN_ONLY", false),
 		LockdownAllowedModels: splitLockdownModels(os.Getenv("CHAT_LOCKDOWN_ALLOWED_MODELS")),
@@ -1375,6 +1451,35 @@ func logArchiveEncryptionKey() []byte {
 		return nil
 	}
 	return key
+}
+
+// Python REPL mode values for FLEET_PYTHON_REPL_MODE (#213).
+const (
+	pythonREPLModePerTurn    = "per-turn"
+	pythonREPLModePersistent = "persistent"
+)
+
+// PersistentPythonREPL reports whether run_python should reuse ONE kernel per
+// conversation across turns (FLEET_PYTHON_REPL_MODE=persistent) rather than the
+// default fresh-per-turn kernel.
+func (c *Config) PersistentPythonREPL() bool {
+	return c.PythonREPLMode == pythonREPLModePersistent
+}
+
+// normalizePythonREPLMode validates FLEET_PYTHON_REPL_MODE and fails closed to
+// the conservative "per-turn" default on any unrecognized value (a typo must
+// never silently keep a stale kernel alive across turns). Case/space tolerant.
+func normalizePythonREPLMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", pythonREPLModePerTurn:
+		return pythonREPLModePerTurn
+	case pythonREPLModePersistent:
+		return pythonREPLModePersistent
+	default:
+		log.Printf("Warning: FLEET_PYTHON_REPL_MODE=%q is not recognized (want %q or %q); falling back to %q",
+			raw, pythonREPLModePerTurn, pythonREPLModePersistent, pythonREPLModePerTurn)
+		return pythonREPLModePerTurn
+	}
 }
 
 func getenvFleetInt(suffix string, def int) int {

@@ -1,4 +1,6 @@
 import atexit
+import base64
+import binascii
 import datetime
 import json
 import math
@@ -9,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 from jupyter_client import BlockingKernelClient
 
@@ -24,10 +27,118 @@ DEFAULT_EXECUTION_TIMEOUT_SECONDS = 300
 # this process. Change in-image only — it is not a host env knob.
 MAX_CAPTURE_BYTES = 131072  # 128 KiB
 
+# Inline figure capture (#213): when the kernel emits an image/png in a
+# display_data / execute_result message, the bridge writes it to a figures/
+# subdir of the conversation workspace and returns the workspace-relative path
+# in image_files. The chat UI renders those inline — so the agent never needs
+# plt.savefig(), and the (large) base64 bytes never enter the model's tool
+# result. Bounds keep a runaway plotting loop from filling the disk.
+MAX_IMAGES_PER_CELL = 20
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MiB decoded, per image
+FIGURES_SUBDIR = "figures"
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
 # Module-level so cleanup() can delete it on exit/signal. Only the bridge
 # process itself ever reads this file — the kernel writes it, the client
 # in the same process reads it, then we delete it in cleanup().
 connection_file = None
+
+
+def collect_image(data, images):
+    """Append a base64 image/png payload from an IOPub data dict to images.
+
+    Bounded by MAX_IMAGES_PER_CELL so a loop that emits thousands of figures
+    can't grow the response unboundedly. The kernel already base64-encodes
+    image/png, so we keep the string as-is and decode at write time.
+    """
+    if len(images) >= MAX_IMAGES_PER_CELL:
+        return
+    b64 = data.get("image/png")
+    if b64:
+        images.append(b64)
+
+
+def write_figures(images, base_dir):
+    """Decode and persist captured PNG figures under base_dir/figures/.
+
+    Returns a list of workspace-relative paths like "figures/fig-<id>.png".
+    The filename is ALWAYS server-generated (uuid) — never derived from kernel
+    data — so the path can't traverse out of the workspace and every figure
+    gets a unique URL (the browser can never show a stale cached image).
+    Non-PNG, oversized, or unwritable payloads are skipped rather than failing
+    the whole cell.
+    """
+    if not images:
+        return []
+    figures_dir = os.path.join(base_dir, FIGURES_SUBDIR)
+    try:
+        os.makedirs(figures_dir, exist_ok=True)
+    except OSError as e:
+        sys.stderr.write(f"figures dir create failed: {e}\n")
+        return []
+    paths = []
+    for b64 in images:
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except (binascii.Error, ValueError):
+            continue
+        if len(raw) > MAX_IMAGE_BYTES or not raw.startswith(PNG_MAGIC):
+            continue
+        name = f"fig-{uuid.uuid4().hex}.png"
+        path = os.path.join(figures_dir, name)
+        try:
+            # O_EXCL | O_NOFOLLOW: refuse to follow or overwrite a name a prior
+            # cell's code might have pre-planted in the (writable) workspace.
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(fd, raw)
+            finally:
+                os.close(fd)
+        except OSError as e:
+            sys.stderr.write(f"figure write failed: {e}\n")
+            continue
+        paths.append(f"{FIGURES_SUBDIR}/{name}")
+    return paths
+
+
+def reap_stale_kernels():
+    """SIGKILL any orphaned ipykernel processes left by a previous bridge.
+
+    In per-turn mode the sandbox container dies at turn end, reaping the kernel
+    with it. In PERSISTENT mode (#213) the container deliberately survives across
+    turns, so a bridge that was SIGKILLed on a cancel/timeout (its in-process
+    cleanup() handler never ran) can leave its kernel orphaned and alive inside
+    the still-running container, consuming the container's memory/pids quota.
+
+    A fresh bridge reaps those orphans HERE — before starting its own kernel —
+    so orphans can never accumulate across the turns of a conversation. We are
+    not the orphan's parent, so we can only SIGKILL it (PID 1 / the container's
+    init reaps the resulting zombie); that is enough to release the memory.
+    Implemented as a dependency-free /proc walk so it works on a minimal image
+    with no pkill. This bridge has not started its own kernel yet, so nothing it
+    wants is ever killed.
+    """
+    my_pid = os.getpid()
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return  # not Linux / no procfs (e.g. host-mode dev on macOS) — nothing to do
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == my_pid:
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmdline = f.read()
+        except OSError:
+            continue
+        if b"ipykernel_launcher" in cmdline:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
 
 
 def start_kernel():
@@ -41,6 +152,11 @@ def start_kernel():
     reaps /tmp on reboot anyway.
     """
     global kernel_process, connection_file
+
+    # Reap any kernel orphaned by a previously-SIGKILLed bridge before we add
+    # ours — keeps a persistent (surviving) container from accumulating zombie
+    # kernels across cancelled/timed-out turns (#213).
+    reap_stale_kernels()
 
     # tempfile.mkstemp creates a unique empty file and returns (fd, path).
     # We close the fd immediately since ipykernel will overwrite the
@@ -163,6 +279,7 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
     stdout_content = OutputCollector(MAX_CAPTURE_BYTES)
     stderr_content = OutputCollector(MAX_CAPTURE_BYTES)
     result_content = OutputCollector(MAX_CAPTURE_BYTES)
+    images = []  # base64 image/png payloads from display_data / execute_result
     error_content = None
     status = "success"
     shell_reply_seen = False
@@ -198,9 +315,13 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
                 elif content['name'] == 'stderr':
                     stderr_content.append(content['text'])
             elif msg_type == 'execute_result':
-                result_content.append(content['data'].get('text/plain', ''))
+                data = content.get('data', {})
+                result_content.append(data.get('text/plain', ''))
+                collect_image(data, images)
             elif msg_type == 'display_data':
-                result_content.append(content['data'].get('text/plain', ''))
+                data = content.get('data', {})
+                result_content.append(data.get('text/plain', ''))
+                collect_image(data, images)
             elif msg_type == 'error':
                 traceback = content.get('traceback', [])
                 error_content = '\n'.join(traceback)
@@ -238,6 +359,7 @@ def run_code_on_kernel(code, client, timeout_seconds=None):
         if error_content is None or isinstance(error_content, str)
         else str(error_content),
         "bridge_truncation": bridge_truncation,
+        "images": images,
     }
 
 # Patterns that indicate agent confusion about MCP tools
@@ -328,12 +450,21 @@ def dump_json_line(value):
 _kernel_cwd = None  # last cwd applied inside the kernel process
 
 
-def execute_code(code, return_vars=None, timeout_seconds=None, workspace_dir=None):
+def execute_code(code, return_vars=None, timeout_seconds=None, workspace_dir=None, reset_kernel=False):
     """Executes code on the kernel and returns the result."""
     global client, _kernel_cwd
 
     # Check for MCP import confusion
     confusion_warning = check_mcp_confusion(code)
+
+    # reset_kernel (#213): in persistent REPL mode the kernel survives across
+    # turns, so the agent may explicitly ask for a clean slate. Tear the current
+    # kernel down; the lazy-start below brings up a fresh one (re-applying the
+    # workspace cwd). No-op when there's no live kernel.
+    if reset_kernel and client is not None:
+        cleanup()  # kills the kernel process + removes its connection file
+        client = None
+        _kernel_cwd = None
 
     if client is None:
         try:
@@ -475,6 +606,11 @@ def execute_code(code, return_vars=None, timeout_seconds=None, workspace_dir=Non
         # Also prepend to stdout for structured output
         stdout_with_warning = (confusion_warning or "") + res["stdout"]
 
+        # Persist any captured figures to the workspace and return their
+        # relative paths (#213). base_dir is the per-conversation workspace; the
+        # bridge already chdir'd there in main(), so os.getcwd() is the fallback.
+        image_files = write_figures(res.get("images", []), workspace_dir or os.getcwd())
+
         return {
             "status": res["status"],
             "output": final_output.strip(), # Legacy field
@@ -483,6 +619,7 @@ def execute_code(code, return_vars=None, timeout_seconds=None, workspace_dir=Non
             "vars": normalize_json_value(vars_data),
             "error": res["error"],
             "bridge_truncation": res.get("bridge_truncation", {}),
+            "image_files": image_files,
         }
 
     except Exception as e:
@@ -512,6 +649,7 @@ def main():
                 code = req.get("code", "")
                 return_vars = req.get("return_vars", [])
                 timeout_seconds = req.get("timeout_seconds") or None
+                reset_kernel = bool(req.get("reset_kernel", False))
 
                 # Per-conversation cwd: Go side sends a scoped
                 # workspace dir on every request. We ensure it exists,
@@ -527,7 +665,7 @@ def main():
                     except OSError as e:
                         sys.stderr.write(f"workspace_dir chdir failed: {e}\n")
 
-                result = execute_code(code, return_vars, timeout_seconds=timeout_seconds, workspace_dir=workspace_dir)
+                result = execute_code(code, return_vars, timeout_seconds=timeout_seconds, workspace_dir=workspace_dir, reset_kernel=reset_kernel)
 
                 # Print result as JSON on one line
                 print(dump_json_line(result), flush=True)

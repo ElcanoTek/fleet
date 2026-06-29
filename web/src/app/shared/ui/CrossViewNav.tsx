@@ -17,12 +17,19 @@ const NAV_TO_CHAT_TESTID = "nav-to-chat";
 export function NavToOrchestrator({
   className,
   children = "Operations Center →",
+  ariaCurrent,
 }: {
   className?: string;
   children?: React.ReactNode;
+  ariaCurrent?: "page";
 }) {
   return (
-    <Link href="/orchestrator" data-testid={NAV_TO_ORCHESTRATOR_TESTID} className={className}>
+    <Link
+      href="/orchestrator"
+      data-testid={NAV_TO_ORCHESTRATOR_TESTID}
+      className={className}
+      aria-current={ariaCurrent}
+    >
       {children}
     </Link>
   );
@@ -31,12 +38,14 @@ export function NavToOrchestrator({
 export function NavToChat({
   className,
   children = "Go to Chat",
+  ariaCurrent,
 }: {
   className?: string;
   children?: React.ReactNode;
+  ariaCurrent?: "page";
 }) {
   return (
-    <Link href="/chat" data-testid={NAV_TO_CHAT_TESTID} className={className}>
+    <Link href="/chat" data-testid={NAV_TO_CHAT_TESTID} className={className} aria-current={ariaCurrent}>
       {children}
     </Link>
   );
