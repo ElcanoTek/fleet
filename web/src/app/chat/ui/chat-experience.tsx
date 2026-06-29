@@ -184,6 +184,13 @@ type UserMemory = {
 const minimumThinkingMs = 250;
 const streamIdleTimeoutMs = 300000;
 
+// Composer textarea height cap (~8 lines at the composer's font/leading).
+// This is the single source of truth: the textarea's Tailwind classes
+// intentionally omit any `max-h-*` so this JS clamp is the only one that
+// fires. `overflow-y-auto` on the element lets it scroll internally once
+// capped. See the autosize `useEffect` near `promptRef`.
+const MAX_COMPOSER_HEIGHT_PX = 200;
+
 // shortcutHelpGroups is the single source of truth for the "?" help overlay
 // (#306). It documents only the shortcuts the shell actually wires through
 // useKeyboardShortcuts below — keep the two in step. Chips render
@@ -846,12 +853,15 @@ export function ChatExperience() {
   // below their callback dependencies") so the effect bodies never read a
   // callback before it is declared. Their relative order is preserved.
 
-  // Textarea autosize
+  // Textarea autosize — clamp at MAX_COMPOSER_HEIGHT_PX (the single source
+  // of truth; the textarea's Tailwind classes omit any `max-h-*` so this
+  // JS clamp is the only one). `overflow-y-auto` + `transition-[height]`
+  // on the element handle the scroll + smooth-growth once capped.
   useEffect(() => {
     const textarea = promptRef.current;
     if (!textarea) return;
     textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 208)}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`;
   }, [prompt]);
 
   const updateJumpToLatestVisibility = () => {
