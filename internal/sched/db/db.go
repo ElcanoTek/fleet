@@ -549,7 +549,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -584,7 +584,7 @@ func marshalTags(tags []string) string {
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 	_, err := db.conn.ExecContext(ctx, `
 		INSERT INTO tasks (
-			id, prompt, model, fallback_model, max_iterations, mcp_selection,
+			id, name, prompt, model, fallback_model, max_iterations, mcp_selection,
 			priority, instruction_self_improve, status, assigned_node_id, agent_session_id,
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
@@ -593,8 +593,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48)
 		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
 			fallback_model = EXCLUDED.fallback_model,
@@ -642,6 +643,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			last_skip_at = EXCLUDED.last_skip_at,
 			last_skip_reason = EXCLUDED.last_skip_reason`,
 		task.ID,
+		task.Name,
 		task.Prompt,
 		task.Model,
 		task.FallbackModel,
@@ -696,6 +698,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 // to every tasks INSERT. Kept in sync with AddTask's upsert. Extracted so the
 // single-row, multi-row, and in-tx paths can never disagree.
 const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
 			fallback_model = EXCLUDED.fallback_model,
@@ -746,7 +749,7 @@ const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
 // taskInsertColumns is the ordered column list for the tasks INSERT, kept in
 // sync with AddTask / AddTaskBatch / AddTaskTx. Extracted as a constant so the
 // single-row and multi-row builders never drift.
-const taskInsertColumns = `id, prompt, model, fallback_model, max_iterations, mcp_selection,
+const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iterations, mcp_selection,
 			priority, instruction_self_improve, status, assigned_node_id, agent_session_id,
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
@@ -756,12 +759,13 @@ const taskInsertColumns = `id, prompt, model, fallback_model, max_iterations, mc
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason`
 
-// taskInsertArgs returns the 47 positional INSERT values for a task, in the
+// taskInsertArgs returns the 48 positional INSERT values for a task, in the
 // exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
 // the single-row and multi-row paths can never disagree on argument ordering.
 func taskInsertArgs(t *models.Task) []any {
 	return []any{
 		t.ID,
+		t.Name,
 		t.Prompt,
 		t.Model,
 		t.FallbackModel,
@@ -814,14 +818,14 @@ func taskInsertArgs(t *models.Task) []any {
 // taskInsertColumnsCount is the number of columns in taskInsertColumns. Kept as
 // a named const so the multi-row placeholder builder is self-documenting and
 // a future schema migration that adds a column forces a single touch point.
-const taskInsertColumnsCount = 47
+const taskInsertColumnsCount = 48
 
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an
 // explicit transaction — callers that need atomicity wrap the call in BeginTx /
 // Commit (see Storage.AddTaskBatch). An empty slice is a no-op.
 //
-// Each row carries the SAME 47 columns as AddTask (via the shared
+// Each row carries the SAME 48 columns as AddTask (via the shared
 // taskInsertArgs helper), so a row inserted through the batch path is
 // byte-identical to one inserted through the single-row path.
 func (db *Database) AddTaskBatch(ctx context.Context, tasks []*models.Task) error {
@@ -1077,6 +1081,7 @@ func nullableString(s string) *string {
 func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*models.Task, error) {
 	var (
 		id                     uuid.UUID
+		name                   string
 		prompt                 string
 		model                  sql.NullString
 		fallbackModel          sql.NullString
@@ -1126,7 +1131,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	)
 
 	err := scanner.Scan(
-		&id, &prompt, &model, &fallbackModel, &maxIterations, &mcpSelection,
+		&id, &name, &prompt, &model, &fallbackModel, &maxIterations, &mcpSelection,
 		&priority, &instructionSelfImprove, &status, &assignedNodeID, &agentSessionID,
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
@@ -1142,6 +1147,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 
 	task := &models.Task{
 		ID:                     id,
+		Name:                   name,
 		Prompt:                 prompt,
 		Priority:               priority,
 		InstructionSelfImprove: instructionSelfImprove,
@@ -1341,6 +1347,84 @@ func (db *Database) GetAllScheduledTasks(ctx context.Context) ([]*models.Task, e
 	}
 	defer rows.Close()
 	return db.rowsToTasks(rows)
+}
+
+// ListTasksForExport returns task definitions for GET /tasks/export (#238). It
+// is a complete snapshot (no pagination) so the caller can download the whole
+// file. ids, when non-empty, limits the result to those task IDs (the ?ids=
+// filter); an empty slice exports every task. recurrenceOnly, when true,
+// restricts the result to tasks with a non-empty recurrence (cron tasks only —
+// the ?recurrence_only=true filter). Ordered by created_at for a stable diff.
+func (db *Database) ListTasksForExport(ctx context.Context, ids []uuid.UUID, recurrenceOnly bool) ([]*models.Task, error) {
+	q := "SELECT " + taskColumns + " FROM tasks WHERE 1=1"
+	args := []any{}
+	if len(ids) > 0 {
+		q += " AND id = ANY($1::uuid[])"
+		args = append(args, uuidStrings(ids))
+	}
+	if recurrenceOnly {
+		q += " AND COALESCE(recurrence, '') <> ''"
+	}
+	q += " ORDER BY created_at ASC, id ASC"
+	rows, err := db.conn.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return db.rowsToTasks(rows)
+}
+
+// FindTaskIDsByName resolves task IDs by non-empty name (#238). It is the
+// pre-flight conflict-detection query for POST /tasks/import: a name present in
+// the returned map collides with an existing task. Empty names are never
+// matched (they cannot collide by name). Names are matched case-sensitively.
+func (db *Database) FindTaskIDsByName(ctx context.Context, names []string) (map[string]uuid.UUID, error) {
+	out := make(map[string]uuid.UUID)
+	var filtered []string
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" {
+			filtered = append(filtered, n)
+		}
+	}
+	if len(filtered) == 0 {
+		return out, nil
+	}
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT id, name FROM tasks
+		WHERE name = ANY($1::text[]) AND name <> ''`,
+		filtered)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[name] = id
+	}
+	return out, rows.Err()
+}
+
+// GetTaskByName returns the task whose non-empty name matches, or (nil, nil)
+// when no such task exists. Used by import conflict=replace to fetch the row to
+// update in place (#238).
+func (db *Database) GetTaskByName(ctx context.Context, name string) (*models.Task, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, nil
+	}
+	row := db.conn.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE name = $1 AND name <> ''", name)
+	t, err := db.scanTask(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return t, nil
 }
 
 // UpdateTasksStatusBatch transitions tasks from fromStatus to toStatus, skipping

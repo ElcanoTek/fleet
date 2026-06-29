@@ -1,0 +1,20 @@
+# Codecov configuration (issue #249). See https://docs.codecov.com/docs/codecovyml-reference.
+#
+# project.status tracks coverage relative to the PR base branch (target: auto),
+# so a repo with uneven coverage isn't penalised by a hard-coded global %; a drop
+# larger than `threshold` fails the check. patch.status applies to the NEW code a
+# PR adds and enforces a minimum coverage floor on it. The ignore list keeps test
+# files, vendored deps, and docs out of the numerator/denominator entirely.
+coverage:
+  status:
+    project:
+      default:
+        target: auto        # track relative to the base branch, not a fixed %
+        threshold: 2%       # fail if project coverage drops more than 2%
+    patch:
+      default:
+        target: 60%         # new code added in a PR must be 60% covered
+ignore:
+  - "**/*_test.go"
+  - "vendor/"
+  - "docs/"
