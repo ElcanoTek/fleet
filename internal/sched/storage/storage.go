@@ -370,6 +370,24 @@ func (s *Storage) ListScheduledTasks(ctx context.Context) ([]*models.Task, error
 	return s.db.GetAllScheduledTasks(ctx)
 }
 
+// ListTasksForExport returns task definitions for GET /tasks/export (#238). See
+// db.ListTasksForExport for filter semantics.
+func (s *Storage) ListTasksForExport(ctx context.Context, ids []uuid.UUID, recurrenceOnly bool) ([]*models.Task, error) {
+	return s.db.ListTasksForExport(ctx, ids, recurrenceOnly)
+}
+
+// FindTaskIDsByName resolves task IDs by non-empty name (#238). Import
+// conflict-detection pre-flight.
+func (s *Storage) FindTaskIDsByName(ctx context.Context, names []string) (map[string]uuid.UUID, error) {
+	return s.db.FindTaskIDsByName(ctx, names)
+}
+
+// GetTaskByName returns the task whose non-empty name matches, or (nil, nil)
+// when no such task exists (#238).
+func (s *Storage) GetTaskByName(ctx context.Context, name string) (*models.Task, error) {
+	return s.db.GetTaskByName(ctx, name)
+}
+
 // UpdateTasksStatusBatch transitions multiple tasks from fromStatus to toStatus.
 func (s *Storage) UpdateTasksStatusBatch(taskIDs []uuid.UUID, fromStatus, toStatus models.TaskStatus) (int, error) {
 	return s.db.UpdateTasksStatusBatch(context.Background(), taskIDs, fromStatus, toStatus)

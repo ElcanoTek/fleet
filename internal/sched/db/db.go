@@ -549,7 +549,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -584,7 +584,7 @@ func marshalTags(tags []string) string {
 func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 	_, err := db.conn.ExecContext(ctx, `
 		INSERT INTO tasks (
-			id, prompt, model, fallback_model, max_iterations, mcp_selection,
+			id, name, prompt, model, fallback_model, max_iterations, mcp_selection,
 			priority, instruction_self_improve, status, assigned_node_id, agent_session_id,
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
@@ -592,8 +592,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path,
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44)
 		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
 			fallback_model = EXCLUDED.fallback_model,
@@ -637,6 +638,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			dead_letter_reason = EXCLUDED.dead_letter_reason,
 			dead_letter_attempts = EXCLUDED.dead_letter_attempts`,
 		task.ID,
+		task.Name,
 		task.Prompt,
 		task.Model,
 		task.FallbackModel,
@@ -849,6 +851,7 @@ func nullableString(s string) *string {
 func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*models.Task, error) {
 	var (
 		id                     uuid.UUID
+		name                   string
 		prompt                 string
 		model                  sql.NullString
 		fallbackModel          sql.NullString
@@ -894,7 +897,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	)
 
 	err := scanner.Scan(
-		&id, &prompt, &model, &fallbackModel, &maxIterations, &mcpSelection,
+		&id, &name, &prompt, &model, &fallbackModel, &maxIterations, &mcpSelection,
 		&priority, &instructionSelfImprove, &status, &assignedNodeID, &agentSessionID,
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
@@ -909,6 +912,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 
 	task := &models.Task{
 		ID:                     id,
+		Name:                   name,
 		Prompt:                 prompt,
 		Priority:               priority,
 		InstructionSelfImprove: instructionSelfImprove,
@@ -1100,6 +1104,84 @@ func (db *Database) GetAllScheduledTasks(ctx context.Context) ([]*models.Task, e
 	}
 	defer rows.Close()
 	return db.rowsToTasks(rows)
+}
+
+// ListTasksForExport returns task definitions for GET /tasks/export (#238). It
+// is a complete snapshot (no pagination) so the caller can download the whole
+// file. ids, when non-empty, limits the result to those task IDs (the ?ids=
+// filter); an empty slice exports every task. recurrenceOnly, when true,
+// restricts the result to tasks with a non-empty recurrence (cron tasks only —
+// the ?recurrence_only=true filter). Ordered by created_at for a stable diff.
+func (db *Database) ListTasksForExport(ctx context.Context, ids []uuid.UUID, recurrenceOnly bool) ([]*models.Task, error) {
+	q := "SELECT " + taskColumns + " FROM tasks WHERE 1=1"
+	args := []any{}
+	if len(ids) > 0 {
+		q += " AND id = ANY($1::uuid[])"
+		args = append(args, uuidStrings(ids))
+	}
+	if recurrenceOnly {
+		q += " AND COALESCE(recurrence, '') <> ''"
+	}
+	q += " ORDER BY created_at ASC, id ASC"
+	rows, err := db.conn.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return db.rowsToTasks(rows)
+}
+
+// FindTaskIDsByName resolves task IDs by non-empty name (#238). It is the
+// pre-flight conflict-detection query for POST /tasks/import: a name present in
+// the returned map collides with an existing task. Empty names are never
+// matched (they cannot collide by name). Names are matched case-sensitively.
+func (db *Database) FindTaskIDsByName(ctx context.Context, names []string) (map[string]uuid.UUID, error) {
+	out := make(map[string]uuid.UUID)
+	var filtered []string
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" {
+			filtered = append(filtered, n)
+		}
+	}
+	if len(filtered) == 0 {
+		return out, nil
+	}
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT id, name FROM tasks
+		WHERE name = ANY($1::text[]) AND name <> ''`,
+		filtered)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[name] = id
+	}
+	return out, rows.Err()
+}
+
+// GetTaskByName returns the task whose non-empty name matches, or (nil, nil)
+// when no such task exists. Used by import conflict=replace to fetch the row to
+// update in place (#238).
+func (db *Database) GetTaskByName(ctx context.Context, name string) (*models.Task, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, nil
+	}
+	row := db.conn.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE name = $1 AND name <> ''", name)
+	t, err := db.scanTask(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return t, nil
 }
 
 // UpdateTasksStatusBatch transitions tasks from fromStatus to toStatus, skipping

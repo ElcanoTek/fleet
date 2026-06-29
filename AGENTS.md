@@ -103,6 +103,11 @@ same PR.
   - **Soft Delete**: Setting `FLEET_CONVERSATION_SOFT_DELETE=true` switches deletes to soft-deletes (`deleted_at` timestamp). A 30-day background sweeper permanently purges soft-deleted rows. Soft-deleted conversations are excluded from retrieval and search query filters.
   - **Bulk APIs**: Bulk delete and patch actions are rate-limited to 100 IDs per request. Transactional pre-checks protect ownership; any single foreign ID fails the entire request (403 forbidden) to ensure consistency.
   - **Bulk UI**: Uses checkboxes for selection, warning users when selecting more than 50 conversations. The confirmation modal enforces a 3-second disabled countdown for delete actions.
+- **Task Definition Import/Export**:
+  - **Task Names**: Scheduled tasks now support an optional `name` field (mapped to the database `tasks.name` column with a partial unique index). Empty/empty-string names represent "unnamed" tasks and are always created fresh on import. Non-empty names are unique and serve as conflict keys.
+  - **Payload Limits**: Imports are rate-limited/capped to at most 100 task records per request (matching bulk API policies). Payload-internal duplicate name entries are validation errors.
+  - **Conflict Behaviors**: Mode `conflict=error` aborts the batch on any collision; `conflict=skip` skips colliding entries and writes others; `conflict=replace` performs an in-place update of colliding entries. Mode `conflict=replace` requires admin permission.
+  - **Formats**: Support both JSON and YAML envelopes (via `github.com/goccy/go-yaml`). Version is set to `"1"`.
 - One focused branch + PR per change; keep diffs scoped. Don't refactor unrelated
   code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions and DCO
   sign-off.

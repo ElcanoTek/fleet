@@ -577,6 +577,13 @@ func NewNode(reg NodeRegistration) *Node {
 
 // TaskCreate is the request model for creating a new task.
 type TaskCreate struct {
+	// Name is an optional, human-readable label for the task (#238). It is the
+	// identity key used by the task-definition import/export endpoints
+	// (GET /tasks/export, POST /tasks/import) for conflict detection on import.
+	// Empty = unnamed (the historical default); a non-empty name must be unique
+	// across tasks (enforced by a partial DB unique index). Not injected into the
+	// agent prompt; purely an operator convenience + import/export key.
+	Name          string       `json:"name,omitempty"`
 	Prompt        string       `json:"prompt"`
 	Model         *string      `json:"model,omitempty"`
 	FallbackModel *string      `json:"fallback_model,omitempty"`
@@ -655,7 +662,10 @@ type TaskCreate struct {
 
 // Task represents a task to be executed by a worker.
 type Task struct {
-	ID            uuid.UUID    `json:"id"`
+	ID uuid.UUID `json:"id"`
+	// Name is the optional operator label / import-export identity key (#238).
+	// Empty = unnamed. See TaskCreate.Name.
+	Name          string       `json:"name,omitempty"`
 	Prompt        string       `json:"prompt"`
 	Model         *string      `json:"model,omitempty"`
 	FallbackModel *string      `json:"fallback_model,omitempty"`
@@ -778,6 +788,7 @@ func NewTask(tc TaskCreate) *Task {
 
 	return &Task{
 		ID:                         uuid.New(),
+		Name:                       tc.Name,
 		Prompt:                     tc.Prompt,
 		Model:                      tc.Model,
 		FallbackModel:              tc.FallbackModel,
@@ -823,6 +834,7 @@ func derefOr(p *int, def int) int {
 func TaskToCreate(t *Task) TaskCreate {
 	maxRetries := t.MaxRetries
 	return TaskCreate{
+		Name:                   t.Name,
 		Prompt:                 t.Prompt,
 		Model:                  t.Model,
 		FallbackModel:          t.FallbackModel,
@@ -846,6 +858,181 @@ func TaskToCreate(t *Task) TaskCreate {
 		// Capability flags are part of the create-recipe so a re-run/clone keeps
 		// the same governance posture (#277). CreatedByTaskID is per-spawn lineage,
 		// like SourceTaskID, and is intentionally NOT carried.
+		AllowTaskCreation:          t.AllowTaskCreation,
+		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
+	}
+}
+
+// TaskExportRecord is the portable definition of a single scheduled task (#238).
+// It is a subset of TaskCreate — every field here maps 1:1 to a TaskCreate
+// field. Runtime state (id, created_at, status, attempt_count, lease, result,
+// created_by, …) is intentionally excluded so an export envelope carries only
+// the configuration needed to recreate a task on a target box.
+type TaskExportRecord struct {
+	// Name is the human-readable label used for conflict detection on import.
+	// Empty = unnamed (the task is always created fresh on import). Non-empty
+	// must be unique within the target deployment (enforced by a partial DB
+	// unique index). It maps to TaskCreate.Name.
+	Name                       string              `json:"name,omitempty"                       yaml:"name,omitempty"`
+	Prompt                     string              `json:"prompt"                               yaml:"prompt"`
+	Model                      *string             `json:"model,omitempty"                      yaml:"model,omitempty"`
+	FallbackModel              *string             `json:"fallback_model,omitempty"             yaml:"fallback_model,omitempty"`
+	MaxIterations              *int                `json:"max_iterations,omitempty"             yaml:"max_iterations,omitempty"`
+	MCPSelection               MCPSelection        `json:"mcp_selection,omitempty"              yaml:"mcp_selection,omitempty"`
+	CredentialAllowlist        CredentialAllowlist `json:"credential_allowlist,omitempty" yaml:"credential_allowlist,omitempty"`
+	LoopConfig                 *LoopConfig         `json:"loop_config,omitempty"                yaml:"loop_config,omitempty"`
+	WorktreeConfig             *WorktreeConfig     `json:"worktree_config,omitempty"         yaml:"worktree_config,omitempty"`
+	Priority                   int                 `json:"priority,omitempty"                   yaml:"priority,omitempty"`
+	InstructionSelfImprove     bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
+	AllowNetwork               bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
+	Persona                    string              `json:"persona,omitempty"                    yaml:"persona,omitempty"`
+	Description                string              `json:"description,omitempty"                yaml:"description,omitempty"`
+	ScheduledFor               *time.Time          `json:"scheduled_for,omitempty"              yaml:"scheduled_for,omitempty"`
+	Recurrence                 string              `json:"recurrence,omitempty"                 yaml:"recurrence,omitempty"`
+	Timezone                   string              `json:"timezone,omitempty"                   yaml:"timezone,omitempty"`
+	Files                      []string            `json:"files,omitempty"                      yaml:"files,omitempty"`
+	Tags                       []string            `json:"tags,omitempty"                       yaml:"tags,omitempty"`
+	MaxRetries                 *int                `json:"max_retries,omitempty"                yaml:"max_retries,omitempty"`
+	RetryPolicy                *RetryPolicy        `json:"retry_policy,omitempty"               yaml:"retry_policy,omitempty"`
+	TriggerType                TriggerType         `json:"trigger_type,omitempty"               yaml:"trigger_type,omitempty"`
+	AllowTaskCreation          bool                `json:"allow_task_creation,omitempty"        yaml:"allow_task_creation,omitempty"`
+	AllowRecurringTaskCreation bool                `json:"allow_recurring_task_creation,omitempty" yaml:"allow_recurring_task_creation,omitempty"`
+}
+
+// TaskExportVersion is the current envelope schema version. Bump only on an
+// incompatible shape change; import rejects an unknown version rather than
+// guessing. v1 is the initial format (#238).
+const TaskExportVersion = "1"
+
+// TaskExportEnvelope is the top-level container for exported task definitions
+// (#238). The version field allows format evolution without breaking importers;
+// exported_at is a server-side timestamp.
+type TaskExportEnvelope struct {
+	Version    string             `json:"version"      yaml:"version"`
+	ExportedAt time.Time          `json:"exported_at"  yaml:"exported_at"`
+	Tasks      []TaskExportRecord `json:"tasks"        yaml:"tasks"`
+}
+
+// TaskImportConflict controls what happens when an imported task name collides
+// with an existing task on the target (#238).
+type TaskImportConflict string
+
+const (
+	// TaskImportConflictError (default) aborts the entire import (HTTP 409)
+	// before any writes when any name collides.
+	TaskImportConflictError TaskImportConflict = "error"
+	// TaskImportConflictSkip leaves the existing task untouched and creates the
+	// non-colliding records.
+	TaskImportConflictSkip TaskImportConflict = "skip"
+	// TaskImportConflictReplace updates the colliding task in place (matched by
+	// name); non-colliding tasks are created. Requires admin permission.
+	TaskImportConflictReplace TaskImportConflict = "replace"
+)
+
+// TaskImportResultStatus is the per-task outcome of an import.
+type TaskImportResultStatus string
+
+const (
+	TaskImportCreated  TaskImportResultStatus = "created"
+	TaskImportSkipped  TaskImportResultStatus = "skipped"
+	TaskImportReplaced TaskImportResultStatus = "replaced"
+	TaskImportErrored  TaskImportResultStatus = "error"
+)
+
+// TaskImportResult is the per-task outcome returned by POST /tasks/import (#238).
+type TaskImportResult struct {
+	Name   string                 `json:"name"`
+	Status TaskImportResultStatus `json:"status"`
+	ID     *uuid.UUID             `json:"id,omitempty"`
+	Reason string                 `json:"reason,omitempty"`
+	Error  string                 `json:"error,omitempty"`
+}
+
+// TaskImportResponse is the full response from POST /tasks/import (#238).
+type TaskImportResponse struct {
+	DryRun   bool               `json:"dry_run"`
+	Total    int                `json:"total"`
+	Created  int                `json:"created"`
+	Skipped  int                `json:"skipped"`
+	Replaced int                `json:"replaced"`
+	Errors   int                `json:"errors"`
+	Results  []TaskImportResult `json:"results"`
+}
+
+// ExportRecordToTaskCreate converts a portable TaskExportRecord back into the
+// TaskCreate "recipe" used to mint a fresh task (#238). It is the inverse of
+// TaskToExportRecord over the definition fields; runtime state is never carried
+// (NewTask assigns id/status/timestamps fresh on the target).
+func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
+	var maxRetries *int
+	if rec.MaxRetries != nil {
+		v := *rec.MaxRetries
+		maxRetries = &v
+	}
+	return TaskCreate{
+		Name:                       rec.Name,
+		Prompt:                     rec.Prompt,
+		Model:                      rec.Model,
+		FallbackModel:              rec.FallbackModel,
+		MaxIterations:              rec.MaxIterations,
+		MCPSelection:               rec.MCPSelection,
+		CredentialAllowlist:        rec.CredentialAllowlist,
+		LoopConfig:                 rec.LoopConfig,
+		WorktreeConfig:             rec.WorktreeConfig,
+		Priority:                   rec.Priority,
+		InstructionSelfImprove:     rec.InstructionSelfImprove,
+		AllowNetwork:               rec.AllowNetwork,
+		Persona:                    rec.Persona,
+		Description:                rec.Description,
+		ScheduledFor:               rec.ScheduledFor,
+		Recurrence:                 rec.Recurrence,
+		Timezone:                   rec.Timezone,
+		Files:                      rec.Files,
+		Tags:                       rec.Tags,
+		MaxRetries:                 maxRetries,
+		RetryPolicy:                rec.RetryPolicy,
+		TriggerType:                rec.TriggerType,
+		AllowTaskCreation:          rec.AllowTaskCreation,
+		AllowRecurringTaskCreation: rec.AllowRecurringTaskCreation,
+	}
+}
+
+// TaskToExportRecord extracts the portable definition of a Task — the inverse of
+// ExportRecordToTaskCreate. Runtime fields (id, status, attempt_count, lease,
+// results, created_by, timestamps, dead-letter, lineage) are dropped so an
+// export envelope carries only the configuration needed to recreate the task.
+func TaskToExportRecord(t *Task) TaskExportRecord {
+	// MaxRetries is an int on Task (0 = no retries) but a *int on the export
+	// record. Preserve a non-zero value; drop 0 (omitempty) so the default
+	// round-trips as "unset" rather than a redundant explicit zero.
+	var maxRetries *int
+	if t.MaxRetries != 0 {
+		v := t.MaxRetries
+		maxRetries = &v
+	}
+	return TaskExportRecord{
+		Name:                       t.Name,
+		Prompt:                     t.Prompt,
+		Model:                      t.Model,
+		FallbackModel:              t.FallbackModel,
+		MaxIterations:              t.MaxIterations,
+		MCPSelection:               t.MCPSelection,
+		CredentialAllowlist:        t.CredentialAllowlist,
+		LoopConfig:                 t.LoopConfig,
+		WorktreeConfig:             t.WorktreeConfig,
+		Priority:                   t.Priority,
+		InstructionSelfImprove:     t.InstructionSelfImprove,
+		AllowNetwork:               t.AllowNetwork,
+		Persona:                    t.Persona,
+		Description:                t.Description,
+		ScheduledFor:               t.ScheduledFor,
+		Recurrence:                 t.Recurrence,
+		Timezone:                   t.Timezone,
+		Files:                      t.Files,
+		Tags:                       t.Tags,
+		MaxRetries:                 maxRetries,
+		RetryPolicy:                t.RetryPolicy,
+		TriggerType:                t.TriggerType,
 		AllowTaskCreation:          t.AllowTaskCreation,
 		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
 	}
