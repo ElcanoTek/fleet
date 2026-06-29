@@ -269,6 +269,38 @@ func (s *Storage) AddTaskWithContext(ctx context.Context, task *models.Task) (*m
 	return task, nil
 }
 
+// AddTaskBatch inserts a slice of validated tasks for the batch submission
+// endpoint (#227). When atomic is true the whole insert runs inside a single
+// transaction (BeginTx/Commit): a DB failure rolls every row back and the
+// caller surfaces a 422. When atomic is false the multi-row INSERT is issued
+// without an explicit tx — a single-statement INSERT is itself atomic per row,
+// so the batch is best-effort (the caller already split valid from invalid at
+// the validation layer). Returns the count actually inserted (== len(tasks) on
+// success).
+func (s *Storage) AddTaskBatch(ctx context.Context, tasks []*models.Task, atomic bool) (int, error) {
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+	if atomic {
+		tx, err := s.db.BeginTx(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err := s.db.AddTaskBatchTx(ctx, tx, tasks); err != nil {
+			return 0, err
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return len(tasks), nil
+	}
+	if err := s.db.AddTaskBatch(ctx, tasks); err != nil {
+		return 0, err
+	}
+	return len(tasks), nil
+}
+
 // EnqueueTask is the storage-layer task-create plumbing the in-process create_task
 // tool calls (#277): it validates the optional cron recurrence, mints a task from
 // tc via models.NewTask (the SAME constructor the public POST /tasks path uses),

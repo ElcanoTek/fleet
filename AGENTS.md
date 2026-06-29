@@ -107,6 +107,11 @@ same PR.
   - Pre-run shell gates (`run_if`) are evaluated serially on the host as the fleet process user prior to task promotion.
   - The evaluation is restricted to `PATH=/usr/bin:/bin` and `HOME=/tmp` with a custom timeout.
   - If a gate skips a recurring task, its status stays `scheduled`, and `scheduled_for` is advanced to the next cron occurrence. For one-shot tasks, status remains `scheduled` but the time is not advanced, acting as a soft hold.
+- **Batch Task Operations**:
+  - **Batch APIs**: `POST /tasks/batch` allows batch task creation of up to 100 tasks. In atomic mode (`atomic: true`), all tasks are validated up front and created in a single DB transaction (returning `422 Unprocessable Entity` with errors if any fail). In non-atomic mode (`atomic: false`), it behaves best-effort and returns `207 Multi-Status` for partial success.
+  - **Rate Limiting**: Rate limiter consumes `N` tokens for `N` tasks in a batch (instead of 1 token per batch request) via `apikeys.Manager.ConsumeN`.
+  - **Single Multi-row Insert**: `db.AddTaskBatch` inserts multiple tasks in a single query via parameterized multi-row insert rather than individual sequential inserts.
+  - **CLI**: `fleet-admin task batch-create --from-file tasks.json [--atomic]` allows creating tasks from a JSON file (or stdin via `-`).
 - One focused branch + PR per change; keep diffs scoped. Don't refactor unrelated
   code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions and DCO
   sign-off.

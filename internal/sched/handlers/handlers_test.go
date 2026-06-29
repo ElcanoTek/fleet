@@ -127,6 +127,7 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 	})
 
 	r.Post("/tasks", h.CreateTask) // Has its own complex auth logic
+	r.With(h.SchedRateLimitMiddleware).Post("/tasks/batch", h.CreateTaskBatch)
 	r.Get("/health", h.HealthCheck)
 
 	cleanup := func() {

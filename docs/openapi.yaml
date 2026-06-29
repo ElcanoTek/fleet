@@ -362,6 +362,62 @@ paths:
               schema: { $ref: "#/components/schemas/Task" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+  /tasks/batch:
+    post:
+      summary: Create multiple tasks in a single call.
+      description: >
+        Accepts a slice of TaskCreate recipes (up to 100) and creates them in one
+        API call. When atomic=true the whole batch is validated up front and
+        inserted in a single transaction — any failure rolls back all (422 with
+        per-task errors). When atomic=false (default) valid tasks are created
+        while invalid ones are skipped, yielding 207 Multi-Status with per-task
+        created/failed results. Same auth + rate limiter as POST /tasks; the
+        scoped API key's hourly cap is charged N tokens for a batch of N tasks
+        (one by the auth check, N-1 by the handler) so the batch path is never a
+        rate-limit bypass.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tasks]
+              properties:
+                atomic:
+                  type: boolean
+                  default: false
+                tasks:
+                  type: array
+                  maxItems: 100
+                  items: { $ref: "#/components/schemas/TaskCreate" }
+      responses:
+        "200":
+          description: All tasks created (atomic or non-atomic with no failures).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        index: { type: integer }
+                  failed:
+                    type: array
+                    items: { type: object }
+                  count: { type: integer }
+        "207":
+          description: Partial success (non-atomic only); some tasks were skipped.
+        "413":
+          description: Batch size exceeds the 100-task limit.
+        "422":
+          description: Atomic rollback or every task failed validation.
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
   /tasks/estimate:
     post:
       summary: Pre-submission cost forecast for a task.

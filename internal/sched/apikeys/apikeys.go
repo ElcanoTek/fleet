@@ -529,6 +529,39 @@ func (m *Manager) LookupKeyMeta(rawKey string) (keyID string, rateLimit int, ok 
 	return key.KeyID, key.RateLimit, true
 }
 
+// ConsumeN charges a key's hourly rate-limit counter for n additional requests
+// (#227). It is the multi-token counterpart to the single increment
+// ValidateKey performs: the batch task endpoint must not be a rate-limit bypass,
+// so a batch of N tasks consumes N tokens total. ValidateKey has already
+// consumed 1 when it authorized the caller, so the handler passes n = (batch
+// size - 1) to reach the full count. Returns false (without mutating state) when
+// the remaining hourly budget cannot cover n, leaving the caller to surface a
+// 429. A key with RateLimit == 0 (no per-key cap) is a no-op success. An
+// unknown / already-authorized-via-admin path passes keyID = "" → no-op success
+// (the admin key and cookie/bearer callers are not keyed here).
+func (m *Manager) ConsumeN(keyID string, n int) bool {
+	if keyID == "" || n <= 0 {
+		return true
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key, ok := m.keys[keyID]
+	if !ok || key.RateLimit <= 0 {
+		return true
+	}
+	state, exists := m.rateLimits[keyID]
+	if !exists {
+		state = &RateLimitState{WindowStart: time.Now().UTC()}
+		m.rateLimits[keyID] = state
+	}
+	state.ResetIfNeeded(1)
+	if state.RequestCount+n > key.RateLimit {
+		return false
+	}
+	state.RequestCount += n
+	return true
+}
+
 // SetBudgets sets (or clears, when nil) a key's daily/monthly spending caps and
 // persists them. Used by the create/update handlers. Returns an error for an
 // unknown key.
