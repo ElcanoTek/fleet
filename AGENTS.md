@@ -97,6 +97,8 @@ same PR.
 - Run tests in the **foreground**. Do not background `go test`, and do not
   `pkill -f 'go test'` (it can kill the shell). Prefer `make test` (it sets
   `-p 1`, which the suite expects).
+- **Composer & Textarea heights**: In `web/src/app/chat/ui/Composer.tsx` and `chat-experience.tsx`, avoid mixing JS-based auto-grow style height clamping with Tailwind `max-h-*` CSS classes on the composer textarea, to prevent layout flickering. Use `MAX_COMPOSER_HEIGHT_PX` (200px) as the single source of truth.
+- **Composer keybindings & preferences**: The user's send preference (`fleet.sendKey` in localStorage) controls whether Enter or Ctrl+Enter (with Cmd+Enter) sends a message. The keydown handler adjusts based on this config and skips sending on touch devices to let mobile keyboards use native enter keys.
 - One focused branch + PR per change; keep diffs scoped. Don't refactor unrelated
   code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions and DCO
   sign-off.
