@@ -351,7 +351,12 @@ explicitly with `FLEET_SANDBOX_WARM_SIZE`, and a background keeper reaps and
 replaces a warm container that has sat idle past `FLEET_SANDBOX_WARM_TTL` (default
 **300s**), bounding the age of any warm container a turn can receive (so a
 long-idle container that may have been OOM-killed or cgroup-frozen is rotated out
-rather than handed to a turn). Size the host to the cap:
+rather than handed to a turn). By default the `run_python` IPython kernel is
+**fresh per turn**; set `FLEET_PYTHON_REPL_MODE=persistent` to keep one kernel
+alive **per conversation** so variables and DataFrames survive across turns (it
+is never shared across conversations — see
+[ADR-0008](docs/adr/0008-persistent-python-repl-per-conversation.md) and the
+[agent runtime guide](docs/AGENT-RUNTIME.md)). Size the host to the cap:
 
 | Concurrent agents | vCPU | RAM    | Disk   | Who it's for                              |
 | ----------------- | ---- | ------ | ------ | ----------------------------------------- |

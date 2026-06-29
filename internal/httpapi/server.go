@@ -225,6 +225,20 @@ func (s *Server) CancelInflightTurns() int {
 // diagnostic counter behind the SIGUSR1 status log.
 func (s *Server) ActiveTurns() int { return int(s.activeTurnCount.Load()) }
 
+// releasePersistentSandbox tears down the persistent per-conversation
+// run_python sandbox (#213) for convID after its conversation is deleted, so
+// the kernel + container are reclaimed promptly instead of waiting for the idle
+// reaper. A no-op when persistent mode is off, the engine is absent (mock/test
+// setups), or the conversation never had a persistent sandbox — every layer
+// down to Pool.ReleaseChatSession is nil-safe. If a turn is still in flight, the
+// pool defers the actual close to the turn's last sandbox borrow.
+func (s *Server) releasePersistentSandbox(convID string) {
+	if s.agent == nil || convID == "" {
+		return
+	}
+	s.agent.SandboxPool().ReleaseChatSession(convID)
+}
+
 // Option customizes a Server at construction.
 type Option func(*Server)
 
@@ -919,6 +933,13 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			// Reclaim each deleted conversation's persistent run_python sandbox
+			// (#213). The filter-based bulk paths (DeleteAllMatching /
+			// DeleteAllUnpinned) return only a count, not IDs, so those rely on
+			// the pool's idle reaper to reclaim instead.
+			for _, cid := range req.ConversationIDs {
+				s.releasePersistentSandbox(cid)
+			}
 			writeJSON(w, map[string]any{"deleted": n})
 		default:
 			// Legacy bare DELETE /conversations → DeleteAllUnpinned.
@@ -1139,6 +1160,8 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// Reclaim the conversation's persistent run_python sandbox (#213), if any.
+		s.releasePersistentSandbox(id)
 		w.WriteHeader(http.StatusNoContent)
 	case sub == "truncate" && r.Method == http.MethodPost:
 		// Retry/regenerate: drop every message after the latest user turn
