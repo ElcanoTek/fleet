@@ -206,6 +206,47 @@ func (p *Pool) stale(ps parkedSandbox) bool {
 // Returns ErrContainerUnavailable when the pool wasn't constructed
 // with a container image (test/mock setups).
 func (p *Pool) TakeContainer(ctx context.Context) (*Sandbox, func(), error) {
+	return p.TakeContainerWithOverrides(ctx, ResourceOverride{}, true)
+}
+
+// ResourceOverride optionally overrides the pool's default cgroup ceilings for a
+// single cold-started container (#205). An empty/zero field keeps the pool
+// default. It carries pre-formatted podman-ready values so the sandbox package
+// stays free of sched/task types.
+type ResourceOverride struct {
+	MemoryLimit string // e.g. "2048m"; "" = pool default
+	CPULimit    string // e.g. "2.00";  "" = pool default
+	PidsLimit   int    // e.g. 512;     0  = pool default
+}
+
+// applyTo returns cfg with this override's set (non-empty/non-zero) fields layered
+// over the pool defaults (#205). The resulting MemoryLimit/CPULimit/PidsLimit are
+// what containerImpl.start() emits verbatim as --memory / --memory-swap / --cpus /
+// --pids-limit, so testing this pure merge proves the per-task flags.
+func (ov ResourceOverride) applyTo(cfg ContainerConfig) ContainerConfig {
+	if ov.MemoryLimit != "" {
+		cfg.MemoryLimit = ov.MemoryLimit
+	}
+	if ov.CPULimit != "" {
+		cfg.CPULimit = ov.CPULimit
+	}
+	if ov.PidsLimit > 0 {
+		cfg.PidsLimit = ov.PidsLimit
+	}
+	return cfg
+}
+
+// TakeContainerWithOverrides cold-starts a fresh container like TakeContainer,
+// but applies per-task resource overrides (#205) and lets the caller choose the
+// network posture: noNetwork=true seals egress (--network=none, the lockdown
+// boundary and the default for sealed scheduled runs), false leaves the default
+// rootless slirp4netns egress (matching the warm pool's newSandbox). Always
+// cold-starts — a warm pooled container is already running with the pool's
+// ceilings, so per-task limits inherently require a fresh container.
+//
+// Returns ErrContainerUnavailable when the pool wasn't constructed with a
+// container image (test/mock setups), exactly like TakeContainer.
+func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverride, noNetwork bool) (*Sandbox, func(), error) {
 	if p == nil {
 		return nil, func() {}, ErrContainerUnavailable
 	}
@@ -215,13 +256,13 @@ func (p *Pool) TakeContainer(ctx context.Context) (*Sandbox, func(), error) {
 	cfg := p.cfg.Container
 	cfg.BridgeScript = p.cfg.BridgeScript
 	cfg.StorageOptSupported = p.storageOptSupported(ctx)
-	// Lockdown's distinguishing security guarantee: no network egress
-	// from inside bash/run_python. Non-lockdown chats (Pool.Take ->
-	// newSandbox) inherit the default rootless slirp4netns so routine
-	// flows like `pip install` or curling a URL the user mentions just
-	// work. The lockdown gate is enforced HERE rather than upstream so
-	// the contract is impossible to bypass via a bad caller.
-	cfg.NoNetwork = true
+	// Network sealing is enforced HERE rather than upstream so the lockdown
+	// contract is impossible to bypass via a bad caller.
+	cfg.NoNetwork = noNetwork
+	// Per-task overrides (#205) tighten/raise the cgroup caps within the operator
+	// ceiling already validated at task creation. An empty/zero field leaves the
+	// pool default (applyContainerDefaults fills it in NewContainer).
+	cfg = ov.applyTo(cfg)
 	// See newSandbox below for why we resolve the start timeout here
 	// rather than reading it raw from cfg.
 	startCtx, cancel := context.WithTimeout(ctx, resolveStartTimeout(cfg)+5*time.Second)

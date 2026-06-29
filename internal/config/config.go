@@ -266,6 +266,9 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SANDBOX_CPUS":           true,
 	"FLEET_SANDBOX_PIDS":           true,
 	"FLEET_SANDBOX_DISK_GB":        true,
+	"FLEET_SANDBOX_MEMORY_MAX_MB":  true,
+	"FLEET_SANDBOX_CPUS_MAX":       true,
+	"FLEET_SANDBOX_PIDS_MAX":       true,
 	"FLEET_SANDBOX_WARM_SIZE":      true,
 	"FLEET_SANDBOX_WARM_TTL":       true,
 	"FLEET_PYTHON_REPL_MODE":       true,
@@ -677,6 +680,13 @@ type Config struct {
 	SandboxMemory string
 	SandboxCPUs   string
 	SandboxPids   int
+	// Per-task override ceilings (#205): a scheduled task's SandboxLimits may
+	// raise its container above the global SandboxMemory/CPUs/Pids, but never
+	// past these operator-set maxima. 0 = no ceiling (any override accepted).
+	// Defaults 8192 MiB / 16.0 CPUs / 1024 pids.
+	SandboxMemoryMaxMB int
+	SandboxCPUsMax     float64
+	SandboxPidsMax     int
 	// SandboxDiskGB caps each sandbox's writable disk usage, in GiB
 	// (FLEET_SANDBOX_DISK_GB). 0 → sandbox default (5); negative disables the
 	// quota. Stops an agent from filling the host disk (#216).
@@ -953,12 +963,16 @@ func Load(envFile string) (*Config, error) {
 		AdminEmails: splitEmails(os.Getenv("ADMIN_EMAILS")),
 
 		// ── sandbox ──
-		SandboxImage:          getenvFleet("SANDBOX_IMAGE"),
-		SandboxRuntime:        getenvFleet("SANDBOX_RUNTIME"),
-		SandboxMemory:         getenvFleet("SANDBOX_MEMORY"),
-		SandboxCPUs:           getenvFleet("SANDBOX_CPUS"),
-		SandboxPids:           getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
-		SandboxDiskGB:         getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+		SandboxImage:   getenvFleet("SANDBOX_IMAGE"),
+		SandboxRuntime: getenvFleet("SANDBOX_RUNTIME"),
+		SandboxMemory:  getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:    getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:    getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB:  getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+		// Per-task override ceilings (#205).
+		SandboxMemoryMaxMB:    getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
+		SandboxCPUsMax:        getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),
+		SandboxPidsMax:        getenvFleetInt("SANDBOX_PIDS_MAX", 1024),
 		SandboxWarmSize:       getenvFleetInt("SANDBOX_WARM_SIZE", 0),
 		SandboxWarmTTLSeconds: getenvFleetInt("SANDBOX_WARM_TTL", 300),
 
