@@ -14,7 +14,7 @@
 //	fleet-admin chat user add|update|del|list
 //	fleet-admin sched user add|update|set-role|rename|del|list
 //	fleet-admin sched apikey create|list|revoke|delete
-//	fleet-admin sched task export|import|set-model|set-credentials|set-description|tag|estimate
+//	fleet-admin sched task export|import|set-model|set-credentials|set-description|tag|estimate|batch-create
 //	fleet-admin mcp account set|list|del
 //	fleet-admin notes set|get|list|rm
 //	fleet-admin notes proposal publish|reject
@@ -123,6 +123,8 @@ Users, credentials, notes:
   fleet-admin sched apikey delete <key-id>
   fleet-admin sched task export > tasks.json    (versioned JSON of scheduled tasks → stdout)
   fleet-admin sched task import < tasks.json     (recreate tasks from stdin; upsert on id)
+  fleet-admin sched task batch-create --from-file <file> [--atomic]
+                                                 (submit multiple tasks atomically or best-effort from a JSON file)
   fleet-admin sched task set-model --model <slug> [--fallback-model <slug>] [--from-model <slug>] [--dry-run]
   fleet-admin sched task set-credentials <task_id> --allow server[:account] ... | --clear   (per-task MCP credential allowlist)
   fleet-admin sched task set-description <task_id> <text>|-    (operator docs; - reads stdin, e.g. < TASK_README.md)
