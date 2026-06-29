@@ -10,6 +10,7 @@ help:
 	@echo "  make compile     go build ./...   (compile-check every package; no artifacts)"
 	@echo "  make test        run the Go test suite"
 	@echo "  make test-race   run the Go test suite with the race detector"
+	@echo "  make test-cover  run the Go test suite with coverage (writes coverage.out)"
 	@echo "  make lint        run golangci-lint"
 	@echo "  make fmt         gofmt the tree"
 	@echo "  make tidy        go mod tidy"
@@ -58,8 +59,14 @@ test:
 test-race:
 	go test -race -p 1 -tags fleet_host_executor ./...
 
+# test-cover mirrors the CI 'go test' step's coverage instrumentation (issue
+# #249): -coverprofile=coverage.out -covermode=atomic on the SAME tagged test
+# run. CI adds -count=1 to defeat the cache; the local target leaves it off so
+# repeated runs reuse the cache. Run `go tool cover -func=coverage.out` for a
+# per-package table or `go tool cover -html=coverage.out` for a browsable view.
 test-cover:
-	go test -cover -p 1 -tags fleet_host_executor ./...
+	go test -coverprofile=coverage.out -covermode=atomic -p 1 -tags fleet_host_executor ./...
+	@go tool cover -func=coverage.out | tail -1
 
 lint: lint-go
 
