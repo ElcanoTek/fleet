@@ -620,7 +620,11 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                         <span className="toggle-slider" />
                       </label>
                       <div className="advanced-setting-meta">
-                        Captain&apos;s Log — persistent agent memory and self-improvement PRs.
+                        Captain&apos;s Log — give this task persistent memory across runs. Its
+                        agent can save facts with <code>remember</code> and read them back with{" "}
+                        <code>recall</code>; saved facts are reloaded at the start of every future
+                        run. Stored in fleet&apos;s database, scoped to this task. Off = each run
+                        starts fresh (the default).
                       </div>
                     </div>
                     <div className="advanced-switch-row">

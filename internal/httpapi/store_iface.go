@@ -25,6 +25,12 @@ type chatStore interface {
 	CreateConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error)
 	Get(ctx context.Context, userEmail, convID string) (*store.Conversation, error)
 	List(ctx context.Context, userEmail string, archivedOnly bool) ([]store.Conversation, error)
+	// Folders & labels (#258). ListFiltered backs the ?folder= / ?label= filters
+	// on GET /conversations; ListFolders enumerates the user's folders + counts
+	// for GET /folders; RenameFolder backs POST /folders/rename.
+	ListFiltered(ctx context.Context, userEmail string, f store.ListFilter) ([]store.Conversation, error)
+	ListFolders(ctx context.Context, userEmail string) ([]store.FolderCount, error)
+	RenameFolder(ctx context.Context, userEmail, from, to string) (int, error)
 	Delete(ctx context.Context, userEmail, convID string) error
 	DeleteAllUnpinned(ctx context.Context, userEmail string) (int, error)
 	// Bulk conversation operations (#279). DeleteByIDs hard-deletes (or, when
@@ -41,6 +47,11 @@ type chatStore interface {
 	SetModel(ctx context.Context, userEmail, convID, model string) error
 	SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
+	// Read-only public sharing (#226): the owner issues/revokes a share token;
+	// GetConversationByShareToken serves the unauthenticated /shared/{token} read.
+	SetShareToken(ctx context.Context, ownerEmail, convID, token string, expiresAt *int64) error
+	RevokeShareToken(ctx context.Context, ownerEmail, convID string) error
+	GetConversationByShareToken(ctx context.Context, token string, now int64) (*store.SharedConversation, error)
 	UpdateTitle(ctx context.Context, userEmail, convID, title string) error
 	RenameTitle(ctx context.Context, userEmail, convID, title string) error
 

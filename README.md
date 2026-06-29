@@ -60,6 +60,18 @@ them.
   AES-256-GCM encrypt the archived payloads. It runs on the same daily
   `FLEET_CLEANUP_HOUR` timer; `0` (the default) leaves it off.
 
+- **Task priority queues.** Each task carries a `priority` in `[0, 100]` where
+  **lower = more urgent** (POSIX `nice`-style; an unset priority defaults to
+  `50`/normal). The scheduler claims pending work in ascending priority, FIFO
+  within a tier, so a `critical` (10) task that arrives later still jumps ahead of
+  an already-queued `bulk` (90) batch job. An anti-starvation sweep promotes any
+  task that has waited past `FLEET_TASK_STARVATION_WINDOW_MINUTES` (default
+  **30**; `0` disables) up to the High tier so a sustained stream of urgent work
+  can never starve it — without rewriting the priority the submitter requested. A
+  scoped API key can carry a `max_priority` ceiling (it cannot submit work more
+  urgent than that), and the admin-only `GET /admin/queue` shows per-tier depth
+  and the oldest pending wait.
+
 - **Connected to your data and tools, wherever they live.** fleet speaks
   [MCP](#standards) and ships a per-deployment **MCP catalog**. Tasks select
   which MCP servers they need, with **multi-account credentials** brokered
@@ -351,7 +363,12 @@ explicitly with `FLEET_SANDBOX_WARM_SIZE`, and a background keeper reaps and
 replaces a warm container that has sat idle past `FLEET_SANDBOX_WARM_TTL` (default
 **300s**), bounding the age of any warm container a turn can receive (so a
 long-idle container that may have been OOM-killed or cgroup-frozen is rotated out
-rather than handed to a turn). Size the host to the cap:
+rather than handed to a turn). By default the `run_python` IPython kernel is
+**fresh per turn**; set `FLEET_PYTHON_REPL_MODE=persistent` to keep one kernel
+alive **per conversation** so variables and DataFrames survive across turns (it
+is never shared across conversations — see
+[ADR-0008](docs/adr/0008-persistent-python-repl-per-conversation.md) and the
+[agent runtime guide](docs/AGENT-RUNTIME.md)). Size the host to the cap:
 
 | Concurrent agents | vCPU | RAM    | Disk   | Who it's for                              |
 | ----------------- | ---- | ------ | ------ | ----------------------------------------- |
@@ -375,7 +392,11 @@ lowers the host's base footprint.
 > workloads above, raise it to match the per-agent RAM you provisioned via
 > `FLEET_SANDBOX_MEMORY` (e.g. `2g`), `FLEET_SANDBOX_CPUS`, and
 > `FLEET_SANDBOX_PIDS` — otherwise those workloads are OOM-killed against the
-> 512 MiB default, not your host's free RAM.
+> 512 MiB default, not your host's free RAM. A scheduled **task can override**
+> these per run with `sandbox_limits: {memory_mb, cpus, pids}` (#205) — a heavy
+> task gets 4 GiB while the common case keeps the lean default — bounded by the
+> operator ceilings `FLEET_SANDBOX_{MEMORY_MAX_MB,CPUS_MAX,PIDS_MAX}` (defaults
+> 8192 / 16 / 1024). A per-task override always cold-starts that run's container.
 
 > **Per-task resource telemetry.** To help right-size those caps, fleet samples
 > `podman stats` read-only over each sandbox container's lifetime and records the

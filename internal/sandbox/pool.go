@@ -18,11 +18,17 @@ import (
 //   - At Manager boot, NewPool(cfg) eagerly spawns cfg.Size sandboxes.
 //   - At turn start, Take() returns a Sandbox + cleanup. Take also
 //     fires a goroutine to refill so the next turn is warm.
-//   - cleanup() closes the sandbox; per-turn isolation is preserved.
-//     Pool members are never recycled across turns — fresh containers
-//     for fresh turns. This avoids the OpenAI-2024-style cross-conv
-//     leak where a "warm" sandbox carried files from the previous
-//     conversation into the next.
+//   - cleanup() closes the sandbox; warm members are never recycled
+//     across turns — fresh containers for fresh turns.
+//
+// The real invariant is NARROWER than "fresh per turn": a sandbox is NEVER
+// SHARED ACROSS CONVERSATIONS. That is what avoids the OpenAI-2024-style leak
+// where a "warm" sandbox carried files from the previous conversation into the
+// next. Per-turn freshness was the original way to guarantee it. Persistent
+// REPL mode (#213, see persistent.go) is a SECOND way that also upholds it: it
+// keeps one sandbox alive across the turns of a SINGLE conversation (keyed by
+// conversation ID), so the python kernel's state survives between turns, while
+// still never crossing a conversation boundary.
 //
 // Failure model: when container construction fails (misconfigured
 // rootless-podman, dead daemon, image gone), Take() returns the error
@@ -55,6 +61,37 @@ type Pool struct {
 	// once per process. The first container creation pays the probe cost.
 	storageProbeOnce sync.Once
 	storageOptOK     bool
+
+	// ── persistent per-conversation sandboxes (#213) ──
+	// When PersistentREPL is set, TakePersistent(convID) keeps ONE sandbox alive
+	// per conversation across turns (so the python kernel's variables/imports
+	// survive). These are entirely separate from the warm slots above — a
+	// persistent sandbox is never parked back in the warm queue, and is keyed by
+	// conversation ID so it is NEVER shared across conversations (the isolation
+	// invariant the warm pool's per-turn freshness also upholds).
+	//
+	// persistentMu guards persistent + persistentClosed. It is a SEPARATE mutex
+	// from p.mu so the slow create/close paths here never contend with the warm
+	// queue's hot path.
+	persistentMu     sync.Mutex
+	persistent       map[string]*persistentEntry
+	persistentClosed bool
+	persistentDone   chan struct{} // closed by Close to stop the idle reaper
+}
+
+// persistentEntry is one conversation's long-lived sandbox plus the bookkeeping
+// the idle reaper and the cancelled-turn-overlap guard need. inUse is a borrow
+// refcount: a turn increments it on TakePersistent and decrements it on the
+// returned cleanup. The reaper closes an entry ONLY when inUse==0, so a long
+// turn can never have its sandbox pulled out from under it; closeRequested lets
+// a conversation-delete that races an in-flight turn defer the actual Close to
+// the last borrow release.
+type persistentEntry struct {
+	sb             *Sandbox
+	convID         string
+	lastUsed       time.Time
+	inUse          int
+	closeRequested bool
 }
 
 // parkedSandbox is a warm sandbox plus the time it was parked, so the TTL keeper
@@ -90,6 +127,24 @@ type PoolConfig struct {
 	// containers live until taken or the pool is closed — the prior behaviour).
 	// A background keeper reaps on a ticker; Take also skips an over-TTL slot.
 	WarmTTL time.Duration
+
+	// ── python REPL (#213) ──
+	// PythonCellTimeout is the per-cell run_python ceiling stamped on every
+	// sandbox this pool builds (FLEET_PYTHON_CELL_TIMEOUT). Zero disables it.
+	PythonCellTimeout time.Duration
+	// PersistentREPL enables the per-conversation persistent sandbox lifecycle
+	// (FLEET_PYTHON_REPL_MODE=persistent). When false, TakePersistent degrades to
+	// the per-turn Take (fresh sandbox + Close cleanup), so callers can route
+	// through it unconditionally.
+	PersistentREPL bool
+	// PersistentIdleTTL bounds how long a persistent per-conversation sandbox may
+	// sit idle (no run_python/bash call) before the reaper closes it
+	// (FLEET_PYTHON_REPL_IDLE_TTL). Zero falls back to 30m.
+	PersistentIdleTTL time.Duration
+	// PersistentMaxSessions caps how many persistent sandboxes may be live at
+	// once (FLEET_PYTHON_REPL_MAX); past it the least-recently-used idle session
+	// is evicted. Zero disables the cap.
+	PersistentMaxSessions int
 }
 
 // NewPool returns a Pool of the given size. Pass Size <= 0 to disable
@@ -100,6 +155,16 @@ func NewPool(cfg PoolConfig) *Pool {
 		cfg.FillCtx = context.Background()
 	}
 	p := &Pool{cfg: cfg, nowFn: time.Now}
+	// Persistent per-conversation REPL (#213) is independent of the warm pool:
+	// it works even with Size<=0 (every conversation cold-starts its first turn).
+	if cfg.PersistentREPL {
+		p.persistent = make(map[string]*persistentEntry)
+		if p.cfg.PersistentIdleTTL <= 0 {
+			p.cfg.PersistentIdleTTL = 30 * time.Minute
+		}
+		p.persistentDone = make(chan struct{})
+		safe.Go("sandbox.pool.persistentKeeper", func() { p.persistentKeeper(p.persistentDone) })
+	}
 	if cfg.Size <= 0 {
 		return p
 	}
@@ -141,6 +206,47 @@ func (p *Pool) stale(ps parkedSandbox) bool {
 // Returns ErrContainerUnavailable when the pool wasn't constructed
 // with a container image (test/mock setups).
 func (p *Pool) TakeContainer(ctx context.Context) (*Sandbox, func(), error) {
+	return p.TakeContainerWithOverrides(ctx, ResourceOverride{}, true)
+}
+
+// ResourceOverride optionally overrides the pool's default cgroup ceilings for a
+// single cold-started container (#205). An empty/zero field keeps the pool
+// default. It carries pre-formatted podman-ready values so the sandbox package
+// stays free of sched/task types.
+type ResourceOverride struct {
+	MemoryLimit string // e.g. "2048m"; "" = pool default
+	CPULimit    string // e.g. "2.00";  "" = pool default
+	PidsLimit   int    // e.g. 512;     0  = pool default
+}
+
+// applyTo returns cfg with this override's set (non-empty/non-zero) fields layered
+// over the pool defaults (#205). The resulting MemoryLimit/CPULimit/PidsLimit are
+// what containerImpl.start() emits verbatim as --memory / --memory-swap / --cpus /
+// --pids-limit, so testing this pure merge proves the per-task flags.
+func (ov ResourceOverride) applyTo(cfg ContainerConfig) ContainerConfig {
+	if ov.MemoryLimit != "" {
+		cfg.MemoryLimit = ov.MemoryLimit
+	}
+	if ov.CPULimit != "" {
+		cfg.CPULimit = ov.CPULimit
+	}
+	if ov.PidsLimit > 0 {
+		cfg.PidsLimit = ov.PidsLimit
+	}
+	return cfg
+}
+
+// TakeContainerWithOverrides cold-starts a fresh container like TakeContainer,
+// but applies per-task resource overrides (#205) and lets the caller choose the
+// network posture: noNetwork=true seals egress (--network=none, the lockdown
+// boundary and the default for sealed scheduled runs), false leaves the default
+// rootless slirp4netns egress (matching the warm pool's newSandbox). Always
+// cold-starts — a warm pooled container is already running with the pool's
+// ceilings, so per-task limits inherently require a fresh container.
+//
+// Returns ErrContainerUnavailable when the pool wasn't constructed with a
+// container image (test/mock setups), exactly like TakeContainer.
+func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverride, noNetwork bool) (*Sandbox, func(), error) {
 	if p == nil {
 		return nil, func() {}, ErrContainerUnavailable
 	}
@@ -150,13 +256,13 @@ func (p *Pool) TakeContainer(ctx context.Context) (*Sandbox, func(), error) {
 	cfg := p.cfg.Container
 	cfg.BridgeScript = p.cfg.BridgeScript
 	cfg.StorageOptSupported = p.storageOptSupported(ctx)
-	// Lockdown's distinguishing security guarantee: no network egress
-	// from inside bash/run_python. Non-lockdown chats (Pool.Take ->
-	// newSandbox) inherit the default rootless slirp4netns so routine
-	// flows like `pip install` or curling a URL the user mentions just
-	// work. The lockdown gate is enforced HERE rather than upstream so
-	// the contract is impossible to bypass via a bad caller.
-	cfg.NoNetwork = true
+	// Network sealing is enforced HERE rather than upstream so the lockdown
+	// contract is impossible to bypass via a bad caller.
+	cfg.NoNetwork = noNetwork
+	// Per-task overrides (#205) tighten/raise the cgroup caps within the operator
+	// ceiling already validated at task creation. An empty/zero field leaves the
+	// pool default (applyContainerDefaults fills it in NewContainer).
+	cfg = ov.applyTo(cfg)
 	// See newSandbox below for why we resolve the start timeout here
 	// rather than reading it raw from cfg.
 	startCtx, cancel := context.WithTimeout(ctx, resolveStartTimeout(cfg)+5*time.Second)
@@ -165,6 +271,7 @@ func (p *Pool) TakeContainer(ctx context.Context) (*Sandbox, func(), error) {
 	if err != nil {
 		return nil, func() {}, err
 	}
+	sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
 	return sb, sb.Close, nil
 }
 
@@ -258,6 +365,30 @@ func (p *Pool) Close() {
 				ps.sb.Close()
 			}
 		}
+	}
+
+	// Drain persistent per-conversation sandboxes (#213). Stop the idle reaper,
+	// snapshot the live entries, clear the map, then Close outside the lock (the
+	// podman teardown is slow). closeRequested entries with in-flight borrows are
+	// closed here too: shutdown overrides the defer-to-last-release rule.
+	p.persistentMu.Lock()
+	var persistent []*persistentEntry
+	if !p.persistentClosed {
+		p.persistentClosed = true
+		if p.persistentDone != nil {
+			close(p.persistentDone)
+		}
+		for _, e := range p.persistent {
+			persistent = append(persistent, e)
+		}
+		p.persistent = nil
+	}
+	p.persistentMu.Unlock()
+	if len(persistent) > 0 {
+		log.Printf("sandbox.Pool.Close: closing %d persistent conversation sandbox(es)", len(persistent))
+	}
+	for _, e := range persistent {
+		e.sb.Close()
 	}
 }
 
@@ -418,14 +549,24 @@ func (p *Pool) newSandbox(ctx context.Context) (*Sandbox, error) {
 		// has finished filling against the now-cached chowned layer).
 		startCtx, cancel := context.WithTimeout(ctx, resolveStartTimeout(cfg)+5*time.Second)
 		defer cancel()
-		return NewContainer(startCtx, cfg)
+		sb, err := NewContainer(startCtx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
+		return sb, nil
 	case ModeHost:
 		// Test-only fixture path. agent.go forbids ModeHost in
 		// production; this branch only fires when sandbox_test.go
 		// constructs a pool directly with ModeHost. newHostSandbox is the
 		// real host executor only with -tags fleet_host_executor; a release
 		// build's stub returns an error here (#159).
-		return newHostSandbox(p.cfg.BridgeScript)
+		sb, err := newHostSandbox(p.cfg.BridgeScript)
+		if err != nil {
+			return nil, err
+		}
+		sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
+		return sb, nil
 	default:
 		return nil, ErrContainerUnavailable
 	}

@@ -436,6 +436,18 @@ func (s *Storage) ClaimNextPendingTask(ctx context.Context, leaseOwner string) (
 	return s.db.ClaimNextPendingTask(ctx, leaseOwner, LeaseDuration)
 }
 
+// PromoteStarvedTasks raises the effective priority of pending tasks that have
+// waited past the starvation window (#230). Returns the count promoted.
+func (s *Storage) PromoteStarvedTasks(ctx context.Context, windowMinutes int) (int64, error) {
+	return s.db.PromoteStarvedTasks(ctx, windowMinutes)
+}
+
+// PendingQueueStats returns the per-effective-priority rollup of the pending
+// queue for GET /admin/queue (#230).
+func (s *Storage) PendingQueueStats(ctx context.Context) ([]models.QueuePriorityBucket, error) {
+	return s.db.PendingQueueStats(ctx)
+}
+
 // GetNodeByName gets a node by its name.
 func (s *Storage) GetNodeByName(name string) (*models.Node, error) {
 	return s.db.GetNodeByName(context.Background(), name)
@@ -1250,6 +1262,11 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		Files:               task.Files,
 		Tags:                task.Tags,
 		RunIf:               task.RunIf,
+		// Carry the Captain's Log opt-in forward (#285/#322) so a recurring
+		// self-improving task keeps its persistent-memory capability on every
+		// occurrence rather than silently losing it (the new occurrence must have
+		// the flag set for its run to register remember/recall + inject memory).
+		InstructionSelfImprove: task.InstructionSelfImprove,
 	})
 	newTask.CreatedBy = task.CreatedBy
 	// Carry the originating API key forward so recurring task cost keeps counting
@@ -1258,8 +1275,23 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 
 	if _, err := s.AddTaskWithContext(ctx, newTask); err != nil {
 		log.Printf("Error creating next recurring task for %s: %v", task.ID, err)
-	} else {
-		log.Printf("Scheduled next recurrence for task %s at %s", task.ID, nextTime)
+		return
+	}
+	log.Printf("Scheduled next recurrence for task %s at %s", task.ID, nextTime)
+
+	// Carry the completing occurrence's persistent memory (#198/#285) forward to
+	// the new occurrence. Memory is keyed by task_id and each recurrence is a NEW
+	// task row, so WITHOUT this copy a recurring Captain's Log task would start
+	// cold every time — defeating the feature (e.g. "alert only if the price
+	// changed since last week"). Best-effort + parameterized; the canonical
+	// task_memories data layer is internal/sched/taskmemory.go. The FK is
+	// satisfied because newTask was just inserted above.
+	if _, cerr := s.db.Conn().ExecContext(ctx, `
+		INSERT INTO task_memories (id, task_id, key, value, created_at, updated_at)
+		SELECT gen_random_uuid(), $1, key, value, created_at, updated_at
+		FROM task_memories WHERE task_id = $2`,
+		newTask.ID, task.ID); cerr != nil {
+		log.Printf("recurring task %s: failed to carry persistent memory forward to %s: %v", task.ID, newTask.ID, cerr)
 	}
 }
 

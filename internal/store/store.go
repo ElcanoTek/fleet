@@ -110,6 +110,12 @@ type Conversation struct {
 	// (#225). nil = use the global default; a positive value sets a per-chat
 	// override. Set via POST /conversations/{id}/approval-timeout.
 	ApprovalTimeoutSeconds *int `json:"approval_timeout_seconds,omitempty"`
+	// ShareToken is the opt-in public read-only share token (#226). Empty = not
+	// shared; non-empty = anyone with /shared/{ShareToken} can view a read-only
+	// snapshot. Surfaced to the owner's own GET /conversations so the sidebar can
+	// show a "shared" badge and a copy-link action. Set/cleared via
+	// POST/DELETE /conversations/{id}/share.
+	ShareToken string `json:"share_token,omitempty"`
 }
 
 // ErrForeignConversation is returned by DeleteByIDs / BulkPatch when one or
@@ -429,6 +435,103 @@ func (s *Store) SetApprovalTimeout(ctx context.Context, userEmail, convID string
 	return nil
 }
 
+// SharedConversation is the read-only public snapshot returned for a valid
+// share token (#226). It deliberately omits id and user_email: an observer with
+// the link learns the content but neither the internal ID nor who authored it.
+type SharedConversation struct {
+	Title     string               `json:"title"`
+	Persona   string               `json:"persona"`
+	Model     string               `json:"model"`
+	CreatedAt int64                `json:"created_at"`
+	SharedAt  int64                `json:"shared_at"`
+	Messages  []agent.HistoryEntry `json:"messages"`
+}
+
+// SetShareToken (re)issues the public read-only share token for a conversation
+// the caller owns (#226). Revoke-then-reissue: a second call rotates the token
+// and resets shared_at. expiresAt is the optional unix-seconds expiry (nil =
+// never expires). Scoped by user_email so a caller can only share their own
+// conversation.
+func (s *Store) SetShareToken(ctx context.Context, ownerEmail, convID, token string, expiresAt *int64) error {
+	var expiresArg any // NULL when no expiry
+	if expiresAt != nil {
+		expiresArg = *expiresAt
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET share_token = $1, shared_at = $2, share_expires_at = $3
+		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
+		token, time.Now().Unix(), expiresArg, convID, ownerEmail,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.New("conversation not found")
+	}
+	return nil
+}
+
+// RevokeShareToken clears the share token (and its metadata) for a conversation
+// the caller owns (#226). Genuinely idempotent: revoking an already-unshared
+// conversation matches the row but changes no columns (RowsAffected = 0), which
+// is still success — so a double DELETE answers 204 both times rather than a
+// spurious 500. Ownership is enforced by the WHERE clause AND by the handler's
+// pre-check (which distinguishes a non-owned id as 404). deleted_at IS NULL
+// matches SetShareToken: a soft-deleted conversation is not mutable.
+func (s *Store) RevokeShareToken(ctx context.Context, ownerEmail, convID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET share_token = NULL, shared_at = NULL, share_expires_at = NULL
+		 WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
+		convID, ownerEmail,
+	)
+	return err
+}
+
+// GetConversationByShareToken returns the read-only snapshot for a share token,
+// or (nil, nil) when the token is unknown, revoked, or expired (#226). The
+// lookup is NOT scoped by user — anyone with the token may read it — but expiry
+// is enforced server-side here (now is unix seconds). It excludes soft-deleted
+// conversations so a tombstoned chat can't be read through a stale link.
+func (s *Store) GetConversationByShareToken(ctx context.Context, token string, now int64) (*SharedConversation, error) {
+	if token == "" {
+		return nil, nil
+	}
+	var (
+		id  string
+		out SharedConversation
+	)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, title, persona, model, created_at, COALESCE(shared_at, 0)
+		 FROM conversations
+		 WHERE share_token = $1 AND deleted_at IS NULL
+		   AND (share_expires_at IS NULL OR share_expires_at > $2)`,
+		token, now,
+	).Scan(&id, &out.Title, &out.Persona, &out.Model, &out.CreatedAt, &out.SharedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	msgs, err := s.LoadHistory(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// Expose ONLY user/assistant text to the public snapshot. The full history
+	// also carries tool_call / tool_result / reasoning entries whose content can
+	// include command output, API responses, or other internals that were never
+	// meant to be shared. Filtering here (not just in the UI) is the security
+	// boundary: any consumer of this snapshot — including a raw JSON fetch —
+	// sees the transcript, not the agent's working trace (#226).
+	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Type == "text" && (m.Role == "user" || m.Role == "assistant") {
+			out.Messages = append(out.Messages, m)
+		}
+	}
+	return &out, nil
+}
+
 // AutoArchiveOlderThan archives unpinned, not-already-archived conversations
 // whose updated_at is older than d (#282). Returns the count archived. A zero or
 // negative duration is a no-op (the feature is disabled). This is a softer
@@ -648,21 +751,44 @@ func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, p
 	return int(n), nil
 }
 
-// List returns the user's conversations, pinned first, newest first. When
-// archivedOnly is false it returns only active (archived_at IS NULL)
-// conversations — the default sidebar view; when true it returns only the
-// archived ones (#282). The two are distinct lists so the frontend can render
-// archived conversations in a separate, collapsed section.
-func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) ([]Conversation, error) {
-	archivedFilter := "archived_at IS NULL"
-	if archivedOnly {
-		archivedFilter = "archived_at IS NOT NULL"
+// ListFilter constrains ListFiltered (#258). The zero value lists all active
+// conversations (the default sidebar view). ArchivedOnly selects the archived
+// section instead (#282). Labels has AND semantics — every listed label must be
+// present (Postgres array containment). Folder, when non-nil, restricts to that
+// folder; a pointer to "" means the explicit "no folder" bucket (folder = ”).
+type ListFilter struct {
+	ArchivedOnly bool
+	Labels       []string
+	Folder       *string
+}
+
+// ListFiltered returns the user's conversations matching f, pinned first, newest
+// first. See ListFilter for the filter semantics (#258). When ArchivedOnly is
+// false it returns only active (archived_at IS NULL) conversations — the default
+// sidebar view; when true it returns only the archived ones (#282), so the
+// frontend can render them in a separate, collapsed section.
+func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter) ([]Conversation, error) {
+	// A single CONSTANT query with sentinel-guarded optional filters (mirroring
+	// DeleteAllMatching) — no string concatenation, so every value is bound and
+	// the query plan is stable. $2 picks the active/archived partition; $3 (NULL =
+	// no label filter) does AND-containment; $4 (NULL = no folder filter, '' = the
+	// explicit no-folder bucket) does folder equality.
+	var labelsArg, folderArg any
+	if len(f.Labels) > 0 {
+		labelsArg = pq.Array(f.Labels)
+	}
+	if f.Folder != nil {
+		folderArg = *f.Folder
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds
-		 FROM conversations WHERE user_email = $1 AND `+archivedFilter+` AND deleted_at IS NULL
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, '')
+		 FROM conversations
+		 WHERE user_email = $1 AND deleted_at IS NULL
+		   AND (CASE WHEN $2 THEN archived_at IS NOT NULL ELSE archived_at IS NULL END)
+		   AND ($3::text[] IS NULL OR labels @> $3::text[])
+		   AND ($4::text IS NULL OR folder = $4::text)
 		 ORDER BY pinned DESC, updated_at DESC, id DESC`,
-		userEmail,
+		userEmail, f.ArchivedOnly, labelsArg, folderArg,
 	)
 	if err != nil {
 		return nil, err
@@ -674,7 +800,7 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 		var c Conversation
 		var optionalRaw []byte
 		var approvalTimeout sql.NullInt64
-		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken); err != nil {
 			return nil, err
 		}
 		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
@@ -684,17 +810,76 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 	return out, rows.Err()
 }
 
+// List returns the user's active (or, when archivedOnly, archived) conversations,
+// pinned first, newest first. Thin wrapper over ListFiltered preserved for the
+// many callers that don't filter by folder/label.
+func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) ([]Conversation, error) {
+	return s.ListFiltered(ctx, userEmail, ListFilter{ArchivedOnly: archivedOnly})
+}
+
+// FolderCount is one folder name and the number of the user's active
+// conversations in it (#258).
+type FolderCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// ListFolders returns the distinct non-empty folder names the user has, each with
+// the count of its active (live, non-archived) conversations, ordered by name
+// (#258). The "no folder" bucket (folder = ”) is intentionally omitted — it is
+// the implicit "All Conversations" default, not a named folder.
+func (s *Store) ListFolders(ctx context.Context, userEmail string) ([]FolderCount, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT folder, COUNT(*) FROM conversations
+		 WHERE user_email = $1 AND folder <> '' AND deleted_at IS NULL AND archived_at IS NULL
+		 GROUP BY folder ORDER BY folder`,
+		userEmail,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]FolderCount, 0)
+	for rows.Next() {
+		var fc FolderCount
+		if err := rows.Scan(&fc.Name, &fc.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, fc)
+	}
+	return out, rows.Err()
+}
+
+// RenameFolder moves every one of the user's conversations from folder `from` to
+// folder `to` (a single UPDATE — there is no separate folders table, so a folder
+// IS just the set of conversations naming it). Returns the number of
+// conversations moved (0 when the source folder was empty/unknown). Archived
+// conversations sharing the name are moved too (unlike ListFolders, which counts
+// only active ones) so a folder's grouping stays consistent across the rename. (#258)
+func (s *Store) RenameFolder(ctx context.Context, userEmail, from, to string) (int, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET folder = $1, updated_at = $2
+		 WHERE user_email = $3 AND folder = $4 AND deleted_at IS NULL`,
+		to, time.Now().Unix(), userEmail, from,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // Get fetches a single conversation (without messages).
 func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, '')
 		 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
 		convID, userEmail,
 	)
 	var c Conversation
 	var optionalRaw []byte
 	var approvalTimeout sql.NullInt64
-	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout); err != nil {
+	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1353,7 +1538,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		// re-sweep never re-tombstones.
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND updated_at < $2`,
+			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND updated_at < $2`,
 			time.Now().Unix(), cutoff,
 		)
 		if err != nil {
@@ -1363,7 +1548,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		expired += int(n)
 	} else {
 		res, err := s.db.ExecContext(ctx,
-			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND updated_at < $1`,
+			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND updated_at < $1`,
 			cutoff,
 		)
 		if err != nil {
@@ -1380,7 +1565,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT user_email, COUNT(*) FROM conversations
-		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
+		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
 		unpinnedCap,
 	)
 	if err != nil {
@@ -1405,7 +1590,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		res, err := s.db.ExecContext(ctx,
 			`DELETE FROM conversations WHERE id IN (
 			    SELECT id FROM conversations
-			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL
+			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL
 			    ORDER BY updated_at DESC, id DESC
 			    OFFSET $2
 			 )`,

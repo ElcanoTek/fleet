@@ -47,6 +47,11 @@ type Server struct {
 	// rateLimitHits tallies 429s by reason ("rpm"|"day"|"concurrent"). Pointer-held
 	// so a Server value stays copyable. A Prometheus surface is deferred to #176.
 	rateLimitHits *rateHitCounter
+	// shareRL throttles the public read-only share endpoint (#226), keyed by
+	// share TOKEN (not IP — the endpoint sits behind the Next proxy, so per-IP
+	// would see only the proxy's address). Always on, independent of the per-user
+	// rate-limit master switch, because /shared is the most exposed surface.
+	shareRL       *ratelimit.Limiter
 	hasUsers      atomic.Bool
 	lastUserCheck atomic.Int64
 
@@ -220,6 +225,20 @@ func (s *Server) CancelInflightTurns() int {
 // diagnostic counter behind the SIGUSR1 status log.
 func (s *Server) ActiveTurns() int { return int(s.activeTurnCount.Load()) }
 
+// releasePersistentSandbox tears down the persistent per-conversation
+// run_python sandbox (#213) for convID after its conversation is deleted, so
+// the kernel + container are reclaimed promptly instead of waiting for the idle
+// reaper. A no-op when persistent mode is off, the engine is absent (mock/test
+// setups), or the conversation never had a persistent sandbox — every layer
+// down to Pool.ReleaseChatSession is nil-safe. If a turn is still in flight, the
+// pool defers the actual close to the turn's last sandbox borrow.
+func (s *Server) releasePersistentSandbox(convID string) {
+	if s.agent == nil || convID == "" {
+		return
+	}
+	s.agent.SandboxPool().ReleaseChatSession(convID)
+}
+
 // Option customizes a Server at construction.
 type Option func(*Server)
 
@@ -286,6 +305,10 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		inflight:         make(map[string]inflightEntry),
 		sessionApprovals: NewSessionApprovalRegistry(),
 		sseReconnects:    newReconnectCounter(),
+		// Per-token cap on the public /shared read endpoint (#226): generous for
+		// real viewers, a hard ceiling against scraping/DDoS amplification of a
+		// single link. No daily window.
+		shareRL: ratelimit.New(sharedReadsPerMinutePerToken, 0),
 	}
 	// Rate limiting is a single master switch. When on, the RPM/day window and
 	// the per-user concurrent-turn cap are both live; when off, both limiters are
@@ -485,6 +508,11 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/attachments", auth(member(http.HandlerFunc(s.postAttachments))))
 	mux.Handle("/conversations", auth(member(http.HandlerFunc(s.listOrCreateConversations))))
 	mux.Handle("/conversations/", auth(member(http.HandlerFunc(s.conversationByID))))
+	// Folders (#258): enumerate folders + counts, and rename (a bulk re-tag).
+	// Both are exact (no trailing slash) patterns, so they never shadow each other
+	// regardless of order; /folders/{anything else} simply 404s.
+	mux.Handle("/folders/rename", auth(member(http.HandlerFunc(s.renameFolder))))
+	mux.Handle("/folders", auth(member(http.HandlerFunc(s.listFolders))))
 	mux.Handle("/search", auth(member(http.HandlerFunc(s.search))))
 	mux.Handle("/memories", auth(member(http.HandlerFunc(s.memories))))
 	mux.Handle("/memories/", auth(member(http.HandlerFunc(s.memoryByID))))
@@ -499,6 +527,12 @@ func (s *Server) Routes() http.Handler {
 	// /theme.css themes the shell (incl. the pre-auth login page) from the
 	// bundle palette, so it is token-gated but identity-less — see themeCSS.
 	mux.Handle("/theme.css", s.tokenOnlyMiddleware(http.HandlerFunc(s.themeCSS)))
+	// Public read-only conversation sharing (#226). Token-gated (shared secret —
+	// only the trusted Next proxy reaches it) but IDENTITY-less, like /theme.css:
+	// the share token in the path is the authorization, and the handler enforces
+	// its own per-token rate limit + expiry. The Next layer exposes /shared/{token}
+	// to logged-out viewers.
+	mux.Handle("/shared/", s.tokenOnlyMiddleware(http.HandlerFunc(s.handleSharedConversation)))
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
@@ -835,8 +869,18 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 	case http.MethodGet:
 		// ?archived=true returns the archived conversations (the collapsed
 		// "Archived" sidebar section, #282); default returns active ones.
-		archivedOnly := r.URL.Query().Get("archived") == "true"
-		list, err := s.store.List(r.Context(), user, archivedOnly)
+		// ?folder= restricts to one folder, and ?label= (repeatable, AND
+		// semantics) restricts to conversations carrying every listed label (#258).
+		q := r.URL.Query()
+		filter := store.ListFilter{
+			ArchivedOnly: q.Get("archived") == "true",
+			Labels:       q["label"],
+		}
+		if q.Has("folder") {
+			folder := q.Get("folder")
+			filter.Folder = &folder
+		}
+		list, err := s.store.ListFiltered(r.Context(), user, filter)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -903,6 +947,13 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
+			}
+			// Reclaim each deleted conversation's persistent run_python sandbox
+			// (#213). The filter-based bulk paths (DeleteAllMatching /
+			// DeleteAllUnpinned) return only a count, not IDs, so those rely on
+			// the pool's idle reaper to reclaim instead.
+			for _, cid := range req.ConversationIDs {
+				s.releasePersistentSandbox(cid)
 			}
 			writeJSON(w, map[string]any{"deleted": n})
 		default:
@@ -977,6 +1028,11 @@ func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) 
 	// object is a no-op the caller almost certainly didn't intend.
 	if req.Changes.Pinned == nil && req.Changes.Folder == nil && req.Changes.Labels == nil {
 		http.Error(w, "changes must include at least one of pinned, folder, labels", http.StatusBadRequest)
+		return
+	}
+	// Bound + normalize the folder/label metadata (#258) before persisting.
+	if err := normalizeAndValidateFolderLabels(req.Changes.Folder, req.Changes.Labels); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	n, err := s.store.BulkPatch(r.Context(), user, req.ConversationIDs, req.Changes.Pinned, req.Changes.Folder, req.Changes.Labels)
@@ -1124,6 +1180,8 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// Reclaim the conversation's persistent run_python sandbox (#213), if any.
+		s.releasePersistentSandbox(id)
 		w.WriteHeader(http.StatusNoContent)
 	case sub == "truncate" && r.Method == http.MethodPost:
 		// Retry/regenerate: drop every message after the latest user turn
@@ -1283,6 +1341,12 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case sub == "share" && r.Method == http.MethodPost:
+		// Issue (or rotate) a public read-only share token (#226).
+		s.handleConversationShare(w, r, id, user)
+	case sub == "share" && r.Method == http.MethodDelete:
+		// Revoke sharing for this conversation (#226).
+		s.handleConversationUnshare(w, r, id, user)
 	case sub == "mcp-servers" && r.Method == http.MethodGet:
 		// Per-conversation MCP-server catalog. Response shape:
 		//   { "servers": [{ name, description, tools: [...], tool_count,

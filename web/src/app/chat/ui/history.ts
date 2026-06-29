@@ -23,6 +23,12 @@ export type PythonStream = {
   error?: string;
   /** Kernel execution time in ms. Surfaced in the footer chip. */
   executionMs?: number;
+  /**
+   * Workspace-relative paths to figures the kernel produced (matplotlib etc.),
+   * saved by the bridge so the UI can render them inline without the agent
+   * calling plt.savefig() (#213). Resolved to a workspace URL at render time.
+   */
+  imageFiles?: string[];
 };
 
 /**
@@ -39,12 +45,17 @@ export function parsePythonStream(raw: string): PythonStream {
       output?: string;
       error?: string;
       execution_time_ms?: number;
+      image_files?: unknown;
     };
+    const imageFiles = Array.isArray(parsed.image_files)
+      ? parsed.image_files.filter((p): p is string => typeof p === "string" && p.length > 0)
+      : undefined;
     return {
       stdout: String(parsed.stdout ?? parsed.output ?? ""),
       stderr: parsed.stderr ? String(parsed.stderr) : undefined,
       error: parsed.error ? String(parsed.error) : undefined,
       executionMs: typeof parsed.execution_time_ms === "number" ? parsed.execution_time_ms : undefined,
+      imageFiles: imageFiles && imageFiles.length > 0 ? imageFiles : undefined,
     };
   } catch {
     return { stdout: raw };
