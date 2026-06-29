@@ -23,8 +23,9 @@ the README "Architecture at a glance" for the full picture.
 make build        # compile-check ./... AND emit ./fleet + ./fleet-admin
 make compile      # go build ./...   (compile-check only; no artifacts)
 make test         # go test -p 1 ./...   — run in the FOREGROUND
-make lint         # golangci-lint run    — the lint gate; must pass clean
 make test-race    # go test -race -p 1 ./...   (use when touching concurrency)
+make test-cover   # run Go tests with coverage profiling (writes coverage.out)
+make lint         # golangci-lint run    — the lint gate; must pass clean
 make fmt          # gofmt -w .
 make tidy         # go mod tidy
 ```
@@ -91,6 +92,7 @@ same PR.
 
 - Single Go module `github.com/ElcanoTek/fleet`, Go 1.26. Keep it `go vet`- and
   `golangci-lint`-clean — lint failures block CI.
+- **Go Test Coverage**: CI runs with `-coverprofile=coverage.out -covermode=atomic` on the plain `go test` step. Local coverage can be run using `make test-cover`. Project coverage must not drop more than 2% compared to the base branch, and new patch code in PRs must have at least 60% coverage, configured via `codecov.yml` at the repo root.
 - **Match the surrounding code:** naming, idioms, and comment density. The
   `internal/agentcore` package comments explain *why* each governance invariant
   holds — preserve that level of explanation when you extend it.

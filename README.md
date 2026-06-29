@@ -1,5 +1,7 @@
 # fleet
 
+[![codecov](https://codecov.io/gh/ElcanoTek/fleet/branch/main/graph/badge.svg)](https://codecov.io/gh/ElcanoTek/fleet)
+
 **A general-purpose agent fleet you run yourself — any model, in a
 sandbox, on a budget, connected to your data.**
 
