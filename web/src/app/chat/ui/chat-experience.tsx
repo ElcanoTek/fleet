@@ -66,6 +66,8 @@ import { ConversationSidebar } from "./ConversationSidebar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { Composer } from "./Composer";
 import { ChatTranscript } from "./ChatTranscript";
+import { usePerConvComposerState } from "./usePerConvComposerState";
+import { useTurnStreamState } from "./useTurnStreamState";
 // The assistant markdown renderer lives in its own module now. Re-export
 // the public API so existing import paths — including the markdown unit
 // tests that import { autoFenceRawHtmlDocument, renderAssistantContent }
@@ -233,40 +235,11 @@ export function ChatExperience() {
   // stream events keep landing in the originating conv's slot whether
   // it's currently displayed or not.
   const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>({});
-  // Per-conv composer state — promptByConv / pendingAttachmentsByConv /
-  // attachmentErrorByConv / uploadingConvs. These used to be global,
-  // which meant typing in chat A then switching to chat B leaked A's
-  // draft + queued files into B's composer. They're keyed by
-  // currentConvKey (real conv id or the PENDING sentinel for the empty
-  // new-chat view) so each chat keeps its own draft + uploads + errors.
-  // Setters are derived below and use closure-captured currentConvKey
-  // so an async submit in conv A clears A's slot even if the user
-  // navigated to B in the meantime.
-  const [promptByConv, setPromptByConv] = useState<Record<string, string>>({});
-  const [pendingAttachmentsByConv, setPendingAttachmentsByConv] = useState<
-    Record<string, PendingAttachment[]>
-  >({});
-  const [attachmentErrorByConv, setAttachmentErrorByConv] = useState<
-    Record<string, string | null>
-  >({});
-  // uploadingConvs is the set of conv keys with an in-flight attachment
-  // upload. Used so the send button + attachment-removal chips disable
-  // only for the conv whose upload is running, not for an unrelated
-  // chat the user navigates to.
-  const [uploadingConvs, setUploadingConvs] = useState<Set<string>>(
-    () => new Set<string>(),
-  );
-  const uploadingConvsRef = useRef<Set<string>>(new Set<string>());
-  const markConvUploading = (key: string) => {
-    if (uploadingConvsRef.current.has(key)) return;
-    uploadingConvsRef.current.add(key);
-    setUploadingConvs(new Set(uploadingConvsRef.current));
-  };
-  const markConvUploadDone = (key: string) => {
-    if (!uploadingConvsRef.current.has(key)) return;
-    uploadingConvsRef.current.delete(key);
-    setUploadingConvs(new Set(uploadingConvsRef.current));
-  };
+  // Per-conversation composer state — drafts, queued attachments, attachment
+  // errors, and in-flight upload marks — lives in usePerConvComposerState,
+  // keyed by currentConvKey (real conv id or the PENDING sentinel for the
+  // empty new-chat view). The hook is instantiated below, once
+  // currentConvKey is in scope. See ./usePerConvComposerState.
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // searchOpen gates the Cmd/Ctrl+K full-text search palette (#308).
   const [searchOpen, setSearchOpen] = useState(false);
@@ -282,34 +255,11 @@ export function ChatExperience() {
   // chat and power users can flip everything on at once. Persisted to
   // localStorage so the preference survives reloads.
   const [showStats, setShowStats] = useState(false);
-  // streamingConvs tracks every conversation slot that currently has a
-  // turn in flight — keyed by conv id (or PENDING_CONV_KEY for a
-  // brand-new chat whose server id we haven't heard back yet). Multiple
-  // entries = multiple chats running in parallel. The sidebar reads this
-  // to paint a "working" dot next to each in-flight chat, and the active
-  // conv's composer uses the derived `isStreaming` below to gate input.
-  const [streamingConvs, setStreamingConvs] = useState<Set<string>>(
-    () => new Set<string>(),
-  );
-  // Ref mirror so synchronous code paths (event handlers, finally blocks)
-  // can read current membership without waiting for the next render.
-  const streamingConvsRef = useRef<Set<string>>(new Set<string>());
-  const markConvStreaming = (key: string) => {
-    if (streamingConvsRef.current.has(key)) return;
-    streamingConvsRef.current.add(key);
-    setStreamingConvs(new Set(streamingConvsRef.current));
-  };
-  const markConvIdle = (key: string) => {
-    if (!streamingConvsRef.current.has(key)) return;
-    streamingConvsRef.current.delete(key);
-    setStreamingConvs(new Set(streamingConvsRef.current));
-  };
-  const renameStreamingKey = (oldKey: string, newKey: string) => {
-    if (!streamingConvsRef.current.has(oldKey)) return;
-    streamingConvsRef.current.delete(oldKey);
-    streamingConvsRef.current.add(newKey);
-    setStreamingConvs(new Set(streamingConvsRef.current));
-  };
+  // Per-conversation turn/SSE transport state — the streaming set (sidebar
+  // "working" dots) plus abort controllers, attached/reattach tracking, and
+  // the SSE dedup counters — lives in useTurnStreamState, keyed by conv
+  // slot. Instantiated below once currentConvKey is in scope. See
+  // ./useTurnStreamState.
   const [crossfadingMessageIds, setCrossfadingMessageIds] = useState<number[]>([]);
   const [userEmail, setUserEmail] = useState("");
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -322,98 +272,52 @@ export function ChatExperience() {
   // conv id when one is loaded, the PENDING sentinel when the user is
   // on the empty new-chat view, or a per-submission pending key during
   // the brief window between submit and the server's "conversation"
-  // SSE event. messagesByConv, promptByConv, pendingAttachmentsByConv,
-  // etc. all key on this string.
+  // SSE event. messagesByConv plus the per-conv composer and turn-stream
+  // state (in usePerConvComposerState / useTurnStreamState below) all key
+  // on this string.
   const currentConvKey = activeConversationId ?? PENDING_CONV_KEY;
-  // Derived from streamingConvs: true when the conv the user is currently
-  // looking at has a turn in flight. Drives the composer disabled states,
-  // Stop button visibility, auto-scroll behavior, etc. Other conversations
-  // may also be streaming simultaneously — see streamingConvs and the
-  // sidebar dot indicator.
-  const isStreaming = streamingConvs.has(currentConvKey);
-  // Composer derivations. Each setter mutates the per-conv Record under
-  // the currentConvKey captured at *render* time, which means an async
-  // submit closure keeps writing to the slot it was launched from even
-  // if the user has since navigated to another chat.
-  const EMPTY_PENDING_ATTACHMENTS: readonly PendingAttachment[] = [];
-  const prompt = promptByConv[currentConvKey] ?? "";
-  const pendingAttachments =
-    pendingAttachmentsByConv[currentConvKey] ??
-    (EMPTY_PENDING_ATTACHMENTS as PendingAttachment[]);
-  const attachmentError = attachmentErrorByConv[currentConvKey] ?? null;
-  const isUploadingAttachments = uploadingConvs.has(currentConvKey);
-  const setPrompt: React.Dispatch<React.SetStateAction<string>> = (next) => {
-    setPromptByConv((prev) => {
-      const old = prev[currentConvKey] ?? "";
-      const value =
-        typeof next === "function"
-          ? (next as (s: string) => string)(old)
-          : next;
-      if (value === old) return prev;
-      const out = { ...prev };
-      if (value === "") delete out[currentConvKey];
-      else out[currentConvKey] = value;
-      return out;
-    });
-  };
-  const setPromptForKey = (key: string, value: string) => {
-    setPromptByConv((prev) => {
-      const old = prev[key] ?? "";
-      if (value === old) return prev;
-      const out = { ...prev };
-      if (value === "") delete out[key];
-      else out[key] = value;
-      return out;
-    });
-  };
-  const setPendingAttachments: React.Dispatch<
-    React.SetStateAction<PendingAttachment[]>
-  > = (next) => {
-    setPendingAttachmentsByConv((prev) => {
-      const old = prev[currentConvKey] ?? [];
-      const value =
-        typeof next === "function"
-          ? (next as (a: PendingAttachment[]) => PendingAttachment[])(old)
-          : next;
-      if (value === old) return prev;
-      const out = { ...prev };
-      if (value.length === 0) delete out[currentConvKey];
-      else out[currentConvKey] = value;
-      return out;
-    });
-  };
-  const setPendingAttachmentsForKey = (key: string, value: PendingAttachment[]) => {
-    setPendingAttachmentsByConv((prev) => {
-      const out = { ...prev };
-      if (value.length === 0) delete out[key];
-      else out[key] = value;
-      return out;
-    });
-  };
-  const setAttachmentError: React.Dispatch<
-    React.SetStateAction<string | null>
-  > = (next) => {
-    setAttachmentErrorByConv((prev) => {
-      const old = prev[currentConvKey] ?? null;
-      const value =
-        typeof next === "function"
-          ? (next as (s: string | null) => string | null)(old)
-          : next;
-      if (value === old) return prev;
-      const out = { ...prev };
-      if (value === null) delete out[currentConvKey];
-      else out[currentConvKey] = value;
-      return out;
-    });
-  };
-  const setAttachmentErrorForKey = (key: string, value: string | null) => {
-    setAttachmentErrorByConv((prev) => {
-      const out = { ...prev };
-      if (value === null) delete out[key];
-      else out[key] = value;
-      return out;
-    });
-  };
+  // Per-conversation turn/SSE transport state, keyed by conv slot. The
+  // derived `isStreaming` is true when the conv the user is currently
+  // looking at has a turn in flight (drives composer disabled states, Stop
+  // button visibility, auto-scroll). Other conversations may stream
+  // simultaneously — the sidebar reads `streamingConvs` for its dots. See
+  // ./useTurnStreamState. `renameStreamingKey` is intentionally not pulled
+  // out: its only caller is promoteStreamKey, inside the hook.
+  const {
+    streamingConvs,
+    streamingConvsRef,
+    isStreaming,
+    markConvStreaming,
+    markConvIdle,
+    abortControllersRef,
+    attachedConvIdsRef,
+    lastEventIdByConvRef,
+    currentTurnIdByConvRef,
+    reattachInFlightRef,
+    promoteStreamKey,
+  } = useTurnStreamState(currentConvKey);
+  // Per-conversation composer state — drafts, queued attachments, attachment
+  // errors, in-flight upload marks — keyed by currentConvKey. The
+  // dispatch-compatible setters (setPrompt / setPendingAttachments /
+  // setAttachmentError) capture currentConvKey at *render* time, so an async
+  // submit in conv A keeps writing to A's slot even after the user navigates
+  // to conv B. See ./usePerConvComposerState.
+  const {
+    prompt,
+    pendingAttachments,
+    attachmentError,
+    isUploadingAttachments,
+    setPrompt,
+    setPendingAttachments,
+    setAttachmentError,
+    setPromptForKey,
+    setPendingAttachmentsForKey,
+    setAttachmentErrorForKey,
+    markConvUploading,
+    markConvUploadDone,
+    getPendingAttachmentsForKey,
+    promoteComposerKey,
+  } = usePerConvComposerState(currentConvKey);
   // Per-submission pending keys: every brand-new chat submission gets
   // its own `__pending__:<n>` key so two new chats in flight at the
   // same time can't collide on the singleton PENDING_CONV_KEY. The
@@ -533,8 +437,8 @@ export function ChatExperience() {
   // pendingAttachments holds files the user has picked but not yet sent.
   // We upload them to the server on submit, get back metadata with a
   // server-trusted path, and forward that in the /api/chat body. The
-  // backing per-conv records (pendingAttachmentsByConv / uploadingConvs)
-  // are declared up top alongside promptByConv.
+  // backing per-conv records live in usePerConvComposerState (destructured
+  // above as pendingAttachments / isUploadingAttachments).
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const dragCounterRef = useRef(0);
   // spreadsheetNudgeDismissed gates the "switch to advanced model"
@@ -585,51 +489,14 @@ export function ChatExperience() {
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const personaPickerRef = useRef<HTMLDivElement | null>(null);
   const mcpPickerRef = useRef<HTMLDivElement | null>(null);
-  // Abort controllers keyed by the conv slot whose POST /chat we're
-  // streaming. Multiple chats can be in flight at once; the Stop button
-  // (and clearConversation) only aborts the controller for the conv the
-  // user is currently looking at. PENDING_CONV_KEY is used until the
-  // server promotes the slot to a real id.
-  const abortControllersRef = useRef<Record<string, AbortController>>({});
   const fadeTimeoutsRef = useRef<number[]>([]);
   const messagesByConvRef = useRef<Record<string, Message[]>>({});
   const activeConversationIdRef = useRef<string | null>(null);
-  // Conv ids this client currently has an SSE socket attached to.
-  // PENDING_CONV_KEY = attached to a new chat whose server-side id we
-  // haven't heard back yet; otherwise a real conversation id. Multiple
-  // entries means we're draining live streams from more than one chat in
-  // parallel (which is allowed — the sidebar lights up a dot for each).
-  // loadConversation reads this to decide whether to re-fetch from the
-  // server (stale partial reply) or trust the local in-memory state
-  // (which has whatever the stream has produced so far). The
-  // visibilitychange/online effect reads it to decide whether a
-  // reattach is needed — if we're attached, the live socket is already
-  // keeping state fresh; if we're not but the server says a turn is
-  // in-flight, we open GET /stream with Last-Event-ID and resume.
-  const attachedConvIdsRef = useRef<Set<string>>(new Set<string>());
   // Cache-bust drift flag. Set when /api/version reports a new build id.
   // We never reload the page automatically — instead we surface an
   // "Update available" button in the sidebar so the user chooses when
   // to refresh. State (not a ref) so the sidebar re-renders on change.
   const [updateAvailable, setUpdateAvailable] = useState(false);
-  // Per-conversation last applied SSE event id. Updated whenever the
-  // dispatch loop commits an event. On reattach we send this value as
-  // Last-Event-ID so the server replays everything AFTER it and we
-  // pick up without duplicating already-applied state. The idempotency
-  // guard below drops any event whose id is already ≤ this number, so
-  // the replay slice that overlaps what we already applied is a no-op.
-  //
-  // Event IDs are monotonic WITHIN A TURN (start at 1, grow to N) but
-  // reset between turns. We also track the current turn_id per conv so
-  // we can reset lastEventId when a new turn begins — otherwise a
-  // fresh turn's id=1 would be silently dropped as "≤ the previous
-  // turn's final id" and the client would hang on a blank reply.
-  const lastEventIdByConvRef = useRef<Record<string, number>>({});
-  const currentTurnIdByConvRef = useRef<Record<string, string>>({});
-  // Guard for concurrent reattach attempts per conv. Without it, two
-  // rapid visibilitychange events (unlock + focus) would open two
-  // /stream sockets and render every event twice.
-  const reattachInFlightRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     messagesByConvRef.current = messagesByConv;
@@ -960,7 +827,9 @@ export function ChatExperience() {
       }
       fades.forEach((t) => window.clearTimeout(t));
     };
-  }, []);
+    // abortControllersRef is a stable ref from useTurnStreamState — listing
+    // it keeps exhaustive-deps honest without changing the mount-once run.
+  }, [abortControllersRef]);
 
   // Cache-bust detection. Every response carries X-App-Version set to
   // the server's current build id (see middleware.ts). The client's
@@ -2042,6 +1911,20 @@ export function ChatExperience() {
 
   // ── the streaming event loop ─────────────────────────────────────────
   //
+  // STEP 3 RE-EVALUATION (issue #401): the per-conv transport state this
+  // loop reads now lives behind useTurnStreamState, and the composer state
+  // behind usePerConvComposerState — the two mechanical groupings #401 asked
+  // for. A future `useTurnStream` hook would absorb useTurnStreamState's
+  // internals and own applyStreamEvent / pumpStreamResponse / reattachToConv
+  // / streamTurn, taking the still-component-owned values as inputs:
+  // messagesByConvRef + its message-store helpers, activeConversationIdRef,
+  // the per-conv message-store setters, and the latest-callback refs. That
+  // cut is a near-total rewrite of the live loop (see #401's writeup), so it
+  // is intentionally NOT attempted here. Re-evaluate it only after these
+  // groupings have cleared the live Playwright lane, and measure first how
+  // many loop reads still reach back into the message store / component
+  // callbacks — those are the edges that decide whether the cut is clean.
+  //
   // Consumes chat-server's SSE event names:
   //   conversation           — emitted once with { id, title, persona }
   //   reasoning.start/delta/end
@@ -2076,52 +1959,14 @@ export function ChatExperience() {
         ctx.target = p.id;
         // Migrate every pending-keyed handle onto the real conv id so
         // subsequent reads (Stop button, attached-set membership, the
-        // streaming-set membership the sidebar reads) all point at the
-        // same slot the SSE events are now writing to.
-        if (attachedConvIdsRef.current.has(oldTarget)) {
-          attachedConvIdsRef.current.delete(oldTarget);
-          attachedConvIdsRef.current.add(p.id);
-        }
-        const pendingController = abortControllersRef.current[oldTarget];
-        if (pendingController) {
-          delete abortControllersRef.current[oldTarget];
-          abortControllersRef.current[p.id] = pendingController;
-        }
-        renameStreamingKey(oldTarget, p.id);
-        // Composer state for the per-submission key (rare but possible
-        // if the user typed something in the pending view) follows the
-        // slot to the real id so a future submit on this conv finds
-        // its draft. Use functional setters so the read sees the latest
-        // committed value, not the (potentially stale) closure capture.
-        setPromptByConv((prev) => {
-          const v = prev[oldTarget];
-          if (typeof v !== "string") return prev;
-          const out = { ...prev };
-          delete out[oldTarget];
-          if (v !== "") out[p.id] = v;
-          return out;
-        });
-        setPendingAttachmentsByConv((prev) => {
-          const v = prev[oldTarget];
-          if (!v || v.length === 0) return prev;
-          const out = { ...prev };
-          delete out[oldTarget];
-          out[p.id] = v;
-          return out;
-        });
-        setAttachmentErrorByConv((prev) => {
-          const v = prev[oldTarget];
-          if (typeof v !== "string") return prev;
-          const out = { ...prev };
-          delete out[oldTarget];
-          out[p.id] = v;
-          return out;
-        });
-        if (uploadingConvsRef.current.has(oldTarget)) {
-          uploadingConvsRef.current.delete(oldTarget);
-          uploadingConvsRef.current.add(p.id);
-          setUploadingConvs(new Set(uploadingConvsRef.current));
-        }
+        // streaming-set membership the sidebar reads) and the per-conv
+        // composer draft all point at the same slot the SSE events are now
+        // writing to. Both promote* helpers mutate synchronously and run
+        // back-to-back, so JS single-threadedness guarantees no SSE event
+        // can observe a half-renamed state between the two families. The
+        // stream rename runs first, matching the prior inline ordering.
+        promoteStreamKey(oldTarget, p.id);
+        promoteComposerKey(oldTarget, p.id);
         // The pending lockdown flag has been promoted onto the real
         // conversation row by the backend; clear the local flag so a
         // subsequent "+ New chat" doesn't accidentally re-flag.
@@ -2824,7 +2669,9 @@ export function ChatExperience() {
     // Mount-once: the listeners are registered/torn down a single time and
     // call reattachToConv / refreshConversations / loadConversation through
     // their latest-refs, so there are no reactive dependencies to track.
-  }, []);
+    // attachedConvIdsRef is a stable ref from useTurnStreamState — listing
+    // it keeps exhaustive-deps honest without changing the mount-once run.
+  }, [attachedConvIdsRef]);
 
   // Initial load: session, personas, conversations, most-recent conversation.
   useEffect(() => {
@@ -3110,7 +2957,7 @@ export function ChatExperience() {
   const uploadPendingAttachments = async (
     composerKey: string,
   ): Promise<UploadedAttachmentMeta[]> => {
-    const files = pendingAttachmentsByConv[composerKey] ?? [];
+    const files = getPendingAttachmentsForKey(composerKey);
     markConvUploading(composerKey);
     setPendingAttachmentsForKey(
       composerKey,
@@ -3186,7 +3033,7 @@ export function ChatExperience() {
     // the text still in the composer so the user can retry without losing
     // their message. Empty list → no-op, fast path unchanged.
     let uploadedAttachments: UploadedAttachmentMeta[] = [];
-    if ((pendingAttachmentsByConv[composerKey] ?? []).length > 0) {
+    if (getPendingAttachmentsForKey(composerKey).length > 0) {
       try {
         uploadedAttachments = await uploadPendingAttachments(composerKey);
       } catch (err) {
