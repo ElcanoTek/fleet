@@ -1125,6 +1125,15 @@ type TaskExportRecord struct {
 	TriggerType                TriggerType         `json:"trigger_type,omitempty"               yaml:"trigger_type,omitempty"`
 	AllowTaskCreation          bool                `json:"allow_task_creation,omitempty"        yaml:"allow_task_creation,omitempty"`
 	AllowRecurringTaskCreation bool                `json:"allow_recurring_task_creation,omitempty" yaml:"allow_recurring_task_creation,omitempty"`
+	// SLA monitoring config (#274) is part of the portable definition so an
+	// exported task keeps its expected-duration + multiplier posture on reimport,
+	// mirroring the clone-recipe (TaskToTaskCreate). Runtime SLA state
+	// (sla_breached, actual_duration_seconds) is runtime-only and excluded, like
+	// id/status/lease. The multipliers are carried only alongside an expected
+	// duration (see TaskToExportRecord) since they are meaningless without it.
+	ExpectedDurationMinutes *int    `json:"expected_duration_minutes,omitempty" yaml:"expected_duration_minutes,omitempty"`
+	SLAWarnMultiplier       float64 `json:"sla_warn_multiplier,omitempty"       yaml:"sla_warn_multiplier,omitempty"`
+	SLAFailMultiplier       float64 `json:"sla_fail_multiplier,omitempty"       yaml:"sla_fail_multiplier,omitempty"`
 }
 
 // TaskExportVersion is the current envelope schema version. Bump only on an
@@ -1222,6 +1231,13 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		TriggerType:                rec.TriggerType,
 		AllowTaskCreation:          rec.AllowTaskCreation,
 		AllowRecurringTaskCreation: rec.AllowRecurringTaskCreation,
+		// SLA config (#274). Passed straight through; NewTask normalizes a
+		// zero/absent multiplier to the default exactly as the public create path
+		// does, so an imported definition resolves identically to one created via
+		// POST /tasks.
+		ExpectedDurationMinutes: rec.ExpectedDurationMinutes,
+		SLAWarnMultiplier:       rec.SLAWarnMultiplier,
+		SLAFailMultiplier:       rec.SLAFailMultiplier,
 	}
 }
 
@@ -1238,7 +1254,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		v := t.MaxRetries
 		maxRetries = &v
 	}
-	return TaskExportRecord{
+	rec := TaskExportRecord{
 		Name:                       t.Name,
 		Prompt:                     t.Prompt,
 		Model:                      t.Model,
@@ -1264,6 +1280,17 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		AllowTaskCreation:          t.AllowTaskCreation,
 		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
 	}
+	// SLA config (#274) only travels with an expected duration: the multipliers
+	// are meaningless without one, and a NOT NULL column default (1.5/2.0) would
+	// otherwise serialize onto every non-SLA task as noise. A task WITH an
+	// expectation carries its multipliers verbatim (default or custom) so the
+	// thresholds round-trip exactly.
+	if t.ExpectedDurationMinutes != nil {
+		rec.ExpectedDurationMinutes = t.ExpectedDurationMinutes
+		rec.SLAWarnMultiplier = t.SLAWarnMultiplier
+		rec.SLAFailMultiplier = t.SLAFailMultiplier
+	}
+	return rec
 }
 
 // StatusUpdate is a status update for a task (from the in-process worker).

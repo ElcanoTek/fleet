@@ -71,8 +71,20 @@ func TestExportImport_RoundTrip(t *testing.T) {
 		task.Status = models.TaskStatusScheduled
 		return task
 	}
+	// daily-standup carries an SLA config (#274) with non-default multipliers so
+	// the round-trip proves SLA definition fields survive export→import end to
+	// end (through the 53-column INSERT and scanTask), while runtime SLA state
+	// (sla_breached / actual_duration_seconds) is dropped.
+	daily := mk("daily-standup", "Summarise standup", "0 9 * * MON-FRI")
+	expDur := 45
+	daily.ExpectedDurationMinutes = &expDur
+	daily.SLAWarnMultiplier = 1.25
+	daily.SLAFailMultiplier = 1.75
+	daily.SLABreached = true
+	actual := 4000
+	daily.ActualDurationSeconds = &actual
 	for _, tk := range []*models.Task{
-		mk("daily-standup", "Summarise standup", "0 9 * * MON-FRI"),
+		daily,
 		mk("weekly-report", "Generate the weekly report", "0 9 * * MON"),
 		mk("", "Ad-hoc, no name", ""),
 	} {
@@ -119,7 +131,7 @@ func TestExportImport_RoundTrip(t *testing.T) {
 		t.Fatalf("decode raw tasks: %v", err)
 	}
 	for _, rec := range raw {
-		for _, k := range []string{"id", "status", "attempt_count", "created_at", "result", "error_message", "lease_owner", "created_by"} {
+		for _, k := range []string{"id", "status", "attempt_count", "created_at", "result", "error_message", "lease_owner", "created_by", "sla_breached", "actual_duration_seconds"} {
 			if _, ok := rec[k]; ok {
 				t.Errorf("runtime field %q present in export record: %v", k, rec)
 			}
@@ -203,6 +215,27 @@ func TestExportImport_RoundTrip(t *testing.T) {
 	}
 	if got.AttemptCount != 0 || got.Status != models.TaskStatusScheduled {
 		t.Errorf("runtime state not reset on import: status=%s attempt=%d", got.Status, got.AttemptCount)
+	}
+	assertSLADefinitionRoundTripped(t, got)
+}
+
+// assertSLADefinitionRoundTripped checks that the seeded daily-standup SLA
+// DEFINITION (#274) survived export→import while its runtime SLA state did not.
+// Extracted from TestExportImport_RoundTrip to keep that test under the gocyclo
+// ceiling.
+func assertSLADefinitionRoundTripped(t *testing.T, got *models.Task) {
+	t.Helper()
+	if got.ExpectedDurationMinutes == nil || *got.ExpectedDurationMinutes != 45 {
+		t.Errorf("expected_duration_minutes not preserved: %v", got.ExpectedDurationMinutes)
+	}
+	if got.SLAWarnMultiplier != 1.25 || got.SLAFailMultiplier != 1.75 {
+		t.Errorf("SLA multipliers not preserved: warn=%v fail=%v", got.SLAWarnMultiplier, got.SLAFailMultiplier)
+	}
+	if got.SLABreached {
+		t.Error("sla_breached (runtime state) leaked through export/import")
+	}
+	if got.ActualDurationSeconds != nil {
+		t.Errorf("actual_duration_seconds (runtime state) leaked through export/import: %v", got.ActualDurationSeconds)
 	}
 }
 
