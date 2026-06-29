@@ -34,7 +34,7 @@ type taskExportEnvelope struct {
 // cmdSchedTask dispatches `fleet-admin sched task export|import|set-model|set-credentials|set-description`.
 func cmdSchedTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched task export|import|set-model|set-credentials|set-description|tag|estimate")
+		return errf(1, "usage: fleet-admin sched task export|import|set-model|set-credentials|set-description|tag|estimate|batch-create")
 	}
 	switch argv[0] {
 	case "export":
@@ -51,8 +51,10 @@ func cmdSchedTask(argv []string) int {
 		return schedTaskTag(argv[1:])
 	case "estimate":
 		return schedTaskEstimate(argv[1:])
+	case "batch-create":
+		return schedTaskBatchCreate(argv[1:])
 	default:
-		return errf(1, "unknown sched task subcommand %q (want export|import|set-model|set-credentials|set-description|tag|estimate)", argv[0])
+		return errf(1, "unknown sched task subcommand %q (want export|import|set-model|set-credentials|set-description|tag|estimate|batch-create)", argv[0])
 	}
 }
 

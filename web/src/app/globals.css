@@ -1179,6 +1179,63 @@ tr.clickable:hover td {
   margin-top: 1rem;
 }
 
+/* Pre-run gate banner (#269): read-only run_if command + skip badge shown at
+ * the top of the task log modal. */
+.task-run-if-banner {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface-raised, rgba(0, 0, 0, 0.02));
+}
+.task-run-if-banner__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.task-run-if-banner__title {
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-secondary);
+}
+.task-run-if-banner__command {
+  flex: 1 1 auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--color-code-bg, rgba(0, 0, 0, 0.05));
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.task-run-if-banner__meta {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.task-run-if-banner__skip-toggle {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  color: var(--color-text-primary);
+}
+.task-run-if-banner__skip-detail {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--color-border);
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 /* Forms */
 .form-group {
   margin-bottom: 1rem;
