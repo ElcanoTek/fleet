@@ -11,29 +11,39 @@
 # This file routes those paths to a required reviewer. GitHub uses the LAST
 # matching pattern for a given file, so the more specific security rules below
 # override the catch-all at the top. CODEOWNERS only REQUESTS review by itself;
-# it becomes a hard gate when branch protection on `main` enables "Require
-# review from Code Owners" (see the recommended ruleset below).
+# it becomes a hard gate only when the ruleset's pull-request rule turns on
+# "Require review from Code Owners" (+ >= 1 approval). That is deliberately OFF
+# today (see below), so right now CODEOWNERS is ADVISORY: a match auto-requests
+# @bradflaugher as a reviewer but does not hard-block the merge. Turning those on
+# makes the ownership rules below binding — the lever to pull once a second
+# maintainer exists who can approve (GitHub forbids approving your own PR, so
+# requiring an approval today would block the sole maintainer from merging).
 #
 # ---------------------------------------------------------------------------
-# Recommended branch-protection ruleset for `main` (set in repo Settings →
-# Branches/Rules; requires admin, so it is a documented manual follow-up — this
-# PR only adds the CODEOWNERS file). CONTRIBUTING.md notes the same:
-#   - Require a pull request before merging.
-#   - Require approvals: >= 1.
-#   - Require review from Code Owners.            <-- makes the rules below binding
-#   - Dismiss stale approvals on new commits.
-#   - Require status checks to pass (the full CI gate: Go build/vet/lint/test,
-#     the -race lane, govulncheck, web lint/test/build, Playwright mocked+live,
-#     and gitleaks) and require branches to be up to date.
-#   - Do NOT allow bypassing the above (no force-push / no admin override).
+# Branch-protection ruleset for `main` — ACTIVE (repo ruleset "Main"; set in
+# Settings -> Rules, which is admin-only, so it lives in GitHub, not this repo).
+# It enforces, with NO bypass for anyone (admins included):
+#   - Require a pull request before merging (no direct pushes to `main`).
+#   - Require status checks to pass, with "branches up to date" (strict) ON. The
+#     SINGLE required check is the `CI gate` job in .github/workflows/ci.yml: it
+#     `needs` every other CI job (Go build / vet / lint / test — which also runs
+#     vet, the -race lane and govulncheck; Web lint / test / build; Playwright
+#     mocked; Playwright live; and the gitleaks secret scan) and fails unless each
+#     one succeeded or was cleanly skipped. Requiring that one aggregate check
+#     rather than each job by name is what lets a docs-only PR skip the heavy jobs
+#     without being left blocked on a required check that never reported.
+#   - Block force-pushes (non-fast-forward) and branch deletion.
+# Deliberately NOT enabled — a CI-only gate so the sole maintainer can self-merge
+# a green PR — are required approvals and Code Owner review (see the note above).
 #
 # Dependabot auto-merge interaction: .github/workflows/auto-merge-dependabot.yml
-# only enables `gh pr merge --auto` on PATCH-level dependency bumps, so GitHub
-# still holds the merge until every required status check passes. It does NOT
-# bypass branch protection or Code Owner review: a Dependabot PR that touches a
-# CODEOWNERS-matched, non-dependency path (e.g. a workflow, a migration, the
-# sandbox) is still gated on the required code-owner approval below. Routine
-# manifest/lockfile bumps live outside these paths and merge on green CI.
+# enables `gh pr merge --auto` on PATCH-level bumps only, and the required `CI
+# gate` check holds that merge until CI is green. Because Code Owner review is
+# NOT currently required, such a patch PR auto-merges on green CI with no human
+# approval — INCLUDING a github-actions patch bump that touches a CODEOWNERS-
+# matched path like .github/workflows/. To force a human gate on those sensitive
+# paths, turn on Code Owner review in the ruleset; minor and major bumps already
+# wait for a human regardless.
 # ---------------------------------------------------------------------------
 
 # Catch-all: every file has an owner so nothing is silently unowned. Specific
