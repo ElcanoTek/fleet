@@ -341,6 +341,12 @@ func (c *containerImpl) start(ctx context.Context) error {
 		"run",
 		"--detach",
 		"--rm",
+		// --init runs a tiny init (catatonit/tini) as PID 1 that reaps zombie
+		// processes. Matters for persistent REPL mode (#213): a kernel orphaned
+		// by a SIGKILLed bridge is reaped-by-SIGKILL on the next bridge start, and
+		// --init then reaps the resulting zombie so a long conversation can't leak
+		// PID slots toward --pids-limit. Harmless in per-turn mode.
+		"--init",
 		"--name", c.containerID,
 		// Hardening defaults: --read-only rootfs, no caps,
 		// no-new-privileges. The workspace bind below is the only
@@ -643,6 +649,7 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 		ReturnVars:     req.ReturnVars,
 		TimeoutSeconds: int(timeout.Seconds()),
 		WorkspaceDir:   req.WorkspaceDir,
+		ResetKernel:    req.ResetKernel,
 	}
 	reqBytes, err := json.Marshal(wireReq)
 	if err != nil {
@@ -691,9 +698,17 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 // terminateBridgeLocked kills the bridge exec session and clears the
 // bridge state so the next ensureBridge starts fresh. Called after a
 // timeout/cancel left a reader goroutine holding bridgeStdout — the
-// session's response stream can no longer be trusted. The python
-// process inside the container is reaped with the per-turn container
-// itself. Caller must hold c.mu.
+// session's response stream can no longer be trusted. Caller must hold c.mu.
+//
+// SIGKILLing the host-side `podman exec` client does not run the bridge's
+// in-process cleanup() (which would SIGTERM the kernel's process group), so the
+// kernel can be left orphaned inside the container. In per-turn mode that's
+// moot — the container is torn down right after. In PERSISTENT mode (#213) the
+// container survives, so the orphan is reaped by the NEXT bridge start
+// (reap_stale_kernels in python_bridge.py SIGKILLs leftover ipykernel
+// processes), and --init reaps the resulting zombie. A cancelled/timed-out cell
+// therefore restarts the kernel and loses prior-turn state — surfaced in the
+// run_python tool description.
 func (c *containerImpl) terminateBridgeLocked() {
 	if cmd := c.bridgeCmd; cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(os.Interrupt)

@@ -623,4 +623,26 @@ describe("parsePythonStream", () => {
       stdout: "hi",
     });
   });
+
+  it("parses image_files into imageFiles (inline figures, #213)", () => {
+    const raw = JSON.stringify({
+      stdout: "FIGURE_DONE\n",
+      image_files: ["figures/fig-a.png", "figures/fig-b.png"],
+    });
+    expect(parsePythonStream(raw)).toEqual({
+      stdout: "FIGURE_DONE\n",
+      imageFiles: ["figures/fig-a.png", "figures/fig-b.png"],
+    });
+  });
+
+  it("omits imageFiles when image_files is absent, empty, or non-array", () => {
+    expect(parsePythonStream(JSON.stringify({ stdout: "x" })).imageFiles).toBeUndefined();
+    expect(parsePythonStream(JSON.stringify({ stdout: "x", image_files: [] })).imageFiles).toBeUndefined();
+    expect(parsePythonStream(JSON.stringify({ stdout: "x", image_files: "nope" })).imageFiles).toBeUndefined();
+  });
+
+  it("filters non-string entries out of image_files", () => {
+    const raw = JSON.stringify({ stdout: "x", image_files: ["figures/ok.png", 123, "", null] });
+    expect(parsePythonStream(raw).imageFiles).toEqual(["figures/ok.png"]);
+  });
 });

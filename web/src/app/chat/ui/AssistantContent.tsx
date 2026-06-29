@@ -244,7 +244,7 @@ export function renderAssistantContent(
 //     would re-fetch and re-decode.
 //   - decoding="async": lets the browser decode off the main thread
 //     so the scroll keeps its frame budget while the image paints.
-const WorkspaceImage = memo(function WorkspaceImage({
+export const WorkspaceImage = memo(function WorkspaceImage({
   src,
   alt,
   title,

@@ -34,6 +34,8 @@ import {
   type PythonStream,
   type ToolCall,
 } from "./history";
+import { WorkspaceImage } from "./AssistantContent";
+import { resolveWorkspaceHref } from "./workspaceHref";
 
 // ── Python output block ──────────────────────────────────────────────────
 //
@@ -42,11 +44,12 @@ import {
 // so we don't render an empty black box. Execution time (when the bridge
 // reports it) is shown as a small footer.
 
-export function PythonOutput({ stream }: { stream: PythonStream }) {
+export function PythonOutput({ stream, conversationId }: { stream: PythonStream; conversationId?: string | null }) {
   const stdout = stream.stdout ?? "";
   const stderr = stream.stderr ?? "";
   const error = stream.error ?? "";
   const hasErr = Boolean(stderr.trim() || error.trim());
+  const images = stream.imageFiles ?? [];
   // Always start collapsed. Line count is a poor signal for "is this
   // small enough to inline" — a single line can be a 5000-char pandas
   // repr that bleeds across the chat column on mobile. User taps the
@@ -54,9 +57,28 @@ export function PythonOutput({ stream }: { stream: PythonStream }) {
   const [expanded, setExpanded] = useState(false);
   // If everything is blank, skip the block entirely. Placed AFTER
   // the useState call so React sees hooks in the same order every
-  // render (rules-of-hooks).
-  if (!stdout.trim() && !hasErr && !stream.executionMs) {
+  // render (rules-of-hooks). Figures count as content — a chart-only
+  // cell (no stdout) must still render its figure (#213).
+  if (!stdout.trim() && !hasErr && !stream.executionMs && images.length === 0) {
     return null;
+  }
+  // Figures (matplotlib etc.) render ALWAYS-visible — the whole point is the
+  // user sees the chart inline without expanding anything. Each relative path
+  // is resolved to the authenticated per-conversation workspace URL, the same
+  // proxy that serves ![](chart.png) markdown images.
+  const figures =
+    images.length > 0 ? (
+      <div className="grid gap-1.5">
+        {images.map((path, i) => {
+          const { href } = resolveWorkspaceHref(path, conversationId ?? null);
+          return <WorkspaceImage key={`${path}-${i}`} src={href} alt="figure" />;
+        })}
+      </div>
+    ) : null;
+  // A figure-only cell (no terminal output / timing) renders just the figures —
+  // no empty collapsible "python output" box.
+  if (!stdout.trim() && !hasErr && !stream.executionMs) {
+    return figures;
   }
   const stdoutLines = stdout ? stdout.split("\n").length : 0;
   const summaryBits = [
@@ -65,7 +87,9 @@ export function PythonOutput({ stream }: { stream: PythonStream }) {
   ].filter(Boolean).join(" · ");
 
   return (
-    <div className="min-w-0 max-w-full overflow-hidden rounded-[0.75rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)]">
+    <div className="grid min-w-0 gap-1.5">
+      {figures}
+      <div className="min-w-0 max-w-full overflow-hidden rounded-[0.75rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)]">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -100,6 +124,7 @@ export function PythonOutput({ stream }: { stream: PythonStream }) {
           ) : null}
         </div>
       ) : null}
+      </div>
     </div>
   );
 }

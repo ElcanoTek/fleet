@@ -33,3 +33,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0005](0005-separate-chat-and-sched-databases.md) | Separate Postgres databases for chat and sched | Accepted |
 | [0006](0006-external-client-config-bundle.md) | Client content lives in an external config bundle | Accepted |
 | [0007](0007-governed-sub-agents.md) | Governed sub-agents spawn only through the one run loop | Accepted |
+| [0008](0008-persistent-python-repl-per-conversation.md) | Opt-in persistent Python REPL is scoped per-conversation | Accepted |

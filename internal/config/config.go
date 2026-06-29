@@ -268,6 +268,10 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SANDBOX_DISK_GB":        true,
 	"FLEET_SANDBOX_WARM_SIZE":      true,
 	"FLEET_SANDBOX_WARM_TTL":       true,
+	"FLEET_PYTHON_REPL_MODE":       true,
+	"FLEET_PYTHON_CELL_TIMEOUT":    true,
+	"FLEET_PYTHON_REPL_IDLE_TTL":   true,
+	"FLEET_PYTHON_REPL_MAX":        true,
 	"FLEET_WORKSPACE_ROOT":         true,
 	"CHAT_LOCKDOWN_ONLY":           true,
 	"CHAT_LOCKDOWN_ALLOWED_MODELS": true,
@@ -678,6 +682,32 @@ type Config struct {
 	// it is reaped and replaced (FLEET_SANDBOX_WARM_TTL, default 300). 0 disables
 	// TTL reaping (#181).
 	SandboxWarmTTLSeconds int
+
+	// ── python REPL (#213) ──
+	// PythonREPLMode selects the run_python kernel lifetime
+	// (FLEET_PYTHON_REPL_MODE). "per-turn" (the default) keeps the legacy
+	// behaviour: a fresh sandbox + kernel each turn, destroyed at turn end.
+	// "persistent" reuses ONE sandbox+kernel per conversation across turns so
+	// variables/imports survive between turns. Persistent mode applies only to
+	// non-lockdown interactive chat; lockdown and scheduled runs always stay
+	// per-turn. Any other value falls back to "per-turn" with a warning.
+	PythonREPLMode string
+	// PythonCellTimeoutSeconds is a host-operator ceiling on a single run_python
+	// cell (FLEET_PYTHON_CELL_TIMEOUT). 0 (default) disables the ceiling, leaving
+	// the per-call timeout_seconds param (default 300) in charge. When >0, the
+	// effective per-cell timeout is min(timeout_seconds, this).
+	PythonCellTimeoutSeconds int
+	// PythonREPLIdleTTLSeconds bounds how long a persistent per-conversation
+	// sandbox may sit idle (no run_python call) before the reaper closes it
+	// (FLEET_PYTHON_REPL_IDLE_TTL, default 1800 = 30m). Only meaningful when
+	// PythonREPLMode == "persistent".
+	PythonREPLIdleTTLSeconds int
+	// PythonREPLMaxSessions caps how many persistent per-conversation sandboxes
+	// may be live at once (FLEET_PYTHON_REPL_MAX, default 32). Past the cap the
+	// least-recently-used idle session is evicted. Only meaningful when
+	// PythonREPLMode == "persistent". 0 disables the cap.
+	PythonREPLMaxSessions int
+
 	WorkspaceRoot         string
 	LockdownOnly          bool
 	LockdownAllowedModels []string
@@ -921,6 +951,12 @@ func Load(envFile string) (*Config, error) {
 		SandboxDiskGB:         getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
 		SandboxWarmSize:       getenvFleetInt("SANDBOX_WARM_SIZE", 0),
 		SandboxWarmTTLSeconds: getenvFleetInt("SANDBOX_WARM_TTL", 300),
+
+		PythonREPLMode:           normalizePythonREPLMode(getenvFleetDefault("PYTHON_REPL_MODE", pythonREPLModePerTurn)),
+		PythonCellTimeoutSeconds: getenvFleetInt("PYTHON_CELL_TIMEOUT", 0),
+		PythonREPLIdleTTLSeconds: getenvFleetInt("PYTHON_REPL_IDLE_TTL", 1800),
+		PythonREPLMaxSessions:    getenvFleetInt("PYTHON_REPL_MAX", 32),
+
 		WorkspaceRoot:         getenvFleet("WORKSPACE_ROOT"),
 		LockdownOnly:          getenvBool("CHAT_LOCKDOWN_ONLY", false),
 		LockdownAllowedModels: splitLockdownModels(os.Getenv("CHAT_LOCKDOWN_ALLOWED_MODELS")),
@@ -1391,6 +1427,35 @@ func logArchiveEncryptionKey() []byte {
 		return nil
 	}
 	return key
+}
+
+// Python REPL mode values for FLEET_PYTHON_REPL_MODE (#213).
+const (
+	pythonREPLModePerTurn    = "per-turn"
+	pythonREPLModePersistent = "persistent"
+)
+
+// PersistentPythonREPL reports whether run_python should reuse ONE kernel per
+// conversation across turns (FLEET_PYTHON_REPL_MODE=persistent) rather than the
+// default fresh-per-turn kernel.
+func (c *Config) PersistentPythonREPL() bool {
+	return c.PythonREPLMode == pythonREPLModePersistent
+}
+
+// normalizePythonREPLMode validates FLEET_PYTHON_REPL_MODE and fails closed to
+// the conservative "per-turn" default on any unrecognized value (a typo must
+// never silently keep a stale kernel alive across turns). Case/space tolerant.
+func normalizePythonREPLMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", pythonREPLModePerTurn:
+		return pythonREPLModePerTurn
+	case pythonREPLModePersistent:
+		return pythonREPLModePersistent
+	default:
+		log.Printf("Warning: FLEET_PYTHON_REPL_MODE=%q is not recognized (want %q or %q); falling back to %q",
+			raw, pythonREPLModePerTurn, pythonREPLModePersistent, pythonREPLModePerTurn)
+		return pythonREPLModePerTurn
+	}
 }
 
 func getenvFleetInt(suffix string, def int) int {

@@ -26,7 +26,8 @@ func PythonBridgeScript() []byte { return pythonBridgeScript }
 type RunPythonParams struct {
 	Code           string   `json:"code" description:"The Python code to execute."`
 	ReturnVars     []string `json:"return_vars,omitempty" description:"List of variable names to extract from the kernel after execution."`
-	TimeoutSeconds int      `json:"timeout_seconds,omitempty" description:"Maximum time in seconds to wait for Python execution. Defaults to 300."`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty" description:"Maximum time in seconds to wait for Python execution. Defaults to 300 (a stricter host ceiling may apply)."`
+	ResetKernel    bool     `json:"reset_kernel,omitempty" description:"Set true to wipe the kernel (discard all variables/imports) and start fresh before running this code. Only meaningful in persistent REPL mode; in per-turn mode the kernel is fresh each turn anyway."`
 }
 
 const runPythonDescription = "Executes Python code in a per-turn IPython kernel inside a sandbox container. " +
@@ -41,10 +42,14 @@ const runPythonDescription = "Executes Python code in a per-turn IPython kernel 
 	"  Documents: openpyxl, xlsxwriter (Excel), pypdf, reportlab (PDF)\n" +
 	"  Images:    pillow (PIL)\n" +
 	"  Parsing:   beautifulsoup4, lxml, pyyaml, requests, tabulate\n\n" +
-	"KERNEL LIFETIME — the IPython kernel is FRESH at the start of every turn and DESTROYED at turn end. " +
-	"Variables, imports, and objects you define DO NOT survive into the next turn. To carry state across turns, " +
-	"write to disk — any file in your workspace persists. Within ONE turn, multiple run_python calls share the same " +
-	"kernel: `df = pd.read_csv(...)` in one call is still in scope on the next.\n\n" +
+	"KERNEL LIFETIME — depends on the server's FLEET_PYTHON_REPL_MODE. In the DEFAULT 'per-turn' mode the IPython " +
+	"kernel is FRESH at the start of every turn and DESTROYED at turn end: variables, imports, and objects DO NOT " +
+	"survive into the next turn, so to carry state across turns write to disk (any workspace file persists). In " +
+	"'persistent' mode the kernel survives across ALL turns of this conversation — `df = pd.read_csv(...)` built in one " +
+	"turn is still in scope turns later, no re-read needed. Either way, within ONE turn multiple run_python calls share " +
+	"the same kernel. Pass reset_kernel=true to deliberately wipe a persistent kernel back to a clean slate. (Lockdown " +
+	"chats always run per-turn.) NOTE: in persistent mode a cancelled or timed-out cell restarts the kernel, so any " +
+	"prior-turn variables are lost — keep durable state in a workspace file if a long cell might be interrupted.\n\n" +
 	"ALWAYS LEAVE A TRACE — end EVERY call with a verifiable checkpoint: print() row counts / key values / len(html), " +
 	"or write the artifact to a workspace file and print its path and size. NEVER end a call with only assignments or " +
 	"comments: a silent success gives you nothing to verify, and re-running identical code is blocked by a loop guard.\n\n" +
@@ -56,11 +61,12 @@ const runPythonDescription = "Executes Python code in a per-turn IPython kernel 
 	"land in THIS chat's scratch and are invisible to other chats. Files from supporting docs — `protocols/`, `personas/`, " +
 	"`system_prompts/`, `skills/` — are exposed via symlinks inside your scratch so relative reads still work. For attachments the " +
 	"user uploaded or the email MCP downloaded, use the absolute path from the tool that produced them.\n\n" +
-	"DISPLAYING IMAGES — to show a chart or image to the user: save it to your workspace with `plt.savefig('chart.png')` " +
-	"(or any other PNG/JPG/SVG writer) and reference it in your reply with markdown image syntax: `![Chart caption](chart.png)`. " +
-	"The chat UI rewrites that relative filename to a per-conversation workspace URL and renders the image inline. " +
-	"DO NOT base64-encode the image into an HTML <img src=\"data:...\"> block — that wastes tokens (a typical chart is ~20 KB " +
-	"of base64 = thousands of completion tokens), thrashes the streaming renderer, and isn't even necessary. Just save and reference.\n\n" +
+	"DISPLAYING IMAGES — matplotlib figures are captured AUTOMATICALLY: any `plt.show()` / `display(fig)` (image/png) is " +
+	"saved to your workspace and rendered inline in the chat by the tool itself — you do NOT need plt.savefig() and you do " +
+	"NOT need to reference the file in your reply for it to appear. (The saved paths come back in the result's image_files " +
+	"field if you want to reference one later.) You may still save explicitly with `plt.savefig('chart.png')` and reference " +
+	"it as `![caption](chart.png)` when you want a named, durable artifact. Either way, DO NOT base64-encode an image into an " +
+	"HTML <img src=\"data:...\"> block — that wastes thousands of tokens and thrashes the renderer.\n\n" +
 	"GIVING THE USER A DOWNLOAD LINK — to hand the user any workspace file (CSV, xlsx, PDF, .md, .html, .zip, ...), write a " +
 	"normal markdown link whose target is the BARE relative filename exactly as it sits on disk: `[Report.xlsx](Report.xlsx)`. " +
 	"The chat UI rewrites that to an authenticated per-conversation download URL and renders it as a click-to-download link — " +
@@ -113,6 +119,11 @@ type pythonResponse struct {
 	BridgeTruncation map[string]bridgeCaptureInfo `json:"bridge_truncation,omitempty"`
 	ExecutionTimeMs  int64                        `json:"execution_time_ms,omitempty"`
 	TruncationInfo   *truncationInfo              `json:"truncation_info,omitempty"`
+	// ImageFiles are workspace-relative paths to figures the kernel produced
+	// (matplotlib etc.), saved by the bridge so the chat UI renders them inline
+	// (#213). Small path strings only — never base64 — so the model can
+	// reference one later without paying the image's token cost.
+	ImageFiles []string `json:"image_files,omitempty"`
 }
 
 // emptyOutputHint is appended to a successful run_python result that produced
@@ -135,6 +146,9 @@ func maybeAddEmptyOutputHint(resp *pythonResponse) {
 	}
 	if strings.TrimSpace(resp.Output) != "" || strings.TrimSpace(resp.Stdout) != "" || len(resp.Vars) > 0 {
 		return
+	}
+	if len(resp.ImageFiles) > 0 {
+		return // a rendered figure is a verifiable trace on its own
 	}
 	resp.Hint = emptyOutputHint
 }
@@ -174,6 +188,7 @@ func runPythonWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params RunPy
 		ReturnVars:   params.ReturnVars,
 		Timeout:      time.Duration(timeoutSeconds) * time.Second,
 		WorkspaceDir: workspaceDir,
+		ResetKernel:  params.ResetKernel,
 	})
 	if runErr != nil {
 		return "", runErr
@@ -188,6 +203,7 @@ func runPythonWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params RunPy
 		Vars:            out.Vars,
 		Error:           out.Error,
 		ExecutionTimeMs: elapsed.Milliseconds(),
+		ImageFiles:      out.ImageFiles,
 	}
 	if len(out.BridgeTruncation) > 0 {
 		resp.BridgeTruncation = make(map[string]bridgeCaptureInfo, len(out.BridgeTruncation))

@@ -322,6 +322,12 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		Mode:         sandbox.ModeContainer,
 		BridgeScript: tools.PythonBridgeScript(),
 		WarmTTL:      time.Duration(cfg.SandboxWarmTTLSeconds) * time.Second,
+		// Python REPL knobs (#213). PythonCellTimeout is the per-cell ceiling;
+		// the persistent-* knobs only bite when PersistentREPL is on.
+		PythonCellTimeout:     time.Duration(cfg.PythonCellTimeoutSeconds) * time.Second,
+		PersistentREPL:        cfg.PersistentPythonREPL(),
+		PersistentIdleTTL:     time.Duration(cfg.PythonREPLIdleTTLSeconds) * time.Second,
+		PersistentMaxSessions: cfg.PythonREPLMaxSessions,
 	}
 	if cfg.MockMode {
 		// MockMode runs ModeHost (unsandboxed, os/exec). That executor is only
@@ -376,6 +382,15 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	}
 	log.Printf("sandbox: container mode, image=%s, pool=%d, workspace=%s, runtime=%s",
 		poolCfg.Container.Image, poolCfg.Size, poolCfg.Container.WorkspaceHostDir, defaultIfEmpty(poolCfg.Container.Runtime, "podman default"))
+	if poolCfg.PersistentREPL {
+		log.Printf("sandbox: run_python REPL mode=persistent — one kernel per conversation survives across turns (idle TTL %s, max %d sessions)",
+			poolCfg.PersistentIdleTTL, cfg.PythonREPLMaxSessions)
+	} else {
+		log.Printf("sandbox: run_python REPL mode=per-turn — kernel is fresh each turn (the default)")
+	}
+	if poolCfg.PythonCellTimeout > 0 {
+		log.Printf("sandbox: run_python per-cell timeout ceiling=%s (FLEET_PYTHON_CELL_TIMEOUT)", poolCfg.PythonCellTimeout)
+	}
 	return sandbox.NewPool(poolCfg), nil
 }
 
@@ -459,9 +474,20 @@ func (m *Manager) computeMCPToolRoster() []string {
 	return names
 }
 
-// takeTurnSandbox pulls a per-turn sandbox: a no-network locked-down container
-// for lockdown chats, else a warm-pool container.
-func (m *Manager) takeTurnSandbox(ctx context.Context, lockdown bool) (*sandbox.Sandbox, func(), error) {
+// takeTurnSandbox pulls the sandbox for one interactive turn.
+//
+//   - Lockdown chats ALWAYS get a fresh no-network locked-down container (never
+//     persistent): isolation is the whole point of lockdown.
+//   - When persistent REPL mode is on (#213) and this is a non-lockdown chat
+//     with a conversation ID, the turn borrows the conversation's long-lived
+//     sandbox so the python kernel survives across turns. The returned cleanup
+//     releases the borrow rather than closing the sandbox.
+//   - Otherwise (the default) it's a fresh warm-pool container, closed at turn
+//     end via the returned cleanup.
+//
+// Scheduled runs never reach here — they drive agentcore.Run through the
+// scheduled runner, which owns its own per-run sandbox + worktree.
+func (m *Manager) takeTurnSandbox(ctx context.Context, lockdown bool, convID string) (*sandbox.Sandbox, func(), error) {
 	if lockdown {
 		if !m.config.LockdownAvailable() {
 			return nil, nil, fmt.Errorf("conversation is in lockdown mode but the server has no sandbox image configured")
@@ -472,11 +498,33 @@ func (m *Manager) takeTurnSandbox(ctx context.Context, lockdown bool) (*sandbox.
 		}
 		return sb, cleanup, nil
 	}
+	if m.config.PersistentPythonREPL() && convID != "" {
+		// TakePersistent reuses the conversation's sandbox (or creates one,
+		// pulling a warm container for the first turn). It degrades to a per-turn
+		// Take internally if persistence is disabled in the pool, so this is
+		// always safe to call.
+		sb, cleanup, err := m.sandboxPool.TakePersistent(convID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("take persistent sandbox: %w", err)
+		}
+		return sb, cleanup, nil
+	}
 	sb, cleanup, err := m.sandboxPool.Take()
 	if err != nil {
 		return nil, nil, fmt.Errorf("take sandbox: %w", err)
 	}
 	return sb, cleanup, nil
+}
+
+// ReleaseChatSession tears down the persistent per-conversation sandbox (#213)
+// for convID, if any. Called when a conversation is deleted so its kernel +
+// container are reclaimed promptly rather than waiting for the idle reaper. A
+// no-op when persistent mode is off or the conversation has no live sandbox.
+func (m *Manager) ReleaseChatSession(convID string) {
+	if m.sandboxPool == nil {
+		return
+	}
+	m.sandboxPool.ReleaseChatSession(convID)
 }
 
 // ── RunTurn ──
@@ -557,7 +605,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return nil, fmt.Errorf("compose system prompt: %w", err)
 	}
 
-	sb, sbCleanup, err := m.takeTurnSandbox(ctx, in.Lockdown)
+	sb, sbCleanup, err := m.takeTurnSandbox(ctx, in.Lockdown, in.ConversationID)
 	if err != nil {
 		return nil, err
 	}

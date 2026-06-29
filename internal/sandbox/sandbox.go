@@ -125,9 +125,17 @@ type PythonRequest struct {
 	ReturnVars   []string
 	Timeout      time.Duration
 	WorkspaceDir string
+	// ResetKernel discards the current IPython kernel (all variables/imports)
+	// and starts a fresh one before running Code. Only meaningful in persistent
+	// REPL mode (#213).
+	ResetKernel bool
 }
 
 // PythonResult is the parsed pythonResponse the bridge writes to stdout.
+//
+// NOTE: parseBridgeResponse (bridge_protocol.go) converts bridgeResponse to this
+// type directly, so the field order/types here MUST stay in lockstep with
+// bridgeResponse.
 type PythonResult struct {
 	Status           string
 	Output           string
@@ -137,6 +145,9 @@ type PythonResult struct {
 	Vars             map[string]any
 	Error            string
 	BridgeTruncation map[string]BridgeCaptureInfo
+	// ImageFiles are workspace-relative paths the bridge saved for each
+	// image/png the kernel produced (#213).
+	ImageFiles []string
 }
 
 // BridgeCaptureInfo mirrors the bridge_truncation map values from
@@ -171,7 +182,30 @@ type Sandbox struct {
 	// one out once and Close()s it after the turn (it is never returned to the
 	// pool and reused). A future pre-warm change that RECYCLES a taken sandbox
 	// MUST clear this on release, or one task's worktree would leak to the next.
+	//
+	// The single exception is persistent REPL mode (#213): there a sandbox is
+	// deliberately reused across turns WITHIN ONE conversation (never across
+	// conversations). defaultWorkingDir stays empty there — persistent mode is
+	// interactive chat only, which passes WorkspaceDir per call; the worktree
+	// seam is a scheduled-run concern and the two never combine.
 	defaultWorkingDir string
+
+	// pythonCellTimeout is the host-operator ceiling on a single run_python cell
+	// (FLEET_PYTHON_CELL_TIMEOUT, #213). Zero disables it. When > 0, RunPython
+	// clamps the per-call Timeout to min(Timeout, pythonCellTimeout) before
+	// dispatching. Enforced here (in the shared RunPython) rather than in the
+	// bridge because the bridge runs inside the container with no --env
+	// forwarding, so a host-side env value can't reach it directly.
+	pythonCellTimeout time.Duration
+}
+
+// SetPythonCellTimeout sets the per-cell run_python ceiling (#213). The pool
+// calls this at construction from the resolved FLEET_PYTHON_CELL_TIMEOUT. Zero
+// disables the ceiling. Goroutine-safe.
+func (s *Sandbox) SetPythonCellTimeout(d time.Duration) {
+	s.mu.Lock()
+	s.pythonCellTimeout = d
+	s.mu.Unlock()
 }
 
 // SetDefaultWorkingDir sets the cwd applied to bash/python calls that don't
@@ -242,6 +276,11 @@ func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (PythonResul
 	}
 	if req.WorkspaceDir == "" {
 		req.WorkspaceDir = s.defaultWorkingDir
+	}
+	// Clamp to the host-operator per-cell ceiling when one is set. min of the
+	// two, treating a non-positive incoming Timeout as "no caller limit".
+	if s.pythonCellTimeout > 0 && (req.Timeout <= 0 || s.pythonCellTimeout < req.Timeout) {
+		req.Timeout = s.pythonCellTimeout
 	}
 	s.mu.Unlock()
 	return s.impl.runPython(ctx, req)
