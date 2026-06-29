@@ -66,6 +66,14 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Public read-only shared conversations (#226): viewable by anyone with the
+  // link, logged in or not. Bypass the session gate entirely — and, unlike
+  // publicPaths, do NOT bounce a logged-in viewer to /chat, since opening a
+  // share link while signed in is legitimate.
+  if (pathname.startsWith("/shared/")) {
+    return decorate(NextResponse.next());
+  }
+
   // Accept either session cookie (elcano_session HMAC or elcano_auth Ed25519).
   const session = await getSessionFromRequest(request);
 

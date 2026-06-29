@@ -57,6 +57,21 @@ export async function chatServerFetch(
 }
 
 /**
+ * chatServerFetchPublic fetches a chat-server endpoint that requires the shared
+ * secret but NO user identity (#226 read-only sharing). It sends only
+ * `X-Chat-Server-Token` — never `X-User-Email` — so it can serve logged-out
+ * viewers of /shared/{token} without impersonating a user. The Go endpoint is
+ * token-gated (only this trusted proxy reaches it) but identity-less; the share
+ * token in the path is the authorization.
+ */
+export async function chatServerFetchPublic(path: string, init?: RequestInit): Promise<Response> {
+  const base = getChatServerBase();
+  const headers = new Headers(init?.headers ?? {});
+  headers.set("X-Chat-Server-Token", getSharedToken());
+  return fetch(`${base}${path}`, { ...init, headers, cache: "no-store" });
+}
+
+/**
  * chatServerProxy wraps chatServerFetch and converts a CONNECTION failure
  * (chat-server down/restarting → fetch throws) into a clean 502 JSON response
  * instead of letting the thrown error bubble into Next.js's generic 500 HTML

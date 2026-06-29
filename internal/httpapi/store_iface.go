@@ -41,6 +41,11 @@ type chatStore interface {
 	SetModel(ctx context.Context, userEmail, convID, model string) error
 	SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
+	// Read-only public sharing (#226): the owner issues/revokes a share token;
+	// GetConversationByShareToken serves the unauthenticated /shared/{token} read.
+	SetShareToken(ctx context.Context, ownerEmail, convID, token string, expiresAt *int64) error
+	RevokeShareToken(ctx context.Context, ownerEmail, convID string) error
+	GetConversationByShareToken(ctx context.Context, token string, now int64) (*store.SharedConversation, error)
 	UpdateTitle(ctx context.Context, userEmail, convID, title string) error
 	RenameTitle(ctx context.Context, userEmail, convID, title string) error
 

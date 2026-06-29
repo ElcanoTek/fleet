@@ -110,6 +110,12 @@ type Conversation struct {
 	// (#225). nil = use the global default; a positive value sets a per-chat
 	// override. Set via POST /conversations/{id}/approval-timeout.
 	ApprovalTimeoutSeconds *int `json:"approval_timeout_seconds,omitempty"`
+	// ShareToken is the opt-in public read-only share token (#226). Empty = not
+	// shared; non-empty = anyone with /shared/{ShareToken} can view a read-only
+	// snapshot. Surfaced to the owner's own GET /conversations so the sidebar can
+	// show a "shared" badge and a copy-link action. Set/cleared via
+	// POST/DELETE /conversations/{id}/share.
+	ShareToken string `json:"share_token,omitempty"`
 }
 
 // ErrForeignConversation is returned by DeleteByIDs / BulkPatch when one or
@@ -429,6 +435,103 @@ func (s *Store) SetApprovalTimeout(ctx context.Context, userEmail, convID string
 	return nil
 }
 
+// SharedConversation is the read-only public snapshot returned for a valid
+// share token (#226). It deliberately omits id and user_email: an observer with
+// the link learns the content but neither the internal ID nor who authored it.
+type SharedConversation struct {
+	Title     string               `json:"title"`
+	Persona   string               `json:"persona"`
+	Model     string               `json:"model"`
+	CreatedAt int64                `json:"created_at"`
+	SharedAt  int64                `json:"shared_at"`
+	Messages  []agent.HistoryEntry `json:"messages"`
+}
+
+// SetShareToken (re)issues the public read-only share token for a conversation
+// the caller owns (#226). Revoke-then-reissue: a second call rotates the token
+// and resets shared_at. expiresAt is the optional unix-seconds expiry (nil =
+// never expires). Scoped by user_email so a caller can only share their own
+// conversation.
+func (s *Store) SetShareToken(ctx context.Context, ownerEmail, convID, token string, expiresAt *int64) error {
+	var expiresArg any // NULL when no expiry
+	if expiresAt != nil {
+		expiresArg = *expiresAt
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET share_token = $1, shared_at = $2, share_expires_at = $3
+		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
+		token, time.Now().Unix(), expiresArg, convID, ownerEmail,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.New("conversation not found")
+	}
+	return nil
+}
+
+// RevokeShareToken clears the share token (and its metadata) for a conversation
+// the caller owns (#226). Genuinely idempotent: revoking an already-unshared
+// conversation matches the row but changes no columns (RowsAffected = 0), which
+// is still success — so a double DELETE answers 204 both times rather than a
+// spurious 500. Ownership is enforced by the WHERE clause AND by the handler's
+// pre-check (which distinguishes a non-owned id as 404). deleted_at IS NULL
+// matches SetShareToken: a soft-deleted conversation is not mutable.
+func (s *Store) RevokeShareToken(ctx context.Context, ownerEmail, convID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET share_token = NULL, shared_at = NULL, share_expires_at = NULL
+		 WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
+		convID, ownerEmail,
+	)
+	return err
+}
+
+// GetConversationByShareToken returns the read-only snapshot for a share token,
+// or (nil, nil) when the token is unknown, revoked, or expired (#226). The
+// lookup is NOT scoped by user — anyone with the token may read it — but expiry
+// is enforced server-side here (now is unix seconds). It excludes soft-deleted
+// conversations so a tombstoned chat can't be read through a stale link.
+func (s *Store) GetConversationByShareToken(ctx context.Context, token string, now int64) (*SharedConversation, error) {
+	if token == "" {
+		return nil, nil
+	}
+	var (
+		id  string
+		out SharedConversation
+	)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, title, persona, model, created_at, COALESCE(shared_at, 0)
+		 FROM conversations
+		 WHERE share_token = $1 AND deleted_at IS NULL
+		   AND (share_expires_at IS NULL OR share_expires_at > $2)`,
+		token, now,
+	).Scan(&id, &out.Title, &out.Persona, &out.Model, &out.CreatedAt, &out.SharedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	msgs, err := s.LoadHistory(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	// Expose ONLY user/assistant text to the public snapshot. The full history
+	// also carries tool_call / tool_result / reasoning entries whose content can
+	// include command output, API responses, or other internals that were never
+	// meant to be shared. Filtering here (not just in the UI) is the security
+	// boundary: any consumer of this snapshot — including a raw JSON fetch —
+	// sees the transcript, not the agent's working trace (#226).
+	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Type == "text" && (m.Role == "user" || m.Role == "assistant") {
+			out.Messages = append(out.Messages, m)
+		}
+	}
+	return &out, nil
+}
+
 // AutoArchiveOlderThan archives unpinned, not-already-archived conversations
 // whose updated_at is older than d (#282). Returns the count archived. A zero or
 // negative duration is a no-op (the feature is disabled). This is a softer
@@ -659,7 +762,7 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 		archivedFilter = "archived_at IS NOT NULL"
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, '')
 		 FROM conversations WHERE user_email = $1 AND `+archivedFilter+` AND deleted_at IS NULL
 		 ORDER BY pinned DESC, updated_at DESC, id DESC`,
 		userEmail,
@@ -674,7 +777,7 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 		var c Conversation
 		var optionalRaw []byte
 		var approvalTimeout sql.NullInt64
-		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken); err != nil {
 			return nil, err
 		}
 		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
@@ -687,14 +790,14 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 // Get fetches a single conversation (without messages).
 func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, '')
 		 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
 		convID, userEmail,
 	)
 	var c Conversation
 	var optionalRaw []byte
 	var approvalTimeout sql.NullInt64
-	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout); err != nil {
+	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1353,7 +1456,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		// re-sweep never re-tombstones.
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND updated_at < $2`,
+			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND updated_at < $2`,
 			time.Now().Unix(), cutoff,
 		)
 		if err != nil {
@@ -1363,7 +1466,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		expired += int(n)
 	} else {
 		res, err := s.db.ExecContext(ctx,
-			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND updated_at < $1`,
+			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND updated_at < $1`,
 			cutoff,
 		)
 		if err != nil {
@@ -1380,7 +1483,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT user_email, COUNT(*) FROM conversations
-		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
+		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
 		unpinnedCap,
 	)
 	if err != nil {
@@ -1405,7 +1508,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		res, err := s.db.ExecContext(ctx,
 			`DELETE FROM conversations WHERE id IN (
 			    SELECT id FROM conversations
-			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL
+			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL
 			    ORDER BY updated_at DESC, id DESC
 			    OFFSET $2
 			 )`,

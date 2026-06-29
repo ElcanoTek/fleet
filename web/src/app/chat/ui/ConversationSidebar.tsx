@@ -17,6 +17,7 @@
 // spec depends on them).
 
 import type { Dispatch, RefObject, SetStateAction } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { NavToOrchestrator } from "@/app/shared/ui/CrossViewNav";
 import type { ClientBranding } from "@/app/lib/useClientConfig";
@@ -49,6 +50,9 @@ export function ConversationSidebar({
   toggleArchive,
   setPendingDeleteConversation,
   togglePin,
+  shareConversation,
+  unshareConversation,
+  copyShareLink,
   archivedConversations,
   showArchived,
   setShowArchived,
@@ -89,6 +93,11 @@ export function ConversationSidebar({
   toggleArchive: (conversation: ConversationSummary, archived: boolean) => Promise<void>;
   setPendingDeleteConversation: Dispatch<SetStateAction<PendingDeleteConversation | null>>;
   togglePin: (conversation: ConversationSummary) => Promise<void>;
+  // Read-only sharing (#226): issue+copy a public link, revoke it, or re-copy
+  // an existing link.
+  shareConversation: (conversation: ConversationSummary) => Promise<boolean>;
+  unshareConversation: (conversation: ConversationSummary) => Promise<void>;
+  copyShareLink: (conversation: ConversationSummary) => Promise<boolean>;
   archivedConversations: ConversationSummary[];
   showArchived: boolean;
   setShowArchived: Dispatch<SetStateAction<boolean>>;
@@ -106,6 +115,21 @@ export function ConversationSidebar({
   onBulkMoveFolder: (folder: string) => void;
   onBulkAddLabel: (label: string) => void;
 }) {
+  // Transient "Copied!" feedback for the share/copy-link actions (#226), keyed
+  // by conversation id. The only effect just clears the pending timer on unmount
+  // — setState happens in handlers and the timeout callback, never synchronously
+  // in the effect body.
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copiedTimer = useRef<number | null>(null);
+  const flashCopied = (id: string) => {
+    setCopiedId(id);
+    if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
+    copiedTimer.current = window.setTimeout(() => setCopiedId(null), 1500);
+  };
+  useEffect(() => () => {
+    if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
+  }, []);
+
   const selecting = selectedIds.size > 0;
   const allVisibleSelected =
     filteredConversations.length > 0 &&
@@ -397,6 +421,21 @@ export function ConversationSidebar({
                       className="size-3 shrink-0 text-[var(--color-accent)]"
                     />
                   ) : null}
+                  {conversation.share_token ? (
+                    <svg
+                      aria-label="Shared"
+                      viewBox="0 0 24 24"
+                      className="size-3 shrink-0 text-[var(--color-accent)]"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={1.8}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M10 13a5 5 0 0 0 7.07 0l2-2a5 5 0 0 0-7.07-7.07l-1 1" />
+                      <path d="M14 11a5 5 0 0 0-7.07 0l-2 2a5 5 0 0 0 7.07 7.07l1-1" />
+                    </svg>
+                  ) : null}
                   <span className="block truncate">{conversation.title}</span>
                 </span>
               </button>
@@ -469,6 +508,115 @@ export function ConversationSidebar({
                     <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
                   </svg>
                 </button>
+                {conversation.share_token ? (
+                  <>
+                    <button
+                      aria-label={
+                        copiedId === conversation.id ? "Link copied" : `Copy share link for ${conversation.title}`
+                      }
+                      title={copiedId === conversation.id ? "Link copied!" : "Copy share link"}
+                      className="pointer-events-auto inline-flex size-10 items-center justify-center rounded-md text-[var(--color-accent)] transition hover:bg-[var(--color-overlay-strong)] sm:size-7"
+                      type="button"
+                      onClick={() =>
+                        void copyShareLink(conversation).then((ok) => {
+                          if (ok) flashCopied(conversation.id);
+                        })
+                      }
+                    >
+                      {copiedId === conversation.id ? (
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 24 24"
+                          className="size-3.5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M20 6L9 17l-5-5" />
+                        </svg>
+                      ) : (
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 24 24"
+                          className="size-3.5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.8}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M10 13a5 5 0 0 0 7.07 0l2-2a5 5 0 0 0-7.07-7.07l-1 1" />
+                          <path d="M14 11a5 5 0 0 0-7.07 0l-2 2a5 5 0 0 0 7.07 7.07l1-1" />
+                        </svg>
+                      )}
+                    </button>
+                    <button
+                      aria-label={`Stop sharing ${conversation.title}`}
+                      title="Unshare"
+                      className="pointer-events-auto inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                      type="button"
+                      onClick={() => void unshareConversation(conversation)}
+                    >
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 24 24"
+                        className="size-3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.8}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M10 13a5 5 0 0 0 7.07 0l2-2a5 5 0 0 0-7.07-7.07l-1 1" />
+                        <path d="M14 11a5 5 0 0 0-7.07 0l-2 2a5 5 0 0 0 7.07 7.07l1-1" />
+                        <path d="M4 4l16 16" />
+                      </svg>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    aria-label={copiedId === conversation.id ? "Link copied" : `Share ${conversation.title}`}
+                    title={copiedId === conversation.id ? "Link copied!" : "Share — copies a read-only link"}
+                    className="touch-reveal pointer-events-auto inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                    type="button"
+                    onClick={() =>
+                      void shareConversation(conversation).then((ok) => {
+                        if (ok) flashCopied(conversation.id);
+                      })
+                    }
+                  >
+                    {copiedId === conversation.id ? (
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 24 24"
+                        className="size-3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M20 6L9 17l-5-5" />
+                      </svg>
+                    ) : (
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 24 24"
+                        className="size-3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.8}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M10 13a5 5 0 0 0 7.07 0l2-2a5 5 0 0 0-7.07-7.07l-1 1" />
+                        <path d="M14 11a5 5 0 0 0-7.07 0l-2 2a5 5 0 0 0 7.07 7.07l1-1" />
+                      </svg>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
             );
