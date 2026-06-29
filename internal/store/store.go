@@ -751,21 +751,44 @@ func (s *Store) BulkPatch(ctx context.Context, userEmail string, ids []string, p
 	return int(n), nil
 }
 
-// List returns the user's conversations, pinned first, newest first. When
-// archivedOnly is false it returns only active (archived_at IS NULL)
-// conversations — the default sidebar view; when true it returns only the
-// archived ones (#282). The two are distinct lists so the frontend can render
-// archived conversations in a separate, collapsed section.
-func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) ([]Conversation, error) {
-	archivedFilter := "archived_at IS NULL"
-	if archivedOnly {
-		archivedFilter = "archived_at IS NOT NULL"
+// ListFilter constrains ListFiltered (#258). The zero value lists all active
+// conversations (the default sidebar view). ArchivedOnly selects the archived
+// section instead (#282). Labels has AND semantics — every listed label must be
+// present (Postgres array containment). Folder, when non-nil, restricts to that
+// folder; a pointer to "" means the explicit "no folder" bucket (folder = ”).
+type ListFilter struct {
+	ArchivedOnly bool
+	Labels       []string
+	Folder       *string
+}
+
+// ListFiltered returns the user's conversations matching f, pinned first, newest
+// first. See ListFilter for the filter semantics (#258). When ArchivedOnly is
+// false it returns only active (archived_at IS NULL) conversations — the default
+// sidebar view; when true it returns only the archived ones (#282), so the
+// frontend can render them in a separate, collapsed section.
+func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter) ([]Conversation, error) {
+	// A single CONSTANT query with sentinel-guarded optional filters (mirroring
+	// DeleteAllMatching) — no string concatenation, so every value is bound and
+	// the query plan is stable. $2 picks the active/archived partition; $3 (NULL =
+	// no label filter) does AND-containment; $4 (NULL = no folder filter, '' = the
+	// explicit no-folder bucket) does folder equality.
+	var labelsArg, folderArg any
+	if len(f.Labels) > 0 {
+		labelsArg = pq.Array(f.Labels)
+	}
+	if f.Folder != nil {
+		folderArg = *f.Folder
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, '')
-		 FROM conversations WHERE user_email = $1 AND `+archivedFilter+` AND deleted_at IS NULL
+		 FROM conversations
+		 WHERE user_email = $1 AND deleted_at IS NULL
+		   AND (CASE WHEN $2 THEN archived_at IS NOT NULL ELSE archived_at IS NULL END)
+		   AND ($3::text[] IS NULL OR labels @> $3::text[])
+		   AND ($4::text IS NULL OR folder = $4::text)
 		 ORDER BY pinned DESC, updated_at DESC, id DESC`,
-		userEmail,
+		userEmail, f.ArchivedOnly, labelsArg, folderArg,
 	)
 	if err != nil {
 		return nil, err
@@ -785,6 +808,65 @@ func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) (
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// List returns the user's active (or, when archivedOnly, archived) conversations,
+// pinned first, newest first. Thin wrapper over ListFiltered preserved for the
+// many callers that don't filter by folder/label.
+func (s *Store) List(ctx context.Context, userEmail string, archivedOnly bool) ([]Conversation, error) {
+	return s.ListFiltered(ctx, userEmail, ListFilter{ArchivedOnly: archivedOnly})
+}
+
+// FolderCount is one folder name and the number of the user's active
+// conversations in it (#258).
+type FolderCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// ListFolders returns the distinct non-empty folder names the user has, each with
+// the count of its active (live, non-archived) conversations, ordered by name
+// (#258). The "no folder" bucket (folder = ”) is intentionally omitted — it is
+// the implicit "All Conversations" default, not a named folder.
+func (s *Store) ListFolders(ctx context.Context, userEmail string) ([]FolderCount, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT folder, COUNT(*) FROM conversations
+		 WHERE user_email = $1 AND folder <> '' AND deleted_at IS NULL AND archived_at IS NULL
+		 GROUP BY folder ORDER BY folder`,
+		userEmail,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]FolderCount, 0)
+	for rows.Next() {
+		var fc FolderCount
+		if err := rows.Scan(&fc.Name, &fc.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, fc)
+	}
+	return out, rows.Err()
+}
+
+// RenameFolder moves every one of the user's conversations from folder `from` to
+// folder `to` (a single UPDATE — there is no separate folders table, so a folder
+// IS just the set of conversations naming it). Returns the number of
+// conversations moved (0 when the source folder was empty/unknown). Archived
+// conversations sharing the name are moved too (unlike ListFolders, which counts
+// only active ones) so a folder's grouping stays consistent across the rename. (#258)
+func (s *Store) RenameFolder(ctx context.Context, userEmail, from, to string) (int, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET folder = $1, updated_at = $2
+		 WHERE user_email = $3 AND folder = $4 AND deleted_at IS NULL`,
+		to, time.Now().Unix(), userEmail, from,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // Get fetches a single conversation (without messages).
