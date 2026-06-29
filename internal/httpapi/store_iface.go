@@ -25,6 +25,12 @@ type chatStore interface {
 	CreateConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error)
 	Get(ctx context.Context, userEmail, convID string) (*store.Conversation, error)
 	List(ctx context.Context, userEmail string, archivedOnly bool) ([]store.Conversation, error)
+	// Folders & labels (#258). ListFiltered backs the ?folder= / ?label= filters
+	// on GET /conversations; ListFolders enumerates the user's folders + counts
+	// for GET /folders; RenameFolder backs POST /folders/rename.
+	ListFiltered(ctx context.Context, userEmail string, f store.ListFilter) ([]store.Conversation, error)
+	ListFolders(ctx context.Context, userEmail string) ([]store.FolderCount, error)
+	RenameFolder(ctx context.Context, userEmail, from, to string) (int, error)
 	Delete(ctx context.Context, userEmail, convID string) error
 	DeleteAllUnpinned(ctx context.Context, userEmail string) (int, error)
 	// Bulk conversation operations (#279). DeleteByIDs hard-deletes (or, when
