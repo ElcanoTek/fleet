@@ -61,6 +61,16 @@ type Options struct {
 	// nil/empty = no narrowing for any persona (defaults unchanged). cmd/fleet
 	// builds it once from the bundle and hands the SAME map to both drivers.
 	PersonaPolicies map[string]agentcore.PersonaToolPermissions
+
+	// ── agent self-improvement (#285), gated per-task by instruction_self_improve
+	// ("Captain's Log"). These seams are wired ONCE here and handed to a run only
+	// when its task opted in (runWorker), so non-opted-in tasks behave exactly as
+	// before. nil disables the respective capability entirely. ──
+	//
+	// TaskMemory backs the remember/recall tools + run-start memory injection
+	// (#198); TaskMemoryConfig caps how much a single task may accumulate.
+	TaskMemory       tools.TaskMemoryStore
+	TaskMemoryConfig tools.TaskMemoryConfig
 }
 
 // Runner executes claimed scheduled tasks in-process through the unified runtime
@@ -93,6 +103,11 @@ type Runner struct {
 	// personaPolicies is the per-persona tool allowlist (Gate-4, #294), keyed by
 	// persona basename. nil/empty = no narrowing. Resolved per task at dispatch.
 	personaPolicies map[string]agentcore.PersonaToolPermissions
+
+	// Captain's Log persistent task memory (#285), handed to a run only when the
+	// task opted in (instruction_self_improve). nil = capability disabled.
+	taskMemory       tools.TaskMemoryStore
+	taskMemoryConfig tools.TaskMemoryConfig
 }
 
 // IterationStore records per-iteration telemetry for a looped task (#179). It is
@@ -117,6 +132,8 @@ func New(opts Options) *Runner {
 		iterationStore:   opts.IterationStore,
 		taskEnqueuer:     opts.TaskEnqueuer,
 		personaPolicies:  opts.PersonaPolicies,
+		taskMemory:       opts.TaskMemory,
+		taskMemoryConfig: opts.TaskMemoryConfig,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -206,6 +223,20 @@ func (r *Runner) taskPromptAndPersona(task *models.Task) (systemPrompt, persona 
 // recurrence grant) are enforced INSIDE the tool as defence in depth; this gate
 // only decides whether the tool exists for the run. The per-run spawn counter is
 // allocated here so it is scoped to exactly one task run.
+// selfImproveTaskMemory is the per-task Captain's Log (#285) opt-in gate: it
+// returns the persistent task-memory store for a task ONLY when the task set
+// instruction_self_improve, and nil otherwise. Centralizing the gate here keeps
+// runWorker readable and makes the opt-in boundary unit-testable. A nil return
+// (a runner built without the seam, or a task that did not opt in) cleanly
+// disables the capability — the agent registers remember/recall only when the
+// seam is non-nil, so non-opted-in tasks behave exactly as before.
+func (r *Runner) selfImproveTaskMemory(task *models.Task) tools.TaskMemoryStore {
+	if task == nil || !task.InstructionSelfImprove {
+		return nil
+	}
+	return r.taskMemory
+}
+
 func (r *Runner) maybeAppendCreateTaskTool(base []fantasy.AgentTool, task *models.Task) []fantasy.AgentTool {
 	if r.taskEnqueuer == nil || !task.AllowTaskCreation {
 		return base
@@ -448,18 +479,39 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// swap in specialized domain expertise; empty uses the runner's global persona.
 	taskSystemPrompt, taskPersona := r.taskPromptAndPersona(task)
 
+	// Captain's Log (#285): instruction_self_improve is the per-task opt-in gate
+	// that finally gives the flag runtime effect (#322). Only when it is set does
+	// the run get persistent task memory — the remember/recall tools + run-start
+	// injection (#198). OFF (the default) reproduces pre-#285 behaviour exactly.
+	// The seam is nil-checked here so a runner built without it (or a non-opted-in
+	// task) wires nothing. Agent-authored client-bundle skills are intentionally
+	// out of scope (#255 closed): skills stay operator-authored so the bundle
+	// remains a reproducible git artifact — fleet never writes the bundle.
+	//
+	// NOTE: propose_note is deliberately NOT gated by this flag — it stays
+	// unconditionally available in scheduled mode (it is wired separately, above,
+	// via NoteProposer) so opting OUT of Captain's Log does not regress the
+	// pre-existing note-proposal behaviour, and it remains fleet's DB-backed path
+	// for agents to improve the shared knowledge base. The flag gates only the NEW
+	// capability — persistent task memory. "Off = today's behaviour" is the rule.
+	taskMemory := r.selfImproveTaskMemory(task)
+
 	a := agent.NewAgent(agent.Options{
-		Config:              r.cfg,
-		Model:               model,
-		FallbackModel:       fallback,
-		MCPClient:           mcpClient,
-		NativeTools:         nativeTools,
-		SystemPrompt:        taskSystemPrompt,
-		Persona:             taskPersona,
-		MaxIterations:       maxIter,
-		Sandbox:             sb,
-		NotesProvider:       r.notesProvider,
-		NoteProposer:        r.noteProposer,
+		Config:        r.cfg,
+		Model:         model,
+		FallbackModel: fallback,
+		MCPClient:     mcpClient,
+		NativeTools:   nativeTools,
+		SystemPrompt:  taskSystemPrompt,
+		Persona:       taskPersona,
+		MaxIterations: maxIter,
+		Sandbox:       sb,
+		NotesProvider: r.notesProvider,
+		NoteProposer:  r.noteProposer,
+		// Captain's Log persistent memory (#285): nil unless the task opted in (above).
+		TaskMemory:          taskMemory,
+		TaskID:              task.ID,
+		TaskMemoryConfig:    r.taskMemoryConfig,
 		CredentialAllowlist: taskCredentialAllowlist(task),
 		PersonaPolicy:       r.personaPolicy(taskPersona),
 		PhoneAFriendEnabled: r.cfg.PhoneAFriendEnabled,

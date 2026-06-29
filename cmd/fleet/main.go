@@ -64,6 +64,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/version"
 )
 
@@ -311,6 +312,12 @@ func run() error {
 	notesStore := sched.NewStore(schedStorage.DB())
 	notesProvider := &notesAdapter{store: notesStore}
 
+	// Self-improvement (#285): the task-memory store over the SAME sched store,
+	// handed only to the scheduled runner — interactive chat has no task to scope
+	// memory to. Prompt/knowledge self-improvement stays on the existing,
+	// DB-backed propose_note path (notesProvider, wired into both drivers below).
+	taskMemoryStore := &taskMemoryAdapter{store: notesStore}
+
 	// ── interactive engine (the concrete turnEngine) ──
 	serverSpecs := scheduledrun.BuildMCPSpecs(cfg)
 	mgr, err := agent.New(agent.ManagerOptions{
@@ -438,6 +445,14 @@ func run() error {
 		SystemPromptsDir: systemPromptsDir,
 		ProtocolsDir:     protocolsDir,
 		PersonaPolicies:  personaPolicies,
+		// Captain's Log persistent memory (#198, #285): handed to a run only when its
+		// task set instruction_self_improve. Caps bound per-task memory growth
+		// (FLEET_TASK_MEMORY_MAX_*).
+		TaskMemory: taskMemoryStore,
+		TaskMemoryConfig: tools.TaskMemoryConfig{
+			MaxKeys:       cfg.TaskMemoryMaxKeys,
+			MaxValueBytes: cfg.TaskMemoryMaxValueBytes,
+		},
 		// Record per-iteration telemetry for looped tasks (#179).
 		IterationStore: schedStorage,
 		// Back the built-in create_task tool (#277) so a scheduled task that opted
@@ -1143,4 +1158,34 @@ func (a *notesAdapter) Propose(slug, title, body, reason string) (string, error)
 		return "", err
 	}
 	return p.ID.String(), nil
+}
+
+// ── self-improvement adapter (#285): the sched-backed task-memory store, handed
+// to the scheduled runner and used only by tasks that opted into Captain's Log. ──
+
+// taskMemoryAdapter implements tools.TaskMemoryStore over the sched store,
+// converting the sched row type to the tools-layer type so the tools package
+// needs no dependency on sched.
+type taskMemoryAdapter struct {
+	store *sched.Store
+}
+
+func (a *taskMemoryAdapter) UpsertTaskMemory(ctx context.Context, taskID uuid.UUID, key, value string, maxKeys, maxValueBytes int) error {
+	return a.store.UpsertTaskMemory(ctx, taskID, key, value, maxKeys, maxValueBytes)
+}
+
+func (a *taskMemoryAdapter) GetTaskMemory(ctx context.Context, taskID uuid.UUID, key string) (string, error) {
+	return a.store.GetTaskMemory(ctx, taskID, key)
+}
+
+func (a *taskMemoryAdapter) ListTaskMemories(ctx context.Context, taskID uuid.UUID) ([]tools.TaskMemory, error) {
+	mems, err := a.store.ListTaskMemories(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tools.TaskMemory, len(mems))
+	for i, m := range mems {
+		out[i] = tools.TaskMemory{Key: m.Key, Value: m.Value}
+	}
+	return out, nil
 }

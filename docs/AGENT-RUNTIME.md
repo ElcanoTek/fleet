@@ -221,6 +221,45 @@ brokering, which always stays host-side.
 
 ---
 
+## Captain's Log: persistent task memory (#198, #285)
+
+By default every run of a scheduled task starts **cold** — it has no knowledge of
+what prior runs observed or decided. A task can opt into persistent, task-scoped
+memory by setting `instruction_self_improve: true` (the **Captain's Log** toggle
+in the task-create form). When set, that task's scheduled runs get two extra
+native tools:
+
+- `remember(key, value)` — upsert a fact for this task. Committed immediately;
+  scheduled runs are unattended, so there is no human-approval step.
+- `recall(key?)` — read one fact, or all of them as a JSON object.
+
+At the start of every run, all of the task's stored facts are injected into the
+system prompt under a **Your Persistent Memory** section, so the agent sees prior
+state without having to call `recall`. This lets a recurring task track state
+across time — "alert only if the price changed since last week", "skip anomalies
+already triaged", "accumulate a running digest".
+
+The store is bounded so a long-lived task cannot grow unbounded:
+`FLEET_TASK_MEMORY_MAX_KEYS` (default 100, oldest key evicted LRU-style on
+overflow) and `FLEET_TASK_MEMORY_MAX_VALUE_BYTES` (default 4096, a hard reject).
+Memories live in the **scheduler database** (`task_memories`, keyed by
+`(task_id, key)`), not the client-config bundle — this is runtime state, so it
+never touches the operator-owned, git-versioned bundle, and the reproducibility
+guarantee ("the setup that worked is the setup that runs again") is preserved.
+Inspect or clear a task's memory with `fleet-admin task memories list|clear|delete`.
+
+Off by default (the column is `BOOLEAN NOT NULL DEFAULT FALSE`), so a task that
+does not opt in behaves exactly as before — no extra tools, no injection.
+
+Prompt/knowledge self-improvement is a separate, already-shipped path: the agent
+proposes edits to the admin-curated knowledge base via `propose_note`, an admin
+publishes or rejects them, and published notes are injected into every run's
+prompt. Agent-authored client-bundle **skills** are intentionally *not* part of
+this — skills stay operator-authored so the bundle remains a reproducible
+artifact; nothing fleet does ever writes the bundle or commits to git.
+
+---
+
 ## Dead-letter queue (#253)
 
 A scheduled task retries on transient failures up to its `max_retries` budget
