@@ -12,6 +12,67 @@ permissions:
   pull-requests: read
 
 jobs:
+  changes:
+    # Classify the PR (or push) as docs-only or not. The heavy jobs below gate on
+    # this so a documentation-only change skips the ~1.3GB sandbox build and the
+    # rest of the compile/test/e2e suite. FAIL-SAFE: docs_only is true only when
+    # EVERY changed file matches the documentation allowlist; a single non-doc file
+    # forces the full suite, and anything we can't classify also runs everything.
+    # The gitleaks secret scan is intentionally NOT gated on this — a secret can be
+    # pasted into a markdown file, so it runs on every change.
+    name: Detect docs-only changes
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.detect.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history so the base/head (or before/after) SHAs are present to diff.
+          fetch-depth: 0
+
+      - name: Detect whether every changed file is documentation
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request)
+              range="${PR_BASE_SHA}...${PR_HEAD_SHA}" ;;
+            push)
+              # New branch / unknown base (all-zero SHA): can't diff, run everything.
+              if [ -z "${PUSH_BEFORE}" ] || [ "${PUSH_BEFORE}" = "0000000000000000000000000000000000000000" ]; then
+                echo "No usable base SHA for this push; running the full suite."
+                echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+              range="${PUSH_BEFORE}...${PUSH_AFTER}" ;;
+            *)
+              echo "Event '$EVENT_NAME' is not gated; running the full suite."
+              echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+
+          files="$(git diff --name-only "$range")"
+          echo "Changed files in ${range}:"
+          printf '%s\n' "$files"
+
+          docs_only=true
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            # `*` in a shell case pattern spans '/', so these match at any depth.
+            case "$f" in
+              *.md|docs/*|LICENSE) : ;;        # documentation: no compiled/runtime signal
+              *) docs_only=false ;;
+            esac
+          done <<< "$files"
+
+          echo "docs_only=${docs_only}"
+          echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
+
   gitleaks:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
@@ -47,6 +108,9 @@ jobs:
   go:
     name: Go build / vet / lint / test
     runs-on: ubuntu-latest
+    needs: changes
+    # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
 
     services:
       postgres:
@@ -180,6 +244,9 @@ jobs:
   web:
     name: Web lint / test / build
     runs-on: ubuntu-latest
+    needs: changes
+    # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     defaults:
       run:
         working-directory: web
@@ -210,6 +277,9 @@ jobs:
   playwright:
     name: Web e2e (Playwright, mocked)
     runs-on: ubuntu-latest
+    needs: changes
+    # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     defaults:
       run:
         working-directory: web
@@ -268,6 +338,9 @@ jobs:
   e2e-live:
     name: Web e2e (Playwright, live — real backend + sandbox)
     runs-on: ubuntu-latest
+    needs: changes
+    # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
     # The full real stack: Postgres (service container), both Go listeners, SSE,
     # the scheduler + worker pool, and the REAL rootless-podman sandbox. ONLY the
     # LLM is stubbed — by the wire-compatible fake (cmd/fake-llm), reached via
@@ -426,3 +499,30 @@ jobs:
             web/test-results/
           retention-days: 14
           if-no-files-found: ignore
+
+  ci-gate:
+    # The SINGLE required status check on `main` (see .github/CODEOWNERS). It
+    # `needs` every other job and ALWAYS runs, so it always reports a result —
+    # which is what lets docs-only PRs (whose heavy jobs are skipped) merge
+    # without being blocked forever on a required check that never reported, the
+    # classic footgun of pairing required checks with path/`if` skips. A code PR
+    # cannot go green here unless every upstream job actually succeeded: a skip is
+    # allowed (docs-only), but any failure or cancellation fails the gate.
+    name: CI gate
+    if: ${{ always() }}
+    needs: [changes, gitleaks, go, web, playwright, e2e-live]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all upstream jobs to have succeeded or been skipped
+        env:
+          # needs.*.result is one of: success | failure | cancelled | skipped.
+          RESULTS: ${{ join(needs.*.result, ',') }}
+        run: |
+          set -euo pipefail
+          echo "Upstream job results: ${RESULTS}"
+          case ",${RESULTS}," in
+            *,failure,*|*,cancelled,*)
+              echo "::error::A required upstream CI job failed or was cancelled."
+              exit 1 ;;
+          esac
+          echo "All required CI jobs passed (or were cleanly skipped for a docs-only change)."
