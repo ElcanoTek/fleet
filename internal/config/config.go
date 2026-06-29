@@ -271,6 +271,16 @@ var allowedEnvVars = map[string]bool{
 	// ── test harness ──
 	"CHAT_MOCK_MODE":  true,
 	"FLEET_MOCK_MODE": true,
+
+	// ── observability: Sentry error tracking (#193) ──
+	// FLEET_SENTRY_DSN is the OPTIONAL Sentry-protocol endpoint (Sentry or a
+	// Better Stack Errors ingest URL). Unset = Sentry is a complete no-op with
+	// zero overhead; the SDK is initialized only when set. FLEET_ENVIRONMENT
+	// tags events by deployment tier ("production" | "staging" | "dev") for
+	// scope filtering in the Sentry UI. The DSN itself is a public ingest
+	// identifier, not a secret — it is safe to ship in the .env file.
+	"FLEET_SENTRY_DSN":  true,
+	"FLEET_ENVIRONMENT": true,
 }
 
 // allowedEnvPrefixes admits open-ended user/account suffixes the operator names
@@ -643,6 +653,21 @@ type Config struct {
 
 	// MockMode short-circuits LLM calls (e2e). FLEET_MOCK_MODE / CHAT_MOCK_MODE.
 	MockMode bool
+
+	// ── observability: Sentry error tracking (#193) ──
+	// SentryDSN is the OPTIONAL Sentry-protocol ingest endpoint (Sentry or a
+	// Better Stack Errors URL). Empty (the default) leaves Sentry completely
+	// disabled — no SDK init, no transport, zero overhead. When set, cmd/fleet
+	// initializes the SDK at boot and registers a deferred Flush. The DSN is a
+	// public ingest identifier, not a secret; secrets never enter the SDK
+	// because the BeforeSend hook scrubs every outbound event (see
+	// internal/observability/sentry).
+	SentryDSN string
+	// Environment is the deployment tier used for Sentry scope tagging
+	// ("production" | "staging" | "dev"). Empty falls back to "dev". Formalized
+	// from the previously-implicit deploy convention so the field is a single
+	// source of truth the Sentry init reads alongside other boot-time wiring.
+	Environment string
 }
 
 // MCPServerConfig is one scheduled-mode MCP server's spawn spec + allowlist.
@@ -851,6 +876,10 @@ func Load(envFile string) (*Config, error) {
 		LockdownOnly:          getenvBool("CHAT_LOCKDOWN_ONLY", false),
 		LockdownAllowedModels: splitLockdownModels(os.Getenv("CHAT_LOCKDOWN_ALLOWED_MODELS")),
 		MockMode:              getenvFleetBool("MOCK_MODE", false),
+
+		// ── observability: Sentry error tracking (#193) ──
+		SentryDSN:   stripQuotes(os.Getenv("FLEET_SENTRY_DSN")),
+		Environment: getenvDefault("FLEET_ENVIRONMENT", "dev"),
 	}
 
 	// ── IP access control (#314) ──

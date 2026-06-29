@@ -31,12 +31,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/notify"
+	"github.com/ElcanoTek/fleet/internal/observability"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -374,13 +376,30 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			// Recover so a panic in task execution fails only this task, not the
 			// whole single-host process. Registered last → runs first on unwind:
 			// mark the task errored (if still owned) so it isn't stuck running
-			// until lease expiry, then the cleanup defers free the slot.
-			defer safe.Recover("runner.worker", func(any) {
+			// until lease expiry, then the cleanup defers free the slot. The
+			// Sentry capture ships a structured event with task_id / model /
+			// attempt tags so the issue is filterable in the Sentry UI (#193).
+			// observability.CapturePanic is a cheap no-op when FLEET_SENTRY_DSN
+			// is unset (the SDK checks internally), so the default config pays
+			// nothing for the call.
+			defer safe.Recover("runner.worker", func(val any) {
 				if p.stillOwns(task.ID, token) {
 					if _, err := p.reportStatus(task.ID, models.TaskStatusError, "task panicked during execution"); err != nil {
 						log.Printf("runner: failed to mark panicked task %s errored: %v", task.ID, err)
 					}
 				}
+				model := ""
+				if task.Model != nil {
+					model = *task.Model
+				}
+				observability.CapturePanic(ctx, val, func(s *sentry.Scope) {
+					s.SetTag("task_id", task.ID.String())
+					s.SetTag("model", model)
+					s.SetTag("flavor", "native-inprocess")
+					s.SetContext("task", sentry.Context{
+						"attempt": task.AttemptCount,
+					})
+				})
 			})
 			// Run on the decoupled taskCtx (not the claim ctx) so a shutdown lets
 			// this task finish naturally up to the grace period.
@@ -397,6 +416,18 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 // shutdown after taskCtx is cancelled.
 func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uuid.UUID) {
 	start := time.Now()
+
+	// Sentry breadcrumb (#193): the task-start trail so a captured panic's
+	// event in the Sentry UI shows what the runner did immediately before the
+	// crash. No-op when FLEET_SENTRY_DSN is unset (the SDK checks internally).
+	model := ""
+	if task.Model != nil {
+		model = *task.Model
+	}
+	observability.AddBreadcrumb(taskCtx, "runner", "task start: "+task.ID.String(), map[string]string{
+		"model":   model,
+		"attempt": strconv.Itoa(task.AttemptCount),
+	})
 
 	// Register a live SSE buffer so GET /tasks/{id}/stream can attach + tail this
 	// run (#200). The buffer is tee'd into the run's Observer event stream via
@@ -431,6 +462,17 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	})
 
 	session, runErr := p.runner.Run(runCtx, task)
+
+	if runErr != nil && !errors.Is(runErr, agentcore.ErrRetryBudgetExhausted) && !errors.Is(runErr, agentcore.ErrStreamBlipPersisted) {
+		observability.CaptureException(taskCtx, runErr, func(s *sentry.Scope) {
+			s.SetTag("task_id", task.ID.String())
+			s.SetTag("model", model)
+			s.SetTag("flavor", "native-inprocess")
+			s.SetContext("task", sentry.Context{
+				"attempt": task.AttemptCount,
+			})
+		})
+	}
 
 	// Emit a terminal lifecycle status (the always-last frame). The deferred release
 	// seals the buffer so attached clients see EOF; the registry retains it briefly.
