@@ -551,7 +551,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -602,8 +602,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
 			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
-			sla_breached, actual_duration_seconds
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53)
+			sla_breached, actual_duration_seconds, effective_priority
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
@@ -657,6 +657,10 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			sla_fail_multiplier = EXCLUDED.sla_fail_multiplier,
 			sla_breached = EXCLUDED.sla_breached,
 			actual_duration_seconds = EXCLUDED.actual_duration_seconds`,
+		// effective_priority is deliberately OMITTED from the upsert: it is set
+		// once on INSERT and thereafter mutated ONLY by the anti-starvation sweep
+		// (#230). UpdateTask delegates here, so including it would let a status
+		// update carrying a stale in-memory copy silently un-promote a task.
 		task.ID,
 		task.Name,
 		task.Prompt,
@@ -710,6 +714,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		slaMultiplierValue(task.SLAFailMultiplier, models.DefaultSLAFailMultiplier),
 		task.SLABreached,
 		task.ActualDurationSeconds,
+		effectivePriorityValue(task),
 	)
 	return err
 }
@@ -755,7 +760,10 @@ func maybeComputeActualDuration(task *models.Task) {
 
 // taskInsertOnConflict is the static ON CONFLICT (id) DO UPDATE clause appended
 // to every tasks INSERT. Kept in sync with AddTask's upsert. Extracted so the
-// single-row, multi-row, and in-tx paths can never disagree.
+// single-row, multi-row, and in-tx paths can never disagree. effective_priority
+// is intentionally NOT in this clause — it is write-once at INSERT and changed
+// only by the anti-starvation sweep (#230), so an UpdateTask (which routes
+// through this upsert) can never clobber a promotion with a stale in-memory value.
 const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
@@ -822,7 +830,7 @@ const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iteratio
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
-			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds`
+			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority`
 
 // taskInsertArgs returns the 53 positional INSERT values for a task, in the
 // exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
@@ -885,13 +893,14 @@ func taskInsertArgs(t *models.Task) []any {
 		slaMultiplierValue(t.SLAFailMultiplier, models.DefaultSLAFailMultiplier),
 		t.SLABreached,
 		t.ActualDurationSeconds,
+		effectivePriorityValue(t),
 	}
 }
 
 // taskInsertColumnsCount is the number of columns in taskInsertColumns. Kept as
 // a named const so the multi-row placeholder builder is self-documenting and
 // a future schema migration that adds a column forces a single touch point.
-const taskInsertColumnsCount = 53
+const taskInsertColumnsCount = 54
 
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an
@@ -1028,6 +1037,21 @@ func mcpSelectionOrEmpty(s models.MCPSelection) models.MCPSelection {
 		return models.MCPSelection{}
 	}
 	return s
+}
+
+// effectivePriorityValue defends the NOT NULL effective_priority column (#230)
+// against a directly-constructed Task that bypassed NewTask, where the field
+// would be the Go zero value 0 — which under the ASC claim ordering is the MOST
+// urgent. It falls back to the submitted Priority, then to Normal, so such a
+// task is never silently dispatched ahead of everything else.
+func effectivePriorityValue(t *models.Task) int {
+	if t.EffectivePriority > 0 {
+		return t.EffectivePriority
+	}
+	if t.Priority > 0 {
+		return t.Priority
+	}
+	return models.PriorityNormal
 }
 
 // marshalCredentialAllowlist serializes the allowlist for the nullable JSONB
@@ -1206,6 +1230,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		slaFailMul             sql.NullFloat64
 		slaBreached            bool
 		actualDurSecs          sql.NullInt64
+		effectivePriority      int
 	)
 
 	err := scanner.Scan(
@@ -1219,6 +1244,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&deadLetteredAt, &deadLetterReason, &deadLetterAttempts,
 		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
+		&effectivePriority,
 	)
 	if err != nil {
 		return nil, err
@@ -1229,6 +1255,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		Name:                   name,
 		Prompt:                 prompt,
 		Priority:               priority,
+		EffectivePriority:      effectivePriority,
 		InstructionSelfImprove: instructionSelfImprove,
 		Status:                 models.TaskStatus(status),
 		AssignedNodeID:         assignedNodeID,
@@ -1544,12 +1571,14 @@ func (db *Database) UpdateTasksStatusBatch(ctx context.Context, taskIDs []uuid.U
 	return int(affected), nil
 }
 
-// GetPendingTasks gets all pending tasks, sorted by priority DESC, created_at ASC.
+// GetPendingTasks gets all pending tasks, ordered the same way the claim path
+// dispatches them: effective_priority ASC (lower = more urgent, #230), then
+// created_at ASC (FIFO within a tier).
 func (db *Database) GetPendingTasks(ctx context.Context) ([]*models.Task, error) {
 	rows, err := db.conn.QueryContext(ctx, `
 		SELECT `+taskColumns+` FROM tasks
 		WHERE status = $1
-		ORDER BY priority DESC, created_at ASC`,
+		ORDER BY effective_priority ASC, created_at ASC`,
 		string(models.TaskStatusPending))
 	if err != nil {
 		return nil, err
@@ -1584,7 +1613,7 @@ func (db *Database) ClaimNextPendingTask(ctx context.Context, leaseOwner string,
 	row := tx.QueryRowContext(ctx, `
 		SELECT `+taskColumns+` FROM tasks
 		WHERE status = $1
-		ORDER BY priority DESC, created_at ASC
+		ORDER BY effective_priority ASC, created_at ASC
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED`,
 		string(models.TaskStatusPending))
@@ -1610,6 +1639,66 @@ func (db *Database) ClaimNextPendingTask(ctx context.Context, leaseOwner string,
 		return nil, err
 	}
 	return task, nil
+}
+
+// PromoteStarvedTasks is the anti-starvation sweep (#230): any pending task that
+// has waited longer than windowMinutes and is still LESS urgent than the
+// starvation floor has its effective_priority raised TO that floor (never its
+// submitted priority), so a sustained stream of higher-priority work can't keep
+// it queued forever. The floor is High, never Critical, so relief for a starving
+// batch task can't preempt genuinely critical work. windowMinutes <= 0 disables
+// the sweep (no-op). Returns the number of tasks promoted.
+func (db *Database) PromoteStarvedTasks(ctx context.Context, windowMinutes int) (int64, error) {
+	if windowMinutes <= 0 {
+		return 0, nil
+	}
+	// Compute the age cutoff in Go and compare against the TIMESTAMPTZ column
+	// directly — avoids any driver-specific interval-parameter typing.
+	cutoff := time.Now().UTC().Add(-time.Duration(windowMinutes) * time.Minute)
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks
+		SET effective_priority = $1
+		WHERE status = $2
+		  AND priority > $1
+		  AND effective_priority > $1
+		  AND created_at < $3`,
+		models.StarvationFloorPriority, string(models.TaskStatusPending), cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// PendingQueueStats returns the per-effective-priority rollup of the pending
+// queue (#230): the count and the longest wait (seconds) at each distinct
+// effective_priority. The handler aggregates these into named tiers for
+// GET /admin/queue.
+func (db *Database) PendingQueueStats(ctx context.Context) ([]models.QueuePriorityBucket, error) {
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT effective_priority,
+		       COUNT(*),
+		       COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(created_at)))::bigint, 0)
+		FROM tasks
+		WHERE status = $1
+		GROUP BY effective_priority
+		ORDER BY effective_priority ASC`,
+		string(models.TaskStatusPending))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]models.QueuePriorityBucket, 0)
+	for rows.Next() {
+		var b models.QueuePriorityBucket
+		var ageSeconds int64
+		if err := rows.Scan(&b.Priority, &b.Count, &ageSeconds); err != nil {
+			return nil, err
+		}
+		b.OldestAgeSeconds = int(ageSeconds)
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }
 
 // GetRunningTasks gets all currently running tasks.

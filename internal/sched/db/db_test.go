@@ -844,13 +844,15 @@ func TestClaimNextPendingTask(t *testing.T) {
 		}
 	}
 
-	// First claim: highest priority first (a).
+	// First claim: lowest integer = most urgent first (#230), so b (priority 5)
+	// beats a (priority 10). EffectivePriority is unset on these directly-built
+	// tasks, so the insert falls back to Priority — exactly the ordering tested.
 	claimed1, err := db.ClaimNextPendingTask(ctx, "worker-1", time.Minute)
 	if err != nil {
 		t.Fatalf("Claim 1 failed: %v", err)
 	}
-	if claimed1 == nil || claimed1.ID != a.ID {
-		t.Fatalf("Expected first claim to be task a, got %v", claimed1)
+	if claimed1 == nil || claimed1.ID != b.ID {
+		t.Fatalf("Expected first claim to be task b (priority 5, more urgent), got %v", claimed1)
 	}
 	if claimed1.Status != models.TaskStatusLeased || claimed1.LeaseOwner == nil || *claimed1.LeaseOwner != "worker-1" {
 		t.Fatalf("Expected leased to worker-1, got status=%s owner=%v", claimed1.Status, claimed1.LeaseOwner)
@@ -859,13 +861,13 @@ func TestClaimNextPendingTask(t *testing.T) {
 		t.Fatalf("Expected a future lease expiry, got %v", claimed1.LeaseExpiresAt)
 	}
 
-	// Second claim gets the other task (a is no longer pending).
+	// Second claim gets the other task (b is no longer pending).
 	claimed2, err := db.ClaimNextPendingTask(ctx, "worker-2", time.Minute)
 	if err != nil {
 		t.Fatalf("Claim 2 failed: %v", err)
 	}
-	if claimed2 == nil || claimed2.ID != b.ID {
-		t.Fatalf("Expected second claim to be task b, got %v", claimed2)
+	if claimed2 == nil || claimed2.ID != a.ID {
+		t.Fatalf("Expected second claim to be task a (priority 10), got %v", claimed2)
 	}
 
 	// Third claim: nothing left.
@@ -889,7 +891,7 @@ func TestClaimNextPendingTask(t *testing.T) {
 		t.Fatalf("begin tx1: %v", err)
 	}
 	defer tx1.Rollback()
-	row := tx1.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE status = $1 ORDER BY priority DESC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED", string(models.TaskStatusPending))
+	row := tx1.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE status = $1 ORDER BY effective_priority ASC, created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED", string(models.TaskStatusPending))
 	locked, err := db.scanTask(row)
 	if err != nil {
 		t.Fatalf("tx1 lock claim failed: %v", err)

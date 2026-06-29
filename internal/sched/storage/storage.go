@@ -436,6 +436,18 @@ func (s *Storage) ClaimNextPendingTask(ctx context.Context, leaseOwner string) (
 	return s.db.ClaimNextPendingTask(ctx, leaseOwner, LeaseDuration)
 }
 
+// PromoteStarvedTasks raises the effective priority of pending tasks that have
+// waited past the starvation window (#230). Returns the count promoted.
+func (s *Storage) PromoteStarvedTasks(ctx context.Context, windowMinutes int) (int64, error) {
+	return s.db.PromoteStarvedTasks(ctx, windowMinutes)
+}
+
+// PendingQueueStats returns the per-effective-priority rollup of the pending
+// queue for GET /admin/queue (#230).
+func (s *Storage) PendingQueueStats(ctx context.Context) ([]models.QueuePriorityBucket, error) {
+	return s.db.PendingQueueStats(ctx)
+}
+
 // GetNodeByName gets a node by its name.
 func (s *Storage) GetNodeByName(name string) (*models.Node, error) {
 	return s.db.GetNodeByName(context.Background(), name)

@@ -813,6 +813,37 @@ paths:
         "200": { description: OK }
         "400": { $ref: "#/components/responses/Error" }
 
+  /admin/queue:
+    get:
+      summary: Pending task-queue stats — per-tier depth + oldest wait (#230).
+      description: >-
+        Operator view of the pending task queue: total depth, the oldest pending
+        wait, and the count + oldest wait per named priority tier
+        (critical/high/normal/low/bulk). Lower priority integer = higher urgency.
+        Admin-only — backlog data is operator-sensitive.
+      security: [{ adminApiKey: [] }]
+      responses:
+        "200":
+          description: Pending-queue depth and oldest wait, overall and per tier.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pending_total: { type: integer }
+                  oldest_age_seconds: { type: integer }
+                  tiers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tier: { type: string }
+                        min_priority: { type: integer }
+                        max_priority: { type: integer }
+                        count: { type: integer }
+                        oldest_age_seconds: { type: integer }
+        "500": { $ref: "#/components/responses/Error" }
+
   /sla-report:
     get:
       summary: SLA report — per-task actual-duration p50/p95 + breach rate (#274).

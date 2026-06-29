@@ -550,6 +550,77 @@ func (s TaskStatus) IsValidReportedStatus() bool {
 	}
 }
 
+// Task priority (#230). Convention: LOWER integer = HIGHER urgency, matching
+// POSIX nice / ionice and most job schedulers. The pending queue is claimed in
+// ascending effective_priority, then FIFO (created_at ASC) within a tier.
+//
+// Two columns back this: Priority is the immutable value the submitter asked
+// for; EffectivePriority is what the scheduler actually orders by. They are
+// equal at creation; only the anti-starvation sweep lowers EffectivePriority
+// (never Priority), so a long-waiting low-urgency task eventually gets claimed
+// without rewriting what the operator requested.
+const (
+	// PriorityMin / PriorityMax bound both columns (enforced by a DB CHECK and by
+	// validateTaskLimits). 0 is reserved as the "unset" sentinel: NewTask maps a
+	// zero-value priority to PriorityNormal, so the smallest value a caller can
+	// explicitly request and have honored as-is is 1 (more urgent than Critical).
+	PriorityMin = 0
+	PriorityMax = 100
+
+	// Named tiers — documented reference points on the 0–100 scale. The API
+	// accepts any in-range integer; these name the conventional values.
+	PriorityCritical = 10 // immediate interruption of batch work
+	PriorityHigh     = 25
+	PriorityNormal   = 50 // the default applied to an unset (zero-value) priority
+	PriorityLow      = 75
+	PriorityBulk     = 90
+
+	// StarvationFloorPriority is the most-urgent value the anti-starvation sweep
+	// will promote a waiting task to. It deliberately stops at High (never
+	// Critical) so relief for a starving batch task can never preempt genuinely
+	// critical work. Only tasks whose Priority AND current EffectivePriority are
+	// both LESS urgent than this floor are eligible for promotion.
+	StarvationFloorPriority = PriorityHigh
+)
+
+// NormalizePriority maps a submitted priority to the value actually stored:
+// the zero value (unset) becomes PriorityNormal; everything else is returned
+// unchanged. Bounds are enforced separately at validation (#230).
+func NormalizePriority(p int) int {
+	if p == 0 {
+		return PriorityNormal
+	}
+	return p
+}
+
+// QueuePriorityBucket is the pending-task count and longest wait at a single
+// effective_priority value (#230) — the raw per-priority rollup the queue-stats
+// endpoint aggregates into named tiers.
+type QueuePriorityBucket struct {
+	Priority         int
+	Count            int
+	OldestAgeSeconds int
+}
+
+// QueueTierStat is the pending depth and longest wait for one named priority
+// tier, returned by GET /admin/queue (#230).
+type QueueTierStat struct {
+	Tier             string `json:"tier"`
+	MinPriority      int    `json:"min_priority"`
+	MaxPriority      int    `json:"max_priority"`
+	Count            int    `json:"count"`
+	OldestAgeSeconds int    `json:"oldest_age_seconds"`
+}
+
+// QueueStats is the operator's view of the pending queue (#230): total depth,
+// the oldest pending wait overall, and the depth + oldest wait per tier, so
+// backlog and starvation are visible at a glance.
+type QueueStats struct {
+	PendingTotal     int             `json:"pending_total"`
+	OldestAgeSeconds int             `json:"oldest_age_seconds"`
+	Tiers            []QueueTierStat `json:"tiers"`
+}
+
 // TriggerType distinguishes how a task is fired (#177).
 type TriggerType string
 
@@ -787,9 +858,14 @@ type Task struct {
 	LoopConfig *LoopConfig `json:"loop_config,omitempty"`
 	// WorktreeConfig, when non-nil with Enabled, runs each occurrence in its own
 	// git worktree + branch (#180). nil = shared workspace. See WorktreeConfig.
-	WorktreeConfig         *WorktreeConfig `json:"worktree_config,omitempty"`
-	Priority               int             `json:"priority"`
-	InstructionSelfImprove bool            `json:"instruction_self_improve,omitempty"`
+	WorktreeConfig *WorktreeConfig `json:"worktree_config,omitempty"`
+	Priority       int             `json:"priority"`
+	// EffectivePriority is the value the scheduler actually orders the pending
+	// queue by (#230). Equal to Priority at creation; only the anti-starvation
+	// sweep lowers it (never Priority) so a long-waiting task is eventually
+	// claimed without rewriting what the submitter requested. Lower = more urgent.
+	EffectivePriority      int  `json:"effective_priority"`
+	InstructionSelfImprove bool `json:"instruction_self_improve,omitempty"`
 	// AllowNetwork controls whether this task's execution sandbox keeps outbound
 	// egress. Default false seals it (--network=none); see TaskCreate.AllowNetwork.
 	AllowNetwork bool `json:"allow_network,omitempty"`
@@ -937,6 +1013,11 @@ func NewTask(tc TaskCreate) *Task {
 		failMul = DefaultSLAFailMultiplier
 	}
 
+	// Resolve the scheduling priority once at creation (#230): the zero value
+	// (unset) becomes Normal, and EffectivePriority starts equal to Priority —
+	// the anti-starvation sweep is the only thing that later lowers it.
+	priority := NormalizePriority(tc.Priority)
+
 	return &Task{
 		ID:                         uuid.New(),
 		Name:                       tc.Name,
@@ -948,7 +1029,8 @@ func NewTask(tc TaskCreate) *Task {
 		CredentialAllowlist:        tc.CredentialAllowlist,
 		LoopConfig:                 tc.LoopConfig,
 		WorktreeConfig:             tc.WorktreeConfig,
-		Priority:                   tc.Priority,
+		Priority:                   priority,
+		EffectivePriority:          priority,
 		InstructionSelfImprove:     tc.InstructionSelfImprove,
 		AllowNetwork:               tc.AllowNetwork,
 		Persona:                    tc.Persona,
@@ -1413,6 +1495,10 @@ type APIKeyCreate struct {
 	// Spending caps (nil = unlimited).
 	MaxCostPerDayUSD   *float64 `json:"max_cost_per_day_usd,omitempty"`
 	MaxCostPerMonthUSD *float64 `json:"max_cost_per_month_usd,omitempty"`
+	// MaxPriority caps how urgent a task this key may submit (#230): the key
+	// cannot create a task at a priority MORE urgent (lower integer) than this.
+	// nil = uncapped. Range [PriorityMin, PriorityMax].
+	MaxPriority *int `json:"max_priority,omitempty"`
 }
 
 // APIKeyResponse is the response model for API key operations.
@@ -1433,6 +1519,8 @@ type APIKeyResponse struct {
 	MaxCostPerMonthUSD *float64 `json:"max_cost_per_month_usd,omitempty"`
 	CostTodayUSD       float64  `json:"cost_today_usd"`
 	CostThisMonthUSD   float64  `json:"cost_this_month_usd"`
+	// MaxPriority is the key's task-urgency ceiling (#230); nil = uncapped.
+	MaxPriority *int `json:"max_priority,omitempty"`
 }
 
 // APIKeySpending is the GET /keys/{id}/spending response: current spend vs caps
