@@ -831,6 +831,7 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 		sc := config.MCPServerConfig{
 			Type:          s.Type,
 			Enabled:       true,
+			Optional:      s.Optional,
 			ToolAllowlist: append([]string(nil), s.Tools...),
 			AccountVars:   append([]string(nil), s.AccountVars...),
 		}

@@ -661,6 +661,7 @@ func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 			Headers:       sc.Headers,
 			ToolAllowlist: sc.ToolAllowlist,
 			AccountVars:   sc.AccountVars,
+			Optional:      sc.Optional,
 		}
 	}
 	return out

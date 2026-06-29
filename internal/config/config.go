@@ -679,6 +679,7 @@ type MCPServerConfig struct {
 	Env           map[string]string
 	Headers       map[string]string
 	Enabled       bool
+	Optional      bool
 	ToolAllowlist []string
 	// Dir is the working directory a stdio server's subprocess launches in (the
 	// client-config bundle root), so relative command args like `mcp/foo.py`
