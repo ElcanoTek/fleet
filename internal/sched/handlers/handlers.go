@@ -930,6 +930,13 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 			return fmt.Errorf("persona must be a bundle persona name without a path (got %q)", persona)
 		}
 	}
+	// RunIf pre-run gate (#269): nil = the legacy unconditional promotion path.
+	// A non-nil gate must have a non-empty command, a valid on_error policy, and
+	// a timeout in [1, 300]s — fail fast at creation rather than always-skip
+	// or always-run at runtime.
+	if err := tc.RunIf.Validate(); err != nil {
+		return fmt.Errorf("run_if: %w", err)
+	}
 	return nil
 }
 

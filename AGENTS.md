@@ -103,6 +103,10 @@ same PR.
   - **Soft Delete**: Setting `FLEET_CONVERSATION_SOFT_DELETE=true` switches deletes to soft-deletes (`deleted_at` timestamp). A 30-day background sweeper permanently purges soft-deleted rows. Soft-deleted conversations are excluded from retrieval and search query filters.
   - **Bulk APIs**: Bulk delete and patch actions are rate-limited to 100 IDs per request. Transactional pre-checks protect ownership; any single foreign ID fails the entire request (403 forbidden) to ensure consistency.
   - **Bulk UI**: Uses checkboxes for selection, warning users when selecting more than 50 conversations. The confirmation modal enforces a 3-second disabled countdown for delete actions.
+- **Conditional Task Execution (run_if)**:
+  - Pre-run shell gates (`run_if`) are evaluated serially on the host as the fleet process user prior to task promotion.
+  - The evaluation is restricted to `PATH=/usr/bin:/bin` and `HOME=/tmp` with a custom timeout.
+  - If a gate skips a recurring task, its status stays `scheduled`, and `scheduled_for` is advanced to the next cron occurrence. For one-shot tasks, status remains `scheduled` but the time is not advanced, acting as a soft hold.
 - One focused branch + PR per change; keep diffs scoped. Don't refactor unrelated
   code in a feature PR. See `CONTRIBUTING.md` for branch/PR conventions and DCO
   sign-off.
