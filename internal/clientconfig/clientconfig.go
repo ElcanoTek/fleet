@@ -833,6 +833,14 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 			Enabled:       true,
 			ToolAllowlist: append([]string(nil), s.Tools...),
 			AccountVars:   append([]string(nil), s.AccountVars...),
+			// Carry the Optional-server metadata so the chat path can gate
+			// optional connectors and render the settings-UI catalog. Dropping
+			// these here was the bug behind the 128-tool ceiling overflow.
+			Optional:         s.Optional,
+			DisplayName:      s.DisplayName,
+			Description:      s.Description,
+			Beta:             s.Beta,
+			EnabledByDefault: s.EnabledByDefault,
 		}
 		switch s.Type {
 		case "http":

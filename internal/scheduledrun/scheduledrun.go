@@ -661,6 +661,14 @@ func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 			Headers:       sc.Headers,
 			ToolAllowlist: sc.ToolAllowlist,
 			AccountVars:   sc.AccountVars,
+			// Optional-server metadata — without these the chat Manager's
+			// optional-set is empty, Gate-1 never skips, and every connector's
+			// tools register on every turn (the 128-tool ceiling overflow).
+			Optional:         sc.Optional,
+			DisplayName:      sc.DisplayName,
+			Description:      sc.Description,
+			Beta:             sc.Beta,
+			EnabledByDefault: sc.EnabledByDefault,
 		}
 	}
 	return out
