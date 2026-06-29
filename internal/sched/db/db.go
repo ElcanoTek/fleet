@@ -549,7 +549,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts"
+const taskColumns = "id, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -591,8 +591,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			attempt_count, max_retries, allow_network, timezone, created_by_key_id,
 			trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path,
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
-			dead_lettered_at, dead_letter_reason, dead_letter_attempts
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43)
+			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
+			run_if, skip_count, last_skip_at, last_skip_reason
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47)
 		ON CONFLICT (id) DO UPDATE SET
 			prompt = EXCLUDED.prompt,
 			model = EXCLUDED.model,
@@ -635,7 +636,11 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			created_by_task_id = EXCLUDED.created_by_task_id,
 			dead_lettered_at = EXCLUDED.dead_lettered_at,
 			dead_letter_reason = EXCLUDED.dead_letter_reason,
-			dead_letter_attempts = EXCLUDED.dead_letter_attempts`,
+			dead_letter_attempts = EXCLUDED.dead_letter_attempts,
+			run_if = EXCLUDED.run_if,
+			skip_count = EXCLUDED.skip_count,
+			last_skip_at = EXCLUDED.last_skip_at,
+			last_skip_reason = EXCLUDED.last_skip_reason`,
 		task.ID,
 		task.Prompt,
 		task.Model,
@@ -679,6 +684,10 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.DeadLetteredAt,
 		nullableString(deref(task.DeadLetterReason)),
 		deadLetterAttemptsValue(task.DeadLetterAttempts),
+		marshalRunIf(task.RunIf),
+		task.SkipCount,
+		task.LastSkipAt,
+		nullableString(deref(task.LastSkipReason)),
 	)
 	return err
 }
@@ -839,6 +848,29 @@ func unmarshalRetryPolicy(ns sql.NullString) *models.RetryPolicy {
 	return &rp
 }
 
+// marshalRunIf serializes the optional pre-run shell gate (#269) for the nullable
+// JSONB column: nil → SQL NULL (the legacy unconditional promotion path), non-nil
+// → its JSON.
+func marshalRunIf(r *models.RunIf) any {
+	if r == nil {
+		return nil
+	}
+	return marshalJSON(r)
+}
+
+// unmarshalRunIf reads the nullable run_if column back. NULL/empty → nil.
+func unmarshalRunIf(ns sql.NullString) *models.RunIf {
+	if !ns.Valid || ns.String == "" {
+		return nil
+	}
+	var r models.RunIf
+	if err := json.Unmarshal([]byte(ns.String), &r); err != nil {
+		log.Printf("Warning: failed to unmarshal run_if: %v (input: %.100s)", err, ns.String)
+		return nil
+	}
+	return &r
+}
+
 func nullableString(s string) *string {
 	if s == "" {
 		return nil
@@ -891,6 +923,10 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		deadLetteredAt         sql.NullTime
 		deadLetterReason       sql.NullString
 		deadLetterAttempts     sql.NullInt64
+		runIf                  sql.NullString
+		skipCount              int
+		lastSkipAt             sql.NullTime
+		lastSkipReason         sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -902,6 +938,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&triggerType, &credentialAllowlist, &loopConfig, &worktreeConfig, &description, &tags, &retryPolicy, &sourceTaskID, &persona, &workspacePath,
 		&allowTaskCreation, &allowRecurringTaskCre, &createdByTaskID,
 		&deadLetteredAt, &deadLetterReason, &deadLetterAttempts,
+		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
 	)
 	if err != nil {
 		return nil, err
@@ -1008,6 +1045,14 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	}
 	if deadLetterAttempts.Valid {
 		task.DeadLetterAttempts = int(deadLetterAttempts.Int64)
+	}
+	task.RunIf = unmarshalRunIf(runIf)
+	task.SkipCount = skipCount
+	if lastSkipAt.Valid {
+		task.LastSkipAt = &lastSkipAt.Time
+	}
+	if lastSkipReason.Valid {
+		task.LastSkipReason = &lastSkipReason.String
 	}
 	return task, nil
 }
@@ -1716,7 +1761,11 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			created_by_task_id = $38,
 			dead_lettered_at = $39,
 			dead_letter_reason = $40,
-			dead_letter_attempts = $41
+			dead_letter_attempts = $41,
+			run_if = $42,
+			skip_count = $43,
+			last_skip_at = $44,
+			last_skip_reason = $45
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -1759,8 +1808,44 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.DeadLetteredAt,
 		nullableString(deref(task.DeadLetterReason)),
 		deadLetterAttemptsValue(task.DeadLetterAttempts),
+		marshalRunIf(task.RunIf),
+		task.SkipCount,
+		task.LastSkipAt,
+		nullableString(deref(task.LastSkipReason)),
 	)
 	return err
+}
+
+// RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it
+// re-locks the row, re-checks it is still `scheduled` (a concurrent cancel or
+// claim must win and suppress the skip), advances scheduled_for to nextRun,
+// increments skip_count, and stamps last_skip_at / last_skip_reason. status is
+// intentionally left `scheduled` (no promotion to pending). Returns the updated
+// task.
+func (db *Database) RecordSkip(ctx context.Context, tx *sql.Tx, taskID uuid.UUID, reason string, nextRun time.Time) (*models.Task, error) {
+	task, err := db.GetTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	// Only a still-scheduled task can be skipped. A concurrent cancel/claim
+	// (status moved off scheduled) wins and the skip is a no-op.
+	if task.Status != models.TaskStatusScheduled {
+		return task, nil
+	}
+	now := time.Now().UTC()
+	if !nextRun.IsZero() {
+		task.ScheduledFor = &nextRun
+	}
+	task.SkipCount++
+	task.LastSkipAt = &now
+	if reason != "" {
+		r := reason
+		task.LastSkipReason = &r
+	}
+	if err := db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	return task, nil
 }
 
 // ── task_iterations (looped-task telemetry, #179) ──
