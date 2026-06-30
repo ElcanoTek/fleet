@@ -52,6 +52,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
+	"github.com/ElcanoTek/fleet/internal/otelsetup"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -126,6 +127,14 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// OpenTelemetry distributed tracing (#186): OPT-IN via FLEET_OTEL_ENDPOINT.
+	// With the endpoint unset (the default) this is a complete no-op — no
+	// exporter, the global no-op TracerProvider stays in place, zero per-span
+	// overhead — while the W3C propagator is still installed so an inbound
+	// traceparent threads request context for free. The stop func (bounded flush)
+	// is deferred BEFORE any goroutine starts, like the Sentry flush.
+	defer initTracing(version.String())()
 
 	// Sentry error tracking (#193): OPT-IN via FLEET_SENTRY_DSN. With the DSN
 	// unset (the default) this is a complete no-op — no SDK init, no transport,
@@ -732,6 +741,27 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 	log.Printf("fleet: shutdown complete")
 }
 
+// initTracing wires OpenTelemetry tracing (#186) and returns a stop func meant
+// to be deferred. A misconfigured exporter is NON-FATAL: it logs and returns a
+// no-op stop, so a bad FLEET_OTEL_ENDPOINT degrades to disabled tracing rather
+// than preventing the agent platform from starting — tracing is optional
+// observability, not a hard dependency. The stop func flushes buffered spans
+// under a bounded timeout so a stuck collector can't hang shutdown.
+func initTracing(serviceVersion string) func() {
+	shutdown, err := otelsetup.Init(context.Background(), serviceVersion)
+	if err != nil {
+		log.Printf("otel: init failed, tracing disabled: %v", err)
+		return func() {}
+	}
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdown(ctx); err != nil {
+			log.Printf("otel: shutdown error: %v", err)
+		}
+	}
+}
+
 // buildOrchestratorMux registers the orchestrator routes (chi), mirroring moc's
 // auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
 func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) http.Handler {
@@ -743,6 +773,7 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 	// exactly what getClientIP() already expects.
 	r.Use(middleware.ClientIPFromXFF())
 	r.Use(middleware.Recoverer)
+	r.Use(otelsetup.Middleware)          // #186: server span + X-Request-Id (no-op when tracing disabled)
 	r.Use(orchestratorMetricsMiddleware) // #176: record request count + latency
 	r.Use(h.SecurityHeadersMiddleware)
 	r.Use(h.BodySizeLimitMiddleware)
