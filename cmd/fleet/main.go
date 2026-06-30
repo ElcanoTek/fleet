@@ -52,6 +52,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
+	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
@@ -63,6 +64,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/slamonitor"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
+	"github.com/ElcanoTek/fleet/internal/secretbox"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/version"
@@ -318,6 +320,12 @@ func run() error {
 	// DB-backed propose_note path (notesProvider, wired into both drivers below).
 	taskMemoryStore := &taskMemoryAdapter{store: notesStore}
 
+	// ── per-user remote (hosted) MCP servers + OAuth (#443) ──
+	// remoteMCPSvc is the concrete service (for the HTTP endpoints); remoteMCPResolver
+	// is the same value as the agent-side interface (for the chat + scheduled overlay).
+	// Both nil when the feature is unconfigured, leaving every path unchanged.
+	remoteMCPSvc, remoteMCPResolver := setupRemoteMCP(cfg, chatStore)
+
 	// ── interactive engine (the concrete turnEngine) ──
 	serverSpecs := scheduledrun.BuildMCPSpecs(cfg)
 	mgr, err := agent.New(agent.ManagerOptions{
@@ -332,6 +340,7 @@ func run() error {
 		NotesProvider:        notesProvider,
 		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
 		PersonaPolicies:      personaPolicies,
+		RemoteMCP:            remoteMCPResolver,
 	})
 	if err != nil {
 		return fmt.Errorf("build interactive engine: %w", err)
@@ -341,12 +350,16 @@ func run() error {
 	// Health summary (#301): uptime + an injected scheduler worker/task provider
 	// (adapts the sched store's dashboard stats) so the chat-side endpoint can
 	// report a single-pane view without httpapi importing the sched packages.
-	chatSrv := httpapi.New(cfg, mgr, chatStore,
+	chatOpts := []httpapi.Option{
 		httpapi.WithClientConfig(bundle),
 		httpapi.WithStartTime(startTime),
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
-	)
+	}
+	if remoteMCPSvc != nil {
+		chatOpts = append(chatOpts, httpapi.WithRemoteMCP(remoteMCPSvc))
+	}
+	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 
 	// Auto-approve-in-test (#225) bypasses the human-in-the-loop approval gate.
 	// It is off by default and intended only for CI/test pipelines with a mocked
@@ -468,6 +481,12 @@ func run() error {
 		// in (allow_task_creation) can enqueue follow-up tasks through the shared
 		// sched storage. Tasks without the flag never see the tool.
 		TaskEnqueuer: schedStorage,
+		// Per-user remote (hosted) MCP + OAuth (#443): the same service the chat
+		// path uses, plus a creator-UUID → email resolver (the sched username IS
+		// the chat email for the elcano-auth tier). Both nil when the feature is
+		// off, leaving scheduled runs unchanged.
+		RemoteMCP:  remoteMCPResolver,
+		OwnerEmail: ownerEmailResolver(schedStorage),
 	})
 	// Wire the cost-forecast's system-prompt resolver (#233) from the SAME runner
 	// that assembles the prompt at dispatch, so POST /tasks/estimate counts the
@@ -1085,6 +1104,62 @@ func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*
 			CompletedToday: ds.CompletedTasksToday,
 			FailedToday:    ds.FailedTasksToday,
 		}, nil
+	}
+}
+
+// setupRemoteMCP wires the per-user remote-MCP + OAuth feature (#443). It is
+// enabled only when an encryption key AND a public base URL are configured;
+// otherwise it fails closed (returns nil, nil) and the endpoints report the
+// feature off. On enable it installs the token cipher on the chat store (secrets
+// encrypted at rest) and starts an hourly sweep of abandoned OAuth-flow rows.
+// The returned *Service backs the HTTP endpoints; the same value, typed as the
+// agent resolver interface, backs the chat + scheduled overlay.
+func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) (*remotemcp.Service, agent.RemoteMCPResolver) {
+	if len(cfg.MCPOAuthEncryptionKey) == 0 || cfg.PublicBaseURL == "" {
+		log.Printf("remote MCP OAuth: disabled (set FLEET_MCP_OAUTH_ENCRYPTION_KEY + FLEET_PUBLIC_BASE_URL to enable)")
+		return nil, nil
+	}
+	cipher, err := secretbox.NewCipher(cfg.MCPOAuthEncryptionKey)
+	if err != nil {
+		// Config already validates the key length, so this is belt-and-suspenders:
+		// disable rather than crash the whole server on a bad key.
+		log.Printf("remote MCP OAuth: disabled — invalid encryption key: %v", err)
+		return nil, nil
+	}
+	chatStore.SetTokenCipher(cipher)
+	svc := remotemcp.NewService(chatStore, remotemcp.Config{
+		PublicBaseURL:     cfg.PublicBaseURL,
+		AllowInsecureHTTP: cfg.RemoteMCPAllowInsecureHTTP,
+	})
+	// Sweep abandoned OAuth flow rows hourly (single-use + expiry already guard
+	// correctness; this just reclaims rows). A process-lifetime daemon.
+	safe.Go("remote-mcp.flow-sweep", func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			swCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if _, err := chatStore.SweepExpiredOAuthFlows(swCtx); err != nil {
+				log.Printf("remote-mcp: oauth flow sweep: %v", err)
+			}
+			cancel()
+		}
+	})
+	//nolint:gosec // G706: PublicBaseURL is operator-set config (env var), not request input — it can't forge a log line.
+	log.Printf("remote MCP OAuth: ENABLED (per-user hosted servers; redirect %s/api/oauth/mcp/callback)", cfg.PublicBaseURL)
+	return svc, svc
+}
+
+// ownerEmailResolver maps a scheduled task's creator UUID to the chat-side email
+// its remote-MCP OAuth tokens are keyed by (#443). The orchestrator username IS
+// that email for the elcano-auth tier. Returns "" (no error) when the user can't
+// be found, so a task created by a since-deleted user simply gets no overlay.
+func ownerEmailResolver(s *storage.Storage) func(context.Context, uuid.UUID) (string, error) {
+	return func(ctx context.Context, id uuid.UUID) (string, error) {
+		m, err := s.GetUsersByIDsWithContext(ctx, []uuid.UUID{id})
+		if err != nil {
+			return "", err
+		}
+		return m[id], nil
 	}
 }
 

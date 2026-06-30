@@ -616,6 +616,21 @@ type Config struct {
 	// payloads. nil/empty = archives are gzip-only. Held host-side; never logged.
 	LogArchiveEncryptionKey []byte
 
+	// ── remote (hosted) MCP servers + per-user OAuth (#443) ──
+	// PublicBaseURL is the externally-reachable origin of the web app, e.g.
+	// "https://fleet.example.com" (FLEET_PUBLIC_BASE_URL). The per-user remote-MCP
+	// OAuth redirect URI is derived from it and must be byte-stable — it is NEVER
+	// reconstructed from request headers. Required to enable the feature.
+	PublicBaseURL string
+	// MCPOAuthEncryptionKey is the optional 32-byte AES-256-GCM key (decoded from
+	// the base64 FLEET_MCP_OAUTH_ENCRYPTION_KEY) that encrypts per-user remote-MCP
+	// OAuth tokens at rest. nil/empty = the feature is OFF (fails closed). Held
+	// host-side; never logged.
+	MCPOAuthEncryptionKey []byte
+	// RemoteMCPAllowInsecureHTTP permits adding http:// remote MCP servers
+	// (FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP). Dev/test only; default false (https).
+	RemoteMCPAllowInsecureHTTP bool
+
 	InputDir   string
 	InputFiles []string
 
@@ -946,6 +961,10 @@ func Load(envFile string) (*Config, error) {
 		// ── log archival (#272) ── default OFF (0): opt in deliberately.
 		LogArchiveAfterDays:     getenvFleetInt("LOG_ARCHIVE_AFTER_DAYS", 0),
 		LogArchiveEncryptionKey: logArchiveEncryptionKey(),
+
+		PublicBaseURL:              strings.TrimRight(strings.TrimSpace(getenvFleet("PUBLIC_BASE_URL")), "/"),
+		MCPOAuthEncryptionKey:      mcpOAuthEncryptionKey(),
+		RemoteMCPAllowInsecureHTTP: getenvFleetBool("REMOTE_MCP_ALLOW_INSECURE_HTTP", false),
 
 		// ── attachments / uploads (generic infra) ──
 		EmailAttachmentDir: getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),
@@ -1448,6 +1467,28 @@ func logArchiveEncryptionKey() []byte {
 	}
 	if len(key) != 32 {
 		log.Printf("Warning: FLEET_LOG_ARCHIVE_ENCRYPTION_KEY must decode to 32 bytes (got %d); archives will be gzip-only (unencrypted)", len(key))
+		return nil
+	}
+	return key
+}
+
+// mcpOAuthEncryptionKey decodes the optional base64 AES-256-GCM key for per-user
+// remote-MCP OAuth tokens (#443) from FLEET_MCP_OAUTH_ENCRYPTION_KEY. Unlike the
+// log-archive key, a malformed/wrong-length value still returns nil (the feature
+// stays OFF — fails closed) but logs loudly so the operator knows their key was
+// rejected. The decoded bytes are never logged.
+func mcpOAuthEncryptionKey() []byte {
+	raw := getenvFleet("MCP_OAUTH_ENCRYPTION_KEY")
+	if raw == "" {
+		return nil
+	}
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		log.Printf("Warning: FLEET_MCP_OAUTH_ENCRYPTION_KEY is not valid base64; remote-MCP OAuth stays DISABLED")
+		return nil
+	}
+	if len(key) != 32 {
+		log.Printf("Warning: FLEET_MCP_OAUTH_ENCRYPTION_KEY must decode to 32 bytes (got %d); remote-MCP OAuth stays DISABLED", len(key))
 		return nil
 	}
 	return key

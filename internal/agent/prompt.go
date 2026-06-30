@@ -136,6 +136,10 @@ type Manager struct {
 	// server/credential gates permit). Nil/empty when the bundle declares no
 	// personas: block — defaults unchanged.
 	personaPolicies map[string]agentcore.PersonaToolPermissions
+
+	// remoteMCP resolves a user's OAuth-connected remote (hosted) MCP servers and
+	// mints their bearer tokens for the per-turn overlay (#443). nil = feature off.
+	remoteMCP RemoteMCPResolver
 }
 
 // personaPolicy returns the per-persona tool allowlist for the named persona
