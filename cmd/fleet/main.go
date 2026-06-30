@@ -306,6 +306,13 @@ func run() error {
 	schedStorage.SetTimezone(timezone())
 	log.Printf("sched DB connected + migrated")
 
+	// Bootstrap operators (#458): provision/promote the configured emails as
+	// orchestrator admins so they reach the Operations Center seamlessly via the
+	// shared chat session cookie. See seedBootstrapAdmins for the rationale.
+	if err := seedBootstrapAdmins(schedStorage); err != nil {
+		return err
+	}
+
 	// Pool health metrics (#276): expose both pools' live db.Stats() at scrape.
 	metrics.RegisterDBPool(map[string]func() metrics.DBPoolStats{
 		"chat":  func() metrics.DBPoolStats { return toDBPoolStats(chatStore.PoolStats()) },
@@ -377,7 +384,6 @@ func run() error {
 	}
 	hcfg := handlers.Config{
 		AdminAPIKey:         os.Getenv("ADMIN_API_KEY"),
-		RegistrationToken:   os.Getenv("REGISTRATION_TOKEN"),
 		Version:             version.String(),
 		DataDir:             cfg.DataDir,
 		Timezone:            timezone(),
@@ -741,13 +747,6 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 	r.Get("/health", h.HealthCheck)
 	r.Get("/api/config", h.GetDashboardConfig)
 
-	// Registration (rate-limited).
-	r.Group(func(r chi.Router) {
-		r.Use(h.RateLimitMiddleware)
-		r.Use(h.RegistrationAuthMiddleware)
-		r.Post("/register", h.RegisterNode)
-	})
-
 	// Admin-gated mutations.
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminAuthMiddleware)
@@ -757,13 +756,8 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 			_, _ = w.Write([]byte(metrics.Render()))
 		})
-		r.Delete("/nodes/{node_id}", h.UnregisterNode)
 		r.Post("/tasks/cleanup", h.CleanupHistory)
 		r.Post("/tasks/model", h.BulkSetTaskModel) // fleet-wide model re-assignment (admin-gated)
-		// SLA report (#274): per-prompt actual-duration p50/p95 + breach rate over
-		// a window. Admin-gated like the other sensitive reads (cost/duration
-		// data must not be public).
-		r.Get("/sla-report", h.GetSLAReport)
 		// Pending-queue inspection (#230): per-tier depth + oldest wait, so an
 		// operator can see backlog and starvation. Admin-gated like the other
 		// sensitive reads.
@@ -790,8 +784,12 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 	// Admin-or-user reads.
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
-		r.Get("/nodes", h.ListNodes)
-		r.Get("/nodes/{node_id}", h.GetNode)
+		// SLA report (#274): per-prompt actual-duration p50/p95 + breach rate over a
+		// window. Registered here (not under AdminAuthMiddleware) so the Next proxy's
+		// header-trust/bearer path resolves the caller into a principal; the handler
+		// then gates on PermissionAdmin (#458). The bare admin-API-key gate made it
+		// unreachable from the dashboard — the proxy can never send X-API-Key.
+		r.Get("/sla-report", h.GetSLAReport)
 		r.Get("/tasks", h.ListTasks)
 		// /tasks/tags is registered before /tasks/{task_id} so the static segment
 		// wins over the wildcard (#212 tag catalogue). /tasks/export and
@@ -837,16 +835,6 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Get("/notes/{slug}", notes.GetNote)
 		r.Get("/notes/proposals", notes.ListProposals)
 		r.Get("/notes/proposals/{id}", notes.GetProposal)
-	})
-
-	// Node lease/report endpoints (kept for protocol compatibility; the
-	// in-process pool uses storage directly).
-	r.Group(func(r chi.Router) {
-		r.Use(h.NodeAuthMiddleware)
-		r.Post("/nodes/heartbeat", h.NodeHeartbeat)
-		r.Get("/tasks/pending", h.GetPendingTask)
-		r.Post("/status", h.ReportStatus)
-		r.Post("/logs", h.SubmitLogs)
 	})
 
 	// The two high-cost endpoints carry the sliding-window rate limiter
@@ -932,6 +920,55 @@ func defaultTaskTimezone() string {
 		return v
 	}
 	return "UTC"
+}
+
+// seedBootstrapAdmins provisions (or promotes) the configured emails as
+// orchestrator admins at boot (#458). The list
+// (FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS, comma-separated emails) is authoritative
+// on every boot and idempotent; empty = no bootstrap. This is the ONLY automatic
+// orchestrator grant: a non-bootstrap chat user is still NOT a member (they get a
+// clear "ask an admin" page, never silent admin), preserving the deliberate
+// chat/orchestrator membership separation (ADR-0005). Extracted from run() to
+// keep it within the cyclomatic budget.
+func seedBootstrapAdmins(schedStorage *storage.Storage) error {
+	admins := bootstrapAdmins()
+	if len(admins) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, email := range admins {
+		if err := schedStorage.EnsureAdminUser(ctx, email); err != nil {
+			return fmt.Errorf("seed orchestrator bootstrap admin: %w", err)
+		}
+	}
+	log.Printf("orchestrator bootstrap admin(s) ensured: %d", len(admins))
+	return nil
+}
+
+// bootstrapAdmins parses FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS — a comma-separated
+// list of emails to provision (or promote) as orchestrator admins at boot (#458)
+// — returning the de-duplicated, lowercased, non-empty entries. Empty/unset =
+// no bootstrap.
+func bootstrapAdmins() []string {
+	raw := strings.TrimSpace(os.Getenv("FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS"))
+	if raw == "" {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		email := strings.ToLower(strings.TrimSpace(part))
+		if email == "" {
+			continue
+		}
+		if _, dup := seen[email]; dup {
+			continue
+		}
+		seen[email] = struct{}{}
+		out = append(out, email)
+	}
+	return out
 }
 
 // envIntDefault reads an integer env var, returning def when unset or
@@ -1122,9 +1159,6 @@ func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*
 			return nil, err
 		}
 		return &httpapi.WorkerStats{
-			TotalNodes:     ds.TotalNodes,
-			ActiveNodes:    ds.ActiveNodes,
-			IdleNodes:      ds.IdleNodes,
 			QueuedTasks:    ds.PendingTasks,
 			RunningTasks:   ds.RunningTasks,
 			CompletedToday: ds.CompletedTasksToday,

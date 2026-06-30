@@ -36,7 +36,7 @@ func TestHandleHealthSummary(t *testing.T) {
 	s.startTime = time.Now().Add(-90 * time.Second)
 	s.version = "test-1.2.3"
 	s.workerStats = func(context.Context) (*WorkerStats, error) {
-		return &WorkerStats{TotalNodes: 4, ActiveNodes: 1, RunningTasks: 2}, nil
+		return &WorkerStats{QueuedTasks: 4, RunningTasks: 2}, nil
 	}
 
 	rr := httptest.NewRecorder()
@@ -64,8 +64,8 @@ func TestHandleHealthSummary(t *testing.T) {
 	if got.LLM.AvgCostPerCall < 0.149 || got.LLM.AvgCostPerCall > 0.151 {
 		t.Errorf("avg_cost_per_call = %v, want 0.15", got.LLM.AvgCostPerCall)
 	}
-	if got.Workers == nil || got.Workers.TotalNodes != 4 || got.Workers.RunningTasks != 2 {
-		t.Errorf("workers = %+v, want 4 nodes / 2 running", got.Workers)
+	if got.Workers == nil || got.Workers.QueuedTasks != 4 || got.Workers.RunningTasks != 2 {
+		t.Errorf("workers = %+v, want 4 queued / 2 running", got.Workers)
 	}
 	if got.Goroutines <= 0 {
 		t.Errorf("goroutines = %d, want > 0", got.Goroutines)

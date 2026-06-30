@@ -1695,6 +1695,34 @@ export function ChatExperience() {
     }
   };
 
+  // branchFromMessage forks the active conversation at a chosen PERSISTED message
+  // into a new independent thread (#454), then opens it. The Branch button only
+  // renders for messages carrying a dbId (persisted), so message.dbId is present
+  // here; we still guard defensively. On success we refresh the sidebar (so the
+  // new branch appears) and load it; failures mirror the other conversation
+  // actions (log + no-op — the user simply stays put).
+  const branchFromMessage = async (message: Message) => {
+    const parentId = activeConversationId;
+    if (!parentId || !message.dbId) return;
+    try {
+      const response = await fetch(`/api/conversations/${parentId}/branch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ branch_point_message_id: message.dbId }),
+      });
+      if (!response.ok) {
+        console.error("branch failed:", response.status, await response.text());
+        return;
+      }
+      const branch = (await response.json()) as { id?: string };
+      if (!branch.id) return;
+      await refreshConversations();
+      await loadConversation(branch.id);
+    } catch (err) {
+      console.error("branch error:", err);
+    }
+  };
+
   // buildShareUrl turns a share token into the absolute, copy-paste link a
   // recipient opens. window.origin is the deployment origin the user is on (#226).
   const buildShareUrl = (token: string) =>
@@ -2868,6 +2896,7 @@ export function ChatExperience() {
             resendUserMessage={resendUserMessage}
             retryLastUserMessage={retryLastUserMessage}
             regenerateLastAssistant={regenerateLastAssistant}
+            branchFromMessage={branchFromMessage}
             loadMemories={loadMemories}
             setSelectedModel={setSelectedModel}
             setModelPickerOpen={setModelPickerOpen}

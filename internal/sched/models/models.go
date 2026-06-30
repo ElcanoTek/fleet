@@ -513,27 +513,6 @@ type LoginResponse struct {
 	User  UserResponse `json:"user"`
 }
 
-// NodeStatus represents the current status of a runner node (the synthetic
-// in-box worker; see internal/runner).
-type NodeStatus string
-
-const (
-	NodeStatusIdle    NodeStatus = "idle"
-	NodeStatusBusy    NodeStatus = "busy"
-	NodeStatusOffline NodeStatus = "offline"
-	NodeStatusError   NodeStatus = "error"
-)
-
-// IsValid reports whether s is a recognized node status.
-func (s NodeStatus) IsValid() bool {
-	switch s {
-	case NodeStatusIdle, NodeStatusBusy, NodeStatusOffline, NodeStatusError:
-		return true
-	default:
-		return false
-	}
-}
-
 // TaskStatus represents the status of a task in the system.
 type TaskStatus string
 
@@ -694,7 +673,6 @@ const (
 	PermissionCreateTask Permission = "create_task"
 	PermissionViewTasks  Permission = "view_tasks"
 	PermissionCancelTask Permission = "cancel_task"
-	PermissionViewNodes  Permission = "view_nodes"
 	PermissionViewLogs   Permission = "view_logs"
 	PermissionManageKeys Permission = "manage_keys"
 	PermissionAdmin      Permission = "admin"
@@ -703,52 +681,8 @@ const (
 // RolePermissions maps role names to their permission sets.
 var RolePermissions = map[string][]Permission{
 	"admin":    {PermissionAdmin},
-	"client":   {PermissionCreateTask, PermissionViewTasks, PermissionViewLogs, PermissionViewNodes},
-	"readonly": {PermissionViewTasks, PermissionViewNodes, PermissionViewLogs},
-}
-
-// NodeRegistration is the request model for node registration.
-type NodeRegistration struct {
-	Hostname string  `json:"hostname"`
-	Name     *string `json:"name,omitempty"`
-	OSType   string  `json:"os_type"`
-}
-
-// Node represents a registered worker node in the fleet.
-type Node struct {
-	ID             uuid.UUID  `json:"id"`
-	Hostname       string     `json:"hostname"`
-	Name           string     `json:"name"`
-	APIKey         string     `json:"api_key"`
-	PreviousAPIKey *string    `json:"-"`
-	KeyRotatedAt   *time.Time `json:"-"`
-	OSType         string     `json:"os_type"`
-	Status         NodeStatus `json:"status"`
-	LastHeartbeat  time.Time  `json:"last_heartbeat"`
-	CurrentTaskID  *uuid.UUID `json:"current_task_id,omitempty"`
-	RegisteredAt   time.Time  `json:"registered_at"`
-}
-
-// KeyRotationGracePeriod is how long the previous API key remains valid after rotation.
-const KeyRotationGracePeriod = 5 * time.Minute
-
-// NewNode creates a new Node with defaults.
-func NewNode(reg NodeRegistration) *Node {
-	now := time.Now().UTC()
-	name := reg.Hostname
-	if reg.Name != nil {
-		name = *reg.Name
-	}
-	return &Node{
-		ID:            uuid.New(),
-		Hostname:      reg.Hostname,
-		Name:          name,
-		APIKey:        uuid.New().String(),
-		OSType:        reg.OSType,
-		Status:        NodeStatusIdle,
-		LastHeartbeat: now,
-		RegisteredAt:  now,
-	}
+	"client":   {PermissionCreateTask, PermissionViewTasks, PermissionViewLogs},
+	"readonly": {PermissionViewTasks, PermissionViewLogs},
 }
 
 // TaskCreate is the request model for creating a new task.
@@ -934,7 +868,6 @@ type Task struct {
 	// Description is optional operator documentation (#281). See TaskCreate.Description.
 	Description    string     `json:"description,omitempty"`
 	Status         TaskStatus `json:"status"`
-	AssignedNodeID *uuid.UUID `json:"assigned_node_id,omitempty"`
 	AgentSessionID *string    `json:"agent_session_id,omitempty"`
 	// WorkspacePath is the host filesystem path of the per-run workspace directory
 	// the agent wrote into (#287). Set by the runner when the run begins; surfaced
@@ -1484,19 +1417,8 @@ type TaskAssignment struct {
 	FileChecksums          []string            `json:"file_checksums,omitempty"`
 }
 
-// NodeHeartbeat is the heartbeat from a node to indicate it's still alive.
-type NodeHeartbeat struct {
-	NodeID        uuid.UUID  `json:"node_id"`
-	Status        NodeStatus `json:"status"`
-	CurrentTaskID *uuid.UUID `json:"current_task_id,omitempty"`
-}
-
 // DashboardStats contains statistics for the dashboard.
 type DashboardStats struct {
-	TotalNodes          int `json:"total_nodes"`
-	ActiveNodes         int `json:"active_nodes"`
-	IdleNodes           int `json:"idle_nodes"`
-	OfflineNodes        int `json:"offline_nodes"`
 	PendingTasks        int `json:"pending_tasks"`
 	RunningTasks        int `json:"running_tasks"`
 	CompletedTasksToday int `json:"completed_tasks_today"`
@@ -1665,12 +1587,6 @@ type BulkModelUpdateResult struct {
 	UpdatedCount int     `json:"updated_count,omitempty"`
 	MatchedCount int     `json:"matched_count,omitempty"`
 	Tasks        []*Task `json:"tasks,omitempty"`
-}
-
-// DeleteNodeResponse is the response for node deletion.
-type DeleteNodeResponse struct {
-	Status string `json:"status"`
-	NodeID string `json:"node_id"`
 }
 
 // DeleteKeyResponse is the response for API key deletion.

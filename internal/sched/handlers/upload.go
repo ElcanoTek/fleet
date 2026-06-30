@@ -4,7 +4,6 @@
 package handlers
 
 import (
-	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -20,8 +19,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-
-	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
 const maxUploadSize = 250 * 1024 * 1024 // 250MB
@@ -159,19 +156,14 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleDownload handles file downloads for runners.
+// HandleDownload serves an uploaded task-input file. With the worker-node
+// registry removed (#459) the legacy node-key download path is gone: the
+// in-process worker reads inputs directly from the shared data dir, so this
+// endpoint is now admin-only (operators inspecting uploaded artifacts).
 func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
-	// Require authentication for file downloads
-	isAdmin := h.verifyAdminKey(r)
-	var node *models.Node
-	var nodeErr error
-
-	if !isAdmin {
-		node, nodeErr = h.verifyNodeKey(r)
-		if nodeErr != nil {
-			writeError(w, http.StatusUnauthorized, "Unauthorized")
-			return
-		}
+	if !h.verifyAdminKey(r) {
+		writeError(w, http.StatusUnauthorized, "Unauthorized")
+		return
 	}
 
 	filename := chi.URLParam(r, "filename")
@@ -181,18 +173,6 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	if filename == "" {
 		writeError(w, http.StatusBadRequest, "Invalid filename")
 		return
-	}
-
-	if node != nil && !isAdmin {
-		allowed, err := h.nodeCanAccessFile(r.Context(), node.ID, filename)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "Failed to authorize file access")
-			return
-		}
-		if !allowed {
-			writeError(w, http.StatusForbidden, "File access denied")
-			return
-		}
 	}
 
 	uploadsDir := filepath.Join(h.config.DataDir, "temp_uploads")
@@ -362,8 +342,4 @@ func sanitizeFilename(filename string) string {
 		return ""
 	}
 	return sanitized
-}
-
-func (h *Handlers) nodeCanAccessFile(ctx context.Context, nodeID uuid.UUID, filename string) (bool, error) {
-	return h.storage.CanNodeAccessFileWithContext(ctx, nodeID, filename)
 }

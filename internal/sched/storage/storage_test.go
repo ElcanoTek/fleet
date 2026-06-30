@@ -41,7 +41,7 @@ func newTestStore(t *testing.T) (*Storage, *db.Database) {
 
 	ctx := context.Background()
 	cleanup := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM nodes", "DELETE FROM users"} {
+		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
 			database.Conn().ExecContext(ctx, q)
 		}
 	}
@@ -63,11 +63,6 @@ func TestStorage(t *testing.T) {
 	}
 	if MatchGlob("foo*", "barfoo") {
 		t.Error("MatchGlob matched incorrectly")
-	}
-
-	node := &models.Node{ID: uuid.New(), Name: "client-acme-prod-01", Hostname: "h", APIKey: "k", Status: models.NodeStatusIdle, OSType: "linux", LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(node); err != nil {
-		t.Fatalf("Failed to add node: %v", err)
 	}
 
 	// A pending task is claimed via ClaimNextPendingTask (no node routing).
@@ -102,25 +97,22 @@ func TestRecurringTaskRescheduling(t *testing.T) {
 	store.SetTimezone("UTC")
 	ctx := context.Background()
 
-	node := &models.Node{ID: uuid.New(), Hostname: "test-host", Name: "test-node", APIKey: "test-key", Status: models.NodeStatusIdle, OSType: "linux", LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(node); err != nil {
-		t.Fatalf("Failed to add node: %v", err)
-	}
+	owner := uuid.New()
 
 	recurringTask := &models.Task{ID: uuid.New(), Prompt: "recurring test task", Status: models.TaskStatusPending, Priority: 10, Recurrence: "@daily", CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(recurringTask); err != nil {
 		t.Fatalf("Failed to add recurring task: %v", err)
 	}
 
-	assignedTask, err := store.AssignTaskToNode(recurringTask.ID, node.ID)
+	assignedTask, err := store.leaseTaskToOwner(recurringTask.ID, owner)
 	if err != nil {
-		t.Fatalf("Failed to assign task: %v", err)
+		t.Fatalf("Failed to lease task: %v", err)
 	}
 	if assignedTask.Status != models.TaskStatusLeased {
 		t.Errorf("Expected status Leased, got %s", assignedTask.Status)
 	}
 
-	completedTask, err := store.UpdateTaskStatusAtomic(assignedTask.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusSuccess, Message: strPtr("done")})
+	completedTask, err := store.UpdateTaskStatusAtomic(assignedTask.ID, owner, &models.StatusUpdate{Status: models.TaskStatusSuccess, Message: strPtr("done")})
 	if err != nil {
 		t.Fatalf("Failed to update task status: %v", err)
 	}
@@ -166,11 +158,11 @@ func TestRecurringTaskRescheduling(t *testing.T) {
 	if _, err := store.AddTask(recurringTask2); err != nil {
 		t.Fatalf("Failed to add second recurring task: %v", err)
 	}
-	assignedTask2, err := store.AssignTaskToNode(recurringTask2.ID, node.ID)
+	assignedTask2, err := store.leaseTaskToOwner(recurringTask2.ID, owner)
 	if err != nil {
-		t.Fatalf("Failed to assign second task: %v", err)
+		t.Fatalf("Failed to lease second task: %v", err)
 	}
-	_, err = store.UpdateTaskStatusAtomic(assignedTask2.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusError, Message: strPtr("Task failed")})
+	_, err = store.UpdateTaskStatusAtomic(assignedTask2.ID, owner, &models.StatusUpdate{Status: models.TaskStatusError, Message: strPtr("Task failed")})
 	if err != nil {
 		t.Fatalf("Failed to update task status: %v", err)
 	}
@@ -196,21 +188,18 @@ func TestRecurringTaskPreservesTimezone(t *testing.T) {
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 
-	node := &models.Node{ID: uuid.New(), Hostname: "h", Name: "n", APIKey: "k", Status: models.NodeStatusIdle, OSType: "linux", LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(node); err != nil {
-		t.Fatalf("AddNode: %v", err)
-	}
+	owner := uuid.New()
 
 	const tz = "America/New_York"
 	task := &models.Task{ID: uuid.New(), Prompt: "tz recur", Status: models.TaskStatusPending, Priority: 5, Recurrence: "@daily", Timezone: tz, CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(task); err != nil {
 		t.Fatalf("AddTask: %v", err)
 	}
-	assigned, err := store.AssignTaskToNode(task.ID, node.ID)
+	assigned, err := store.leaseTaskToOwner(task.ID, owner)
 	if err != nil {
-		t.Fatalf("AssignTaskToNode: %v", err)
+		t.Fatalf("leaseTaskToOwner: %v", err)
 	}
-	if _, err := store.UpdateTaskStatusAtomic(assigned.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusSuccess, Message: strPtr("done")}); err != nil {
+	if _, err := store.UpdateTaskStatusAtomic(assigned.ID, owner, &models.StatusUpdate{Status: models.TaskStatusSuccess, Message: strPtr("done")}); err != nil {
 		t.Fatalf("UpdateTaskStatusAtomic: %v", err)
 	}
 
@@ -233,83 +222,23 @@ func TestRecurringTaskPreservesTimezone(t *testing.T) {
 	}
 }
 
-func TestUpdateNodeHeartbeatRenewsActiveTaskLease(t *testing.T) {
-	store, _ := newTestStore(t)
-
-	node := &models.Node{ID: uuid.New(), Hostname: "test-node", Name: "test-node", APIKey: uuid.New().String(), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(node); err != nil {
-		t.Fatalf("Failed to add node: %v", err)
-	}
-
-	task := &models.Task{ID: uuid.New(), Prompt: "lease-renewal test", Status: models.TaskStatusRunning, AssignedNodeID: &node.ID, CreatedAt: time.Now().UTC()}
-	leaseOwner := node.ID.String()
-	originalExpiry := time.Now().UTC().Add(30 * time.Second)
-	task.LeaseOwner = &leaseOwner
-	task.LeaseExpiresAt = &originalExpiry
-	if _, err := store.AddTask(task); err != nil {
-		t.Fatalf("Failed to add task: %v", err)
-	}
-
-	updatedNode, err := store.UpdateNodeHeartbeat(node.ID, models.NodeStatusBusy, &task.ID)
-	if err != nil {
-		t.Fatalf("UpdateNodeHeartbeat failed: %v", err)
-	}
-	if updatedNode.CurrentTaskID == nil || *updatedNode.CurrentTaskID != task.ID {
-		t.Fatalf("expected node current task %s, got %v", task.ID, updatedNode.CurrentTaskID)
-	}
-
-	updatedTask, err := store.GetTask(task.ID)
-	if err != nil {
-		t.Fatalf("Failed to reload task: %v", err)
-	}
-	if updatedTask.LeaseExpiresAt == nil {
-		t.Fatal("expected lease expiry to remain set")
-	}
-	if !updatedTask.LeaseExpiresAt.After(originalExpiry) {
-		t.Fatalf("expected heartbeat to extend lease beyond %v, got %v", originalExpiry, updatedTask.LeaseExpiresAt)
-	}
-
-	updatedTask.Status = models.TaskStatusPending
-	updatedTask.AssignedNodeID = nil
-	updatedTask.LeaseOwner = nil
-	updatedTask.LeaseExpiresAt = nil
-	if _, err := store.UpdateTask(updatedTask); err != nil {
-		t.Fatalf("Failed to simulate recovered task: %v", err)
-	}
-
-	if _, err := store.UpdateNodeHeartbeat(node.ID, models.NodeStatusBusy, &task.ID); err != nil {
-		t.Fatalf("Second UpdateNodeHeartbeat failed: %v", err)
-	}
-
-	recoveredTask, err := store.GetTask(task.ID)
-	if err != nil {
-		t.Fatalf("Failed to reload recovered task: %v", err)
-	}
-	if recoveredTask.LeaseExpiresAt != nil || recoveredTask.LeaseOwner != nil || recoveredTask.AssignedNodeID != nil {
-		t.Fatalf("expected recovered task to remain unowned, got lease=%v owner=%v assigned=%v", recoveredTask.LeaseExpiresAt, recoveredTask.LeaseOwner, recoveredTask.AssignedNodeID)
-	}
-}
-
 func TestUpdateTaskStatusAtomicIgnoresStaleRunningAfterSuccess(t *testing.T) {
 	store, _ := newTestStore(t)
 
-	node := &models.Node{ID: uuid.New(), Hostname: "test-node", Name: "test-node", APIKey: uuid.New().String(), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(node); err != nil {
-		t.Fatalf("Failed to add node: %v", err)
-	}
+	owner := uuid.New()
 
 	task := &models.Task{ID: uuid.New(), Prompt: "stale-running-regression", Status: models.TaskStatusPending, Priority: 1, CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(task); err != nil {
 		t.Fatalf("Failed to add task: %v", err)
 	}
 
-	assignedTask, err := store.AssignTaskToNode(task.ID, node.ID)
+	assignedTask, err := store.leaseTaskToOwner(task.ID, owner)
 	if err != nil {
-		t.Fatalf("Failed to assign task: %v", err)
+		t.Fatalf("Failed to lease task: %v", err)
 	}
 
 	successMessage := "Task completed successfully"
-	completedTask, err := store.UpdateTaskStatusAtomic(assignedTask.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusSuccess, Message: &successMessage})
+	completedTask, err := store.UpdateTaskStatusAtomic(assignedTask.ID, owner, &models.StatusUpdate{Status: models.TaskStatusSuccess, Message: &successMessage})
 	if err != nil {
 		t.Fatalf("Failed to mark task successful: %v", err)
 	}
@@ -320,13 +249,16 @@ func TestUpdateTaskStatusAtomicIgnoresStaleRunningAfterSuccess(t *testing.T) {
 		t.Fatal("Expected completed_at to be set")
 	}
 
+	// A stale Running update arriving after success must NOT resurrect the task.
+	// Completing the task cleared its lease owner, so a late update from the same
+	// worker no longer holds the lease and is rejected outright — a strictly
+	// stronger guard than the old silent no-op. Either way the terminal task is
+	// never reopened.
 	staleMessage := "Starting task execution"
-	staleUpdate, err := store.UpdateTaskStatusAtomic(assignedTask.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusRunning, Message: &staleMessage})
-	if err != nil {
-		t.Fatalf("Failed to apply stale running update: %v", err)
-	}
-	if staleUpdate.Status != models.TaskStatusSuccess {
-		t.Fatalf("Expected stale update to preserve success, got %s", staleUpdate.Status)
+	if _, err := store.UpdateTaskStatusAtomic(assignedTask.ID, owner, &models.StatusUpdate{Status: models.TaskStatusRunning, Message: &staleMessage}); err == nil {
+		t.Fatal("Expected stale running update on a completed task to be rejected (lease cleared on success)")
+	} else if err.Error() != "worker does not hold the lease on this task" {
+		t.Fatalf("Expected lease-rejection error, got %q", err.Error())
 	}
 
 	reloadedTask, err := store.GetTask(assignedTask.ID)
@@ -352,10 +284,7 @@ func TestUpdateTaskStatusAtomicIgnoresStaleRunningAfterSuccess(t *testing.T) {
 func TestTerminalTransitionComputesActualDuration(t *testing.T) {
 	store, _ := newTestStore(t)
 
-	node := &models.Node{ID: uuid.New(), Hostname: "dur-node", Name: "dur-node", APIKey: uuid.New().String(), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(node); err != nil {
-		t.Fatalf("Failed to add node: %v", err)
-	}
+	owner := uuid.New()
 
 	expected := 15
 	task := &models.Task{
@@ -370,14 +299,14 @@ func TestTerminalTransitionComputesActualDuration(t *testing.T) {
 		t.Fatalf("Failed to add task: %v", err)
 	}
 
-	assigned, err := store.AssignTaskToNode(task.ID, node.ID)
+	assigned, err := store.leaseTaskToOwner(task.ID, owner)
 	if err != nil {
-		t.Fatalf("Failed to assign task: %v", err)
+		t.Fatalf("Failed to lease task: %v", err)
 	}
 
 	// Promote to running so StartedAt is recorded, then to success so
 	// CompletedAt is recorded and the actual duration is derived.
-	if _, err := store.UpdateTaskStatusAtomic(assigned.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusRunning}); err != nil {
+	if _, err := store.UpdateTaskStatusAtomic(assigned.ID, owner, &models.StatusUpdate{Status: models.TaskStatusRunning}); err != nil {
 		t.Fatalf("running update failed: %v", err)
 	}
 	// Force a non-trivial StartedAt gap so the derived seconds are > 0.
@@ -390,7 +319,7 @@ func TestTerminalTransitionComputesActualDuration(t *testing.T) {
 	if _, err := store.UpdateTask(running); err != nil {
 		t.Fatalf("UpdateTask (back-dated start) failed: %v", err)
 	}
-	completed, err := store.UpdateTaskStatusAtomic(assigned.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusSuccess})
+	completed, err := store.UpdateTaskStatusAtomic(assigned.ID, owner, &models.StatusUpdate{Status: models.TaskStatusSuccess})
 	if err != nil {
 		t.Fatalf("success update failed: %v", err)
 	}

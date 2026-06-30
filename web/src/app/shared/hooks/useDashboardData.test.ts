@@ -18,13 +18,11 @@ function deferred() {
 }
 
 const statsMock = vi.fn();
-const nodesMock = vi.fn();
 const tasksMock = vi.fn();
 
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
     stats: () => statsMock(),
-    nodes: () => nodesMock(),
     tasks: (qs: string) => tasksMock(qs),
   },
 }));
@@ -44,7 +42,6 @@ function qOf(qs: string): string {
 describe("useDashboardData run-id supersession", () => {
   it("discards a superseded reload that resolves after a newer one", async () => {
     statsMock.mockResolvedValue({});
-    nodesMock.mockResolvedValue({ data: [] });
     // Each tasks() call gets its own deferred, registered by query value.
     tasksMock.mockImplementation((qs: string) => {
       const d = deferred();
