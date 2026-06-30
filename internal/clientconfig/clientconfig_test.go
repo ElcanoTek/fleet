@@ -559,6 +559,80 @@ func TestSandboxDeclaredBlockRequiresContainerfile(t *testing.T) {
 	}
 }
 
+func TestSandboxRuntimeParsedFromManifest(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sandbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sandbox", "Containerfile"), []byte("FROM scratch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `
+sandbox:
+  tag: localhost/x:latest
+  runtime: kata
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := b.Sandbox().Runtime; got != "kata" {
+		t.Errorf("Sandbox().Runtime = %q, want kata", got)
+	}
+}
+
+func TestSandboxRuntimeOmittedIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sandbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sandbox", "Containerfile"), []byte("FROM scratch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A sandbox block with no runtime: key leaves Runtime empty (podman default).
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("sandbox:\n  tag: localhost/x:latest\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := b.Sandbox().Runtime; got != "" {
+		t.Errorf("Sandbox().Runtime = %q, want empty", got)
+	}
+}
+
+func TestSandboxRuntimeFromEnvInterpolation(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sandbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sandbox", "Containerfile"), []byte("FROM scratch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Mirror the default bundle's `runtime: "${FLEET_SANDBOX_RUNTIME:-}"` form.
+	manifest := `
+sandbox:
+  tag: localhost/x:latest
+  runtime: "${FLEET_SANDBOX_RUNTIME:-}"
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_SANDBOX_RUNTIME", "libkrun")
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// clientconfig stores the value VERBATIM (normalization happens at consume time).
+	if got := b.Sandbox().Runtime; got != "libkrun" {
+		t.Errorf("Sandbox().Runtime = %q, want libkrun (verbatim)", got)
+	}
+}
+
 func TestMissingManifestIsError(t *testing.T) {
 	if _, err := Load(t.TempDir()); err == nil {
 		t.Error("expected error for bundle with no manifest.yaml")
