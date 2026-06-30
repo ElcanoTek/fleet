@@ -59,9 +59,9 @@ func TestDeadLetterColumnsRoundTrip(t *testing.T) {
 }
 
 // TestDeadLetterTaskRespectsLeaseOwnership pins the lease guard on the quarantine
-// transition (#253), mirroring the requeue guard: a non-owning node cannot
-// dead-letter a leased task, the owner can, and the result is terminal with the
-// DLQ columns set.
+// transition (#253), mirroring the requeue guard: a non-owning lease owner
+// cannot dead-letter a leased task, the owner can, and the result is terminal
+// with the DLQ columns set.
 func TestDeadLetterTaskRespectsLeaseOwnership(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
@@ -78,7 +78,7 @@ func TestDeadLetterTaskRespectsLeaseOwnership(t *testing.T) {
 
 	stale := uuid.New()
 	if _, err := store.DeadLetterTaskWithContext(ctx, claimed.ID, stale, "x", 2); err == nil {
-		t.Fatal("dead-letter by a non-owning node must be rejected")
+		t.Fatal("dead-letter by a non-owning lease owner must be rejected")
 	}
 
 	updated, err := store.DeadLetterTaskWithContext(ctx, claimed.ID, owner, "retry budget exhausted", 2)

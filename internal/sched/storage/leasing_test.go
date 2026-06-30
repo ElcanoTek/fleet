@@ -11,10 +11,7 @@ import (
 func TestTaskLeasing(t *testing.T) {
 	store, _ := newTestStore(t)
 
-	node := &models.Node{ID: uuid.New(), Hostname: "test-host", Name: "test-node", APIKey: "test-key", Status: models.NodeStatusIdle, OSType: "linux", LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(node); err != nil {
-		t.Fatalf("Failed to add node: %v", err)
-	}
+	owner := uuid.New()
 
 	task := &models.Task{ID: uuid.New(), Prompt: "leasing test task", Status: models.TaskStatusPending, Priority: 10, CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(task); err != nil {
@@ -22,15 +19,15 @@ func TestTaskLeasing(t *testing.T) {
 	}
 
 	// 1. Basic leasing
-	assignedTask, err := store.AssignTaskToNode(task.ID, node.ID)
+	assignedTask, err := store.leaseTaskToOwner(task.ID, owner)
 	if err != nil {
-		t.Fatalf("Failed to assign task: %v", err)
+		t.Fatalf("Failed to lease task: %v", err)
 	}
 	if assignedTask.Status != models.TaskStatusLeased {
 		t.Errorf("Expected status Leased, got %s", assignedTask.Status)
 	}
-	if assignedTask.LeaseOwner == nil || *assignedTask.LeaseOwner != node.ID.String() {
-		t.Errorf("Expected LeaseOwner %s, got %v", node.ID, assignedTask.LeaseOwner)
+	if assignedTask.LeaseOwner == nil || *assignedTask.LeaseOwner != owner.String() {
+		t.Errorf("Expected LeaseOwner %s, got %v", owner, assignedTask.LeaseOwner)
 	}
 	if assignedTask.LeaseExpiresAt == nil || assignedTask.LeaseExpiresAt.Before(time.Now().UTC()) {
 		t.Errorf("Invalid LeaseExpiresAt: %v", assignedTask.LeaseExpiresAt)
@@ -45,7 +42,7 @@ func TestTaskLeasing(t *testing.T) {
 	if _, err := store.UpdateTask(assignedTask); err != nil {
 		t.Fatalf("Failed to update task expiry: %v", err)
 	}
-	updatedTask, err := store.UpdateTaskStatusAtomic(assignedTask.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusRunning})
+	updatedTask, err := store.UpdateTaskStatusAtomic(assignedTask.ID, owner, &models.StatusUpdate{Status: models.TaskStatusRunning})
 	if err != nil {
 		t.Fatalf("Failed to renew lease: %v", err)
 	}
@@ -65,12 +62,12 @@ func TestTaskLeasing(t *testing.T) {
 	// 3. Multiple tasks per owner
 	task2 := &models.Task{ID: uuid.New(), Prompt: "task 2", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC()}
 	store.AddTask(task2)
-	assignedTask2, err := store.AssignTaskToNode(task2.ID, node.ID)
+	assignedTask2, err := store.leaseTaskToOwner(task2.ID, owner)
 	if err != nil {
-		t.Fatalf("Failed to assign second task: %v", err)
+		t.Fatalf("Failed to lease second task: %v", err)
 	}
 	if assignedTask2 == nil {
-		t.Fatal("Failed to assign second task (returned nil)")
+		t.Fatal("Failed to lease second task (returned nil)")
 	}
 
 	// 4. Expired lease recovery
@@ -95,55 +92,46 @@ func TestTaskLeasing(t *testing.T) {
 		t.Error("LeaseOwner should be nil after recovery")
 	}
 
-	// Reassign to another node
-	node2 := &models.Node{ID: uuid.New(), Hostname: "node2", Name: "node2", APIKey: "key2", Status: models.NodeStatusIdle, OSType: "linux", LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(node2); err != nil {
-		t.Fatalf("Failed to add node2: %v", err)
-	}
-	reassigned, err := store.AssignTaskToNode(task2.ID, node2.ID)
+	// Re-lease to another owner
+	owner2 := uuid.New()
+	reassigned, err := store.leaseTaskToOwner(task2.ID, owner2)
 	if err != nil {
-		t.Fatalf("Failed to reassign expired task: %v", err)
+		t.Fatalf("Failed to re-lease expired task: %v", err)
 	}
 	if reassigned == nil {
-		t.Fatal("Expected reassignment of recovered task")
+		t.Fatal("Expected re-lease of recovered task")
 	}
-	if *reassigned.LeaseOwner != node2.ID.String() {
-		t.Errorf("Expected owner node2, got %s", *reassigned.LeaseOwner)
+	if *reassigned.LeaseOwner != owner2.String() {
+		t.Errorf("Expected owner %s, got %s", owner2, *reassigned.LeaseOwner)
 	}
 }
 
 // TestRecoveredTaskRejectsOldNode verifies that an owner that lost its lease
-// (recovery cleared lease_owner + assigned_node_id) cannot update the task
-// status, preventing two workers from running the same task. Adapted from moc:
-// the wildcard glob-routing setup is removed (the synthetic worker claims tasks
-// directly), but the lease-ownership rejection contract is identical.
+// (recovery cleared lease_owner) cannot update the task status, preventing two
+// workers from running the same task. Adapted from moc: the wildcard
+// glob-routing setup is removed (the synthetic worker claims tasks directly),
+// but the lease-ownership rejection contract is identical.
 func TestRecoveredTaskRejectsOldNode(t *testing.T) {
 	store, _ := newTestStore(t)
 
-	nodeA := &models.Node{ID: uuid.New(), Hostname: "host-a", Name: "worker-a", APIKey: "key-a", Status: models.NodeStatusIdle, OSType: "linux", LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	nodeB := &models.Node{ID: uuid.New(), Hostname: "host-b", Name: "worker-b", APIKey: "key-b", Status: models.NodeStatusIdle, OSType: "linux", LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(nodeA); err != nil {
-		t.Fatalf("Failed to add nodeA: %v", err)
-	}
-	if _, err := store.AddNode(nodeB); err != nil {
-		t.Fatalf("Failed to add nodeB: %v", err)
-	}
+	ownerA := uuid.New()
+	ownerB := uuid.New()
 
 	task := &models.Task{ID: uuid.New(), Prompt: "race condition test", Status: models.TaskStatusPending, Priority: 10, CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(task); err != nil {
 		t.Fatalf("Failed to add task: %v", err)
 	}
 
-	// Node A leases the task.
-	assignedTask, err := store.AssignTaskToNode(task.ID, nodeA.ID)
+	// Owner A leases the task.
+	assignedTask, err := store.leaseTaskToOwner(task.ID, ownerA)
 	if err != nil {
-		t.Fatalf("Failed to assign task to nodeA: %v", err)
+		t.Fatalf("Failed to lease task to ownerA: %v", err)
 	}
-	if assignedTask == nil || *assignedTask.LeaseOwner != nodeA.ID.String() {
-		t.Fatalf("Expected task leased to nodeA")
+	if assignedTask == nil || *assignedTask.LeaseOwner != ownerA.String() {
+		t.Fatalf("Expected task leased to ownerA")
 	}
 
-	// Force lease expiry and recover (clears lease_owner + assigned_node_id).
+	// Force lease expiry and recover (clears lease_owner).
 	expired := time.Now().UTC().Add(-1 * time.Minute)
 	assignedTask.LeaseExpiresAt = &expired
 	if _, err := store.UpdateTask(assignedTask); err != nil {
@@ -161,15 +149,15 @@ func TestRecoveredTaskRejectsOldNode(t *testing.T) {
 	if recoveredTask.Status != models.TaskStatusPending {
 		t.Fatalf("Expected pending after recovery, got %s", recoveredTask.Status)
 	}
-	if recoveredTask.LeaseOwner != nil || recoveredTask.AssignedNodeID != nil {
-		t.Fatal("Expected lease_owner and assigned_node_id to be nil after recovery")
+	if recoveredTask.LeaseOwner != nil {
+		t.Fatal("Expected lease_owner to be nil after recovery")
 	}
 
-	// Node A (lost lease) cannot report status.
+	// Owner A (lost lease) cannot report status.
 	update := &models.StatusUpdate{Status: models.TaskStatusRunning}
-	if _, err := store.UpdateTaskStatusAtomic(task.ID, nodeA.ID, update); err == nil {
-		t.Fatal("Expected error when node without lease tries to update task status")
-	} else if err.Error() != "node is not assigned to this task" {
+	if _, err := store.UpdateTaskStatusAtomic(task.ID, ownerA, update); err == nil {
+		t.Fatal("Expected error when owner without lease tries to update task status")
+	} else if err.Error() != "worker does not hold the lease on this task" {
 		t.Errorf("Expected lease-rejection error, got '%s'", err.Error())
 	}
 
@@ -178,22 +166,22 @@ func TestRecoveredTaskRejectsOldNode(t *testing.T) {
 		t.Errorf("Task status should still be pending, got %s", taskAfter.Status)
 	}
 
-	// Node B claims the recovered task.
-	assignedToB, err := store.AssignTaskToNode(task.ID, nodeB.ID)
+	// Owner B claims the recovered task.
+	assignedToB, err := store.leaseTaskToOwner(task.ID, ownerB)
 	if err != nil {
-		t.Fatalf("Failed to assign task to nodeB: %v", err)
+		t.Fatalf("Failed to lease task to ownerB: %v", err)
 	}
-	if assignedToB == nil || *assignedToB.LeaseOwner != nodeB.ID.String() {
-		t.Fatal("Expected nodeB to claim the recovered task")
+	if assignedToB == nil || *assignedToB.LeaseOwner != ownerB.String() {
+		t.Fatal("Expected ownerB to claim the recovered task")
 	}
 
-	// Node A still rejected; node B accepted.
-	if _, err := store.UpdateTaskStatusAtomic(task.ID, nodeA.ID, update); err == nil {
-		t.Fatal("Expected error when nodeA updates task owned by nodeB")
+	// Owner A still rejected; owner B accepted.
+	if _, err := store.UpdateTaskStatusAtomic(task.ID, ownerA, update); err == nil {
+		t.Fatal("Expected error when ownerA updates task owned by ownerB")
 	}
-	updatedByB, err := store.UpdateTaskStatusAtomic(task.ID, nodeB.ID, update)
+	updatedByB, err := store.UpdateTaskStatusAtomic(task.ID, ownerB, update)
 	if err != nil {
-		t.Fatalf("NodeB should be able to update its own task: %v", err)
+		t.Fatalf("OwnerB should be able to update its own task: %v", err)
 	}
 	if updatedByB.Status != models.TaskStatusRunning {
 		t.Errorf("Expected status running, got %s", updatedByB.Status)
@@ -286,19 +274,16 @@ func TestRecoverExpiredLeasesSelectivity(t *testing.T) {
 func TestTaskLeasingUsesFixedLeaseWindow(t *testing.T) {
 	store, _ := newTestStore(t)
 
-	node := &models.Node{ID: uuid.New(), Hostname: "test-host-custom", Name: "test-node-custom", APIKey: "test-key-custom", Status: models.NodeStatusIdle, OSType: "linux", LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(node); err != nil {
-		t.Fatalf("Failed to add node: %v", err)
-	}
+	owner := uuid.New()
 
 	task := &models.Task{ID: uuid.New(), Prompt: "leasing fixed-window task", Status: models.TaskStatusPending, Priority: 10, CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(task); err != nil {
 		t.Fatalf("Failed to add task: %v", err)
 	}
 
-	assignedTask, err := store.AssignTaskToNode(task.ID, node.ID)
+	assignedTask, err := store.leaseTaskToOwner(task.ID, owner)
 	if err != nil {
-		t.Fatalf("Failed to assign task: %v", err)
+		t.Fatalf("Failed to lease task: %v", err)
 	}
 
 	now := time.Now().UTC()
@@ -309,7 +294,7 @@ func TestTaskLeasingUsesFixedLeaseWindow(t *testing.T) {
 		t.Errorf("Lease expiry too long. Expected ~5m, got %v", assignedTask.LeaseExpiresAt)
 	}
 
-	updatedTask, err := store.UpdateTaskStatusAtomic(assignedTask.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusRunning})
+	updatedTask, err := store.UpdateTaskStatusAtomic(assignedTask.ID, owner, &models.StatusUpdate{Status: models.TaskStatusRunning})
 	if err != nil {
 		t.Fatalf("Failed to update status: %v", err)
 	}

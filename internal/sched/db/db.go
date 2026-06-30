@@ -19,15 +19,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
-
-// ErrDuplicateNodeName is returned by AddNode when a node with the same name
-// already exists.
-var ErrDuplicateNodeName = errors.New("node name already registered")
 
 // Database is the PostgreSQL database wrapper for the orchestrator.
 type Database struct {
@@ -273,27 +268,6 @@ func (db *Database) DeleteUser(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
 
-// CanNodeAccessFile checks if a node is assigned to an active task containing filename.
-func (db *Database) CanNodeAccessFile(ctx context.Context, nodeID uuid.UUID, filename string) (bool, error) {
-	var exists bool
-	err := db.conn.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM tasks
-			WHERE assigned_node_id = $1
-			AND status IN ($2, $3)
-			AND files ? $4
-		)`,
-		nodeID,
-		string(models.TaskStatusRunning),
-		string(models.TaskStatusAnalyzing),
-		filename,
-	).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
-}
-
 // GetUser gets a user by ID.
 func (db *Database) GetUser(ctx context.Context, userID uuid.UUID) (*models.User, error) {
 	row := db.conn.QueryRowContext(ctx,
@@ -398,160 +372,9 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 	return user, nil
 }
 
-// Node operations
-
-// AddNode adds or updates a node in the registry.
-func (db *Database) AddNode(ctx context.Context, node *models.Node) error {
-	_, err := db.conn.ExecContext(ctx, `
-		INSERT INTO nodes (
-			id, hostname, name, api_key, previous_api_key, key_rotated_at,
-			os_type, status, last_heartbeat, current_task_id, registered_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		ON CONFLICT (id) DO UPDATE SET
-			hostname = EXCLUDED.hostname,
-			name = EXCLUDED.name,
-			api_key = EXCLUDED.api_key,
-			previous_api_key = EXCLUDED.previous_api_key,
-			key_rotated_at = EXCLUDED.key_rotated_at,
-			os_type = EXCLUDED.os_type,
-			status = EXCLUDED.status,
-			last_heartbeat = EXCLUDED.last_heartbeat,
-			current_task_id = EXCLUDED.current_task_id,
-			registered_at = EXCLUDED.registered_at`,
-		node.ID,
-		node.Hostname,
-		node.Name,
-		node.APIKey,
-		node.PreviousAPIKey,
-		node.KeyRotatedAt,
-		node.OSType,
-		string(node.Status),
-		node.LastHeartbeat,
-		node.CurrentTaskID,
-		node.RegisteredAt,
-	)
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_nodes_name_unique" {
-		return ErrDuplicateNodeName
-	}
-	return err
-}
-
-func (db *Database) scanNode(scanner interface{ Scan(...interface{}) error }) (*models.Node, error) {
-	var (
-		id             uuid.UUID
-		hostname       string
-		name           string
-		apiKey         string
-		previousAPIKey sql.NullString
-		keyRotatedAt   sql.NullTime
-		osType         string
-		status         string
-		lastHeartbeat  time.Time
-		currentTaskID  *uuid.UUID
-		registeredAt   time.Time
-	)
-
-	err := scanner.Scan(&id, &hostname, &name, &apiKey, &previousAPIKey, &keyRotatedAt,
-		&osType, &status, &lastHeartbeat, &currentTaskID, &registeredAt)
-	if err != nil {
-		return nil, err
-	}
-
-	node := &models.Node{
-		ID:            id,
-		Hostname:      hostname,
-		Name:          name,
-		APIKey:        apiKey,
-		OSType:        osType,
-		Status:        models.NodeStatus(status),
-		LastHeartbeat: lastHeartbeat,
-		CurrentTaskID: currentTaskID,
-		RegisteredAt:  registeredAt,
-	}
-	if previousAPIKey.Valid {
-		node.PreviousAPIKey = &previousAPIKey.String
-	}
-	if keyRotatedAt.Valid {
-		node.KeyRotatedAt = &keyRotatedAt.Time
-	}
-	return node, nil
-}
-
-func (db *Database) rowToNode(row *sql.Row) (*models.Node, error) { return db.scanNode(row) }
-
-func (db *Database) rowsToNodes(rows *sql.Rows) ([]*models.Node, error) {
-	nodes := make([]*models.Node, 0)
-	for rows.Next() {
-		node, err := db.scanNode(rows)
-		if err != nil {
-			return nil, err
-		}
-		nodes = append(nodes, node)
-	}
-	return nodes, rows.Err()
-}
-
-const nodeColumns = "id, hostname, name, api_key, previous_api_key, key_rotated_at, os_type, status, last_heartbeat, current_task_id, registered_at"
-
-// GetNode gets a node by ID.
-func (db *Database) GetNode(ctx context.Context, nodeID uuid.UUID) (*models.Node, error) {
-	row := db.conn.QueryRowContext(ctx, "SELECT "+nodeColumns+" FROM nodes WHERE id = $1", nodeID)
-	return db.rowToNode(row)
-}
-
-// GetNodeByAPIKey gets a node by its API key (also checks previous key in grace period).
-func (db *Database) GetNodeByAPIKey(ctx context.Context, apiKey string) (*models.Node, error) {
-	hashedKey := models.HashToken(apiKey)
-
-	row := db.conn.QueryRowContext(ctx, "SELECT "+nodeColumns+" FROM nodes WHERE api_key = $1", hashedKey)
-	node, err := db.rowToNode(row)
-	if err == nil {
-		return node, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-
-	row = db.conn.QueryRowContext(ctx, `
-		SELECT `+nodeColumns+` FROM nodes
-		WHERE previous_api_key = $1
-		AND key_rotated_at IS NOT NULL
-		AND key_rotated_at > $2`,
-		hashedKey,
-		time.Now().UTC().Add(-models.KeyRotationGracePeriod),
-	)
-	return db.rowToNode(row)
-}
-
-// GetAllNodes gets all registered nodes.
-func (db *Database) GetAllNodes(ctx context.Context) ([]*models.Node, error) {
-	rows, err := db.conn.QueryContext(ctx, "SELECT "+nodeColumns+" FROM nodes")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return db.rowsToNodes(rows)
-}
-
-// UpdateNode updates an existing node.
-func (db *Database) UpdateNode(ctx context.Context, node *models.Node) error {
-	return db.AddNode(ctx, node)
-}
-
-// RemoveNode removes a node from the registry.
-func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, error) {
-	result, err := db.conn.ExecContext(ctx, "DELETE FROM nodes WHERE id = $1", nodeID)
-	if err != nil {
-		return false, err
-	}
-	affected, _ := result.RowsAffected()
-	return affected > 0, nil
-}
-
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -593,7 +416,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 	_, err := db.conn.ExecContext(ctx, `
 		INSERT INTO tasks (
 			id, name, prompt, model, fallback_model, max_iterations, mcp_selection,
-			priority, instruction_self_improve, status, assigned_node_id, agent_session_id,
+			priority, instruction_self_improve, status, agent_session_id,
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, timezone, created_by_key_id,
@@ -603,7 +426,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			run_if, skip_count, last_skip_at, last_skip_reason,
 			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
 			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
@@ -614,7 +437,6 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			priority = EXCLUDED.priority,
 			instruction_self_improve = EXCLUDED.instruction_self_improve,
 			status = EXCLUDED.status,
-			assigned_node_id = EXCLUDED.assigned_node_id,
 			agent_session_id = EXCLUDED.agent_session_id,
 			created_at = EXCLUDED.created_at,
 			started_at = EXCLUDED.started_at,
@@ -678,7 +500,6 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.Priority,
 		task.InstructionSelfImprove,
 		string(task.Status),
-		task.AssignedNodeID,
 		task.AgentSessionID,
 		task.CreatedAt,
 		task.StartedAt,
@@ -785,7 +606,6 @@ const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
 			priority = EXCLUDED.priority,
 			instruction_self_improve = EXCLUDED.instruction_self_improve,
 			status = EXCLUDED.status,
-			assigned_node_id = EXCLUDED.assigned_node_id,
 			agent_session_id = EXCLUDED.agent_session_id,
 			created_at = EXCLUDED.created_at,
 			started_at = EXCLUDED.started_at,
@@ -837,7 +657,7 @@ const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
 // sync with AddTask / AddTaskBatch / AddTaskTx. Extracted as a constant so the
 // single-row and multi-row builders never drift.
 const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iterations, mcp_selection,
-			priority, instruction_self_improve, status, assigned_node_id, agent_session_id,
+			priority, instruction_self_improve, status, agent_session_id,
 			created_at, started_at, completed_at, result, error_message,
 			scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at,
 			attempt_count, max_retries, allow_network, timezone, created_by_key_id,
@@ -847,7 +667,7 @@ const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iteratio
 			run_if, skip_count, last_skip_at, last_skip_reason,
 			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json`
 
-// taskInsertArgs returns the 58 positional INSERT values for a task, in the
+// taskInsertArgs returns the 57 positional INSERT values for a task, in the
 // exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
 // the single-row and multi-row paths can never disagree on argument ordering.
 // It derives actual_duration_seconds (#274) up front so the batch/tx paths
@@ -865,7 +685,6 @@ func taskInsertArgs(t *models.Task) []any {
 		t.Priority,
 		t.InstructionSelfImprove,
 		string(t.Status),
-		t.AssignedNodeID,
 		t.AgentSessionID,
 		t.CreatedAt,
 		t.StartedAt,
@@ -919,7 +738,7 @@ func taskInsertArgs(t *models.Task) []any {
 // taskInsertColumnsCount is the number of columns in taskInsertColumns. Kept as
 // a named const so the multi-row placeholder builder is self-documenting and
 // a future schema migration that adds a column forces a single touch point.
-const taskInsertColumnsCount = 58
+const taskInsertColumnsCount = 57
 
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an
@@ -1248,7 +1067,6 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		priority               int
 		instructionSelfImprove bool
 		status                 string
-		assignedNodeID         *uuid.UUID
 		agentSessionID         sql.NullString
 		createdAt              time.Time
 		startedAt              sql.NullTime
@@ -1300,7 +1118,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 
 	err := scanner.Scan(
 		&id, &name, &prompt, &model, &fallbackModel, &maxIterations, &mcpSelection,
-		&priority, &instructionSelfImprove, &status, &assignedNodeID, &agentSessionID,
+		&priority, &instructionSelfImprove, &status, &agentSessionID,
 		&createdAt, &startedAt, &completedAt, &result, &errorMessage,
 		&scheduledFor, &recurrence, &createdBy, &files, &leaseOwner, &leaseExpiresAt,
 		&attemptCount, &maxRetries, &allowNetwork, &timezone, &createdByKeyID,
@@ -1323,7 +1141,6 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		EffectivePriority:      effectivePriority,
 		InstructionSelfImprove: instructionSelfImprove,
 		Status:                 models.TaskStatus(status),
-		AssignedNodeID:         assignedNodeID,
 		CreatedAt:              createdAt,
 		CreatedBy:              createdBy,
 		AttemptCount:           attemptCount,
@@ -1854,6 +1671,12 @@ func (db *Database) MarkSLABreached(ctx context.Context, taskID uuid.UUID) error
 // or an actual duration are excluded. windowDays is clamped to [1, 90]; the
 // partial index idx_tasks_sla backs the WHERE filter. Buckets are ordered by
 // breach rate (worst first) so the most violated SLAs surface at the top.
+//
+// The window uses make_interval(days => $1) rather than ($1 || ' days')::INTERVAL:
+// the latter makes Postgres infer $1 as TEXT, which the pgx driver then refuses
+// to encode a Go int into ("cannot find encode plan"), so the report errored for
+// every caller. make_interval's days param is typed int, so the bound int4
+// encodes cleanly. Do NOT revert to string concatenation (#458).
 func (db *Database) GetSLAReport(ctx context.Context, windowDays int) (*models.SLAReport, error) {
 	if windowDays <= 0 {
 		windowDays = 7
@@ -1871,7 +1694,7 @@ func (db *Database) GetSLAReport(ctx context.Context, windowDays int) (*models.S
 			     ELSE 100.0 * SUM(CASE WHEN sla_breached THEN 1 ELSE 0 END) / COUNT(*) END,
 			COUNT(*)
 		FROM tasks
-		WHERE completed_at >= NOW() - ($1 || ' days')::INTERVAL
+		WHERE completed_at >= NOW() - make_interval(days => $1)
 		AND expected_duration_minutes IS NOT NULL
 		AND actual_duration_seconds IS NOT NULL
 		GROUP BY prompt, expected_duration_minutes
@@ -1941,26 +1764,11 @@ func (db *Database) GetTasksCompletedToday(ctx context.Context) ([]*models.Task,
 func (db *Database) GetDashboardStats(ctx context.Context) (*models.DashboardStats, error) {
 	stats := &models.DashboardStats{}
 
-	err := db.conn.QueryRowContext(ctx, `
-		SELECT
-			COUNT(*) as total_nodes,
-			COUNT(*) FILTER (WHERE status IN ($1, $2)) as active_nodes,
-			COUNT(*) FILTER (WHERE status = $1) as idle_nodes,
-			COUNT(*) FILTER (WHERE status = $3) as offline_nodes
-		FROM nodes`,
-		string(models.NodeStatusIdle),
-		string(models.NodeStatusBusy),
-		string(models.NodeStatusOffline),
-	).Scan(&stats.TotalNodes, &stats.ActiveNodes, &stats.IdleNodes, &stats.OfflineNodes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get node stats: %w", err)
-	}
-
 	now := time.Now().UTC()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, time.UTC)
 
-	err = db.conn.QueryRowContext(ctx, `
+	err := db.conn.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE status = $1) as pending_tasks,
 			COUNT(*) FILTER (WHERE status IN ($2, $3, $8)) as running_tasks,
@@ -1982,38 +1790,18 @@ func (db *Database) GetDashboardStats(ctx context.Context) (*models.DashboardSta
 	return stats, nil
 }
 
-// GetDashboardStatsForUser gets stats scoped to a user's permissions. Scopes are
-// glob patterns matched against node names. Tasks are visible when created by
-// the user or untargeted (mcp_selection-based tasks carry no node target, so all
-// non-creator tasks fall under the untargeted branch).
+// GetDashboardStatsForUser gets stats scoped to a user's permissions. Tasks are
+// visible when created by the user or untargeted; mcp_selection-based tasks carry
+// no node target, so every non-creator task falls under the untargeted branch and
+// is visible to any scoped user. (The scope patterns themselves no longer narrow
+// anything now that the node registry is gone — they are retained on the principal
+// only for forward-compatibility of the API-key scoping concept.)
 func (db *Database) GetDashboardStatsForUser(ctx context.Context, userID *uuid.UUID, scopes []string) (*models.DashboardStats, error) {
 	if len(scopes) == 0 {
 		return db.GetDashboardStats(ctx)
 	}
 
 	stats := &models.DashboardStats{}
-
-	likePatterns := make([]string, len(scopes))
-	for i, scope := range scopes {
-		likePatterns[i] = globToLike(scope)
-	}
-
-	err := db.conn.QueryRowContext(ctx, `
-		SELECT
-			COUNT(*) as total_nodes,
-			COUNT(*) FILTER (WHERE status IN ($1, $2)) as active_nodes,
-			COUNT(*) FILTER (WHERE status = $1) as idle_nodes,
-			COUNT(*) FILTER (WHERE status = $3) as offline_nodes
-		FROM nodes
-		WHERE name LIKE ANY($4::text[])`,
-		string(models.NodeStatusIdle),
-		string(models.NodeStatusBusy),
-		string(models.NodeStatusOffline),
-		likePatterns,
-	).Scan(&stats.TotalNodes, &stats.ActiveNodes, &stats.IdleNodes, &stats.OfflineNodes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get node stats: %w", err)
-	}
 
 	now := time.Now().UTC()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
@@ -2047,7 +1835,7 @@ func (db *Database) GetDashboardStatsForUser(ctx context.Context, userID *uuid.U
 		FROM tasks
 		WHERE %s`, whereClause)
 
-	err = db.conn.QueryRowContext(ctx, query, args...).Scan(&stats.PendingTasks, &stats.RunningTasks, &stats.CompletedTasksToday, &stats.FailedTasksToday)
+	err := db.conn.QueryRowContext(ctx, query, args...).Scan(&stats.PendingTasks, &stats.RunningTasks, &stats.CompletedTasksToday, &stats.FailedTasksToday)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get task stats: %w", err)
 	}
@@ -2370,54 +2158,53 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			priority = $4,
 			instruction_self_improve = $5,
 			status = $6,
-			assigned_node_id = $7,
-			agent_session_id = $8,
-			created_at = $9,
-			started_at = $10,
-			completed_at = $11,
-			result = $12,
-			error_message = $13,
-			scheduled_for = $14,
-			recurrence = $15,
-			created_by = $16,
-			files = $17,
-			lease_owner = $18,
-			lease_expires_at = $19,
-			model = $20,
-			fallback_model = $21,
-			max_iterations = $22,
-			attempt_count = $23,
-			max_retries = $24,
-			allow_network = $25,
-			timezone = $26,
-			credential_allowlist = $27,
-			loop_config = $28,
-			worktree_config = $29,
-			description = $30,
-			tags = $31,
-			retry_policy = $32,
-			source_task_id = $33,
-			persona = $34,
-			workspace_path = $35,
-			allow_task_creation = $36,
-			allow_recurring_task_creation = $37,
-			created_by_task_id = $38,
-			dead_lettered_at = $39,
-			dead_letter_reason = $40,
-			dead_letter_attempts = $41,
-			run_if = $42,
-			skip_count = $43,
-			last_skip_at = $44,
-			last_skip_reason = $45,
-			expected_duration_minutes = $46,
-			sla_warn_multiplier = $47,
-			sla_fail_multiplier = $48,
-			sla_breached = $49,
-			actual_duration_seconds = $50,
-			sandbox_limits = $51,
-			allow_delegation = $52,
-			output_schema = $53,
-			output_json = $54
+			agent_session_id = $7,
+			created_at = $8,
+			started_at = $9,
+			completed_at = $10,
+			result = $11,
+			error_message = $12,
+			scheduled_for = $13,
+			recurrence = $14,
+			created_by = $15,
+			files = $16,
+			lease_owner = $17,
+			lease_expires_at = $18,
+			model = $19,
+			fallback_model = $20,
+			max_iterations = $21,
+			attempt_count = $22,
+			max_retries = $23,
+			allow_network = $24,
+			timezone = $25,
+			credential_allowlist = $26,
+			loop_config = $27,
+			worktree_config = $28,
+			description = $29,
+			tags = $30,
+			retry_policy = $31,
+			source_task_id = $32,
+			persona = $33,
+			workspace_path = $34,
+			allow_task_creation = $35,
+			allow_recurring_task_creation = $36,
+			created_by_task_id = $37,
+			dead_lettered_at = $38,
+			dead_letter_reason = $39,
+			dead_letter_attempts = $40,
+			run_if = $41,
+			skip_count = $42,
+			last_skip_at = $43,
+			last_skip_reason = $44,
+			expected_duration_minutes = $45,
+			sla_warn_multiplier = $46,
+			sla_fail_multiplier = $47,
+			sla_breached = $48,
+			actual_duration_seconds = $49,
+			sandbox_limits = $50,
+			allow_delegation = $51,
+			output_schema = $52,
+			output_json = $53
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -2425,7 +2212,6 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.Priority,
 		task.InstructionSelfImprove,
 		string(task.Status),
-		task.AssignedNodeID,
 		task.AgentSessionID,
 		task.CreatedAt,
 		task.StartedAt,
@@ -2595,42 +2381,6 @@ func scanTaskIteration(scanner interface{ Scan(...interface{}) error }) (*models
 	return &it, nil
 }
 
-// GetNodeForUpdate gets a node by ID with a row-level lock. Must be in a tx.
-func (db *Database) GetNodeForUpdate(ctx context.Context, tx *sql.Tx, nodeID uuid.UUID) (*models.Node, error) {
-	row := tx.QueryRowContext(ctx, "SELECT "+nodeColumns+" FROM nodes WHERE id = $1 FOR UPDATE", nodeID)
-	return db.scanNode(row)
-}
-
-// UpdateNodeTx updates a node within a transaction.
-func (db *Database) UpdateNodeTx(ctx context.Context, tx *sql.Tx, node *models.Node) error {
-	_, err := tx.ExecContext(ctx, `
-		UPDATE nodes SET
-			hostname = $2,
-			name = $3,
-			api_key = $4,
-			previous_api_key = $5,
-			key_rotated_at = $6,
-			os_type = $7,
-			status = $8,
-			last_heartbeat = $9,
-			current_task_id = $10,
-			registered_at = $11
-		WHERE id = $1`,
-		node.ID,
-		node.Hostname,
-		node.Name,
-		node.APIKey,
-		node.PreviousAPIKey,
-		node.KeyRotatedAt,
-		node.OSType,
-		string(node.Status),
-		node.LastHeartbeat,
-		node.CurrentTaskID,
-		node.RegisteredAt,
-	)
-	return err
-}
-
 // RecoverExpiredLeases resets tasks with expired leases back to pending. This is
 // the crash-safe backstop: a worker that died mid-task (systemd restart) lets
 // its lease expire, and recovery re-queues the task for the next claim.
@@ -2638,7 +2388,6 @@ func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (in
 	result, err := db.conn.ExecContext(ctx, `
 		UPDATE tasks SET
 			status = $1,
-			assigned_node_id = NULL,
 			lease_owner = NULL,
 			lease_expires_at = NULL,
 			started_at = NULL,
@@ -2656,95 +2405,6 @@ func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (in
 	}
 	affected, _ := result.RowsAffected()
 	return int(affected), nil
-}
-
-// GetNodeByName gets a node by its name directly.
-func (db *Database) GetNodeByName(ctx context.Context, name string) (*models.Node, error) {
-	row := db.conn.QueryRowContext(ctx, "SELECT "+nodeColumns+" FROM nodes WHERE name = $1", name)
-	node, err := db.scanNode(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	return node, err
-}
-
-// GetNodeNamesByIDs gets node names for a list of node IDs efficiently.
-func (db *Database) GetNodeNamesByIDs(ctx context.Context, nodeIDs []uuid.UUID) (map[uuid.UUID]string, error) {
-	if len(nodeIDs) == 0 {
-		return make(map[uuid.UUID]string), nil
-	}
-	rows, err := db.conn.QueryContext(ctx,
-		"SELECT id, name FROM nodes WHERE id = ANY($1::uuid[])", uuidStrings(nodeIDs))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := make(map[uuid.UUID]string, len(nodeIDs))
-	for rows.Next() {
-		var id uuid.UUID
-		var name string
-		if err := rows.Scan(&id, &name); err != nil {
-			return nil, err
-		}
-		result[id] = name
-	}
-	return result, rows.Err()
-}
-
-// GetAllNodesPaginated gets nodes with pagination.
-func (db *Database) GetAllNodesPaginated(ctx context.Context, limit, offset int) ([]*models.Node, int, error) {
-	var total int
-	err := db.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes").Scan(&total)
-	if err != nil {
-		return nil, 0, err
-	}
-	rows, err := db.conn.QueryContext(ctx,
-		"SELECT "+nodeColumns+" FROM nodes ORDER BY registered_at DESC LIMIT $1 OFFSET $2", limit, offset)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-	nodes, err := db.rowsToNodes(rows)
-	return nodes, total, err
-}
-
-// GetNodesScopedPaginated gets nodes filtering by scopes using LIKE ANY.
-func (db *Database) GetNodesScopedPaginated(ctx context.Context, limit, offset int, scopes []string) ([]*models.Node, int, error) {
-	if len(scopes) == 0 {
-		return []*models.Node{}, 0, nil
-	}
-	likePatterns := make([]string, len(scopes))
-	for i, scope := range scopes {
-		likePatterns[i] = globToLike(scope)
-	}
-
-	var total int
-	err := db.conn.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM nodes
-		WHERE name LIKE ANY($1::text[])`,
-		likePatterns,
-	).Scan(&total)
-	if err != nil {
-		return nil, 0, err
-	}
-	if total == 0 {
-		return []*models.Node{}, 0, nil
-	}
-
-	rows, err := db.conn.QueryContext(ctx, `
-		SELECT `+nodeColumns+` FROM nodes
-		WHERE name LIKE ANY($3::text[])
-		ORDER BY registered_at DESC
-		LIMIT $1 OFFSET $2`,
-		limit, offset, likePatterns,
-	)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-	nodes, err := db.rowsToNodes(rows)
-	return nodes, total, err
 }
 
 // GetAllTasksPaginated gets tasks with pagination.
@@ -2786,28 +2446,6 @@ type TaskFilter struct {
 	// untargeted now), so a scoped user with VisibleToScopes set sees all tasks.
 	VisibleToUserID *uuid.UUID
 	VisibleToScopes []string
-}
-
-// globToLike converts a glob pattern (* and ?) to a SQL LIKE pattern (% and _).
-func globToLike(pattern string) string {
-	var sb strings.Builder
-	for _, c := range pattern {
-		switch c {
-		case '\\':
-			sb.WriteString("\\\\")
-		case '%':
-			sb.WriteString("\\%")
-		case '_':
-			sb.WriteString("\\_")
-		case '*':
-			sb.WriteRune('%')
-		case '?':
-			sb.WriteRune('_')
-		default:
-			sb.WriteRune(c)
-		}
-	}
-	return sb.String()
 }
 
 // GetTasksFiltered gets tasks with optional filters and pagination.

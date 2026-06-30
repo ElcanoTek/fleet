@@ -14,9 +14,8 @@ async function mockOrchestratorShell(page: Page) {
     if (path === "/me") return r.fulfill({ json: { authenticated: true, username: "e2e" } });
     if (path === "/stats")
       return r.fulfill({
-        json: { total_nodes: 0, active_nodes: 0, pending_tasks: 0, running_tasks: 0 },
+        json: { pending_tasks: 0, running_tasks: 0 },
       });
-    if (path === "/nodes") return r.fulfill({ json: { data: [], total: 0, limit: 100, offset: 0 } });
     if (path === "/tasks") return r.fulfill({ json: { data: [], total: 0, limit: 20, offset: 0 } });
     if (path === "/mcp-servers") return r.fulfill({ json: { servers: [] } });
     if (path === "/config") return r.fulfill({ json: { timezone: "UTC" } });

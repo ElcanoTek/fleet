@@ -32,7 +32,6 @@ func setupTestDB(t *testing.T) *Database {
 	queries := []string{
 		"DELETE FROM logs",
 		"DELETE FROM tasks",
-		"DELETE FROM nodes",
 		"DELETE FROM users",
 	}
 	for _, q := range queries {
@@ -48,65 +47,6 @@ func isDatabaseUnavailable(err error) bool {
 	return strings.Contains(errMsg, "failed to connect to database") ||
 		strings.Contains(errMsg, "connection refused") ||
 		strings.Contains(errMsg, "no such host")
-}
-
-func TestNodeOperations(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	ctx := context.Background()
-
-	plainAPIKey := "test-key"
-	node := &models.Node{ID: uuid.New(), Hostname: "test-host", Name: "test-node", APIKey: models.HashToken(plainAPIKey), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-
-	if err := db.AddNode(ctx, node); err != nil {
-		t.Fatalf("Failed to add node: %v", err)
-	}
-	retrieved, err := db.GetNode(ctx, node.ID)
-	if err != nil {
-		t.Fatalf("Failed to get node: %v", err)
-	}
-	if retrieved.Name != node.Name {
-		t.Errorf("Expected name %s, got %s", node.Name, retrieved.Name)
-	}
-
-	node.Status = models.NodeStatusBusy
-	if err := db.UpdateNode(ctx, node); err != nil {
-		t.Fatalf("Failed to update node: %v", err)
-	}
-	retrieved, err = db.GetNode(ctx, node.ID)
-	if err != nil {
-		t.Fatalf("Failed to get updated node: %v", err)
-	}
-	if retrieved.Status != models.NodeStatusBusy {
-		t.Errorf("Expected status %s, got %s", models.NodeStatusBusy, retrieved.Status)
-	}
-
-	retrieved, err = db.GetNodeByAPIKey(ctx, plainAPIKey)
-	if err != nil {
-		t.Fatalf("Failed to get node by api key: %v", err)
-	}
-	if retrieved.ID != node.ID {
-		t.Errorf("Expected ID %s, got %s", node.ID, retrieved.ID)
-	}
-
-	nodes, err := db.GetAllNodes(ctx)
-	if err != nil {
-		t.Fatalf("Failed to get all nodes: %v", err)
-	}
-	if len(nodes) != 1 {
-		t.Errorf("Expected 1 node, got %d", len(nodes))
-	}
-
-	deleted, err := db.RemoveNode(ctx, node.ID)
-	if err != nil {
-		t.Fatalf("Failed to remove node: %v", err)
-	}
-	if !deleted {
-		t.Error("RemoveNode returned false, expected true")
-	}
-	if _, err = db.GetNode(ctx, node.ID); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("Expected ErrNoRows, got %v", err)
-	}
 }
 
 func TestTaskOperations(t *testing.T) {
@@ -762,62 +702,6 @@ func TestAddLogResetsArchiveColumns(t *testing.T) {
 	}
 	if got.ID != "v2" {
 		t.Fatalf("GetLog returned id %q, want v2", got.ID)
-	}
-}
-
-func TestGetNodesScopedPaginated(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	ctx := context.Background()
-
-	nodes := []*models.Node{
-		{ID: uuid.New(), Hostname: "host1", Name: "prod-web-1", APIKey: models.HashToken("key1"), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC().Add(-10 * time.Minute)},
-		{ID: uuid.New(), Hostname: "host2", Name: "prod-db-1", APIKey: models.HashToken("key2"), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC().Add(-5 * time.Minute)},
-		{ID: uuid.New(), Hostname: "host3", Name: "dev-web-1", APIKey: models.HashToken("key3"), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()},
-		{ID: uuid.New(), Hostname: "host4", Name: "prod-web-2", APIKey: models.HashToken("key4"), OSType: "linux", Status: models.NodeStatusIdle, LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC().Add(-1 * time.Minute)},
-	}
-	for _, node := range nodes {
-		if err := db.AddNode(ctx, node); err != nil {
-			t.Fatalf("Failed to add node: %v", err)
-		}
-	}
-
-	tests := []struct {
-		name          string
-		scopes        []string
-		limit, offset int
-		expectedTotal int
-		expectedNames []string
-	}{
-		{"Empty scopes", []string{}, 10, 0, 0, []string{}},
-		{"Exact match", []string{"prod-web-1"}, 10, 0, 1, []string{"prod-web-1"}},
-		{"Wildcard suffix", []string{"prod-*"}, 10, 0, 3, []string{"prod-web-2", "prod-db-1", "prod-web-1"}},
-		{"Wildcard middle", []string{"prod-w?b-*"}, 10, 0, 2, []string{"prod-web-2", "prod-web-1"}},
-		{"Global wildcard", []string{"*"}, 10, 0, 4, []string{"dev-web-1", "prod-web-2", "prod-db-1", "prod-web-1"}},
-		{"Multiple scopes", []string{"dev-*", "prod-db-*"}, 10, 0, 2, []string{"dev-web-1", "prod-db-1"}},
-		{"Pagination limit", []string{"*"}, 2, 0, 4, []string{"dev-web-1", "prod-web-2"}},
-		{"Pagination offset", []string{"*"}, 2, 2, 4, []string{"prod-db-1", "prod-web-1"}},
-		{"No match", []string{"staging-*"}, 10, 0, 0, []string{}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			resNodes, total, err := db.GetNodesScopedPaginated(ctx, tc.limit, tc.offset, tc.scopes)
-			if err != nil {
-				t.Fatalf("Unexpected error: %v", err)
-			}
-			if total != tc.expectedTotal {
-				t.Errorf("Expected total %d, got %d", tc.expectedTotal, total)
-			}
-			if len(resNodes) != len(tc.expectedNames) {
-				t.Errorf("Expected %d nodes, got %d", len(tc.expectedNames), len(resNodes))
-			} else {
-				for i, expectedName := range tc.expectedNames {
-					if resNodes[i].Name != expectedName {
-						t.Errorf("Expected node at index %d to be %s, got %s", i, expectedName, resNodes[i].Name)
-					}
-				}
-			}
-		})
 	}
 }
 

@@ -225,20 +225,18 @@ func securitySchemeNames(op any) []string {
 // reflectable backing type appear here; inline/ad-hoc/unexported-backed schemas
 // are listed in schemaExcluded with the reason.
 var schemaModelRegistry = map[string]any{
-	"ErrorResponse":    models.ErrorResponse{},
-	"HealthResponse":   models.HealthResponse{},
-	"MCPChoice":        models.MCPChoice{},
-	"TaskCreate":       models.TaskCreate{},
-	"Task":             models.Task{},
-	"NodeRegistration": models.NodeRegistration{},
-	"Node":             models.Node{},
-	"APIKeyCreate":     models.APIKeyCreate{},
-	"APIKeyCreated":    models.APIKeyCreated{},
-	"UserCreate":       models.UserCreate{},
-	"UserResponse":     models.UserResponse{},
-	"LoginRequest":     models.UserLogin{},
-	"LoginResponse":    models.LoginResponse{},
-	"DashboardStats":   models.DashboardStats{},
+	"ErrorResponse":  models.ErrorResponse{},
+	"HealthResponse": models.HealthResponse{},
+	"MCPChoice":      models.MCPChoice{},
+	"TaskCreate":     models.TaskCreate{},
+	"Task":           models.Task{},
+	"APIKeyCreate":   models.APIKeyCreate{},
+	"APIKeyCreated":  models.APIKeyCreated{},
+	"UserCreate":     models.UserCreate{},
+	"UserResponse":   models.UserResponse{},
+	"LoginRequest":   models.UserLogin{},
+	"LoginResponse":  models.LoginResponse{},
+	"DashboardStats": models.DashboardStats{},
 	// SLA report (#274): GET /admin/sla-report returns these two reusable
 	// schemas verbatim via writeJSON, backed by exported reflectable models.
 	"SLAReport":     models.SLAReport{},
@@ -439,7 +437,7 @@ func kindGroupForSpecType(specType string) string {
 }
 
 // kindGroup maps a Go field type to the same coarse groups, unwrapping pointers
-// and treating named string types (e.g. TaskStatus, NodeStatus) as strings and
+// and treating named string types (e.g. TaskStatus) as strings and
 // []byte/uuid-like as strings too. Returns "" when no confident mapping exists
 // (e.g. uuid.UUID is an array-backed type that serializes as a string), so the
 // caller skips rather than false-fails.

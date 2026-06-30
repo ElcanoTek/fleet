@@ -16,7 +16,6 @@ import (
 type contextKey string
 
 const (
-	nodeContextKey   = contextKey("node")
 	tokenContextKey  = contextKey("token")
 	userContextKey   = contextKey("user")
 	apiKeyContextKey = contextKey("apiKey")
@@ -124,41 +123,6 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// NodeAuthMiddleware requires a valid X-API-Key for a registered node.
-// It places the *models.Node in the context.
-func (h *Handlers) NodeAuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		node, err := h.verifyNodeKey(r)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "Invalid node API key")
-			return
-		}
-		ctx := context.WithValue(r.Context(), nodeContextKey, node)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-// RegistrationAuthMiddleware checks for the registration token.
-func (h *Handlers) RegistrationAuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := h.verifyRegistrationToken(r); err != nil {
-			if strings.Contains(err.Error(), "disabled") {
-				writeError(w, http.StatusServiceUnavailable, "Registration is disabled. Set REGISTRATION_TOKEN environment variable.")
-			} else {
-				writeError(w, http.StatusUnauthorized, "Invalid registration token")
-			}
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// GetNodeFromContext retrieves the node from the context.
-func GetNodeFromContext(ctx context.Context) *models.Node {
-	node, _ := ctx.Value(nodeContextKey).(*models.Node)
-	return node
-}
-
 // GetUserFromContext retrieves the user from the context.
 func GetUserFromContext(ctx context.Context) *models.User {
 	user, _ := ctx.Value(userContextKey).(*models.User)
@@ -169,18 +133,6 @@ func GetUserFromContext(ctx context.Context) *models.User {
 func GetAPIKeyFromContext(ctx context.Context) *apikeys.APIKey {
 	key, _ := ctx.Value(apiKeyContextKey).(*apikeys.APIKey)
 	return key
-}
-
-// RateLimitMiddleware applies rate limiting for registration.
-func (h *Handlers) RateLimitMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clientIP := getClientIP(r)
-		if !h.regRateLimiter.Allow(clientIP) {
-			writeError(w, http.StatusTooManyRequests, "Rate limit exceeded. Try again later.")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 // MaxJSONBodySize is the maximum size of JSON request bodies (1MB)
@@ -243,12 +195,6 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 
 		// Skip for API key authentication
 		if r.Header.Get("X-API-Key") != "" {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Skip for registration token authentication
-		if r.Header.Get("X-Registration-Token") != "" {
 			next.ServeHTTP(w, r)
 			return
 		}

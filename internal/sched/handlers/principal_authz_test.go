@@ -53,24 +53,21 @@ func setupAuthzHandler(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.M
 	}
 
 	ctx := context.Background()
-	for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM nodes", "DELETE FROM users"} {
+	for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
 		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
 			t.Fatalf("cleanup: %v", err)
 		}
 	}
 
 	h := New(Config{
-		OrchestratorURL:   "http://localhost:8000",
-		AdminAPIKey:       "test-admin-key",
-		RegistrationToken: "test-reg-token",
-		Version:           "0.1.0",
+		OrchestratorURL: "http://localhost:8000",
+		AdminAPIKey:     "test-admin-key",
+		Version:         "0.1.0",
 	}, store, keyMgr)
 
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminOrUserAuthMiddleware)
-		r.Get("/nodes", h.ListNodes)
-		r.Get("/nodes/{node_id}", h.GetNode)
 		r.Get("/tasks", h.ListTasks)
 		r.Get("/tasks/{task_id}", h.GetTask)
 		r.Put("/tasks/{task_id}", h.UpdateTask)

@@ -45,10 +45,9 @@ func setupFullHandler(t *testing.T) (*storage.Storage, *Handlers, func()) {
 	// get a handle to it we rebuild via the same New call it used. The config
 	// matches the shared helper so verifyAdminKey etc. behave identically.
 	h := New(Config{
-		OrchestratorURL:   "http://localhost:8000",
-		AdminAPIKey:       "test-admin-key",
-		RegistrationToken: "test-reg-token",
-		Version:           "0.1.0",
+		OrchestratorURL: "http://localhost:8000",
+		AdminAPIKey:     "test-admin-key",
+		Version:         "0.1.0",
 	}, store, nil)
 	return store, h, cleanup
 }

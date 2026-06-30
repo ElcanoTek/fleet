@@ -213,7 +213,7 @@ func TestExportImportDefinitions_DB(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 	clean := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM nodes", "DELETE FROM users"} {
+		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
 			database.Conn().ExecContext(ctx, q)
 		}
 	}

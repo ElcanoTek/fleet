@@ -2,13 +2,11 @@
 
 import type { DashboardStats } from "@/app/shared/lib/orchestratorApi";
 
-// StatsGrid — the six clickable stat cards. React port of moc dashboard.js's
+// StatsGrid — the four clickable stat cards. React port of moc dashboard.js's
 // stat-card grid + applyStatCardFilter. Clicking a card applies the matching
-// task/agent filter (handled by the parent via onFilter).
+// task filter (handled by the parent via onFilter).
 
 export type StatFilter =
-  | "nodes-all"
-  | "nodes-active"
   | "tasks-pending"
   | "tasks-running"
   | "tasks-completed-today"
@@ -21,8 +19,6 @@ export type StatsGridProps = {
 };
 
 const CARDS: Array<{ filter: StatFilter; label: string; key: keyof DashboardStats; tone: string }> = [
-  { filter: "nodes-all", label: "Total Agents", key: "total_nodes", tone: "" },
-  { filter: "nodes-active", label: "Active Agents", key: "active_nodes", tone: "success" },
   { filter: "tasks-pending", label: "Pending Tasks", key: "pending_tasks", tone: "pending" },
   { filter: "tasks-running", label: "Running Tasks", key: "running_tasks", tone: "running" },
   { filter: "tasks-completed-today", label: "Completed Today", key: "completed_tasks_today", tone: "success" },

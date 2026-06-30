@@ -24,10 +24,7 @@ func TestRecurringTaskCarriesMemoryForward(t *testing.T) {
 	ctx := context.Background()
 	mem := sched.NewStore(database)
 
-	node := &models.Node{ID: uuid.New(), Hostname: "h", Name: "n", APIKey: "k", Status: models.NodeStatusIdle, OSType: "linux", LastHeartbeat: time.Now().UTC(), RegisteredAt: time.Now().UTC()}
-	if _, err := store.AddNode(node); err != nil {
-		t.Fatalf("AddNode: %v", err)
-	}
+	owner := uuid.New()
 
 	orig := &models.Task{ID: uuid.New(), Prompt: "weekly price check", Status: models.TaskStatusPending, Priority: 10, Recurrence: "@daily", InstructionSelfImprove: true, CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(orig); err != nil {
@@ -40,11 +37,11 @@ func TestRecurringTaskCarriesMemoryForward(t *testing.T) {
 	}
 
 	// Run it to success — this triggers scheduleNextRecurrence.
-	assigned, err := store.AssignTaskToNode(orig.ID, node.ID)
+	assigned, err := store.leaseTaskToOwner(orig.ID, owner)
 	if err != nil {
-		t.Fatalf("AssignTaskToNode: %v", err)
+		t.Fatalf("leaseTaskToOwner: %v", err)
 	}
-	if _, err := store.UpdateTaskStatusAtomic(assigned.ID, node.ID, &models.StatusUpdate{Status: models.TaskStatusSuccess, Message: strPtr("done")}); err != nil {
+	if _, err := store.UpdateTaskStatusAtomic(assigned.ID, owner, &models.StatusUpdate{Status: models.TaskStatusSuccess, Message: strPtr("done")}); err != nil {
 		t.Fatalf("UpdateTaskStatusAtomic: %v", err)
 	}
 

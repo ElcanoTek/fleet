@@ -66,7 +66,6 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 	queries := []string{
 		"DELETE FROM logs",
 		"DELETE FROM tasks",
-		"DELETE FROM nodes",
 		"DELETE FROM users",
 	}
 	for _, q := range queries {
@@ -76,27 +75,15 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 	}
 
 	h := New(Config{
-		OrchestratorURL:   "http://localhost:8000",
-		AdminAPIKey:       "test-admin-key",
-		RegistrationToken: "test-reg-token",
-		Version:           "0.1.0",
+		OrchestratorURL: "http://localhost:8000",
+		AdminAPIKey:     "test-admin-key",
+		Version:         "0.1.0",
 	}, store, keyMgr)
 
 	r := chi.NewRouter()
 
-	// Apply middlewares as in main.go
-	r.Group(func(r chi.Router) {
-		r.Use(h.RateLimitMiddleware)
-		r.Use(h.RegistrationAuthMiddleware)
-		r.Post("/register", h.RegisterNode)
-	})
-
 	r.Group(func(r chi.Router) {
 		r.Use(h.AdminAuthMiddleware)
-		r.Get("/nodes", h.ListNodes)
-		r.Get("/nodes/{node_id}", h.GetNode)
-		r.Delete("/nodes/{node_id}", h.UnregisterNode)
-
 		r.Get("/tasks", h.ListTasks)
 		r.Get("/tasks/{task_id}", h.GetTask)
 		r.Post("/tasks/cleanup", h.CleanupHistory)
@@ -116,14 +103,6 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 		r.Delete("/keys/{key_id}", h.DeleteAPIKey)
 
 		r.Get("/stats", h.GetDashboardStats)
-	})
-
-	r.Group(func(r chi.Router) {
-		r.Use(h.NodeAuthMiddleware)
-		r.Post("/nodes/heartbeat", h.NodeHeartbeat)
-		r.Get("/tasks/pending", h.GetPendingTask)
-		r.Post("/status", h.ReportStatus)
-		r.Post("/logs", h.SubmitLogs)
 	})
 
 	r.Post("/tasks", h.CreateTask) // Has its own complex auth logic

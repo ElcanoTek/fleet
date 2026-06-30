@@ -101,6 +101,30 @@ test('"Use Elcano email" bounces to the auth service magic-link flow', async ({ 
   expect(bounceUrl).toContain("auth.elcanotek.com");
 });
 
+test("a signed-in non-member sees the login form WITH a no-access notice, not a redirect or a dead-end (#458)", async ({
+  page,
+  context,
+}) => {
+  // A valid chat session cookie whose identity isn't provisioned in the
+  // orchestrator: /me returns 403 not_a_member. The middleware still admits the
+  // navigation (valid cookie), and the orchestrator must NOT strand the visitor
+  // — it shows the login card (so the username/password moc path can still admit
+  // a provisioned operator) plus a notice explaining why the prompt appeared.
+  await loginViaElcanoCookie(context);
+  await page.route("**/api/orchestrator/me", (r: Route) =>
+    r.fulfill({ status: 403, json: { error: "not_a_member" } }),
+  );
+
+  await page.goto("/orchestrator");
+
+  // Not bounced to the app login, and the dashboard is NOT shown.
+  expect(new URL(page.url()).pathname.startsWith("/login")).toBe(false);
+  await expect(page.getByTestId("orchestrator-dashboard")).toHaveCount(0);
+  // The explanatory notice is shown AND the username/password form remains.
+  await expect(page.getByTestId("orchestrator-no-access")).toBeVisible();
+  await expect(page.getByLabel("Username", { exact: true })).toBeVisible();
+});
+
 test("the elcano_auth (magic-link) cookie authenticates the same as the password session", async ({
   page,
   context,

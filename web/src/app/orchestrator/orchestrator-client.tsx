@@ -13,7 +13,6 @@ import { NavRail } from "@/app/shared/ui/NavRail";
 import { Icon } from "@/app/shared/ui/Icon";
 import { OrchestratorLogin } from "./OrchestratorLogin";
 import { StatsGrid, type StatFilter } from "./StatsGrid";
-import { NodesTable } from "./NodesTable";
 import { TasksTable } from "./TasksTable";
 import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
@@ -29,6 +28,28 @@ import { SLAReportPanel } from "./SLAReportPanel";
 // top bar with the theme switch + a cross-link to Chat. Routing, data-fetching,
 // SSE, and the dashboard body are unchanged — this is a shell change.
 
+// OrchestratorSlimHeader — the railless top bar (theme switch + cross-link to
+// Chat) shown above the pre-dashboard cards. Shared by the signed-out login
+// state and the #458 no-access state so the two read identically.
+function OrchestratorSlimHeader() {
+  return (
+    <header className="header page-header" role="banner">
+      <div className="ds-app-header">
+        <div className="ds-app-header__brand">
+          <div className="ds-app-header__text">
+            <p className="ds-app-header__eyebrow">Elcano Internal</p>
+            <h1 className="ds-app-header__title">Operations Center</h1>
+          </div>
+        </div>
+        <div className="ds-app-header__actions">
+          <ThemeToggle />
+          <NavToChat className="btn btn-ghost" />
+        </div>
+      </div>
+    </header>
+  );
+}
+
 function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
   const session = useOrchestratorSession();
   const dashboard = useDashboardData(session.signedIn);
@@ -36,7 +57,6 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   const { branding } = useClientConfig();
 
   const [statFilter, setStatFilter] = useState<StatFilter | null>(null);
-  const [nodeActiveOnly, setNodeActiveOnly] = useState(false);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [logTask, setLogTask] = useState<Task | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
@@ -46,19 +66,18 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   // dashboard shape is unchanged on load.
   const [tab, setTab] = useState<"tasks" | "sla">("tasks");
 
+  // #458 symptom 2: the SLA tab + panel are admin-only. role may be absent (an
+  // admin-API-key principal carries no role) — treat absent as non-admin for
+  // gating, so a non-admin can never reach the SLA report even via stale state.
+  const isAdmin = session.role === "admin";
+
   const applyStatFilter = (filter: StatFilter) => {
     if (statFilter === filter) {
       setStatFilter(null);
-      setNodeActiveOnly(false);
       dashboard.clearFilters();
       return;
     }
     setStatFilter(filter);
-    if (filter.startsWith("nodes-")) {
-      setNodeActiveOnly(filter === "nodes-active");
-      return;
-    }
-    setNodeActiveOnly(false);
     switch (filter) {
       case "tasks-pending":
         dashboard.setFilters({ status: "pending", completedToday: false, completedStatus: "" });
@@ -87,27 +106,26 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   }
 
   // Signed out — slim top bar (theme + cross-link) above the login card; no rail.
+  // #458 symptom 1: when the visitor IS signed in to chat but that identity
+  // isn't provisioned here (/me → 403 not_a_member, session.noAccess), we still
+  // render the login card — the username/password (moc) path can admit a
+  // provisioned operator even when the cookie identity can't — but with a notice
+  // explaining why a login prompt appeared, instead of a bare, confusing form or
+  // a dead-end card that would strand a valid moc user. A genuinely signed-out
+  // visitor (401) gets the plain card with no notice.
   if (!session.signedIn) {
     return (
       <div className="container">
-        <header className="header page-header" role="banner">
-          <div className="ds-app-header">
-            <div className="ds-app-header__brand">
-              <div className="ds-app-header__text">
-                <p className="ds-app-header__eyebrow">Elcano Internal</p>
-                <h1 className="ds-app-header__title">Operations Center</h1>
-              </div>
-            </div>
-            <div className="ds-app-header__actions">
-              <ThemeToggle />
-              <NavToChat className="btn btn-ghost" />
-            </div>
-          </div>
-        </header>
+        <OrchestratorSlimHeader />
         <OrchestratorLogin
           elcanoLoginEnabled={elcanoLoginEnabled}
           onLogin={session.login}
           error={session.error}
+          notice={
+            session.noAccess
+              ? "You're signed in, but that identity isn't provisioned for the Operations Center. Sign in with Operations Center credentials below, or ask an administrator to provision your account."
+              : undefined
+          }
         />
       </div>
     );
@@ -175,13 +193,6 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
             <div className="dashboard-content visible" data-testid="orchestrator-dashboard">
               <StatsGrid stats={dashboard.stats} activeFilter={statFilter} onFilter={applyStatFilter} />
 
-              <div className="section" role="region" aria-labelledby="nodesHeading">
-                <div className="section-header">
-                  <h2 id="nodesHeading">Registered Agents</h2>
-                </div>
-                <NodesTable nodes={dashboard.nodes} activeOnly={nodeActiveOnly} />
-              </div>
-
               <div className="dashboard-tabs" role="tablist" aria-label="Operations Center view">
                 <button
                   type="button"
@@ -192,18 +203,25 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                 >
                   Recent Tasks
                 </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === "sla"}
-                  className={`tab-btn${tab === "sla" ? " tab-btn-active" : ""}`}
-                  onClick={() => setTab("sla")}
-                >
-                  SLA
-                </button>
+                {/* #458 symptom 2: only admins see the SLA tab. The render guard
+                    below mirrors this — a non-admin holding a stale tab === "sla"
+                    still falls back to the tasks view. */}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === "sla"}
+                    className={`tab-btn${tab === "sla" ? " tab-btn-active" : ""}`}
+                    onClick={() => setTab("sla")}
+                  >
+                    SLA
+                  </button>
+                ) : null}
               </div>
 
-              {tab === "tasks" ? (
+              {tab === "sla" && isAdmin ? (
+                <SLAReportPanel />
+              ) : (
                 <TasksTable
                   tasks={dashboard.tasks}
                   total={dashboard.total}
@@ -215,8 +233,6 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                   onPageSize={dashboard.setPageSize}
                   onOpenLogs={setLogTask}
                 />
-              ) : (
-                <SLAReportPanel />
               )}
 
               {adminOpen ? (

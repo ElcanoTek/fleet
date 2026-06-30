@@ -3,7 +3,7 @@
 fleet runs **one Postgres cluster with two logical databases**:
 
 - **chat** — conversations, turn events, chat users (the `internal/store` pool).
-- **sched** — scheduled tasks, nodes, API keys (the `internal/sched/db` pool).
+- **sched** — scheduled tasks, API keys, orchestrator users (the `internal/sched/db` pool).
 
 Losing the chat DB loses every conversation; losing the sched DB loses every
 scheduled task. There is no other copy. Back both up.

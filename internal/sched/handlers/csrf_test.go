@@ -13,8 +13,7 @@ import (
 // that replaced the in-memory synchronizer-token store. On the cookie/session
 // path, mutating requests must carry a same-origin Origin header; requests
 // authenticated by a token that the browser does not auto-attach (API key,
-// bearer, registration) and safe methods stay exempt. Mirrors chat's
-// verifyOrigin contract.
+// bearer) and safe methods stay exempt. Mirrors chat's verifyOrigin contract.
 func TestCSRFMiddlewareOrigin(t *testing.T) {
 	h := &Handlers{}
 	reached := false
@@ -129,15 +128,6 @@ func TestCSRFMiddlewareOrigin(t *testing.T) {
 		})
 		if rr.Code != http.StatusOK || !reached {
 			t.Fatalf("Bearer POST should bypass CSRF: code=%d", rr.Code)
-		}
-	})
-
-	t.Run("registration token request is exempt", func(t *testing.T) {
-		rr := do("POST", "/register", func(r *http.Request) {
-			r.Header.Set("X-Registration-Token", "reg-token") // no Origin
-		})
-		if rr.Code != http.StatusOK || !reached {
-			t.Fatalf("X-Registration-Token POST should bypass CSRF: code=%d", rr.Code)
 		}
 	})
 
