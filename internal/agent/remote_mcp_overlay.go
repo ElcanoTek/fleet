@@ -59,6 +59,11 @@ type RemoteMCPOverlay struct {
 	Client  *mcp.Client      // per-run; Close() in the caller's defer
 	Catalog []mcp.ServerTool // the overlay servers' tools, merged into the run catalog
 	Servers map[string]bool  // registration names handled by the overlay broker
+	// Skipped names servers that were selected but could not be wired this run —
+	// today only because their token is unavailable (needs re-auth) or the server
+	// failed to connect. Callers surface these to the owner (a needs-reauth server
+	// silently doing nothing is a correctness trap, especially for headless runs).
+	Skipped []string
 }
 
 // Active reports whether the overlay actually registered any servers.
@@ -76,10 +81,15 @@ func (o *RemoteMCPOverlay) Close() {
 // BuildRemoteMCPOverlay registers a user's connected remote servers onto a fresh
 // per-run client. shadowed is the set of server names already provided by the
 // base catalog — an overlay server colliding with one is skipped so a user can
-// never shadow a built-in tool. A server that fails to mint a token or initialize
-// is skipped (graceful degradation), never fatal. Returns nil when there are no
-// usable overlay servers. The caller MUST Close the returned overlay.
-func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, email string, shadowed map[string]bool) (*RemoteMCPOverlay, error) {
+// never shadow a built-in tool. enabled, when non-nil, restricts wiring to the
+// servers whose name is in it (the conversation's per-turn opt-in set); nil means
+// "wire all connected servers" (the scheduled default). A server that fails to
+// mint a token (needs re-auth) or connect is recorded in Skipped (graceful
+// degradation), never fatal. The returned overlay is non-nil whenever there are
+// connected servers (so the caller can read Skipped even when none registered);
+// its Active() reports whether any server is actually wired. The caller MUST
+// Close it.
+func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, email string, shadowed, enabled map[string]bool) (*RemoteMCPOverlay, error) {
 	if resolver == nil || email == "" {
 		return nil, nil
 	}
@@ -96,6 +106,11 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 	overlay := &RemoteMCPOverlay{Client: client, Servers: map[string]bool{}}
 	registered := 0
 	for _, conn := range conns {
+		// Opt-in gate (chat): only wire servers the conversation selected. A
+		// non-selected server is not "skipped" — the user chose not to enable it.
+		if enabled != nil && !enabled[conn.Name] {
+			continue
+		}
 		if registered >= maxOverlayServers {
 			log.Printf("remote-mcp: skipping %q and further servers for %s — overlay cap %d reached", conn.Name, email, maxOverlayServers)
 			break
@@ -106,8 +121,10 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		}
 		bearer, terr := resolver.AcquireTokenByID(ctx, email, conn.ID)
 		if terr != nil {
-			// needs-reauth / refresh failure: skip this server, keep the rest.
+			// needs-reauth / refresh failure: skip this server, keep the rest, and
+			// record it so the caller can tell the owner.
 			log.Printf("remote-mcp: skipping server %q for %s — token unavailable: %v", conn.Name, email, terr)
+			overlay.Skipped = append(overlay.Skipped, conn.Name)
 			continue
 		}
 		opts := mcp.HTTPServerOptions{
@@ -116,16 +133,13 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		}
 		if aerr := client.AddHTTPServerWithOptions(ctx, conn.Name, conn.URL, opts); aerr != nil {
 			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %v", conn.Name, email, aerr)
+			overlay.Skipped = append(overlay.Skipped, conn.Name)
 			continue
 		}
 		overlay.Servers[conn.Name] = true
 		registered++
 	}
 
-	if registered == 0 {
-		_ = client.Close()
-		return nil, nil
-	}
 	overlay.Catalog = client.GetAllTools()
 	return overlay, nil
 }

@@ -863,6 +863,31 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 			"accounts": info.Accounts,
 		})
 	}
+	// Per-user remote (hosted) MCP servers (#443): merge the caller's connected
+	// servers into the Optional-server catalog so they show up in the Tools picker
+	// as toggleable, default-on entries (gated per conversation like a bundle
+	// Optional server). Best-effort — a lookup error never breaks the catalog.
+	if s.remoteMCP != nil && s.remoteMCP.Enabled() {
+		user := userFromCtx(r.Context())
+		if conns, err := s.remoteMCP.ConnectedServersForUser(r.Context(), user); err == nil {
+			for _, c := range conns {
+				servers = append(servers, map[string]any{
+					"name":               c.Name,
+					"display_name":       c.Name,
+					"description":        "Remote MCP server you connected (" + c.URL + ").",
+					"tools":              []string{},
+					"tool_count":         0,
+					"enabled":            true,
+					"beta":               false,
+					"enabled_by_default": true,
+					"accounts":           []string{},
+					"remote":             true,
+				})
+			}
+		} else {
+			log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
+		}
+	}
 	writeJSON(w, map[string]any{"servers": servers})
 }
 

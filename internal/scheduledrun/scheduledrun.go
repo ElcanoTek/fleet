@@ -599,6 +599,19 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 				"already performed by an earlier attempt; do not duplicate it.\n\n%s",
 			task.AttemptCount+1, task.Prompt)
 	}
+	// Owner-visible degradation notice (#443): a headless run can't re-prompt the
+	// user to log in, so a connected remote MCP server whose token needs re-auth is
+	// skipped. Surface it in the run transcript so the owner sees the task did less
+	// than expected, and tell the agent so it doesn't silently rely on missing tools.
+	if remoteOverlay != nil && len(remoteOverlay.Skipped) > 0 {
+		log.Printf("scheduled task %s: skipped remote MCP server(s) needing re-auth: %v", task.ID, remoteOverlay.Skipped)
+		prompt = fmt.Sprintf(
+			"[notice] These remote MCP connectors were unavailable this run because their "+
+				"login expired (the task owner must reconnect them in Settings → Connections): %s. "+
+				"Proceed without them; if the task depends on one, say so in your result rather than "+
+				"guessing.\n\n%s",
+			strings.Join(remoteOverlay.Skipped, ", "), prompt)
+	}
 	// Loop context (#179): a prior iteration's output is fed forward so the worker
 	// can improve on it. Empty on the first / only pass.
 	if strings.TrimSpace(extraPrompt) != "" {
@@ -657,7 +670,9 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 	for _, st := range base.GetAllTools() {
 		shadowed[st.ServerName] = true
 	}
-	overlay, err := agent.BuildRemoteMCPOverlay(ctx, r.remoteMCP, email, shadowed)
+	// Scheduled runs have no interactive Tools picker, so all of the owner's
+	// connected servers participate (nil opt-in set), bounded by the overlay cap.
+	overlay, err := agent.BuildRemoteMCPOverlay(ctx, r.remoteMCP, email, shadowed, nil)
 	if err != nil {
 		log.Printf("scheduled task %s: remote-mcp overlay unavailable: %v", task.ID, err)
 		return nil

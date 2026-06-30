@@ -183,8 +183,12 @@ add a **remote (hosted) MCP server** from the GUI and log in to it via the MCP
 OAuth handshake (spec revision 2025-06-18: OAuth 2.1 + PKCE S256, RFC 9728/8414
 discovery, RFC 7591 dynamic client registration, RFC 8707 resource indicators).
 The connected server's tools then participate in that user's chat turns **and**
-their scheduled tasks. Local stdio servers are unchanged. See
-[ADR-0009](adr/0009-per-user-remote-mcp-oauth.md) for the full rationale.
+their scheduled tasks. In chat they appear in the Tools picker as toggleable,
+default-on entries (gated per conversation exactly like a bundle Optional
+server, so they count against the tool ceiling only when selected); scheduled
+runs use all of the owner's connected servers. Local stdio servers are
+unchanged. See [ADR-0009](adr/0009-per-user-remote-mcp-oauth.md) for the full
+rationale.
 
 The feature is **off until configured** and fails closed:
 
@@ -220,8 +224,11 @@ How the invariants hold:
 
 Scheduled tasks resolve the **task owner's email** (the orchestrator username)
 to look up that user's connected servers, so a headless run reaches them with no
-user present — as long as a valid refresh token exists (a needs-reauth server is
-skipped, since a headless run can't re-prompt the user to log in).
+user present — as long as a valid refresh token exists. A headless run can't
+re-prompt the user to log in, so a needs-reauth server is skipped AND surfaced
+to the owner: a notice naming the unavailable connectors is prepended to the run
+(visible in the task transcript) so the agent doesn't silently rely on missing
+tools and the owner knows to reconnect.
 
 ---
 

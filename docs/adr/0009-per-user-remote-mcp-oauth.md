@@ -98,9 +98,9 @@ elcano-auth orchestrator tier).
   defense-in-depth against a leaked DB backup / SQL read, not against root. The
   ciphertext carries a version byte so envelope/KMS encryption can be layered in
   later without a migration flag-day.
-- A silently-skipped server in a headless task means the task quietly does less
-  than intended; today that surfaces as a log line. A richer owner-visible
-  notification is a follow-up.
+- A skipped (needs-reauth) server in a headless task is surfaced to the owner: a
+  notice naming the unavailable connectors is prepended to the run so it appears
+  in the task transcript and the agent won't silently rely on missing tools.
 
 ## Alternatives considered
 

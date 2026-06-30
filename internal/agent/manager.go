@@ -669,12 +669,27 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		for _, st := range m.mcpClient.GetAllTools() {
 			shadowed[st.ServerName] = true
 		}
-		ov, oerr := BuildRemoteMCPOverlay(ctx, m.remoteMCP, in.UserEmail, shadowed)
+		// A remote server participates in a turn only when the conversation opted
+		// in (the Tools picker), exactly like a bundle Optional server. New
+		// conversations seed the opt-in list from the catalog (remote servers are
+		// enabled_by_default), so a freshly-connected server is on by default yet
+		// remains toggleable and bounded by the tool ceiling.
+		enabled := make(map[string]bool, len(in.OptionalMCPServersEnabled))
+		for _, name := range in.OptionalMCPServersEnabled {
+			if n := strings.TrimSpace(name); n != "" {
+				enabled[n] = true
+			}
+		}
+		ov, oerr := BuildRemoteMCPOverlay(ctx, m.remoteMCP, in.UserEmail, shadowed, enabled)
 		if oerr != nil {
 			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", in.UserEmail, oerr)
-		} else if ov.Active() {
+		} else if ov != nil {
 			overlay = ov
 			defer overlay.Close()
+			if len(ov.Skipped) > 0 {
+				// Interactive: the user can see+fix these on the Connections page.
+				log.Printf("RunTurn: remote MCP server(s) need re-auth for %s: %v", in.UserEmail, ov.Skipped)
+			}
 		}
 	}
 

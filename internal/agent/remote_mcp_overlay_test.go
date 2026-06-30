@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -34,14 +35,22 @@ func TestCompositeBrokerRouting(t *testing.T) {
 }
 
 type fakeResolver struct {
-	conns  []RemoteMCPConn
-	tokens map[string]string
+	conns    []RemoteMCPConn
+	tokens   map[string]string
+	tokenErr map[string]error
+	asked    []string // server IDs AcquireTokenByID was called for
 }
 
 func (f *fakeResolver) ConnectedServersForUser(_ context.Context, _ string) ([]RemoteMCPConn, error) {
 	return f.conns, nil
 }
 func (f *fakeResolver) AcquireTokenByID(_ context.Context, _, id string) (string, error) {
+	f.asked = append(f.asked, id)
+	if f.tokenErr != nil {
+		if e := f.tokenErr[id]; e != nil {
+			return "", e
+		}
+	}
 	return f.tokens[id], nil
 }
 func (f *fakeResolver) SafeHTTPClient() *http.Client { return http.DefaultClient }
@@ -49,17 +58,57 @@ func (f *fakeResolver) SafeHTTPClient() *http.Client { return http.DefaultClient
 func TestBuildRemoteMCPOverlayGuards(t *testing.T) {
 	ctx := context.Background()
 	// nil resolver → nil overlay.
-	if ov, err := BuildRemoteMCPOverlay(ctx, nil, "u@x.com", nil); err != nil || ov.Active() {
+	if ov, err := BuildRemoteMCPOverlay(ctx, nil, "u@x.com", nil, nil); err != nil || ov.Active() {
 		t.Errorf("nil resolver: ov=%v err=%v", ov, err)
 	}
 	// empty email → nil overlay.
 	r := &fakeResolver{conns: []RemoteMCPConn{{ID: "1", Name: "s", URL: "https://s"}}}
-	if ov, err := BuildRemoteMCPOverlay(ctx, r, "", nil); err != nil || ov.Active() {
+	if ov, err := BuildRemoteMCPOverlay(ctx, r, "", nil, nil); err != nil || ov.Active() {
 		t.Errorf("empty email: ov=%v err=%v", ov, err)
 	}
 	// no connected servers → nil overlay.
-	if ov, err := BuildRemoteMCPOverlay(ctx, &fakeResolver{}, "u@x.com", nil); err != nil || ov.Active() {
+	if ov, err := BuildRemoteMCPOverlay(ctx, &fakeResolver{}, "u@x.com", nil, nil); err != nil || ov.Active() {
 		t.Errorf("no servers: ov=%v err=%v", ov, err)
+	}
+}
+
+func TestBuildRemoteMCPOverlaySkipsAndReportsNeedsReauth(t *testing.T) {
+	ctx := context.Background()
+	reauth := errors.New("needs reauth")
+	r := &fakeResolver{
+		conns:    []RemoteMCPConn{{ID: "1", Name: "dead", URL: "https://dead.example.com"}},
+		tokenErr: map[string]error{"1": reauth},
+	}
+	ov, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, nil)
+	if err != nil {
+		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ov.Close()
+	if ov.Active() {
+		t.Error("overlay should be inactive when the only server needs reauth")
+	}
+	if len(ov.Skipped) != 1 || ov.Skipped[0] != "dead" {
+		t.Errorf("Skipped = %v, want [dead]", ov.Skipped)
+	}
+}
+
+func TestBuildRemoteMCPOverlayOptInFilter(t *testing.T) {
+	ctx := context.Background()
+	// Both servers' token fetch errors, but only the opted-in one is even ATTEMPTED.
+	r := &fakeResolver{
+		conns: []RemoteMCPConn{
+			{ID: "1", Name: "s1", URL: "https://s1.example.com"},
+			{ID: "2", Name: "s2", URL: "https://s2.example.com"},
+		},
+		tokenErr: map[string]error{"1": errors.New("x"), "2": errors.New("x")},
+	}
+	ov, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, map[string]bool{"s2": true})
+	if err != nil {
+		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ov.Close()
+	if len(r.asked) != 1 || r.asked[0] != "2" {
+		t.Errorf("opt-in filter: AcquireToken asked for %v, want only [2]", r.asked)
 	}
 }
 
