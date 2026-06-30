@@ -631,7 +631,7 @@ jobs:
         # affected packages, and fix versions rather than only a red CI job. The
         # hashFiles guard skips this step (instead of erroring "file not found")
         # when an EARLIER step failed before grype could write the SARIF.
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: ${{ !cancelled() && hashFiles('grype-results.sarif') != '' }}
         with:
           sarif_file: 'grype-results.sarif'

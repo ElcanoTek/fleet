@@ -79,7 +79,7 @@ jobs:
             --output sarif=grype-results.sarif
 
       - name: Upload weekly scan results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         # Skip cleanly (rather than error "file not found") if an earlier step
         # failed before grype could write the SARIF.
         if: ${{ !cancelled() && hashFiles('grype-results.sarif') != '' }}
