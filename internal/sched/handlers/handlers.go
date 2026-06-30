@@ -35,6 +35,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
 
 // Config holds the handler configuration.
@@ -1087,6 +1088,13 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 	if err := h.validateSandboxLimits(tc.SandboxLimits); err != nil {
 		return err
 	}
+	// Structured-output mode (#244): reject a malformed output_schema up front so
+	// the task author sees the error at create time, not at run time.
+	if len(tc.OutputSchema) > 0 {
+		if err := structuredoutput.ValidateSchema(tc.OutputSchema); err != nil {
+			return fmt.Errorf("output_schema: %w", err)
+		}
+	}
 
 	// Resolve + validate the per-task timezone (writes the resolved name back to
 	// tc so it persists). The cron Recurrence is evaluated in this zone so a
@@ -1476,6 +1484,57 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, task)
+}
+
+// GetTaskOutput handles GET /tasks/{task_id}/output (#244): the validated
+// structured JSON result of a structured-output task, returned raw with
+// Content-Type application/json (no envelope) for direct programmatic
+// consumption. 404 when the task has no output_json (no output_schema was
+// declared, or the agent's answer failed validation); 409 while the task has not
+// yet reached a terminal state (the result isn't ready — poll again).
+func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionViewTasks) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return
+	}
+
+	taskIDStr := chi.URLParam(r, "task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid task ID")
+		return
+	}
+
+	task, err := h.storage.GetTask(taskID)
+	if err != nil || task == nil {
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+
+	if scopes := p.scopes(); len(scopes) > 0 {
+		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
+			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
+			return
+		}
+	}
+
+	if len(task.OutputJSON) == 0 {
+		// Distinguish "not ready yet" (still pending/running) from "never will be"
+		// (terminal with no structured output) so a poller knows whether to retry.
+		if !task.Status.IsTerminal() {
+			writeError(w, http.StatusConflict, "Task has not finished; structured output is not yet available")
+			return
+		}
+		writeError(w, http.StatusNotFound, "Task has no structured output (no output_schema declared, or the result failed schema validation)")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	// output_json is schema-validated JSON (compiled at create, validated post-run)
+	// served as application/json — not HTML — so there is no XSS sink here.
+	_, _ = w.Write(task.OutputJSON) //nolint:gosec // G705: validated JSON served as application/json, not an HTML/XSS context
 }
 
 // CleanupHistory handles POST /tasks/cleanup

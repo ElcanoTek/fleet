@@ -43,6 +43,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
+	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
 
 const (
@@ -556,6 +557,15 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		// Terminal failure (quarantined): fire the outbound notification (#208).
 		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 	default:
+		// Structured-output mode (#244): if the task declared an output_schema,
+		// validate the agent's final answer against it and persist the validated
+		// JSON BEFORE the terminal success (which clears the lease). Best-effort —
+		// a missing/non-conforming result leaves output_json NULL and the run still
+		// succeeds (the free-form session log retains the text); the
+		// GET /tasks/{id}/output endpoint then 404s.
+		if len(task.OutputSchema) > 0 {
+			p.recordStructuredOutput(task, session)
+		}
 		if _, err := p.reportStatus(task.ID, models.TaskStatusSuccess, "Task completed successfully"); err != nil {
 			log.Printf("runner: failed to report success for task %s: %v", task.ID, err)
 		}
@@ -670,6 +680,46 @@ func (p *Pool) reportWorkspacePath(taskID uuid.UUID, path string) {
 	}); err != nil {
 		log.Printf("runner: failed to record workspace path for task %s: %v", taskID, err)
 	}
+}
+
+// recordStructuredOutput validates the agent's final answer against the task's
+// declared output_schema (#244) and persists the validated JSON to output_json
+// under the held lease, riding a TaskStatusRunning update exactly like
+// reportWorkspacePath. Best-effort: anything that goes wrong (no final text, a
+// non-conforming answer, a persist failure) is logged and swallowed so the run
+// still completes successfully — output_json simply stays NULL.
+func (p *Pool) recordStructuredOutput(task *models.Task, session *models.LogSession) {
+	finalText := finalAssistantText(session)
+	if strings.TrimSpace(finalText) == "" {
+		log.Printf("runner: task %s declared output_schema but produced no final text; output_json left null", task.ID)
+		return
+	}
+	out, err := structuredoutput.ValidateOutput(finalText, task.OutputSchema)
+	if err != nil {
+		log.Printf("runner: task %s structured output did not validate: %v; output_json left null", task.ID, err)
+		return
+	}
+	if _, err := p.store.UpdateTaskStatusAtomicWithContext(context.Background(), task.ID, p.leaseOwner, &models.StatusUpdate{
+		TaskID:     task.ID,
+		Status:     models.TaskStatusRunning,
+		OutputJSON: out,
+	}); err != nil {
+		log.Printf("runner: task %s failed to persist output_json: %v", task.ID, err)
+	}
+}
+
+// finalAssistantText returns the content of the last assistant message in the
+// session — the agent's final answer — or "" when there is none.
+func finalAssistantText(session *models.LogSession) string {
+	if session == nil {
+		return ""
+	}
+	for i := len(session.Messages) - 1; i >= 0; i-- {
+		if session.Messages[i].Role == "assistant" {
+			return session.Messages[i].Content
+		}
+	}
+	return ""
 }
 
 // submitLog persists the run's session log. When the runner produced no
