@@ -29,6 +29,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robfig/cron/v3"
+
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -426,6 +428,9 @@ func summarizeApprovalInput(toolName, rawInput, convID string) map[string]any {
 	if toolName == tools.SuggestAdvancedModelToolName {
 		return summarizeSuggestAdvancedInput(toolName, rawInput)
 	}
+	if toolName == tools.ScheduleTaskToolName {
+		return summarizeScheduleTaskInput(toolName, rawInput)
+	}
 	// preview_email uses the exact same summary shape as send_email
 	// so ApprovalCard's existing email-preview render path just works;
 	// the only difference is the `tool` field, which drives the UI
@@ -447,6 +452,88 @@ func summarizeSuggestAdvancedInput(toolName, rawInput string) map[string]any {
 		"reason":          args.Reason,
 		"recommend_model": agentcore.AdvancedModelSlug,
 	}
+}
+
+// summarizeScheduleTaskInput builds the schedule_task approval-card payload
+// (#239): the task name, a truncated prompt preview, the schedule (cron or
+// one-time run_at), whether it recurs, and an estimated runs-per-month for
+// recurring tasks so the user can gauge frequency before approving. Pure display
+// — the underlying approval row keeps the full args for the create call.
+func summarizeScheduleTaskInput(toolName, rawInput string) map[string]any {
+	var p tools.ScheduleTaskParams
+	if err := json.Unmarshal([]byte(rawInput), &p); err != nil {
+		return map[string]any{"tool": toolName, "raw": rawInput}
+	}
+	const previewMax = 200
+	preview := strings.TrimSpace(p.Prompt)
+	// Truncate by RUNES, not bytes, so a multibyte UTF-8 prompt isn't cut
+	// mid-rune (which would emit a replacement char in the card).
+	if r := []rune(preview); len(r) > previewMax {
+		preview = string(r[:previewMax]) + "…"
+	}
+	out := map[string]any{
+		"tool":           toolName,
+		"name":           strings.TrimSpace(p.Name),
+		"prompt_preview": preview,
+		"model":          strings.TrimSpace(p.Model),
+		"allow_network":  p.AllowNetwork,
+		"tags":           p.Tags,
+	}
+	cron := strings.TrimSpace(p.Cron)
+	switch {
+	case cron != "":
+		out["recurring"] = true
+		out["cron"] = cron
+		if n, ok := estimateRunsPerMonth(cron); ok {
+			out["runs_per_month"] = n
+		}
+	case strings.TrimSpace(p.RunAt) != "":
+		out["recurring"] = false
+		if t, ok := p.RunAtTime(); ok {
+			out["run_at"] = t.Format(time.RFC3339)
+		} else {
+			out["run_at"] = strings.TrimSpace(p.RunAt)
+		}
+	default:
+		out["recurring"] = false
+		out["run_immediately"] = true
+	}
+	return out
+}
+
+// runsPerMonthCountCap bounds the cron-occurrence walk so a per-minute schedule
+// can't spin counting ~43k iterations; beyond the cap we report the cap as a
+// floor ("runs_per_month": 1000 means "≥1000"). The card renders it as "1000+".
+const runsPerMonthCountCap = 1000
+
+// estimateRunsPerMonth counts how many times a standard cron expression fires in
+// the next 30 days, for the approval card's frequency hint. Returns ok=false for
+// an unparseable expression (the card then omits the frequency rather than
+// guessing). Evaluated in UTC; the displayed estimate only needs to be
+// order-of-magnitude correct, and the real schedule is timezone-resolved at
+// create time by the storage path.
+func estimateRunsPerMonth(cronExpr string) (int, bool) {
+	schedule, err := cron.ParseStandard(cronExpr)
+	if err != nil {
+		return 0, false
+	}
+	// A fixed reference window keeps this deterministic-ish and free of the
+	// banned Date.now coupling concerns; time.Now is fine on the Go side. The
+	// 30-day window is the conventional "per month" approximation.
+	start := time.Now().UTC()
+	end := start.AddDate(0, 0, 30)
+	count := 0
+	for t := schedule.Next(start); !t.IsZero() && !t.After(end); t = schedule.Next(t) {
+		// A zero time means the schedule has no next firing (an impossible date
+		// like "0 0 30 2 *" / Feb 30 — cron parses it but Next() never resolves).
+		// Stop, so the card reports 0 rather than spinning to the "1000+" cap and
+		// claiming a never-firing task runs constantly.
+		count++
+		if count >= runsPerMonthCountCap {
+			break
+		}
+	}
+	return count, true
 }
 
 // summarizeBashInput extracts the command, working directory, and
@@ -740,8 +827,8 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	}
 
 	if !req.Approved {
-		claimed, err := s.store.ClaimApproval(r.Context(), user, approvalID, "rejected",
-			"User declined to send.")
+		claimMsg, historyMsg := rejectionMessages(approval.ToolName)
+		claimed, err := s.store.ClaimApproval(r.Context(), user, approvalID, "rejected", claimMsg)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -755,7 +842,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		// original tool_call id so the chip in the UI updates instead
 		// of orphaning a second result row keyed off the approval id.
 		appendToolResultToHistory(r.Context(), s.store, convID, approval.ToolName,
-			resolutionCallID(approval), "User declined to send this email.", false)
+			resolutionCallID(approval), historyMsg, false)
 		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 		writeJSON(w, map[string]any{"status": "rejected"})
 		return
@@ -788,17 +875,26 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		text    string
 		toolErr error
 	)
-	if s.cfg.MockMode {
+	switch {
+	case s.cfg.MockMode && approval.ToolName == tools.ScheduleTaskToolName:
+		// Playwright/mock mode has no real sched store wired; report a canned
+		// success so the approval UX is exercisable without a database.
+		text = "Scheduled task created (mock mode — no task persisted)."
+	case s.cfg.MockMode:
 		text = `{"status_code":202,"message":"mock send ok"}`
-	} else {
+	case approval.ToolName == tools.ScheduleTaskToolName:
+		// schedule_task creates an orchestrator task in-process via the injected
+		// seam (#239) — not an MCP send — so it gets its own one-shot path.
+		text, toolErr = s.runStagedScheduleTask(execCtx, approval)
+	default:
 		text, toolErr = runStagedTool(execCtx, s.agent, approval)
 	}
 	resultText := text
 	if toolErr != nil {
-		// The approval stays approved so the user knows the send was
+		// The approval stays approved so the user knows the action was
 		// attempted; surface the failure in result_text so the UI can
 		// show it.
-		resultText = fmt.Sprintf("send failed: %v", toolErr)
+		resultText = fmt.Sprintf("%s failed: %v", actionVerb(approval.ToolName), toolErr)
 	}
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
@@ -1049,6 +1145,109 @@ func runStagedBash(ctx context.Context, mgr turnEngine, approval *store.Approval
 	}
 	defer cleanup()
 	return tools.RunBashForApproval(ctx, sb, params)
+}
+
+// runStagedScheduleTask creates the orchestrator task an approved schedule_task
+// call described (#239). It parses the staged args, re-validates them (the same
+// pure checks the gate applied at stage time — defence in depth against a tampered
+// row), maps them to the sched-agnostic seam, and formats a user/model-facing
+// confirmation pointing at the Operations Center. The injected seam reuses the
+// SAME constructor + persistence (models.NewTask + AddTask) and cron validation
+// that POST /tasks and the create_task tool use — this handler does not fork a
+// second create path. (It does NOT re-run the HTTP handler's field-limit
+// validation — max_iterations bounds, prompt-min-length — matching the
+// create_task seam; the human approval plus the box-wide cost/iteration ceilings
+// bound a misconfigured task.) A nil seam (feature unconfigured) is surfaced as a
+// clear error rather than silently succeeding.
+func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Approval) (string, error) {
+	if s.scheduleTask == nil {
+		return "", errors.New("scheduling from chat is not configured on this server")
+	}
+	var p tools.ScheduleTaskParams
+	if err := json.Unmarshal([]byte(approval.ArgsJSON), &p); err != nil {
+		return "", fmt.Errorf("parse schedule_task args: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return "", err
+	}
+
+	req := TaskScheduleRequest{
+		Name:          strings.TrimSpace(p.Name),
+		Prompt:        strings.TrimSpace(p.Prompt),
+		Model:         strings.TrimSpace(p.Model),
+		Cron:          strings.TrimSpace(p.Cron),
+		MaxIterations: p.MaxIterations,
+		AllowNetwork:  p.AllowNetwork,
+		Tags:          p.Tags,
+	}
+	if t, ok := p.RunAtTime(); ok {
+		req.RunAt = &t
+	}
+
+	// Bound the create call so the approval HTTP request returns promptly.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	res, err := s.scheduleTask(ctx, req)
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	b.WriteString("Scheduled task created.\n")
+	if req.Name != "" {
+		fmt.Fprintf(&b, "Name: %s\n", req.Name)
+	}
+	switch {
+	case req.Cron != "":
+		fmt.Fprintf(&b, "Schedule: recurring (cron %q)\n", req.Cron)
+	case req.RunAt != nil:
+		fmt.Fprintf(&b, "Schedule: one-time at %s\n", req.RunAt.Format(time.RFC3339))
+	default:
+		b.WriteString("Schedule: runs as soon as a worker is free\n")
+	}
+	if !res.NextRun.IsZero() {
+		fmt.Fprintf(&b, "Next run: %s\n", res.NextRun.Format(time.RFC3339))
+	}
+	fmt.Fprintf(&b, "Task id: %s (status: %s)\n", res.ID, res.Status)
+	if link := s.orchestratorTaskLink(); link != "" {
+		fmt.Fprintf(&b, "View / manage it in the Operations Center: %s", link)
+	} else {
+		b.WriteString("View / manage it in the Operations Center.")
+	}
+	return strings.TrimSpace(b.String()), nil
+}
+
+// rejectionMessages returns the (claim, history) result strings to record when a
+// user declines a staged approval, worded for the tool kind so the transcript
+// reads honestly (schedule_task is not a "send"). Falls back to the historical
+// email wording for the send/preview tools.
+func rejectionMessages(toolName string) (claim, history string) {
+	if toolName == tools.ScheduleTaskToolName {
+		return "User declined to create the scheduled task.",
+			"User declined to create the scheduled task. No task was created."
+	}
+	return "User declined to send.", "User declined to send this email."
+}
+
+// actionVerb labels a failed staged action for the result_text prefix so the UI
+// reads correctly per tool kind ("schedule failed: …" vs "send failed: …").
+func actionVerb(toolName string) string {
+	if toolName == tools.ScheduleTaskToolName {
+		return "schedule"
+	}
+	return "send"
+}
+
+// orchestratorTaskLink returns a user-facing URL to the Operations Center, or ""
+// when no externally-reachable base URL is configured. We deliberately link to
+// the orchestrator landing page rather than synthesizing a per-task deep link:
+// the web app has no per-task route, so a /tasks/<id> URL would 404 (honesty).
+func (s *Server) orchestratorTaskLink() string {
+	if s.cfg == nil || s.cfg.PublicBaseURL == "" {
+		return ""
+	}
+	return strings.TrimRight(s.cfg.PublicBaseURL, "/") + "/orchestrator"
 }
 
 // appendToolResultToHistory writes a synthetic tool_result row so the

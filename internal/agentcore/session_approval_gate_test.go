@@ -39,6 +39,37 @@ func TestEmailGate_NormalStagingUnchanged(t *testing.T) {
 	}
 }
 
+func TestScheduleTaskGate_StagesForApproval(t *testing.T) {
+	o := newOrchestrationState(NewLogSession(), 100)
+	o.setApprovalSink(sentinelStager{ret: "appr-sched"})
+	blocked, msg := o.checkScheduleTaskSafety("schedule_task", "call-1",
+		`{"name":"weekly report","prompt":"summarize the week","cron":"0 9 * * MON"}`)
+	if !blocked {
+		t.Fatal("schedule_task must always block (the approval card is the feature)")
+	}
+	if !strings.Contains(msg, "APPROVAL_REQUIRED") || !strings.Contains(msg, "appr-sched") {
+		t.Fatalf("schedule_task staging msg=%q, want APPROVAL_REQUIRED with the approval id", msg)
+	}
+}
+
+func TestScheduleTaskGate_UnavailableWithoutSink(t *testing.T) {
+	o := newOrchestrationState(NewLogSession(), 100)
+	// No approval sink wired (e.g. scheduled mode). Must NOT pass through to the
+	// guarded-error Run, and must NOT loop — a clear unavailable message.
+	blocked, msg := o.checkScheduleTaskSafety("schedule_task", "call-1", `{"prompt":"x"}`)
+	if !blocked || !strings.Contains(msg, "SCHEDULE_TASK_UNAVAILABLE") {
+		t.Fatalf("no-sink schedule_task: blocked=%v msg=%q, want blocked + SCHEDULE_TASK_UNAVAILABLE", blocked, msg)
+	}
+}
+
+func TestScheduleTaskGate_IgnoresOtherTools(t *testing.T) {
+	o := newOrchestrationState(NewLogSession(), 100)
+	o.setApprovalSink(sentinelStager{ret: "appr-x"})
+	if blocked, _ := o.checkScheduleTaskSafety("bash", "call-1", `{"command":"ls"}`); blocked {
+		t.Fatal("schedule_task gate must ignore non-schedule_task tools")
+	}
+}
+
 func TestBashGate_SessionPreApprovedRunsNormally(t *testing.T) {
 	o := newOrchestrationState(NewLogSession(), 100)
 	o.setApprovalSink(sentinelStager{ret: PreApprovedSentinel})
