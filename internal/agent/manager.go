@@ -185,7 +185,7 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 		var addErr error
 		switch {
 		case spec.URL != "":
-			addErr = client.AddHTTPServerWithHeaders(ctx, name, spec.URL, spec.Headers)
+			addErr = client.AddHTTPServerWithOptions(ctx, name, spec.URL, mcp.HTTPServerOptions{Headers: spec.Headers, TLS: spec.TLS})
 		case spec.Command != "":
 			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, spec.Env, spec.Dir)
 		default:

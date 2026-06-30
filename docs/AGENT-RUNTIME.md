@@ -192,6 +192,42 @@ fleet sched task set-credentials <task_id> --clear   # revert to global inherit
 
 ---
 
+## Remote MCP transport hardening (TLS pinning + mTLS, #280)
+
+A manifest HTTP MCP server may opt into per-server TLS hardening under a `tls:`
+block — pin the trusted CA, present a client certificate (mTLS), and/or pin the
+server's public key. It defends a sensitive connection (internal API, credential
+store) against CA-substitution MITM, beyond default system-root verification:
+
+```yaml
+mcp_servers:
+  - name: internal_api
+    type: http
+    url: https://mcp.internal.example
+    tls:
+      ca_cert: /etc/fleet/mcp/internal-ca.pem      # pin trust to this CA bundle
+      client_cert: /etc/fleet/mcp/fleet-client.pem # mTLS client cert (+ key)
+      client_key:  /etc/fleet/mcp/fleet-client.key
+      pinned_sha256: 9b8e…                          # hex SHA-256 of the server SPKI
+      server_name: mcp.internal                     # SNI / verified-name override
+```
+
+The public-key pin is checked **in addition to** normal chain verification, so a
+substituted certificate is rejected even if it chains to an otherwise-trusted
+CA. fleet never disables verification — a self-signed server is reached by
+supplying its certificate as `ca_cert`. Compute a pin with:
+
+```sh
+openssl x509 -in server.pem -pubkey -noout |
+  openssl pkey -pubin -outform der | openssl dgst -sha256
+```
+
+Every field is optional; omitting the block keeps default system TLS. See
+[ADR-0015](adr/0015-remote-mcp-tls-pinning-mtls.md). (Per-user OAuth remote
+servers below are not covered — they dial through the SSRF-safe client.)
+
+---
+
 ## Per-user remote MCP servers (OAuth login, #443)
 
 The bundle's MCP servers are operator-provisioned. fleet also lets each **user**
