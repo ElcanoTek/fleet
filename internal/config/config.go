@@ -273,6 +273,7 @@ var allowedEnvVars = map[string]bool{
 	"CHAT_WORKSPACE_ROOT":            true,
 	"FLEET_SANDBOX_IMAGE":            true,
 	"FLEET_SANDBOX_RUNTIME":          true,
+	"FLEET_DEFAULT_NETWORK_MODE":     true,
 	"FLEET_SANDBOX_MEMORY":           true,
 	"FLEET_SANDBOX_CPUS":             true,
 	"FLEET_SANDBOX_PIDS":             true,
@@ -716,6 +717,17 @@ type Config struct {
 	// ── sandbox ──
 	SandboxImage   string
 	SandboxRuntime string
+	// DefaultNetworkMode is the fleet-wide sandbox egress posture (#211):
+	// "" / "open" (full slirp4netns egress for networked work — the default),
+	// "allowlisted" (networked sandboxes route HTTP(S) through the host egress
+	// proxy, limited to SandboxNetworkAllowlist), or "lockdown" (a fleet-wide
+	// kill-switch: every sandbox is sealed regardless of a task's AllowNetwork).
+	// From FLEET_DEFAULT_NETWORK_MODE.
+	DefaultNetworkMode string
+	// SandboxNetworkAllowlist is the default domain allowlist for allowlisted
+	// mode, resolved from the bundle manifest's sandbox.network_allowlist at boot
+	// (not an env var). Exact domains or "*."-prefixed wildcards.
+	SandboxNetworkAllowlist []string
 	// Per-container cgroup caps (empty/0 → sandbox defaults: 512m / 1.0 / 128).
 	// Operators size these to the host the docs told them to provision.
 	SandboxMemory string
@@ -1010,12 +1022,13 @@ func Load(envFile string) (*Config, error) {
 		AdminEmails: splitEmails(os.Getenv("ADMIN_EMAILS")),
 
 		// ── sandbox ──
-		SandboxImage:   getenvFleet("SANDBOX_IMAGE"),
-		SandboxRuntime: getenvFleet("SANDBOX_RUNTIME"),
-		SandboxMemory:  getenvFleet("SANDBOX_MEMORY"),
-		SandboxCPUs:    getenvFleet("SANDBOX_CPUS"),
-		SandboxPids:    getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
-		SandboxDiskGB:  getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+		SandboxImage:       getenvFleet("SANDBOX_IMAGE"),
+		SandboxRuntime:     getenvFleet("SANDBOX_RUNTIME"),
+		DefaultNetworkMode: strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
+		SandboxMemory:      getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:        getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:        getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB:      getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
 		// Per-task override ceilings (#205).
 		SandboxMemoryMaxMB:    getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
 		SandboxCPUsMax:        getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),
@@ -1080,6 +1093,14 @@ func Load(envFile string) (*Config, error) {
 	if cfg.LockdownOnly && cfg.SandboxImage == "" {
 		fmt.Fprintln(os.Stderr, "warn: CHAT_LOCKDOWN_ONLY=true but sandbox image is unset; cannot enforce — treating as disabled")
 		cfg.LockdownOnly = false
+	}
+
+	// Validate the sandbox egress mode (#211): an unknown value must fail loudly
+	// rather than silently fall through to open egress.
+	switch cfg.DefaultNetworkMode {
+	case "", "open", "allowlisted", "lockdown":
+	default:
+		return nil, fmt.Errorf("FLEET_DEFAULT_NETWORK_MODE must be one of open|allowlisted|lockdown, got %q", cfg.DefaultNetworkMode)
 	}
 	return cfg, nil
 }
