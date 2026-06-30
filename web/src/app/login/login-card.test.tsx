@@ -41,6 +41,38 @@ describe("LoginCard — Elcano-email button gating", () => {
   });
 });
 
+// The SSO button (#240) is the only visible surface of the OIDC path. It is
+// gated independently of the Elcano-email button, uses the operator-chosen
+// label, and points at the /start leg of the flow.
+describe("LoginCard — OIDC SSO button gating", () => {
+  afterEach(cleanup);
+
+  it("shows the SSO button with the operator label when enabled", () => {
+    render(<LoginCard elcanoLoginEnabled={false} oidcEnabled oidcLabel="Sign in with Okta" />);
+    const button = screen.getByRole("link", { name: "Sign in with Okta" });
+    expect(button).toHaveAttribute("href", "/api/auth/oidc/start");
+    // The divider shows even when only the SSO path is enabled.
+    expect(screen.getByText("or")).toBeInTheDocument();
+  });
+
+  it("omits the SSO button when disabled", () => {
+    render(<LoginCard elcanoLoginEnabled={false} oidcEnabled={false} />);
+    expect(screen.queryByRole("link", { name: /sign in with/i })).toBeNull();
+  });
+
+  it("renders both secondary buttons when both paths are enabled", () => {
+    render(<LoginCard elcanoLoginEnabled oidcEnabled oidcLabel="Sign in with SSO" />);
+    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
+      "href",
+      "/api/auth/oidc/start",
+    );
+    expect(screen.getByRole("link", { name: "Use Elcano email" })).toHaveAttribute(
+      "href",
+      "/api/auth/elcano-login",
+    );
+  });
+});
+
 // page.tsx is the wiring: it must derive the prop from AUTH_SIGNING_PUBKEY —
 // the same gate the elcano-login backend route uses — so the UI and the
 // redirect handler can never disagree about whether the path is live.
