@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -117,6 +119,22 @@ type PoolConfig struct {
 	// Container holds the per-sandbox container settings (image, mounts,
 	// caps). Required when Mode == ModeContainer.
 	Container ContainerConfig
+
+	// EgressProxy, when non-nil, is the host-side allowlist proxy (#211) used by
+	// TakeContainerWithEgress for "allowlisted" network mode. nil means
+	// allowlisted mode is unavailable: such requests FAIL CLOSED (an error)
+	// rather than silently downgrading to open egress. Pool.Close shuts it down.
+	EgressProxy *EgressProxy
+
+	// DefaultNetworkMode is the fleet-wide egress posture (#211):
+	// NetworkModeOpen (or ""), NetworkModeAllowlisted, or NetworkModeLockdown.
+	// It is advisory data the SCHEDULED run path reads via EgressDefault to pick
+	// a take method; the pool does not act on it itself.
+	DefaultNetworkMode string
+
+	// DefaultEgressAllowlist is the fleet-wide domain allowlist applied in
+	// allowlisted mode (resolved from the bundle manifest's network_allowlist).
+	DefaultEgressAllowlist []string
 
 	// FillCtx is the parent context the warming goroutines run under.
 	// Defaults to context.Background.
@@ -275,6 +293,46 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 	return sb, sb.Close, nil
 }
 
+// TakeContainerWithEgress cold-starts a fresh container in "allowlisted" network
+// mode (#211): slirp4netns transport with HTTPS_PROXY pointed at the pool's
+// EgressProxy, scoped to allowlist for THIS turn via a fresh per-turn token. The
+// returned cleanup releases that token in addition to stopping the container, so
+// the grant does not outlive the turn.
+//
+// It FAILS CLOSED: with no EgressProxy configured it returns an error rather
+// than silently granting open egress — an allowlisted request must never become
+// an unrestricted one. Always cold-starts (the per-turn token must be fresh, so
+// a warm container can't be reused).
+func (p *Pool) TakeContainerWithEgress(ctx context.Context, ov ResourceOverride, allowlist []string) (*Sandbox, func(), error) {
+	if p == nil || p.cfg.Container.Image == "" {
+		return nil, func() {}, ErrContainerUnavailable
+	}
+	if p.cfg.EgressProxy == nil {
+		return nil, func() {}, errors.New("allowlisted network mode requested but no egress proxy is configured (fail-closed)")
+	}
+	token, release, err := p.cfg.EgressProxy.Register(allowlist)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("register egress allowlist: %w", err)
+	}
+	cfg := p.cfg.Container
+	cfg.BridgeScript = p.cfg.BridgeScript
+	cfg.StorageOptSupported = p.storageOptSupported(ctx)
+	// Allowlisted needs slirp transport (NoNetwork=false) to reach the proxy;
+	// the proxy is the enforcement point, not the network namespace.
+	cfg.NoNetwork = false
+	cfg.ProxyURL = p.cfg.EgressProxy.ProxyURLForToken(token)
+	cfg = ov.applyTo(cfg)
+	startCtx, cancel := context.WithTimeout(ctx, resolveStartTimeout(cfg)+5*time.Second)
+	defer cancel()
+	sb, err := NewContainer(startCtx, cfg)
+	if err != nil {
+		release()
+		return nil, func() {}, err
+	}
+	sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
+	return sb, func() { sb.Close(); release() }, nil
+}
+
 // Take pulls a warm sandbox or constructs a fresh one if none are
 // ready. Returns (sandbox, cleanup) — call cleanup when the turn ends.
 //
@@ -341,9 +399,27 @@ func (p *Pool) Stats() (size, available int) {
 
 // Close reaps every remaining sandbox. Safe to call on a nil pool or to
 // call multiple times.
+// EgressDefault reports the fleet-wide network mode (#211) and the domain
+// allowlist for allowlisted mode. The scheduled run path uses it to choose
+// between the open, allowlisted, and sealed take methods. A nil pool or one with
+// no configured mode returns ("", nil) — i.e. open/current behavior.
+func (p *Pool) EgressDefault() (mode string, allowlist []string) {
+	if p == nil {
+		return "", nil
+	}
+	return p.cfg.DefaultNetworkMode, p.cfg.DefaultEgressAllowlist
+}
+
 func (p *Pool) Close() {
 	if p == nil {
 		return
+	}
+	// Shut the egress proxy (#211) before draining containers; bounded so a hung
+	// proxy can't stall shutdown.
+	if p.cfg.EgressProxy != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = p.cfg.EgressProxy.Shutdown(ctx)
+		cancel()
 	}
 	p.mu.Lock()
 	if p.closed {

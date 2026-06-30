@@ -416,6 +416,30 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	if poolCfg.PythonCellTimeout > 0 {
 		log.Printf("sandbox: run_python per-cell timeout ceiling=%s (FLEET_PYTHON_CELL_TIMEOUT)", poolCfg.PythonCellTimeout)
 	}
+
+	// Sandbox egress mode (#211). The mode + allowlist are carried on the pool so
+	// the scheduled run path can pick a take method; for allowlisted mode we also
+	// stand up the host-side egress proxy here and fail CLOSED at boot if it can't
+	// bind (never silently downgrade to open egress). Best-effort control over
+	// proxy-honoring clients, NOT a hard jail — lockdown remains the hard seal.
+	// See docs/adr/0012-sandbox-egress-allowlist.md.
+	poolCfg.DefaultNetworkMode = cfg.DefaultNetworkMode
+	poolCfg.DefaultEgressAllowlist = cfg.SandboxNetworkAllowlist
+	switch cfg.DefaultNetworkMode {
+	case sandbox.NetworkModeAllowlisted:
+		proxy := sandbox.NewEgressProxy()
+		if err := proxy.Start(); err != nil {
+			return nil, fmt.Errorf("start sandbox egress proxy (#211): %w", err)
+		}
+		poolCfg.EgressProxy = proxy
+		if len(cfg.SandboxNetworkAllowlist) == 0 {
+			log.Printf("sandbox: WARNING network mode=allowlisted but the allowlist is EMPTY — networked SCHEDULED-task sandboxes can reach NO domains (set sandbox.network_allowlist in the bundle manifest)")
+		} else {
+			log.Printf("sandbox: network mode=allowlisted — networked SCHEDULED-task egress filtered to %v via the host proxy (best-effort; ADR-0012). Chat turns are unaffected (wiring deferred).", cfg.SandboxNetworkAllowlist)
+		}
+	case sandbox.NetworkModeLockdown:
+		log.Printf("sandbox: network mode=lockdown — SCHEDULED-task egress sealed regardless of per-task AllowNetwork. Chat turns are unaffected (wiring deferred).")
+	}
 	return sandbox.NewPool(poolCfg), nil
 }
 

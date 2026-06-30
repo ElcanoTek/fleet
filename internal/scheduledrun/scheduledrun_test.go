@@ -210,6 +210,26 @@ type recordingTaker struct {
 	// containerUnavailable makes the container takes report ErrContainerUnavailable,
 	// modeling a host-mode / mock pool with no container backend.
 	containerUnavailable bool
+	// tookEgress records a TakeContainerWithEgress call (#211) + its allowlist.
+	// egressMode/egressAllowlist drive EgressDefault — empty mode = open/current.
+	tookEgress      bool
+	gotEgressList   []string
+	egressMode      string
+	egressAllowlist []string
+}
+
+func (rt *recordingTaker) TakeContainerWithEgress(_ context.Context, ov sandbox.ResourceOverride, allowlist []string) (*sandbox.Sandbox, func(), error) {
+	rt.tookEgress = true
+	rt.gotOverride = ov
+	rt.gotEgressList = allowlist
+	if rt.containerUnavailable {
+		return nil, func() {}, sandbox.ErrContainerUnavailable
+	}
+	return nil, func() {}, nil
+}
+
+func (rt *recordingTaker) EgressDefault() (string, []string) {
+	return rt.egressMode, rt.egressAllowlist
 }
 
 func (rt *recordingTaker) Take() (*sandbox.Sandbox, func(), error) {
@@ -270,6 +290,81 @@ func TestTakeTaskSandbox_NetworkPosture(t *testing.T) {
 		}
 		if !rt.tookSealed || !rt.tookWarm {
 			t.Fatalf("host-mode default must try sealed then fall back to warm; got warm=%v sealed=%v", rt.tookWarm, rt.tookSealed)
+		}
+	})
+}
+
+// TestTakeTaskSandbox_EgressMode is the #211 acceptance test for the fleet-wide
+// network mode: allowlisted routes a networked task through the egress proxy with
+// the configured allowlist; lockdown seals even an AllowNetwork task; an empty
+// mode is byte-identical to the pre-#211 behavior.
+func TestTakeTaskSandbox_EgressMode(t *testing.T) {
+	limits := &models.TaskSandboxLimits{MemoryMB: 2048, CPUs: 2.0, Pids: 512}
+
+	t.Run("allowlisted routes a networked task through egress", func(t *testing.T) {
+		rt := &recordingTaker{egressMode: sandbox.NetworkModeAllowlisted, egressAllowlist: []string{"pypi.org", "*.github.com"}}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookEgress || rt.tookWarm || rt.tookSealed {
+			t.Fatalf("allowlisted+AllowNetwork must take the egress path; got egress=%v warm=%v sealed=%v", rt.tookEgress, rt.tookWarm, rt.tookSealed)
+		}
+		if len(rt.gotEgressList) != 2 || rt.gotEgressList[0] != "pypi.org" {
+			t.Errorf("egress allowlist = %v, want the configured list", rt.gotEgressList)
+		}
+	})
+
+	t.Run("allowlisted still seals a non-network task", func(t *testing.T) {
+		rt := &recordingTaker{egressMode: sandbox.NetworkModeAllowlisted, egressAllowlist: []string{"pypi.org"}}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookSealed || rt.tookEgress {
+			t.Fatalf("a non-AllowNetwork task must stay sealed even in allowlisted mode; got sealed=%v egress=%v", rt.tookSealed, rt.tookEgress)
+		}
+	})
+
+	t.Run("lockdown seals even an AllowNetwork task", func(t *testing.T) {
+		rt := &recordingTaker{egressMode: sandbox.NetworkModeLockdown}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookSealed || rt.tookWarm || rt.tookEgress {
+			t.Fatalf("lockdown kill-switch must seal an AllowNetwork task; got sealed=%v warm=%v egress=%v", rt.tookSealed, rt.tookWarm, rt.tookEgress)
+		}
+	})
+
+	t.Run("allowlisted + limits routes through egress with overrides", func(t *testing.T) {
+		rt := &recordingTaker{egressMode: sandbox.NetworkModeAllowlisted, egressAllowlist: []string{"pypi.org"}}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true, SandboxLimits: limits}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookEgress || rt.tookOverrides {
+			t.Fatalf("allowlisted+limits must take the egress path (with the override applied there); got egress=%v overrides=%v", rt.tookEgress, rt.tookOverrides)
+		}
+		want := sandbox.ResourceOverride{MemoryLimit: "2048m", CPULimit: "2.00", PidsLimit: 512}
+		if rt.gotOverride != want {
+			t.Errorf("egress override = %+v, want %+v", rt.gotOverride, want)
+		}
+	})
+
+	t.Run("lockdown + limits seals via the override path", func(t *testing.T) {
+		rt := &recordingTaker{egressMode: sandbox.NetworkModeLockdown}
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true, SandboxLimits: limits}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookOverrides || !rt.gotNoNetwork || rt.tookEgress {
+			t.Fatalf("lockdown+limits must seal via overrides (noNetwork=true), not egress; got overrides=%v noNetwork=%v egress=%v", rt.tookOverrides, rt.gotNoNetwork, rt.tookEgress)
+		}
+	})
+
+	t.Run("empty mode preserves pre-211 behavior", func(t *testing.T) {
+		rt := &recordingTaker{} // egressMode == ""
+		if _, _, err := takeTaskSandbox(context.Background(), rt, &models.Task{AllowNetwork: true}); err != nil {
+			t.Fatalf("takeTaskSandbox: %v", err)
+		}
+		if !rt.tookWarm || rt.tookEgress {
+			t.Fatalf("empty mode + AllowNetwork must take the warm pool (open), not egress; got warm=%v egress=%v", rt.tookWarm, rt.tookEgress)
 		}
 	})
 }
