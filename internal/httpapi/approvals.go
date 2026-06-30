@@ -731,6 +731,31 @@ func firstString(m map[string]any, keys ...string) string {
 	return ""
 }
 
+// resolveThinkingConfig computes the effective Claude extended-thinking config
+// for a turn (#220): a per-conversation override wins; otherwise the global
+// FLEET_DEFAULT_THINKING_BUDGET_TOKENS default applies. Returns nil (thinking
+// off) when neither is set.
+//
+//   - override.Enabled == false → an explicit per-chat opt-out that overrides a
+//     global default (returns a disabled config, NOT nil, so it suppresses the
+//     default).
+//   - override.Enabled == true with budget 0 → fall back to the global default
+//     budget; the producer clamps to Claude's minimum, so an enabled chat always
+//     thinks even when neither budget is set.
+func resolveThinkingConfig(override *store.ThinkingConfig, defaultBudget int) *agentcore.ThinkingConfig {
+	if override != nil {
+		if !override.Enabled {
+			return &agentcore.ThinkingConfig{Enabled: false}
+		}
+		budget := override.BudgetTokens
+		if budget <= 0 {
+			budget = defaultBudget
+		}
+		return &agentcore.ThinkingConfig{Enabled: true, BudgetTokens: budget}
+	}
+	return agentcore.ThinkingConfigForBudget(defaultBudget)
+}
+
 // ── HTTP handler: POST /conversations/{id}/approvals/{approvalId} ───────
 
 // approvalRequest is the body the UI sends when the user clicks Send,

@@ -84,6 +84,13 @@ type RunConfig struct {
 	// ProviderHeaders identify the run to OpenRouter.
 	ProviderHeaders ProviderHeaders
 
+	// ThinkingConfig, when set and Enabled, activates Claude extended thinking
+	// (#220) for this run on a thinking-capable Claude slug. nil = off (the
+	// default). The drivers resolve it from the per-conversation setting (chat) or
+	// the global FLEET_DEFAULT_THINKING_BUDGET_TOKENS default; a non-Claude model
+	// silently ignores it (see supportsExtendedThinking).
+	ThinkingConfig *ThinkingConfig
+
 	// PreGatedTools are already-policy-aware tools registered VERBATIM (NOT
 	// wrapped in the policyGuardedTool gate, because they call BeforeToolCall +
 	// RecordToolResult themselves — exactly like the built-in mcpTool). A driver
@@ -245,6 +252,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		maxIterations:          cfg.MaxIterations,
 		healthRegistry:         deps.HealthRegistry,
 		requireCompactionOptIn: cfg.RequireCompactionOptIn,
+		thinkingConfig:         cfg.ThinkingConfig,
 	}
 
 	systemPrompt, messages, label, err := deps.Input.Prompt(ctx)

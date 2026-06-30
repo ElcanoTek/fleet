@@ -72,6 +72,12 @@ type TurnInput struct {
 	// per-turn container sandbox and constrains the resolved model slug to the
 	// operator's lockdown allow-list.
 	Lockdown bool
+
+	// ThinkingConfig, when set and Enabled, activates Claude extended thinking
+	// (#220) for this turn. The caller (httpapi) resolves it from the
+	// per-conversation override or the global default before the call; nil = off.
+	// A non-Claude model silently ignores it (see agentcore.supportsExtendedThinking).
+	ThinkingConfig *agentcore.ThinkingConfig
 }
 
 // TurnResult is returned after a turn completes.
@@ -754,6 +760,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		MemoryProposer:  in.MemoryProposer,
 		NoteProposer:    m.noteProposer,
 		HealthRegistry:  m.health,
+		ThinkingConfig:  in.ThinkingConfig,
 	}
 	tc.Overlay = overlay
 
