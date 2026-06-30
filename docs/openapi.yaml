@@ -601,8 +601,10 @@ paths:
         explicitly published via the publish_artifact tool — a JSON array of
         {name, path, description, size} — distinct from the raw per-run workspace
         the workspace endpoints expose. Each entry's path is downloadable via the
-        task's workspace file endpoint. 404 when the run published no artifacts;
-        409 while the task has not yet reached a terminal state.
+        task's workspace file endpoint. Restricted to the task's creator (or an
+        admin), like the workspace file endpoints — the manifest indexes the
+        creator-private workspace. 404 when the run published no artifacts; 409
+        while the task has not yet reached a terminal state.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200":

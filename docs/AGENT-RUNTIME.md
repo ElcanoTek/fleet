@@ -424,7 +424,12 @@ structured-output capture, #244) into a nullable `artifacts` JSONB column. The
 column is deliberately excluded from the task upsert, so a later status update
 cannot clobber it. `GET /tasks/{id}/artifacts` returns the manifest (404 when the
 run published none; 409 while non-terminal); each entry's path is downloadable
-via the existing workspace file endpoint.
+via the existing workspace file endpoint. Because the manifest indexes the
+creator-private workspace (#287), the endpoint is gated to the task's **creator
+or an admin** — the same ownership check as the workspace file endpoints, not the
+looser task-visibility used by `/output`. A re-run (lease recovery) clears the
+prior attempt's manifest, so a task only ever serves the artifacts of its
+latest, successful attempt.
 
 ---
 

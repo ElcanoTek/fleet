@@ -1306,11 +1306,16 @@ func (h *Handlers) GetTaskArtifacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if scopes := p.scopes(); len(scopes) > 0 {
-		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
-			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
-			return
-		}
+	// The manifest is the directory index of the creator-private per-run workspace
+	// (#287) — paths plus agent-authored descriptions — so it is gated with the
+	// SAME creator-only ownership check as the workspace file endpoints, NOT the
+	// permissive task-visibility scope check the /output and /error-analysis
+	// siblings use. Otherwise it would leak another user's workspace file metadata
+	// under a looser gate than the bytes it indexes (which taskWorkspaceOwned
+	// already restricts to admin/creator).
+	if !taskWorkspaceOwned(p, task) {
+		writeError(w, http.StatusForbidden, "Artifacts are private to the task creator")
+		return
 	}
 
 	if len(task.Artifacts) == 0 {
