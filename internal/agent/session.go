@@ -24,6 +24,11 @@ type EventSink interface {
 // a conversation. SQLite rows deserialize into this and then get replayed
 // into fantasy.Message on the next turn.
 type HistoryEntry struct {
+	// ID is the persisted messages.id, populated on READ (LoadHistory) and
+	// surfaced in the conversation GET so a client can name a specific message —
+	// e.g. the branch point for conversation branching (#454). Omitted when zero:
+	// the write path doesn't set it (messages.id is assigned by the DB).
+	ID      int64           `json:"id,omitempty"`
 	Role    string          `json:"role"`    // user|assistant|tool
 	Type    string          `json:"type"`    // text|reasoning|tool_call|tool_result
 	Content json.RawMessage `json:"content"` // shape depends on Type

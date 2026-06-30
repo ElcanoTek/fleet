@@ -134,6 +134,14 @@ type Conversation struct {
 	// show a "shared" badge and a copy-link action. Set/cleared via
 	// POST/DELETE /conversations/{id}/share.
 	ShareToken string `json:"share_token,omitempty"`
+	// ParentConversationID is set when this conversation is a BRANCH forked from
+	// another (#454): it copied the parent's messages up to BranchPointMessageID,
+	// then diverged. Empty = not a branch. Lineage metadata only — the branch is
+	// independent, so the parent may be deleted without affecting it.
+	ParentConversationID string `json:"parent_conversation_id,omitempty"`
+	// BranchPointMessageID is the parent message id this conversation was forked
+	// at (#454). 0 = not a branch.
+	BranchPointMessageID int64 `json:"branch_point_message_id,omitempty"`
 }
 
 // ErrForeignConversation is returned by DeleteByIDs / BulkPatch when one or
@@ -145,6 +153,11 @@ var ErrForeignConversation = errors.New("one or more conversation IDs not owned 
 // locked by a manual rename (#302) — the auto-titler treats it as "skip", not a
 // failure.
 var ErrTitleLocked = errors.New("title is locked by a manual rename")
+
+// ErrBranchPointNotFound is returned by BranchConversation when the requested
+// branch-point message id names no message in the parent conversation (#454) —
+// a client error (bad message id), not a server fault.
+var ErrBranchPointNotFound = errors.New("branch point message not found in conversation")
 
 // PoolConfig tunes the chat DB connection pool (#276). Kept local to the store
 // package (the cmd layer maps the env-derived config into it) so this low-level
@@ -270,6 +283,89 @@ func (s *Store) CreateConversation(ctx context.Context, userEmail, title, person
 		CreatedAt:                 now,
 		UpdatedAt:                 now,
 		OptionalMCPServersEnabled: nil,
+	}, nil
+}
+
+// BranchConversation forks parentConvID at branchPointMessageID into a new
+// conversation owned by the same user (#454): it copies the parent's messages
+// with id <= branchPointMessageID into a fresh conversation (inheriting the
+// parent's persona/model/lockdown), records the lineage, and returns it so the
+// caller can continue the new thread independently. The branch is fully
+// independent — its messages are COPIED, not shared — so deleting the parent
+// never affects it. Errors if the parent is not found/owned by the user, or the
+// branch point names no message in the parent.
+func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID string, branchPointMessageID int64, title string) (*Conversation, error) {
+	parent, err := s.Get(ctx, userEmail, parentConvID)
+	if err != nil {
+		return nil, err
+	}
+	if parent == nil {
+		return nil, sql.ErrNoRows
+	}
+
+	// Load the parent's messages up to (and including) the branch point. The
+	// conversation_id predicate guarantees only the PARENT's messages are copied,
+	// so a branch-point id belonging to another conversation matches nothing and
+	// is rejected below.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT role, type, content FROM messages
+		 WHERE conversation_id = $1 AND id <= $2 ORDER BY id ASC`,
+		parentConvID, branchPointMessageID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var entries []agent.HistoryEntry
+	for rows.Next() {
+		var e agent.HistoryEntry
+		var content string
+		if err := rows.Scan(&e.Role, &e.Type, &content); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		e.Content = json.RawMessage(content)
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	_ = rows.Close()
+	if len(entries) == 0 {
+		return nil, ErrBranchPointNotFound
+	}
+
+	id := uuid.NewString()
+	now := time.Now().Unix()
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO conversations (id, user_email, title, persona, model, pinned, lockdown, parent_conversation_id, branch_point_message_id, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $9, $10)`,
+		id, userEmail, title, parent.Persona, parent.Model, parent.Lockdown, parentConvID, branchPointMessageID, now, now,
+	); err != nil {
+		return nil, err
+	}
+
+	// Copy the parent's messages into the branch. AppendHistory also writes the
+	// FTS index rows + bumps updated_at, so the branch is searchable like any
+	// other conversation. On failure, delete the conversation row we just created
+	// so a failed branch is not left visible (a hard delete, or a tombstone hidden
+	// from all reads under FLEET_CONVERSATION_SOFT_DELETE).
+	if err := s.AppendHistory(ctx, id, entries); err != nil {
+		_ = s.Delete(ctx, userEmail, id)
+		return nil, err
+	}
+
+	return &Conversation{
+		ID:                   id,
+		UserEmail:            userEmail,
+		Title:                title,
+		Persona:              parent.Persona,
+		Model:                parent.Model,
+		Lockdown:             parent.Lockdown,
+		ParentConversationID: parentConvID,
+		BranchPointMessageID: branchPointMessageID,
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}, nil
 }
 
@@ -544,6 +640,11 @@ func (s *Store) GetConversationByShareToken(ctx context.Context, token string, n
 	out.Messages = make([]agent.HistoryEntry, 0, len(msgs))
 	for _, m := range msgs {
 		if m.Type == "text" && (m.Role == "user" || m.Role == "assistant") {
+			// Drop the persisted messages.id from the PUBLIC snapshot. LoadHistory
+			// populates it for the owner's branching flow (#454), but the #226 share
+			// contract deliberately omits internal identifiers — a global BIGSERIAL id
+			// would leak cross-conversation row ordering/volume to an anonymous viewer.
+			m.ID = 0
 			out.Messages = append(out.Messages, m)
 		}
 	}
@@ -799,7 +900,7 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 		folderArg = *f.Folder
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, '')
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0)
 		 FROM conversations
 		 WHERE user_email = $1 AND deleted_at IS NULL
 		   AND (CASE WHEN $2 THEN archived_at IS NOT NULL ELSE archived_at IS NULL END)
@@ -818,7 +919,7 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 		var c Conversation
 		var optionalRaw []byte
 		var approvalTimeout sql.NullInt64
-		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID); err != nil {
 			return nil, err
 		}
 		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
@@ -890,14 +991,14 @@ func (s *Store) RenameFolder(ctx context.Context, userEmail, from, to string) (i
 // Get fetches a single conversation (without messages).
 func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, '')
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0)
 		 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
 		convID, userEmail,
 	)
 	var c Conversation
 	var optionalRaw []byte
 	var approvalTimeout sql.NullInt64
-	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken); err != nil {
+	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -912,7 +1013,7 @@ func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversatio
 // insertion order.
 func (s *Store) LoadHistory(ctx context.Context, convID string) ([]agent.HistoryEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT role, type, content FROM messages WHERE conversation_id = $1 ORDER BY id ASC`,
+		`SELECT id, role, type, content FROM messages WHERE conversation_id = $1 ORDER BY id ASC`,
 		convID,
 	)
 	if err != nil {
@@ -924,7 +1025,7 @@ func (s *Store) LoadHistory(ctx context.Context, convID string) ([]agent.History
 	for rows.Next() {
 		var e agent.HistoryEntry
 		var content string
-		if err := rows.Scan(&e.Role, &e.Type, &content); err != nil {
+		if err := rows.Scan(&e.ID, &e.Role, &e.Type, &content); err != nil {
 			return nil, err
 		}
 		e.Content = json.RawMessage(content)
