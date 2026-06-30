@@ -1488,7 +1488,12 @@ const MaxLogSubmissionSize = 24 * 1024 * 1024
 
 // APIKeyCreate is the request model for creating an API key.
 type APIKeyCreate struct {
-	Name                string   `json:"name"`
+	Name string `json:"name"`
+	// Type, when set, mints a typed key (#190): one of admin|task|webhook|readonly.
+	// When empty, the legacy role-based path is used. A webhook key requires
+	// AllowedTriggerSlugs.
+	Type                string   `json:"type,omitempty"`
+	AllowedTriggerSlugs []string `json:"allowed_trigger_slugs,omitempty"`
 	AllowedNodePatterns []string `json:"allowed_node_patterns"`
 	Role                *string  `json:"role,omitempty"`
 	RateLimit           int      `json:"rate_limit"`
@@ -1508,6 +1513,8 @@ type APIKeyResponse struct {
 	KeyID               string     `json:"key_id"`
 	Name                string     `json:"name"`
 	KeyPrefix           string     `json:"key_prefix"`
+	Type                string     `json:"type,omitempty"`
+	AllowedTriggerSlugs []string   `json:"allowed_trigger_slugs,omitempty"`
 	AllowedNodePatterns []string   `json:"allowed_node_patterns"`
 	Permissions         []string   `json:"permissions"`
 	RateLimit           int        `json:"rate_limit"`
