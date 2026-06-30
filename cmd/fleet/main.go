@@ -435,6 +435,10 @@ func run() error {
 		}
 		return out
 	})
+	// Surface each caller's per-user remote (hosted) MCP servers (#443) in the
+	// orchestrator picker too (#466) — see wireRemoteMCPCatalog. No-op when the
+	// feature is disabled (remoteMCPSvc == nil).
+	wireRemoteMCPCatalog(h, remoteMCPSvc)
 	// Wire the orchestrator's read-only task-template catalog from the loaded
 	// client bundle (#262). Templates are pre-filled scheduled-task shapes the
 	// task-create UI offers as a starting point; the task itself is still created
@@ -1207,6 +1211,48 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) (*remotemcp.Serv
 	//nolint:gosec // G706: PublicBaseURL is operator-set config (env var), not request input — it can't forge a log line.
 	log.Printf("remote MCP OAuth: ENABLED (per-user hosted servers; redirect %s/api/oauth/mcp/callback)", cfg.PublicBaseURL)
 	return svc, svc
+}
+
+// wireRemoteMCPCatalog injects the per-user remote-MCP catalog provider (#466)
+// into the orchestrator handlers when the feature is on. A nil service (feature
+// disabled) is a no-op, so the bundle catalog is served unchanged. Kept separate
+// from run() so the nil-guard branch stays out of run()'s cyclomatic budget.
+func wireRemoteMCPCatalog(h *handlers.Handlers, svc *remotemcp.Service) {
+	if svc == nil {
+		return
+	}
+	h.SetRemoteMCPServersProvider(remoteMCPCatalogProvider(svc))
+}
+
+// remoteMCPCatalogProvider adapts the remotemcp Service into the orchestrator's
+// per-user remote-MCP catalog provider (#466): given the caller's email (the
+// orchestrator username for the elcano-auth tier; see ownerEmailResolver), it
+// returns that user's OAuth-connected hosted servers so GetMCPServers can surface
+// them in the task form — mirroring chat's GET /mcp-servers. Only CONNECTED
+// servers are returned; they carry no credential seats (auth is the brokered
+// per-user token) and are auto-applied to ALL the owner's runs by the run
+// overlay, so the UI renders them connected/auto-available rather than as a
+// per-task toggle. A lookup error is logged and treated as "no remote servers"
+// so it never breaks the bundle catalog.
+func remoteMCPCatalogProvider(svc *remotemcp.Service) func(context.Context, string) []handlers.MCPServerCatalogEntry {
+	return func(ctx context.Context, email string) []handlers.MCPServerCatalogEntry {
+		conns, err := svc.ConnectedServersForUser(ctx, email)
+		if err != nil {
+			log.Printf("orchestrator mcp catalog: remote server lookup failed: %v", err)
+			return nil
+		}
+		out := make([]handlers.MCPServerCatalogEntry, 0, len(conns))
+		for _, c := range conns {
+			out = append(out, handlers.MCPServerCatalogEntry{
+				Name:        c.Name,
+				DisplayName: c.Name,
+				Description: "Remote MCP server you connected (" + c.URL + "). Auto-available to your scheduled tasks.",
+				Enabled:     true,
+				Remote:      true,
+			})
+		}
+		return out
+	}
 }
 
 // ownerEmailResolver maps a scheduled task's creator UUID to the chat-side email

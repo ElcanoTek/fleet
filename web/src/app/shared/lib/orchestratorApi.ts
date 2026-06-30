@@ -175,10 +175,16 @@ export type Paginated<T> = { data: T[]; total: number; limit: number; offset: nu
 // credential-account names (never secret values).
 export type McpServer = {
   name: string;
+  display_name?: string;
   description?: string;
   tool_count?: number;
   enabled?: boolean;
   accounts?: string[];
+  // remote marks a per-user remote (hosted) MCP server the caller connected via
+  // OAuth (#443/#466). The orchestrator overlay auto-applies ALL of the owner's
+  // connected remote servers to every scheduled run, so the picker shows them as
+  // connected/auto-available (read-only) rather than a per-task toggle.
+  remote?: boolean;
 };
 
 export type ConcurrencyConfig = {

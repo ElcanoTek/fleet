@@ -139,6 +139,13 @@ type Handlers struct {
 	// SetMCPCatalogProvider; nil → empty catalog. See mcp.go.
 	mcpCatalog func() []MCPServerCatalogEntry
 
+	// remoteMCPServers returns the per-user remote (hosted) MCP servers the given
+	// email has connected via OAuth (#443), so GetMCPServers can surface them in
+	// the task-form picker alongside the bundle catalog (#466) — mirroring chat's
+	// /mcp-servers. Injected by cmd/fleet via SetRemoteMCPServersProvider from the
+	// remotemcp Service; nil (feature off) → no remote entries. See mcp.go.
+	remoteMCPServers func(ctx context.Context, email string) []MCPServerCatalogEntry
+
 	// taskTemplates returns the read-only task-template catalog the task-create UI
 	// renders as "new task from a template". Injected by cmd/fleet via
 	// SetTaskTemplateProvider from the loaded client bundle; nil → empty catalog.
