@@ -197,9 +197,16 @@ type SubagentOptions struct {
 	Enabled bool
 	// MaxDepth caps recursion depth (root run = depth 0; a spawn at MaxDepth is
 	// refused). MaxChildren caps fan-out per parent. Both <=0 fall back to the
-	// package defaults so a misconfiguration can never mean "unbounded".
+	// package defaults so a misconfiguration can never mean "unbounded". The
+	// default MaxDepth is 1 (#264): a child does not get the spawn tool registered
+	// at all (see buildChild), so "parent → sub-agent only".
 	MaxDepth    int
 	MaxChildren int
+	// BudgetFraction is each child's default/maximum slice of the parent's
+	// REMAINING budget (#264). A child requesting more than this fraction is refused
+	// with a tool-result error. <=0 falls back to the package default (0.10); >1 is
+	// clamped to 1.0 (the whole remaining budget).
+	BudgetFraction float64
 	// ModelSlug is the default child model slug (FLEET_SUBAGENTS_MODEL); empty
 	// means a child inherits the parent's model. A per-spawn override is resolved
 	// through Resolver too.
@@ -228,7 +235,7 @@ func NewAgent(opts Options) *Agent {
 	if maxIter <= 0 {
 		maxIter = 500
 	}
-	return &Agent{
+	a := &Agent{
 		config:              opts.Config,
 		model:               opts.Model,
 		fallbackModel:       opts.FallbackModel,
@@ -253,6 +260,13 @@ func NewAgent(opts Options) *Agent {
 		reviewerModel:       opts.ReviewerModel,
 		subagent:            newSubagentConfig(opts.Subagent),
 	}
+	// The parent task id labels any sub-agent this run spawns (#264 traceability).
+	// A child inherits this same value (buildChild), so every descendant's session
+	// log points back to the one owning task.
+	if opts.TaskID != uuid.Nil {
+		a.subagent.parentTaskID = opts.TaskID.String()
+	}
+	return a
 }
 
 // LogSession exposes the run's session log.

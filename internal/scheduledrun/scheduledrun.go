@@ -573,16 +573,21 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		Overlay:             remoteOverlay,
 		PhoneAFriendEnabled: r.cfg.PhoneAFriendEnabled,
 		ReviewerModel:       reviewer,
-		// Governed sub-agents (#175, part b): OFF unless FLEET_SUBAGENTS_ENABLED.
+		// Governed sub-agents / delegation (#175, #264): enabled when the fleet-wide
+		// FLEET_SUBAGENTS_ENABLED operator flag is on OR THIS task opted in via
+		// allow_delegation — the per-task opt-in is sufficient on its own (#264),
+		// while the env flag stays a fleet-wide override (#175). Either way the tool
+		// is registered ONLY here in the scheduled driver, never in interactive chat.
 		// The child model is resolved HOST-SIDE through the SAME Manager resolver the
 		// parent's model came from (r.mgr), so a per-child model choice keeps
 		// credentials host-side — never in the sandbox or model context.
 		Subagent: agent.SubagentOptions{
-			Enabled:     r.cfg.SubagentsEnabled,
-			MaxDepth:    r.cfg.SubagentsMaxDepth,
-			MaxChildren: r.cfg.SubagentsMaxChildren,
-			ModelSlug:   r.cfg.SubagentsModel,
-			Resolver:    r.mgr,
+			Enabled:        r.cfg.SubagentsEnabled || task.AllowDelegation,
+			MaxDepth:       r.cfg.SubagentsMaxDepth,
+			MaxChildren:    r.cfg.SubagentsMaxChildren,
+			BudgetFraction: r.cfg.SubagentsBudgetFraction,
+			ModelSlug:      r.cfg.SubagentsModel,
+			Resolver:       r.mgr,
 		},
 	})
 

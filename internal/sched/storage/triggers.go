@@ -67,6 +67,7 @@ func (s *Storage) SpawnWebhookRun(ctx context.Context, trigger *models.TaskTrigg
 		Priority:               template.Priority,
 		InstructionSelfImprove: template.InstructionSelfImprove,
 		AllowNetwork:           template.AllowNetwork,
+		AllowDelegation:        template.AllowDelegation,
 		Files:                  template.Files,
 		MaxRetries:             &template.MaxRetries,
 		Timezone:               template.Timezone,

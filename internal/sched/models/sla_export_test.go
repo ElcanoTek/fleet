@@ -43,6 +43,38 @@ func roundTripDefinition(
 	return rec, NewTask(ExportRecordToTaskCreate(rec))
 }
 
+// TestExportImport_AllowDelegationRoundTrip proves the per-task delegation opt-in
+// (#264) is part of the portable task definition: allow_delegation=true survives an
+// export→import round-trip in both JSON and YAML, and a task without it imports as
+// false (delegation off) — so an OLD exported config stays valid and unchanged.
+func TestExportImport_AllowDelegationRoundTrip(t *testing.T) {
+	formats := []struct {
+		name      string
+		marshal   func(any) ([]byte, error)
+		unmarshal func([]byte, any) error
+	}{
+		{"json", json.Marshal, json.Unmarshal},
+		{"yaml", yaml.Marshal, yaml.Unmarshal},
+	}
+	for _, f := range formats {
+		t.Run(f.name+"/opted-in", func(t *testing.T) {
+			rec, got := roundTripDefinition(t, &Task{Prompt: "p", AllowDelegation: true}, f.marshal, f.unmarshal)
+			if !rec.AllowDelegation {
+				t.Error("export record dropped allow_delegation=true")
+			}
+			if !got.AllowDelegation {
+				t.Error("imported task lost allow_delegation=true")
+			}
+		})
+		t.Run(f.name+"/default-off", func(t *testing.T) {
+			rec, got := roundTripDefinition(t, &Task{Prompt: "p"}, f.marshal, f.unmarshal)
+			if rec.AllowDelegation || got.AllowDelegation {
+				t.Error("a task without delegation must round-trip as false (old configs stay unchanged)")
+			}
+		})
+	}
+}
+
 // TestExportImport_SLARoundTrip proves the follow-up to #274/#238: SLA config
 // (expected duration + multipliers) is part of the portable task definition and
 // survives an export→import round-trip in both JSON and YAML, while runtime SLA

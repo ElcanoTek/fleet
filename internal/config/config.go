@@ -60,13 +60,22 @@ const DefaultTitleModel = "google/gemini-3.5-flash"
 // default; a deployment overrides via SENDGRID_FROM_EMAIL / MAILBUX_FROM_EMAIL.
 const DefaultFromEmail = "noreply@example.com"
 
-// Sub-agent caps (#175): deliberately SMALL defaults. Depth bounds recursion (a
-// child spawning a child …); fan-out bounds how many children one parent may
-// spawn. Both are hard refusals when exceeded — combined with the budget split,
-// they bound total sub-agent spend and prevent a spawn fork-bomb.
+// Sub-agent caps (#175, tightened for delegation #264): deliberately SMALL
+// defaults. Depth bounds recursion; fan-out bounds how many children one parent
+// may spawn; the budget fraction bounds each child's slice of the parent's
+// remaining budget. All are hard refusals / hard caps when exceeded — combined
+// with the budget split, they bound total sub-agent spend and prevent a spawn
+// fork-bomb.
+//
+// The depth default is 1 (#264, "parent → sub-agent only"): the root task may
+// delegate, but a child may NOT delegate further — the spawn tool is not even
+// registered in a child (see internal/agent/subagent.go buildChild). An operator
+// can raise FLEET_SUBAGENTS_MAX_DEPTH to allow deeper trees. The budget-fraction
+// default is 0.10 (#264, "≤10% of the parent's remaining budget per child").
 const (
-	defaultSubagentsMaxDepth    = 2
-	defaultSubagentsMaxChildren = 4
+	defaultSubagentsMaxDepth       = 1
+	defaultSubagentsMaxChildren    = 5
+	defaultSubagentsBudgetFraction = 0.10
 )
 
 // allowedEnvVars is the union allowlist of keys that may be set from a .env
@@ -547,26 +556,35 @@ type Config struct {
 	PhoneAFriendEnabled bool
 	PhoneAFriendModel   string
 
-	// ── sub-agents (#175) ──
-	// SubagentsEnabled turns on the spawn_subagent native tool, which lets a
-	// governed run delegate a scoped piece of work to a CHILD run. The child is
-	// not a new or weaker loop: it is another agentcore.Run governed exactly like
+	// ── sub-agents / delegation (#175, #264) ──
+	// SubagentsEnabled turns on the spawn_subagent native tool fleet-wide, which
+	// lets a governed run delegate a scoped piece of work to a CHILD run. The child
+	// is not a new or weaker loop: it is another agentcore.Run governed exactly like
 	// the parent (ADR-0001), inheriting the parent's sandbox network posture, MCP
 	// + credential allowlist (least-privilege: it may only SUBTRACT), and a SLICE
 	// of the parent's remaining cost/token budget — the parent ceiling is the hard
 	// wall across all descendants. OFF by default (FLEET_SUBAGENTS_ENABLED) so
 	// config/default behaviour is unchanged.
 	//
-	// SubagentsMaxDepth caps recursion (a child of a child …); SubagentsMaxChildren
-	// caps fan-out per parent. A spawn exceeding either is REFUSED with a tool
-	// error. SubagentsModel names the default child model slug
-	// (FLEET_SUBAGENTS_MODEL); empty inherits the parent's model. The child model
-	// is resolved HOST-SIDE (like the phone-a-friend reviewer) so credentials stay
-	// host-side.
-	SubagentsEnabled     bool
-	SubagentsMaxDepth    int
-	SubagentsMaxChildren int
-	SubagentsModel       string
+	// Delegation is ALSO opt-in PER TASK via the task's allow_delegation flag (#264):
+	// a task with allow_delegation=true gets the tool even when this fleet-wide flag
+	// is off. The two compose as OR (see internal/scheduledrun) — the env flag is the
+	// operator-level override, the per-task flag the granular opt-in. Either way the
+	// tool is registered ONLY in scheduled mode, never in interactive chat.
+	//
+	// SubagentsMaxDepth caps recursion; the default is 1 ("parent → sub-agent only",
+	// #264) — a child does not get the spawn tool. SubagentsMaxChildren caps per-parent
+	// fan-out (default 5). SubagentsBudgetFraction is each child's default/maximum
+	// slice of the parent's REMAINING budget (default 0.10; a call requesting more is
+	// refused). A spawn exceeding any cap is REFUSED with a tool-result error.
+	// SubagentsModel names the default child model slug (FLEET_SUBAGENTS_MODEL); empty
+	// inherits the parent's model. The child model is resolved HOST-SIDE (like the
+	// phone-a-friend reviewer) so credentials stay host-side.
+	SubagentsEnabled        bool
+	SubagentsMaxDepth       int
+	SubagentsMaxChildren    int
+	SubagentsBudgetFraction float64
+	SubagentsModel          string
 
 	// ── agent self-improvement: persistent task memory (#198, #285) ──
 	// A scheduled task that opts into Captain's Log (instruction_self_improve) gets
@@ -929,11 +947,12 @@ func Load(envFile string) (*Config, error) {
 		PhoneAFriendEnabled: getenvFleetBool("PHONE_A_FRIEND_ENABLED", false),
 		PhoneAFriendModel:   getenvFleet("PHONE_A_FRIEND_MODEL"),
 
-		// ── sub-agents (#175) ──
-		SubagentsEnabled:     getenvFleetBool("SUBAGENTS_ENABLED", false),
-		SubagentsMaxDepth:    getenvFleetInt("SUBAGENTS_MAX_DEPTH", defaultSubagentsMaxDepth),
-		SubagentsMaxChildren: getenvFleetInt("SUBAGENTS_MAX_CHILDREN", defaultSubagentsMaxChildren),
-		SubagentsModel:       getenvFleet("SUBAGENTS_MODEL"),
+		// ── sub-agents / delegation (#175, #264) ──
+		SubagentsEnabled:        getenvFleetBool("SUBAGENTS_ENABLED", false),
+		SubagentsMaxDepth:       getenvFleetInt("SUBAGENTS_MAX_DEPTH", defaultSubagentsMaxDepth),
+		SubagentsMaxChildren:    getenvFleetInt("SUBAGENTS_MAX_CHILDREN", defaultSubagentsMaxChildren),
+		SubagentsBudgetFraction: normalizeBudgetFraction(getenvFleetFloat("SUBAGENTS_BUDGET_FRACTION", defaultSubagentsBudgetFraction)),
+		SubagentsModel:          getenvFleet("SUBAGENTS_MODEL"),
 
 		// ── agent self-improvement: persistent task memory (#198, #285) ──
 		TaskMemoryMaxKeys:       getenvFleetInt("TASK_MEMORY_MAX_KEYS", 100),
@@ -1551,6 +1570,21 @@ func getenvFleetFloat(suffix string, def float64) float64 {
 		}
 	}
 	return def
+}
+
+// normalizeBudgetFraction clamps the sub-agent budget fraction (#264) into the
+// valid (0, 1] range, falling back to the package default on a nonsensical value
+// so a misconfiguration can never mean "unbounded" (0 or negative → default;
+// >1 → 1.0, the whole remaining budget). The fraction caps each child's slice of
+// the parent's remaining budget; the parent ceiling remains the hard wall.
+func normalizeBudgetFraction(f float64) float64 {
+	if f <= 0 {
+		return defaultSubagentsBudgetFraction
+	}
+	if f > 1 {
+		return 1.0
+	}
+	return f
 }
 
 func getenvFleetBool(suffix string, def bool) bool {
