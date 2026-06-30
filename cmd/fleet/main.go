@@ -62,6 +62,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
+	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/scheduler"
 	"github.com/ElcanoTek/fleet/internal/sched/slamonitor"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -419,6 +420,10 @@ func run() error {
 		httpapi.WithStartTime(startTime),
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
+		// schedule_task (#239): let an approved interactive call create an
+		// orchestrator task in-process, reusing the SAME validated storage create
+		// path POST /tasks uses — no second governance/create path is forked.
+		httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage)),
 	}
 	if remoteMCPSvc != nil {
 		chatOpts = append(chatOpts, httpapi.WithRemoteMCP(remoteMCPSvc))
@@ -1233,6 +1238,59 @@ func orchestratorMetricsMiddleware(next http.Handler) http.Handler {
 // httpapi.WorkerStats the admin health summary embeds (#301), keeping httpapi
 // free of any sched-package import. Extracted from run() to keep it within the
 // cyclomatic budget.
+// taskSchedulerProvider adapts the chat server's sched-agnostic TaskScheduleRequest
+// (#239) to the orchestrator's task-create path. It maps the request to a
+// models.TaskCreate and calls schedStorage.EnqueueTask — the SAME constructor +
+// persistence (models.NewTask + AddTask, cron validation, DB name-uniqueness) the
+// create_task tool uses and that underlies POST /tasks. It does NOT re-run the
+// HTTP handler's field-limit checks (max_iterations bounds, prompt-min-length),
+// matching the create_task seam; the human approval plus the box-wide ceilings
+// bound a misconfigured task. The human approval IS the authorization; no task is
+// created until the user clicks Approve. NOTE: chat-created tasks are left
+// unattributed (CreatedBy nil) — like create_task-spawned tasks — so they run
+// against the shared global MCP catalog, NOT the requesting user's personal
+// remote-MCP connections (#443/#449). That is the safe (less-access) direction.
+func taskSchedulerProvider(schedStorage *storage.Storage) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
+	return func(ctx context.Context, req httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
+		tc := schedmodels.TaskCreate{
+			Name:         req.Name,
+			Prompt:       req.Prompt,
+			Recurrence:   req.Cron,
+			ScheduledFor: req.RunAt,
+			AllowNetwork: req.AllowNetwork,
+		}
+		if m := strings.TrimSpace(req.Model); m != "" {
+			tc.Model = &m
+		}
+		if req.MaxIterations > 0 {
+			iters := req.MaxIterations
+			tc.MaxIterations = &iters
+		}
+		// Tag chat-originated tasks for provenance so an operator can tell at a
+		// glance the task was created from a conversation rather than the API/CLI.
+		// EnqueueTask does NOT run the handler's tag normalization, so we apply the
+		// SAME NormalizeAndValidateTags the public POST /tasks path uses here —
+		// otherwise a chat-supplied tag could violate the documented #212 format
+		// (lowercase alphanumeric + '-'/'.', ≤20). The provenance tag uses a hyphen
+		// (not ':') to stay inside that allowed character set.
+		normalizedTags, err := schedmodels.NormalizeAndValidateTags(append(req.Tags, "source-chat"))
+		if err != nil {
+			return nil, err
+		}
+		tc.Tags = normalizedTags
+
+		id, status, nextRunAt, err := schedStorage.EnqueueTask(ctx, tc)
+		if err != nil {
+			return nil, err
+		}
+		return &httpapi.TaskScheduleResult{
+			ID:      id.String(),
+			Status:  status,
+			NextRun: nextRunAt,
+		}, nil
+	}
+}
+
 func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*httpapi.WorkerStats, error) {
 	return func(context.Context) (*httpapi.WorkerStats, error) {
 		ds, err := schedStorage.GetDashboardStats()
