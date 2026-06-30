@@ -23,6 +23,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -508,7 +509,7 @@ func run() error {
 		return bundle.TaskTemplates
 	})
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
-	orchHandler := buildOrchestratorMux(h, notesHandlers)
+	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg))
 
 	// ── scheduler ticker (promote scheduled→pending + recover leases) ──
 	sch := scheduler.New(schedStorage, timezone())
@@ -658,6 +659,10 @@ func run() error {
 	sigCh := make(chan os.Signal, 4)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
 	defer signal.Stop(sigCh)
+
+	// Config hot-reload on SIGUSR2 (#286): re-read the reloadable settings without
+	// a restart. Extracted to a helper so run() stays within the cyclomatic budget.
+	defer watchConfigReloadSignal(ctx, cfg)()
 
 	// Worker pool runs until ctx is cancelled, then drains. Guarded so a panic in
 	// the pool loop is a contained, logged event — and poolDone still closes
@@ -818,9 +823,69 @@ func initTracing(serviceVersion string) func() {
 	}
 }
 
+// reloadConfigHandler serves POST /admin/reload-config (#286): it re-reads the
+// reloadable settings from the env file + process environment and returns a JSON
+// diff of what changed / was skipped (non-reloadable) / errored. cfg may be nil
+// in route-walking tests (the route only needs to exist there); a real request
+// against a nil cfg returns 503.
+func reloadConfigHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if cfg == nil {
+			http.Error(w, "config reload unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		result, err := cfg.Reload(os.Getenv("FLEET_ENV_FILE"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	}
+}
+
+// watchConfigReloadSignal reloads cfg's reloadable settings on every SIGUSR2 until
+// ctx is cancelled, and returns a stop func that deregisters the signal. A
+// separate channel/goroutine (not the shutdown loop) keeps cfg in scope and
+// decouples reload from the lifecycle signals; SIGUSR2 (not SIGHUP) avoids
+// clashing with log-rotation tooling. A panic in a reload is contained. (#286)
+func watchConfigReloadSignal(ctx context.Context, cfg *config.Config) func() {
+	reloadSig := make(chan os.Signal, 1)
+	signal.Notify(reloadSig, syscall.SIGUSR2)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-reloadSig:
+				// Recover PER iteration (not once around the loop) so a panic in one
+				// reload can't permanently disable SIGUSR2 reloads for the process.
+				func() {
+					defer safe.Recover("cmd.config-reload", nil)
+					logConfigReload(cfg.Reload(os.Getenv("FLEET_ENV_FILE")))
+				}()
+			}
+		}
+	}()
+	return func() { signal.Stop(reloadSig) }
+}
+
+// logConfigReload logs the outcome of a SIGUSR2-triggered reload.
+func logConfigReload(result config.ReloadResult, err error) {
+	if err != nil {
+		log.Printf("config reload (SIGUSR2): error: %v", err)
+		return
+	}
+	log.Printf("config reload (SIGUSR2): %d changed, %d skipped, %d error(s)",
+		len(result.Changed), len(result.Skipped), len(result.Errors))
+	for _, ch := range result.Changed {
+		log.Printf("config reload: %s: %q -> %q", ch.Key, ch.Old, ch.New)
+	}
+}
+
 // buildOrchestratorMux registers the orchestrator routes (chi), mirroring moc's
 // auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
-func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) http.Handler {
+func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig http.HandlerFunc) http.Handler {
 	r := chi.NewRouter()
 	// ClientIPFromXFF replaces the deprecated, spoofable middleware.RealIP
 	// (GHSA-3fxj-6jh8-hvhx et al.): with no trusted prefixes it reads the
@@ -853,6 +918,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		// operator can see backlog and starvation. Admin-gated like the other
 		// sensitive reads.
 		r.Get("/admin/queue", h.QueueStats)
+		// Config hot-reload (#286): re-read the reloadable settings (cost/token/
+		// iteration ceilings, temperatures) without a restart. Admin-gated like the
+		// other sensitive mutations; returns a JSON diff of what changed, what was
+		// skipped (non-reloadable, needs restart), and any parse errors.
+		r.Post("/admin/reload-config", reloadConfig)
 		r.Post("/users", h.CreateUser)
 		r.Post("/keys", h.CreateAPIKey)
 		r.Get("/keys", h.ListAPIKeys)

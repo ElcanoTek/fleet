@@ -230,7 +230,7 @@ type ModelResolver interface {
 func NewAgent(opts Options) *Agent {
 	maxIter := opts.MaxIterations
 	if maxIter <= 0 && opts.Config != nil {
-		maxIter = opts.Config.MaxIterations
+		maxIter = opts.Config.LiveMaxIterations()
 	}
 	if maxIter <= 0 {
 		maxIter = 500
@@ -474,8 +474,8 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	var maxCostUSD float64
 	var maxTotalTokens int
 	if a.config != nil {
-		maxCostUSD = a.config.MaxCostUSD
-		maxTotalTokens = a.config.MaxTotalTokens
+		maxCostUSD = a.config.LiveMaxCostUSD()
+		maxTotalTokens = a.config.LiveMaxTotalTokens()
 	}
 	// A spawned child carries a SLICED budget (#175): its override REPLACES the
 	// config ceiling so the child's own agentcore.Run enforces the slice through
@@ -538,7 +538,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	}
 	temp := 0.3
 	if a.config != nil {
-		temp = a.config.LLMTemperature
+		temp = a.config.LiveLLMTemperature()
 	}
 
 	allow, optional := a.mcpGates()
