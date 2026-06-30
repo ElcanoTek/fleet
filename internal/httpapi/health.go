@@ -11,9 +11,6 @@ import (
 // It is populated by the WithWorkerStats provider (wired from the sched store in
 // cmd/fleet) so this package stays sched-agnostic. nil → reported as null.
 type WorkerStats struct {
-	TotalNodes     int `json:"total"`
-	ActiveNodes    int `json:"active"`
-	IdleNodes      int `json:"idle"`
 	QueuedTasks    int `json:"queued_tasks"`
 	RunningTasks   int `json:"running_tasks"`
 	CompletedToday int `json:"completed_today"`

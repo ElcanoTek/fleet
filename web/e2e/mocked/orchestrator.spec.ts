@@ -9,15 +9,11 @@ import { loginViaCookie } from "./_session";
 // by Playwright (no Go moc backend).
 
 const STATS = {
-  total_nodes: 1,
-  active_nodes: 1,
   pending_tasks: 2,
   running_tasks: 0,
   completed_tasks_today: 3,
   failed_tasks_today: 0,
 };
-
-const NODES = { data: [], total: 0, limit: 100, offset: 0 };
 
 // A 1x1 transparent PNG, used as a stand-in for an agent-generated image served
 // through the task workspace proxy (#271).
@@ -51,7 +47,6 @@ async function mockOrchestrator(page: Page, captured: { createBody?: Record<stri
 
     if (path === "/me") return route.fulfill({ json: { authenticated: true, username: "e2e" } });
     if (path === "/stats") return route.fulfill({ json: STATS });
-    if (path === "/nodes") return route.fulfill({ json: NODES });
     if (path === "/mcp-servers") return route.fulfill({ json: MCP_SERVERS });
     if (path === "/config") return route.fulfill({ json: { timezone: "America/New_York" } });
     if (path === "/concurrency")

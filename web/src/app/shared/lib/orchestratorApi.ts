@@ -8,15 +8,6 @@
 
 import { getStoredToken } from "./orchestratorAuth";
 
-export type Node = {
-  id: string;
-  hostname?: string;
-  name?: string;
-  os_type?: string;
-  status?: "idle" | "busy" | "offline" | "error";
-  last_heartbeat?: string;
-};
-
 // MCPChoice mirrors agentcore.MCPChoice: which optional server is on + which
 // credential account backs it. Account === "" means the default/shared seat.
 export type MCPChoice = { server: string; account?: string };
@@ -172,8 +163,6 @@ export type TaskTemplate = {
 };
 
 export type DashboardStats = {
-  total_nodes?: number;
-  active_nodes?: number;
   pending_tasks?: number;
   running_tasks?: number;
   completed_tasks_today?: number;
@@ -254,7 +243,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const orchestratorApi = {
   stats: () => request<DashboardStats>("/stats"),
-  nodes: () => request<Paginated<Node>>("/nodes?limit=100&offset=0"),
   tasks: (qs: string) => request<Paginated<Task>>(`/tasks${qs ? `?${qs}` : ""}`),
   createTask: (body: TaskCreate) =>
     request<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),

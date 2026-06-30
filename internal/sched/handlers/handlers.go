@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -40,12 +39,11 @@ import (
 
 // Config holds the handler configuration.
 type Config struct {
-	OrchestratorURL   string
-	AdminAPIKey       string
-	RegistrationToken string
-	Version           string
-	DataDir           string
-	Timezone          string
+	OrchestratorURL string
+	AdminAPIKey     string
+	Version         string
+	DataDir         string
+	Timezone        string
 	// DefaultTaskTimezone (FLEET_DEFAULT_TIMEZONE) is the IANA timezone applied
 	// to a new task whose create request omits one. Distinct from Timezone
 	// (FLEET_TIMEZONE, the server clock); empty defaults to "UTC".
@@ -109,8 +107,6 @@ type Handlers struct {
 	storage *storage.Storage
 	apiKeys *apikeys.Manager
 
-	// Rate limiting for registration
-	regRateLimiter *rateLimiter
 	// Rate limiting for login
 	loginRateLimiter *rateLimiter
 
@@ -355,7 +351,6 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 		config:           cfg,
 		storage:          store,
 		apiKeys:          keyMgr,
-		regRateLimiter:   newRateLimiter(10, time.Minute), // 10 registrations per minute per IP
 		loginRateLimiter: newRateLimiter(20, time.Minute), // 20 logins per minute per IP
 		taskKeyRL:        ratelimit.New(cfg.SchedRateLimitPerMinute, cfg.SchedRateLimitPerDay),
 		taskGlobalRL:     ratelimit.New(cfg.SchedGlobalRateLimitPerMinute, 0),
@@ -433,279 +428,6 @@ func (h *Handlers) verifyAdminKey(r *http.Request) bool {
 	apiKeyHash := sha256.Sum256([]byte(apiKey))
 	expectedKeyHash := sha256.Sum256([]byte(h.config.AdminAPIKey))
 	return subtle.ConstantTimeCompare(apiKeyHash[:], expectedKeyHash[:]) == 1
-}
-
-func (h *Handlers) verifyNodeKey(r *http.Request) (*models.Node, error) {
-	apiKey := r.Header.Get("X-API-Key")
-	if apiKey == "" {
-		authHeader := r.Header.Get("Authorization")
-		if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-			apiKey = authHeader[7:]
-		}
-	}
-	if apiKey == "" {
-		return nil, fmt.Errorf("missing API key")
-	}
-	node, err := h.storage.GetNodeByAPIKey(apiKey)
-	if err != nil || node == nil {
-		return nil, fmt.Errorf("invalid node API key")
-	}
-	return node, nil
-}
-
-func (h *Handlers) verifyRegistrationToken(r *http.Request) error {
-	if h.config.RegistrationToken == "" {
-		return fmt.Errorf("registration is disabled")
-	}
-	token := r.Header.Get("X-Registration-Token")
-	// Hash inputs to prevent length-deduction timing attacks before constant-time comparison
-	tokenHash := sha256.Sum256([]byte(token))
-	expectedHash := sha256.Sum256([]byte(h.config.RegistrationToken))
-	if subtle.ConstantTimeCompare(tokenHash[:], expectedHash[:]) != 1 {
-		return fmt.Errorf("invalid registration token")
-	}
-	return nil
-}
-
-// Node Management Endpoints
-
-// RegisterNode handles POST /register
-func (h *Handlers) RegisterNode(w http.ResponseWriter, r *http.Request) {
-	var reg models.NodeRegistration
-	if err := readJSON(r, &reg); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	// Determine the node name
-	nodeName := reg.Hostname
-	if reg.Name != nil {
-		nodeName = *reg.Name
-	}
-
-	// Check for re-registration: if a node with the same name exists, update it
-	existingNode, _ := h.storage.GetNodeByName(nodeName)
-	if existingNode != nil {
-		// Prevent re-registration while node has an active task
-		if existingNode.CurrentTaskID != nil {
-			writeError(w, http.StatusConflict, "Node has an active task and cannot be re-registered. Wait for the task to complete or cancel it first.")
-			return
-		}
-
-		// Re-registration: update the existing node with key rotation grace period
-		now := time.Now().UTC()
-
-		// Preserve the old API key for the grace period. Copy it into a local
-		// first: taking the address of existingNode.APIKey would alias the very
-		// field we overwrite below, so PreviousAPIKey would end up pointing at
-		// the new key and the grace-period lookup could never match the old one.
-		// Note: existingNode.APIKey is already hashed in the database.
-		oldAPIKey := existingNode.APIKey
-		existingNode.PreviousAPIKey = &oldAPIKey
-		existingNode.KeyRotatedAt = &now
-
-		// Generate new API key
-		newAPIKey := uuid.New().String()
-		existingNode.Hostname = reg.Hostname
-		existingNode.OSType = reg.OSType
-		existingNode.Status = models.NodeStatusIdle
-		existingNode.LastHeartbeat = now
-		existingNode.APIKey = newAPIKey
-
-		if _, err := h.storage.UpdateNode(existingNode); err != nil {
-			writeError(w, http.StatusInternalServerError, "Failed to update node")
-			return
-		}
-
-		// Return the unhashed new API key to the client
-		existingNode.APIKey = newAPIKey
-		log.Printf("Node re-registered: %s (name: %s) - old key valid for %v", existingNode.ID, existingNode.Name, models.KeyRotationGracePeriod)
-		writeJSON(w, http.StatusOK, existingNode)
-		return
-	}
-
-	// New registration
-	node := models.NewNode(reg)
-	log.Printf("Registering new node: %s", node.Name)
-
-	if _, err := h.storage.AddNode(node); err != nil {
-		// A concurrent registration of the same name won the race to insert.
-		// The unique constraint did its job; tell the runner to retry, at which
-		// point it will find the existing row and take the re-registration path.
-		if errors.Is(err, db.ErrDuplicateNodeName) {
-			writeError(w, http.StatusConflict, "Node name was just registered by a concurrent request; please retry")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "Failed to register node")
-		return
-	}
-
-	log.Printf("Node registered: %s (name: %s)", node.ID, node.Name)
-	writeJSON(w, http.StatusOK, node)
-}
-
-// ListNodes handles GET /nodes
-// Requires pagination with ?limit=N&offset=M query parameters.
-// Returns a PaginatedResponse with total count.
-func (h *Handlers) ListNodes(w http.ResponseWriter, r *http.Request) {
-	p := h.principalFromRequest(r)
-	if !p.hasPermission(models.PermissionViewNodes) {
-		writeError(w, http.StatusForbidden, "Insufficient permissions")
-		return
-	}
-	user := p.user
-
-	// Parse pagination parameters (default: limit=100, offset=0)
-	limit := 100
-	offset := 0
-
-	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		parsed, err := strconv.Atoi(limitStr)
-		if err != nil || parsed < 1 || parsed > 500 {
-			writeError(w, http.StatusBadRequest, "Invalid limit parameter (must be 1-500)")
-			return
-		}
-		limit = parsed
-	}
-
-	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
-		parsed, err := strconv.Atoi(offsetStr)
-		if err != nil || parsed < 0 {
-			writeError(w, http.StatusBadRequest, "Invalid offset parameter")
-			return
-		}
-		offset = parsed
-	}
-
-	var nodes []*models.Node
-	var total int
-	var err error
-
-	// Visibility rules:
-	//   - Admin key / admin-role user: see all nodes.
-	//   - Any principal with scopes (user or API key): see only matching nodes.
-	//   - A non-admin user with no scopes: see nothing (avoids leaking the whole
-	//     fleet to an unscoped client account).
-	//   - A scoped API key with no patterns is unrestricted by design, so it
-	//     falls into the admin branch below.
-	scopes := p.scopes()
-	switch {
-	case p.isAdmin || (user != nil && userHasPermission(user, models.PermissionAdmin)) || (p.apiKey != nil && len(scopes) == 0):
-		if len(scopes) > 0 {
-			nodes, total, err = h.storage.GetNodesScopedPaginated(limit, offset, scopes)
-		} else {
-			nodes, total, err = h.storage.GetAllNodesPaginated(limit, offset)
-		}
-	case len(scopes) > 0:
-		nodes, total, err = h.storage.GetNodesScopedPaginated(limit, offset, scopes)
-	default:
-		// Non-admin with no scopes -> no access (empty list).
-		nodes = []*models.Node{}
-		total = 0
-		err = nil
-	}
-
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to list nodes")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, models.PaginatedResponse{
-		Data:   nodes,
-		Total:  total,
-		Limit:  limit,
-		Offset: offset,
-	})
-}
-
-// GetNode handles GET /nodes/{node_id}
-func (h *Handlers) GetNode(w http.ResponseWriter, r *http.Request) {
-	p := h.principalFromRequest(r)
-	if !p.hasPermission(models.PermissionViewNodes) {
-		writeError(w, http.StatusForbidden, "Insufficient permissions")
-		return
-	}
-
-	nodeIDStr := chi.URLParam(r, "node_id")
-	nodeID, err := uuid.Parse(nodeIDStr)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid node ID")
-		return
-	}
-
-	node, err := h.storage.GetNode(nodeID)
-	if err != nil || node == nil {
-		writeError(w, http.StatusNotFound, "Node not found")
-		return
-	}
-
-	if scopes := p.scopes(); len(scopes) > 0 && !scopesMatchNode(scopes, node.Name) {
-		writeError(w, http.StatusForbidden, "Node not within allowed scopes")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, node)
-}
-
-// NodeHeartbeat handles POST /nodes/heartbeat
-func (h *Handlers) NodeHeartbeat(w http.ResponseWriter, r *http.Request) {
-	node := GetNodeFromContext(r.Context())
-	if node == nil {
-		writeError(w, http.StatusUnauthorized, "Invalid node API key")
-		return
-	}
-
-	var heartbeat models.NodeHeartbeat
-	if err := readJSON(r, &heartbeat); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	if !heartbeat.Status.IsValid() {
-		writeError(w, http.StatusBadRequest, "Invalid node status")
-		return
-	}
-
-	updated, err := h.storage.UpdateNodeHeartbeat(node.ID, heartbeat.Status, heartbeat.CurrentTaskID)
-	if err != nil {
-		// Distinguish "node gone" from a transient DB error: a node that treats
-		// every 404 as deregistration will re-register and needlessly rotate its
-		// key, so transient failures must surface as 500 instead.
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "Node not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "Failed to update heartbeat")
-		return
-	}
-	if updated == nil {
-		writeError(w, http.StatusNotFound, "Node not found")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, updated)
-}
-
-// UnregisterNode handles DELETE /nodes/{node_id}
-func (h *Handlers) UnregisterNode(w http.ResponseWriter, r *http.Request) {
-	nodeIDStr := chi.URLParam(r, "node_id")
-	nodeID, err := uuid.Parse(nodeIDStr)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid node ID")
-		return
-	}
-
-	deleted, err := h.storage.RemoveNode(nodeID)
-	if err != nil || !deleted {
-		writeError(w, http.StatusNotFound, "Node not found")
-		return
-	}
-
-	log.Printf("Node unregistered: %s", nodeID) //nolint:gosec // G706 false positive: nodeID is a uuid.UUID parsed via uuid.Parse, so its String() is canonical hex+dashes and cannot carry CR/LF.
-	writeJSON(w, http.StatusOK, models.DeleteNodeResponse{
-		Status: "deleted",
-		NodeID: nodeIDStr,
-	})
 }
 
 // Task Management Endpoints
@@ -1388,52 +1110,6 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetPendingTask handles GET /tasks/pending. Runners are retired — the
-// in-process worker pool claims tasks directly via the runner package — but the
-// endpoint remains so a node API key can claim the next pending task. It uses
-// ClaimNextPendingTask (FOR UPDATE SKIP LOCKED) keyed on the requesting node as
-// the lease owner, then builds the TaskAssignment carrying the per-task
-// mcp_selection (no node targeting).
-func (h *Handlers) GetPendingTask(w http.ResponseWriter, r *http.Request) {
-	node := GetNodeFromContext(r.Context())
-	if node == nil {
-		writeError(w, http.StatusUnauthorized, "Invalid node API key")
-		return
-	}
-
-	assignedTask, err := h.storage.ClaimNextPendingTask(r.Context(), node.ID.String())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to get pending task")
-		return
-	}
-	if assignedTask == nil {
-		writeJSON(w, http.StatusOK, nil)
-		return
-	}
-
-	log.Printf("Task %s claimed by node %s (%s)", assignedTask.ID, node.Name, node.ID)
-
-	// Build file checksums if files are present
-	var fileChecksums []string
-	if len(assignedTask.Files) > 0 {
-		fileChecksums = h.getFileChecksums(assignedTask.Files)
-	}
-
-	writeJSON(w, http.StatusOK, models.TaskAssignment{
-		TaskID:                 assignedTask.ID,
-		Prompt:                 assignedTask.Prompt,
-		Model:                  assignedTask.Model,
-		FallbackModel:          assignedTask.FallbackModel,
-		MaxIterations:          assignedTask.MaxIterations,
-		MCPSelection:           assignedTask.MCPSelection,
-		CredentialAllowlist:    assignedTask.CredentialAllowlist,
-		InstructionSelfImprove: assignedTask.InstructionSelfImprove,
-		OrchestratorURL:        h.config.OrchestratorURL,
-		Files:                  assignedTask.Files,
-		FileChecksums:          fileChecksums,
-	})
-}
-
 // GetTask handles GET /tasks/{task_id}
 func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 	p := h.principalFromRequest(r)
@@ -1825,12 +1501,25 @@ func (h *Handlers) GetTagCatalogue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, catalogue)
 }
 
-// GetSLAReport handles GET /admin/sla-report (#274): the per-prompt SLA
-// actuals (p50/p95 actual duration + breach rate) over a window. The window is
-// optional via ?days= (default 7, clamped to [1, 90] by the storage layer).
-// Admin-gated (registered behind AdminAuthMiddleware) — duration/breach data
-// is operator-sensitive, not public.
+// GetSLAReport handles GET /sla-report (#274): the per-prompt SLA actuals
+// (p50/p95 actual duration + breach rate) over a window. The window is optional
+// via ?days= (default 7, clamped to [1, 90] by the storage layer).
+//
+// Admin-only, but reachable from the web UI: it is registered behind
+// AdminOrUserAuthMiddleware (which resolves the caller into a principal) and
+// gated HERE on PermissionAdmin (#458). The admin API key OR an admin-role user
+// (the role the Next proxy's header-trust/bearer path conveys) passes; a
+// non-admin member gets 403. This is the only gate that lets a web-authenticated
+// admin reach the report — the proxy can never send the admin X-API-Key that the
+// bare AdminAuthMiddleware demanded, so the report was previously unreachable
+// from the dashboard for every user. The report is GLOBAL (all tasks) while a
+// member may be scoped, so exposing it to a scoped non-admin would leak the
+// existence/volume/latency of work outside their scope — hence admin-only.
 func (h *Handlers) GetSLAReport(w http.ResponseWriter, r *http.Request) {
+	if !h.principalFromRequest(r).hasPermission(models.PermissionAdmin) {
+		writeError(w, http.StatusForbidden, "Admin access required")
+		return
+	}
 	days := 7
 	if raw := r.URL.Query().Get("days"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -2072,127 +1761,6 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	if o.Persona != nil {
 		tc.Persona = *o.Persona
 	}
-}
-
-// Status Reporting Endpoints
-
-// ReportStatus handles POST /status
-func (h *Handlers) ReportStatus(w http.ResponseWriter, r *http.Request) {
-	node := GetNodeFromContext(r.Context())
-	if node == nil {
-		writeError(w, http.StatusUnauthorized, "Invalid node API key")
-		return
-	}
-
-	var update models.StatusUpdate
-	if err := readJSON(r, &update); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	// A node may only report progress/terminal statuses for its own task. It
-	// must not be able to write orchestrator-owned states (e.g. "pending"),
-	// which would let it re-queue and re-run a finished task.
-	if !update.Status.IsValidReportedStatus() {
-		writeError(w, http.StatusBadRequest, "Invalid task status")
-		return
-	}
-
-	message := ""
-	if update.Message != nil {
-		message = " - " + *update.Message
-	}
-	log.Printf("Status update for task %s from node %s: %s%s", update.TaskID, node.Name, update.Status, message)
-
-	// Use atomic update to prevent race conditions
-	task, err := h.storage.UpdateTaskStatusAtomic(update.TaskID, node.ID, &update)
-	if err != nil {
-		if strings.Contains(err.Error(), "not assigned") {
-			writeError(w, http.StatusForbidden, "Node is not assigned to this task")
-			return
-		}
-		if strings.Contains(err.Error(), "no rows") {
-			writeError(w, http.StatusNotFound, "Task not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "Failed to update task status")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, task)
-}
-
-// Log Submission Endpoints
-
-// SubmitLogs handles POST /logs
-func (h *Handlers) SubmitLogs(w http.ResponseWriter, r *http.Request) {
-	node := GetNodeFromContext(r.Context())
-	if node == nil {
-		writeError(w, http.StatusUnauthorized, "Invalid node API key")
-		return
-	}
-
-	// Limit request body size
-	r.Body = http.MaxBytesReader(w, r.Body, models.MaxLogSubmissionSize)
-
-	// Read the body to check size
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		if strings.Contains(err.Error(), "request body too large") {
-			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("Log submission exceeds maximum size of %d bytes", models.MaxLogSubmissionSize))
-			return
-		}
-		writeError(w, http.StatusBadRequest, "Failed to read request body")
-		return
-	}
-
-	var submission models.LogSubmission
-	if err := json.Unmarshal(body, &submission); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	task, err := h.storage.GetTask(submission.TaskID)
-	if err != nil || task == nil {
-		writeError(w, http.StatusNotFound, "Task not found")
-		return
-	}
-
-	// Verify the node owns this task, by current assignment or by lease. A nil
-	// assignment (e.g. after lease recovery) must NOT be treated as "anyone may
-	// write" — otherwise any authenticated node could overwrite another task's
-	// logs.
-	ownsByAssignment := task.AssignedNodeID != nil && *task.AssignedNodeID == node.ID
-	ownsByLease := task.LeaseOwner != nil && *task.LeaseOwner == node.ID.String()
-	if !ownsByAssignment && !ownsByLease {
-		writeError(w, http.StatusForbidden, "Node is not assigned to this task")
-		return
-	}
-
-	log.Printf("Received logs for task %s from node %s: session %s with %d messages",
-		task.ID, node.Name, submission.Session.ID, len(submission.Session.Messages))
-
-	// Store the session logs
-	if _, err := h.storage.AddLog(submission.TaskID, &submission.Session); err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to store logs")
-		return
-	}
-
-	// Update task with agent session ID if not already set
-	if task.AgentSessionID == nil {
-		task.AgentSessionID = &submission.Session.ID
-		if _, err := h.storage.UpdateTask(task); err != nil {
-			log.Printf("Warning: failed to update task with session ID: %v", err)
-		}
-	}
-
-	// Attribute this run's LLM cost to the submitting API key (if any) for
-	// per-key spending caps.
-	if task.CreatedByKeyID != nil {
-		h.apiKeys.AccumulateCost(*task.CreatedByKeyID, submission.Session.Cost)
-	}
-
-	writeJSON(w, http.StatusOK, submission.Session)
 }
 
 // GetLogs handles GET /logs/{task_id}
@@ -2563,56 +2131,6 @@ func (h *Handlers) HealthCheck(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// getFileChecksums returns checksums for the given filenames.
-func (h *Handlers) getFileChecksums(filenames []string) []string {
-	if len(filenames) == 0 {
-		return nil
-	}
-
-	checksums := make([]string, len(filenames))
-
-	// Find the unique filenames and group their indices
-	uniqueFiles := make(map[string][]int)
-	for i, filename := range filenames {
-		uniqueFiles[filename] = append(uniqueFiles[filename], i)
-	}
-
-	var wg sync.WaitGroup
-	// Limit concurrency to avoid too many open files
-	sem := make(chan struct{}, 20)
-
-	for filename, indices := range uniqueFiles {
-		// Check cache first
-		if cached, ok := h.checksumCache.Get(filename); ok {
-			for _, idx := range indices {
-				checksums[idx] = cached
-			}
-			continue
-		}
-
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(fname string, idxs []int) {
-			defer safe.Recover("sched.handlers.checksum", nil)
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			checksum, err := getFileChecksum(h.config.DataDir, fname)
-			if err == nil {
-				// Write directly to index - no lock needed since slices don't overlap
-				for _, idx := range idxs {
-					checksums[idx] = checksum
-				}
-				// Cache the result
-				h.checksumCache.Set(fname, checksum)
-			}
-		}(filename, indices)
-	}
-	wg.Wait()
-
-	return checksums
-}
-
 func userHasPermission(user *models.User, permission models.Permission) bool {
 	if user == nil {
 		return false
@@ -2684,21 +2202,6 @@ func (p principal) ownerID() *uuid.UUID {
 		return &p.user.ID
 	}
 	return nil
-}
-
-// scopesMatchNode reports whether any of the principal's scope patterns matches
-// the given node name. An empty scope list is unrestricted. Nodes still carry
-// names, so this gates node visibility in ListNodes/GetNode.
-func scopesMatchNode(scopes []string, nodeName string) bool {
-	if len(scopes) == 0 {
-		return true
-	}
-	for _, scope := range scopes {
-		if storage.MatchGlob(scope, nodeName) {
-			return true
-		}
-	}
-	return false
 }
 
 // taskVisibleToUser reports whether a task is visible to the given user under

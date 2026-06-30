@@ -9,13 +9,17 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// AssignTaskToNode atomically leases a pending task to a node. It is the
-// crash-recovery TEST SUBSTRATE: the lease/recovery tests use a node row as a
-// synthetic lease owner so they can exercise RecoverExpiredLeases without the
-// production claim path. It lives in a _test.go file (package storage,
-// white-box) so it is compiled into the test binary only and never ships in the
-// production binary — the production claim path is ClaimNextPendingTask.
-func (s *Storage) AssignTaskToNode(taskID uuid.UUID, nodeID uuid.UUID) (*models.Task, error) {
+// leaseTaskToOwner atomically leases a pending task to a synthetic lease owner.
+// It is the crash-recovery TEST SUBSTRATE: the lease/recovery tests need a task
+// in the leased state so they can exercise RecoverExpiredLeases without the
+// production claim path. It mirrors what ClaimNextPendingTask does — set
+// status=leased, stamp lease_owner, set lease_expires_at — but takes the owner
+// id explicitly so a test can drive expiry/ownership directly.
+//
+// It lives in a _test.go file (package storage, white-box) so it compiles into
+// the test binary only and never ships. The worker-node registry was removed
+// (#459), so the lease is keyed purely on lease_owner; there is no node row.
+func (s *Storage) leaseTaskToOwner(taskID uuid.UUID, owner uuid.UUID) (*models.Task, error) {
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -32,30 +36,18 @@ func (s *Storage) AssignTaskToNode(taskID uuid.UUID, nodeID uuid.UUID) (*models.
 		return nil, err
 	}
 
-	now := time.Now().UTC()
 	if task.Status != models.TaskStatusPending {
 		return nil, nil
 	}
 
-	node, err := s.db.GetNodeForUpdate(ctx, tx, nodeID)
-	if err != nil {
-		return nil, err
-	}
-
+	now := time.Now().UTC()
 	task.Status = models.TaskStatusLeased
-	task.AssignedNodeID = &nodeID
-	leaseOwner := nodeID.String()
+	leaseOwner := owner.String()
 	task.LeaseOwner = &leaseOwner
 	expiresAt := now.Add(LeaseDuration)
 	task.LeaseExpiresAt = &expiresAt
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
-		return nil, err
-	}
-
-	node.Status = models.NodeStatusBusy
-	node.CurrentTaskID = &task.ID
-	if err := s.db.UpdateNodeTx(ctx, tx, node); err != nil {
 		return nil, err
 	}
 

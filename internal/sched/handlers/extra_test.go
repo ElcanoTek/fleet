@@ -53,7 +53,7 @@ func cleanDB(s *storage.Storage) error {
 	ctx := context.Background()
 	// Use raw DB access to clean tables
 	db := s.DB()
-	tables := []string{"logs", "tasks", "nodes", "users"}
+	tables := []string{"logs", "tasks", "users"}
 	for _, table := range tables {
 		if _, err := db.Conn().ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			return err
@@ -309,9 +309,9 @@ func TestLoginToDashboardFlow(t *testing.T) {
 		t.Fatalf("Failed to decode stats: %v", err)
 	}
 
-	// Verify stats structure is valid (should have zero values since DB is empty)
-	if stats.TotalNodes != 0 {
-		t.Logf("Note: Expected 0 total nodes in clean test DB, got %d", stats.TotalNodes)
+	// Verify stats structure is valid (should have zero values since DB is empty).
+	if stats.PendingTasks != 0 {
+		t.Logf("Note: Expected 0 pending tasks in clean test DB, got %d", stats.PendingTasks)
 	}
 }
 
@@ -331,21 +331,13 @@ func TestGetLogsWithUserAuth(t *testing.T) {
 	adminUser.SessionToken = &tokenHash
 	store.AddUser(adminUser)
 
-	// Register a node
-	node := &models.Node{
-		ID:       uuid.New(),
-		Hostname: "test-node",
-		Name:     "test-node-1",
-		APIKey:   "node-api-key-123",
-		Status:   models.NodeStatusIdle,
-	}
-	store.AddNode(node)
-
-	// Create a task
+	// Create a task owned by the admin user (GetLogs visibility is gated on
+	// created_by/scope; the admin user sees every task regardless).
 	task := &models.Task{
 		ID:        uuid.New(),
 		Prompt:    "Test task for logs",
 		Status:    models.TaskStatusPending,
+		CreatedBy: &adminUser.ID,
 		CreatedAt: time.Now().UTC(),
 	}
 	task, err := store.AddTask(task)
@@ -353,9 +345,8 @@ func TestGetLogsWithUserAuth(t *testing.T) {
 		t.Fatalf("Failed to create task: %v", err)
 	}
 
-	// Assign task to node
+	// Promote it to running.
 	task.Status = models.TaskStatusRunning
-	task.AssignedNodeID = &node.ID
 	store.UpdateTask(task)
 
 	// Submit logs

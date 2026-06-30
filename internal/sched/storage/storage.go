@@ -1,14 +1,15 @@
-// Package storage provides the storage layer for nodes and tasks (sched).
-// Ported from moc's internal/storage. Concurrency is handled by PostgreSQL
-// through transactions and row-level locking. The node-glob routing
-// (NodeMatchesTask / GetPendingTaskForNode) is dropped: on one box there is a
-// single synthetic in-box worker, and task claiming goes through
-// db.ClaimNextPendingTask (FOR UPDATE SKIP LOCKED), not node matching. The
-// MatchGlob helper survives for scoped-visibility checks in the handlers.
+// Package storage provides the storage layer for tasks (sched). Ported from
+// moc's internal/storage. Concurrency is handled by PostgreSQL through
+// transactions and row-level locking. There is no worker-node registry: on one
+// box a single synthetic in-process worker claims work through
+// db.ClaimNextPendingTask (FOR UPDATE SKIP LOCKED) under a lease keyed by a
+// synthetic lease_owner, never a node table. The MatchGlob helper survives for
+// scoped-visibility checks in the handlers.
 package storage
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -73,7 +75,7 @@ func match(pattern, name string) bool {
 	return len(name) == 0
 }
 
-// Storage provides persistent storage for nodes and tasks.
+// Storage provides persistent storage for scheduled tasks.
 type Storage struct {
 	db       *db.Database
 	location *time.Location
@@ -129,130 +131,6 @@ func (s *Storage) DB() *db.Database { return s.db }
 // renew ticker already keeps the lease fresh well inside this window. Revisit
 // only if long-running scheduled agents ever need a wider window.
 const LeaseDuration = 5 * time.Minute
-
-// Node operations
-
-// AddNode adds a new node to the registry.
-func (s *Storage) AddNode(node *models.Node) (*models.Node, error) {
-	return s.AddNodeWithContext(context.Background(), node)
-}
-
-// AddNodeWithContext adds a new node with context.
-func (s *Storage) AddNodeWithContext(ctx context.Context, node *models.Node) (*models.Node, error) {
-	nodeToStore := *node
-	nodeToStore.APIKey = models.HashTokenIfNeeded(node.APIKey)
-	if err := s.db.AddNode(ctx, &nodeToStore); err != nil {
-		return nil, err
-	}
-	return node, nil
-}
-
-// GetNode gets a node by ID.
-func (s *Storage) GetNode(nodeID uuid.UUID) (*models.Node, error) {
-	return s.db.GetNode(context.Background(), nodeID)
-}
-
-// GetNodeByAPIKey gets a node by its API key.
-func (s *Storage) GetNodeByAPIKey(apiKey string) (*models.Node, error) {
-	return s.db.GetNodeByAPIKey(context.Background(), apiKey)
-}
-
-// GetAllNodes gets all registered nodes.
-func (s *Storage) GetAllNodes() ([]*models.Node, error) {
-	return s.db.GetAllNodes(context.Background())
-}
-
-// GetAllNodesPaginated gets nodes with pagination.
-func (s *Storage) GetAllNodesPaginated(limit, offset int) ([]*models.Node, int, error) {
-	return s.db.GetAllNodesPaginated(context.Background(), limit, offset)
-}
-
-// GetNodesScopedPaginated gets nodes with pagination filtering by scopes.
-func (s *Storage) GetNodesScopedPaginated(limit, offset int, scopes []string) ([]*models.Node, int, error) {
-	return s.db.GetNodesScopedPaginated(context.Background(), limit, offset, scopes)
-}
-
-// GetNodeNamesByIDs gets node names for a list of node IDs.
-func (s *Storage) GetNodeNamesByIDs(nodeIDs []uuid.UUID) (map[uuid.UUID]string, error) {
-	return s.db.GetNodeNamesByIDs(context.Background(), nodeIDs)
-}
-
-// UpdateNode updates an existing node.
-func (s *Storage) UpdateNode(node *models.Node) (*models.Node, error) {
-	nodeToStore := *node
-	nodeToStore.APIKey = models.HashTokenIfNeeded(node.APIKey)
-	if err := s.db.UpdateNode(context.Background(), &nodeToStore); err != nil {
-		return nil, err
-	}
-	return node, nil
-}
-
-// RemoveNode removes a node from the registry.
-func (s *Storage) RemoveNode(nodeID uuid.UUID) (bool, error) {
-	return s.db.RemoveNode(context.Background(), nodeID)
-}
-
-// UpdateNodeHeartbeat updates a node's heartbeat timestamp and status, and
-// (for a busy heartbeat) renews the lease on its active task — preserved
-// verbatim so the in-process worker's lease-renew ticker can reuse it.
-func (s *Storage) UpdateNodeHeartbeat(nodeID uuid.UUID, status models.NodeStatus, taskID *uuid.UUID) (*models.Node, error) {
-	ctx := context.Background()
-	tx, err := s.db.BeginTx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
-	// the error paths the function already returns the underlying error, and a
-	// rollback failure in a defer can't be surfaced — so the result is
-	// intentionally ignored.
-	defer func() { _ = tx.Rollback() }()
-
-	now := time.Now().UTC()
-
-	// Lock order is ALWAYS task-then-node.
-	var taskToRenew *models.Task
-	if status == models.NodeStatusBusy && taskID != nil {
-		task, err := s.db.GetTaskForUpdate(ctx, tx, *taskID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
-		if task != nil {
-			hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
-			isAssigned := task.AssignedNodeID != nil && *task.AssignedNodeID == nodeID
-			isRenewableStatus := task.Status == models.TaskStatusLeased ||
-				task.Status == models.TaskStatusRunning ||
-				task.Status == models.TaskStatusAnalyzing
-			if (hasValidLease || isAssigned) && isRenewableStatus {
-				expiresAt := now.Add(LeaseDuration)
-				task.LeaseExpiresAt = &expiresAt
-				taskToRenew = task
-			}
-		}
-	}
-
-	node, err := s.db.GetNodeForUpdate(ctx, tx, nodeID)
-	if err != nil {
-		return nil, err
-	}
-
-	node.LastHeartbeat = now
-	node.Status = status
-	node.CurrentTaskID = taskID
-	if err := s.db.UpdateNodeTx(ctx, tx, node); err != nil {
-		return nil, err
-	}
-
-	if taskToRenew != nil {
-		if err := s.db.UpdateTaskTx(ctx, tx, taskToRenew); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return node, nil
-}
 
 // Task operations
 
@@ -448,11 +326,6 @@ func (s *Storage) PendingQueueStats(ctx context.Context) ([]models.QueuePriority
 	return s.db.PendingQueueStats(ctx)
 }
 
-// GetNodeByName gets a node by its name.
-func (s *Storage) GetNodeByName(name string) (*models.Node, error) {
-	return s.db.GetNodeByName(context.Background(), name)
-}
-
 // RecoverExpiredLeases resets tasks with expired leases back to pending.
 func (s *Storage) RecoverExpiredLeases() (int, error) {
 	return s.RecoverExpiredLeasesWithContext(context.Background())
@@ -584,6 +457,49 @@ func (s *Storage) GetUserByUsername(username string) (*models.User, error) {
 	return s.db.GetUserByUsername(context.Background(), username)
 }
 
+// EnsureAdminUser provisions (or promotes) username as an admin so a bootstrap
+// operator reaches the Operations Center through the shared chat session cookie
+// without a manual `fleet-admin sched user add` step (#458). username is the
+// lowercased email the header-trust/cookie path resolves against (lookupMember).
+// Idempotent and config-authoritative: an existing admin is left untouched, an
+// existing non-admin is promoted to admin, and a missing user is created with a
+// random, UNUSABLE bcrypt password hash — a bootstrap admin authenticates ONLY
+// via the cookie/header-trust path, never the moc username/password login.
+func (s *Storage) EnsureAdminUser(ctx context.Context, username string) error {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if username == "" {
+		return nil
+	}
+	existing, err := s.db.GetUserByUsername(ctx, username)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if existing != nil {
+		if existing.Role == "admin" {
+			return nil
+		}
+		return s.db.UpdateUserRole(ctx, existing.ID, "admin")
+	}
+	// New bootstrap admin: a 32-byte random secret bcrypt-hashed so the moc
+	// password login can never succeed for this account (cookie-auth only).
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword(secret, bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	_, err = s.AddUser(&models.User{
+		ID:           uuid.New(),
+		Username:     username,
+		PasswordHash: string(hash),
+		Role:         "admin",
+		CreatedAt:    time.Now().UTC(),
+	})
+	return err
+}
+
 // GetUserByUsernameWithContext gets a user by username with context.
 func (s *Storage) GetUserByUsernameWithContext(ctx context.Context, username string) (*models.User, error) {
 	return s.db.GetUserByUsername(ctx, username)
@@ -592,16 +508,6 @@ func (s *Storage) GetUserByUsernameWithContext(ctx context.Context, username str
 // GetUserByToken gets a user by session token.
 func (s *Storage) GetUserByToken(token string) (*models.User, error) {
 	return s.db.GetUserByToken(context.Background(), token)
-}
-
-// CanNodeAccessFile checks if a node is assigned to a task containing filename.
-func (s *Storage) CanNodeAccessFile(nodeID uuid.UUID, filename string) (bool, error) {
-	return s.CanNodeAccessFileWithContext(context.Background(), nodeID, filename)
-}
-
-// CanNodeAccessFileWithContext checks file access with context.
-func (s *Storage) CanNodeAccessFileWithContext(ctx context.Context, nodeID uuid.UUID, filename string) (bool, error) {
-	return s.db.CanNodeAccessFile(ctx, nodeID, filename)
 }
 
 // GetScheduledTasks gets scheduled tasks ready to run up to a limit.
@@ -641,20 +547,6 @@ func (s *Storage) CancelTaskAtomic(taskID uuid.UUID) (*models.Task, error) {
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err
-	}
-
-	if task.AssignedNodeID != nil {
-		node, err := s.db.GetNodeForUpdate(ctx, tx, *task.AssignedNodeID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
-		if node != nil {
-			node.Status = models.NodeStatusIdle
-			node.CurrentTaskID = nil
-			if err := s.db.UpdateNodeTx(ctx, tx, node); err != nil {
-				return nil, err
-			}
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -932,9 +824,8 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 	}
 
 	hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
-	isAssigned := task.AssignedNodeID != nil && *task.AssignedNodeID == nodeID
-	if !hasValidLease && !isAssigned {
-		return nil, fmt.Errorf("node is not assigned to this task")
+	if !hasValidLease {
+		return nil, fmt.Errorf("worker does not hold the lease on this task")
 	}
 
 	if task.Status == models.TaskStatusSuccess || task.Status == models.TaskStatusError || task.Status == models.TaskStatusCancelled {
@@ -984,19 +875,6 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 				task.Result = update.Message
 			}
 		}
-		if task.AssignedNodeID != nil {
-			node, err := s.db.GetNodeForUpdate(ctx, tx, *task.AssignedNodeID)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return nil, err
-			}
-			if node != nil && node.CurrentTaskID != nil && *node.CurrentTaskID == task.ID {
-				node.Status = models.NodeStatusIdle
-				node.CurrentTaskID = nil
-				if err := s.db.UpdateNodeTx(ctx, tx, node); err != nil {
-					return nil, err
-				}
-			}
-		}
 	}
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
@@ -1034,9 +912,8 @@ func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, no
 	}
 
 	hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
-	isAssigned := task.AssignedNodeID != nil && *task.AssignedNodeID == nodeID
-	if !hasValidLease && !isAssigned {
-		return nil, fmt.Errorf("node is not assigned to this task")
+	if !hasValidLease {
+		return nil, fmt.Errorf("worker does not hold the lease on this task")
 	}
 	// Already-terminal tasks are never resurrected by a retry.
 	if task.Status == models.TaskStatusSuccess || task.Status == models.TaskStatusError || task.Status == models.TaskStatusCancelled {
@@ -1057,22 +934,6 @@ func (s *Storage) RequeueTaskForRetryWithContext(ctx context.Context, taskID, no
 	task.LeaseExpiresAt = nil
 	if msg != "" {
 		task.ErrorMessage = &msg
-	}
-
-	// Free the assigned node (mirror the terminal path) so it can pick up other work.
-	if task.AssignedNodeID != nil {
-		node, err := s.db.GetNodeForUpdate(ctx, tx, *task.AssignedNodeID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
-		if node != nil && node.CurrentTaskID != nil && *node.CurrentTaskID == task.ID {
-			node.Status = models.NodeStatusIdle
-			node.CurrentTaskID = nil
-			if err := s.db.UpdateNodeTx(ctx, tx, node); err != nil {
-				return nil, err
-			}
-		}
-		task.AssignedNodeID = nil
 	}
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
@@ -1111,9 +972,8 @@ func (s *Storage) DeadLetterTaskWithContext(ctx context.Context, taskID, nodeID 
 	}
 
 	hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
-	isAssigned := task.AssignedNodeID != nil && *task.AssignedNodeID == nodeID
-	if !hasValidLease && !isAssigned {
-		return nil, fmt.Errorf("node is not assigned to this task")
+	if !hasValidLease {
+		return nil, fmt.Errorf("worker does not hold the lease on this task")
 	}
 	// Already-terminal tasks are never re-quarantined.
 	if task.Status == models.TaskStatusSuccess || task.Status == models.TaskStatusError ||
@@ -1131,23 +991,6 @@ func (s *Storage) DeadLetterTaskWithContext(ctx context.Context, taskID, nodeID 
 	if reason != "" {
 		task.ErrorMessage = &reason
 		task.DeadLetterReason = &reason
-	}
-
-	// Free the assigned node (mirror the terminal/requeue paths) so it can pick up
-	// other work.
-	if task.AssignedNodeID != nil {
-		node, err := s.db.GetNodeForUpdate(ctx, tx, *task.AssignedNodeID)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, err
-		}
-		if node != nil && node.CurrentTaskID != nil && *node.CurrentTaskID == task.ID {
-			node.Status = models.NodeStatusIdle
-			node.CurrentTaskID = nil
-			if err := s.db.UpdateNodeTx(ctx, tx, node); err != nil {
-				return nil, err
-			}
-		}
-		task.AssignedNodeID = nil
 	}
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
