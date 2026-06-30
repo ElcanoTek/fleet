@@ -20,6 +20,7 @@ const (
 	toolNameBash                 = "bash"
 	toolNamePreviewEmail         = "preview_email"
 	toolNameSuggestAdvancedModel = "suggest_advanced_model"
+	toolNameScheduleTask         = "schedule_task"
 )
 
 // checkBashSafety stages risky bash commands (git push, system package-manager
@@ -73,6 +74,39 @@ func (o *orchestrationState) checkPreviewEmailSafety(toolName, toolCallID, rawIn
 		return true, fmt.Sprintf("PREVIEW_FAILED: could not render preview for display (%v).", err)
 	}
 	return true, fmt.Sprintf("PREVIEW_DISPLAYED: the user is now viewing your draft in an inbox-style preview card (preview_id=%s). Nothing was sent and no approval is needed. The card has a Dismiss button ONLY — there is no Send button. Do NOT tell the user to \"click Send\" or \"approve\" the card. Instead, describe what you drafted in your reply and wait for the user's next instruction. If they want changes, revise and call preview_email again. If they say \"send it\", call mcp_sendgrid_send_email.", id)
+}
+
+// checkScheduleTaskSafety intercepts schedule_task (interactive, #239): it always
+// stages the call for explicit user approval. Like preview_email, the tool has no
+// execution path of its own — its Run is a guarded error and the actual
+// orchestrator task creation happens in the approval-resolution handler when the
+// user clicks Approve. Inert (unavailable, never an infinite stage loop) when no
+// approval sink is wired; schedule_task is registered only in the interactive
+// tool set, so the no-sink branch is a defensive backstop, not a normal path.
+//
+// Unlike send_email/bash, this gate does NOT handle the pre-approve/pre-deny
+// session sentinels: schedule_task has no apply-all card chrome, so the session
+// registry never holds a policy for it and Stage never returns a sentinel here.
+// A pre-approval would be meaningless anyway — the work runs handler-side, not in
+// the tool's (error-only) Run.
+func (o *orchestrationState) checkScheduleTaskSafety(toolName, toolCallID, rawInput string) (bool, string) {
+	if toolName != toolNameScheduleTask {
+		return false, ""
+	}
+	if hasUnresolvedToolPlaceholder(rawInput) {
+		return true, "schedule_task argument contains an unresolved ${tool:…} placeholder. The agent runtime does NOT substitute that syntax; paste the actual value into the tool arguments instead."
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.approvalSink == nil {
+		return true, "SCHEDULE_TASK_UNAVAILABLE: creating scheduled tasks from chat requires an approval-enabled interactive session. Do NOT retry — tell the user to create the task from the Operations Center instead."
+	}
+	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	if err != nil {
+		log.Printf("approval stage failed (schedule_task): %v", err)
+		return true, fmt.Sprintf("APPROVAL_REQUIRED: could not stage schedule_task for user approval (%v). Ask the user what to do.", err)
+	}
+	return true, fmt.Sprintf("APPROVAL_REQUIRED: the scheduled task has been staged for explicit user approval (approval_id=%s). Do NOT retry. Summarize the task you would create (name, what it does, when it runs) and wait for the user to click Approve.", id)
 }
 
 // checkSuggestAdvancedSafety intercepts suggest_advanced_model — the staged

@@ -116,6 +116,35 @@ type Server struct {
 	startTime   time.Time
 	version     string
 	workerStats func(context.Context) (*WorkerStats, error)
+
+	// scheduleTask creates a scheduled task in the orchestrator on behalf of an
+	// approved interactive schedule_task call (#239). Injected so httpapi stays
+	// sched-agnostic — main.go translates TaskScheduleRequest to the sched model
+	// and calls the storage create path. nil → schedule_task approvals report the
+	// feature is unconfigured (no task is created).
+	scheduleTask func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)
+}
+
+// TaskScheduleRequest is the sched-agnostic payload the chat approval path hands
+// to the injected scheduler seam (#239). main.go maps it to models.TaskCreate.
+// Exactly one of Cron / RunAt should be set (or neither, for run-immediately);
+// the caller validates that before staging.
+type TaskScheduleRequest struct {
+	Name          string
+	Prompt        string
+	Model         string
+	Cron          string
+	RunAt         *time.Time
+	MaxIterations int
+	AllowNetwork  bool
+	Tags          []string
+}
+
+// TaskScheduleResult is what the scheduler seam returns after creating a task.
+type TaskScheduleResult struct {
+	ID      string
+	Status  string
+	NextRun time.Time // zero = runs as soon as a worker is free
 }
 
 // reconnectCounter is a concurrency-safe tally of SSE reconnect outcomes.
@@ -277,6 +306,14 @@ func WithVersion(v string) Option {
 // importing the sched packages. nil leaves the workers/tasks section null.
 func WithWorkerStats(fn func(context.Context) (*WorkerStats, error)) Option {
 	return func(s *Server) { s.workerStats = fn }
+}
+
+// WithTaskScheduler injects the orchestrator task-create seam used to resolve an
+// approved interactive schedule_task call (#239), so httpapi can create a
+// scheduled task without importing the sched packages. nil leaves schedule_task
+// approvals reporting the feature unconfigured.
+func WithTaskScheduler(fn func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)) Option {
+	return func(s *Server) { s.scheduleTask = fn }
 }
 
 // inflightEntry pairs the cancel-func for a turn with a unique token,

@@ -103,6 +103,28 @@ export type Approval = {
     reason?: string;
     /** Server-authoritative slug the conversation will be pinned to on accept. */
     recommend_model?: string;
+
+    // schedule_task (#239)
+    /** Human-readable task label. */
+    name?: string;
+    /** First 200 chars of the task prompt. */
+    prompt_preview?: string;
+    /** True for a cron task, false for one-time / run-immediately. */
+    recurring?: boolean;
+    /** Cron expression for a recurring task. */
+    cron?: string;
+    /** Estimated firings over the next 30 days (capped at 1000 → shown as "1000+"). */
+    runs_per_month?: number;
+    /** ISO-8601 instant for a one-time task. */
+    run_at?: string;
+    /** True when neither cron nor run_at is set (runs as soon as a worker is free). */
+    run_immediately?: boolean;
+    /** Model slug override for the scheduled task. */
+    model?: string;
+    /** Whether the task's sandbox keeps outbound network egress. */
+    allow_network?: boolean;
+    /** Task tags. */
+    tags?: string[];
   };
   status: ApprovalStatus;
   resultText?: string;
