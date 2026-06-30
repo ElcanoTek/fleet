@@ -51,7 +51,7 @@ func TestTurnBuffer_AttachReplaysFromZero(t *testing.T) {
 	buf.Finish()
 
 	rw := newRecorder()
-	if err := buf.Attach(context.Background(), 0, rw); err != nil {
+	if err := buf.Attach(context.Background(), 0, rw, nil); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	body := rw.Body()
@@ -70,7 +70,7 @@ func TestTurnBuffer_AttachRespectsLastEventID(t *testing.T) {
 	buf.Finish()
 
 	rw := newRecorder()
-	if err := buf.Attach(context.Background(), 3, rw); err != nil {
+	if err := buf.Attach(context.Background(), 3, rw, nil); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	body := rw.Body()
@@ -97,7 +97,7 @@ func TestTurnBuffer_AttachAfterFinishReturns(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		rw := newRecorder()
-		done <- buf.Attach(context.Background(), 0, rw)
+		done <- buf.Attach(context.Background(), 0, rw, nil)
 	}()
 	select {
 	case err := <-done:
@@ -118,7 +118,7 @@ func TestTurnBuffer_FanOutToMultipleSubscribers(t *testing.T) {
 		wg.Add(1)
 		go func(rw *testRecorder) {
 			defer wg.Done()
-			_ = buf.Attach(context.Background(), 0, rw)
+			_ = buf.Attach(context.Background(), 0, rw, nil)
 		}(rw)
 	}
 
@@ -152,7 +152,7 @@ func TestTurnBuffer_ClientDisconnectReleasesSubscriber(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		rw := newRecorder()
-		_ = buf.Attach(ctx, 0, rw)
+		_ = buf.Attach(ctx, 0, rw, nil)
 		close(done)
 	}()
 
@@ -179,7 +179,7 @@ func TestTurnBuffer_EmitAfterFinishIsNoOp(t *testing.T) {
 	buf.Emit("should-be-dropped", nil)
 
 	rw := newRecorder()
-	_ = buf.Attach(context.Background(), 0, rw)
+	_ = buf.Attach(context.Background(), 0, rw, nil)
 	if strings.Contains(rw.Body(), "should-be-dropped") {
 		t.Error("post-Finish Emit leaked into replay")
 	}
