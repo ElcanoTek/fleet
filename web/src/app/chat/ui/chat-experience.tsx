@@ -50,6 +50,7 @@ import {
   type PendingAttachment,
 } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
+import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { Composer } from "./Composer";
 import { ChatTranscript } from "./ChatTranscript";
@@ -2700,46 +2701,91 @@ export function ChatExperience() {
           </div>
         ) : null}
 
-        <main
-          // grid-cols-[minmax(0,1fr)] is the load-bearing class here. Without
-          // an explicit column, the default `grid-auto-columns: auto` sizes
-          // the track to max-content of the children — and because main has
-          // `overflow: hidden` (scroll container), the track is free to grow
-          // past main's own width. On a 375px viewport that meant the header,
-          // conversation section, and composer all laid out at ~413px and
-          // visibly bled past the right edge when a history with rich content
-          // (user bubble with a long prompt, composer with Persona + Model
-          // + Send side-by-side) loaded. Pinning to minmax(0, 1fr) clamps the
-          // track to the container width; min-w-0 on descendants still lets
-          // wide children scroll internally.
-          className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-hidden px-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 sm:gap-3 sm:px-6 sm:pt-[max(1.25rem,env(safe-area-inset-top))] sm:pb-5 lg:px-8 xl:px-10"
-          suppressHydrationWarning
-        >
-          <header className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <button
-                aria-label="Open sidebar"
-                className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none sm:size-8 lg:hidden"
-                type="button"
-                onClick={() => setSidebarOpen(true)}
-              >
-                <svg
-                  aria-hidden="true"
-                  className="size-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.9"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden" suppressHydrationWarning>
+          {/* Shared top header (#169): "Chat" on the left, the chat's header
+              controls (search, shortcuts, memories, details) right-aligned —
+              the same bordered bar the Operations Center renders. */}
+          <PageTopBar
+            title="Chat"
+            onMenu={() => setSidebarOpen(true)}
+            actions={
+              <>
+                {/* Unified page-header search (#169): an icon-only button, inline
+                    with the other header icons, that opens the full-text search
+                    overlay (also bound to ⌘K). The rail's own "Search chats…" input
+                    is a separate local title filter — both are unchanged. */}
+                <button
+                  aria-label="Search conversations"
+                  className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                  title={`Search conversations (${searchShortcut})`}
+                  type="button"
+                  onClick={() => setSearchOpen(true)}
                 >
-                  <path d="M4 6h16" />
-                  <path d="M4 12h16" />
-                  <path d="M4 18h16" />
-                </svg>
-              </button>
+                  <Icon name="search" className="size-5" />
+                </button>
+                <button
+                  aria-label="Keyboard shortcuts"
+                  className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                  title="Keyboard shortcuts (?)"
+                  data-testid="shortcuts-button"
+                  type="button"
+                  onClick={() => setShortcutsOpen(true)}
+                >
+                  <Icon name="info" className="size-5" />
+                </button>
+                <button
+                  aria-label="Manage memories"
+                  className="relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                  title="Manage memories"
+                  type="button"
+                  onClick={openMemoryManager}
+                >
+                  <Icon name="brain" className="size-5" />
+                </button>
+                <button
+                  aria-label={showStats ? "Hide details (thinking, stats, tool calls)" : "Show details (thinking, stats, tool calls)"}
+                  aria-pressed={showStats}
+                  // Color stays muted in both states — the icon swap is
+                  // the affordance the user keys off, not an accent
+                  // highlight. Mirrors the sun/moon theme toggle next door.
+                  className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                  title={showStats ? "Hide details" : "Show details"}
+                  type="button"
+                  onClick={toggleShowStats}
+                >
+                  <span className="relative size-4" aria-hidden="true">
+                    <Icon
+                      name="sparkles"
+                      className={[
+                        "absolute inset-0 size-4 transition duration-200",
+                        showStats
+                          ? "rotate-12 scale-[0.86] opacity-0"
+                          : "rotate-0 scale-100 opacity-100",
+                      ].join(" ")}
+                    />
+                    <Icon
+                      name="info"
+                      className={[
+                        "absolute inset-0 size-4 transition duration-200",
+                        showStats
+                          ? "rotate-0 scale-100 opacity-100"
+                          : "-rotate-12 scale-[0.86] opacity-0",
+                      ].join(" ")}
+                    />
+                  </span>
+                </button>
+              </>
+            }
+          />
 
-              {renamingTitleDraft !== null && activeConversationId ? (
+          {/* Active conversation name (#169): a heading at the top of the chat
+              content area, left-aligned to the "Chat" header label, carrying the
+              existing rename-on-click affordance + the lockdown badge. A new/empty
+              chat (no active conversation) shows no name — the empty-state hero in
+              the transcript stands in. */}
+          {activeConversationId ? (
+            <div className="flex min-w-0 items-center gap-2 px-4 pt-3 sm:px-6">
+              {renamingTitleDraft !== null ? (
                 <input
                   autoFocus
                   aria-label="Rename chat"
@@ -2769,21 +2815,19 @@ export function ChatExperience() {
                       setRenamingTitleDraft(null);
                     }
                   }}
-                  className="min-w-0 flex-1 rounded-md border border-[var(--color-accent)] bg-transparent px-1.5 py-0.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] outline-none sm:text-[0.9375rem]"
+                  className="min-w-0 flex-1 rounded-md border border-[var(--color-accent)] bg-transparent py-1 pl-0 pr-1.5 text-[1.0625rem] font-semibold text-[var(--color-text-primary)] outline-none sm:text-[1.25rem]"
                 />
               ) : (
-                <button
-                  type="button"
-                  disabled={!activeConversationId}
-                  title={activeConversationId ? "Click to rename" : undefined}
-                  onClick={() => {
-                    if (!activeConversationId) return;
-                    setRenamingTitleDraft(title);
-                  }}
-                  className="min-w-0 truncate rounded-md px-1.5 py-0.5 text-left text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition enabled:cursor-text enabled:hover:bg-[var(--color-overlay-soft)] enabled:hover:text-[var(--color-text-primary)] disabled:cursor-default sm:text-[0.9375rem]"
-                >
-                  {title}
-                </button>
+                <h2 className="min-w-0">
+                  <button
+                    type="button"
+                    title="Click to rename"
+                    onClick={() => setRenamingTitleDraft(title)}
+                    className="block min-w-0 max-w-full cursor-text truncate rounded-md py-1 pr-1.5 text-left text-[1.0625rem] font-semibold text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] sm:text-[1.25rem]"
+                  >
+                    {title}
+                  </button>
+                </h2>
               )}
               {isLockdown ? (
                 <span
@@ -2795,74 +2839,13 @@ export function ChatExperience() {
                 </span>
               ) : null}
             </div>
+          ) : null}
 
-            <div className="inline-flex items-center gap-1">
-              {/* Unified page-header search (#169): an icon-only button, inline
-                  with the other header icons, that opens the full-text search
-                  overlay (also bound to ⌘K). The rail's own "Search chats…" input
-                  is a separate local title filter — both are unchanged. */}
-              <button
-                aria-label="Search conversations"
-                className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                title={`Search conversations (${searchShortcut})`}
-                type="button"
-                onClick={() => setSearchOpen(true)}
-              >
-                <Icon name="search" className="size-5" />
-              </button>
-              <button
-                aria-label="Keyboard shortcuts"
-                className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                title="Keyboard shortcuts (?)"
-                data-testid="shortcuts-button"
-                type="button"
-                onClick={() => setShortcutsOpen(true)}
-              >
-                <Icon name="info" className="size-5" />
-              </button>
-              <button
-                aria-label="Manage memories"
-                className="relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                title="Manage memories"
-                type="button"
-                onClick={openMemoryManager}
-              >
-                <Icon name="brain" className="size-5" />
-              </button>
-              <button
-                aria-label={showStats ? "Hide details (thinking, stats, tool calls)" : "Show details (thinking, stats, tool calls)"}
-                aria-pressed={showStats}
-                // Color stays muted in both states — the icon swap is
-                // the affordance the user keys off, not an accent
-                // highlight. Mirrors the sun/moon theme toggle next door.
-                className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                title={showStats ? "Hide details" : "Show details"}
-                type="button"
-                onClick={toggleShowStats}
-              >
-                <span className="relative size-4" aria-hidden="true">
-                  <Icon
-                    name="sparkles"
-                    className={[
-                      "absolute inset-0 size-4 transition duration-200",
-                      showStats
-                        ? "rotate-12 scale-[0.86] opacity-0"
-                        : "rotate-0 scale-100 opacity-100",
-                    ].join(" ")}
-                  />
-                  <Icon
-                    name="info"
-                    className={[
-                      "absolute inset-0 size-4 transition duration-200",
-                      showStats
-                        ? "rotate-0 scale-100 opacity-100"
-                        : "-rotate-12 scale-[0.86] opacity-0",
-                    ].join(" ")}
-                  />
-                </span>
-              </button>
-            </div>
-          </header>
+          {/* Chat content — transcript scrolls, composer pins to the bottom.
+              grid-cols-[minmax(0,1fr)] clamps the single column to the container
+              width so rich content can't bleed past the right edge on mobile;
+              min-w-0 descendants still scroll wide children internally. */}
+          <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] gap-2 overflow-hidden px-3 pb-3 pt-2 sm:gap-3 sm:px-6 sm:pb-5 lg:px-8 xl:px-10">
 
           <ChatTranscript
             conversationRef={conversationRef}
@@ -3006,6 +2989,7 @@ export function ChatExperience() {
               isPendingKey={isPendingKey}
             />
           </section>
+          </div>
         </main>
       </div>
     </div>

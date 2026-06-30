@@ -1029,37 +1029,104 @@ button {
   margin: 0.4rem 0;
 }
 
-/* Stats grid */
-.stats-grid {
+/* Stats bar — task-metric cards (Pending / Running / Completed / Failed). The
+   worker-node "agents" counters were removed in #459; these four task counters
+   are the live dashboard signal. Each card stays a clickable filter (applies the
+   matching Recent Tasks filter) while matching the design handoff's card look. */
+.stats-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 0.75rem;
-  margin-bottom: 1.5rem;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
 }
 .stat-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
   text-align: left;
-  padding: 1rem;
-  border-radius: 0.75rem;
+  background: var(--color-surface-1);
   border: 1px solid var(--color-border);
-  background: var(--color-surface-1, #241b31);
+  border-radius: var(--radius-lg);
+  padding: 1.1rem 1.15rem 1.2rem;
   cursor: pointer;
-  transition: border-color 0.15s ease;
+  transition: border-color var(--transition-fast), transform var(--transition-fast);
 }
-.stat-card:hover,
+.stat-card:hover {
+  border-color: var(--color-border-strong);
+  transform: translateY(-2px);
+}
+.stat-card:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
 .stat-card.active {
   border-color: var(--color-primary);
 }
-.stat-card h3 {
-  margin: 0 0 0.4rem;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-text-muted);
+.stat-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
 }
-.stat-card .value {
-  font-size: 1.75rem;
-  font-weight: 700;
+.stat-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999rem;
+  flex: 0 0 auto;
+}
+.stat-dot.pending {
+  background: var(--color-warning);
+}
+.stat-dot.running {
+  background: var(--color-accent);
+}
+.stat-dot.success {
+  background: var(--color-success);
+}
+.stat-dot.error {
+  background: var(--color-danger);
+}
+.stat-card.live .stat-dot {
+  animation: statPulse 1.8s ease-in-out infinite;
+}
+@keyframes statPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.7);
+  }
+}
+.stat-card-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.stat-card-val {
+  font-size: 2.1rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
+}
+@media (max-width: 720px) {
+  .stats-bar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stat-card:hover {
+    transform: none;
+  }
+  .stat-card.live .stat-dot {
+    animation: none;
+  }
 }
 
 /* Sections + tables */
@@ -1261,29 +1328,92 @@ tr.sla-row-fail {
   fill: var(--color-text);
 }
 
-/* Filters + pagination */
+/* Filters + pagination — the Recent Tasks filter/search row matches the design
+   handoff's .tasks-filter-bar exactly. The input/select sizing is scoped to the
+   bar so the shared .filter-input used elsewhere (e.g. the task modal) keeps its
+   own styling. */
 .tasks-filter-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-  align-items: end;
+  align-items: flex-end;
+  gap: 0.85rem;
+  margin-bottom: 1rem;
 }
 .filter-group {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.3rem;
 }
 .filter-label {
-  font-size: 0.7rem;
+  font-size: 0.625rem;
   text-transform: uppercase;
+  letter-spacing: 0.08em;
   color: var(--color-text-muted);
+}
+.tasks-filter-bar .filter-select,
+.tasks-filter-bar .filter-input {
+  min-height: 2.5rem;
+  width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-overlay-soft);
+  color: var(--color-text-primary);
+  padding: 0 0.7rem;
+  font-size: 0.875rem;
+}
+.tasks-filter-bar .filter-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 9rem;
+  padding-right: 2rem;
+}
+.tasks-filter-bar .filter-select:focus-visible,
+.tasks-filter-bar .filter-input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--color-border-strong);
+}
+.select-wrap {
+  position: relative;
+}
+.select-wrap::after {
+  content: "";
+  position: absolute;
+  right: 0.7rem;
+  top: 50%;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 1.5px solid var(--color-text-muted);
+  border-bottom: 1.5px solid var(--color-text-muted);
+  transform: translateY(-65%) rotate(45deg);
+  pointer-events: none;
 }
 .filter-checkbox-label {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.45rem;
+  min-height: 2.5rem;
   color: var(--color-text-secondary);
   font-size: 0.875rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.filter-checkbox-label input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--color-primary);
+}
+.filter-group-search {
+  margin-left: auto;
+  min-width: 16rem;
+}
+.filter-group-search .filter-input {
+  width: 100%;
+}
+@media (max-width: 720px) {
+  .filter-group-search {
+    margin-left: 0;
+    flex: 1 1 100%;
+  }
 }
 .tasks-pagination {
   display: flex;
@@ -1356,6 +1486,110 @@ tr.sla-row-fail {
   justify-content: flex-end;
   gap: 0.5rem;
   margin-top: 1rem;
+}
+
+/* Large modals (New Task, Settings) — a flex column so the body scrolls between
+   a fixed header and a fixed footer (#169 design handoff: .modal-lg +
+   .modal-footer). */
+.modal-lg {
+  max-width: 660px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 4rem);
+}
+.modal-lg .modal-header {
+  flex: 0 0 auto;
+}
+/* The design leaves the modal title as a default <h3> (1.17em, bold). Tailwind's
+   preflight resets headings to inherit, so restore that exact sizing/weight on
+   the New Task + Settings titles to match the design. */
+.modal-lg .modal-header h3 {
+  font-size: 1.17em;
+  font-weight: 700;
+}
+.modal-lg .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  padding: 1.5rem 1.6rem;
+}
+/* Field rhythm matches the design's task form exactly: 1.6rem between fields
+   (the .task-form gap) and 0.55rem under each label before its control (the
+   .task-field gap). */
+.modal-lg .form-group {
+  margin-bottom: 1.6rem;
+}
+.modal-lg .form-group > label {
+  display: block;
+  margin-bottom: 0.55rem;
+}
+.modal-lg .form-label-row {
+  margin-bottom: 0.55rem;
+}
+/* One consistent input-label typography across both modals: a single size +
+   medium weight for every field label (bare <label>, .form-label, and the
+   secrets <legend>). Classed sub-labels keep their own smaller styling — the
+   MCP picker rows, the "at" date/time connector, and the run_if inline meta
+   labels are intentionally lighter. */
+.modal-lg label:not([class]),
+.modal-lg .form-label,
+.modal-lg legend {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+/* The Settings credential form lays its fields out as a tight grid; inside the
+   modal its Server/Account fields are wrapped in .form-group, so drop the grid
+   gap and let those .form-group margins drive the same rhythm as every other
+   modal field. */
+.modal-lg .credential-account-form {
+  display: block;
+}
+/* Match the inter-field rhythm above the Server field too: the existing-accounts
+   list sits 1.6rem above it, the same gap used between every other field, so
+   Server isn't cramped under the list while Account has a full gap above it. */
+.modal-lg .credential-account-list {
+  margin-bottom: 1.6rem;
+}
+/* The "MCP Credential Accounts" heading reads as a field label, so give it the
+   same 14px / medium-weight typography as the other modal labels. */
+.modal-lg .credential-account-admin h3 {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+/* The MCP help/description text sat flush against the control below it (the MCP
+   server picker and the credential-accounts list). Give it breathing room. */
+.modal-lg .mcp-server-picker {
+  margin-top: 0.6rem;
+}
+.modal-lg .credential-account-admin > .advanced-setting-meta {
+  margin-bottom: 0.6rem;
+}
+/* Filled fields to match the design's modal form styling. Scoped to the large
+   modals; leaves checkboxes/radios (toggles) and the bare input rule elsewhere
+   untouched. */
+.modal-lg input:not([type="checkbox"]):not([type="radio"]),
+.modal-lg select,
+.modal-lg textarea {
+  background: var(--color-overlay-soft);
+}
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  flex: 0 0 auto;
+  padding: 0.95rem 1.6rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+}
+.modal-footer .btn {
+  padding: 0.55rem 1.15rem;
+}
+.settings-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 1.25rem 0;
 }
 
 /* Pre-run gate banner (#269): read-only run_if command + skip badge shown at
@@ -1812,14 +2046,9 @@ tr.sla-row-fail {
   padding: 2rem;
 }
 
-/* Pre-submission cost forecast (#233): the "Estimate Cost" action row + the
-   inline forecast panel rendered below the Create Task form. Advisory only. */
-.task-create-actions {
-  display: flex;
-  gap: var(--space-3);
-  align-items: center;
-}
-
+/* Pre-submission cost forecast (#233): the inline forecast panel rendered below
+   the Create Task form (the "Estimate Cost" action now lives in the modal
+   footer). Advisory only. */
 .cost-forecast {
   margin: var(--space-4) 0;
   padding: var(--space-4);

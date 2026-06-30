@@ -114,20 +114,48 @@ export function TasksTable({
           <label htmlFor="taskStatusFilter" className="filter-label">
             Status
           </label>
-          <select
-            id="taskStatusFilter"
-            className="filter-select"
-            aria-label="Filter by status"
-            value={filters.status}
-            onChange={(e) => onFilters({ status: e.target.value })}
-          >
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s || "all"} value={s}>
-                {s ? s[0].toUpperCase() + s.slice(1) : "All"}
-              </option>
-            ))}
-          </select>
+          <div className="select-wrap">
+            <select
+              id="taskStatusFilter"
+              className="filter-select"
+              aria-label="Filter by status"
+              value={filters.status}
+              onChange={(e) => onFilters({ status: e.target.value })}
+            >
+              {STATUS_OPTIONS.map((s) => (
+                <option key={s || "all"} value={s}>
+                  {s ? s[0].toUpperCase() + s.slice(1) : "All"}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
+        <div className="filter-group">
+          <label htmlFor="createdByFilter" className="filter-label">
+            Created By
+          </label>
+          <div className="select-wrap">
+            <select
+              id="createdByFilter"
+              className="filter-select"
+              aria-label="Filter by creator"
+              value={filters.createdBy}
+              onChange={(e) => onFilters({ createdBy: e.target.value })}
+            >
+              <option value="">All</option>
+              <option value="me">My Tasks</option>
+            </select>
+          </div>
+        </div>
+        <label className="filter-checkbox-label">
+          <input
+            type="checkbox"
+            aria-label="Scheduled only"
+            checked={filters.scheduledOnly}
+            onChange={(e) => onFilters({ scheduledOnly: e.target.checked })}
+          />
+          <span>Scheduled Only</span>
+        </label>
         <div className="filter-group filter-group-search">
           <label htmlFor="taskSearchFilter" className="filter-label">
             Search
@@ -141,32 +169,6 @@ export function TasksTable({
             value={queryDraft}
             onChange={(e) => setQueryDraft(e.target.value)}
           />
-        </div>
-        <div className="filter-group filter-group-toggle">
-          <label className="filter-checkbox-label">
-            <input
-              type="checkbox"
-              aria-label="Scheduled only"
-              checked={filters.scheduledOnly}
-              onChange={(e) => onFilters({ scheduledOnly: e.target.checked })}
-            />
-            <span>Scheduled Only</span>
-          </label>
-        </div>
-        <div className="filter-group">
-          <label htmlFor="createdByFilter" className="filter-label">
-            Created By
-          </label>
-          <select
-            id="createdByFilter"
-            className="filter-select"
-            aria-label="Filter by creator"
-            value={filters.createdBy}
-            onChange={(e) => onFilters({ createdBy: e.target.value })}
-          >
-            <option value="">All</option>
-            <option value="me">My Tasks</option>
-          </select>
         </div>
       </div>
 
