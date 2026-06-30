@@ -27,6 +27,12 @@ const publicApiPaths = new Set([
   "/api/auth/login",
   "/api/auth/logout",
   "/api/auth/elcano-login",
+  // OIDC SSO (#240): both legs are pre-session by definition — /start bounces an
+  // unauthenticated browser to the IdP, /callback receives the IdP's redirect
+  // and mints the session. They must bypass the gate or the user can never reach
+  // the IdP (the start of every SSO login).
+  "/api/auth/oidc/start",
+  "/api/auth/oidc/callback",
   "/api/orchestrator/auth/login",
   "/api/orchestrator/auth/logout",
   "/api/orchestrator/auth/elcano-login",

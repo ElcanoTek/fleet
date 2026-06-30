@@ -1,4 +1,5 @@
 import { getAuthSigningPubkey } from "@/app/lib/auth";
+import { getOidcConfig } from "@/app/lib/oidc";
 import LoginCard from "./login-card";
 
 // force-dynamic is load-bearing: the deploy build (scripts/update.sh) runs in a
@@ -15,5 +16,15 @@ export const dynamic = "force-dynamic";
 // button appears only where the magic-link path is actually configured, so a
 // white-labelled deploy that never sets the key shows only the password form.
 export default function LoginPage() {
-  return <LoginCard elcanoLoginEnabled={getAuthSigningPubkey() !== ""} />;
+  // OIDC (#240) is resolved server-side at request time too (same rationale as
+  // the Elcano-email flag above): the SSO button appears only where FLEET_OIDC_*
+  // is actually configured, with the operator-chosen label.
+  const oidc = getOidcConfig();
+  return (
+    <LoginCard
+      elcanoLoginEnabled={getAuthSigningPubkey() !== ""}
+      oidcEnabled={oidc !== null}
+      oidcLabel={oidc?.buttonLabel ?? "Sign in with SSO"}
+    />
+  );
 }

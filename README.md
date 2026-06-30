@@ -557,13 +557,22 @@ each piece yourself):
    > `fleet-web`, and with `--domain` installs Caddy + opens 80/443 for automatic
    > TLS. The manual steps below are the by-hand equivalent.
    >
-   > **Login model.** The web app authenticates two ways: a **self-contained
-   > email + password** path (`POST /api/auth/login` → backend `/auth/verify` →
-   > bcrypt against the chat user store; HMAC session signed with
-   > `APP_SESSION_SECRET`) — add users via `fleet chat user add` — and an
-   > optional Elcano **SSO** cookie path that is **disabled unless
-   > `AUTH_SIGNING_PUBKEY` is set**. A stand-alone deploy needs no external auth
-   > service; users just log in with email + password.
+   > **Login model.** The web app authenticates three ways, all minting the same
+   > HMAC session cookie (signed with `APP_SESSION_SECRET`) so everything
+   > downstream is identical: (1) a **self-contained email + password** path
+   > (`POST /api/auth/login` → backend `/auth/verify` → bcrypt against the chat
+   > user store) — add users via `fleet chat user add`; (2) an optional Elcano
+   > **magic-link** cookie path, **disabled unless `AUTH_SIGNING_PUBKEY` is set**;
+   > and (3) an optional **OIDC / OAuth2 SSO** path (Authorization Code + PKCE),
+   > **disabled unless `FLEET_OIDC_ISSUER` + `FLEET_OIDC_CLIENT_ID` +
+   > `FLEET_OIDC_CLIENT_SECRET` are set** (optional: `FLEET_OIDC_SCOPES`,
+   > `FLEET_OIDC_ALLOWED_DOMAINS`, `FLEET_OIDC_BUTTON_LABEL`,
+   > `FLEET_OIDC_REDIRECT_URI`). SSO lives entirely in the Next.js layer — the Go
+   > chat server never speaks OIDC. In every case the chat user-list still gates
+   > **membership** (an authenticated email that isn't provisioned lands on the
+   > no-access page), so SSO/magic-link prove *who you are* while the user-list
+   > decides *who may use chat*. A stand-alone deploy needs none of this; users
+   > just log in with email + password.
    >
    > **`fleet-web` BindsTo `fleet`.** It stays down until the backend is healthy
    > (i.e. until `OPENROUTER_API_KEY` is set), so after a first `--enable-web`

@@ -13,6 +13,11 @@ function errorCodeToMessage(code: string | null): string | null {
   if (code === "server") return "The chat server isn't reachable right now. Try again in a moment.";
   if (code === "elcano_unavailable")
     return "Elcano email sign-in isn't available right now. Use your email and password.";
+  if (code === "oidc_unavailable")
+    return "Single sign-on isn't available right now. Use your email and password.";
+  if (code === "oidc_denied") return "Single sign-on was cancelled.";
+  if (code === "oidc_domain") return "Your account's email domain isn't allowed to sign in here.";
+  if (code === "oidc_error") return "Single sign-on failed. Try again, or use your email and password.";
   return "Could not sign in.";
 }
 
@@ -21,7 +26,15 @@ function errorCodeToMessage(code: string | null): string | null {
 // isn't configured — e.g. a white-labelled deploy — the secondary button and
 // its divider are omitted entirely so the card shows only the password form
 // and never surfaces the Elcano brand.
-export default function LoginCard({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
+export default function LoginCard({
+  elcanoLoginEnabled,
+  oidcEnabled = false,
+  oidcLabel = "Sign in with SSO",
+}: {
+  elcanoLoginEnabled: boolean;
+  oidcEnabled?: boolean;
+  oidcLabel?: string;
+}) {
   const [loginError, setLoginError] = useState<string | null>(null);
 
   // Reading the `?e=` query param must happen after hydration — `window` is
@@ -97,7 +110,7 @@ export default function LoginCard({ elcanoLoginEnabled }: { elcanoLoginEnabled: 
           </button>
         </form>
 
-        {elcanoLoginEnabled ? (
+        {elcanoLoginEnabled || oidcEnabled ? (
           <>
             <div className="my-5 flex items-center gap-3 text-[0.6875rem] uppercase tracking-wide text-[var(--color-text-muted)]">
               <span className="h-px flex-1 bg-[var(--color-border)]" />
@@ -105,15 +118,27 @@ export default function LoginCard({ elcanoLoginEnabled }: { elcanoLoginEnabled: 
               <span className="h-px flex-1 bg-[var(--color-border)]" />
             </div>
 
-            {/* Secondary sign-in: hands off to the auth service's magic-link flow
-                (Pattern B). Kept visually subordinate to the primary password
-                action above, per the flag design system's primary-semantics rule. */}
-            <a
-              href="/api/auth/elcano-login"
-              className="flex items-center justify-center rounded-xl border border-[var(--color-border)] px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
-            >
-              Use Elcano email
-            </a>
+            {/* Secondary sign-in(s): hand off to an external identity flow. Kept
+                visually subordinate to the primary password action above, per the
+                flag design system's primary-semantics rule. */}
+            <div className="grid gap-3">
+              {oidcEnabled ? (
+                <a
+                  href="/api/auth/oidc/start"
+                  className="flex items-center justify-center rounded-xl border border-[var(--color-border)] px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
+                >
+                  {oidcLabel}
+                </a>
+              ) : null}
+              {elcanoLoginEnabled ? (
+                <a
+                  href="/api/auth/elcano-login"
+                  className="flex items-center justify-center rounded-xl border border-[var(--color-border)] px-4 py-2.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]"
+                >
+                  Use Elcano email
+                </a>
+              ) : null}
+            </div>
           </>
         ) : null}
       </div>
