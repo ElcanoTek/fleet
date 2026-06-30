@@ -40,6 +40,12 @@ type engine struct {
 	// override to add reasoning / long-context headers.
 	providerOptionsFn func(modelSlug string) fantasy.ProviderOptions
 
+	// thinkingConfig, when set and Enabled, activates Claude extended thinking
+	// (#220) by adding a `thinking` extra-body parameter to the request — but only
+	// for slugs that supportExtendedThinking. nil / disabled leaves the request
+	// untouched. Wired from RunConfig.ThinkingConfig.
+	thinkingConfig *ThinkingConfig
+
 	// temperature + maxRetries plumbing for the round stream.
 	temperature float64
 
@@ -106,6 +112,23 @@ func (e *engine) providerOptions(modelSlug string) fantasy.ProviderOptions {
 			opts.ExtraBody = make(map[string]any)
 		}
 		opts.ExtraBody["anthropic_beta"] = []string{"context-1m-2025-08-07"}
+	}
+	// Extended thinking (#220): activate Claude's internal chain-of-thought when
+	// the run opted in AND the ACTIVE slug is a thinking-capable Claude model.
+	// Gated on the active modelSlug (not primary/fallback) so a fallback to a
+	// non-Claude model in the same run doesn't carry a stray thinking param. The
+	// budget is clamped into Claude's accepted window. Thinking blocks stream back
+	// through the existing reasoning callbacks; they are never replayed to the
+	// model across turns (replayHistory drops reasoning entries) and fantasy
+	// preserves the in-turn thinking signature for tool-use continuation.
+	if e.thinkingConfig != nil && e.thinkingConfig.Enabled && supportsExtendedThinking(modelSlug) {
+		if opts.ExtraBody == nil {
+			opts.ExtraBody = make(map[string]any)
+		}
+		opts.ExtraBody["thinking"] = map[string]any{
+			"type":          "enabled",
+			"budget_tokens": ClampThinkingBudget(e.thinkingConfig.BudgetTokens),
+		}
 	}
 	opts.Provider = upstreamPinFor(modelSlug)
 	return fantasy.ProviderOptions{openrouter.Name: opts}

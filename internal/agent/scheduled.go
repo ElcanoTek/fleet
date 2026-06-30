@@ -593,6 +593,12 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		LoaderTools:     loaderTools,
 		NativeTools:     nativeTools,
 		ProviderHeaders: agentcore.DefaultProviderHeaders,
+		// Extended thinking (#220) for scheduled runs is driven by the GLOBAL
+		// default only (FLEET_DEFAULT_THINKING_BUDGET_TOKENS). A per-task override
+		// column is a documented follow-on; the global default uniformly enables
+		// thinking for every scheduled run when an operator turns it on. nil config
+		// (some test setups) → no default → thinking off.
+		ThinkingConfig: scheduledThinkingConfig(a.config),
 	}
 
 	res, err := agentcore.Run(ctx, agentcore.ModeScheduled, cfg, deps)
@@ -603,6 +609,16 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		a.logSession.AddMessage(roleAssistant, res.FinalText, nil, nil)
 	}
 	return nil
+}
+
+// scheduledThinkingConfig resolves the extended-thinking config for a scheduled
+// run from the global default (#220). nil config or a zero/unset default returns
+// nil (thinking off). Per-task overrides are a documented follow-on.
+func scheduledThinkingConfig(cfg *config.Config) *agentcore.ThinkingConfig {
+	if cfg == nil {
+		return nil
+	}
+	return agentcore.ThinkingConfigForBudget(cfg.DefaultThinkingBudgetTokens)
 }
 
 func (a *Agent) mcpDirty() bool {

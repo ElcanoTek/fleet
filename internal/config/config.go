@@ -130,35 +130,36 @@ var allowedEnvVars = map[string]bool{
 	"DB_SSLMODE":                        true,
 
 	// ── LLM (shared) ──
-	"OPENROUTER_API_KEY":                true,
-	"OPENROUTER_BASE_URL":               true,
-	"FLEET_OPENROUTER_BASE_URL":         true,
-	"CHAT_MAX_ITERATIONS":               true,
-	"CHAT_MAX_COST_USD":                 true,
-	"CHAT_MAX_TOTAL_TOKENS":             true,
-	"CHAT_TURN_TIMEOUT_SECONDS":         true,
-	"CHAT_TEMPERATURE":                  true,
-	"CHAT_TITLE_MODEL":                  true,
-	"CHAT_METADATA_MODEL":               true,
-	"FLEET_MAX_ITERATIONS":              true,
-	"FLEET_MAX_COST_USD":                true,
-	"FLEET_MAX_TOTAL_TOKENS":            true,
-	"FLEET_TEMPERATURE":                 true,
-	"FLEET_TITLE_MODEL":                 true,
-	"FLEET_METADATA_MODEL":              true,
-	"FLEET_AUTO_TITLE":                  true,
-	"FLEET_APPROVAL_TIMEOUT_SECONDS":    true,
-	"FLEET_AUTO_APPROVE_IN_TEST":        true,
-	"FLEET_MAX_CONCURRENT_AGENTS":       true,
-	"FLEET_RUN_LOG_RETENTION_DAYS":      true,
-	"FLEET_KEEP_RUNS_PER_TASK":          true,
-	"FLEET_TASK_MEMORY_MAX_KEYS":        true,
-	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES": true,
-	"FLEET_CLEANUP_HOUR":                true,
-	"LLM_MAX_TOKENS":                    true,
-	"REASONING_ENABLED":                 true,
-	"REASONING_EFFORT":                  true,
-	"FLEET_MAX_TOOL_OUTPUT_BYTES":       true,
+	"OPENROUTER_API_KEY":                   true,
+	"OPENROUTER_BASE_URL":                  true,
+	"FLEET_OPENROUTER_BASE_URL":            true,
+	"CHAT_MAX_ITERATIONS":                  true,
+	"CHAT_MAX_COST_USD":                    true,
+	"CHAT_MAX_TOTAL_TOKENS":                true,
+	"CHAT_TURN_TIMEOUT_SECONDS":            true,
+	"CHAT_TEMPERATURE":                     true,
+	"CHAT_TITLE_MODEL":                     true,
+	"CHAT_METADATA_MODEL":                  true,
+	"FLEET_DEFAULT_THINKING_BUDGET_TOKENS": true,
+	"FLEET_MAX_ITERATIONS":                 true,
+	"FLEET_MAX_COST_USD":                   true,
+	"FLEET_MAX_TOTAL_TOKENS":               true,
+	"FLEET_TEMPERATURE":                    true,
+	"FLEET_TITLE_MODEL":                    true,
+	"FLEET_METADATA_MODEL":                 true,
+	"FLEET_AUTO_TITLE":                     true,
+	"FLEET_APPROVAL_TIMEOUT_SECONDS":       true,
+	"FLEET_AUTO_APPROVE_IN_TEST":           true,
+	"FLEET_MAX_CONCURRENT_AGENTS":          true,
+	"FLEET_RUN_LOG_RETENTION_DAYS":         true,
+	"FLEET_KEEP_RUNS_PER_TASK":             true,
+	"FLEET_TASK_MEMORY_MAX_KEYS":           true,
+	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES":    true,
+	"FLEET_CLEANUP_HOUR":                   true,
+	"LLM_MAX_TOKENS":                       true,
+	"REASONING_ENABLED":                    true,
+	"REASONING_EFFORT":                     true,
+	"FLEET_MAX_TOOL_OUTPUT_BYTES":          true,
 
 	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
 	"FLEET_LOG_FILE":         true,
@@ -497,16 +498,22 @@ type Config struct {
 	SchedDBPool DBPoolConfig
 
 	// ── LLM (shared) ──
-	OpenRouterAPIKey   string
-	MaxIterations      int
-	MaxCostUSD         float64
-	MaxTotalTokens     int
-	TurnTimeoutSeconds int
-	Temperature        float64
-	LLMMaxTokens       int
-	ReasoningEnabled   bool
-	ReasoningEffort    string
-	TitleModel         string
+	OpenRouterAPIKey string
+	MaxIterations    int
+	MaxCostUSD       float64
+	MaxTotalTokens   int
+	// DefaultThinkingBudgetTokens is the global fallback Claude extended-thinking
+	// budget (#220, FLEET_DEFAULT_THINKING_BUDGET_TOKENS). 0 (default) = thinking
+	// off unless a conversation opts in. A non-zero value enables thinking for
+	// every chat/scheduled run that has no per-conversation override, clamped into
+	// Claude's [1024, 100000] window by the producer.
+	DefaultThinkingBudgetTokens int
+	TurnTimeoutSeconds          int
+	Temperature                 float64
+	LLMMaxTokens                int
+	ReasoningEnabled            bool
+	ReasoningEffort             string
+	TitleModel                  string
 	// MetadataModel is the fast/cheap model the suggest_branch_name /
 	// suggest_commit_message / suggest_pr_description tools (#191) call to
 	// produce git metadata. FLEET_METADATA_MODEL, defaulting to TitleModel so
@@ -940,6 +947,8 @@ func Load(envFile string) (*Config, error) {
 		MaxIterations:    getenvFleetInt("MAX_ITERATIONS", 300),
 		MaxCostUSD:       getenvFleetFloat("MAX_COST_USD", 50.0),
 		MaxTotalTokens:   getenvFleetInt("MAX_TOTAL_TOKENS", 10000000),
+
+		DefaultThinkingBudgetTokens: getenvFleetInt("DEFAULT_THINKING_BUDGET_TOKENS", 0),
 
 		ShutdownGraceSeconds: getenvFleetInt("SHUTDOWN_GRACE_SECONDS", 30),
 

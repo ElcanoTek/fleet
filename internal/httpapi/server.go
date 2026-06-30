@@ -1451,6 +1451,60 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case sub == "thinking_config" && r.Method == http.MethodGet:
+		// Per-conversation Claude extended-thinking override (#220). A null
+		// thinking_config means "inherit the global default".
+		conv, err := s.store.Get(r.Context(), user, id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if conv == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"thinking_config":       conv.ThinkingConfig,
+			"default_budget_tokens": s.cfg.DefaultThinkingBudgetTokens,
+		})
+	case sub == "thinking_config" && r.Method == http.MethodPut:
+		// Set the per-conversation override (#220). budget_tokens must be 0 (use
+		// the global default budget) or within Claude's [1024, 100000] window;
+		// an out-of-window non-zero value is rejected rather than silently clamped
+		// so the caller gets a clear signal. enabled=false stores an explicit
+		// opt-out that overrides a global default; DELETE clears back to inherit.
+		var req struct {
+			Enabled      bool `json:"enabled"`
+			BudgetTokens int  `json:"budget_tokens"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.BudgetTokens != 0 && (req.BudgetTokens < agentcore.MinThinkingBudgetTokens || req.BudgetTokens > agentcore.MaxThinkingBudgetTokens) {
+			http.Error(w, fmt.Sprintf("budget_tokens must be 0 or between %d and %d", agentcore.MinThinkingBudgetTokens, agentcore.MaxThinkingBudgetTokens), http.StatusBadRequest)
+			return
+		}
+		if err := s.store.SetThinkingConfig(r.Context(), user, id, &store.ThinkingConfig{Enabled: req.Enabled, BudgetTokens: req.BudgetTokens}); err != nil {
+			if err.Error() == "conversation not found" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case sub == "thinking_config" && r.Method == http.MethodDelete:
+		// Clear the override → inherit the global default (#220).
+		if err := s.store.SetThinkingConfig(r.Context(), user, id, nil); err != nil {
+			if err.Error() == "conversation not found" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case sub == "branch" && r.Method == http.MethodPost:
 		// Fork this conversation at a chosen message into a new conversation (#454).
 		s.handleConversationBranch(w, r, id, user)
@@ -1940,6 +1994,7 @@ func (s *Server) runTurnAsync(
 		OptionalMCPServersEnabled: conv.OptionalMCPServersEnabled,
 		Lockdown:                  conv.Lockdown,
 		ImageAttachments:          imageAttachments,
+		ThinkingConfig:            resolveThinkingConfig(conv.ThinkingConfig, s.cfg.DefaultThinkingBudgetTokens),
 		ApprovalStager: &approvalStager{
 			ctx:                  turnCtx,
 			store:                s.store,
