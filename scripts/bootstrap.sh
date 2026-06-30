@@ -699,6 +699,8 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
   if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would run: (cd ${REPO_ROOT} && make build)  → fleet + fleet-admin"
     info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR}"
+    info "[dry-run] would symlink /usr/local/bin/fleet (+ fleet-admin) → ${INSTALL_DIR} (operator PATH)"
+    info "[dry-run] would install deploy/fleet-motd.sh → /etc/profile.d/fleet-motd.sh (login banner)"
     info "[dry-run] would install deploy/fleet.service + deploy/fleet-web.service → /etc/systemd/system"
     info "[dry-run] would run: systemctl daemon-reload && systemctl enable --now ${SERVICE_NAME}"
   elif ! command -v systemctl >/dev/null 2>&1; then
@@ -712,6 +714,23 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
         install -D -m 0755 "$REPO_ROOT/fleet"       "$INSTALL_DIR/fleet"
         install -D -m 0755 "$REPO_ROOT/fleet-admin" "$INSTALL_DIR/fleet-admin"
         ok "installed fleet + fleet-admin → ${INSTALL_DIR}"
+        # Put `fleet` on the operator's PATH (#461). deploy/fleet.service's
+        # ExecStart points at $INSTALL_DIR/fleet, but an operator typing `fleet
+        # status` / `fleet update` / `fleet chat` needs it on PATH too — that gap
+        # was the "fleet isn't installed" symptom. Symlink (not copy) so a later
+        # update of $INSTALL_DIR/fleet is reflected with no second install. The
+        # fleet-admin shim is linked alongside for one deprecation release.
+        if [[ -d /usr/local/bin ]] || install -d /usr/local/bin 2>/dev/null; then
+          ln -sf "$INSTALL_DIR/fleet"       /usr/local/bin/fleet       && info "linked /usr/local/bin/fleet → ${INSTALL_DIR}/fleet"
+          ln -sf "$INSTALL_DIR/fleet-admin" /usr/local/bin/fleet-admin || true
+        fi
+        # MOTD (#461): a login banner like the sibling chat repo's. profile.d runs
+        # `fleet motd` (version + service state + commands; no secrets) on an
+        # interactive login. Best-effort — never fail the install on it.
+        if [[ -d /etc/profile.d || -w /etc ]] && [[ -f "$REPO_ROOT/deploy/fleet-motd.sh" ]]; then
+          install -D -m 0644 "$REPO_ROOT/deploy/fleet-motd.sh" /etc/profile.d/fleet-motd.sh \
+            && info "installed /etc/profile.d/fleet-motd.sh (login banner)" || true
+        fi
       else
         die "make build failed or produced no artifacts — install Go and retry"
       fi
@@ -762,7 +781,7 @@ fi
 
 step "Reminders"
 info "Migrations are NOT run here — each service self-migrates on first start."
-info "Set MCP account secrets post-bootstrap: fleet-admin mcp account set <server> <account> --secret KEY=-"
-info "Check health any time:  fleet-admin status"
-info "Update in place later:  fleet-admin update   (or scripts/update.sh)"
+info "Set MCP account secrets post-bootstrap: fleet mcp account set <server> <account> --secret KEY=-"
+info "Check health any time:  fleet status     (also: fleet logs, fleet motd, fleet chat)"
+info "Update in place later:  fleet update      (--check for a read-only 'commits behind'; or scripts/update.sh)"
 ok "bootstrap complete (postgres=${POSTGRES_MODE}, dry-run=${DRY_RUN})"
