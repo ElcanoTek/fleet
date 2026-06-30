@@ -85,6 +85,7 @@ func redactLogSession(session *LogSession) *LogSession {
 	redacted := &LogSession{
 		ID:                  session.ID,
 		Title:               redactSecrets(session.Title),
+		ParentTaskID:        session.ParentTaskID,
 		PromptTokens:        session.PromptTokens,
 		CompletionTokens:    session.CompletionTokens,
 		CachedTokens:        session.CachedTokens,
@@ -123,6 +124,7 @@ func truncateLogSession(session *LogSession, maxSize int) []byte {
 		return &LogSession{
 			ID:                  session.ID,
 			Title:               session.Title,
+			ParentTaskID:        session.ParentTaskID,
 			PromptTokens:        session.PromptTokens,
 			CompletionTokens:    session.CompletionTokens,
 			CachedTokens:        session.CachedTokens,

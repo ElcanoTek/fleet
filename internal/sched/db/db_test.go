@@ -235,6 +235,41 @@ func TestTaskAllowNetworkRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTaskAllowDelegationRoundTrip proves the per-task delegation opt-in (#264)
+// persists: an opted-in task round-trips AllowDelegation=true, and the default is
+// false (delegation off) so an existing task's behaviour is unchanged.
+func TestTaskAllowDelegationRoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	on := &models.Task{ID: uuid.New(), Prompt: "delegate", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC(), AllowDelegation: true}
+	if err := db.AddTask(ctx, on); err != nil {
+		t.Fatalf("Failed to add task: %v", err)
+	}
+	gotOn, err := db.GetTask(ctx, on.ID)
+	if err != nil {
+		t.Fatalf("Failed to get task: %v", err)
+	}
+	if !gotOn.AllowDelegation {
+		t.Errorf("AllowDelegation = false, want true (opt-in must persist)")
+	}
+
+	// The default is off: AllowDelegation=false survives the round-trip, so an
+	// existing task (no field) keeps delegation disabled.
+	off := &models.Task{ID: uuid.New(), Prompt: "no delegate", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC()}
+	if err := db.AddTask(ctx, off); err != nil {
+		t.Fatalf("Failed to add task: %v", err)
+	}
+	gotOff, err := db.GetTask(ctx, off.ID)
+	if err != nil {
+		t.Fatalf("Failed to get task: %v", err)
+	}
+	if gotOff.AllowDelegation {
+		t.Errorf("AllowDelegation = true, want false (default must be off)")
+	}
+}
+
 func TestTaskTimezoneRoundTrip(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

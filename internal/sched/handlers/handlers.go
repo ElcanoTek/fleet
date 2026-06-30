@@ -1728,6 +1728,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
+		AllowDelegation:        tc.AllowDelegation,
 		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,
 		Recurrence:             tc.Recurrence,
@@ -1848,15 +1849,16 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 // taskRerunOverrides is the optional subset of fields a re-run / clone may change
 // vs the source task (#270). Pointer fields → nil means "inherit from source".
 type taskRerunOverrides struct {
-	Prompt        *string  `json:"prompt,omitempty"`
-	Model         *string  `json:"model,omitempty"`
-	FallbackModel *string  `json:"fallback_model,omitempty"`
-	MaxIterations *int     `json:"max_iterations,omitempty"`
-	Priority      *int     `json:"priority,omitempty"`
-	AllowNetwork  *bool    `json:"allow_network,omitempty"`
-	Description   *string  `json:"description,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
-	Persona       *string  `json:"persona,omitempty"`
+	Prompt          *string  `json:"prompt,omitempty"`
+	Model           *string  `json:"model,omitempty"`
+	FallbackModel   *string  `json:"fallback_model,omitempty"`
+	MaxIterations   *int     `json:"max_iterations,omitempty"`
+	Priority        *int     `json:"priority,omitempty"`
+	AllowNetwork    *bool    `json:"allow_network,omitempty"`
+	AllowDelegation *bool    `json:"allow_delegation,omitempty"`
+	Description     *string  `json:"description,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
+	Persona         *string  `json:"persona,omitempty"`
 }
 
 // taskRerunRequest is the (optional) body of POST /tasks/{id}/rerun|clone.
@@ -1998,6 +2000,9 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	}
 	if o.AllowNetwork != nil {
 		tc.AllowNetwork = *o.AllowNetwork
+	}
+	if o.AllowDelegation != nil {
+		tc.AllowDelegation = *o.AllowDelegation
 	}
 	if o.Description != nil {
 		tc.Description = *o.Description

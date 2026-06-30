@@ -787,6 +787,13 @@ type TaskCreate struct {
 	// --network=none, matching the interactive lockdown path; egress is an
 	// explicit opt-in for the tasks that genuinely need it.
 	AllowNetwork bool `json:"allow_network,omitempty"`
+	// AllowDelegation opts THIS task into agent delegation (#264): the spawn_subagent
+	// native tool is registered so the run can fan out scoped subtasks to governed
+	// child runs (sliced budget, depth/fan-out caps, parent_task_id linkage). The
+	// default (false) registers nothing — byte-for-byte unchanged. It composes with
+	// the fleet-wide FLEET_SUBAGENTS_ENABLED operator flag as OR (either enables it),
+	// and is honoured ONLY in scheduled mode (delegation never enters interactive chat).
+	AllowDelegation bool `json:"allow_delegation,omitempty"`
 	// Persona is the optional per-task persona override (#221): a personas/<name>.yaml
 	// (named without extension, e.g. "security-auditor") whose domain-expertise
 	// block is injected into the system prompt. Empty = the runner's global
@@ -893,6 +900,9 @@ type Task struct {
 	// AllowNetwork controls whether this task's execution sandbox keeps outbound
 	// egress. Default false seals it (--network=none); see TaskCreate.AllowNetwork.
 	AllowNetwork bool `json:"allow_network,omitempty"`
+	// AllowDelegation opts this task into agent delegation (#264). Default false
+	// registers no spawn_subagent tool; see TaskCreate.AllowDelegation.
+	AllowDelegation bool `json:"allow_delegation,omitempty"`
 	// Persona is the per-task persona override (#221). See TaskCreate.Persona.
 	Persona string `json:"persona,omitempty"`
 	// Description is optional operator documentation (#281). See TaskCreate.Description.
@@ -1058,6 +1068,7 @@ func NewTask(tc TaskCreate) *Task {
 		EffectivePriority:          priority,
 		InstructionSelfImprove:     tc.InstructionSelfImprove,
 		AllowNetwork:               tc.AllowNetwork,
+		AllowDelegation:            tc.AllowDelegation,
 		Persona:                    tc.Persona,
 		Description:                tc.Description,
 		Status:                     status,
@@ -1174,6 +1185,7 @@ func TaskToCreate(t *Task) TaskCreate {
 		Priority:               t.Priority,
 		InstructionSelfImprove: t.InstructionSelfImprove,
 		AllowNetwork:           t.AllowNetwork,
+		AllowDelegation:        t.AllowDelegation,
 		ScheduledFor:           t.ScheduledFor,
 		Recurrence:             t.Recurrence,
 		Timezone:               t.Timezone,
@@ -1222,6 +1234,7 @@ type TaskExportRecord struct {
 	Priority                   int                 `json:"priority,omitempty"                   yaml:"priority,omitempty"`
 	InstructionSelfImprove     bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
 	AllowNetwork               bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
+	AllowDelegation            bool                `json:"allow_delegation,omitempty"           yaml:"allow_delegation,omitempty"`
 	Persona                    string              `json:"persona,omitempty"                    yaml:"persona,omitempty"`
 	Description                string              `json:"description,omitempty"                yaml:"description,omitempty"`
 	ScheduledFor               *time.Time          `json:"scheduled_for,omitempty"              yaml:"scheduled_for,omitempty"`
@@ -1329,6 +1342,7 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		Priority:                   rec.Priority,
 		InstructionSelfImprove:     rec.InstructionSelfImprove,
 		AllowNetwork:               rec.AllowNetwork,
+		AllowDelegation:            rec.AllowDelegation,
 		Persona:                    rec.Persona,
 		Description:                rec.Description,
 		ScheduledFor:               rec.ScheduledFor,
@@ -1378,6 +1392,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		Priority:                   t.Priority,
 		InstructionSelfImprove:     t.InstructionSelfImprove,
 		AllowNetwork:               t.AllowNetwork,
+		AllowDelegation:            t.AllowDelegation,
 		Persona:                    t.Persona,
 		Description:                t.Description,
 		ScheduledFor:               t.ScheduledFor,

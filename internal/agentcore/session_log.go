@@ -51,9 +51,14 @@ func RedactSecrets(text string) string {
 //     compares against the model's context window — cumulative growth must NOT
 //     drive compaction or the trigger ratchets up every step into a spiral.
 type LogSession struct {
-	mu                   sync.Mutex   `json:"-"`
-	ID                   string       `json:"id"`
-	Title                string       `json:"title"`
+	mu    sync.Mutex `json:"-"`
+	ID    string     `json:"id"`
+	Title string     `json:"title"`
+	// ParentTaskID links a sub-agent's child run back to the scheduled task that
+	// spawned it (#264) for traceability. Empty for an ordinary (root) run, so it
+	// is omitted from the JSON and a non-delegating run's log is byte-for-byte
+	// unchanged. Set by the spawn_subagent tool on the child's session.
+	ParentTaskID         string       `json:"parent_task_id,omitempty"`
 	PromptTokens         int          `json:"prompt_tokens"`
 	CompletionTokens     int          `json:"completion_tokens"`
 	CachedTokens         int          `json:"cached_tokens,omitempty"`

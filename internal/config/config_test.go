@@ -117,6 +117,47 @@ func TestLoad_DefaultsApply(t *testing.T) {
 	if cfg.ShutdownGraceSeconds != 30 {
 		t.Errorf("ShutdownGraceSeconds default: got %d, want 30", cfg.ShutdownGraceSeconds)
 	}
+	// Sub-agent / delegation defaults (#175 tightened by #264): depth 1
+	// (parent → sub-agent only), fan-out 5, per-child budget fraction 0.10.
+	if cfg.SubagentsMaxDepth != 1 {
+		t.Errorf("SubagentsMaxDepth default: got %d, want 1", cfg.SubagentsMaxDepth)
+	}
+	if cfg.SubagentsMaxChildren != 5 {
+		t.Errorf("SubagentsMaxChildren default: got %d, want 5", cfg.SubagentsMaxChildren)
+	}
+	if cfg.SubagentsBudgetFraction != 0.10 {
+		t.Errorf("SubagentsBudgetFraction default: got %v, want 0.10", cfg.SubagentsBudgetFraction)
+	}
+	if cfg.SubagentsEnabled {
+		t.Error("SubagentsEnabled default: expected false (off by default)")
+	}
+}
+
+// TestLoad_SubagentBudgetFractionNormalization pins the (0,1] clamp on the
+// per-child budget fraction (#264): a nonsensical value falls back to the default
+// or is clamped to 1.0 so a misconfiguration can never mean "unbounded".
+func TestLoad_SubagentBudgetFractionNormalization(t *testing.T) {
+	cases := []struct {
+		set  string
+		want float64
+	}{
+		{"0", defaultSubagentsBudgetFraction},
+		{"-0.5", defaultSubagentsBudgetFraction},
+		{"2.0", 1.0},
+		{"0.25", 0.25},
+	}
+	for _, tc := range cases {
+		isolateEnv(t)
+		chdir(t, t.TempDir())
+		t.Setenv("FLEET_SUBAGENTS_BUDGET_FRACTION", tc.set)
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load(%s): %v", tc.set, err)
+		}
+		if cfg.SubagentsBudgetFraction != tc.want {
+			t.Errorf("FLEET_SUBAGENTS_BUDGET_FRACTION=%s → %v, want %v", tc.set, cfg.SubagentsBudgetFraction, tc.want)
+		}
+	}
 }
 
 func TestLoad_ShutdownGraceOverride(t *testing.T) {

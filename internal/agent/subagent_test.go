@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -97,7 +98,23 @@ func newParentForSpawn(t *testing.T, child fantasy.LanguageModel, maxCostUSD flo
 	})
 	// Install a live policy carrying the budget the spawn tool reads + charges.
 	a.runtimePolicy = agentcore.NewScheduledPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTokens)
+	// Default these hard-wall / fan-out tests to a 100% per-child budget fraction so
+	// a request up to the parent's full remaining budget is permitted — they exercise
+	// the atomic reservation / avail cap, NOT the #264 per-child fraction cap (which
+	// has its own dedicated tests). Tests that exercise the fraction set it explicitly.
+	a.subagent.budgetFraction = 1.0
 	return a
+}
+
+// parseSpawnOutput decodes the JSON tool result (#264) the spawn tool now returns,
+// failing the test on a non-JSON body. Refusals and successes share this shape.
+func parseSpawnOutput(t *testing.T, resp fantasy.ToolResponse) spawnSubagentOutput {
+	t.Helper()
+	var out spawnSubagentOutput
+	if err := json.Unmarshal([]byte(resp.Content), &out); err != nil {
+		t.Fatalf("spawn result is not JSON (#264 contract): %v; content=%q", err, resp.Content)
+	}
+	return out
 }
 
 // TestSpawn_ChildRunsThroughGovernedCoreWithSlicedBudgetAndDepth is the core
@@ -128,8 +145,8 @@ func TestSpawn_ChildRunsThroughGovernedCoreWithSlicedBudgetAndDepth(t *testing.T
 	if err != nil {
 		t.Fatalf("spawn returned a transport error (should be tool-level at worst): %v", err)
 	}
-	if resp.IsError {
-		t.Fatalf("spawn unexpectedly refused: %q", resp.Content)
+	if out := parseSpawnOutput(t, resp); !out.Success {
+		t.Fatalf("spawn unexpectedly refused: %q", out.Result)
 	}
 
 	// (1) The child actually ran through agentcore.Run: the child model streamed at
@@ -155,7 +172,7 @@ func TestSpawn_ChildRunsThroughGovernedCoreWithSlicedBudgetAndDepth(t *testing.T
 	// (2) + depth: assert directly on buildChild that privilege only narrows and
 	// depth advances. (spawn() builds the child internally; buildChild is the unit
 	// that sets these invariants.)
-	c := parent.buildChild(child, parent.narrowedCredentialAllowlist(), nil, 0.05, 50)
+	c := parent.buildChild(child, parent.narrowedCredentialAllowlist(), nil, 0.05, 50, 0)
 	if c.subagent.depth != parent.subagent.depth+1 {
 		t.Fatalf("child depth = %d, want parent+1 = %d", c.subagent.depth, parent.subagent.depth+1)
 	}
@@ -193,13 +210,17 @@ func TestSpawn_BudgetNeverExceedsParentCeiling(t *testing.T) {
 		if err != nil {
 			t.Fatalf("spawn %d transport error: %v", i, err)
 		}
-		if resp.IsError {
-			if strings.Contains(resp.Content, "SUBAGENT_BUDGET_EXHAUSTED") {
+		out := parseSpawnOutput(t, resp)
+		if !out.Success {
+			// Once the budget is too small for another $0.05 child, the spawn is
+			// refused — as either "over the per-child limit" (cap = remaining shrank
+			// below the request) or "budget exhausted". Either is the budget wall.
+			if strings.Contains(out.Result, "SUBAGENT_BUDGET_") {
 				refusedForBudget = true
 				break
 			}
 			// A non-budget refusal (e.g. fan-out) would be a test setup error.
-			t.Fatalf("spawn %d refused for a non-budget reason: %q", i, resp.Content)
+			t.Fatalf("spawn %d refused for a non-budget reason: %q", i, out.Result)
 		}
 		spent = parent.runtimePolicy.Budget().SpentCostUSD
 		// The invariant under test: cumulative charged spend NEVER exceeds the
@@ -232,8 +253,8 @@ func TestSpawn_DepthCapRefusesAtMaxDepth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn transport error: %v", err)
 	}
-	if !resp.IsError || !strings.Contains(resp.Content, "SUBAGENT_DEPTH_EXCEEDED") {
-		t.Fatalf("expected a depth-cap refusal at depth==maxDepth, got isError=%v content=%q", resp.IsError, resp.Content)
+	if out := parseSpawnOutput(t, resp); out.Success || !strings.Contains(out.Result, "SUBAGENT_DEPTH_EXCEEDED") {
+		t.Fatalf("expected a depth-cap refusal at depth==maxDepth, got success=%v result=%q", out.Success, out.Result)
 	}
 	// A refused spawn must NOT have run a child.
 	if child.streamCount.Load() != 0 {
@@ -261,17 +282,18 @@ func TestSpawn_FanOutCapRefusesExtraChild(t *testing.T) {
 		if err != nil {
 			t.Fatalf("spawn %d transport error: %v", i, err)
 		}
-		if resp.IsError {
-			t.Fatalf("spawn %d (within fan-out cap) unexpectedly refused: %q", i, resp.Content)
+		if out := parseSpawnOutput(t, resp); !out.Success {
+			t.Fatalf("spawn %d (within fan-out cap) unexpectedly refused: %q", i, out.Result)
 		}
 	}
-	// The (maxChildren+1)-th spawn must be refused.
+	// The (maxChildren+1)-th spawn must be refused (#264: "max concurrent sub-agents
+	// reached") with an error RESULT, not a block.
 	resp, err := parent.spawn(context.Background(), spawnSubagentInput{Task: "one too many", MaxCostUSD: 0.001})
 	if err != nil {
 		t.Fatalf("overflow spawn transport error: %v", err)
 	}
-	if !resp.IsError || !strings.Contains(resp.Content, "SUBAGENT_FANOUT_EXCEEDED") {
-		t.Fatalf("expected a fan-out refusal on the (max+1)-th spawn, got isError=%v content=%q", resp.IsError, resp.Content)
+	if out := parseSpawnOutput(t, resp); out.Success || !strings.Contains(out.Result, "max concurrent sub-agents reached") {
+		t.Fatalf("expected a fan-out refusal on the (max+1)-th spawn, got success=%v result=%q", out.Success, out.Result)
 	}
 }
 
@@ -310,8 +332,8 @@ func TestSpawn_DisabledIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transport error: %v", err)
 	}
-	if !resp.IsError || !strings.Contains(resp.Content, "disabled") {
-		t.Fatalf("disabled spawn must refuse, got isError=%v content=%q", resp.IsError, resp.Content)
+	if out := parseSpawnOutput(t, resp); out.Success || !strings.Contains(out.Result, "disabled") {
+		t.Fatalf("disabled spawn must refuse, got success=%v result=%q", out.Success, out.Result)
 	}
 }
 
@@ -530,28 +552,32 @@ func TestGrantFrom_HardCapsAtAvailable(t *testing.T) {
 	}
 }
 
-// TestReserveChildBudget_AtomicAndHardCaps exercises the atomic reservation path:
-// a grant is computed against remaining MINUS in-flight reservations, never
-// exceeds available, refuses when too little is left, and unlimited parents yield
-// unlimited children.
+// TestReserveChildBudget_AtomicAndHardCaps exercises the atomic reservation path
+// with the per-child fraction cap (#264): a within-cap grant is honoured and never
+// exceeds available; an over-cap request is REFUSED; concurrent reservations never
+// over-grant; too-little-left and unlimited parents behave correctly. newParentForSpawn
+// sets fraction=1.0, so here the per-child cap equals the parent's remaining budget.
 func TestReserveChildBudget_AtomicAndHardCaps(t *testing.T) {
 	child := &budgetMockModel{name: "c"}
 
-	// Finite cost parent: $1.00 ceiling, $0.90 spent → $0.10 remaining.
+	// Finite cost parent: $1.00 ceiling, $0.90 spent → $0.10 remaining (= the cap).
 	p := newParentForSpawn(t, child, 1.0, 0, 2, 100)
 	p.runtimePolicy.ChargeChildUsage(agentcore.RunUsage{CostUSD: 0.90})
-	cost, _, refusal := p.reserveChildBudget(0.50, 0)
+	// A request ABOVE the per-child cap ($0.10) is refused outright (#264).
+	if _, _, refusal := p.reserveChildBudget(0.50, 0); refusal == "" || !strings.Contains(refusal, "OVER_LIMIT") {
+		t.Fatalf("a request above the per-child cap must be refused with OVER_LIMIT, got %q", refusal)
+	}
+	// A within-cap request is granted and never exceeds remaining.
+	cost, _, refusal := p.reserveChildBudget(0.05, 0)
 	if refusal != "" {
-		t.Fatalf("unexpected refusal with $0.10 remaining: %s", refusal)
+		t.Fatalf("unexpected refusal for a within-cap $0.05 request with $0.10 remaining: %s", refusal)
 	}
 	if cost > 0.10+1e-9 {
 		t.Fatalf("granted $%.4f > remaining $0.10 — hard cap breached", cost)
 	}
-	// The grant is now reserved; a SECOND reservation sees less available and is
-	// refused (only ~$0.05 is left after the first ~$0.05 grant, below the floor
-	// once the first grant takes the default fraction). Even if it grants, the SUM
-	// must never exceed the $0.10 remaining.
-	cost2, _, _ := p.reserveChildBudget(0.50, 0)
+	// A SECOND within-cap reservation sees less available; the SUM never exceeds the
+	// $0.10 remaining (atomic reservation), and once too little is left it refuses.
+	cost2, _, _ := p.reserveChildBudget(0.05, 0)
 	if cost+cost2 > 0.10+1e-9 {
 		t.Fatalf("two reservations summed to $%.4f > remaining $0.10 — atomic reservation failed", cost+cost2)
 	}
@@ -562,7 +588,8 @@ func TestReserveChildBudget_AtomicAndHardCaps(t *testing.T) {
 		t.Fatalf("unlimited parent should grant unlimited (0,0) with no refusal, got c=%v tok=%d refusal=%q", c, tok, refusal)
 	}
 
-	// Exhausted parent → refusal.
+	// Exhausted parent → refusal (cap is 0, any request is over it; the default
+	// slice has nothing to give).
 	pe := newParentForSpawn(t, child, 1.0, 0, 2, 100)
 	pe.runtimePolicy.ChargeChildUsage(agentcore.RunUsage{CostUSD: 1.0})
 	if _, _, refusal := pe.reserveChildBudget(0, 0); refusal == "" {
