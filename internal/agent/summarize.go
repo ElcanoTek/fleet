@@ -58,7 +58,7 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 
 	const summarizeMaxOutputTokens int64 = 4096
 	maxTokens := summarizeMaxOutputTokens
-	temp := m.config.Temperature
+	temp := m.config.LiveTemperature()
 
 	ag := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(summarizeSystemPrompt),

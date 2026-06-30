@@ -264,7 +264,7 @@ func (r *Runner) maybeAppendCreateTaskTool(base []fantasy.AgentTool, task *model
 			Enqueuer:         r.taskEnqueuer,
 			CreatingTaskID:   task.ID,
 			ParentModel:      task.Model,
-			ParentBudgetUSD:  r.cfg.MaxCostUSD,
+			ParentBudgetUSD:  r.cfg.LiveMaxCostUSD(),
 			RecurringAllowed: task.AllowRecurringTaskCreation,
 			MaxCreations:     tools.DefaultMaxTaskCreations,
 			Counter:          counter,
@@ -548,7 +548,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// (only reachable via a test double) makes the tool return a clear error.
 	nativeTools = append(nativeTools, tools.MetadataTools(r.mgr, r.cfg.MetadataModel)...)
 
-	maxIter := r.cfg.MaxIterations
+	maxIter := r.cfg.LiveMaxIterations()
 	if task.MaxIterations != nil && *task.MaxIterations > 0 {
 		maxIter = *task.MaxIterations
 	}

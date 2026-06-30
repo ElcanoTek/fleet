@@ -818,6 +818,55 @@ paths:
                         oldest_age_seconds: { type: integer }
         "500": { $ref: "#/components/responses/Error" }
 
+  /admin/reload-config:
+    post:
+      summary: Hot-reload reloadable settings without a restart (#286).
+      description: >-
+        Re-reads the small, explicitly safe subset of settings that a running
+        fleet may change mid-flight — the per-run cost/token ceilings, the
+        per-turn iteration ceiling, and the interactive/scheduled sampling
+        temperatures (FLEET_MAX_COST_USD, FLEET_MAX_TOTAL_TOKENS,
+        FLEET_MAX_ITERATIONS, FLEET_TEMPERATURE, CUTLASS_TEMPERATURE). Values are
+        re-read from the env file (FLEET_ENV_FILE) and process environment with
+        the same precedence as boot. Equivalent to sending SIGUSR2. Settings that
+        are bound into a listener, connection pool, or signing context at startup
+        (bind addresses, DB DSNs, auth secrets, the admission-semaphore size, TLS)
+        are NOT reloadable and are reported under `skipped` when changed. Admin-only.
+      security: [{ adminApiKey: [] }]
+      responses:
+        "200":
+          description: A diff of what changed, was skipped (needs restart), or errored.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reloaded_at: { type: string, format: date-time }
+                  changed:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string }
+                        old: { type: string }
+                        new: { type: string }
+                  skipped:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string }
+                        reason: { type: string }
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string }
+                        error: { type: string }
+        "500": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
   /sla-report:
     get:
       summary: SLA report — per-task actual-duration p50/p95 + breach rate (#274).
