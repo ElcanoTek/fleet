@@ -12,9 +12,6 @@ type HealthSummary = {
   uptime_seconds: number;
   db: { chat: string; pool_size: number; in_use: number; idle: number };
   workers: {
-    total: number;
-    active: number;
-    idle: number;
     queued_tasks: number;
     running_tasks: number;
     completed_today: number;
@@ -127,10 +124,13 @@ export function HealthPanel() {
         <Card label="Active chats" value={String(data.conversations_active)} />
         {data.workers ? (
           <>
+            {/* Single-box deploy: there are no separate worker nodes, so this is
+                a task-throughput card (what the scheduler is doing right now),
+                not a node count. */}
             <Card
-              label="Workers"
-              value={`${data.workers.active}/${data.workers.total}`}
-              hint={`${data.workers.running_tasks} running · ${data.workers.queued_tasks} queued`}
+              label="Tasks"
+              value={`${data.workers.running_tasks} running`}
+              hint={`${data.workers.queued_tasks} queued`}
             />
             <Card
               label="Tasks today"
@@ -139,7 +139,7 @@ export function HealthPanel() {
             />
           </>
         ) : (
-          <Card label="Workers" value="—" hint="scheduler stats unavailable" />
+          <Card label="Tasks" value="—" hint="scheduler stats unavailable" />
         )}
         <Card
           label="Sandbox pool"

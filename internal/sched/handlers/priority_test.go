@@ -48,17 +48,16 @@ func setupPriorityHandler(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Ma
 	}
 
 	ctx := context.Background()
-	for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM nodes", "DELETE FROM users"} {
+	for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
 		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
 			t.Fatalf("cleanup %q: %v", q, err)
 		}
 	}
 
 	h := New(Config{
-		OrchestratorURL:   "http://localhost:8000",
-		AdminAPIKey:       "test-admin-key",
-		RegistrationToken: "test-reg-token",
-		Version:           "0.1.0",
+		OrchestratorURL: "http://localhost:8000",
+		AdminAPIKey:     "test-admin-key",
+		Version:         "0.1.0",
 	}, store, keyMgr)
 
 	r := chi.NewRouter()

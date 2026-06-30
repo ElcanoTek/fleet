@@ -36,7 +36,11 @@
 #   # FLEET_SERVER_ADDR=127.0.0.1:8080           # chat listener  (default 127.0.0.1:8080)
 #   # FLEET_ORCHESTRATOR_ADDR=127.0.0.1:8000     # orchestrator listener (default :8000)
 #   # FLEET_SERVER_TOKEN=...                      # shared chat token (web sets CHAT_SERVER_TOKEN to match)
-#   # ADMIN_API_KEY=... / REGISTRATION_TOKEN=...  # orchestrator admin/registration
+#   # ADMIN_API_KEY=...                           # orchestrator admin API key (full access)
+#   # FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS=ops@example.com,lead@example.com
+#   #                                             # comma-separated emails provisioned/promoted as
+#   #                                             # Operations Center admins at boot, so they reach it
+#   #                                             # seamlessly via the chat session cookie (#458)
 #   # FLEET_TIMEZONE=UTC / FLEET_DATA_DIR=/var/lib/fleet
 #   # FLEET_SHUTDOWN_GRACE_SECONDS=30            # drain budget on SIGTERM (keep < TimeoutStopSec)
 #   # Process log file sink (#298) — OPT-IN, default OFF. Under this unit the

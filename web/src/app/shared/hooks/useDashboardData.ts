@@ -4,14 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   orchestratorApi,
   type DashboardStats,
-  type Node,
   type Task,
 } from "@/app/shared/lib/orchestratorApi";
 
-// useDashboardData drives the orchestrator dashboard: stats + nodes + a
+// useDashboardData drives the orchestrator dashboard: stats + a
 // filtered/paginated task list, with 30s auto-refresh. React port of moc's
-// dashboard.js loadDashboard()/loadStats()/loadNodes()/loadTasks() +
-// startAutoRefresh().
+// dashboard.js loadDashboard()/loadStats()/loadTasks() + startAutoRefresh().
 
 export type TaskFilters = {
   status: string;
@@ -48,7 +46,6 @@ function buildTaskQuery(filters: TaskFilters, page: number, pageSize: number): s
 
 export type UseDashboardData = {
   stats: DashboardStats | null;
-  nodes: Node[];
   tasks: Task[];
   total: number;
   loading: boolean;
@@ -64,7 +61,6 @@ export type UseDashboardData = {
 
 export function useDashboardData(active: boolean): UseDashboardData {
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [nodes, setNodes] = useState<Node[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [total, setTotal] = useState(0);
   // Lazy-init to `active`: when the dashboard mounts active we begin in the
@@ -95,15 +91,13 @@ export function useDashboardData(active: boolean): UseDashboardData {
     const qs = buildTaskQuery(filters, page, pageSize);
     const results = await Promise.allSettled([
       orchestratorApi.stats(),
-      orchestratorApi.nodes(),
       orchestratorApi.tasks(qs),
     ]);
     if (runId !== runIdRef.current) return;
     if (results[0].status === "fulfilled") setStats(results[0].value);
-    if (results[1].status === "fulfilled") setNodes(results[1].value.data ?? []);
-    if (results[2].status === "fulfilled") {
-      setTasks(results[2].value.data ?? []);
-      setTotal(results[2].value.total ?? 0);
+    if (results[1].status === "fulfilled") {
+      setTasks(results[1].value.data ?? []);
+      setTotal(results[1].value.total ?? 0);
     }
     setLoading(false);
   }, [filters, page, pageSize]);
@@ -143,7 +137,6 @@ export function useDashboardData(active: boolean): UseDashboardData {
 
   return {
     stats,
-    nodes,
     tasks,
     total,
     loading,

@@ -13,9 +13,17 @@ export type OrchestratorLoginProps = {
   elcanoLoginEnabled: boolean;
   onLogin: (username: string, password: string) => Promise<boolean>;
   error: string | null;
+  // notice is an informational banner shown ABOVE the form (distinct from the
+  // error alert). It surfaces the #458 not_a_member case: the visitor holds a
+  // valid chat session but that identity isn't provisioned in the Operations
+  // Center, so the cookie path can't admit them — yet the username/password
+  // (moc) path below still can, and an admin can provision their email. We keep
+  // the form rather than a dead-end card precisely so that second auth path
+  // stays reachable.
+  notice?: string | null;
 };
 
-export function OrchestratorLogin({ elcanoLoginEnabled, onLogin, error }: OrchestratorLoginProps) {
+export function OrchestratorLogin({ elcanoLoginEnabled, onLogin, error, notice }: OrchestratorLoginProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -35,6 +43,12 @@ export function OrchestratorLogin({ elcanoLoginEnabled, onLogin, error }: Orches
       <div className="auth-fields stack-form">
         <h2>Sign in</h2>
         <p className="caption">Sign in to access the internal Operations Center workspace.</p>
+
+        {notice ? (
+          <div className="validation-error" role="status" data-testid="orchestrator-no-access">
+            {notice}
+          </div>
+        ) : null}
 
         {error ? (
           <div className="validation-error" role="alert" data-testid="orchestrator-login-error">

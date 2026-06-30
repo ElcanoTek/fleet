@@ -628,7 +628,7 @@ does (and the manual path if you'd rather run each piece yourself):
    filter state is logged at startup and surfaced in `GET /admin/health-summary`.
 
 See `deploy/fleet.service` and `deploy/Caddyfile` for the full annotated knob
-list (listener addresses, admin/registration tokens, data dir, timezone).
+list (listener addresses, admin token, bootstrap admins, data dir, timezone).
 
 ## Operating fleet
 
