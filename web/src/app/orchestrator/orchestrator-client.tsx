@@ -10,14 +10,14 @@ import { ToastProvider } from "@/app/shared/ui/Toast";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 import { NavToChat } from "@/app/shared/ui/CrossViewNav";
 import { NavRail } from "@/app/shared/ui/NavRail";
+import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { Icon } from "@/app/shared/ui/Icon";
 import { OrchestratorLogin } from "./OrchestratorLogin";
 import { StatsGrid, type StatFilter } from "./StatsGrid";
 import { TasksTable } from "./TasksTable";
 import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
-import { ConcurrencyCapSetting } from "./ConcurrencyCapSetting";
-import { CredentialAccountAdmin } from "./CredentialAccountAdmin";
+import { SettingsModal } from "./SettingsModal";
 import { SLAReportPanel } from "./SLAReportPanel";
 
 // OrchestratorClient — the top-level orchestrator (Operations Center) view. It
@@ -59,7 +59,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   const [statFilter, setStatFilter] = useState<StatFilter | null>(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [logTask, setLogTask] = useState<Task | null>(null);
-  const [adminOpen, setAdminOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Top-level dashboard tab (#274): "tasks" is the legacy Recent Tasks view;
   // "sla" swaps in the SLA report panel. Defaults to tasks so the existing
@@ -145,7 +145,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
         account={{
           email: session.username ?? "",
           onSignOut: () => void session.logout(),
-          onSettings: () => setAdminOpen((o) => !o),
+          onSettings: () => setSettingsOpen(true),
         }}
       >
         <button
@@ -159,34 +159,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
       </NavRail>
 
       <main className="flex min-h-0 flex-col overflow-hidden">
-        <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3 sm:px-6">
-          <div className="flex min-w-0 items-center gap-3">
-            <button
-              aria-label="Open sidebar"
-              className="inline-flex size-9 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] lg:hidden"
-              type="button"
-              onClick={() => setSidebarOpen(true)}
-            >
-              <svg
-                aria-hidden="true"
-                className="size-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.9"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M4 6h16" />
-                <path d="M4 12h16" />
-                <path d="M4 18h16" />
-              </svg>
-            </button>
-            <h1 className="truncate text-[1.05rem] font-semibold text-[var(--color-text-primary)]">
-              Operations Center
-            </h1>
-          </div>
-        </header>
+        <PageTopBar title="Operations Center" onMenu={() => setSidebarOpen(true)} />
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="container">
@@ -235,16 +208,6 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                 />
               )}
 
-              {adminOpen ? (
-                <div className="section" role="region" aria-label="Settings" data-testid="settings-section">
-                  <div className="section-header">
-                    <h2>Settings</h2>
-                  </div>
-                  <ConcurrencyCapSetting />
-                  <CredentialAccountAdmin servers={servers} onChanged={reloadServers} />
-                </div>
-              ) : null}
-
               <p className="refresh-note">Auto-refresh every 30 seconds</p>
             </div>
           </div>
@@ -256,6 +219,12 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
         servers={servers}
         onClose={() => setTaskModalOpen(false)}
         onCreated={() => void dashboard.reload()}
+      />
+      <SettingsModal
+        open={settingsOpen}
+        servers={servers}
+        onClose={() => setSettingsOpen(false)}
+        onChanged={reloadServers}
       />
       <LogViewer task={logTask} onClose={() => setLogTask(null)} />
     </div>

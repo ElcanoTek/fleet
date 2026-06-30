@@ -7,6 +7,7 @@ import { applyTemplateVars, promptableVars } from "@/app/shared/lib/taskTemplate
 import { validateTaskForm } from "@/app/shared/lib/validation";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { useToast } from "@/app/shared/ui/Toast";
+import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { ModelPicker } from "@/app/shared/ui/ModelPicker";
 import { McpServerPicker } from "@/app/shared/ui/McpServerPicker";
 import { FileUpload, type FileUploadHandle } from "@/app/shared/ui/FileUpload";
@@ -82,6 +83,8 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
   const [forecast, setForecast] = useState<CostForecast | null>(null);
 
   const fileHandle = useRef<FileUploadHandle | null>(null);
+  // Dialog container — focus trap, Esc to close, return focus to the trigger.
+  const modalRef = useRef<HTMLDivElement | null>(null);
 
   // Task templates (#262): the bundle's read-only catalog of pre-filled task
   // shapes. Fetched once when the modal opens; an empty catalog (or a fetch
@@ -105,6 +108,8 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
       cancelled = true;
     };
   }, [open]);
+
+  useDialogA11y(open, modalRef, onClose);
 
   // applyTemplate pre-fills the form from a template. Built-in variables ({date},
   // {user_name}) are substituted automatically; any remaining custom {token} is
@@ -284,7 +289,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
 
   return (
     <div className="modal-overlay is-open" role="dialog" aria-modal="true" aria-label="Create New Task">
-      <div className="modal">
+      <div className="modal modal-lg" ref={modalRef} tabIndex={-1}>
         <div className="modal-header">
           <h3>Create New Task</h3>
           <button type="button" className="icon-action modal-close" aria-label="Close modal" onClick={onClose}>
@@ -723,22 +728,31 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
             </div>
 
             {forecast ? <CostForecastPanel forecast={forecast} /> : null}
-
-            <div className="task-create-actions">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                aria-label="Estimate cost"
-                disabled={estimating}
-                onClick={() => void estimate()}
-              >
-                {estimating ? "Estimating…" : "Estimate Cost"}
-              </button>
-              <button type="submit" className="btn btn-primary" aria-label="Launch task" disabled={submitting}>
-                {submitting ? "Launching…" : "Launch Task"}
-              </button>
-            </div>
           </form>
+        </div>
+        {/* Fixed footer — the modal's actions stay pinned to the bottom while the
+            body scrolls. The submit button stays wired to the form via the
+            `form` attribute so Enter-to-submit and onSubmit validation are
+            unchanged even though it now lives outside the <form>. */}
+        <div className="modal-footer">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            aria-label="Estimate cost"
+            disabled={estimating}
+            onClick={() => void estimate()}
+          >
+            {estimating ? "Estimating…" : "Estimate Cost"}
+          </button>
+          <button
+            type="submit"
+            form="createTaskForm"
+            className="btn btn-primary"
+            aria-label="Launch task"
+            disabled={submitting}
+          >
+            {submitting ? "Launching…" : "Launch Task"}
+          </button>
         </div>
       </div>
     </div>
