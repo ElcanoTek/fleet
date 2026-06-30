@@ -74,6 +74,36 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
       ) : (
         <ul className="mcp-server-picker__list">
           {servers.map((server) => {
+            // Per-user remote (hosted) MCP servers (#443/#466) are auto-applied to
+            // ALL of the owner's scheduled runs by the run overlay — the per-task
+            // selection doesn't gate them — so we render them as a read-only,
+            // already-on "connected" row (no toggle to flip, no credential seat to
+            // pick) rather than a control that would falsely imply per-task choice.
+            if (server.remote) {
+              return (
+                <li
+                  key={server.name}
+                  className="mcp-server-picker__row mcp-server-picker__row--remote"
+                  data-server={server.name}
+                  data-remote="true"
+                >
+                  <label className="mcp-server-picker__toggle">
+                    <input
+                      type="checkbox"
+                      checked
+                      disabled
+                      aria-label={`${server.name} (connected, auto-available)`}
+                      data-testid={`mcp-remote-${server.name}`}
+                    />
+                    <span className="mcp-server-picker__name">{server.display_name || server.name}</span>
+                    <span className="mcp-server-picker__count">connected · auto-available</span>
+                  </label>
+                  {server.description ? (
+                    <p className="mcp-server-picker__desc">{server.description}</p>
+                  ) : null}
+                </li>
+              );
+            }
             const choice = findChoice(selection, server.name);
             const enabled = !!choice;
             const accounts = server.accounts ?? [];

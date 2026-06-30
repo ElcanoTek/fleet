@@ -3,7 +3,10 @@
 
 package handlers
 
-import "net/http"
+import (
+	"context"
+	"net/http"
+)
 
 // MCPServerCatalogEntry is one Optional MCP server in the orchestrator's
 // task-form picker. It mirrors chat's GET /mcp-servers response shape so the
@@ -17,6 +20,12 @@ type MCPServerCatalogEntry struct {
 	ToolCount   int      `json:"tool_count"`
 	Enabled     bool     `json:"enabled"`
 	Accounts    []string `json:"accounts"`
+	// Remote marks a per-user remote (hosted) MCP server the caller connected via
+	// OAuth (#443/#466), as opposed to a bundle Optional server. Remote servers
+	// carry no credential seats (their auth is the brokered per-user token) and are
+	// auto-applied to ALL the owner's scheduled runs by the run overlay, so the UI
+	// surfaces them as connected/auto-available rather than a per-task toggle.
+	Remote bool `json:"remote,omitempty"`
 }
 
 // MCPAccountEntry is one (server, account) credential seat — names only, never
@@ -36,13 +45,36 @@ func (h *Handlers) SetMCPCatalogProvider(p func() []MCPServerCatalogEntry) {
 	h.mcpCatalog = p
 }
 
+// SetRemoteMCPServersProvider wires the per-user remote (hosted) MCP lookup
+// (#443) so GetMCPServers can surface the caller's OAuth-connected servers in
+// the task-form picker (#466). cmd/fleet injects it from the remotemcp Service
+// (ConnectedServersForUser), keyed by the caller's email; nil (feature off) →
+// no remote entries. Keeps the handlers package decoupled from remotemcp/agent.
+func (h *Handlers) SetRemoteMCPServersProvider(p func(ctx context.Context, email string) []MCPServerCatalogEntry) {
+	h.remoteMCPServers = p
+}
+
 // GetMCPServers returns the Optional-MCP catalog (read-only; never secret
 // values), mirroring chat's GET /mcp-servers so the scheduled-task picker works.
-// Response: { "servers": [ {name, display_name, description, tool_count, enabled, accounts[]} ] }
-func (h *Handlers) GetMCPServers(w http.ResponseWriter, _ *http.Request) {
+// It merges the caller's per-user remote (hosted) MCP servers (#443/#466) after
+// the bundle catalog, resolving the caller's email from the authenticated
+// principal — so a server connected in chat shows up here too. An admin-API-key
+// principal carries no user, so it sees only the bundle catalog.
+// Response: { "servers": [ {name, display_name, description, tool_count, enabled, accounts[], remote?} ] }
+func (h *Handlers) GetMCPServers(w http.ResponseWriter, r *http.Request) {
 	servers := []MCPServerCatalogEntry{}
 	if h.mcpCatalog != nil {
 		servers = h.mcpCatalog()
+	}
+	// Merge the caller's connected remote MCP servers. The orchestrator username
+	// IS the chat-side email for the elcano-auth/header-trust tier (see
+	// ownerEmailResolver), which is the key the remote-MCP tokens are stored under.
+	// Best-effort: a missing user (admin key) or a provider that returns nothing
+	// simply yields the bundle catalog unchanged.
+	if h.remoteMCPServers != nil {
+		if user := GetUserFromContext(r.Context()); user != nil && user.Username != "" {
+			servers = append(servers, h.remoteMCPServers(r.Context(), user.Username)...)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"servers": servers})
 }

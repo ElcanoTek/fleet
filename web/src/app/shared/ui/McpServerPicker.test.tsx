@@ -111,3 +111,32 @@ describe("McpServerPicker — enable/disable + account selection", () => {
     expect(options).toEqual(["", "client_a", "client_b"]);
   });
 });
+
+describe("McpServerPicker — per-user remote (hosted) servers (#466)", () => {
+  const WITH_REMOTE: McpServer[] = [
+    ...SERVERS,
+    { name: "my-notion", description: "Remote MCP server you connected.", remote: true },
+  ];
+
+  it("renders a connected remote server as a read-only, already-on row (no toggle, no account)", () => {
+    render(<McpServerPicker mode="task" servers={WITH_REMOTE} selection={[]} onChange={() => {}} />);
+    const remote = screen.getByTestId("mcp-remote-my-notion") as HTMLInputElement;
+    expect(remote).toBeInTheDocument();
+    expect(remote).toBeChecked();
+    expect(remote).toBeDisabled();
+    // It is NOT a per-task toggle and carries no credential-seat dropdown.
+    expect(screen.queryByTestId("mcp-toggle-my-notion")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("mcp-account-my-notion")).not.toBeInTheDocument();
+    expect(screen.getByText(/auto-available/i)).toBeInTheDocument();
+    // Bundle servers are still ordinary toggles alongside it.
+    expect(screen.getByTestId("mcp-toggle-xandr")).toBeInTheDocument();
+  });
+
+  it("never adds a remote server to the per-task selection (the row has no live control)", () => {
+    const onChange = vi.fn();
+    render(<McpServerPicker mode="task" servers={WITH_REMOTE} selection={[]} onChange={onChange} />);
+    // The remote checkbox is disabled, so a click cannot mutate the selection.
+    fireEvent.click(screen.getByTestId("mcp-remote-my-notion"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
