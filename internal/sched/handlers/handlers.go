@@ -1227,6 +1227,58 @@ func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(task.OutputJSON) //nolint:gosec // G705: validated JSON served as application/json, not an HTML/XSS context
 }
 
+// GetTaskErrorAnalysis handles GET /tasks/{task_id}/error-analysis (#317): the
+// async post-failure LLM diagnosis (category + summary + remediation) for a
+// terminally-failed task, returned raw as application/json. 404 when the task has
+// no analysis (it didn't fail terminally, analysis was disabled, or the diagnosis
+// failed / hasn't completed); 409 while the task is still non-terminal. Mirrors
+// GetTaskOutput.
+func (h *Handlers) GetTaskErrorAnalysis(w http.ResponseWriter, r *http.Request) {
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionViewTasks) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return
+	}
+
+	taskIDStr := chi.URLParam(r, "task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid task ID")
+		return
+	}
+
+	task, err := h.storage.GetTask(taskID)
+	if err != nil || task == nil {
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+
+	if scopes := p.scopes(); len(scopes) > 0 {
+		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
+			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
+			return
+		}
+	}
+
+	if len(task.ErrorAnalysis) == 0 {
+		// Distinguish "not ready yet" (still running — analysis only runs on a
+		// terminal failure, and then asynchronously) from "never will be" (terminal,
+		// but no analysis was produced) so a poller knows whether to retry.
+		if !task.Status.IsTerminal() {
+			writeError(w, http.StatusConflict, "Task has not finished; error analysis is not yet available")
+			return
+		}
+		writeError(w, http.StatusNotFound, "Task has no error analysis (it did not fail terminally, analysis is disabled, or the diagnosis was not produced)")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	// error_analysis is schema-validated JSON (validated against errorAnalysisSchema
+	// before persistence) served as application/json — not HTML — so no XSS sink.
+	_, _ = w.Write(task.ErrorAnalysis) //nolint:gosec // G705: validated JSON served as application/json, not an HTML/XSS context
+}
+
 // CleanupHistory handles POST /tasks/cleanup
 func (h *Handlers) CleanupHistory(w http.ResponseWriter, r *http.Request) {
 	days := 7
