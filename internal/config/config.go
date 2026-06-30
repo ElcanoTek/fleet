@@ -818,6 +818,13 @@ type Config struct {
 	// from the previously-implicit deploy convention so the field is a single
 	// source of truth the Sentry init reads alongside other boot-time wiring.
 	Environment string
+
+	// reload backs config hot-reload (#286): synchronization for the Live* getters
+	// plus the boot env snapshot Reload uses to reproduce boot precedence. Set by
+	// Load; nil for a Config built directly in a test (the getters then read their
+	// fields directly, which is safe because such a Config is never reloaded). See
+	// reload.go.
+	reload *reloadState
 }
 
 // MCPServerConfig is one scheduled-mode MCP server's spawn spec + allowlist.
@@ -1125,6 +1132,12 @@ func Load(envFile string) (*Config, error) {
 	default:
 		return nil, fmt.Errorf("FLEET_DEFAULT_NETWORK_MODE must be one of open|allowlisted|lockdown, got %q", cfg.DefaultNetworkMode)
 	}
+
+	// Capture the boot environment last, once the process env is in its final
+	// (file-loaded, winners-restored) state, so a later hot-reload (#286) can
+	// reproduce boot precedence exactly and report changed non-reloadable settings.
+	cfg.reload = newReloadState(existing)
+
 	return cfg, nil
 }
 
