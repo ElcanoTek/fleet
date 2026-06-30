@@ -6,31 +6,31 @@ import (
 	"testing"
 )
 
-func TestResolve(t *testing.T) {
-	noFile := func(string) ([]byte, error) { return nil, errors.New("no file") }
-	noEnvFile := func(string, ...string) (map[string]string, error) { return nil, nil }
-	envMap := func(m map[string]string) getenv {
-		return func(k string) string { return m[k] }
-	}
-	// envFileFrom builds a fake env-file reader from path → (key → value). A path
-	// absent from the map behaves like a missing file (empty, no error), matching
-	// creds.ReadEnvValues.
-	envFileFrom := func(files map[string]map[string]string) envValuesReader {
-		return func(path string, keys ...string) (map[string]string, error) {
-			f, ok := files[path]
-			if !ok {
-				return nil, nil
-			}
-			out := map[string]string{}
-			for _, k := range keys {
-				if v, ok := f[k]; ok {
-					out[k] = v
-				}
-			}
-			return out, nil
-		}
-	}
+// Shared test doubles for Resolve's injected accessors.
+func noFile(string) ([]byte, error)                          { return nil, errors.New("no file") }
+func noEnvFile(string, ...string) (map[string]string, error) { return nil, nil }
+func envMap(m map[string]string) getenv                      { return func(k string) string { return m[k] } }
 
+// envFileFrom builds a fake env-file reader from path → (key → value). A path
+// absent from the map behaves like a missing file (empty, no error), matching
+// creds.ReadEnvValues.
+func envFileFrom(files map[string]map[string]string) envValuesReader {
+	return func(path string, keys ...string) (map[string]string, error) {
+		f, ok := files[path]
+		if !ok {
+			return nil, nil
+		}
+		out := map[string]string{}
+		for _, k := range keys {
+			if v, ok := f[k]; ok {
+				out[k] = v
+			}
+		}
+		return out, nil
+	}
+}
+
+func TestResolve(t *testing.T) {
 	t.Run("flags win; server normalized", func(t *testing.T) {
 		cfg, err := Resolve(
 			Flags{Server: "http://host:9000/", Email: "Me@Example.com", Model: "x/y"},
@@ -92,8 +92,12 @@ func TestResolve(t *testing.T) {
 			t.Errorf("CHAT_SERVER_TOKEN fallback = %q", cfg2.Token)
 		}
 	})
+}
 
-	t.Run("token auto-discovered from the server env file (the #480 path)", func(t *testing.T) {
+// TestResolveEnvFileDiscovery covers the #480 on-box auto-discovery path: the
+// token/addr come from the server's own env file when not given explicitly.
+func TestResolveEnvFileDiscovery(t *testing.T) {
+	t.Run("token auto-discovered from the server env file", func(t *testing.T) {
 		// No --token-file, no token in the process env: the token comes from the
 		// default .env.local that an on-box operator can read.
 		evf := envFileFrom(map[string]map[string]string{
@@ -174,7 +178,7 @@ func TestResolve(t *testing.T) {
 		}
 	})
 
-	t.Run("unreadable env file is skipped; token error mentions the paths but not a value", func(t *testing.T) {
+	t.Run("unreadable env file is skipped; token error names paths, never a value", func(t *testing.T) {
 		deny := func(string, ...string) (map[string]string, error) { return nil, errors.New("permission denied") }
 		_, err := Resolve(Flags{Email: "a@b.co"}, envMap(nil), noFile, deny)
 		if err == nil || !strings.Contains(err.Error(), "token") {

@@ -50,8 +50,8 @@ type envValuesReader func(path string, keys ...string) (map[string]string, error
 
 // Env-file keys fleet chat will auto-discover, and the canonical files it probes.
 const (
-	envKeyServerToken       = "FLEET_SERVER_TOKEN" // canonical shared-secret key
-	envKeyServerTokenLegacy = "CHAT_SERVER_TOKEN"  // legacy alias
+	envKeyServerToken       = "FLEET_SERVER_TOKEN" //nolint:gosec // G101: env var NAME (canonical shared-secret key), not a secret value
+	envKeyServerTokenLegacy = "CHAT_SERVER_TOKEN"  //nolint:gosec // G101: env var NAME (legacy alias), not a secret value
 	envKeyServerAddr        = "FLEET_SERVER_ADDR"  // chat server listen addr
 )
 
