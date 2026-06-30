@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { HealthPanel } from "./HealthPanel";
+import { UsersPanel } from "./UsersPanel";
 
 // The admin page is intentionally minimalist — a single table keyed on
 // user email. Power tools belong in real observability (Grafana, etc);
@@ -197,6 +198,8 @@ export default function AdminPage() {
                 </tbody>
               </table>
             </div>
+
+            <UsersPanel />
           </>
         )}
       </div>
