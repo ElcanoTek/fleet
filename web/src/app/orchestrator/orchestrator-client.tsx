@@ -105,29 +105,14 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
     );
   }
 
-  // #458 symptom 1: a chat-cookie user authenticated to chat but NOT provisioned
-  // in the orchestrator (/me returned 403 not_a_member). They are genuinely
-  // signed in, so the login card would be a dead-end loop — show a clear
-  // no-access card instead, mirroring chat's /no-access page. This must come
-  // BEFORE the !signedIn branch, since noAccess implies !signedIn.
-  if (session.noAccess) {
-    return (
-      <div className="container">
-        <OrchestratorSlimHeader />
-        <div className="auth-section" role="region" aria-label="No access">
-          <div className="auth-fields stack-form" data-testid="orchestrator-no-access">
-            <h2>No Operations Center access</h2>
-            <p className="caption">
-              You&rsquo;re signed in, but your account hasn&rsquo;t been granted access to the
-              Operations Center. Ask an administrator to provision your account.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // Signed out — slim top bar (theme + cross-link) above the login card; no rail.
+  // #458 symptom 1: when the visitor IS signed in to chat but that identity
+  // isn't provisioned here (/me → 403 not_a_member, session.noAccess), we still
+  // render the login card — the username/password (moc) path can admit a
+  // provisioned operator even when the cookie identity can't — but with a notice
+  // explaining why a login prompt appeared, instead of a bare, confusing form or
+  // a dead-end card that would strand a valid moc user. A genuinely signed-out
+  // visitor (401) gets the plain card with no notice.
   if (!session.signedIn) {
     return (
       <div className="container">
@@ -136,6 +121,11 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
           elcanoLoginEnabled={elcanoLoginEnabled}
           onLogin={session.login}
           error={session.error}
+          notice={
+            session.noAccess
+              ? "You're signed in, but that identity isn't provisioned for the Operations Center. Sign in with Operations Center credentials below, or ask an administrator to provision your account."
+              : undefined
+          }
         />
       </div>
     );
