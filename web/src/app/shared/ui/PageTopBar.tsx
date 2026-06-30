@@ -22,7 +22,11 @@ export type PageTopBarProps = {
 export function PageTopBar({ title, onMenu, actions }: PageTopBarProps) {
   return (
     <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-6">
-      <div className="flex min-w-0 items-center gap-3">
+      {/* min-h matches the action-button size (size-11 / sm:size-8) so the bar
+          is the same height whether or not a view supplies actions — Chat (with
+          its header controls) and the Operations Center (none) line up exactly,
+          with no height/title jump when switching between them. */}
+      <div className="flex min-h-11 min-w-0 items-center gap-3 sm:min-h-8">
         <button
           aria-label="Open sidebar"
           className="inline-flex size-9 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] lg:hidden"
