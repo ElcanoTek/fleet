@@ -2,8 +2,13 @@
 //
 // A single Postgres database holds all users' conversations and the
 // event-level message log produced by [agent.RunTurn]. Every read path is
-// scoped by user_email — there is no superuser query — so cross-user access
-// requires an auth-layer breach first.
+// scoped by user_email, with ONE narrow, opt-in exception:
+// [Store.ListTeamConversations] (#237) returns conversations that same-team
+// members have explicitly shared (team_visible = TRUE), read-only. That single
+// query is doubly gated — by a shared users.team_id AND by the per-conversation
+// owner opt-in — so a shared team never auto-exposes private history, and there
+// is still no unconditional superuser query. See docs/adr/0013-team-rbac.md.
+// Cross-user access otherwise requires an auth-layer breach first.
 //
 // # Retention
 //

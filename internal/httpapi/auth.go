@@ -14,13 +14,23 @@ package httpapi
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 type ctxKey string
 
-const ctxKeyUser ctxKey = "user_email"
+const (
+	ctxKeyUser ctxKey = "user_email"
+	// ctxKeyRole carries the caller's RBAC role (#237), enriched by
+	// membershipMiddleware from the users table so downstream gates
+	// (rejectViewerWrites, adminMiddleware) don't each re-query. Absent (empty)
+	// on the test seam path, which treats every member as a plain member.
+	ctxKeyRole ctxKey = "user_role"
+)
 
 // authMiddleware enforces the shared-secret + user-email headers.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
@@ -69,6 +79,14 @@ func userFromCtx(ctx context.Context) string {
 	return v
 }
 
+// roleFromCtx returns the caller's RBAC role enriched by membershipMiddleware,
+// or "" when unknown (the test seam path). "" is treated as a plain member by
+// the gates — never as admin, so an un-enriched request can't escalate.
+func roleFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyRole).(string)
+	return v
+}
+
 // membershipMiddleware enforces the scoped-tier user-list gate. A request
 // that already cleared authMiddleware (valid shared token + X-User-Email)
 // is admitted only if that email belongs to a provisioned chat user. This
@@ -84,22 +102,70 @@ func userFromCtx(ctx context.Context) string {
 func (s *Server) membershipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		email := userFromCtx(r.Context())
-		check := s.isMember
-		if check == nil {
-			check = s.store.IsUser
+		ctx := r.Context()
+
+		// Test seam: when isMember is injected, do a membership-only check and
+		// skip role/team enrichment (the fake store embeds a nil *store.Store,
+		// so GetUser would panic). Production leaves isMember nil and takes the
+		// enriching path below.
+		if s.isMember != nil {
+			ok, err := s.isMember(ctx, email)
+			if err != nil {
+				http.Error(w, "membership check failed", http.StatusInternalServerError)
+				return
+			}
+			if !ok {
+				writeNotAMember(w)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
 		}
-		ok, err := check(r.Context(), email)
+
+		// Production: a single lookup both admits the user AND enriches the
+		// request with their role + team (#237), so downstream gates don't
+		// re-query. ErrUserNotFound is the "valid cookie, not a chat user" case.
+		u, err := s.store.GetUser(ctx, email)
+		if errors.Is(err, store.ErrUserNotFound) {
+			writeNotAMember(w)
+			return
+		}
 		if err != nil {
 			http.Error(w, "membership check failed", http.StatusInternalServerError)
 			return
 		}
-		if !ok {
-			// Distinct, machine-readable body so the Next.js layer can tell
-			// "valid cookie but not a chat user" apart from other 403s and
-			// render the no-access page instead of bouncing back to login.
+		ctx = context.WithValue(ctx, ctxKeyRole, u.Role)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// writeNotAMember emits the distinct, machine-readable 403 the Next.js layer
+// keys on to render the no-access page instead of bouncing back to login.
+func writeNotAMember(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`{"error":"not_a_member"}`))
+}
+
+// rejectViewerWrites blocks the read-only "viewer" role (#237) from MUTATING a
+// route it wraps, returning 403 {"error":"read_only"}. It is method-aware:
+// safe methods (GET/HEAD/OPTIONS) always pass so a viewer keeps full read
+// access, and only state-changing methods (POST/PATCH/PUT/DELETE) are gated.
+// This lets it wrap the mixed read+write handlers (/conversations, …) without a
+// per-method split at every call site. It runs AFTER membershipMiddleware so
+// the role is in context; an un-enriched request (role "", the test seam) is
+// treated as a non-viewer and passes — viewer is the only role this stops.
+func (s *Server) rejectViewerWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		if roleFromCtx(r.Context()) == store.RoleViewer {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":"not_a_member"}`))
+			_, _ = w.Write([]byte(`{"error":"read_only"}`))
 			return
 		}
 		next.ServeHTTP(w, r)

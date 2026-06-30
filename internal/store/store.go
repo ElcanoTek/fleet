@@ -913,7 +913,16 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 		return nil, err
 	}
 	defer rows.Close()
+	return scanConversationRows(rows)
+}
 
+// conversationListColumns is the SELECT list (in scan order) every conversation-
+// LIST query shares, so ListFiltered and ListTeamConversations stay in lockstep.
+// (Aliased with a `c.` prefix-friendly bare form; callers prefix as needed.)
+const conversationListColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0)`
+
+// scanConversationRows scans a rows set produced with conversationListColumns.
+func scanConversationRows(rows *sql.Rows) ([]Conversation, error) {
 	var out []Conversation
 	for rows.Next() {
 		var c Conversation
@@ -927,6 +936,62 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// ErrNoTeam is returned by ListTeamConversations when the caller has no team_id —
+// there is no team to scope to. The HTTP layer maps it to 400.
+var ErrNoTeam = errors.New("caller has no team")
+
+// ListTeamConversations returns the active conversations that members of the
+// caller's team have SHARED with the team (team_visible = TRUE), read-only (#237).
+// Team membership alone never exposes a conversation — only the owner's explicit
+// share-with-team does — so this preserves the per-user privacy default while
+// enabling "manager sees the team's shared threads". Returns ErrNoTeam when the
+// caller has no team_id. This is the ONLY cross-user conversation read path; it
+// is gated by shared team_id AND the per-conversation opt-in (see ADR-0013).
+func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) ([]Conversation, error) {
+	callerEmail = normalizeEmail(callerEmail)
+	caller, err := s.GetUser(ctx, callerEmail)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(caller.TeamID) == "" {
+		return nil, ErrNoTeam
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+conversationListColumns+`
+		FROM conversations c
+		WHERE c.deleted_at IS NULL
+		  AND c.archived_at IS NULL
+		  AND c.team_visible = TRUE
+		  AND c.user_email IN (SELECT email FROM users WHERE team_id = $1)
+		ORDER BY c.pinned DESC, c.updated_at DESC, c.id DESC`,
+		caller.TeamID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanConversationRows(rows)
+}
+
+// SetConversationTeamVisible flips a conversation's team_visible flag (#237). Only
+// the OWNER may change it (the WHERE user_email gate), so one teammate can't
+// expose another's conversation. Returns ErrConversationNotFound when the caller
+// doesn't own a conversation with that id.
+func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) error {
+	ownerEmail = normalizeEmail(ownerEmail)
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET team_visible = $1, updated_at = $2
+		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		visible, time.Now().Unix(), convID, ownerEmail)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.New("conversation not found")
+	}
+	return nil
 }
 
 // List returns the user's active (or, when archivedOnly, archived) conversations,

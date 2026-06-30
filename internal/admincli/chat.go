@@ -23,7 +23,7 @@ func cmdChat(argv []string) int {
 		return chattui.Run(argv)
 	}
 	if len(argv) < 2 {
-		return errf(1, "usage: fleet chat user add|update|del|list  (or `fleet chat` for the agent TUI)")
+		return errf(1, "usage: fleet chat user add|update|role|del|list  (or `fleet chat` for the agent TUI)")
 	}
 	sub := argv[1]
 	rest := argv[2:]
@@ -32,6 +32,8 @@ func cmdChat(argv []string) int {
 		return chatUserUpsert(rest, true)
 	case "update", "passwd", "password":
 		return chatUserUpsert(rest, false)
+	case "role", "set-role":
+		return chatUserRole(rest)
 	case "del", "delete", "rm":
 		return chatUserDel(rest)
 	case "list", "ls":
@@ -39,6 +41,64 @@ func cmdChat(argv []string) int {
 	default:
 		return errf(1, "unknown chat user subcommand %q", sub)
 	}
+}
+
+// chatUserRole assigns an RBAC role and/or team to an existing chat user (#237):
+//
+//	fleet chat user role <email> --role viewer
+//	fleet chat user role <email> --team growth
+//	fleet chat user role <email> --role admin --team growth
+//	fleet chat user role <email> --team ""        # clear the team
+//
+// A flag left unset leaves that column untouched (partial PATCH), matching
+// store.SetUserRoleTeam. At least one of --role/--team must be provided.
+func chatUserRole(argv []string) int {
+	fs := flag.NewFlagSet("chat user role", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "chat Postgres DSN")
+	role := fs.String("role", "", "role: member|viewer|admin")
+	team := fs.String("team", "", `team id (empty string clears the team)`)
+	email, flagArgs := splitPositional(argv)
+	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+	if email == "" {
+		return errf(1, "email required")
+	}
+	// Only forward flags the operator actually set, so an omitted flag is a
+	// no-op rather than an empty write. fs.Visit reports only set flags.
+	var rolePtr, teamPtr *string
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "role":
+			rolePtr = role
+		case "team":
+			teamPtr = team
+		}
+	})
+	if rolePtr == nil && teamPtr == nil {
+		return errf(1, "provide --role and/or --team")
+	}
+
+	dsn, err := chatDSN(*dbURL)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	if err != nil {
+		return errf(1, "open chat DB: %v", err)
+	}
+	defer st.Close()
+
+	u, err := st.SetUserRoleTeam(context.Background(), email, rolePtr, teamPtr)
+	if err != nil {
+		return errf(5, "%v", err)
+	}
+	teamLabel := u.TeamID
+	if teamLabel == "" {
+		teamLabel = "(none)"
+	}
+	fmt.Printf("updated %s: role=%s team=%s\n", u.Email, u.Role, teamLabel)
+	return 0
 }
 
 // chatUserUpsert handles add (create) and update (password change). The password
@@ -142,7 +202,12 @@ func chatUserList(argv []string) int {
 		return 0
 	}
 	for _, u := range users {
-		fmt.Println(u.Email)
+		team := u.TeamID
+		if team == "" {
+			team = "-"
+		}
+		// email  role  team — tab-separated so it stays greppable/column-able.
+		fmt.Printf("%s\t%s\t%s\n", u.Email, u.Role, team)
 	}
 	return 0
 }

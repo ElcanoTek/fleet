@@ -16,9 +16,35 @@ import (
 // bcrypt hashes; plaintext is only surfaced at creation time by the
 // admin CLI and never logged.
 type User struct {
-	Email     string
+	Email string
+	// Role is one of "member" (default), "viewer" (read-only), or "admin" (#237).
+	// A user in the ADMIN_EMAILS env allowlist is treated as admin regardless of
+	// this column (an out-of-band bootstrap gate); see Server.isAdmin.
+	Role string
+	// TeamID groups users into a read-sharing trust group. Empty = no team. A
+	// teammate sees a conversation only once its owner opts in (team_visible),
+	// so a shared team_id never auto-exposes private history.
+	TeamID    string
 	CreatedAt int64
 	UpdatedAt int64
+}
+
+// Role constants (#237). Kept in sync with the CHECK constraint in
+// migrations/024_rbac.sql.
+const (
+	RoleMember = "member"
+	RoleViewer = "viewer"
+	RoleAdmin  = "admin"
+)
+
+// ValidRole reports whether r is a recognized role.
+func ValidRole(r string) bool {
+	switch r {
+	case RoleMember, RoleViewer, RoleAdmin:
+		return true
+	default:
+		return false
+	}
 }
 
 // ErrUserNotFound is returned by VerifyUser / GetUser when the email is
@@ -68,7 +94,67 @@ func (s *Store) CreateUser(ctx context.Context, email, plainPassword string) (*U
 		}
 		return nil, err
 	}
-	return &User{Email: email, CreatedAt: now, UpdatedAt: now}, nil
+	// role defaults to 'member' via the column default (#237); reflect that here.
+	return &User{Email: email, Role: RoleMember, CreatedAt: now, UpdatedAt: now}, nil
+}
+
+// GetUser returns the full user record (role + team included). Returns
+// ErrUserNotFound when the email isn't provisioned — the membership middleware
+// uses this to admit known users AND enrich the request with their role/team.
+func (s *Store) GetUser(ctx context.Context, email string) (*User, error) {
+	email = normalizeEmail(email)
+	if email == "" {
+		return nil, ErrUserNotFound
+	}
+	var u User
+	var teamID sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT email, role, team_id, created_at, updated_at FROM users WHERE email = $1`, email).
+		Scan(&u.Email, &u.Role, &teamID, &u.CreatedAt, &u.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	u.TeamID = teamID.String
+	return &u, nil
+}
+
+// SetUserRoleTeam applies a partial role/team update (PATCH /admin/users/{email},
+// #237): a nil pointer leaves that column untouched, a non-nil one writes it (an
+// empty team_id string clears the team → NULL). Validates role against the CHECK
+// set. Returns the updated user, or ErrUserNotFound when the email is absent.
+func (s *Store) SetUserRoleTeam(ctx context.Context, email string, role, teamID *string) (*User, error) {
+	email = normalizeEmail(email)
+	if role != nil && !ValidRole(*role) {
+		return nil, fmt.Errorf("invalid role %q (want member|viewer|admin)", *role)
+	}
+	// COALESCE($n, current) leaves a column untouched when its arg is NULL; an
+	// empty team_id is written as SQL NULL so "clear the team" round-trips.
+	var teamArg any
+	if teamID != nil {
+		if strings.TrimSpace(*teamID) == "" {
+			teamArg = nil // explicit clear
+		} else {
+			teamArg = strings.TrimSpace(*teamID)
+		}
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE users
+		SET role     = COALESCE($2, role),
+		    team_id  = CASE WHEN $4::bool THEN $3 ELSE team_id END,
+		    updated_at = $5
+		WHERE email = $1`,
+		email, role, teamArg, teamID != nil, time.Now().Unix(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrUserNotFound
+	}
+	return s.GetUser(ctx, email)
 }
 
 // dummyPasswordHash is bcrypt-compared against on the unknown-email
@@ -194,7 +280,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 // ListUsers returns every provisioned user, sorted by email.
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT email, created_at, updated_at FROM users ORDER BY email ASC`)
+		`SELECT email, role, team_id, created_at, updated_at FROM users ORDER BY email ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -202,9 +288,11 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.Email, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		var teamID sql.NullString
+		if err := rows.Scan(&u.Email, &u.Role, &teamID, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
+		u.TeamID = teamID.String
 		out = append(out, u)
 	}
 	return out, rows.Err()

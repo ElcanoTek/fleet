@@ -16,7 +16,7 @@
 //	fleet restart|stop [--service <name>]
 //	fleet logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
 //	fleet chat                                        (interactive agent TUI, #457; --message for one-shot)
-//	fleet chat user add|update|del|list
+//	fleet chat user add|update|role|del|list
 //	fleet sched user add|update|set-role|rename|del|list
 //	fleet sched apikey create|list|revoke|delete
 //	fleet sched task export|import|set-model|set-credentials|set-description|tag|estimate|batch-create
@@ -125,6 +125,7 @@ Operator lifecycle (bootstrap → update → status):
 Users, credentials, notes:
   fleet chat user add <email>    --password -
   fleet chat user update <email> --password -
+  fleet chat user role <email>   --role member|viewer|admin [--team <id>]
   fleet chat user del <email>
   fleet chat user list
   fleet sched user add <username> --role admin|client|readonly --password -
