@@ -1,7 +1,7 @@
 # ADR-0007: Governed sub-agents spawn only through the one run loop
 
 - **Status:** Accepted
-- **Date:** 2026-06-28
+- **Date:** 2026-06-28 (amended 2026-06-30 for #264)
 - **Deciders:** fleet maintainers
 
 ## Context
@@ -27,10 +27,12 @@ constraint, and the additional invariants their power demands.
 
 A sub-agent is **another `agentcore.Run`, governed exactly like its parent.** The
 `spawn_subagent` native tool (`internal/agent/subagent.go`) only adapts I/O around
-a fresh `agent.Agent.Execute` (→ `agentcore.Run`). It is **OFF by default**,
-gated behind `FLEET_SUBAGENTS_ENABLED` (mirroring `FLEET_PHONE_A_FRIEND_ENABLED`);
-when off the tool is not even registered. When on, every spawn obeys four
-non-negotiable properties:
+a fresh `agent.Agent.Execute` (→ `agentcore.Run`). It is **OFF by default** and
+turned on **per task** via `allow_delegation: true` OR **fleet-wide** via
+`FLEET_SUBAGENTS_ENABLED` (the two compose as OR — the env flag is the operator
+override, the task flag the granular opt-in; #264). When both are off the tool is
+not even registered, and it is **only ever** registered in scheduled mode, never in
+interactive chat. When on, every spawn obeys these non-negotiable properties:
 
 1. **Governance is one core.** The child runs through `(*Agent).Execute`, the same
    governed entrypoint the conformance test pins. No second loop, no second
@@ -44,15 +46,20 @@ non-negotiable properties:
    per-child model is resolved **host-side** (like the phone-a-friend reviewer),
    so credentials never enter the sandbox or model context.
 
-3. **Hard budget split.** The child's cost/token ceiling is **sliced from the
-   parent's remaining budget**, and the child's actual spend is **charged back**
-   into the parent after it returns. The parent ceiling is therefore a hard wall
+3. **Hard budget split.** The child's cost/token ceiling is **capped at a fraction
+   of the parent's remaining budget** (`FLEET_SUBAGENTS_BUDGET_FRACTION`, default
+   `0.10`) and **sliced from what the parent has left**; the child's actual spend is
+   **charged back** into the parent after it returns. A request above the per-child
+   cap is **refused** (not clamped). The parent ceiling is therefore a hard wall
    that the collective spend of all descendants — across fan-out *and* depth —
    can never breach.
 
-4. **Recursion / fan-out caps.** A small `maxDepth` (default 2) bounds recursion
-   and a `maxChildren` (default 4) bounds per-parent fan-out. A spawn exceeding
-   either is **refused with a tool error** — never a panic, never a silent allow.
+4. **One-level delegation + fan-out cap.** `maxDepth` (default `1`) means **parent →
+   sub-agent only**: a child is built **without** the `spawn_subagent` tool (the
+   primary, structural enforcement — non-registration, immune to an off-by-one in a
+   counter), with the in-body depth check as a backstop. `maxChildren` (default `5`)
+   bounds per-parent fan-out. A spawn exceeding either is **refused with an error
+   result** — never a panic, never a silent allow, never a block.
 
 ## Enforcement
 
@@ -85,9 +92,53 @@ non-negotiable properties:
   `childSelection` (intersection, never union). Tests:
   `TestSpawn_AllowServersOnlyNarrows`,
   `TestSpawn_ChildRunsThroughGovernedCoreWithSlicedBudgetAndDepth`.
-- **Off by default:** `config.SubagentsEnabled` defaults false; the tool is
-  registered only when enabled (`Execute`). Test:
+- **Off by default:** `config.SubagentsEnabled` defaults false and no task opts in;
+  the tool is registered only when enabled (`Execute`). Test:
   `TestExecute_RegistersSpawnToolOnlyWhenEnabled`.
+
+## #264 amendment — agent delegation completed
+
+Issue #264 ("agent delegation — spawn sub-agents for parallel work") was filed
+before #175 landed and asked for a `delegate_task` tool. Because #175 already built
+the governed delegation core, #264 is **completed by extending that one tool**, not
+by adding a second `delegate_task` entrypoint (which would be the forked, weaker
+path this ADR exists to forbid — a second registration, a second name in the audit
+log, and an LLM-ergonomics hazard of two identical tools). The behavioural deltas,
+all preserving the properties above:
+
+- **Per-task opt-in.** A new `allow_delegation` task field registers the tool for
+  that task even when `FLEET_SUBAGENTS_ENABLED` is off; they compose as OR. The
+  env flag is **retained** as the fleet-wide operator override — a literal reading
+  of #264 ("opt-in per task, not a global toggle") is satisfied because the
+  per-task flag is *sufficient on its own*; the env flag is an additional override,
+  not a precondition. Default deployments (both off) are byte-for-byte unchanged.
+  The flag is threaded like `allow_network` (DB column, export/import, rerun
+  overrides). Tests: `TestTaskAllowDelegationRoundTrip`,
+  `TestExportImport_AllowDelegationRoundTrip`.
+- **Parallel fan-out.** The tool is marked **parallel** (`NewParallelAgentTool`),
+  so fantasy dispatches multiple `spawn_subagent` calls in one turn concurrently
+  (its parallel-tool semaphore bounds true concurrency) and the parent collects all
+  results before its next LLM call. The atomic reservation already made this safe;
+  the marking is what lets fantasy drive it. Test:
+  `TestSpawn_ParallelExecutionWallClock` (wall-clock ≪ sum of sequential).
+- **JSON result.** The tool now returns `{result, cost_usd, tokens, success}` so a
+  parent can branch deterministically on concurrently-returned results; refusals
+  are `success:false` results, never a panic. Test: `TestSpawn_JSONResultShape`.
+- **Default changes (all tighten or align governance).** `maxDepth` 2→**1**
+  (children get no spawn tool — "parent → sub-agent only"), `maxChildren` 4→**5**
+  (#264's "max 5"), and the per-child budget grant moves from a 50% default slice
+  to a **10%** cap that *refuses* over-cap requests (`FLEET_SUBAGENTS_BUDGET_FRACTION`,
+  configurable). Lowering depth also forecloses a latent deadlock against fantasy's
+  shared parallel-tool semaphore.
+- **Per-child `timeout_minutes` + `max_iterations`.** Optional bounds on a child's
+  wall-clock and agent steps; the child ctx derives from the parent's, so a parent
+  kill-switch cancels children too, and spend is charged back on every exit path
+  (success, error, timeout, panic). Tests: `TestSpawn_TimeoutBranchAndChargeBack`,
+  `TestBuildChild_MaxIterationsCappedAtParent`.
+- **Traceability (`parent_task_id`).** A child's session log carries the owning
+  task id and the parent's persisted log gains a `subagent_spawned` linkage entry
+  with the child id + spend. Tests: `TestBuildChild_ParentTaskIDLinkage`,
+  `TestRecordSubagentSpawn_AppendsToParentLog`.
 
 This ADR **extends** ADR-0001 rather than superseding it: it does not weaken the
 one-governed-loop invariant, it adds the privilege/budget/recursion constraints

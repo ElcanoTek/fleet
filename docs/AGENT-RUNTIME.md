@@ -462,17 +462,32 @@ ceilings, and round cap as everything else.
 
 ---
 
-## Governed sub-agents (#175)
+## Governed sub-agents / agent delegation (#175, completed by #264)
 
-An **optional, off-by-default** capability (`FLEET_SUBAGENTS_ENABLED`) that adds a
-`spawn_subagent` native tool so a scheduled run can delegate a scoped subtask to a
-**child** run. The child is **not** a new or weaker loop — it is another
-`agentcore.Run`, governed exactly like the parent (see
-[ADR-0007](adr/0007-governed-sub-agents.md)). The tool body
-(`internal/agent/subagent.go`) only adapts I/O around a fresh
-`agent.Agent.Execute`.
+An **optional, off-by-default** capability that adds a `spawn_subagent` native tool
+so a scheduled run can delegate a scoped subtask to a **child** run — the agent
+delegation issue #264 asks for, realized as this one tool rather than a second
+`delegate_task` entrypoint (a second tool would be the forked, weaker path
+[ADR-0001](adr/0001-one-governed-run-loop.md)/[ADR-0007](adr/0007-governed-sub-agents.md)
+forbid). The child is **not** a new or weaker loop — it is another `agentcore.Run`,
+governed exactly like the parent. The tool body (`internal/agent/subagent.go`) only
+adapts I/O around a fresh `agent.Agent.Execute`.
 
-Each spawn obeys four non-negotiable properties:
+**Two ways to turn it on (either suffices):**
+
+- **Per task** — set `allow_delegation: true` on the scheduled task. This is the
+  granular opt-in (#264): the tool is registered for that task even when the
+  fleet-wide flag is off.
+- **Fleet-wide** — `FLEET_SUBAGENTS_ENABLED` is the operator override that enables
+  it for every scheduled task (the #175 behaviour, retained).
+
+They compose as **OR** (`FLEET_SUBAGENTS_ENABLED || task.allow_delegation`). With
+both off (the default) the tool is **not even registered** and behaviour is
+identical to before. Delegation is honoured **only in scheduled mode** — it is
+never registered in interactive chat, regardless of config (parallel unattended
+sub-agents are too expensive/unpredictable for a live session).
+
+Each spawn obeys these non-negotiable properties:
 
 - **Governance is one core.** The child runs through `(*Agent).Execute → agentcore.Run`
   — the same governed entrypoint, pinned by `TestEntrypointConformance`.
@@ -483,26 +498,40 @@ Each spawn obeys four non-negotiable properties:
   loaded; the credential allowlist is the parent's, copied). A per-child model is
   resolved **host-side** like the phone-a-friend reviewer, so credentials never
   enter the sandbox or model context.
-- **Hard budget split.** The child's cost/token ceiling is **sliced from the
-  parent's remaining budget**, and the child's actual spend is **charged back**
-  into the parent. The parent's configured `MaxCostUSD`/`MaxTotalTokens` is the
-  hard wall the collective spend of all descendants — across fan-out *and* depth —
-  can never breach.
-- **Recursion / fan-out caps.** `FLEET_SUBAGENTS_MAX_DEPTH` (default 2) bounds
-  recursion and `FLEET_SUBAGENTS_MAX_CHILDREN` (default 4) bounds per-parent
-  fan-out; a spawn exceeding either is **refused with a tool error**, never a
-  panic or silent allow.
+- **Hard budget split.** The child's cost/token ceiling is **capped at a fraction
+  of the parent's remaining budget** (`FLEET_SUBAGENTS_BUDGET_FRACTION`, default
+  `0.10` = the #264 "≤10% of remaining per child") and **sliced from what the
+  parent has left**, and the child's actual spend is **charged back** into the
+  parent. A request for `max_cost_usd`/`max_total_tokens` **above** the per-child
+  cap is **refused** (not silently clamped). The parent's configured
+  `MaxCostUSD`/`MaxTotalTokens` is the hard wall the collective spend of all
+  descendants can never breach.
+- **One-level delegation.** `FLEET_SUBAGENTS_MAX_DEPTH` (default `1`) means
+  **parent → sub-agent only**: a child does not get the `spawn_subagent` tool
+  registered at all, so it cannot delegate further. An operator can raise the depth
+  to allow deeper trees.
+- **Fan-out cap.** `FLEET_SUBAGENTS_MAX_CHILDREN` (default `5`) bounds per-parent
+  fan-out; the `(N+1)`-th spawn is **refused** with `"max concurrent sub-agents
+  reached"` as an error **result** rather than blocking.
 
-Stated plainly (honesty in docs): with the flag off (the default), the tool is not
-even registered and behaviour is identical to before. The budget split combines an
-**atomic up-front reservation** of each child's granted ceiling (held against the
-parent's remaining budget under the parent mutex for as long as the child runs)
-with **charge-back** of the child's actual spend on return. Because the
-reservation is atomic, even N **concurrent** spawns can never collectively be
-granted more than the parent has left — the wall does **not** rely on
-`spawn_subagent` being a sequential tool (a concurrency regression test pins this
-under `-race`; see ADR-0007). `FLEET_SUBAGENTS_MODEL` names a default child model
-slug; empty means the child inherits the parent's model.
+**Parallel fan-out (#264).** The tool is marked **parallel**, so when the model
+emits several `spawn_subagent` calls in one turn, fantasy dispatches them
+**concurrently** (bounded by its parallel-tool semaphore) and the parent collects
+all results before its next LLM call. The result is **machine-parseable JSON**
+`{result, cost_usd, tokens, success}` so the parent can branch deterministically
+even when several children return at once. The budget split combines an **atomic
+up-front reservation** of each child's granted ceiling (held against the parent's
+remaining budget under the parent mutex for as long as the child runs) with
+**charge-back** of the child's actual spend on return — so even N **concurrent**
+spawns can never collectively be granted more than the parent has left (a
+concurrency regression test pins this under `-race`; the wall-clock test pins that
+fan-out actually runs in parallel). An optional per-child `timeout_minutes` bounds
+a child's wall-clock (spend is still charged back on timeout, `success=false`), and
+`max_iterations` caps its agent steps (clamped at the parent's). A spawned child's
+run is linked back to its owning task via `parent_task_id` (on the child's session
+log and a `subagent_spawned` entry in the parent's persisted log) for traceability.
+`FLEET_SUBAGENTS_MODEL` names a default child model slug; empty means the child
+inherits the parent's model.
 
 ---
 

@@ -382,6 +382,7 @@ type TaskTemplateTask struct {
 	Timezone               string   `yaml:"timezone,omitempty" json:"timezone,omitempty"`
 	Priority               int      `yaml:"priority,omitempty" json:"priority,omitempty"`
 	AllowNetwork           bool     `yaml:"allow_network,omitempty" json:"allow_network,omitempty"`
+	AllowDelegation        bool     `yaml:"allow_delegation,omitempty" json:"allow_delegation,omitempty"`
 	InstructionSelfImprove bool     `yaml:"instruction_self_improve,omitempty" json:"instruction_self_improve,omitempty"`
 	Persona                string   `yaml:"persona,omitempty" json:"persona,omitempty"`
 	Description            string   `yaml:"description,omitempty" json:"description,omitempty"`
