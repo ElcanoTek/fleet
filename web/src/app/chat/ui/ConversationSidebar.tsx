@@ -219,22 +219,7 @@ function LabelsPanel({
   );
 }
 
-function PanelBack({ title, onBack }: { title: string; onBack: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onBack}
-      className="flex w-full items-center gap-1.5 rounded-[0.4rem] px-2 py-1.5 text-left text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:bg-[var(--color-overlay-soft)] focus-visible:outline-none"
-    >
-      <Icon name="chevron-right" className="size-3.5 rotate-180" />
-      {title}
-    </button>
-  );
-}
-
 // ── Per-row kebab menu ───────────────────────────────────────────────────────
-type KebabPanel = "root" | "folder" | "labels";
-
 function ConversationKebab({
   conversation,
   folders,
@@ -267,13 +252,47 @@ function ConversationKebab({
   onDelete: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [panel, setPanel] = useState<KebabPanel>("root");
+  const [flyout, setFlyout] = useState<null | "folder" | "labels">(null);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
+  // The menu item that opened the active flyout — the flyout anchors to it and
+  // focus returns here on Escape. Captured from the click's currentTarget.
+  const flyoutAnchorRef = useRef<HTMLElement | null>(null);
   const close = () => {
     setOpen(false);
-    setPanel("root");
+    setFlyout(null);
+  };
+  const toggleFlyout = (which: "folder" | "labels", el: HTMLElement) => {
+    flyoutAnchorRef.current = el;
+    setFlyout((cur) => (cur === which ? null : which));
   };
   const labels = conversation.labels ?? [];
+  const caret = (
+    <span aria-hidden="true" className="text-[0.62rem] text-[var(--color-text-muted)]">
+      ▸
+    </span>
+  );
+  const flyoutContent =
+    flyout === "folder" ? (
+      <FolderPanel
+        folders={folders}
+        currentFolder={conversation.folder || undefined}
+        onPick={(name) => {
+          onSetFolder(name);
+          close();
+        }}
+        onRemove={() => {
+          onSetFolder(null);
+          close();
+        }}
+      />
+    ) : flyout === "labels" ? (
+      <LabelsPanel
+        current={labels}
+        suggestions={allLabelNames}
+        onAdd={(label) => onSetLabels(addLabelTo(labels, label))}
+        onRemove={(label) => onSetLabels(labels.filter((l) => l !== label))}
+      />
+    ) : null;
 
   return (
     <>
@@ -285,16 +304,18 @@ function ConversationKebab({
         aria-label={`Conversation options for ${conversation.title}`}
         title="Conversation options"
         className={[
-          "pointer-events-auto inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:outline-none sm:size-7",
+          // Fixed, centered, padded square (~1.8rem) per the handoff .conv-kebab —
+          // a rounded hover highlight around the centered icon, not hugging it.
+          "pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
         ].join(" ")}
         onClick={(e) => {
           e.stopPropagation();
-          setPanel("root");
+          setFlyout(null);
           setOpen((o) => !o);
         }}
       >
-        <Icon name="dots" className="size-4" />
+        <Icon name="dots" className="size-[1.1rem]" />
       </button>
       <Menu
         open={open}
@@ -303,152 +324,125 @@ function ConversationKebab({
         placement="bottom-end"
         label={`Options for ${conversation.title}`}
         className="min-w-[12rem]"
+        flyout={flyoutContent}
+        flyoutOpen={flyout !== null}
+        flyoutAnchorRef={flyoutAnchorRef}
+        onFlyoutClose={() => setFlyout(null)}
+        flyoutLabel={flyout === "folder" ? "Add to folder" : "Labels"}
       >
-        {panel === "root" ? (
+        <MenuItem
+          icon={<Icon name="pin" className="size-4" />}
+          onClick={() => {
+            onPin();
+            close();
+          }}
+        >
+          {conversation.pinned ? "Unpin" : "Pin"}
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name="edit" className="size-4" />}
+          onClick={() => {
+            close();
+            onRename();
+          }}
+        >
+          Rename
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name="folder" className="size-4" />}
+          ariaHasPopup
+          ariaExpanded={flyout === "folder"}
+          trailing={caret}
+          onClick={(e) => toggleFlyout("folder", e.currentTarget)}
+        >
+          Add to folder
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name="tag" className="size-4" />}
+          ariaHasPopup
+          ariaExpanded={flyout === "labels"}
+          trailing={caret}
+          onClick={(e) => toggleFlyout("labels", e.currentTarget)}
+        >
+          Labels
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem
+          icon={<Icon name="download" className="size-4" />}
+          onClick={() => {
+            onDownload();
+            close();
+          }}
+        >
+          Download as JSON
+        </MenuItem>
+        {isShared ? (
           <>
             <MenuItem
-              icon={<Icon name="pin" className="size-4" />}
+              icon={<ShareGlyph className="size-4" />}
               onClick={() => {
-                onPin();
+                onCopyLink();
                 close();
               }}
             >
-              {conversation.pinned ? `Unpin ${conversation.title}` : `Pin ${conversation.title}`}
+              Copy share link
             </MenuItem>
             <MenuItem
-              icon={<Icon name="edit" className="size-4" />}
+              icon={<ShareGlyph off className="size-4" />}
               onClick={() => {
-                close();
-                onRename();
-              }}
-            >
-              Rename
-            </MenuItem>
-            <MenuItem
-              icon={<Icon name="download" className="size-4" />}
-              onClick={() => {
-                onDownload();
+                onUnshare();
                 close();
               }}
             >
-              Download {conversation.title} as JSON
+              Stop sharing
             </MenuItem>
-            <MenuItem
-              icon={<Icon name="folder" className="size-4" />}
-              ariaHasPopup
-              ariaExpanded={false}
-              trailing={<span aria-hidden="true" className="text-[0.62rem] text-[var(--color-text-muted)]">▸</span>}
-              onClick={() => setPanel("folder")}
-            >
-              Add to folder
-            </MenuItem>
-            <MenuItem
-              icon={<Icon name="tag" className="size-4" />}
-              ariaHasPopup
-              ariaExpanded={false}
-              trailing={<span aria-hidden="true" className="text-[0.62rem] text-[var(--color-text-muted)]">▸</span>}
-              onClick={() => setPanel("labels")}
-            >
-              Labels
-            </MenuItem>
-            <MenuSeparator />
-            {isShared ? (
-              <>
-                <MenuItem
-                  icon={<ShareGlyph className="size-4" />}
-                  onClick={() => {
-                    onCopyLink();
-                    close();
-                  }}
-                >
-                  Copy share link
-                </MenuItem>
-                <MenuItem
-                  icon={<ShareGlyph off className="size-4" />}
-                  onClick={() => {
-                    onUnshare();
-                    close();
-                  }}
-                >
-                  Stop sharing {conversation.title}
-                </MenuItem>
-              </>
-            ) : (
-              <MenuItem
-                icon={<ShareGlyph className="size-4" />}
-                onClick={() => {
-                  onShare();
-                  close();
-                }}
-              >
-                Share {conversation.title}
-              </MenuItem>
-            )}
-            <MenuSeparator />
-            <MenuItem
-              icon={
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  className="size-4"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.8}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <rect x="3" y="4" width="18" height="4" rx="1" />
-                  <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-                  <path d="M10 12h4" />
-                </svg>
-              }
-              onClick={() => {
-                onArchive();
-                close();
-              }}
-            >
-              Archive {conversation.title}
-            </MenuItem>
-            <MenuItem
-              danger
-              icon={<Icon name="trash" className="size-4" />}
-              onClick={() => {
-                onDelete();
-                close();
-              }}
-            >
-              Delete {conversation.title}
-            </MenuItem>
-          </>
-        ) : panel === "folder" ? (
-          <>
-            <PanelBack title="Add to folder" onBack={() => setPanel("root")} />
-            <MenuSeparator />
-            <FolderPanel
-              folders={folders}
-              currentFolder={conversation.folder || undefined}
-              onPick={(name) => {
-                onSetFolder(name);
-                close();
-              }}
-              onRemove={() => {
-                onSetFolder(null);
-                close();
-              }}
-            />
           </>
         ) : (
-          <>
-            <PanelBack title="Labels" onBack={() => setPanel("root")} />
-            <MenuSeparator />
-            <LabelsPanel
-              current={labels}
-              suggestions={allLabelNames}
-              onAdd={(label) => onSetLabels(addLabelTo(labels, label))}
-              onRemove={(label) => onSetLabels(labels.filter((l) => l !== label))}
-            />
-          </>
+          <MenuItem
+            icon={<ShareGlyph className="size-4" />}
+            onClick={() => {
+              onShare();
+              close();
+            }}
+          >
+            Share
+          </MenuItem>
         )}
+        <MenuSeparator />
+        <MenuItem
+          icon={
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              className="size-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.8}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3" y="4" width="18" height="4" rx="1" />
+              <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+              <path d="M10 12h4" />
+            </svg>
+          }
+          onClick={() => {
+            onArchive();
+            close();
+          }}
+        >
+          Archive
+        </MenuItem>
+        <MenuItem
+          danger
+          icon={<Icon name="trash" className="size-4" />}
+          onClick={() => {
+            onDelete();
+            close();
+          }}
+        >
+          Delete
+        </MenuItem>
       </Menu>
     </>
   );
@@ -582,7 +576,7 @@ function ConvRow({
       )}
 
       {!editing ? (
-        <div className="absolute right-1 top-1 flex items-center">{kebab}</div>
+        <div className="absolute inset-y-0 right-1 flex items-center">{kebab}</div>
       ) : null}
     </div>
   );

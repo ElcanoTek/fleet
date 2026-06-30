@@ -70,7 +70,7 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     const pinResponse = page.waitForResponse(
       (res) => /\/api\/conversations\/[^/]+\/pin$/.test(res.url()) && res.request().method() === "POST",
     );
-    await page.getByRole("menuitem", { name: "Pin Keep this chat" }).click();
+    await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
     expect((await pinResponse).status()).toBe(200);
 
     // The server is the source of truth: List must report it pinned.
@@ -99,7 +99,7 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     const bar = sidebar(page);
     const row = bar.locator("div.group").filter({ hasText: "Doomed chat" }).first();
     await openRowMenu(page, row, "Doomed chat");
-    await page.getByRole("menuitem", { name: "Delete Doomed chat" }).click();
+    await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
     // Confirm in the modal.
     await page.getByRole("button", { name: /^delete$/i }).click();
 
@@ -126,7 +126,7 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     const pinResponse = page.waitForResponse(
       (res) => /\/api\/conversations\/[^/]+\/pin$/.test(res.url()) && res.request().method() === "POST",
     );
-    await page.getByRole("menuitem", { name: "Pin Pinned survivor" }).click();
+    await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
     expect((await pinResponse).status()).toBe(200);
 
     await page.getByRole("button", { name: /delete all unpinned/i }).click();
@@ -152,7 +152,7 @@ test.describe("live conversation management (real chat server + Postgres)", () =
       (res) =>
         /\/api\/conversations\/[^/]+\/archive$/.test(res.url()) && res.request().method() === "POST",
     );
-    await page.getByRole("menuitem", { name: "Archive Filed away chat" }).click();
+    await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
     expect((await archiveResponse).status()).toBe(200);
 
     // Gone from the main list; surfaced under a collapsed "Archived" section.
@@ -203,7 +203,7 @@ test.describe("live conversation management (real chat server + Postgres)", () =
       (res) =>
         /\/api\/conversations\/[^/]+\/archive$/.test(res.url()) && res.request().method() === "POST",
     );
-    await page.getByRole("menuitem", { name: "Archive Archived doomed" }).click();
+    await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
     expect((await archiveResponse).status()).toBe(200);
 
     // Expand the Archived section, then delete from it (the ghost-row regression).
