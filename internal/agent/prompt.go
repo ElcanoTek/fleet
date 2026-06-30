@@ -186,6 +186,9 @@ type MCPServerSpec struct {
 	// HTTP fields. If URL is set, we treat this as an HTTP MCP server.
 	URL     string
 	Headers map[string]string
+	// TLS hardens an HTTP server's connection (CA pinning / mTLS / public-key
+	// pin) when set in the manifest (#280); nil = default system TLS.
+	TLS *mcp.TLSOptions
 
 	// ToolAllowlist — empty means "register every tool the server
 	// advertises". Non-empty restricts to the listed tool names.

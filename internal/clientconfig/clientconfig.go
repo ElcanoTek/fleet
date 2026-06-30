@@ -54,6 +54,7 @@ import (
 	"github.com/itchyny/gojq"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // HTTPToolServerName is the synthetic MCP-server name inline http_tools are
@@ -438,6 +439,11 @@ type ServerDef struct {
 	URL     string            `yaml:"url"`
 	Headers map[string]string `yaml:"headers"`
 
+	// TLS, when set on an http server, hardens the connection: pin the trusted
+	// CA, present a client certificate (mTLS), and/or pin the server's public
+	// key (#280). Omitted = default system TLS verification. Ignored for stdio.
+	TLS *ServerTLSDef `yaml:"tls"`
+
 	// Enable gate. When Always is true the server is unconditionally enabled.
 	// Otherwise the server is enabled iff EVERY var in EnabledEnv is non-empty
 	// (after env interpolation), OR — if EnabledGroups is set — if ANY group's
@@ -469,6 +475,37 @@ type ServerDef struct {
 	Description      string `yaml:"description"`
 	Beta             bool   `yaml:"beta"`
 	EnabledByDefault bool   `yaml:"enabled_by_default"`
+}
+
+// ServerTLSDef is the manifest shape for per-server TLS hardening of an http
+// MCP server (#280). All fields are optional paths/values on the fleet host;
+// they map 1:1 to mcp.TLSOptions (see its doc for semantics). cert/key/ca files
+// are read host-side at connect time and never enter the sandbox.
+type ServerTLSDef struct {
+	CACert       string `yaml:"ca_cert"`       // PEM CA bundle to verify the server against
+	ClientCert   string `yaml:"client_cert"`   // PEM client cert for mTLS (with client_key)
+	ClientKey    string `yaml:"client_key"`    // PEM client key for mTLS (with client_cert)
+	PinnedSHA256 string `yaml:"pinned_sha256"` // hex SHA-256 of the server leaf public key (SPKI)
+	ServerName   string `yaml:"server_name"`   // SNI / verified hostname override
+}
+
+// toMCP maps the manifest TLS shape to the runtime mcp.TLSOptions, or nil when
+// the block is absent/empty (so an empty `tls:` is treated as "no hardening").
+func (d *ServerTLSDef) toMCP() *mcp.TLSOptions {
+	if d == nil {
+		return nil
+	}
+	o := mcp.TLSOptions{
+		CACertFile:     strings.TrimSpace(d.CACert),
+		ClientCertFile: strings.TrimSpace(d.ClientCert),
+		ClientKeyFile:  strings.TrimSpace(d.ClientKey),
+		PinnedSHA256:   strings.TrimSpace(d.PinnedSHA256),
+		ServerName:     strings.TrimSpace(d.ServerName),
+	}
+	if o.IsZero() {
+		return nil
+	}
+	return &o
 }
 
 // HTTPToolDef is one inline HTTP tool in the manifest's http_tools: section.
@@ -740,6 +777,12 @@ func (b *Bundle) validate() error {
 		default:
 			return fmt.Errorf("mcp_servers[%q]: unknown type %q (want stdio|http)", s.Name, s.Type)
 		}
+		// TLS placement is validated for EVERY server (after Type is normalized)
+		// so a tls: block that could never apply fails the load loudly instead of
+		// being silently dropped.
+		if err := validateServerTLS(s.Name, s.Type, s.URL, s.TLS); err != nil {
+			return err
+		}
 	}
 	if err := b.validateHTTPTools(seen); err != nil {
 		return err
@@ -749,6 +792,42 @@ func (b *Bundle) validate() error {
 	}
 	if err := validatePricing(b.PricingConfig); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateServerTLS rejects a per-server TLS block that is malformed OR could
+// never take effect (#280). A non-empty block is only meaningful on an https
+// http server: http.Transport applies a TLSClientConfig solely to https
+// requests, and stdio has no TLS transport at all — so a block on a plaintext
+// http:// url or a stdio server would otherwise be SILENTLY ignored, leaving the
+// operator believing a connection is pinned/mTLS-protected when it is not. We
+// fail the load loudly instead. An absent or empty block (toMCP == nil) is a
+// no-op and is allowed on any server.
+//
+// mTLS needs BOTH client_cert and client_key, and a public-key pin must be a
+// well-formed SHA-256. File existence/parse is deliberately deferred to connect
+// time (cert/key/CA files may be provisioned on the box separately from the
+// bundle), where mcp.TLSOptions.build surfaces a clear, named error.
+func validateServerTLS(name, serverType, url string, d *ServerTLSDef) error {
+	if d.toMCP() == nil {
+		return nil // absent or all-empty → nothing to apply or validate
+	}
+	if serverType != "http" {
+		return fmt.Errorf("mcp_servers[%q]: tls is only valid on an http server (got type %q)", name, serverType)
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(url)), "https://") {
+		return fmt.Errorf("mcp_servers[%q]: tls hardening requires an https:// url (got %q) — it cannot apply to a plaintext connection", name, url)
+	}
+	cert := strings.TrimSpace(d.ClientCert)
+	key := strings.TrimSpace(d.ClientKey)
+	if (cert == "") != (key == "") {
+		return fmt.Errorf("mcp_servers[%q]: tls mTLS requires both client_cert and client_key", name)
+	}
+	if p := strings.TrimSpace(d.PinnedSHA256); p != "" {
+		if _, err := mcp.NormalizePinSHA256(p); err != nil {
+			return fmt.Errorf("mcp_servers[%q]: tls %w", name, err)
+		}
 	}
 	return nil
 }
@@ -899,6 +978,7 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 		case "http":
 			sc.URL = s.URL
 			sc.Headers = resolveEnvMap(s.Headers, nil)
+			sc.TLS = s.TLS.toMCP()
 		default: // stdio
 			sc.Command = s.Command
 			sc.Args = append([]string(nil), s.Args...)
