@@ -6,14 +6,24 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ElcanoTek/fleet/internal/chattui"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
-// cmdChat dispatches `fleet-admin chat user ...` (interactive chat users — email
-// + bcrypt, store-backed). Mirrors chat-admin's semantics.
+// cmdChat is overloaded by design (#457):
+//   - `fleet chat`                  → the interactive TUI to chat with the agent
+//   - `fleet chat --message "…"`    → a one-shot non-interactive turn
+//   - `fleet chat user add|…`       → chat-USER administration (email + bcrypt)
+//
+// The TUI is the common case, so anything that isn't the `user` admin verb routes
+// to chattui.Run. (The two never collide: `user` is a bare positional, while the
+// TUI takes only flags/none.)
 func cmdChat(argv []string) int {
-	if len(argv) < 2 || argv[0] != "user" {
-		return errf(1, "usage: fleet-admin chat user add|update|del|list")
+	if len(argv) == 0 || argv[0] != "user" {
+		return chattui.Run(argv)
+	}
+	if len(argv) < 2 {
+		return errf(1, "usage: fleet chat user add|update|del|list  (or `fleet chat` for the agent TUI)")
 	}
 	sub := argv[1]
 	rest := argv[2:]
