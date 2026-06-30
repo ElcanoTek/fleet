@@ -644,6 +644,11 @@ the same state rather than double-applying. None of them ever run application
 migrations — each service self-migrates on start (chat's advisory-lock runner;
 sched's golang-migrate). `make install` puts the `fleet` binary on PATH.
 
+For a terminal chat with the agent, `fleet chat` opens a Bubble Tea TUI that
+streams replies from the running server's chat API (or `fleet chat --message
+"…"` for a one-shot, scriptable turn) — same governed run loop and sandbox as the
+web chat, just a CLI front-end for power users.
+
 ```
 fleet bootstrap   →   fleet update   →   fleet status
   (provision a box)   (roll a new version)   (health / doctor)

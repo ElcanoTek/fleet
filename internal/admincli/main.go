@@ -15,6 +15,7 @@
 //	fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
 //	fleet restart|stop [--service <name>]
 //	fleet logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
+//	fleet chat                                        (interactive agent TUI, #457; --message for one-shot)
 //	fleet chat user add|update|del|list
 //	fleet sched user add|update|set-role|rename|del|list
 //	fleet sched apikey create|list|revoke|delete
@@ -103,6 +104,11 @@ func Run(argv []string) int {
 
 func Usage() {
 	fmt.Fprint(os.Stderr, `fleet — unified operator CLI  (run "fleet serve" to start the server)
+
+Chat with the agent (TUI, #457):
+  fleet chat                                          (interactive Bubble Tea chat with the fleet agent)
+  fleet chat --message "<text>" [--no-tui]            (one-shot: stream the reply to stdout; scriptable)
+  fleet chat [--conversation <id>] [--model <slug>] [--email …] [--server …] [--token-file <path>]
 
 Operator lifecycle (bootstrap → update → status):
   fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]

@@ -15,6 +15,15 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- `fleet chat` — a terminal UI for chatting with the fleet agent (Bubble Tea /
+  Lipgloss, glamour-rendered Markdown, streaming replies, tool-call + reasoning
+  display, `/new` `/retry` `/model` `/reasoning` `/clear` `/quit`, Ctrl+C to
+  cancel a turn). It is a thin SSE client of the running server's `POST /chat`,
+  so every turn still flows through the one governed run loop, the sandbox, and
+  host-side credential brokering — the TUI only renders. `fleet chat --message
+  "<text>"` (or `--no-tui`) runs one turn non-interactively to stdout for
+  scripts/pipes. Connection identity resolves from `--email`/`--server`/`--token-file`
+  → `$FLEET_USER_EMAIL` / `$FLEET_SERVER_TOKEN`; the shared token is never logged.
 - Unified the operator CLI into one `fleet` binary (`fleet serve` runs the
   server — bare `fleet` also serves, for back-compat — and `fleet <verb>` is every
   operator command); a new `make install` puts `fleet` on PATH; `fleet update
