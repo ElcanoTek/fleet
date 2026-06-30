@@ -143,7 +143,7 @@ export function ChatTranscript({
                   Loading conversation...
                 </div>
               ) : messages.length === 0 ? (
-                <div className="flex min-h-full flex-col items-center justify-center gap-6 pb-6 sm:gap-8 sm:pb-8">
+                <div className="flex min-h-full flex-col items-center justify-start gap-6 pb-6 pt-12 sm:gap-8 sm:pb-8 sm:pt-16">
                   <div className="text-center">
                     <h2 className="font-heading text-[1.4rem] font-semibold text-[var(--color-text-primary)] sm:text-[1.75rem]">
                       {isLockdown ? "Lockdown chat" : "What can I help with?"}
