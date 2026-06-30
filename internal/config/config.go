@@ -29,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // Canonical + legacy env prefixes. FLEET_ wins; the two legacy prefixes are
@@ -859,6 +861,12 @@ type MCPServerConfig struct {
 	Description      string
 	Beta             bool
 	EnabledByDefault bool
+
+	// TLS hardens an http server's connection (CA pinning / mTLS / public-key
+	// pin) when set in the manifest (#280); nil = default system TLS. Carried
+	// through to agent.MCPServerSpec and agentcore.MCPServerBase so both the
+	// scheduled and interactive registration paths apply it.
+	TLS *mcp.TLSOptions
 }
 
 // HTTPToolConfig is one resolved inline HTTP tool (the manifest http_tools[]
