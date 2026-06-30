@@ -48,13 +48,6 @@ type readFile func(string) ([]byte, error)
 // creds.ReadEnvValues in production).
 type envValuesReader func(path string, keys ...string) (map[string]string, error)
 
-// Env-file keys fleet chat will auto-discover, and the canonical files it probes.
-const (
-	envKeyServerToken       = "FLEET_SERVER_TOKEN" //nolint:gosec // G101: env var NAME (canonical shared-secret key), not a secret value
-	envKeyServerTokenLegacy = "CHAT_SERVER_TOKEN"  //nolint:gosec // G101: env var NAME (legacy alias), not a secret value
-	envKeyServerAddr        = "FLEET_SERVER_ADDR"  // chat server listen addr
-)
-
 // defaultEnvFilePaths are the two locations bootstrap writes the credential file
 // to: the dev/local default, then the systemd-deployment default. Probed in
 // order when neither --env-file nor $FLEET_ENV_FILE pins one explicitly.
@@ -94,7 +87,8 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 		cfg.Token = strings.TrimSpace(string(b))
 	}
 	if cfg.Token == "" {
-		cfg.Token = strings.TrimSpace(firstNonEmpty(env(envKeyServerToken), env(envKeyServerTokenLegacy)))
+		// Env-var NAMES (not secret values): canonical first, legacy alias second.
+		cfg.Token = strings.TrimSpace(firstNonEmpty(env("FLEET_SERVER_TOKEN"), env("CHAT_SERVER_TOKEN")))
 	}
 
 	// Server URL from flags/env (default applied after the env-file step below).
@@ -103,20 +97,20 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 		cfg.ServerURL = strings.TrimSpace(f.Server)
 	case strings.TrimSpace(env("FLEET_CHAT_URL")) != "":
 		cfg.ServerURL = strings.TrimSpace(env("FLEET_CHAT_URL"))
-	case strings.TrimSpace(env(envKeyServerAddr)) != "":
-		cfg.ServerURL = "http://" + strings.TrimSpace(env(envKeyServerAddr))
+	case strings.TrimSpace(env("FLEET_SERVER_ADDR")) != "":
+		cfg.ServerURL = "http://" + strings.TrimSpace(env("FLEET_SERVER_ADDR"))
 	}
 
 	// On-box auto-discovery: fill any still-missing token/addr from the server
 	// env file. Skipped entirely once both are already resolved.
 	candidates := envFileCandidates(f.EnvFile, env)
 	if cfg.Token == "" || cfg.ServerURL == "" {
-		if vals, _ := discoverEnvValues(evf, candidates, envKeyServerToken, envKeyServerTokenLegacy, envKeyServerAddr); vals != nil {
+		if vals, _ := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
 			if cfg.Token == "" {
-				cfg.Token = strings.TrimSpace(firstNonEmpty(vals[envKeyServerToken], vals[envKeyServerTokenLegacy]))
+				cfg.Token = strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"]))
 			}
 			if cfg.ServerURL == "" {
-				if addr := strings.TrimSpace(vals[envKeyServerAddr]); addr != "" {
+				if addr := strings.TrimSpace(vals["FLEET_SERVER_ADDR"]); addr != "" {
 					cfg.ServerURL = "http://" + addr
 				}
 			}
@@ -136,8 +130,8 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	}
 
 	if cfg.Token == "" {
-		return Config{}, fmt.Errorf("no server token: on the box, `fleet chat` reads %s from the server env file (tried %s) — ensure you can read it, or set %s / %s, or pass --token-file <path> (mode 0600)",
-			envKeyServerToken, strings.Join(candidates, ", "), envKeyServerToken, envKeyServerTokenLegacy)
+		return Config{}, fmt.Errorf("no server token: on the box, `fleet chat` reads FLEET_SERVER_TOKEN from the server env file (tried %s) — ensure you can read it, or set FLEET_SERVER_TOKEN / CHAT_SERVER_TOKEN, or pass --token-file <path> (mode 0600)",
+			strings.Join(candidates, ", "))
 	}
 	return cfg, nil
 }
