@@ -1526,6 +1526,12 @@ tr.sla-row-fail {
 .modal-lg .credential-account-form {
   display: block;
 }
+/* Match the inter-field rhythm above the Server field too: the existing-accounts
+   list sits 1.6rem above it, the same gap used between every other field, so
+   Server isn't cramped under the list while Account has a full gap above it. */
+.modal-lg .credential-account-list {
+  margin-bottom: 1.6rem;
+}
 /* Filled fields to match the design's modal form styling. Scoped to the large
    modals; leaves checkboxes/radios (toggles) and the bare input rule elsewhere
    untouched. */
