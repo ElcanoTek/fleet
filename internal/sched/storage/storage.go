@@ -964,6 +964,14 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 		task.WorkspacePath = update.WorkspacePath
 	}
 
+	// Record the validated structured output (#244) when the runner supplies it,
+	// on the running-status update it sends just before terminal success. Empty
+	// leaves the existing value untouched (so the later success update, which
+	// carries no OutputJSON, doesn't wipe it).
+	if len(update.OutputJSON) > 0 {
+		task.OutputJSON = update.OutputJSON
+	}
+
 	if update.Status == models.TaskStatusSuccess || update.Status == models.TaskStatusError {
 		completedAt := time.Now().UTC()
 		task.CompletedAt = &completedAt

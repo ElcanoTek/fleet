@@ -1798,8 +1798,11 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Attach this HTTP response as the initial subscriber. Blocks until
-	// the turn finishes or the client disconnects.
-	if err := buf.Attach(r.Context(), 0, w); err != nil && !errors.Is(err, context.Canceled) {
+	// the turn finishes or the client disconnects. The client's declared SSE
+	// capabilities (#194) filter which event types it receives; absent header =
+	// full stream.
+	caps := parseClientCapabilities(r.Header.Get(clientCapabilitiesHeaderName))
+	if err := buf.Attach(r.Context(), 0, w, caps); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("Attach (user=%s conv=%s): %v", user, conv.ID, err)
 	}
 }
@@ -2045,13 +2048,16 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 
 	lastEventID := parseLastEventID(r)
 	requestedTurnID := r.URL.Query().Get("turn_id")
+	// Client's declared SSE capabilities (#194); nil = no filter (full stream).
+	// Applied to both the live-buffer reattach and the DB-fallback replay below.
+	caps := parseClientCapabilities(r.Header.Get(clientCapabilitiesHeaderName))
 
 	entry, ok := s.getInflight(convID)
 	// If the client is asking about a different (older) turn than the one
 	// we currently have buffered, fall through to the DB lookup below.
 	if ok && entry.buf != nil && (requestedTurnID == "" || requestedTurnID == entry.turnID) {
 		s.sseReconnects.inc("within_buffer")
-		if err := entry.buf.Attach(r.Context(), lastEventID, w); err != nil && !errors.Is(err, context.Canceled) {
+		if err := entry.buf.Attach(r.Context(), lastEventID, w, caps); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("stream Attach (user=%q conv=%q): %v", user, convID, err) //nolint:gosec // identifiers are %q-quoted
 		}
 		return
@@ -2089,7 +2095,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 		outcome = "buffer_expired"
 	}
 	s.sseReconnects.inc(outcome)
-	if err := replayEventsFromDB(w, events); err != nil && !errors.Is(err, context.Canceled) {
+	if err := replayEventsFromDB(w, events, caps); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("DB replay (user=%q conv=%q turn=%q): %v", user, convID, requestedTurnID, err) //nolint:gosec // identifiers are %q-quoted
 		return
 	}
@@ -2116,8 +2122,9 @@ func writeBufferExpiredFrame(w http.ResponseWriter, turnID string) {
 
 // replayEventsFromDB writes a slice of persisted events as SSE frames
 // using the same framing the live buffer uses. Sets the SSE headers
-// + flushes per event.
-func replayEventsFromDB(w http.ResponseWriter, events []store.TurnEvent) error {
+// + flushes per event. caps filters the replay by the client's declared
+// SSE capabilities (#194), matching the live Attach path; nil = no filter.
+func replayEventsFromDB(w http.ResponseWriter, events []store.TurnEvent, caps map[SSECapability]bool) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return errors.New("response writer does not support flushing")
@@ -2126,9 +2133,14 @@ func replayEventsFromDB(w http.ResponseWriter, events []store.TurnEvent) error {
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	setSupportedCapabilitiesHeader(w)
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
+	_ = writeCapabilitiesFrame(w, flusher)
 	for _, e := range events {
+		if !shouldEmit(caps, e.Name) {
+			continue
+		}
 		if err := writeSSEFrame(w, flusher, bufferedEvent{
 			ID:   e.EventID,
 			Name: e.Name,

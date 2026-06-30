@@ -139,11 +139,13 @@ var allowedEnvVars = map[string]bool{
 	"CHAT_TURN_TIMEOUT_SECONDS":         true,
 	"CHAT_TEMPERATURE":                  true,
 	"CHAT_TITLE_MODEL":                  true,
+	"CHAT_METADATA_MODEL":               true,
 	"FLEET_MAX_ITERATIONS":              true,
 	"FLEET_MAX_COST_USD":                true,
 	"FLEET_MAX_TOTAL_TOKENS":            true,
 	"FLEET_TEMPERATURE":                 true,
 	"FLEET_TITLE_MODEL":                 true,
+	"FLEET_METADATA_MODEL":              true,
 	"FLEET_AUTO_TITLE":                  true,
 	"FLEET_APPROVAL_TIMEOUT_SECONDS":    true,
 	"FLEET_AUTO_APPROVE_IN_TEST":        true,
@@ -504,6 +506,11 @@ type Config struct {
 	ReasoningEnabled   bool
 	ReasoningEffort    string
 	TitleModel         string
+	// MetadataModel is the fast/cheap model the suggest_branch_name /
+	// suggest_commit_message / suggest_pr_description tools (#191) call to
+	// produce git metadata. FLEET_METADATA_MODEL, defaulting to TitleModel so
+	// existing deployments need zero new config.
+	MetadataModel string
 	// AutoTitle gates the LLM auto-titler (#302). FLEET_AUTO_TITLE, default true.
 	// When false, a new conversation keeps its instant heuristic title and no
 	// title-model call is made (cost/latency escape hatch).
@@ -930,6 +937,7 @@ func Load(envFile string) (*Config, error) {
 		ReasoningEnabled:       getenvBool("REASONING_ENABLED", true),
 		ReasoningEffort:        getenvDefault("REASONING_EFFORT", "medium"),
 		TitleModel:             getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
+		MetadataModel:          getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)),
 		AutoTitle:              getenvFleetBool("AUTO_TITLE", true),
 		ApprovalTimeoutSeconds: getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 300),
 		AutoApproveInTest:      getenvFleetBool("AUTO_APPROVE_IN_TEST", false),

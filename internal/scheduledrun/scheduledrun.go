@@ -33,6 +33,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -508,6 +509,17 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// maybeAppendCreateTaskTool for the gate rationale.
 	nativeTools := r.maybeAppendCreateTaskTool(turnTools.Tools, task)
 
+	// #191 git-metadata tools (suggest_branch_name / suggest_commit_message /
+	// suggest_pr_description) are wired into the SCHEDULED native set only:
+	// autonomous agents that produce branches/commits/PRs are the use case, and
+	// a task's MCP selection is narrow, so the 3 extra tools stay well clear of
+	// the 128-tool ceiling that the interactive chat turn runs near (#433/#449).
+	// They resolve through the SAME host-side Manager resolver the run uses for
+	// its main model (r.mgr), so the operator's key never enters the sandbox.
+	// MetadataModel defaults to the title model in config.Load; an empty slug
+	// (only reachable via a test double) makes the tool return a clear error.
+	nativeTools = append(nativeTools, tools.MetadataTools(r.mgr, r.cfg.MetadataModel)...)
+
 	maxIter := r.cfg.MaxIterations
 	if task.MaxIterations != nil && *task.MaxIterations > 0 {
 		maxIter = *task.MaxIterations
@@ -534,6 +546,12 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// Per-task persona override (#221): a task may name a personas/<name>.yaml to
 	// swap in specialized domain expertise; empty uses the runner's global persona.
 	taskSystemPrompt, taskPersona := r.taskPromptAndPersona(task)
+
+	// Structured-output mode (#244): when the task declares an output_schema, tell
+	// the agent its final answer must be JSON conforming to that schema. The
+	// runner Pool validates the produced output against the same schema after the
+	// run and persists the result in the task's output_json.
+	taskSystemPrompt += structuredoutput.PromptAugmentation(task.OutputSchema)
 
 	// Captain's Log (#285): instruction_self_improve is the per-task opt-in gate
 	// that finally gives the flag runtime effect (#322). Only when it is set does
