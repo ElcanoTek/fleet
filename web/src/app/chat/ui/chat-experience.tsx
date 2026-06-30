@@ -2769,21 +2769,18 @@ export function ChatExperience() {
             </div>
 
             <div className="inline-flex items-center gap-1">
-              {/* Unified page-header search (#169): opens the full-text command
-                  palette (⌘K). The rail's own "Search chats…" input is a local
-                  filter; this is the cross-conversation search. */}
+              {/* Unified page-header search (#169): an icon-only button, inline
+                  with the other header icons, that opens the full-text search
+                  overlay (also bound to ⌘K). The rail's own "Search chats…" input
+                  is a separate local title filter — both are unchanged. */}
               <button
                 aria-label="Search conversations"
-                className="inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                title="Search conversations"
+                className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                title={`Search conversations (${searchShortcut})`}
                 type="button"
                 onClick={() => setSearchOpen(true)}
               >
-                <Icon name="search" className="size-4" />
-                <span className="hidden sm:inline">Search</span>
-                <kbd className="hidden font-[family-name:var(--font-code)] text-[0.6875rem] text-[var(--color-text-muted)] sm:inline">
-                  {searchShortcut}
-                </kbd>
+                <Icon name="search" className="size-5" />
               </button>
               <button
                 aria-label="Keyboard shortcuts"
