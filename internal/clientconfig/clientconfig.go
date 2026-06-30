@@ -13,7 +13,7 @@
 //	  manifest.yaml        # branding, models, mcp_servers[] (the catalog),
 //	                       #   empty_state{cards[], protocol_pills[]},
 //	                       #   agent_policy{parallel/critical tool lists},
-//	                       #   sandbox{containerfile, tag, image}
+//	                       #   sandbox{containerfile, tag, image, runtime}
 //	  sandbox/             # the bundle's own Containerfile (build-on-box default)
 //	  system_prompts/      # default.md (scheduled base), chat.md (interactive base)
 //	  personas/            # *.yaml
@@ -268,6 +268,29 @@ type Sandbox struct {
 	// resolved ref (the opt-in registry-pull path); when empty the build-on-box
 	// Tag is used.
 	Image string
+
+	// Runtime is the OCI runtime passed to `podman run --runtime=<value>` for
+	// every sandbox container (manifest sandbox.runtime). It selects the
+	// ISOLATION posture of the mandatory sandbox without changing any other
+	// invariant:
+	//
+	//	""        — Podman's configured default (crun/runc): rootless containers
+	//	            sharing the host kernel. No extra host requirements (#217).
+	//	"runc"    — explicit runc; same shared-kernel posture as the default.
+	//	"kata"    — Kata Containers: each tool call runs in a dedicated KVM VM
+	//	            with its own guest kernel — escape requires a hypervisor CVE,
+	//	            not just a container-escape. Requires /dev/kvm + kata-runtime.
+	//	"libkrun" — lightweight microVM (Apple Virtualization.framework on macOS,
+	//	            libkrun on Linux); lower overhead than Kata. Normalized to the
+	//	            Podman runtime name "krun" at consume time (see sandbox.NormalizeRuntime).
+	//	"runsc"   — gVisor user-space kernel (syscall interception, not a VM).
+	//
+	// An empty value leaves the existing rootless-container default unchanged
+	// (byte-for-byte the pre-#217 behaviour). The value is stored VERBATIM here;
+	// the consuming layer (cmd/fleet) normalizes friendly aliases and applies the
+	// boot-time preflight + Kata memory-overhead. An explicit FLEET_SANDBOX_RUNTIME
+	// env var still wins over this manifest value, mirroring sandbox.image.
+	Runtime string
 }
 
 // ResolvedImageRef returns the image reference the fleet process should consume:
@@ -284,6 +307,7 @@ type sandboxManifest struct {
 	Containerfile string `yaml:"containerfile"`
 	Tag           string `yaml:"tag"`
 	Image         string `yaml:"image"`
+	Runtime       string `yaml:"runtime"`
 }
 
 // Branding carries the white-label strings surfaced in the web UI + login.
@@ -639,6 +663,7 @@ func resolveSandbox(sm *sandboxManifest, bundleDir string) Sandbox {
 		ContainerfileAbsPath: filepath.Join(bundleDir, cf),
 		Tag:                  tag,
 		Image:                strings.TrimSpace(raw.Image),
+		Runtime:              strings.TrimSpace(raw.Runtime),
 	}
 }
 

@@ -137,8 +137,14 @@ type ContainerConfig struct {
 	// zero value (false) is safe — it just uses the always-works ulimit path.
 	StorageOptSupported bool
 
-	// Runtime overrides the default OCI runtime — e.g. "runsc" for
-	// gVisor. Empty means use Podman's configured default (crun/runc).
+	// Runtime overrides the default OCI runtime, emitted verbatim as
+	// `podman run --runtime=<value>`. Empty means Podman's configured default
+	// (crun/runc) — a shared-kernel rootless container. Hypervisor-isolated
+	// values ("kata" for Kata Containers, "krun" for libkrun) run each tool call
+	// in a dedicated KVM VM; "runsc" selects gVisor. The friendly name "libkrun"
+	// is normalized to "krun" upstream (see NormalizeRuntime), and kata/krun are
+	// fail-closed preflighted at boot (PreflightRuntime). When Runtime == "kata"
+	// the memory ceiling is raised by the guest overhead (applyKataMemoryOverhead).
 	Runtime string
 
 	// ExtraRunArgs are appended to the `podman run` invocation just
@@ -199,7 +205,16 @@ func NewContainer(ctx context.Context, cfg ContainerConfig) (*Sandbox, error) {
 	if cfg.BridgeScript == nil {
 		return nil, fmt.Errorf("sandbox: ContainerConfig.BridgeScript required")
 	}
-	c := &containerImpl{cfg: applyContainerDefaults(cfg)}
+	defaulted := applyContainerDefaults(cfg)
+	// Kata VMs carry a guest-kernel + VMM memory baseline; bump the --memory
+	// ceiling so the operator's limit still reflects usable guest RAM (#217).
+	// Done here, after defaults and any per-task ResourceOverride, so the bump
+	// stacks on the final limit. Fails closed on an unparseable limit rather
+	// than shipping a guest that may be too small to boot.
+	if err := applyKataMemoryOverhead(&defaulted); err != nil {
+		return nil, fmt.Errorf("sandbox: %w", err)
+	}
+	c := &containerImpl{cfg: defaulted}
 	if err := c.start(ctx); err != nil {
 		c.close()
 		return nil, err
@@ -210,6 +225,13 @@ func NewContainer(ctx context.Context, cfg ContainerConfig) (*Sandbox, error) {
 func applyContainerDefaults(cfg ContainerConfig) ContainerConfig {
 	if cfg.PodmanBinary == "" {
 		cfg.PodmanBinary = "podman"
+	}
+	// Normalize the OCI runtime to the name podman understands ("libkrun" →
+	// "krun") so the --runtime flag start() emits is always valid, even for a
+	// direct NewContainer caller that didn't pre-normalize. The production path
+	// already normalizes upstream; this is the idempotent backstop.
+	if cfg.Runtime != "" {
+		cfg.Runtime, _ = NormalizeRuntime(cfg.Runtime)
 	}
 	if cfg.MemoryLimit == "" {
 		cfg.MemoryLimit = "512m"

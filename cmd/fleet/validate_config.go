@@ -549,9 +549,11 @@ func requiredGateVarsMissing(bundle *clientconfig.Bundle) []string {
 //
 // When container-backed it checks: podman on PATH, `podman info` succeeds, and
 // the resolved sandbox image exists locally (the same ref the boot path consumes
-// via bundle.Sandbox().ResolvedImageRef() / cfg.SandboxImage). If
-// FLEET_SANDBOX_RUNTIME names a non-default OCI runtime (e.g. runsc/gVisor) it
-// must also be on PATH.
+// via bundle.Sandbox().ResolvedImageRef() / cfg.SandboxImage). If a non-default
+// OCI runtime is selected (FLEET_SANDBOX_RUNTIME or the bundle's sandbox.runtime
+// — e.g. runsc/gVisor, kata, libkrun) its binary must be on PATH, and the
+// hypervisor-backed tiers (kata/krun) must pass the same fail-closed KVM
+// preflight the boot path runs (#217).
 func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.Bundle) checkResult {
 	res := checkResult{Name: "sandbox"}
 	containerBacked := sandboxIsContainerBacked(cfg)
@@ -568,14 +570,23 @@ func checkSandbox(ctx context.Context, cfg *config.Config, bundle *clientconfig.
 		res.Detail = "podman not found in PATH"
 		return res
 	}
-	// A non-default OCI runtime override must also be installed.
-	if cfg != nil {
-		if rt := strings.TrimSpace(cfg.SandboxRuntime); rt != "" {
-			if _, err := exec.LookPath(rt); err != nil {
+	// A non-default OCI runtime must be installed and — for the hypervisor-backed
+	// tiers (kata/krun) — actually able to deliver isolation. Resolve the runtime
+	// the same way the boot path does (env wins, else the bundle manifest), map
+	// the name to the binary podman resolves --runtime to ("kata" → "kata-runtime",
+	// "libkrun"/"krun" → "krun"), and run the real fail-closed preflight (#217).
+	if rt := resolveSandboxRuntime(cfg, bundle); rt != "" {
+		if bin := sandbox.RuntimeBinary(rt); bin != "" {
+			if _, err := exec.LookPath(bin); err != nil {
 				res.Status = statusFail
-				res.Detail = fmt.Sprintf("FLEET_SANDBOX_RUNTIME=%q not found in PATH", rt)
+				res.Detail = fmt.Sprintf("sandbox runtime %q: binary %q not found in PATH", rt, bin)
 				return res
 			}
+		}
+		if err := sandbox.PreflightRuntime(ctx, rt); err != nil {
+			res.Status = statusFail
+			res.Detail = err.Error()
+			return res
 		}
 	}
 	infoCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -631,6 +642,22 @@ func resolveSandboxImage(cfg *config.Config, bundle *clientconfig.Bundle) string
 		return bundle.Sandbox().ResolvedImageRef()
 	}
 	return ""
+}
+
+// resolveSandboxRuntime resolves the OCI runtime the boot path will use, with
+// the same precedence as the image (env FLEET_SANDBOX_RUNTIME wins, else the
+// bundle manifest's sandbox.runtime), normalized to podman's runtime name
+// ("libkrun" → "krun"). Empty means podman's configured default (#217).
+func resolveSandboxRuntime(cfg *config.Config, bundle *clientconfig.Bundle) string {
+	envRuntime := ""
+	if cfg != nil {
+		envRuntime = cfg.SandboxRuntime
+	}
+	bundleRuntime := ""
+	if bundle != nil {
+		bundleRuntime = bundle.Sandbox().Runtime
+	}
+	return sandbox.ResolveRuntime(envRuntime, bundleRuntime)
 }
 
 // ── 7. model / API key (warning) ──
