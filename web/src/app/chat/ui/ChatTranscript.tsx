@@ -73,6 +73,8 @@ export type ChatTranscriptProps = {
   resendUserMessage: (userMessageId: number, editedContent: string) => void | Promise<void>;
   retryLastUserMessage: () => void | Promise<void>;
   regenerateLastAssistant: () => void | Promise<void>;
+  // Fork the conversation at a persisted message into a new thread (#454).
+  branchFromMessage: (message: Message) => void | Promise<void>;
   loadMemories: () => void | Promise<void>;
 
   // Model picker / model-required affordance
@@ -115,6 +117,7 @@ export function ChatTranscript({
   resendUserMessage,
   retryLastUserMessage,
   regenerateLastAssistant,
+  branchFromMessage,
   loadMemories,
   setSelectedModel,
   setModelPickerOpen,
@@ -659,6 +662,18 @@ export function ChatTranscript({
                                       onClick={() => void regenerateLastAssistant()}
                                     >
                                       Regenerate
+                                    </button>
+                                  ) : null}
+                                  {/* Fork the conversation at this (persisted) message into a
+                                      new thread (#454). Only persisted messages carry a dbId;
+                                      in-flight ones can't be a branch point yet. */}
+                                  {message.dbId && !isStreaming ? (
+                                    <button
+                                      type="button"
+                                      className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                                      onClick={() => void branchFromMessage(message)}
+                                    >
+                                      Branch
                                     </button>
                                   ) : null}
                                 </div>

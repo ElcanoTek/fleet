@@ -189,6 +189,26 @@ describe("historyToMessages", () => {
     expect(msgs.map((m) => m.id)).toEqual([1, 2, 3, 4]);
   });
 
+  it("threads the MAX persisted messages.id onto dbId per group (#454 branch point)", () => {
+    const msgs = historyToMessages([
+      { id: 100, role: "user", type: "text", content: { text: "go" } },
+      { id: 101, role: "assistant", type: "reasoning", content: { text: "think" } },
+      { id: 102, role: "assistant", type: "tool_call", content: { id: "c1", name: "run_python", input: "{}" } },
+      { id: 103, role: "tool", type: "tool_result", content: { id: "c1", name: "run_python", text: "ok", is_err: false } },
+      { id: 104, role: "assistant", type: "text", content: { text: "done" } },
+    ]);
+    // The user message carries its own id; the aggregated assistant turn carries
+    // the MAX id of its entries (104) — the cut point that includes the whole turn.
+    expect(msgs[0].dbId).toBe(100);
+    expect(msgs[1].dbId).toBe(104);
+  });
+
+  it("leaves dbId undefined for entries without a persisted id (in-flight, not branchable)", () => {
+    const msgs = historyToMessages([user("hi"), asText("yo")]);
+    expect(msgs[0].dbId).toBeUndefined();
+    expect(msgs[1].dbId).toBeUndefined();
+  });
+
   it("emits a banner-style summary message with kind=summary + meta", () => {
     const summary: HistoryEntry = {
       role: "assistant",

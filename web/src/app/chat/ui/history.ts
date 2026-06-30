@@ -300,6 +300,14 @@ export type ContextCompactedEventPayload = {
 
 export type Message = {
   id: number;
+  /**
+   * The persisted DB messages.id this rendered message ends at — the MAX id of
+   * the history entries grouped into it (#454). Only set for messages loaded
+   * from server history; in-flight streamed messages have no DB id yet. It is
+   * the branch point a "branch from here" action sends to the server. Undefined
+   * = not yet persisted (cannot be a branch point).
+   */
+  dbId?: number;
   role: "assistant" | "user";
   /**
    * Optional discriminator. Absent (or "text") means a normal turn.
@@ -467,6 +475,12 @@ export function applyModelRequired(message: Message, payload: ModelRequiredEvent
 }
 
 export type HistoryEntry = {
+  /**
+   * Persisted messages.id, present on entries loaded from server history (#454).
+   * Omitted (zero) on the write path. Threaded onto Message.dbId so a message can
+   * be named as a branch point.
+   */
+  id?: number;
   role: "user" | "assistant" | "tool";
   type: "text" | "reasoning" | "tool_call" | "tool_result" | "turn_summary" | "summary";
   content: Record<string, unknown>;
@@ -515,6 +529,7 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       flush();
       messages.push({
         id: nextId++,
+        dbId: e.id,
         role: "user",
         content: String((e.content as { text?: string }).text ?? ""),
         state: "done",
@@ -525,6 +540,9 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       if (!current) {
         current = { id: nextId++, role: "assistant", content: "", state: "done" };
       }
+      // Track the highest persisted messages.id in this assistant group as its
+      // branch point (#454); undefined until a persisted entry contributes one.
+      current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
       current.content += String((e.content as { text?: string }).text ?? "");
       continue;
     }
@@ -532,6 +550,9 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       if (!current) {
         current = { id: nextId++, role: "assistant", content: "", state: "done" };
       }
+      // Track the highest persisted messages.id in this assistant group as its
+      // branch point (#454); undefined until a persisted entry contributes one.
+      current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
       const txt = String((e.content as { text?: string }).text ?? "");
       current.reasoning = (current.reasoning ?? "") + (current.reasoning ? "\n" : "") + txt;
       continue;
@@ -540,6 +561,9 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       if (!current) {
         current = { id: nextId++, role: "assistant", content: "", state: "done" };
       }
+      // Track the highest persisted messages.id in this assistant group as its
+      // branch point (#454); undefined until a persisted entry contributes one.
+      current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
       const c = e.content as { id: string; name: string; input: string };
       const tc: ToolCall = { id: c.id, name: c.name, input: c.input, state: "done" };
       current.toolCalls = [...(current.toolCalls ?? []), tc];
@@ -560,6 +584,7 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       };
       messages.push({
         id: nextId++,
+        dbId: e.id,
         role: "assistant",
         kind: "summary",
         content: String(c.text ?? ""),
@@ -577,6 +602,9 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       if (!current) {
         current = { id: nextId++, role: "assistant", content: "", state: "done" };
       }
+      // Track the highest persisted messages.id in this assistant group as its
+      // branch point (#454); undefined until a persisted entry contributes one.
+      current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
       const c = e.content as {
         cost_usd?: number;
         prompt_tokens?: number;
@@ -606,6 +634,9 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       if (!current) {
         current = { id: nextId++, role: "assistant", content: "", state: "done" };
       }
+      // Track the highest persisted messages.id in this assistant group as its
+      // branch point (#454); undefined until a persisted entry contributes one.
+      current.dbId = Math.max(current.dbId ?? 0, e.id ?? 0) || undefined;
       const c = e.content as { id: string; name: string; text: string; is_err: boolean };
       if ((current.toolCalls ?? []).some((t) => t.id === c.id)) {
         current.toolCalls = (current.toolCalls ?? []).map((t) =>
