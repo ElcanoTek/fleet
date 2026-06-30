@@ -21,6 +21,7 @@ func Run(argv []string) int {
 	fs.StringVar(&f.Server, "server", "", "fleet server URL (default $FLEET_CHAT_URL, else http://$FLEET_SERVER_ADDR, else http://127.0.0.1:8080)")
 	fs.StringVar(&f.Email, "email", "", "your user email — X-User-Email (default $FLEET_USER_EMAIL)")
 	fs.StringVar(&f.TokenFile, "token-file", "", "path to a file holding the shared server token (mode 0600); else $FLEET_SERVER_TOKEN / $CHAT_SERVER_TOKEN")
+	fs.StringVar(&f.EnvFile, "env-file", "", "server env file to auto-read the token/addr from when not set otherwise (default $FLEET_ENV_FILE, else .env.local, else /etc/fleet/fleet.env)")
 	fs.StringVar(&f.Model, "model", "", "model slug for the turn(s) (default: the conversation/server default)")
 	fs.StringVar(&f.Persona, "persona", "", "persona for a NEW conversation")
 	conv := fs.String("conversation", "", "resume an existing conversation by id")
@@ -30,13 +31,15 @@ func Run(argv []string) int {
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: fleet chat [--message <text>|--no-tui] [--conversation <id>] [--model <slug>] [--email …] [--server …]")
 		fmt.Fprintln(os.Stderr, "\nInteractive TUI by default; --message/--no-tui runs one turn to stdout (scriptable).")
+		fmt.Fprintln(os.Stderr, "On the box running fleet, the shared token is read from the server env file automatically;")
+		fmt.Fprintln(os.Stderr, "you usually only need: fleet chat --email you@org")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(argv); err != nil {
 		return 2
 	}
 
-	cfg, err := Resolve(f, osEnv, osReadFile)
+	cfg, err := Resolve(f, osEnv, osReadFile, osReadEnvValues)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fleet chat: "+err.Error())
 		return 1
