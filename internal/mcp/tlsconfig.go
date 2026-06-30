@@ -61,7 +61,7 @@ func (o TLSOptions) build() (*tls.Config, error) {
 	}
 
 	if o.CACertFile != "" {
-		pem, err := os.ReadFile(o.CACertFile) //nolint:gosec // G304: operator-supplied CA bundle path, a deliberate local file.
+		pem, err := os.ReadFile(o.CACertFile)
 		if err != nil {
 			return nil, fmt.Errorf("read ca_cert %q: %w", o.CACertFile, err)
 		}
