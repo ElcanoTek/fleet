@@ -305,6 +305,12 @@ type sandboxTaker interface {
 	// TakeContainerWithOverrides cold-starts a fresh sandbox applying per-task
 	// resource overrides (#205), with the caller's chosen network posture.
 	TakeContainerWithOverrides(ctx context.Context, ov sandbox.ResourceOverride, noNetwork bool) (*sandbox.Sandbox, func(), error)
+	// TakeContainerWithEgress cold-starts a fresh sandbox in allowlisted egress
+	// mode (#211), restricting outbound HTTP(S) to allowlist via the host proxy.
+	TakeContainerWithEgress(ctx context.Context, ov sandbox.ResourceOverride, allowlist []string) (*sandbox.Sandbox, func(), error)
+	// EgressDefault reports the fleet-wide network mode (#211) and the allowlist
+	// for allowlisted mode. ("", nil) = open/current behavior.
+	EgressDefault() (mode string, allowlist []string)
 }
 
 // takeTaskSandbox acquires the bash/run_python execution sandbox for a
@@ -323,18 +329,40 @@ type sandboxTaker interface {
 // the host take. This is not a production downgrade — buildSandboxPool requires
 // a container image outside mock mode, so a real deployment always seals here.
 func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task) (*sandbox.Sandbox, func(), error) {
+	// Fleet-wide egress mode (#211). lockdown is a kill-switch: it seals EVERY
+	// sandbox, overriding a task's AllowNetwork. allowlisted routes a networked
+	// task's egress through the host proxy (best-effort). open/"" = current.
+	mode, allowlist := pool.EgressDefault()
+	networked := task.AllowNetwork && mode != sandbox.NetworkModeLockdown
+	allowlisted := networked && mode == sandbox.NetworkModeAllowlisted
+
 	// Per-task sandbox limits (#205) require a cold start (a warm pooled container
 	// is already running with the pool's ceilings), so route through the override
 	// path — applying the task's own network posture (sealed unless AllowNetwork).
 	if !task.SandboxLimits.IsZero() {
-		sb, cleanup, err := pool.TakeContainerWithOverrides(ctx, sandboxOverride(task.SandboxLimits), !task.AllowNetwork)
+		ov := sandboxOverride(task.SandboxLimits)
+		if allowlisted {
+			sb, cleanup, err := pool.TakeContainerWithEgress(ctx, ov, allowlist)
+			if errors.Is(err, sandbox.ErrContainerUnavailable) {
+				return pool.Take()
+			}
+			return sb, cleanup, err
+		}
+		sb, cleanup, err := pool.TakeContainerWithOverrides(ctx, ov, !networked)
 		if errors.Is(err, sandbox.ErrContainerUnavailable) {
 			// Host/mock pool: no container to size — fall back to the host take.
 			return pool.Take()
 		}
 		return sb, cleanup, err
 	}
-	if task.AllowNetwork {
+	if networked {
+		if allowlisted {
+			sb, cleanup, err := pool.TakeContainerWithEgress(ctx, sandbox.ResourceOverride{}, allowlist)
+			if errors.Is(err, sandbox.ErrContainerUnavailable) {
+				return pool.Take()
+			}
+			return sb, cleanup, err
+		}
 		return pool.Take()
 	}
 	sb, cleanup, err := pool.TakeContainer(ctx)

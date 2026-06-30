@@ -162,6 +162,17 @@ type ContainerConfig struct {
 	// what happens *inside* bash/run_python.
 	NoNetwork bool
 
+	// ProxyURL, when set (and NoNetwork is false), puts the container in
+	// "allowlisted" egress mode (#211): it runs on slirp4netns with
+	// host-loopback enabled and HTTPS_PROXY/HTTP_PROXY pointed at this URL — the
+	// host-side EgressProxy that permits only allowlisted domains. The URL embeds
+	// a per-turn token as basic-auth userinfo (see EgressProxy.ProxyURLForToken).
+	// This is a BEST-EFFORT control over proxy-honoring clients, NOT a hard jail —
+	// lockdown (NoNetwork) remains the hard seal. NoNetwork takes precedence (an
+	// empty netns has no route to the proxy). Empty = open or lockdown per
+	// NoNetwork. See docs/adr/0012-sandbox-egress-allowlist.md.
+	ProxyURL string
+
 	// ReadOnlyMounts are absolute host directories that should appear
 	// inside the container at the SAME absolute path, read-only.
 	//
@@ -301,6 +312,58 @@ func resolveStartTimeout(cfg ContainerConfig) time.Duration {
 		return cfg.StartTimeout
 	}
 	return defaultContainerStartTimeout
+}
+
+// Network modes (#211) — the operator-selected default egress posture for a
+// sandbox, resolved from FLEET_DEFAULT_NETWORK_MODE. These name the THREE
+// postures; the per-container mechanics are (NoNetwork, ProxyURL) — see
+// networkArgs.
+const (
+	// NetworkModeOpen is the historical non-lockdown default: full rootless
+	// slirp4netns egress (outbound only).
+	NetworkModeOpen = "open"
+	// NetworkModeAllowlisted routes a networked sandbox's HTTP(S) clients through
+	// the host EgressProxy, limiting egress to allowlisted domains (best-effort;
+	// see EgressProxy / ADR-0012).
+	NetworkModeAllowlisted = "allowlisted"
+	// NetworkModeLockdown is a fleet-wide egress kill-switch: every sandbox is
+	// sealed (--network=none) regardless of a task's AllowNetwork opt-in.
+	NetworkModeLockdown = "lockdown"
+)
+
+// networkArgs returns the podman network (and, for allowlisted mode, proxy
+// --env) arguments for a container's network posture. It is a pure function so
+// the three modes are unit-testable and cannot drift:
+//
+//   - lockdown   (noNetwork)            → --network=none (empty netns, the hard seal)
+//   - allowlisted (proxyURL set)        → slirp4netns + host-loopback + HTTP(S)_PROXY
+//     pointed at the host EgressProxy (best-effort; see EgressProxy / ADR-0012)
+//   - open       (neither)              → rootless slirp4netns default (outbound only)
+//
+// noNetwork takes precedence: an empty network namespace has no route to the
+// proxy, so a lockdown turn is never put in allowlisted mode.
+func networkArgs(noNetwork bool, proxyURL string) []string {
+	switch {
+	case noNetwork:
+		return []string{"--network=none"}
+	case proxyURL != "":
+		// allow_host_loopback lets the container reach the host-bound proxy at
+		// slirpHostGateway. NO_PROXY keeps loopback + the proxy host itself direct
+		// so the proxy connection isn't recursively proxied. Both upper- and
+		// lower-case env names are set because tools disagree on which they read.
+		noProxy := "localhost,127.0.0.1," + slirpHostGateway
+		return []string{
+			"--network=slirp4netns:allow_host_loopback=true",
+			"--env", "HTTPS_PROXY=" + proxyURL,
+			"--env", "HTTP_PROXY=" + proxyURL,
+			"--env", "https_proxy=" + proxyURL,
+			"--env", "http_proxy=" + proxyURL,
+			"--env", "NO_PROXY=" + noProxy,
+			"--env", "no_proxy=" + noProxy,
+		}
+	default:
+		return nil
+	}
 }
 
 func (c *containerImpl) start(ctx context.Context) error {
@@ -489,14 +552,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 		// podman docs explicitly recommend for read-only volumes.
 		args = append(args, fmt.Sprintf("--volume=%s:%s:ro,z", dir, dir))
 	}
-	if c.cfg.NoNetwork {
-		// Empty network namespace — no loopback, no DNS, no routes. Used
-		// by lockdown turns where exfiltration to an external host is part
-		// of the threat model. Non-lockdown turns omit this and inherit
-		// rootless podman's slirp4netns default (outbound only, no
-		// inbound listeners reachable from the host).
-		args = append(args, "--network=none")
-	}
+	args = append(args, networkArgs(c.cfg.NoNetwork, c.cfg.ProxyURL)...)
 	if c.cfg.Runtime != "" {
 		args = append(args, fmt.Sprintf("--runtime=%s", c.cfg.Runtime))
 	}

@@ -241,6 +241,11 @@ func run() error {
 	}
 
 	resolveSandboxRuntimeInto(cfg, bundle)
+	// Sandbox egress allowlist (#211): the bundle manifest supplies the default
+	// allowed domains for allowlisted network mode (operator-authored deployment
+	// config, like the runtime + image). FLEET_DEFAULT_NETWORK_MODE selects the
+	// mode; this fills the allowlist it draws from.
+	cfg.SandboxNetworkAllowlist = bundle.Sandbox().NetworkAllowlist
 
 	// Install the bundle's agent tool-behavior policy (parallel-safe tools,
 	// critical-tool suffixes, substitute map). The generic bundle ships none, so

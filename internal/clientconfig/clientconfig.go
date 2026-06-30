@@ -291,6 +291,14 @@ type Sandbox struct {
 	// boot-time preflight + Kata memory-overhead. An explicit FLEET_SANDBOX_RUNTIME
 	// env var still wins over this manifest value, mirroring sandbox.image.
 	Runtime string
+
+	// NetworkAllowlist is the default sandbox egress allowlist (#211) used when
+	// FLEET_DEFAULT_NETWORK_MODE=allowlisted: networked sandboxes may reach only
+	// these domains (via the host egress proxy). Entries are exact domains or
+	// "*."-prefixed wildcards (e.g. "pypi.org", "*.github.com"). From the
+	// manifest sandbox.network_allowlist. Empty in allowlisted mode = deny all
+	// egress (best-effort — see ADR-0012).
+	NetworkAllowlist []string
 }
 
 // ResolvedImageRef returns the image reference the fleet process should consume:
@@ -304,10 +312,11 @@ func (s Sandbox) ResolvedImageRef() string {
 
 // sandboxManifest is the on-disk YAML shape of the manifest's sandbox: block.
 type sandboxManifest struct {
-	Containerfile string `yaml:"containerfile"`
-	Tag           string `yaml:"tag"`
-	Image         string `yaml:"image"`
-	Runtime       string `yaml:"runtime"`
+	Containerfile    string   `yaml:"containerfile"`
+	Tag              string   `yaml:"tag"`
+	Image            string   `yaml:"image"`
+	Runtime          string   `yaml:"runtime"`
+	NetworkAllowlist []string `yaml:"network_allowlist"`
 }
 
 // Branding carries the white-label strings surfaced in the web UI + login.
@@ -659,11 +668,18 @@ func resolveSandbox(sm *sandboxManifest, bundleDir string) Sandbox {
 	if tag == "" {
 		tag = "localhost/fleet-sandbox:latest"
 	}
+	var allowlist []string
+	for _, d := range raw.NetworkAllowlist {
+		if d = strings.TrimSpace(d); d != "" {
+			allowlist = append(allowlist, d)
+		}
+	}
 	return Sandbox{
 		ContainerfileAbsPath: filepath.Join(bundleDir, cf),
 		Tag:                  tag,
 		Image:                strings.TrimSpace(raw.Image),
 		Runtime:              strings.TrimSpace(raw.Runtime),
+		NetworkAllowlist:     allowlist,
 	}
 }
 
