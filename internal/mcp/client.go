@@ -249,7 +249,29 @@ func (c *Client) AddHTTPServer(ctx context.Context, name, url string) error {
 
 // AddHTTPServerWithHeaders adds an HTTP-based MCP server with custom headers for authentication
 func (c *Client) AddHTTPServerWithHeaders(ctx context.Context, name, url string, headers map[string]string) error {
-	transport := NewHTTPTransportWithHeaders(url, headers)
+	return c.AddHTTPServerWithOptions(ctx, name, url, HTTPServerOptions{Headers: headers})
+}
+
+// HTTPServerOptions configures an HTTP MCP server registration. It exists for
+// the per-user remote-MCP path (#443): those servers are user-supplied, so they
+// must dial through an SSRF-safe HTTP client (HTTPClient) and carry a per-user
+// bearer (Headers). The bundle's operator-configured HTTP servers keep using
+// AddHTTPServerWithHeaders (default client), unchanged.
+type HTTPServerOptions struct {
+	// Headers are sent with every request (e.g. Authorization: Bearer <token>).
+	Headers map[string]string
+	// HTTPClient overrides the default client — pass the SSRF-safe client for
+	// user-supplied URLs. nil = the default bounded client.
+	HTTPClient *http.Client
+}
+
+// AddHTTPServerWithOptions adds an HTTP-based MCP server with full control over
+// the headers and the underlying HTTP client.
+func (c *Client) AddHTTPServerWithOptions(ctx context.Context, name, url string, opts HTTPServerOptions) error {
+	transport := NewHTTPTransportWithHeaders(url, opts.Headers)
+	if opts.HTTPClient != nil {
+		transport.client = opts.HTTPClient
+	}
 
 	server := &Server{
 		name:      name,

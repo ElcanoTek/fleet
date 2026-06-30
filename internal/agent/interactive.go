@@ -67,6 +67,13 @@ type TurnConfig struct {
 	OptionalServers agentcore.MCPOptionalSet
 	Selection       agentcore.MCPSelection
 
+	// Overlay is the per-user remote-MCP overlay (#443). When Active, the run
+	// advertises the shared catalog merged with the overlay's and dispatches via a
+	// compositeBroker that routes the overlay's servers (this user's
+	// OAuth-connected servers) to the per-run overlay client. nil = no overlay
+	// (behavior identical to before the feature). The Manager owns its lifecycle.
+	Overlay *RemoteMCPOverlay
+
 	// Persona is the turn's active persona basename (e.g. "assistant"), used to
 	// label persona_tool_blocked audit events. PersonaPolicy is the per-persona
 	// tool allowlist (Gate-4, #294): nil keeps current behavior (the persona sees
@@ -134,6 +141,13 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		CompactionSummarizer: buildInteractiveCompactionSummarizer(tc),
 		HealthRegistry:       tc.HealthRegistry,
 	}
+
+	// Per-user remote-MCP overlay (#443): advertise the shared catalog merged
+	// with the overlay's, and dispatch via a compositeBroker so the user's
+	// OAuth-connected servers route to the per-run overlay client (holding their
+	// bearer) while bundle servers stay on the shared client. The overlay never
+	// mutates the shared client, so concurrent users can't cross-contaminate.
+	ApplyMCPOverlay(&deps, tc.MCPClient, tc.Overlay)
 
 	cfg := agentcore.RunConfig{
 		EnvPrefix:           agentcore.CanonicalEnvPrefix,

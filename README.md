@@ -181,7 +181,15 @@ tested in this repository:
 
 - **MCP — Model Context Protocol.** A merged Go MCP client (stdio + HTTP) drives
   the tools and data sources in the deployment's MCP catalog. See
-  [`internal/mcp`](internal/mcp).
+  [`internal/mcp`](internal/mcp). Beyond the operator-provisioned catalog, each
+  **user** can add a **remote (hosted) MCP server** from the GUI and log in to it
+  with the MCP OAuth 2.1 + PKCE handshake (discovery, dynamic client
+  registration, RFC 8707 resource binding); their connected server's tools then
+  work in their chat turns and scheduled tasks. Tokens are encrypted at rest and
+  stay host-side — same credential boundary as the bundle's servers. Off until
+  `FLEET_MCP_OAUTH_ENCRYPTION_KEY` + `FLEET_PUBLIC_BASE_URL` are set; see
+  [ADR-0009](docs/adr/0009-per-user-remote-mcp-oauth.md) and
+  [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md).
 - **Agent Skills.** The client-config bundle's `skills/` directory holds packaged,
   on-demand agent capabilities in the open
   [Agent Skills format](https://github.com/anthropics/skills) — a `SKILL.md` per

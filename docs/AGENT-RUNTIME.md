@@ -176,6 +176,62 @@ fleet-admin sched task set-credentials <task_id> --clear   # revert to global in
 
 ---
 
+## Per-user remote MCP servers (OAuth login, #443)
+
+The bundle's MCP servers are operator-provisioned. fleet also lets each **user**
+add a **remote (hosted) MCP server** from the GUI and log in to it via the MCP
+OAuth handshake (spec revision 2025-06-18: OAuth 2.1 + PKCE S256, RFC 9728/8414
+discovery, RFC 7591 dynamic client registration, RFC 8707 resource indicators).
+The connected server's tools then participate in that user's chat turns **and**
+their scheduled tasks. In chat they appear in the Tools picker as toggleable,
+default-on entries (gated per conversation exactly like a bundle Optional
+server, so they count against the tool ceiling only when selected); scheduled
+runs use all of the owner's connected servers. Local stdio servers are
+unchanged. See [ADR-0009](adr/0009-per-user-remote-mcp-oauth.md) for the full
+rationale.
+
+The feature is **off until configured** and fails closed:
+
+- `FLEET_MCP_OAUTH_ENCRYPTION_KEY` — base64 of 32 random bytes
+  (`openssl rand -base64 32`). Encrypts the per-user tokens / client secret at
+  rest (AES-256-GCM, AAD-bound to `(email, canonical server URL)`). Unset → the
+  feature is disabled and the endpoints report it.
+- `FLEET_PUBLIC_BASE_URL` — the externally-reachable web origin
+  (e.g. `https://fleet.example.com`). The OAuth redirect URI is derived from it
+  (`<base>/api/oauth/mcp/callback`) and must be byte-stable; it is **never**
+  reconstructed from request headers. Required.
+- `FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP` — dev only; permits `http://` servers.
+  Default false (https required).
+
+How the invariants hold:
+
+- **Credentials stay host-side (ADR-0003).** Tokens live only in the fleet
+  process + chat Postgres (encrypted) and reach a server only as the
+  `Authorization` header the host-side MCP client writes — never the sandbox,
+  model context, or logs.
+- **No forked governance (ADR-0001).** A user's servers are wired as a *per-run
+  overlay* `mcp.Client` (built with a freshly-refreshed bearer) composed with the
+  shared/bundle client via a `compositeBroker`. The shared long-lived client is
+  never mutated with per-user secrets, so concurrent users can't cross-pollute.
+  Chat and scheduled use the same overlay + refresh path.
+- **SSRF guard.** User-supplied URLs are dialed through a client that rejects
+  private/loopback/link-local/metadata IPs at connect time (DNS-rebinding safe)
+  and refuses redirects.
+- **Rotation-safe refresh.** Tokens are refreshed under a `SELECT … FOR UPDATE`
+  row lock with a post-lock expiry re-check, persisting any rotated (single-use)
+  refresh token in the same transaction. A dead refresh token marks the
+  connection `needs_reauth` and the server is skipped — the run still completes.
+
+Scheduled tasks resolve the **task owner's email** (the orchestrator username)
+to look up that user's connected servers, so a headless run reaches them with no
+user present — as long as a valid refresh token exists. A headless run can't
+re-prompt the user to log in, so a needs-reauth server is skipped AND surfaced
+to the owner: a notice naming the unavailable connectors is prepended to the run
+(visible in the task transcript) so the agent doesn't silently rely on missing
+tools and the owner knows to reconnect.
+
+---
+
 ## Per-persona tool allowlist (least-privilege by role)
 
 Different personas have different roles and risk surfaces. A `code-reviewer`

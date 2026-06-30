@@ -57,6 +57,7 @@ type Agent struct {
 	model         fantasy.LanguageModel
 	fallbackModel fantasy.LanguageModel
 	mcpClient     *mcp.Client
+	overlay       *RemoteMCPOverlay
 	nativeTools   []fantasy.AgentTool
 	systemPrompt  string
 	persona       string
@@ -162,6 +163,12 @@ type Options struct {
 	// the task's effective persona and threads it into RunConfig.
 	PersonaPolicy *agentcore.PersonaToolPermissions
 
+	// Overlay is the per-user remote-MCP overlay (#443): the task owner's
+	// OAuth-connected hosted servers, wired via the same compositeBroker the
+	// interactive path uses. nil = no overlay. The DRIVER (scheduledrun) builds
+	// and closes it.
+	Overlay *RemoteMCPOverlay
+
 	// PhoneAFriendEnabled turns on the one-time "phone a friend" super-LLM review
 	// (part of #175). OFF by default so config/default behaviour is unchanged.
 	// ReviewerModel is the resolved (typically stronger) reviewer model that
@@ -226,6 +233,7 @@ func NewAgent(opts Options) *Agent {
 		model:               opts.Model,
 		fallbackModel:       opts.FallbackModel,
 		mcpClient:           opts.MCPClient,
+		overlay:             opts.Overlay,
 		nativeTools:         opts.NativeTools,
 		systemPrompt:        opts.SystemPrompt,
 		persona:             opts.Persona,
@@ -536,6 +544,10 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		MCPServersDirty: a.mcpDirty,
 		ClearMCPDirty:   a.clearMCPDirty,
 	}
+	// Per-user remote-MCP overlay (#443): wire the task owner's OAuth-connected
+	// hosted servers via the SAME compositeBroker the interactive path uses, so a
+	// headless run reaches them without mutating the shared/per-run bundle client.
+	ApplyMCPOverlay(&deps, a.mcpClient, a.overlay)
 	// The verifier gate wraps the inner policy. We must drive CanFinish through
 	// the wrapper while keeping the inner policy as Deps.Policy so agentcore's
 	// confirm_audit tool + usage accounting bind to the same orchestration. We

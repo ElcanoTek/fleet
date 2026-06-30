@@ -52,7 +52,7 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 	// 32 MiB in-memory threshold — anything larger spills to a temp file,
 	// which we then stream into the final destination. The overall request
 	// size is capped by http.MaxBytesReader above.
-	if err := r.ParseMultipartForm(32 << 20); err != nil { //nolint:gosec // bounded by MaxBytesReader above
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, "parse multipart: "+err.Error(), http.StatusBadRequest)
 		return
 	}

@@ -26,6 +26,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/secretbox"
 )
 
 // Store wraps the Postgres handle. Schema is managed by the embedded
@@ -43,7 +44,24 @@ type Store struct {
 	// (hard delete — no behavior change for existing deployments). Set via
 	// SetSoftDelete from FLEET_CONVERSATION_SOFT_DELETE.
 	softDelete bool
+	// tokenCipher encrypts the per-user remote-MCP OAuth secrets at rest (#443).
+	// nil = the remote-MCP-OAuth feature is disabled (no FLEET_MCP_OAUTH_ENCRYPTION_KEY);
+	// the token CRUD then fails closed via secretbox.ErrNoCipher rather than
+	// storing plaintext. Set via SetTokenCipher right after Open.
+	tokenCipher *secretbox.Cipher
 }
+
+// SetTokenCipher installs the AES-256-GCM cipher used to encrypt per-user
+// remote-MCP OAuth secrets at rest (#443). cmd/fleet calls this from config
+// (FLEET_MCP_OAUTH_ENCRYPTION_KEY) right after Open. A nil cipher leaves the
+// feature disabled — the token CRUD fails closed rather than persisting
+// plaintext secrets.
+func (s *Store) SetTokenCipher(c *secretbox.Cipher) { s.tokenCipher = c }
+
+// RemoteMCPEncryptionEnabled reports whether a token cipher is configured, i.e.
+// whether the remote-MCP-OAuth feature can store secrets. Handlers gate on this
+// to return an actionable "set FLEET_MCP_OAUTH_ENCRYPTION_KEY" error.
+func (s *Store) RemoteMCPEncryptionEnabled() bool { return s.tokenCipher != nil }
 
 // SetSearchEnabled toggles full-text search index maintenance. cmd/fleet calls
 // this from config (FLEET_SEARCH_ENABLED) right after Open. Off → AppendHistory
@@ -198,7 +216,7 @@ func (s *Store) Close() error {
 // after a truncate is still a no-op on the second run.
 func (s *Store) TruncateAllForTest(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, memories, users, panic_events RESTART IDENTITY CASCADE`)
+		`TRUNCATE TABLE conversations, memories, users, panic_events, remote_mcp_servers RESTART IDENTITY CASCADE`)
 	return err
 }
 

@@ -72,6 +72,14 @@ type Options struct {
 	// (#198); TaskMemoryConfig caps how much a single task may accumulate.
 	TaskMemory       tools.TaskMemoryStore
 	TaskMemoryConfig tools.TaskMemoryConfig
+
+	// RemoteMCP resolves a task owner's OAuth-connected remote (hosted) MCP servers
+	// and mints their bearer tokens, so a scheduled (headless) run can use the same
+	// per-user servers a chat turn would (#443). nil = feature off. OwnerEmail maps
+	// the task's creator UUID to the chat-side email the tokens are keyed by; nil
+	// disables remote-MCP wiring for scheduled runs even when RemoteMCP is set.
+	RemoteMCP  agent.RemoteMCPResolver
+	OwnerEmail func(ctx context.Context, userID uuid.UUID) (string, error)
 }
 
 // Runner executes claimed scheduled tasks in-process through the unified runtime
@@ -109,6 +117,11 @@ type Runner struct {
 	// task opted in (instruction_self_improve). nil = capability disabled.
 	taskMemory       tools.TaskMemoryStore
 	taskMemoryConfig tools.TaskMemoryConfig
+
+	// remoteMCP + ownerEmail wire a task owner's OAuth-connected remote (hosted)
+	// MCP servers into a headless run (#443). nil = feature off.
+	remoteMCP  agent.RemoteMCPResolver
+	ownerEmail func(ctx context.Context, userID uuid.UUID) (string, error)
 }
 
 // IterationStore records per-iteration telemetry for a looped task (#179). It is
@@ -135,6 +148,8 @@ func New(opts Options) *Runner {
 		personaPolicies:  opts.PersonaPolicies,
 		taskMemory:       opts.TaskMemory,
 		taskMemoryConfig: opts.TaskMemoryConfig,
+		remoteMCP:        opts.RemoteMCP,
+		ownerEmail:       opts.OwnerEmail,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -508,6 +523,14 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	}
 	defer mcpCleanup()
 
+	// Per-user remote (hosted) MCP overlay (#443): wire the task owner's
+	// OAuth-connected servers via the SAME composite mechanism the chat path uses,
+	// so a headless run reaches them without mutating the shared/per-run client.
+	// Best-effort: a server that needs re-auth or whose owner can't be resolved is
+	// skipped, never failing the run.
+	remoteOverlay := r.buildTaskRemoteOverlay(ctx, task, mcpClient)
+	defer remoteOverlay.Close()
+
 	// Per-task persona override (#221): a task may name a personas/<name>.yaml to
 	// swap in specialized domain expertise; empty uses the runner's global persona.
 	taskSystemPrompt, taskPersona := r.taskPromptAndPersona(task)
@@ -547,6 +570,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		TaskMemoryConfig:    r.taskMemoryConfig,
 		CredentialAllowlist: taskCredentialAllowlist(task),
 		PersonaPolicy:       r.personaPolicy(taskPersona),
+		Overlay:             remoteOverlay,
 		PhoneAFriendEnabled: r.cfg.PhoneAFriendEnabled,
 		ReviewerModel:       reviewer,
 		// Governed sub-agents (#175, part b): OFF unless FLEET_SUBAGENTS_ENABLED.
@@ -574,6 +598,19 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 				"side-effect (sending email, payments, creating/mutating records), VERIFY it was not "+
 				"already performed by an earlier attempt; do not duplicate it.\n\n%s",
 			task.AttemptCount+1, task.Prompt)
+	}
+	// Owner-visible degradation notice (#443): a headless run can't re-prompt the
+	// user to log in, so a connected remote MCP server whose token needs re-auth is
+	// skipped. Surface it in the run transcript so the owner sees the task did less
+	// than expected, and tell the agent so it doesn't silently rely on missing tools.
+	if remoteOverlay != nil && len(remoteOverlay.Skipped) > 0 {
+		log.Printf("scheduled task %s: skipped remote MCP server(s) needing re-auth: %v", task.ID, remoteOverlay.Skipped)
+		prompt = fmt.Sprintf(
+			"[notice] These remote MCP connectors were unavailable this run because their "+
+				"login expired (the task owner must reconnect them in Settings → Connections): %s. "+
+				"Proceed without them; if the task depends on one, say so in your result rather than "+
+				"guessing.\n\n%s",
+			strings.Join(remoteOverlay.Skipped, ", "), prompt)
 	}
 	// Loop context (#179): a prior iteration's output is fed forward so the worker
 	// can improve on it. Empty on the first / only pass.
@@ -611,6 +648,39 @@ func taskCredentialAllowlist(task *models.Task) agentcore.CredentialAllowlist {
 		al = append(al, agentcore.CredentialAllowlistEntry{Server: e.Server, Account: e.Account})
 	}
 	return al
+}
+
+// buildTaskRemoteOverlay resolves the task owner's email (creator UUID →
+// chat-side email) and builds a per-user remote-MCP overlay (#443) for the run.
+// Returns nil (a no-op overlay) when the feature is off, the owner can't be
+// resolved, or no server is connected — all best-effort, never fatal.
+func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, base *mcp.Client) *agent.RemoteMCPOverlay {
+	if r.remoteMCP == nil || r.ownerEmail == nil || task.CreatedBy == nil {
+		return nil
+	}
+	email, err := r.ownerEmail(ctx, *task.CreatedBy)
+	if err != nil {
+		log.Printf("scheduled task %s: cannot resolve owner email for remote MCP: %v", task.ID, err)
+		return nil
+	}
+	if email == "" {
+		return nil
+	}
+	shadowed := make(map[string]bool)
+	for _, st := range base.GetAllTools() {
+		shadowed[st.ServerName] = true
+	}
+	// Scheduled runs have no interactive Tools picker, so all of the owner's
+	// connected servers participate (nil opt-in set), bounded by the overlay cap.
+	overlay, err := agent.BuildRemoteMCPOverlay(ctx, r.remoteMCP, email, shadowed, nil)
+	if err != nil {
+		log.Printf("scheduled task %s: remote-mcp overlay unavailable: %v", task.ID, err)
+		return nil
+	}
+	if overlay.Active() {
+		log.Printf("scheduled task %s: wired %d remote MCP server(s) for %s", task.ID, len(overlay.Servers), email)
+	}
+	return overlay
 }
 
 // bindTaskMCP resolves the MCP client the scheduled run should use.

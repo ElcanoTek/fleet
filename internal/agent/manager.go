@@ -47,6 +47,11 @@ type TurnInput struct {
 	// ConversationID scopes per-turn filesystem state to this chat.
 	ConversationID string
 
+	// UserEmail is the authenticated user driving this turn. Used to resolve the
+	// user's connected remote (hosted) MCP servers + mint their OAuth bearers for
+	// the per-turn overlay (#443). Empty disables the overlay for the turn.
+	UserEmail string
+
 	// OptionalMCPServersEnabled is the conversation's opt-in list for Optional
 	// MCP servers (e.g. gamma). nil/empty means "no optional servers".
 	OptionalMCPServersEnabled []string
@@ -144,6 +149,11 @@ type ManagerOptions struct {
 	// nil/empty = no narrowing for any persona (defaults unchanged). cmd/fleet
 	// builds it once from the bundle and hands it to BOTH drivers.
 	PersonaPolicies map[string]agentcore.PersonaToolPermissions
+
+	// RemoteMCP resolves a user's OAuth-connected remote (hosted) MCP servers and
+	// mints their bearer tokens for the per-turn overlay (#443). nil = the feature
+	// is off; turns run exactly as before.
+	RemoteMCP RemoteMCPResolver
 }
 
 // New constructs a Manager: it dials OpenRouter (via the model resolver),
@@ -276,6 +286,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		limiter:              opts.Limiter,
 		health:               agentcore.NewProviderHealthRegistry(),
 		personaPolicies:      opts.PersonaPolicies,
+		remoteMCP:            opts.RemoteMCP,
 	}
 	m.mcpToolRoster = m.computeMCPToolRoster()
 	m.optionalServerMetadata = m.buildOptionalServerMetadata(opts.ServerSpecs)
@@ -648,6 +659,40 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		}
 	}
 
+	// Per-user remote (hosted) MCP overlay (#443). Builds a short-lived client of
+	// the user's OAuth-connected servers (fresh bearer, SSRF-safe transport) that
+	// composes with the shared catalog. Best-effort: a server that needs re-auth
+	// is skipped, never failing the turn. The overlay is closed when the turn ends.
+	var overlay *RemoteMCPOverlay
+	if m.remoteMCP != nil && in.UserEmail != "" {
+		shadowed := make(map[string]bool)
+		for _, st := range m.mcpClient.GetAllTools() {
+			shadowed[st.ServerName] = true
+		}
+		// A remote server participates in a turn only when the conversation opted
+		// in (the Tools picker), exactly like a bundle Optional server. New
+		// conversations seed the opt-in list from the catalog (remote servers are
+		// enabled_by_default), so a freshly-connected server is on by default yet
+		// remains toggleable and bounded by the tool ceiling.
+		enabled := make(map[string]bool, len(in.OptionalMCPServersEnabled))
+		for _, name := range in.OptionalMCPServersEnabled {
+			if n := strings.TrimSpace(name); n != "" {
+				enabled[n] = true
+			}
+		}
+		ov, oerr := BuildRemoteMCPOverlay(ctx, m.remoteMCP, in.UserEmail, shadowed, enabled)
+		if oerr != nil {
+			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", in.UserEmail, oerr)
+		} else if ov != nil {
+			overlay = ov
+			defer overlay.Close()
+			if len(ov.Skipped) > 0 {
+				// Interactive: the user can see+fix these on the Connections page.
+				log.Printf("RunTurn: remote MCP server(s) need re-auth for %s: %v", in.UserEmail, ov.Skipped)
+			}
+		}
+	}
+
 	tc := TurnConfig{
 		SystemPrompt:    systemPrompt,
 		Messages:        messages,
@@ -672,6 +717,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		NoteProposer:    m.noteProposer,
 		HealthRegistry:  m.health,
 	}
+	tc.Overlay = overlay
 
 	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink})
 
