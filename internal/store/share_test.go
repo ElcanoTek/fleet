@@ -66,6 +66,18 @@ func TestShareToken_RoundTrip(t *testing.T) {
 		if strings.Contains(string(m.Content), "SECRET_TOOL_OUTPUT") {
 			t.Error("snapshot leaked tool_result content — tool internals must not be shared")
 		}
+		// The public snapshot must omit the internal messages.id (#226): LoadHistory
+		// populates HistoryEntry.ID for the owner's branching flow (#454), but it
+		// must be zeroed here so it never reaches an anonymous viewer.
+		if m.ID != 0 {
+			t.Errorf("snapshot leaked internal messages.id %d — #226 omits internal identifiers", m.ID)
+		}
+	}
+	// Belt-and-suspenders: the marshaled public JSON must carry no "id" field.
+	if blob, err := json.Marshal(snap); err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	} else if strings.Contains(string(blob), `"id"`) {
+		t.Errorf("public snapshot JSON exposes an id field: %s", blob)
 	}
 	if snap.SharedAt == 0 {
 		t.Error("snapshot SharedAt not set")

@@ -1383,6 +1383,9 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case sub == "branch" && r.Method == http.MethodPost:
+		// Fork this conversation at a chosen message into a new conversation (#454).
+		s.handleConversationBranch(w, r, id, user)
 	case sub == "share" && r.Method == http.MethodPost:
 		// Issue (or rotate) a public read-only share token (#226).
 		s.handleConversationShare(w, r, id, user)

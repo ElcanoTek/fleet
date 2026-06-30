@@ -23,6 +23,10 @@ import (
 type chatStore interface {
 	// Conversations.
 	CreateConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error)
+	// BranchConversation forks a conversation at a chosen message into a new
+	// independent conversation that copies the parent's messages up to that point
+	// (#454). Backs POST /conversations/{id}/branch.
+	BranchConversation(ctx context.Context, userEmail, parentConvID string, branchPointMessageID int64, title string) (*store.Conversation, error)
 	Get(ctx context.Context, userEmail, convID string) (*store.Conversation, error)
 	List(ctx context.Context, userEmail string, archivedOnly bool) ([]store.Conversation, error)
 	// Folders & labels (#258). ListFiltered backs the ?folder= / ?label= filters
