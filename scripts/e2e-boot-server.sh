@@ -222,10 +222,11 @@ SQL
 
 # ── 2. build Go binaries ──
 build_binaries() {
-  log "build: go build fleet + fake-llm + fleet-admin"
+  log "build: go build fleet + fake-llm"
+  # One unified `fleet` binary (#461): `fleet serve` runs the server, `fleet <verb>`
+  # is the operator CLI (user provisioning below). No separate fleet-admin needed.
   GOTOOLCHAIN=auto go build -o "$BIN_DIR/fleet" ./cmd/fleet        >>"$LOG_DIR/build.log" 2>&1 || die "go build fleet failed (see $LOG_DIR/build.log)"
   GOTOOLCHAIN=auto go build -o "$BIN_DIR/fake-llm" ./cmd/fake-llm  >>"$LOG_DIR/build.log" 2>&1 || die "go build fake-llm failed"
-  GOTOOLCHAIN=auto go build -o "$BIN_DIR/fleet-admin" ./cmd/fleet-admin >>"$LOG_DIR/build.log" 2>&1 || die "go build fleet-admin failed"
 }
 
 # ── 3. ensure the sandbox image, then probe it ──
@@ -308,10 +309,10 @@ start_fleet() {
 seed_users() {
   log "seed: chat user $E2E_TEST_EMAIL + sched admin $E2E_SCHED_USERNAME"
   FLEET_CHAT_DATABASE_URL="$CHAT_DSN" \
-    "$BIN_DIR/fleet-admin" chat user add "$E2E_TEST_EMAIL" --password - <<<"$E2E_TEST_PASSWORD" \
+    "$BIN_DIR/fleet" chat user add "$E2E_TEST_EMAIL" --password - <<<"$E2E_TEST_PASSWORD" \
     >>"$LOG_DIR/seed.log" 2>&1 || log "seed: chat user may already exist (continuing)"
   FLEET_SCHED_DATABASE_URL="$SCHED_DSN" \
-    "$BIN_DIR/fleet-admin" sched user add "$E2E_SCHED_USERNAME" --role admin --password - <<<"$E2E_TEST_PASSWORD" \
+    "$BIN_DIR/fleet" sched user add "$E2E_SCHED_USERNAME" --role admin --password - <<<"$E2E_TEST_PASSWORD" \
     >>"$LOG_DIR/seed.log" 2>&1 || log "seed: sched user may already exist (continuing)"
 }
 

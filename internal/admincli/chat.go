@@ -1,0 +1,230 @@
+package admincli
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+
+	"github.com/ElcanoTek/fleet/internal/chattui"
+	"github.com/ElcanoTek/fleet/internal/store"
+)
+
+// cmdChat is overloaded by design (#457):
+//   - `fleet chat`                  → the interactive TUI to chat with the agent
+//   - `fleet chat --message "…"`    → a one-shot non-interactive turn
+//   - `fleet chat user add|…`       → chat-USER administration (email + bcrypt)
+//
+// The TUI is the common case, so anything that isn't the `user` admin verb routes
+// to chattui.Run. (The two never collide: `user` is a bare positional, while the
+// TUI takes only flags/none.)
+func cmdChat(argv []string) int {
+	if len(argv) == 0 || argv[0] != "user" {
+		return chattui.Run(argv)
+	}
+	if len(argv) < 2 {
+		return errf(1, "usage: fleet chat user add|update|role|del|list  (or `fleet chat` for the agent TUI)")
+	}
+	sub := argv[1]
+	rest := argv[2:]
+	switch sub {
+	case "add":
+		return chatUserUpsert(rest, true)
+	case "update", "passwd", "password":
+		return chatUserUpsert(rest, false)
+	case "role", "set-role":
+		return chatUserRole(rest)
+	case "del", "delete", "rm":
+		return chatUserDel(rest)
+	case "list", "ls":
+		return chatUserList(rest)
+	default:
+		return errf(1, "unknown chat user subcommand %q", sub)
+	}
+}
+
+// chatUserRole assigns an RBAC role and/or team to an existing chat user (#237):
+//
+//	fleet chat user role <email> --role viewer
+//	fleet chat user role <email> --team growth
+//	fleet chat user role <email> --role admin --team growth
+//	fleet chat user role <email> --team ""        # clear the team
+//
+// A flag left unset leaves that column untouched (partial PATCH), matching
+// store.SetUserRoleTeam. At least one of --role/--team must be provided.
+func chatUserRole(argv []string) int {
+	fs := flag.NewFlagSet("chat user role", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "chat Postgres DSN")
+	role := fs.String("role", "", "role: member|viewer|admin")
+	team := fs.String("team", "", `team id (empty string clears the team)`)
+	email, flagArgs := splitPositional(argv)
+	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+	if email == "" {
+		return errf(1, "email required")
+	}
+	// Only forward flags the operator actually set, so an omitted flag is a
+	// no-op rather than an empty write. fs.Visit reports only set flags.
+	var rolePtr, teamPtr *string
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "role":
+			rolePtr = role
+		case "team":
+			teamPtr = team
+		}
+	})
+	if rolePtr == nil && teamPtr == nil {
+		return errf(1, "provide --role and/or --team")
+	}
+
+	dsn, err := chatDSN(*dbURL)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	if err != nil {
+		return errf(1, "open chat DB: %v", err)
+	}
+	defer st.Close()
+
+	u, err := st.SetUserRoleTeam(context.Background(), email, rolePtr, teamPtr)
+	if err != nil {
+		return errf(5, "%v", err)
+	}
+	teamLabel := u.TeamID
+	if teamLabel == "" {
+		teamLabel = "(none)"
+	}
+	fmt.Printf("updated %s: role=%s team=%s\n", u.Email, u.Role, teamLabel)
+	return 0
+}
+
+// chatUserUpsert handles add (create) and update (password change). The password
+// is read from stdin when --password is "-" (never on argv).
+func chatUserUpsert(argv []string, create bool) int {
+	fs := flag.NewFlagSet("chat user", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "chat Postgres DSN")
+	pw := fs.String("password", "", `password ("-" reads from stdin)`)
+	email, flagArgs := splitPositional(argv)
+	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+	if email == "" {
+		return errf(1, "email required")
+	}
+	password := *pw
+	if password == "-" {
+		v, err := readStdinValue()
+		if err != nil {
+			return errf(5, "%v", err)
+		}
+		password = v
+	}
+	if len(password) < 8 {
+		return errf(1, "password must be at least 8 characters (use --password -)")
+	}
+
+	dsn, err := chatDSN(*dbURL)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	if err != nil {
+		return errf(1, "open chat DB: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	if create {
+		if _, err := st.CreateUser(ctx, email, password); err != nil {
+			return errf(5, "%v", err)
+		}
+		fmt.Printf("created chat user %s\n", email)
+		return 0
+	}
+	if err := st.UpdatePassword(ctx, email, password); err != nil {
+		return errf(5, "%v", err)
+	}
+	fmt.Printf("updated password for chat user %s\n", email)
+	return 0
+}
+
+func chatUserDel(argv []string) int {
+	fs := flag.NewFlagSet("chat user del", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "chat Postgres DSN")
+	email, flagArgs := splitPositional(argv)
+	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+	if email == "" {
+		return errf(1, "email required")
+	}
+	dsn, err := chatDSN(*dbURL)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	if err != nil {
+		return errf(1, "open chat DB: %v", err)
+	}
+	defer st.Close()
+	if err := st.DeleteUser(context.Background(), email); err != nil {
+		return errf(5, "%v", err)
+	}
+	fmt.Printf("deleted chat user %s\n", email)
+	return 0
+}
+
+func chatUserList(argv []string) int {
+	fs := flag.NewFlagSet("chat user list", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "chat Postgres DSN")
+	_, flagArgs := splitPositional(argv)
+	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+	dsn, err := chatDSN(*dbURL)
+	if err != nil {
+		return errf(1, "%v", err)
+	}
+	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	if err != nil {
+		return errf(1, "open chat DB: %v", err)
+	}
+	defer st.Close()
+	users, err := st.ListUsers(context.Background())
+	if err != nil {
+		return errf(5, "%v", err)
+	}
+	if len(users) == 0 {
+		fmt.Fprintln(os.Stderr, "no chat users yet — add one with: fleet-admin chat user add <email> --password -")
+		return 0
+	}
+	for _, u := range users {
+		team := u.TeamID
+		if team == "" {
+			team = "-"
+		}
+		// email  role  team — tab-separated so it stays greppable/column-able.
+		fmt.Printf("%s\t%s\t%s\n", u.Email, u.Role, team)
+	}
+	return 0
+}
+
+// splitPositional separates the FIRST positional argument from the flag tokens.
+// Go's flag package stops at the first non-flag arg, so the email/slug
+// positional must be lifted out before Parse. Multiple positionals are returned
+// joined back into the flag list (callers that need >1 positional use a
+// dedicated splitter).
+func splitPositional(argv []string) (first string, flagArgs []string) {
+	for i, a := range argv {
+		if len(a) > 0 && a[0] != '-' {
+			first = a
+			flagArgs = append(flagArgs, argv[:i]...)
+			flagArgs = append(flagArgs, argv[i+1:]...)
+			return first, flagArgs
+		}
+	}
+	return "", argv
+}

@@ -142,6 +142,22 @@ type Conversation struct {
 	// BranchPointMessageID is the parent message id this conversation was forked
 	// at (#454). 0 = not a branch.
 	BranchPointMessageID int64 `json:"branch_point_message_id,omitempty"`
+	// ThinkingConfig is the per-conversation Claude extended-thinking override
+	// (#220). nil = inherit the global FLEET_DEFAULT_THINKING_BUDGET_TOKENS
+	// default; non-nil sets an explicit per-chat choice (Enabled=false force-
+	// disables even when a global default is set). Set via
+	// PUT /conversations/{id}/thinking_config. Stored as nullable JSONB.
+	ThinkingConfig *ThinkingConfig `json:"thinking_config,omitempty"`
+}
+
+// ThinkingConfig is the persisted shape of a conversation's extended-thinking
+// setting (#220). It mirrors agentcore.ThinkingConfig field-for-field; the chat
+// turn-setup boundary maps between the two so the store stays free of the heavy
+// agentcore dependency. BudgetTokens is validated at the HTTP layer (0 or
+// [1024, 100000]) and clamped again by the producer.
+type ThinkingConfig struct {
+	Enabled      bool `json:"enabled"`
+	BudgetTokens int  `json:"budget_tokens,omitempty"`
 }
 
 // ErrForeignConversation is returned by DeleteByIDs / BulkPatch when one or
@@ -396,6 +412,50 @@ func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID str
 		return errors.New("conversation not found")
 	}
 	return nil
+}
+
+// SetThinkingConfig sets (or clears) a conversation's extended-thinking override
+// (#220). A nil cfg writes SQL NULL, restoring "inherit the global default";
+// a non-nil cfg persists the explicit choice. Owner-scoped (the user_email gate),
+// so one user can't toggle another's conversation. Returns "conversation not
+// found" when the caller doesn't own a live conversation with that id.
+func (s *Store) SetThinkingConfig(ctx context.Context, userEmail, convID string, cfg *ThinkingConfig) error {
+	var arg any // nil → SQL NULL → inherit global default
+	if cfg != nil {
+		payload, err := json.Marshal(cfg)
+		if err != nil {
+			return fmt.Errorf("marshal thinking config: %w", err)
+		}
+		arg = payload
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET thinking_config = $1, updated_at = $2
+		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		arg, time.Now().Unix(), convID, userEmail,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errors.New("conversation not found")
+	}
+	return nil
+}
+
+// scanThinkingConfig decodes the nullable thinking_config JSONB. NULL, empty, or
+// a `null` literal yield nil (inherit the global default); a malformed payload
+// also yields nil rather than erroring, so a bad row never blocks the rest of the
+// conversation record (mirrors scanOptionalMCPServers' tolerance).
+func scanThinkingConfig(raw []byte) *ThinkingConfig {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var tc ThinkingConfig
+	if err := json.Unmarshal(raw, &tc); err != nil {
+		return nil
+	}
+	return &tc
 }
 
 // scanOptionalMCPServers decodes the JSONB payload. Tolerant of NULL and
@@ -900,7 +960,7 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 		folderArg = *f.Folder
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0)
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config
 		 FROM conversations
 		 WHERE user_email = $1 AND deleted_at IS NULL
 		   AND (CASE WHEN $2 THEN archived_at IS NOT NULL ELSE archived_at IS NULL END)
@@ -913,20 +973,87 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 		return nil, err
 	}
 	defer rows.Close()
+	return scanConversationRows(rows)
+}
 
+// conversationListColumns is the SELECT list (in scan order) every conversation-
+// LIST query shares, so ListFiltered and ListTeamConversations stay in lockstep.
+// (Aliased with a `c.` prefix-friendly bare form; callers prefix as needed.)
+const conversationListColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config`
+
+// scanConversationRows scans a rows set produced with conversationListColumns.
+func scanConversationRows(rows *sql.Rows) ([]Conversation, error) {
 	var out []Conversation
 	for rows.Next() {
 		var c Conversation
 		var optionalRaw []byte
 		var approvalTimeout sql.NullInt64
-		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID); err != nil {
+		var thinkingRaw []byte
+		if err := rows.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw); err != nil {
 			return nil, err
 		}
 		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
 		c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
+		c.ThinkingConfig = scanThinkingConfig(thinkingRaw)
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// ErrNoTeam is returned by ListTeamConversations when the caller has no team_id —
+// there is no team to scope to. The HTTP layer maps it to 400.
+var ErrNoTeam = errors.New("caller has no team")
+
+// ListTeamConversations returns the active conversations that members of the
+// caller's team have SHARED with the team (team_visible = TRUE), read-only (#237).
+// Team membership alone never exposes a conversation — only the owner's explicit
+// share-with-team does — so this preserves the per-user privacy default while
+// enabling "manager sees the team's shared threads". Returns ErrNoTeam when the
+// caller has no team_id. This is the ONLY cross-user conversation read path; it
+// is gated by shared team_id AND the per-conversation opt-in (see ADR-0013).
+func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) ([]Conversation, error) {
+	callerEmail = normalizeEmail(callerEmail)
+	caller, err := s.GetUser(ctx, callerEmail)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(caller.TeamID) == "" {
+		return nil, ErrNoTeam
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+conversationListColumns+`
+		FROM conversations c
+		WHERE c.deleted_at IS NULL
+		  AND c.archived_at IS NULL
+		  AND c.team_visible = TRUE
+		  AND c.user_email IN (SELECT email FROM users WHERE team_id = $1)
+		ORDER BY c.pinned DESC, c.updated_at DESC, c.id DESC`,
+		caller.TeamID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanConversationRows(rows)
+}
+
+// SetConversationTeamVisible flips a conversation's team_visible flag (#237). Only
+// the OWNER may change it (the WHERE user_email gate), so one teammate can't
+// expose another's conversation. Returns ErrConversationNotFound when the caller
+// doesn't own a conversation with that id.
+func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) error {
+	ownerEmail = normalizeEmail(ownerEmail)
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET team_visible = $1, updated_at = $2
+		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		visible, time.Now().Unix(), convID, ownerEmail)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.New("conversation not found")
+	}
+	return nil
 }
 
 // List returns the user's active (or, when archivedOnly, archived) conversations,
@@ -991,14 +1118,15 @@ func (s *Store) RenameFolder(ctx context.Context, userEmail, from, to string) (i
 // Get fetches a single conversation (without messages).
 func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversation, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0)
+		`SELECT id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, folder, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config
 		 FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL`,
 		convID, userEmail,
 	)
 	var c Conversation
 	var optionalRaw []byte
 	var approvalTimeout sql.NullInt64
-	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID); err != nil {
+	var thinkingRaw []byte
+	if err := row.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, &c.Folder, pq.Array(&c.Labels), &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1006,6 +1134,7 @@ func (s *Store) Get(ctx context.Context, userEmail, convID string) (*Conversatio
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
 	c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
+	c.ThinkingConfig = scanThinkingConfig(thinkingRaw)
 	return &c, nil
 }
 

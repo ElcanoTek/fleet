@@ -205,6 +205,16 @@ export function ApprovalCard({
     );
   }
 
+  if (approval.tool === "schedule_task") {
+    return (
+      <ScheduleTaskCard
+        approval={approval}
+        submitting={submitting}
+        onResolve={resolve}
+      />
+    );
+  }
+
   const recipients = toRecipientList(approval.summary.to, approval.summary.cc, approval.summary.bcc);
   const subject = approval.summary.subject ?? "(no subject)";
   const from = approval.summary.from ?? "";
@@ -466,6 +476,146 @@ function BashApprovalCard({
       ) : null}
     </div>
   );
+}
+
+// ScheduleTaskCard renders the approval card for a schedule_task call (#239):
+// the user reviews the task name, prompt preview, schedule, and (for recurring
+// tasks) the estimated run frequency, then Approves or Cancels. On approval the
+// server creates the orchestrator task in-process; nothing is created until the
+// user clicks Approve. Mirrors BashApprovalCard's chrome — no apply-all checkbox,
+// since each scheduled task is a distinct, deliberate action.
+function ScheduleTaskCard({
+  approval,
+  submitting,
+  onResolve,
+}: {
+  approval: Approval;
+  submitting: "send" | "cancel" | null;
+  onResolve: (approved: boolean) => void;
+}) {
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
+  const s = approval.summary;
+  const name = (s.name ?? "").trim();
+  const promptPreview = s.prompt_preview ?? "";
+
+  // Render the schedule as a single human-readable line.
+  const scheduleLine = s.recurring
+    ? `Recurring · cron ${s.cron ?? ""}`
+    : s.run_at
+      ? `One-time · ${formatRunAt(s.run_at)}`
+      : "Runs as soon as a worker is free";
+  const frequencyLine =
+    s.recurring && typeof s.runs_per_month === "number"
+      ? `≈ ${s.runs_per_month >= 1000 ? "1000+" : s.runs_per_month} run${s.runs_per_month === 1 ? "" : "s"} / month`
+      : null;
+
+  const statusStyle: React.CSSProperties =
+    approval.status === "approved"
+      ? { borderColor: "var(--color-success-border)", color: "var(--color-success)" }
+      : approval.status === "rejected"
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-muted)" }
+        : approval.status === "failed"
+          ? { borderColor: "var(--color-danger-border)", color: "var(--color-danger)" }
+          : { borderColor: "var(--color-accent)", color: "var(--color-text-primary)" };
+
+  const title =
+    approval.status === "pending"
+      ? "ACTION REQUIRED · Schedule this task?"
+      : approval.status === "approved"
+        ? "Task scheduled ✓"
+        : approval.status === "rejected"
+          ? "Scheduling cancelled"
+          : "Scheduling failed";
+
+  return (
+    <div
+      data-approval-id={approval.id}
+      data-tool="schedule_task"
+      className="rounded-[0.95rem] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      style={statusStyle}
+    >
+      <div className="mb-2 flex items-center gap-2">
+        <span aria-hidden>🗓️</span>
+        <span className="font-medium">{title}</span>
+      </div>
+
+      <div className="grid gap-0.5 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
+        {name ? (
+          <div>
+            <span className="text-[var(--color-text-muted)]">Name: </span>
+            {name}
+          </div>
+        ) : null}
+        <div>
+          <span className="text-[var(--color-text-muted)]">Schedule: </span>
+          {scheduleLine}
+        </div>
+        {frequencyLine ? (
+          <div>
+            <span className="text-[var(--color-text-muted)]">Frequency: </span>
+            {frequencyLine}
+          </div>
+        ) : null}
+        {s.model ? (
+          <div>
+            <span className="text-[var(--color-text-muted)]">Model: </span>
+            {s.model}
+          </div>
+        ) : null}
+        {s.allow_network ? (
+          <div>
+            <span className="text-[var(--color-text-muted)]">Network: </span>
+            egress allowed
+          </div>
+        ) : null}
+      </div>
+
+      {promptPreview ? (
+        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.75rem] text-[var(--color-text-primary)]">
+          {promptPreview}
+        </pre>
+      ) : null}
+
+      {approval.status === "pending" ? (
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+              disabled={submitting !== null || countdown.expired}
+              onClick={() => onResolve(true)}
+            >
+              {submitting === "send" ? "Scheduling…" : "Approve & schedule"}
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              disabled={submitting !== null}
+              onClick={() => onResolve(false)}
+            >
+              {submitting === "cancel" ? "Cancelling…" : "Cancel"}
+            </button>
+          </div>
+          <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+        </div>
+      ) : approval.resultText ? (
+        <p className="mt-2 whitespace-pre-wrap text-[0.72rem] text-[var(--color-text-muted)]">
+          {approval.resultText}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// formatRunAt renders an ISO-8601 instant as a readable local datetime for the
+// schedule_task card, falling back to the raw string if it doesn't parse.
+function formatRunAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 // SuggestAdvancedModelCard renders an inline nudge when the agent

@@ -118,6 +118,10 @@ EnvironmentFile=/etc/fleet/fleet.env
 # applies UnsetEnvironment= after Environment=/EnvironmentFile=, so this is
 # deterministic regardless of directive order.
 UnsetEnvironment=FLEET_ENV_FILE
+# Bare `fleet` runs the server (#461, ADR-0012). `fleet serve` is the explicit
+# equivalent; both work, so this line never needs to change in lockstep with a
+# binary upgrade (no restart-mid-upgrade can brick the daemon). Operator verbs
+# (`fleet update`, `fleet status`, `fleet chat`, …) live in the same binary.
 ExecStart=/opt/fleet/fleet
 Restart=always
 RestartSec=5s

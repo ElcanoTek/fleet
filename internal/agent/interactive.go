@@ -98,6 +98,11 @@ type TurnConfig struct {
 	// wired in interactive mode too (the notes wiki is global). The user-memory
 	// propose_memory path is unchanged. Nil leaves propose_note "not wired".
 	NoteProposer agentcore.NoteProposer
+
+	// ThinkingConfig, when set and Enabled, activates Claude extended thinking
+	// (#220) for the turn. nil = off. Resolved by the Manager from the
+	// per-conversation override or the global default.
+	ThinkingConfig *agentcore.ThinkingConfig
 }
 
 // messagesInput adapts a pre-built message slice to agentcore.InputSource.
@@ -161,6 +166,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		PersonaName:         tc.Persona,
 		PersonaPolicy:       tc.PersonaPolicy,
 		ProviderHeaders:     agentcore.DefaultProviderHeaders,
+		ThinkingConfig:      tc.ThinkingConfig,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)
 }

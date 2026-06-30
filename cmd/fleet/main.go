@@ -42,6 +42,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/admincli"
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -52,6 +53,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
+	"github.com/ElcanoTek/fleet/internal/otelsetup"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -60,6 +62,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
+	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/scheduler"
 	"github.com/ElcanoTek/fleet/internal/sched/slamonitor"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -76,37 +79,77 @@ import (
 const approvalExpirySweepInterval = 30 * time.Second
 
 func main() {
-	// Subcommand dispatch. With no args (or any non-subcommand arg) fleet boots
-	// THE fleet server (run).
+	// `fleet` is the ONE unified binary (#461). It dispatches three families:
 	//
-	// `fleet version` (also `--version` / `-v`) prints the build identity — the
-	// release version stamped from the top-level VERSION file plus the VCS
-	// revision — and exits. It boots nothing, so it works on a box where the DBs
-	// or sandbox are down.
-	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-v") {
+	//   1. Server-family verbs handled HERE — they boot or inspect the server
+	//      process itself and must not route through the operator CLI.
+	//   2. The daemon — bare `fleet` (back-compat with the historical systemd
+	//      ExecStart=/usr/local/bin/fleet) AND the explicit `fleet serve`. Keeping
+	//      bare `fleet` start the server means a unit file can migrate to
+	//      `fleet serve` on its own schedule WITHOUT a restart-mid-upgrade ever
+	//      bricking the box (the binary understands both forms). See ADR-0012.
+	//   3. Everything else → the operator/admin CLI (internal/admincli): bootstrap,
+	//      update, status, diagnose, restart/stop/logs, chat (the TUI + chat-user
+	//      admin), sched, task, mcp, notes, worktree, backup/restore.
+	argv := os.Args[1:]
+	switch classifyInvocation(argv) {
+	case invokeVersion:
+		// Build identity (top-level VERSION + VCS revision). Boots nothing, so it
+		// works on a box where the DBs or sandbox are down.
 		fmt.Println("fleet " + version.String())
-		return
-	}
-	// `fleet mcp-broker` instead runs the out-of-process MCP credential broker
-	// over stdio (issue #167): it holds the connector secrets + MCP subprocesses
-	// and serves delegated MCP calls back to a parent fleet process. It boots no
-	// HTTP servers / scheduler — it is a single-purpose stdio adapter.
-	if len(os.Args) > 1 && os.Args[1] == "mcp-broker" {
+	case invokeMCPBroker:
+		// The out-of-process MCP credential broker over stdio (issue #167): it holds
+		// the connector secrets + MCP subprocesses and serves delegated MCP calls
+		// back to a parent fleet process. No HTTP servers / scheduler.
 		if err := runMCPBroker(); err != nil {
 			log.Fatalf("fleet mcp-broker: %v", err)
 		}
-		return
+	case invokeValidateConfig:
+		// Preflight checks (#248) against the SAME loaders the server boots through;
+		// exits 0/1. Starts no servers, runs no migrations.
+		os.Exit(runValidateConfig(argv[1:]))
+	case invokeServe:
+		// Daemon: bare `fleet` (legacy) or `fleet serve`. The server is env/config
+		// driven, so any args after `serve` are ignored (no flag parsing here).
+		if err := run(); err != nil {
+			log.Fatalf("fleet: %v", err)
+		}
+	default: // invokeAdmin
+		os.Exit(admincli.Run(argv))
 	}
-	// `fleet validate-config` runs the preflight checks (#248) — env vars, the
-	// manifest bundle, MCP servers, the databases, credentials, the sandbox, and
-	// the model API — against the SAME loaders the server boots through, then exits
-	// 0 (all blocking checks passed) or 1. It starts no servers and runs no
-	// migrations; it is a read-only diagnostic for CI and pre-`systemctl start`.
-	if len(os.Args) > 1 && os.Args[1] == "validate-config" {
-		os.Exit(runValidateConfig(os.Args[2:]))
+}
+
+type invocation int
+
+const (
+	invokeServe invocation = iota // bare `fleet` (legacy ExecStart) OR `fleet serve`
+	invokeVersion
+	invokeMCPBroker
+	invokeValidateConfig
+	invokeAdmin // every operator/admin verb → internal/admincli
+)
+
+// classifyInvocation decides which family the argv belongs to. The load-bearing
+// invariant (ADR-0012, #461): bare `fleet` (no args) AND `fleet serve` BOTH map
+// to invokeServe, so a historical systemd unit running ExecStart=/usr/local/bin/fleet
+// keeps starting the daemon even as units migrate to `fleet serve` — no restart
+// mid-upgrade can ever brick the box. Server-family verbs (version, mcp-broker,
+// validate-config) are handled in-binary; everything else is an admin verb.
+func classifyInvocation(argv []string) invocation {
+	if len(argv) == 0 {
+		return invokeServe
 	}
-	if err := run(); err != nil {
-		log.Fatalf("fleet: %v", err)
+	switch argv[0] {
+	case "serve":
+		return invokeServe
+	case "version", "--version", "-v":
+		return invokeVersion
+	case "mcp-broker":
+		return invokeMCPBroker
+	case "validate-config":
+		return invokeValidateConfig
+	default:
+		return invokeAdmin
 	}
 }
 
@@ -126,6 +169,14 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// OpenTelemetry distributed tracing (#186): OPT-IN via FLEET_OTEL_ENDPOINT.
+	// With the endpoint unset (the default) this is a complete no-op — no
+	// exporter, the global no-op TracerProvider stays in place, zero per-span
+	// overhead — while the W3C propagator is still installed so an inbound
+	// traceparent threads request context for free. The stop func (bounded flush)
+	// is deferred BEFORE any goroutine starts, like the Sentry flush.
+	defer initTracing(version.String())()
 
 	// Sentry error tracking (#193): OPT-IN via FLEET_SENTRY_DSN. With the DSN
 	// unset (the default) this is a complete no-op — no SDK init, no transport,
@@ -191,6 +242,11 @@ func run() error {
 	}
 
 	resolveSandboxRuntimeInto(cfg, bundle)
+	// Sandbox egress allowlist (#211): the bundle manifest supplies the default
+	// allowed domains for allowlisted network mode (operator-authored deployment
+	// config, like the runtime + image). FLEET_DEFAULT_NETWORK_MODE selects the
+	// mode; this fills the allowlist it draws from.
+	cfg.SandboxNetworkAllowlist = bundle.Sandbox().NetworkAllowlist
 
 	// Install the bundle's agent tool-behavior policy (parallel-safe tools,
 	// critical-tool suffixes, substitute map). The generic bundle ships none, so
@@ -364,6 +420,10 @@ func run() error {
 		httpapi.WithStartTime(startTime),
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
+		// schedule_task (#239): let an approved interactive call create an
+		// orchestrator task in-process, reusing the SAME validated storage create
+		// path POST /tasks uses — no second governance/create path is forked.
+		httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage)),
 	}
 	if remoteMCPSvc != nil {
 		chatOpts = append(chatOpts, httpapi.WithRemoteMCP(remoteMCPSvc))
@@ -538,6 +598,11 @@ func run() error {
 		DrainGrace:    poolGrace,
 		Notifier:      taskNotifier,
 		PublicURLBase: os.Getenv("FLEET_PUBLIC_URL"),
+		// Post-failure error-recovery diagnosis (#317): the interactive Manager
+		// doubles as the runner's ErrorAnalyzer (it has the host-side resolver +
+		// cheap-model seam, exactly like SuggestTitle). Gated on
+		// FLEET_ERROR_ANALYSIS_ENABLED; nil = off (the analyze path is a no-op).
+		ErrorAnalyzer: errorAnalyzerFor(cfg, mgr),
 	})
 	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 
@@ -732,6 +797,27 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 	log.Printf("fleet: shutdown complete")
 }
 
+// initTracing wires OpenTelemetry tracing (#186) and returns a stop func meant
+// to be deferred. A misconfigured exporter is NON-FATAL: it logs and returns a
+// no-op stop, so a bad FLEET_OTEL_ENDPOINT degrades to disabled tracing rather
+// than preventing the agent platform from starting — tracing is optional
+// observability, not a hard dependency. The stop func flushes buffered spans
+// under a bounded timeout so a stuck collector can't hang shutdown.
+func initTracing(serviceVersion string) func() {
+	shutdown, err := otelsetup.Init(context.Background(), serviceVersion)
+	if err != nil {
+		log.Printf("otel: init failed, tracing disabled: %v", err)
+		return func() {}
+	}
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdown(ctx); err != nil {
+			log.Printf("otel: shutdown error: %v", err)
+		}
+	}
+}
+
 // buildOrchestratorMux registers the orchestrator routes (chi), mirroring moc's
 // auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
 func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) http.Handler {
@@ -743,6 +829,7 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 	// exactly what getClientIP() already expects.
 	r.Use(middleware.ClientIPFromXFF())
 	r.Use(middleware.Recoverer)
+	r.Use(otelsetup.Middleware)          // #186: server span + X-Request-Id (no-op when tracing disabled)
 	r.Use(orchestratorMetricsMiddleware) // #176: record request count + latency
 	r.Use(h.SecurityHeadersMiddleware)
 	r.Use(h.BodySizeLimitMiddleware)
@@ -804,6 +891,7 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Post("/tasks/import", h.HandleTaskImport)
 		r.Get("/tasks/{task_id}", h.GetTask)
 		r.Get("/tasks/{task_id}/output", h.GetTaskOutput)
+		r.Get("/tasks/{task_id}/error-analysis", h.GetTaskErrorAnalysis)
 		r.Put("/tasks/{task_id}", h.UpdateTask)
 		r.Post("/tasks/{task_id}/tags", h.UpdateTaskTags)
 		r.Post("/tasks/{task_id}/rerun", h.RerunTask)
@@ -1156,6 +1244,69 @@ func orchestratorMetricsMiddleware(next http.Handler) http.Handler {
 // httpapi.WorkerStats the admin health summary embeds (#301), keeping httpapi
 // free of any sched-package import. Extracted from run() to keep it within the
 // cyclomatic budget.
+// taskSchedulerProvider adapts the chat server's sched-agnostic TaskScheduleRequest
+// (#239) to the orchestrator's task-create path. It maps the request to a
+// models.TaskCreate and calls schedStorage.EnqueueTask — the SAME constructor +
+// persistence (models.NewTask + AddTask, cron validation, DB name-uniqueness) the
+// create_task tool uses and that underlies POST /tasks. It does NOT re-run the
+// HTTP handler's field-limit checks (max_iterations bounds, prompt-min-length),
+// matching the create_task seam; the human approval plus the box-wide ceilings
+// bound a misconfigured task. The human approval IS the authorization; no task is
+// created until the user clicks Approve. NOTE: chat-created tasks are left
+// unattributed (CreatedBy nil) — like create_task-spawned tasks — so they run
+// against the shared global MCP catalog, NOT the requesting user's personal
+// remote-MCP connections (#443/#449). That is the safe (less-access) direction.
+// errorAnalyzerFor returns the runner's post-failure diagnosis seam (#317): the
+// Manager when FLEET_ERROR_ANALYSIS_ENABLED is on, else nil (analysis off). A
+// tiny helper so run() stays under the gocyclo ceiling.
+func errorAnalyzerFor(cfg *config.Config, mgr *agent.Manager) runner.ErrorAnalyzer {
+	if cfg == nil || !cfg.ErrorAnalysisEnabled {
+		return nil
+	}
+	return mgr
+}
+
+func taskSchedulerProvider(schedStorage *storage.Storage) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
+	return func(ctx context.Context, req httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
+		tc := schedmodels.TaskCreate{
+			Name:         req.Name,
+			Prompt:       req.Prompt,
+			Recurrence:   req.Cron,
+			ScheduledFor: req.RunAt,
+			AllowNetwork: req.AllowNetwork,
+		}
+		if m := strings.TrimSpace(req.Model); m != "" {
+			tc.Model = &m
+		}
+		if req.MaxIterations > 0 {
+			iters := req.MaxIterations
+			tc.MaxIterations = &iters
+		}
+		// Tag chat-originated tasks for provenance so an operator can tell at a
+		// glance the task was created from a conversation rather than the API/CLI.
+		// EnqueueTask does NOT run the handler's tag normalization, so we apply the
+		// SAME NormalizeAndValidateTags the public POST /tasks path uses here —
+		// otherwise a chat-supplied tag could violate the documented #212 format
+		// (lowercase alphanumeric + '-'/'.', ≤20). The provenance tag uses a hyphen
+		// (not ':') to stay inside that allowed character set.
+		normalizedTags, err := schedmodels.NormalizeAndValidateTags(append(req.Tags, "source-chat"))
+		if err != nil {
+			return nil, err
+		}
+		tc.Tags = normalizedTags
+
+		id, status, nextRunAt, err := schedStorage.EnqueueTask(ctx, tc)
+		if err != nil {
+			return nil, err
+		}
+		return &httpapi.TaskScheduleResult{
+			ID:      id.String(),
+			Status:  status,
+			NextRun: nextRunAt,
+		}, nil
+	}
+}
+
 func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*httpapi.WorkerStats, error) {
 	return func(context.Context) (*httpapi.WorkerStats, error) {
 		ds, err := schedStorage.GetDashboardStats()

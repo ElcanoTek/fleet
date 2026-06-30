@@ -103,6 +103,34 @@ func (s *Server) handleConversationUnshare(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleConversationShareWithTeam toggles a conversation's team-visibility flag
+// (#237) — the OWNER opting their thread into (or out of) read-only visibility
+// for same-team members. This is distinct from public share tokens (#226):
+// team visibility is gated by shared team_id, never mints a public link, and is
+// the only path by which one teammate's conversation becomes readable by
+// another. Body: { "visible": bool } (default false = un-share). The store
+// gates on ownership, so a non-owned/unknown id is 404.
+func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.Request, convID, user string) {
+	var body struct {
+		Visible bool `json:"visible"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	err := s.store.SetConversationTeamVisible(r.Context(), user, convID, body.Visible)
+	if err != nil {
+		// The store returns a plain "conversation not found" when the caller
+		// doesn't own a conversation with this id → 404, matching the share path.
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"team_visible": body.Visible})
+}
+
 // handleSharedConversation serves the public read-only snapshot for a share
 // token. Token-gated (shared secret) but identity-less; the token in the path
 // is the authorization. Per-token rate-limited; returns 404 for an unknown,

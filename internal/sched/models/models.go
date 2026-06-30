@@ -880,8 +880,16 @@ type Task struct {
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 	Result        *string    `json:"result,omitempty"`
 	ErrorMessage  *string    `json:"error_message,omitempty"`
-	ScheduledFor  *time.Time `json:"scheduled_for,omitempty"`
-	Recurrence    string     `json:"recurrence,omitempty"`
+	// ErrorAnalysis is the JSON-validated post-failure LLM diagnosis (#317): a
+	// structured {category, summary, remediation} object explaining a TERMINAL
+	// failure and how to fix it, distinct from the raw ErrorMessage string. nil
+	// when the task did not fail terminally, analysis was disabled, or the
+	// diagnosis call/validation failed (best-effort). Written async after the
+	// terminal transition via storage.SetTaskErrorAnalysis (lease-free, since the
+	// lease is already released); read back into GET /tasks/{id}/error-analysis.
+	ErrorAnalysis json.RawMessage `json:"error_analysis,omitempty"`
+	ScheduledFor  *time.Time      `json:"scheduled_for,omitempty"`
+	Recurrence    string          `json:"recurrence,omitempty"`
 	// Timezone is the IANA timezone the cron Recurrence is evaluated in. Always
 	// present in responses ("UTC" for legacy/unset tasks). See TaskCreate.Timezone.
 	Timezone string `json:"timezone"`
@@ -1488,7 +1496,12 @@ const MaxLogSubmissionSize = 24 * 1024 * 1024
 
 // APIKeyCreate is the request model for creating an API key.
 type APIKeyCreate struct {
-	Name                string   `json:"name"`
+	Name string `json:"name"`
+	// Type, when set, mints a typed key (#190): one of admin|task|webhook|readonly.
+	// When empty, the legacy role-based path is used. A webhook key requires
+	// AllowedTriggerSlugs.
+	Type                string   `json:"type,omitempty"`
+	AllowedTriggerSlugs []string `json:"allowed_trigger_slugs,omitempty"`
 	AllowedNodePatterns []string `json:"allowed_node_patterns"`
 	Role                *string  `json:"role,omitempty"`
 	RateLimit           int      `json:"rate_limit"`
@@ -1508,6 +1521,8 @@ type APIKeyResponse struct {
 	KeyID               string     `json:"key_id"`
 	Name                string     `json:"name"`
 	KeyPrefix           string     `json:"key_prefix"`
+	Type                string     `json:"type,omitempty"`
+	AllowedTriggerSlugs []string   `json:"allowed_trigger_slugs,omitempty"`
 	AllowedNodePatterns []string   `json:"allowed_node_patterns"`
 	Permissions         []string   `json:"permissions"`
 	RateLimit           int        `json:"rate_limit"`

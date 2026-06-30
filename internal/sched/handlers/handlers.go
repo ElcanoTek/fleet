@@ -444,6 +444,13 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// Check for Admin API Key first
 	isAdmin := h.verifyAdminKey(r)
 
+	// A valid but under-scoped typed key (readonly/webhook) is a definitive 403,
+	// not a fall-through to the 401 path (#190). Legacy sk- keys are exempt.
+	if !isAdmin && h.scopedKeyCannotCreate(r) {
+		writeError(w, http.StatusForbidden, "insufficient key scope: this key type cannot create tasks")
+		return
+	}
+
 	var creatorID *uuid.UUID
 	// creatorKeyID is the scoped API key that authorized this task (if any), used
 	// to attribute completion cost back to the key for spending caps.
@@ -1220,6 +1227,58 @@ func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(task.OutputJSON) //nolint:gosec // G705: validated JSON served as application/json, not an HTML/XSS context
 }
 
+// GetTaskErrorAnalysis handles GET /tasks/{task_id}/error-analysis (#317): the
+// async post-failure LLM diagnosis (category + summary + remediation) for a
+// terminally-failed task, returned raw as application/json. 404 when the task has
+// no analysis (it didn't fail terminally, analysis was disabled, or the diagnosis
+// failed / hasn't completed); 409 while the task is still non-terminal. Mirrors
+// GetTaskOutput.
+func (h *Handlers) GetTaskErrorAnalysis(w http.ResponseWriter, r *http.Request) {
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionViewTasks) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return
+	}
+
+	taskIDStr := chi.URLParam(r, "task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid task ID")
+		return
+	}
+
+	task, err := h.storage.GetTask(taskID)
+	if err != nil || task == nil {
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+
+	if scopes := p.scopes(); len(scopes) > 0 {
+		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
+			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
+			return
+		}
+	}
+
+	if len(task.ErrorAnalysis) == 0 {
+		// Distinguish "not ready yet" (still running — analysis only runs on a
+		// terminal failure, and then asynchronously) from "never will be" (terminal,
+		// but no analysis was produced) so a poller knows whether to retry.
+		if !task.Status.IsTerminal() {
+			writeError(w, http.StatusConflict, "Task has not finished; error analysis is not yet available")
+			return
+		}
+		writeError(w, http.StatusNotFound, "Task has no error analysis (it did not fail terminally, analysis is disabled, or the diagnosis was not produced)")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	// error_analysis is schema-validated JSON (validated against errorAnalysisSchema
+	// before persistence) served as application/json — not HTML — so no XSS sink.
+	_, _ = w.Write(task.ErrorAnalysis) //nolint:gosec // G705: validated JSON served as application/json, not an HTML/XSS context
+}
+
 // CleanupHistory handles POST /tasks/cleanup
 func (h *Handlers) CleanupHistory(w http.ResponseWriter, r *http.Request) {
 	days := 7
@@ -1824,15 +1883,52 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key, rawKey, err := h.apiKeys.CreateKey(
-		keyCreate.Name,
-		keyCreate.AllowedNodePatterns,
-		nil,
-		keyCreate.Role,
-		keyCreate.RateLimit,
-		keyCreate.ExpiresInDays,
-		keyCreate.Description,
+	var (
+		key    *apikeys.APIKey
+		rawKey string
+		err    error
 	)
+	if keyCreate.Type != "" {
+		// Typed-key path (#190): the type determines the permission set; reject an
+		// unknown type, and require a webhook key to be scoped to ≥1 valid slug.
+		kt := apikeys.KeyType(keyCreate.Type)
+		if !kt.Valid() {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown key type %q (want admin|task|webhook|readonly)", keyCreate.Type))
+			return
+		}
+		if kt == apikeys.KeyTypeWebhook {
+			if len(keyCreate.AllowedTriggerSlugs) == 0 {
+				writeError(w, http.StatusBadRequest, "webhook key requires at least one allowed_trigger_slugs entry")
+				return
+			}
+			for _, s := range keyCreate.AllowedTriggerSlugs {
+				if !triggerSlugShape.MatchString(s) {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid trigger slug %q", s))
+					return
+				}
+			}
+		}
+		key, rawKey, err = h.apiKeys.CreateTypedKey(
+			keyCreate.Name,
+			kt,
+			keyCreate.AllowedTriggerSlugs,
+			keyCreate.AllowedNodePatterns,
+			keyCreate.RateLimit,
+			keyCreate.ExpiresInDays,
+			keyCreate.Description,
+		)
+	} else {
+		// Legacy role-based path: mints an untyped sk- key, unchanged.
+		key, rawKey, err = h.apiKeys.CreateKey(
+			keyCreate.Name,
+			keyCreate.AllowedNodePatterns,
+			nil,
+			keyCreate.Role,
+			keyCreate.RateLimit,
+			keyCreate.ExpiresInDays,
+			keyCreate.Description,
+		)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create API key")
 		return

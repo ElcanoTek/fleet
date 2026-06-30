@@ -130,35 +130,38 @@ var allowedEnvVars = map[string]bool{
 	"DB_SSLMODE":                        true,
 
 	// ── LLM (shared) ──
-	"OPENROUTER_API_KEY":                true,
-	"OPENROUTER_BASE_URL":               true,
-	"FLEET_OPENROUTER_BASE_URL":         true,
-	"CHAT_MAX_ITERATIONS":               true,
-	"CHAT_MAX_COST_USD":                 true,
-	"CHAT_MAX_TOTAL_TOKENS":             true,
-	"CHAT_TURN_TIMEOUT_SECONDS":         true,
-	"CHAT_TEMPERATURE":                  true,
-	"CHAT_TITLE_MODEL":                  true,
-	"CHAT_METADATA_MODEL":               true,
-	"FLEET_MAX_ITERATIONS":              true,
-	"FLEET_MAX_COST_USD":                true,
-	"FLEET_MAX_TOTAL_TOKENS":            true,
-	"FLEET_TEMPERATURE":                 true,
-	"FLEET_TITLE_MODEL":                 true,
-	"FLEET_METADATA_MODEL":              true,
-	"FLEET_AUTO_TITLE":                  true,
-	"FLEET_APPROVAL_TIMEOUT_SECONDS":    true,
-	"FLEET_AUTO_APPROVE_IN_TEST":        true,
-	"FLEET_MAX_CONCURRENT_AGENTS":       true,
-	"FLEET_RUN_LOG_RETENTION_DAYS":      true,
-	"FLEET_KEEP_RUNS_PER_TASK":          true,
-	"FLEET_TASK_MEMORY_MAX_KEYS":        true,
-	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES": true,
-	"FLEET_CLEANUP_HOUR":                true,
-	"LLM_MAX_TOKENS":                    true,
-	"REASONING_ENABLED":                 true,
-	"REASONING_EFFORT":                  true,
-	"FLEET_MAX_TOOL_OUTPUT_BYTES":       true,
+	"OPENROUTER_API_KEY":                   true,
+	"OPENROUTER_BASE_URL":                  true,
+	"FLEET_OPENROUTER_BASE_URL":            true,
+	"CHAT_MAX_ITERATIONS":                  true,
+	"CHAT_MAX_COST_USD":                    true,
+	"CHAT_MAX_TOTAL_TOKENS":                true,
+	"CHAT_TURN_TIMEOUT_SECONDS":            true,
+	"CHAT_TEMPERATURE":                     true,
+	"CHAT_TITLE_MODEL":                     true,
+	"CHAT_METADATA_MODEL":                  true,
+	"FLEET_DEFAULT_THINKING_BUDGET_TOKENS": true,
+	"FLEET_MAX_ITERATIONS":                 true,
+	"FLEET_MAX_COST_USD":                   true,
+	"FLEET_MAX_TOTAL_TOKENS":               true,
+	"FLEET_TEMPERATURE":                    true,
+	"FLEET_TITLE_MODEL":                    true,
+	"FLEET_METADATA_MODEL":                 true,
+	"FLEET_ERROR_ANALYSIS_MODEL":           true,
+	"FLEET_ERROR_ANALYSIS_ENABLED":         true,
+	"FLEET_AUTO_TITLE":                     true,
+	"FLEET_APPROVAL_TIMEOUT_SECONDS":       true,
+	"FLEET_AUTO_APPROVE_IN_TEST":           true,
+	"FLEET_MAX_CONCURRENT_AGENTS":          true,
+	"FLEET_RUN_LOG_RETENTION_DAYS":         true,
+	"FLEET_KEEP_RUNS_PER_TASK":             true,
+	"FLEET_TASK_MEMORY_MAX_KEYS":           true,
+	"FLEET_TASK_MEMORY_MAX_VALUE_BYTES":    true,
+	"FLEET_CLEANUP_HOUR":                   true,
+	"LLM_MAX_TOKENS":                       true,
+	"REASONING_ENABLED":                    true,
+	"REASONING_EFFORT":                     true,
+	"FLEET_MAX_TOOL_OUTPUT_BYTES":          true,
 
 	// ── process log file sink (#298) — opt-in rotating file, default OFF ──
 	"FLEET_LOG_FILE":         true,
@@ -273,6 +276,7 @@ var allowedEnvVars = map[string]bool{
 	"CHAT_WORKSPACE_ROOT":            true,
 	"FLEET_SANDBOX_IMAGE":            true,
 	"FLEET_SANDBOX_RUNTIME":          true,
+	"FLEET_DEFAULT_NETWORK_MODE":     true,
 	"FLEET_SANDBOX_MEMORY":           true,
 	"FLEET_SANDBOX_CPUS":             true,
 	"FLEET_SANDBOX_PIDS":             true,
@@ -496,21 +500,37 @@ type Config struct {
 	SchedDBPool DBPoolConfig
 
 	// ── LLM (shared) ──
-	OpenRouterAPIKey   string
-	MaxIterations      int
-	MaxCostUSD         float64
-	MaxTotalTokens     int
-	TurnTimeoutSeconds int
-	Temperature        float64
-	LLMMaxTokens       int
-	ReasoningEnabled   bool
-	ReasoningEffort    string
-	TitleModel         string
+	OpenRouterAPIKey string
+	MaxIterations    int
+	MaxCostUSD       float64
+	MaxTotalTokens   int
+	// DefaultThinkingBudgetTokens is the global fallback Claude extended-thinking
+	// budget (#220, FLEET_DEFAULT_THINKING_BUDGET_TOKENS). 0 (default) = thinking
+	// off unless a conversation opts in. A non-zero value enables thinking for
+	// every chat/scheduled run that has no per-conversation override, clamped into
+	// Claude's [1024, 100000] window by the producer.
+	DefaultThinkingBudgetTokens int
+	TurnTimeoutSeconds          int
+	Temperature                 float64
+	LLMMaxTokens                int
+	ReasoningEnabled            bool
+	ReasoningEffort             string
+	TitleModel                  string
 	// MetadataModel is the fast/cheap model the suggest_branch_name /
 	// suggest_commit_message / suggest_pr_description tools (#191) call to
 	// produce git metadata. FLEET_METADATA_MODEL, defaulting to TitleModel so
 	// existing deployments need zero new config.
 	MetadataModel string
+	// ErrorAnalysisModel is the fast/cheap model the post-failure error-recovery
+	// diagnosis (#317) calls to classify a terminal task failure + suggest
+	// remediation. FLEET_ERROR_ANALYSIS_MODEL, defaulting to MetadataModel (then
+	// TitleModel) so deployments need zero new config.
+	ErrorAnalysisModel string
+	// ErrorAnalysisEnabled gates the post-failure LLM diagnosis (#317).
+	// FLEET_ERROR_ANALYSIS_ENABLED, default true. When false, no analysis goroutine
+	// or model call fires on a terminal failure (cost/latency escape hatch); the
+	// raw error_message is still recorded as before.
+	ErrorAnalysisEnabled bool
 	// AutoTitle gates the LLM auto-titler (#302). FLEET_AUTO_TITLE, default true.
 	// When false, a new conversation keeps its instant heuristic title and no
 	// title-model call is made (cost/latency escape hatch).
@@ -716,6 +736,17 @@ type Config struct {
 	// ── sandbox ──
 	SandboxImage   string
 	SandboxRuntime string
+	// DefaultNetworkMode is the fleet-wide sandbox egress posture (#211):
+	// "" / "open" (full slirp4netns egress for networked work — the default),
+	// "allowlisted" (networked sandboxes route HTTP(S) through the host egress
+	// proxy, limited to SandboxNetworkAllowlist), or "lockdown" (a fleet-wide
+	// kill-switch: every sandbox is sealed regardless of a task's AllowNetwork).
+	// From FLEET_DEFAULT_NETWORK_MODE.
+	DefaultNetworkMode string
+	// SandboxNetworkAllowlist is the default domain allowlist for allowlisted
+	// mode, resolved from the bundle manifest's sandbox.network_allowlist at boot
+	// (not an env var). Exact domains or "*."-prefixed wildcards.
+	SandboxNetworkAllowlist []string
 	// Per-container cgroup caps (empty/0 → sandbox defaults: 512m / 1.0 / 128).
 	// Operators size these to the host the docs told them to provision.
 	SandboxMemory string
@@ -929,6 +960,8 @@ func Load(envFile string) (*Config, error) {
 		MaxCostUSD:       getenvFleetFloat("MAX_COST_USD", 50.0),
 		MaxTotalTokens:   getenvFleetInt("MAX_TOTAL_TOKENS", 10000000),
 
+		DefaultThinkingBudgetTokens: getenvFleetInt("DEFAULT_THINKING_BUDGET_TOKENS", 0),
+
 		ShutdownGraceSeconds: getenvFleetInt("SHUTDOWN_GRACE_SECONDS", 30),
 
 		TurnTimeoutSeconds:     getenvFleetInt("TURN_TIMEOUT_SECONDS", 1800),
@@ -938,6 +971,8 @@ func Load(envFile string) (*Config, error) {
 		ReasoningEffort:        getenvDefault("REASONING_EFFORT", "medium"),
 		TitleModel:             getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
 		MetadataModel:          getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)),
+		ErrorAnalysisModel:     getenvFleetDefault("ERROR_ANALYSIS_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
+		ErrorAnalysisEnabled:   getenvFleetBool("ERROR_ANALYSIS_ENABLED", true),
 		AutoTitle:              getenvFleetBool("AUTO_TITLE", true),
 		ApprovalTimeoutSeconds: getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 300),
 		AutoApproveInTest:      getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
@@ -1010,12 +1045,13 @@ func Load(envFile string) (*Config, error) {
 		AdminEmails: splitEmails(os.Getenv("ADMIN_EMAILS")),
 
 		// ── sandbox ──
-		SandboxImage:   getenvFleet("SANDBOX_IMAGE"),
-		SandboxRuntime: getenvFleet("SANDBOX_RUNTIME"),
-		SandboxMemory:  getenvFleet("SANDBOX_MEMORY"),
-		SandboxCPUs:    getenvFleet("SANDBOX_CPUS"),
-		SandboxPids:    getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
-		SandboxDiskGB:  getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+		SandboxImage:       getenvFleet("SANDBOX_IMAGE"),
+		SandboxRuntime:     getenvFleet("SANDBOX_RUNTIME"),
+		DefaultNetworkMode: strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
+		SandboxMemory:      getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:        getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:        getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB:      getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
 		// Per-task override ceilings (#205).
 		SandboxMemoryMaxMB:    getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
 		SandboxCPUsMax:        getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),
@@ -1080,6 +1116,14 @@ func Load(envFile string) (*Config, error) {
 	if cfg.LockdownOnly && cfg.SandboxImage == "" {
 		fmt.Fprintln(os.Stderr, "warn: CHAT_LOCKDOWN_ONLY=true but sandbox image is unset; cannot enforce — treating as disabled")
 		cfg.LockdownOnly = false
+	}
+
+	// Validate the sandbox egress mode (#211): an unknown value must fail loudly
+	// rather than silently fall through to open egress.
+	switch cfg.DefaultNetworkMode {
+	case "", "open", "allowlisted", "lockdown":
+	default:
+		return nil, fmt.Errorf("FLEET_DEFAULT_NETWORK_MODE must be one of open|allowlisted|lockdown, got %q", cfg.DefaultNetworkMode)
 	}
 	return cfg, nil
 }

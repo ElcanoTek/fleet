@@ -27,6 +27,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/otelsetup"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -115,6 +116,35 @@ type Server struct {
 	startTime   time.Time
 	version     string
 	workerStats func(context.Context) (*WorkerStats, error)
+
+	// scheduleTask creates a scheduled task in the orchestrator on behalf of an
+	// approved interactive schedule_task call (#239). Injected so httpapi stays
+	// sched-agnostic — main.go translates TaskScheduleRequest to the sched model
+	// and calls the storage create path. nil → schedule_task approvals report the
+	// feature is unconfigured (no task is created).
+	scheduleTask func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)
+}
+
+// TaskScheduleRequest is the sched-agnostic payload the chat approval path hands
+// to the injected scheduler seam (#239). main.go maps it to models.TaskCreate.
+// Exactly one of Cron / RunAt should be set (or neither, for run-immediately);
+// the caller validates that before staging.
+type TaskScheduleRequest struct {
+	Name          string
+	Prompt        string
+	Model         string
+	Cron          string
+	RunAt         *time.Time
+	MaxIterations int
+	AllowNetwork  bool
+	Tags          []string
+}
+
+// TaskScheduleResult is what the scheduler seam returns after creating a task.
+type TaskScheduleResult struct {
+	ID      string
+	Status  string
+	NextRun time.Time // zero = runs as soon as a worker is free
 }
 
 // reconnectCounter is a concurrency-safe tally of SSE reconnect outcomes.
@@ -276,6 +306,14 @@ func WithVersion(v string) Option {
 // importing the sched packages. nil leaves the workers/tasks section null.
 func WithWorkerStats(fn func(context.Context) (*WorkerStats, error)) Option {
 	return func(s *Server) { s.workerStats = fn }
+}
+
+// WithTaskScheduler injects the orchestrator task-create seam used to resolve an
+// approved interactive schedule_task call (#239), so httpapi can create a
+// scheduled task without importing the sched packages. nil leaves schedule_task
+// approvals reporting the feature unconfigured.
+func WithTaskScheduler(fn func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)) Option {
+	return func(s *Server) { s.scheduleTask = fn }
 }
 
 // inflightEntry pairs the cancel-func for a turn with a unique token,
@@ -516,18 +554,23 @@ func (s *Server) Routes() http.Handler {
 	// leaking the user-list (see membershipMiddleware).
 	auth := s.authMiddleware
 	member := s.membershipMiddleware
-	mux.Handle("/chat", auth(member(s.rateLimitMiddleware(http.HandlerFunc(s.postChat)))))
-	mux.Handle("/attachments", auth(member(http.HandlerFunc(s.postAttachments))))
-	mux.Handle("/conversations", auth(member(http.HandlerFunc(s.listOrCreateConversations))))
-	mux.Handle("/conversations/", auth(member(http.HandlerFunc(s.conversationByID))))
+	// mutate adds the read-only-role gate (#237): a "viewer" account may read
+	// everything it could before but is 403'd on any state-changing method. It is
+	// method-aware, so it safely wraps mixed read+write handlers. It must sit
+	// INSIDE member (member enriches the role mutate reads).
+	mutate := s.rejectViewerWrites
+	mux.Handle("/chat", auth(member(mutate(s.rateLimitMiddleware(http.HandlerFunc(s.postChat))))))
+	mux.Handle("/attachments", auth(member(mutate(http.HandlerFunc(s.postAttachments)))))
+	mux.Handle("/conversations", auth(member(mutate(http.HandlerFunc(s.listOrCreateConversations)))))
+	mux.Handle("/conversations/", auth(member(mutate(http.HandlerFunc(s.conversationByID)))))
 	// Folders (#258): enumerate folders + counts, and rename (a bulk re-tag).
 	// Both are exact (no trailing slash) patterns, so they never shadow each other
 	// regardless of order; /folders/{anything else} simply 404s.
-	mux.Handle("/folders/rename", auth(member(http.HandlerFunc(s.renameFolder))))
+	mux.Handle("/folders/rename", auth(member(mutate(http.HandlerFunc(s.renameFolder)))))
 	mux.Handle("/folders", auth(member(http.HandlerFunc(s.listFolders))))
 	mux.Handle("/search", auth(member(http.HandlerFunc(s.search))))
-	mux.Handle("/memories", auth(member(http.HandlerFunc(s.memories))))
-	mux.Handle("/memories/", auth(member(http.HandlerFunc(s.memoryByID))))
+	mux.Handle("/memories", auth(member(mutate(http.HandlerFunc(s.memories)))))
+	mux.Handle("/memories/", auth(member(mutate(http.HandlerFunc(s.memoryByID)))))
 	mux.Handle("/personas", auth(member(http.HandlerFunc(s.listPersonas))))
 	// Dynamic model discovery (#251): the model catalog, routed through the
 	// backend so the API key stays server-side and the allow-list is applied
@@ -536,9 +579,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/mcp-servers", auth(member(http.HandlerFunc(s.listMCPServerCatalog))))
 	// Per-user remote (hosted) MCP servers + OAuth (#443). The /oauth/mcp/callback
 	// completion is POSTed here by the browser-facing Next.js callback route.
-	mux.Handle("/remote-mcp-servers", auth(member(http.HandlerFunc(s.remoteMCPServers))))
-	mux.Handle("/remote-mcp-servers/", auth(member(http.HandlerFunc(s.remoteMCPServerByID))))
-	mux.Handle("/oauth/mcp/callback", auth(member(http.HandlerFunc(s.remoteMCPOAuthCallback))))
+	mux.Handle("/remote-mcp-servers", auth(member(mutate(http.HandlerFunc(s.remoteMCPServers)))))
+	mux.Handle("/remote-mcp-servers/", auth(member(mutate(http.HandlerFunc(s.remoteMCPServerByID)))))
+	mux.Handle("/oauth/mcp/callback", auth(member(mutate(http.HandlerFunc(s.remoteMCPOAuthCallback)))))
 	mux.Handle("/server-config", auth(member(http.HandlerFunc(s.serverConfig))))
 	mux.Handle("/client-config", auth(member(http.HandlerFunc(s.clientConfigHandler))))
 	// /theme.css themes the shell (incl. the pre-auth login page) from the
@@ -555,12 +598,20 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
+	// Admin Users tab (#237): list accounts + their role/team; PATCH one account's
+	// role/team. Admin-gated like the other /admin/* endpoints.
+	mux.Handle("/admin/users", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUsers)))))
+	mux.Handle("/admin/users/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUserPatch)))))
 	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits
 	// just inside recoverMiddleware and before bodyLimitMiddleware, so a blocked
 	// client IP is dropped before any body parsing, route dispatch, or auth
 	// comparison. It is a no-op (returns next unwrapped) when no allow/deny lists
 	// are configured, so default behavior is unchanged. /healthz stays exempt.
-	return recoverMiddleware(s.ipFilterMiddleware(bodyLimitMiddleware(mux)))
+	// otelsetup.Middleware (#186) wraps the routed mux so the server span sees the
+	// matched route pattern; it sits inside bodyLimitMiddleware (after recover/IP
+	// filter/body cap) and is a no-op-cost non-recording span when tracing is off,
+	// while always setting the X-Request-Id response header.
+	return recoverMiddleware(s.ipFilterMiddleware(bodyLimitMiddleware(otelsetup.Middleware(mux))))
 }
 
 // maxJSONBodyBytes caps non-upload request bodies on the chat server, matching
@@ -914,6 +965,23 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 		// ?folder= restricts to one folder, and ?label= (repeatable, AND
 		// semantics) restricts to conversations carrying every listed label (#258).
 		q := r.URL.Query()
+		// ?scope=team returns the conversations same-team members have shared
+		// (team_visible), read-only (#237) — the manager/teammate view. It is a
+		// distinct, opt-in read path: it never mixes the caller's private
+		// conversations in, and a caller with no team gets 400.
+		if q.Get("scope") == "team" {
+			list, err := s.store.ListTeamConversations(r.Context(), user)
+			if errors.Is(err, store.ErrNoTeam) {
+				http.Error(w, "no team", http.StatusBadRequest)
+				return
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]any{"conversations": list})
+			return
+		}
 		filter := store.ListFilter{
 			ArchivedOnly: q.Get("archived") == "true",
 			Labels:       q["label"],
@@ -1383,6 +1451,60 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case sub == "thinking_config" && r.Method == http.MethodGet:
+		// Per-conversation Claude extended-thinking override (#220). A null
+		// thinking_config means "inherit the global default".
+		conv, err := s.store.Get(r.Context(), user, id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if conv == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"thinking_config":       conv.ThinkingConfig,
+			"default_budget_tokens": s.cfg.DefaultThinkingBudgetTokens,
+		})
+	case sub == "thinking_config" && r.Method == http.MethodPut:
+		// Set the per-conversation override (#220). budget_tokens must be 0 (use
+		// the global default budget) or within Claude's [1024, 100000] window;
+		// an out-of-window non-zero value is rejected rather than silently clamped
+		// so the caller gets a clear signal. enabled=false stores an explicit
+		// opt-out that overrides a global default; DELETE clears back to inherit.
+		var req struct {
+			Enabled      bool `json:"enabled"`
+			BudgetTokens int  `json:"budget_tokens"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.BudgetTokens != 0 && (req.BudgetTokens < agentcore.MinThinkingBudgetTokens || req.BudgetTokens > agentcore.MaxThinkingBudgetTokens) {
+			http.Error(w, fmt.Sprintf("budget_tokens must be 0 or between %d and %d", agentcore.MinThinkingBudgetTokens, agentcore.MaxThinkingBudgetTokens), http.StatusBadRequest)
+			return
+		}
+		if err := s.store.SetThinkingConfig(r.Context(), user, id, &store.ThinkingConfig{Enabled: req.Enabled, BudgetTokens: req.BudgetTokens}); err != nil {
+			if err.Error() == "conversation not found" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case sub == "thinking_config" && r.Method == http.MethodDelete:
+		// Clear the override → inherit the global default (#220).
+		if err := s.store.SetThinkingConfig(r.Context(), user, id, nil); err != nil {
+			if err.Error() == "conversation not found" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case sub == "branch" && r.Method == http.MethodPost:
 		// Fork this conversation at a chosen message into a new conversation (#454).
 		s.handleConversationBranch(w, r, id, user)
@@ -1392,6 +1514,9 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 	case sub == "share" && r.Method == http.MethodDelete:
 		// Revoke sharing for this conversation (#226).
 		s.handleConversationUnshare(w, r, id, user)
+	case sub == "share-with-team" && r.Method == http.MethodPost:
+		// Opt this conversation in/out of team visibility (#237). Owner-only.
+		s.handleConversationShareWithTeam(w, r, id, user)
 	case sub == "mcp-servers" && r.Method == http.MethodGet:
 		// Per-conversation MCP-server catalog. Response shape:
 		//   { "servers": [{ name, description, tools: [...], tool_count,
@@ -1869,6 +1994,7 @@ func (s *Server) runTurnAsync(
 		OptionalMCPServersEnabled: conv.OptionalMCPServersEnabled,
 		Lockdown:                  conv.Lockdown,
 		ImageAttachments:          imageAttachments,
+		ThinkingConfig:            resolveThinkingConfig(conv.ThinkingConfig, s.cfg.DefaultThinkingBudgetTokens),
 		ApprovalStager: &approvalStager{
 			ctx:                  turnCtx,
 			store:                s.store,
