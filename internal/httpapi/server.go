@@ -27,6 +27,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/otelsetup"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -560,7 +561,11 @@ func (s *Server) Routes() http.Handler {
 	// client IP is dropped before any body parsing, route dispatch, or auth
 	// comparison. It is a no-op (returns next unwrapped) when no allow/deny lists
 	// are configured, so default behavior is unchanged. /healthz stays exempt.
-	return recoverMiddleware(s.ipFilterMiddleware(bodyLimitMiddleware(mux)))
+	// otelsetup.Middleware (#186) wraps the routed mux so the server span sees the
+	// matched route pattern; it sits inside bodyLimitMiddleware (after recover/IP
+	// filter/body cap) and is a no-op-cost non-recording span when tracing is off,
+	// while always setting the X-Request-Id response header.
+	return recoverMiddleware(s.ipFilterMiddleware(bodyLimitMiddleware(otelsetup.Middleware(mux))))
 }
 
 // maxJSONBodyBytes caps non-upload request bodies on the chat server, matching
