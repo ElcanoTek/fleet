@@ -1500,6 +1500,13 @@ tr.sla-row-fail {
 .modal-lg .modal-header {
   flex: 0 0 auto;
 }
+/* The design leaves the modal title as a default <h3> (1.17em, bold). Tailwind's
+   preflight resets headings to inherit, so restore that exact sizing/weight on
+   the New Task + Settings titles to match the design. */
+.modal-lg .modal-header h3 {
+  font-size: 1.17em;
+  font-weight: 700;
+}
 .modal-lg .modal-body {
   flex: 1 1 auto;
   min-height: 0;
