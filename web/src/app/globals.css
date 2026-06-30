@@ -1551,6 +1551,21 @@ tr.sla-row-fail {
 .modal-lg .credential-account-list {
   margin-bottom: 1.6rem;
 }
+/* The "MCP Credential Accounts" heading reads as a field label, so give it the
+   same 14px / medium-weight typography as the other modal labels. */
+.modal-lg .credential-account-admin h3 {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+/* The MCP help/description text sat flush against the control below it (the MCP
+   server picker and the credential-accounts list). Give it breathing room. */
+.modal-lg .mcp-server-picker {
+  margin-top: 0.6rem;
+}
+.modal-lg .credential-account-admin > .advanced-setting-meta {
+  margin-bottom: 0.6rem;
+}
 /* Filled fields to match the design's modal form styling. Scoped to the large
    modals; leaves checkboxes/radios (toggles) and the bare input rule elsewhere
    untouched. */
