@@ -864,6 +864,13 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 		task.OutputJSON = update.OutputJSON
 	}
 
+	// Record the published-artifact manifest (#204) when the runner supplies it,
+	// on the running-status update it sends just before terminal success. Empty
+	// leaves the existing value untouched, mirroring OutputJSON.
+	if len(update.Artifacts) > 0 {
+		task.Artifacts = update.Artifacts
+	}
+
 	if update.Status == models.TaskStatusSuccess || update.Status == models.TaskStatusError {
 		completedAt := time.Now().UTC()
 		task.CompletedAt = &completedAt

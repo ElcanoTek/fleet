@@ -374,7 +374,7 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -1115,6 +1115,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		outputSchema           sql.NullString
 		outputJSON             sql.NullString
 		errorAnalysis          sql.NullString
+		artifacts              sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -1128,7 +1129,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&deadLetteredAt, &deadLetterReason, &deadLetterAttempts,
 		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
-		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis,
+		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis, &artifacts,
 	)
 	if err != nil {
 		return nil, err
@@ -1175,6 +1176,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	task.OutputSchema = unmarshalRawJSON(outputSchema)
 	task.OutputJSON = unmarshalRawJSON(outputJSON)
 	task.ErrorAnalysis = unmarshalRawJSON(errorAnalysis)
+	task.Artifacts = unmarshalRawJSON(artifacts)
 	task.RetryPolicy = unmarshalRetryPolicy(retryPolicy)
 	task.Persona = persona.String
 	if sourceTaskID.Valid && sourceTaskID.String != "" {
@@ -2226,7 +2228,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			sandbox_limits = $50,
 			allow_delegation = $51,
 			output_schema = $52,
-			output_json = $53
+			output_json = $53,
+			artifacts = $54
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -2281,6 +2284,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.AllowDelegation,
 		marshalRawJSON(task.OutputSchema),
 		marshalRawJSON(task.OutputJSON),
+		marshalRawJSON(task.Artifacts),
 	)
 	return err
 }
