@@ -1,0 +1,11 @@
+-- 044_add_task_error_analysis.up.sql — intelligent task error recovery (#317).
+--
+-- error_analysis is an optional post-failure LLM diagnosis (nullable JSONB):
+-- a structured {category, summary, remediation} object that classifies a
+-- TERMINAL failure and suggests concrete remediation, distinct from the raw
+-- error_message string. NULL on every existing row and on success = no diagnosis
+-- (the prior behaviour), so existing tasks are byte-for-byte unchanged. Written
+-- asynchronously after a terminal failure via a dedicated lease-free UPDATE
+-- (storage.SetTaskErrorAnalysis); never set on create and excluded from the task
+-- upsert, so a later status update cannot clobber it.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_analysis JSONB;
