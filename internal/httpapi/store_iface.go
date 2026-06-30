@@ -119,8 +119,20 @@ type chatStore interface {
 
 	// Users (auth gate) + admin stats + sweeps.
 	IsUser(ctx context.Context, email string) (bool, error)
+	// GetUser returns the full record (role + team) used by membershipMiddleware
+	// to admit AND enrich a request with the caller's role/team (#237).
+	GetUser(ctx context.Context, email string) (*store.User, error)
+	// ListUsers + SetUserRoleTeam back the admin Users tab (#237): list every
+	// provisioned account, and PATCH a single account's role/team.
+	ListUsers(ctx context.Context) ([]store.User, error)
+	SetUserRoleTeam(ctx context.Context, email string, role, teamID *string) (*store.User, error)
 	CountUsers(ctx context.Context) (int, error)
 	VerifyUser(ctx context.Context, email, plainPassword string) error
+	// Team-scoped, opt-in conversation sharing (#237). ListTeamConversations
+	// returns the conversations same-team members have shared (team_visible),
+	// read-only; SetConversationTeamVisible flips the owner's opt-in flag.
+	ListTeamConversations(ctx context.Context, callerEmail string) ([]store.Conversation, error)
+	SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) error
 	AdminStats(ctx context.Context) ([]store.AdminRow, error)
 	SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap int) (expired int, evicted int, err error)
 	AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int, error)
