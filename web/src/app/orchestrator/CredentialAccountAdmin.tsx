@@ -142,27 +142,31 @@ export function CredentialAccountAdmin({
       </ul>
 
       <div className="credential-account-form">
-        <label htmlFor="credAdminServer">Server</label>
-        <select
-          id="credAdminServer"
-          value={server}
-          onChange={(e) => setServer(e.target.value)}
-        >
-          {servers.map((s) => (
-            <option key={s.name} value={s.name}>
-              {s.name}
-            </option>
-          ))}
-        </select>
+        <div className="form-group">
+          <label htmlFor="credAdminServer">Server</label>
+          <select
+            id="credAdminServer"
+            value={server}
+            onChange={(e) => setServer(e.target.value)}
+          >
+            {servers.map((s) => (
+              <option key={s.name} value={s.name}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
 
-        <label htmlFor="credAdminAccount">Account name</label>
-        <input
-          id="credAdminAccount"
-          type="text"
-          placeholder="e.g. client_a"
-          value={account}
-          onChange={(e) => setAccount(e.target.value)}
-        />
+        <div className="form-group">
+          <label htmlFor="credAdminAccount">Account name</label>
+          <input
+            id="credAdminAccount"
+            type="text"
+            placeholder="e.g. client_a"
+            value={account}
+            onChange={(e) => setAccount(e.target.value)}
+          />
+        </div>
 
         <fieldset className="credential-account-secrets">
           <legend>Secrets (write-only)</legend>

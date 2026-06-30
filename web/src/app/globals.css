@@ -1519,6 +1519,13 @@ tr.sla-row-fail {
 .modal-lg .form-label-row {
   margin-bottom: 0.55rem;
 }
+/* The Settings credential form lays its fields out as a tight grid; inside the
+   modal its Server/Account fields are wrapped in .form-group, so drop the grid
+   gap and let those .form-group margins drive the same rhythm as every other
+   modal field. */
+.modal-lg .credential-account-form {
+  display: block;
+}
 /* Filled fields to match the design's modal form styling. Scoped to the large
    modals; leaves checkboxes/radios (toggles) and the bare input rule elsewhere
    untouched. */
