@@ -656,7 +656,13 @@ sched's golang-migrate). `make install` puts the `fleet` binary on PATH.
 For a terminal chat with the agent, `fleet chat` opens a Bubble Tea TUI that
 streams replies from the running server's chat API (or `fleet chat --message
 "…"` for a one-shot, scriptable turn) — same governed run loop and sandbox as the
-web chat, just a CLI front-end for power users.
+web chat, just a CLI front-end for power users. **On the box running fleet you
+usually only need `fleet chat --email you@org`:** the shared `FLEET_SERVER_TOKEN`
+is read automatically from the same env file the server uses (`$FLEET_ENV_FILE`,
+else `.env.local`, else `/etc/fleet/fleet.env`), so an operator who can read that
+0600 file logs in without copying the token anywhere. The token is still never
+accepted on argv — override discovery with `$FLEET_SERVER_TOKEN`, `--token-file`,
+or `--env-file <path>` when the file lives elsewhere.
 
 ```
 fleet bootstrap   →   fleet update   →   fleet status

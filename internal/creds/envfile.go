@@ -65,6 +65,45 @@ func DeleteEnvKey(path, key string) (bool, error) {
 	return removed, writeEnvLines(path, out)
 }
 
+// ReadEnvValues reads the env file at path and returns the values for the
+// requested keys (only keys actually present in the file appear in the result;
+// pass no keys to read every line). It mirrors the SERVER's env-file value
+// handling (internal/config.loadEnvFile): an `export ` prefix is tolerated, an
+// unquoted value's trailing ` #comment` is trimmed, and a single layer of
+// surrounding quotes is stripped — so a value read here is byte-for-byte the
+// value the server loads from the same file (this matters for the shared
+// token). Values are returned to the caller but NEVER logged here. A missing
+// file yields an empty map and no error (so "no file" and "key absent" look the
+// same to callers); an unreadable file — e.g. a 0600 file the caller lacks
+// permission for — returns the error so the caller can fall back.
+func ReadEnvValues(path string, keys ...string) (map[string]string, error) {
+	lines, err := readEnvLines(path)
+	if err != nil {
+		return nil, err
+	}
+	var want map[string]struct{}
+	if len(keys) > 0 {
+		want = make(map[string]struct{}, len(keys))
+		for _, k := range keys {
+			want[k] = struct{}{}
+		}
+	}
+	out := make(map[string]string)
+	for _, ln := range lines {
+		k, v, ok := splitEnvKeyValue(ln)
+		if !ok {
+			continue
+		}
+		if want != nil {
+			if _, requested := want[k]; !requested {
+				continue
+			}
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
 // ListEnvKeys returns the KEYS defined in the env file (sorted), NEVER values.
 // Used by `fleet mcp account list` to show which account seats are provisioned
 // without ever printing a secret.
@@ -144,14 +183,52 @@ func writeEnvLines(path string, lines []string) error {
 // splitEnvLine returns (key, true) for a KEY=VALUE line, skipping blanks and
 // comments. The key is trimmed; an `export ` prefix is tolerated.
 func splitEnvLine(line string) (string, bool) {
+	k, _, ok := splitEnvKeyValue(line)
+	return k, ok
+}
+
+// splitEnvKeyValue parses a KEY=VALUE line into its key and processed value,
+// skipping blanks and `#` comments. An `export ` prefix is tolerated, the key
+// is trimmed, and the value is run through the same trimming the server applies
+// (inline-comment strip on unquoted values, then a single layer of surrounding
+// quotes). ok is false for non-assignment lines.
+func splitEnvKeyValue(line string) (key, value string, ok bool) {
 	t := strings.TrimSpace(line)
 	if t == "" || strings.HasPrefix(t, "#") {
-		return "", false
+		return "", "", false
 	}
 	t = strings.TrimPrefix(t, "export ")
 	eq := strings.IndexByte(t, '=')
 	if eq <= 0 {
-		return "", false
+		return "", "", false
 	}
-	return strings.TrimSpace(t[:eq]), true
+	key = strings.TrimSpace(t[:eq])
+	value = stripEnvQuotes(stripEnvInlineComment(strings.TrimSpace(t[eq+1:])))
+	return key, value, true
+}
+
+// stripEnvInlineComment trims a trailing ` #comment` off an unquoted value;
+// quoted values are left intact. Mirrors internal/config.stripInlineComment.
+func stripEnvInlineComment(value string) string {
+	if strings.HasPrefix(value, `"`) || strings.HasPrefix(value, `'`) {
+		return value
+	}
+	if i := strings.Index(value, " #"); i >= 0 {
+		return strings.TrimSpace(value[:i])
+	}
+	if i := strings.Index(value, "\t#"); i >= 0 {
+		return strings.TrimSpace(value[:i])
+	}
+	return value
+}
+
+// stripEnvQuotes removes a single layer of matching surrounding quotes.
+// Mirrors internal/config.stripQuotes.
+func stripEnvQuotes(value string) string {
+	if len(value) >= 2 &&
+		((strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
+			(strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`))) {
+		return value[1 : len(value)-1]
+	}
+	return value
 }
