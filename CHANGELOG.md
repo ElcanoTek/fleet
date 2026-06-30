@@ -15,6 +15,13 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Unified the operator CLI into one `fleet` binary (`fleet serve` runs the
+  server — bare `fleet` also serves, for back-compat — and `fleet <verb>` is every
+  operator command); a new `make install` puts `fleet` on PATH; `fleet update
+  --check` is a read-only "commits behind" report; bootstrap installs a login
+  MOTD banner. The old `fleet-admin <verb>` still works for one deprecation
+  release (it prints a warning and forwards to the same dispatch) and is then
+  removed.
 - Top-level `VERSION` file as the single source of truth for the release number,
   stamped into the `fleet` and `fleet-admin` binaries at build time via
   `-ldflags -X` (`internal/version`). `fleet version` / `fleet-admin version`

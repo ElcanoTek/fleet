@@ -37,3 +37,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0009](0009-per-user-remote-mcp-oauth.md) | Per-user remote MCP servers via OAuth | Accepted |
 | [0010](0010-microvm-sandbox-runtimes.md) | microVM sandbox runtimes (Kata / libkrun) via a fail-closed `--runtime` selector | Accepted |
 | [0011](0011-remove-worker-node-registry.md) | Remove the worker-node registry; the in-process worker is the only runner | Accepted |
+| [0012](0012-unified-fleet-cli.md) | One `fleet` binary — `serve` plus the operator CLI (back-compat preserved) | Accepted |

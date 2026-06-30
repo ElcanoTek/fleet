@@ -1,4 +1,4 @@
-.PHONY: all build compile bins test test-race test-cover lint lint-go fmt tidy clean help \
+.PHONY: all build compile bins install test test-race test-cover lint lint-go fmt tidy clean help \
 	govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 all: build
@@ -7,6 +7,7 @@ help:
 	@echo "fleet — build/test/lint targets"
 	@echo "  make build       compile-check ./... AND emit ./fleet + ./fleet-admin"
 	@echo "  make bins        emit ./fleet + ./fleet-admin only (no full compile-check)"
+	@echo "  make install     build + install fleet (and the fleet-admin shim) to PREFIX/bin (default /usr/local)"
 	@echo "  make compile     go build ./...   (compile-check every package; no artifacts)"
 	@echo "  make test        run the Go test suite"
 	@echo "  make test-race   run the Go test suite with the race detector"
@@ -46,9 +47,28 @@ compile:
 	go build ./...
 
 # emit just the two deployable artifacts (used by scripts/update.sh + bootstrap.sh).
+# fleet is the ONE unified binary (#461): `fleet serve` (or bare `fleet`) runs the
+# server, every other verb is the operator CLI. fleet-admin is a thin deprecation
+# shim that forwards to the same admin dispatch for one release.
 bins:
 	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet ./cmd/fleet
 	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet-admin ./cmd/fleet-admin
+
+# install puts the binaries on PATH so `fleet` and `fleet <verb>` (e.g.
+# `fleet update`, `fleet status`, `fleet chat`) work without cd-ing into the
+# checkout — the fix for "fleet isn't installed" on a dev box (#461). The
+# systemd unit can keep ExecStart=$(BINDIR)/fleet (bare fleet still serves) or
+# migrate to `fleet serve` on its own schedule; both work. The fleet-admin shim
+# is installed alongside for one deprecation release (the scripts' upgrade path
+# still expects it). Override the location with PREFIX (or BINDIR) and DESTDIR
+# for packaging.
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
+install: bins
+	install -d "$(DESTDIR)$(BINDIR)"
+	install -m 0755 ./fleet "$(DESTDIR)$(BINDIR)/fleet"
+	install -m 0755 ./fleet-admin "$(DESTDIR)$(BINDIR)/fleet-admin"
+	@echo "installed: $(DESTDIR)$(BINDIR)/fleet (+ fleet-admin shim)"
 
 # Tests run WITH the fleet_host_executor tag so the host-mode fixtures + MockMode
 # tests compile. The release binary (`make build`/`bins`) is built WITHOUT it, so

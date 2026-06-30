@@ -8,8 +8,10 @@ fleet runs **one Postgres cluster with two logical databases**:
 Losing the chat DB loses every conversation; losing the sched DB loses every
 scheduled task. There is no other copy. Back both up.
 
-`fleet-admin backup` / `fleet-admin restore` wrap `pg_dump -Fc` (PostgreSQL
-custom format) and `pg_restore`. Each database is dumped to its **own** file
+`fleet backup` / `fleet restore` wrap `pg_dump -Fc` (PostgreSQL
+custom format) and `pg_restore`. (These are operator-CLI verbs of the unified
+`fleet` binary; `fleet-admin backup`/`restore` still works but is deprecated and
+will be removed.) Each database is dumped to its **own** file
 rather than a single cluster-wide `pg_dumpall`, because the two databases have
 independent DSNs (and, in `--postgres=external` deployments, independent
 credentials). One file per DB also lets you restore one database without
@@ -19,7 +21,7 @@ touching the other.
 
 - The PostgreSQL client tools `pg_dump` and `pg_restore` on `PATH` (same major
   version as the server, or newer).
-- The same DSN resolution every other `fleet-admin` verb uses:
+- The same DSN resolution every other `fleet` operator verb uses:
   - chat: `--chat-database-url`, else `FLEET_CHAT_DATABASE_URL`, else `DATABASE_URL`
   - sched: `--sched-database-url`, else `FLEET_SCHED_DATABASE_URL`, else `DATABASE_URL`
 
@@ -35,13 +37,13 @@ line is redacted.
 
 ```sh
 # Both databases into the current directory:
-fleet-admin backup
+fleet backup
 # → fleet-chat-20260623T140506Z.dump
 # → fleet-sched-20260623T140506Z.dump
 
 # One database, into a chosen directory:
-fleet-admin backup --db=chat  --out /var/backups/fleet
-fleet-admin backup --db=sched --out /var/backups/fleet
+fleet backup --db=chat  --out /var/backups/fleet
+fleet backup --db=sched --out /var/backups/fleet
 ```
 
 `--db` accepts `chat`, `sched`, or `all` (the default). The dump filename is
@@ -61,7 +63,7 @@ current directory.
 30) from the output directory after a successful backup:
 
 ```sh
-fleet-admin backup --db=all --out /var/backups/fleet --prune
+fleet backup --db=all --out /var/backups/fleet --prune
 # backed up chat DB → …/fleet-chat-…dump (verified)
 # backed up sched DB → …/fleet-sched-…dump (verified)
 # pruned 3 old backup(s) older than 30 days
@@ -73,8 +75,8 @@ Restore is **single-database on purpose** — it overwrites a live database, so 
 name the target explicitly; there is no `--db=all`.
 
 ```sh
-fleet-admin restore --db=chat  /var/backups/fleet/fleet-chat-20260623T140506Z.dump
-fleet-admin restore --db=sched /var/backups/fleet/fleet-sched-20260623T140506Z.dump
+fleet restore --db=chat  /var/backups/fleet/fleet-chat-20260623T140506Z.dump
+fleet restore --db=sched /var/backups/fleet/fleet-sched-20260623T140506Z.dump
 ```
 
 Restore runs `pg_restore --clean --if-exists --no-owner --no-acl`: it drops the
@@ -95,11 +97,11 @@ or CI) without `--no-confirm`, restore refuses rather than silently overwriting.
 **Stop the fleet service before restoring** so nothing writes mid-restore:
 
 ```sh
-fleet-admin stop
-fleet-admin restore --db=chat  fleet-chat-….dump
-fleet-admin restore --db=sched fleet-sched-….dump
-fleet-admin restart
-fleet-admin status        # both DBs answer SELECT 1, unit healthy
+fleet stop
+fleet restore --db=chat  fleet-chat-….dump
+fleet restore --db=sched fleet-sched-….dump
+fleet restart
+fleet status        # both DBs answer SELECT 1, unit healthy
 ```
 
 The databases self-migrate on connect, so a dump taken from an older schema is
@@ -117,7 +119,7 @@ psql -d fleet_chat_verify -c '\dt'     # tables present?
 dropdb fleet_chat_verify
 ```
 
-The automated round-trip test (`cmd/fleet-admin/backup_test.go`,
+The automated round-trip test (`internal/admincli/backup_test.go`,
 `TestBackupRestoreRoundTrip`) does exactly this against scratch databases: it
 seeds a sentinel row, runs the real `pg_dump` wrapper, restores into a fresh
 database with the real `pg_restore` wrapper, and asserts the row survives — so
@@ -143,7 +145,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/fleet/fleet.env
-ExecStart=/usr/local/bin/fleet-admin backup --db=all --prune
+ExecStart=/usr/local/bin/fleet backup --db=all --prune
 ```
 
 ```ini

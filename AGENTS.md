@@ -48,7 +48,9 @@ never a real key.
 ## Repository map
 
 See the README "Repository layout" for the annotated tree. In short: `cmd/` (the
-`fleet` binary, `fleet-admin` CLI, …), `internal/`
+one unified `fleet` binary — `fleet serve` runs the server, every other verb is the
+operator CLI; `fleet-admin` is a transitional deprecation shim that still works for
+one release, …), `internal/`
 (`agentcore` the one run loop, `sandbox`,
 `mcp`, `creds`, `clientconfig`, `store`, `sched`, `httpapi`, …), `web/` (one
 Next.js app: `/chat` + `/orchestrator`), and `config/default/` (the generic
@@ -113,7 +115,7 @@ same PR.
   - **Batch APIs**: `POST /tasks/batch` allows batch task creation of up to 100 tasks. In atomic mode (`atomic: true`), all tasks are validated up front and created in a single DB transaction (returning `422 Unprocessable Entity` with errors if any fail). In non-atomic mode (`atomic: false`), it behaves best-effort and returns `207 Multi-Status` for partial success.
   - **Rate Limiting**: Rate limiter consumes `N` tokens for `N` tasks in a batch (instead of 1 token per batch request) via `apikeys.Manager.ConsumeN`.
   - **Single Multi-row Insert**: `db.AddTaskBatch` inserts multiple tasks in a single query via parameterized multi-row insert rather than individual sequential inserts.
-  - **CLI**: `fleet-admin task batch-create --from-file tasks.json [--atomic]` allows creating tasks from a JSON file (or stdin via `-`).
+  - **CLI**: `fleet task batch-create --from-file tasks.json [--atomic]` allows creating tasks from a JSON file (or stdin via `-`).
 - **Task Definition Import/Export**:
   - **Task Names**: Scheduled tasks now support an optional `name` field (mapped to the database `tasks.name` column with a partial unique index). Empty/empty-string names represent "unnamed" tasks and are always created fresh on import. Non-empty names are unique and serve as conflict keys.
   - **Payload Limits**: Imports are rate-limited/capped to at most 100 task records per request (matching bulk API policies). Payload-internal duplicate name entries are validation errors.
@@ -139,7 +141,7 @@ same PR.
   - **Model**: `TaskSandboxLimits{MemoryMB, CPUs, Pids}` (a zero field = use the global default), stored as the nullable `sandbox_limits` JSONB column (migration 040; NULL = all-global). Threaded through `db.go` exactly like `loop_config` (taskColumns/scanTask/AddTask/taskInsert\*/UpdateTaskTx) and the export/import record.
   - **Validation** (`Handlers.validateSandboxLimits`): floors (≥128 MiB, cpus>0, ≥16 pids) and operator ceilings `FLEET_SANDBOX_{MEMORY_MAX_MB,CPUS_MAX,PIDS_MAX}` (defaults 8192/16/1024; 0 = uncapped), surfaced onto `handlers.Config`.
   - **Application**: per-task limits require a COLD start (a warm pooled container already runs with the pool's ceilings). `takeTaskSandbox` routes a task with non-zero `SandboxLimits` through the new `Pool.TakeContainerWithOverrides(ctx, ResourceOverride, noNetwork)` — applying the override to a copy of the pool config (`ResourceOverride.applyTo`, the testable seam for the `--memory/--cpus/--pids-limit` values) and keeping the task's network posture (sealed unless `AllowNetwork`). `TakeContainer` now delegates to it. A tightening of the mandatory sandbox, never an escape.
-  - **Deferred** (honest scope): the `fleet-admin task set-limits` CLI and the web "Advanced settings" panel — per-task limits ship usable now via `POST /tasks` and `fleet-admin task import` (the JSON/YAML carries `sandbox_limits`).
+  - **Deferred** (honest scope): the `fleet task set-limits` CLI and the web "Advanced settings" panel — per-task limits ship usable now via `POST /tasks` and `fleet task import` (the JSON/YAML carries `sandbox_limits`).
 - **Agent delegation (#175 + #264)**: a scheduled run can delegate scoped subtasks to governed CHILD runs via the `spawn_subagent` native tool (this one tool is the delegation primitive #264 asked for — NOT a separate `delegate_task`; a second tool would fork the one governed core). See [`docs/adr/0007-governed-sub-agents.md`](docs/adr/0007-governed-sub-agents.md).
   - **Opt-in**: per-task `allow_delegation: true` OR fleet-wide `FLEET_SUBAGENTS_ENABLED` (composed as OR in `scheduledrun`); registered ONLY in scheduled mode, never interactive. Off by default → byte-for-byte unchanged. `allow_delegation` is threaded like `allow_network` (migration 041, taskColumns/scanTask/AddTask/taskInsert\*/UpdateTaskTx, export/import, rerun overrides).
   - **Parallel**: the tool is `NewParallelAgentTool`, so multiple `spawn_subagent` calls in one model turn run concurrently (fantasy's parallel-tool semaphore, cap 5) and results fan back in before the next LLM call. Output is JSON `{result, cost_usd, tokens, success}`. The atomic budget reservation (under the parent `mu`) makes concurrent spawns safe; `make test-race` covers it.

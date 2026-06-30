@@ -146,7 +146,7 @@ matter.
 - **Credentials stay out of reach.** MCP credentials are isolated by the
   out-of-process MCP broker: it injects them only when it runs a delegated MCP
   call host-side, so they never enter the sandbox, the model's context, or the
-  logs. They live in a `0600` env file managed through `fleet-admin`, with
+  logs. They live in a `0600` env file managed through `fleet`, with
   per-MCP multi-account seats. The agent uses your connectors without ever
   holding their keys. This isolation is about the *sandbox*; the client-config
   bundle's own host-side MCP servers **do** receive these brokered credentials by
@@ -212,8 +212,8 @@ with the shipped router (it does not gate body schemas).
 
 ```
 cmd/
-  fleet/          the fleet binary (chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool)
-  fleet-admin/    unified admin CLI (bootstrap, users, MCP credential accounts)
+  fleet/          the one unified binary — server (`fleet serve`: chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool) AND operator CLI (every other verb)
+  fleet-admin/    transitional deprecation shim — forwards to `fleet`; removed after one release
   cutlass/        optional local one-shot debug entrypoint (not the production scheduled path)
   sandbox-probe/  deploy-time sandbox smoke test
 internal/
@@ -471,7 +471,7 @@ sudo bash /opt/fleet/src/scripts/bootstrap.sh \
 sudo "$EDITOR" /etc/fleet/fleet.env       # set OPENROUTER_API_KEY=… (+ MCP creds)
 #    If the bundle's default persona isn't "assistant", also set
 #    PERSONA_DEFAULT=<persona> here (e.g. PERSONA_DEFAULT=victoria).
-sudo fleet-admin restart
+sudo fleet restart
 #    With --enable-web, also (re)start the web unit: it BindsTo fleet.service, so
 #    it stays down until the backend is healthy (i.e. until the key is set).
 # sudo systemctl restart fleet-web
@@ -485,10 +485,13 @@ sudo fleet-admin restart
 > (`https://<token>@github.com/ORG/your-config.git`). `update` reuses the same
 > cached credential to fast-forward the bundle.
 
-The first run is always the **shell script** — `fleet-admin` doesn't exist until
-it's built. Once installed, `fleet-admin bootstrap`/`update`/`status` wrap the
-same scripts for day-2 ops. The numbered steps below break down what bootstrap
-does (and the manual path if you'd rather run each piece yourself):
+The first run is always the **shell script** — the `fleet` binary doesn't exist
+until it's built. Once installed, `fleet bootstrap`/`update`/`status` wrap the
+same scripts for day-2 ops. The server runs via `fleet serve` (bare `fleet` also
+serves, for back-compat); all other verbs are the operator CLI. (`fleet-admin
+<verb>` still works but is deprecated and will be removed.) The numbered steps
+below break down what bootstrap does (and the manual path if you'd rather run
+each piece yourself):
 
 1. **Bootstrap** the databases + the 0600 credential env file (one cluster, two
    DBs; never runs app migrations — each service self-migrates on first start):
@@ -501,9 +504,9 @@ does (and the manual path if you'd rather run each piece yourself):
    python3 — skipped on non-dnf hosts), then writes the two
    `FLEET_*_DATABASE_URL`s and `FLEET_CLIENT_CONFIG_DIR` into the env file for
    you; you then add `OPENROUTER_API_KEY`, the bundle's MCP connector
-   credentials, and any MCP account secrets (`fleet-admin mcp account set ...`).
+   credentials, and any MCP account secrets (`fleet mcp account set ...`).
    See **Operating fleet** below for the full bootstrap → update → status
-   lifecycle (`fleet-admin bootstrap` wraps this).
+   lifecycle (`fleet bootstrap` wraps this).
 
 2. **Build** the binary, the sandbox image, and the web app:
 
@@ -543,7 +546,7 @@ does (and the manual path if you'd rather run each piece yourself):
    systemctl daemon-reload && systemctl enable --now fleet
    ```
 
-   (`fleet-admin bootstrap --enable-service` automates this build → install →
+   (`fleet bootstrap --enable-service` automates this build → install →
    unit-install → enable from a source checkout — see **Operating fleet** below.)
 
    > **One command for the web tier + TLS.** `bootstrap.sh --enable-web
@@ -557,14 +560,14 @@ does (and the manual path if you'd rather run each piece yourself):
    > **Login model.** The web app authenticates two ways: a **self-contained
    > email + password** path (`POST /api/auth/login` → backend `/auth/verify` →
    > bcrypt against the chat user store; HMAC session signed with
-   > `APP_SESSION_SECRET`) — add users via `fleet-admin chat user add` — and an
+   > `APP_SESSION_SECRET`) — add users via `fleet chat user add` — and an
    > optional Elcano **SSO** cookie path that is **disabled unless
    > `AUTH_SIGNING_PUBKEY` is set**. A stand-alone deploy needs no external auth
    > service; users just log in with email + password.
    >
    > **`fleet-web` BindsTo `fleet`.** It stays down until the backend is healthy
    > (i.e. until `OPENROUTER_API_KEY` is set), so after a first `--enable-web`
-   > bootstrap: set the key, `fleet-admin restart`, then `systemctl start fleet-web`.
+   > bootstrap: set the key, `fleet restart`, then `systemctl start fleet-web`.
 
    Run the Next web app as its own supervised unit (`deploy/fleet-web.service` —
    it `npm run start`s the built app on port 3000), wiring
@@ -632,15 +635,18 @@ list (listener addresses, admin token, bootstrap admins, data dir, timezone).
 
 ## Operating fleet
 
-The operator lifecycle is **bootstrap → update → status**, one box. Every verb is
-idempotent and exposed both as a shell script (`scripts/`) and as a `fleet-admin`
-subcommand that wraps it, so a re-run converges on the same state rather than
-double-applying. None of them ever run application migrations — each service
-self-migrates on start (chat's advisory-lock runner; sched's golang-migrate).
+The operator lifecycle is **bootstrap → update → status**, one box. The server
+runs via `fleet serve` (bare `fleet` also serves, for back-compat); all other
+verbs are the operator CLI. (`fleet-admin <verb>` still works but is deprecated
+and will be removed.) Every verb is idempotent and exposed both as a shell script
+(`scripts/`) and as a `fleet` subcommand that wraps it, so a re-run converges on
+the same state rather than double-applying. None of them ever run application
+migrations — each service self-migrates on start (chat's advisory-lock runner;
+sched's golang-migrate). `make install` puts the `fleet` binary on PATH.
 
 ```
-fleet-admin bootstrap   →   fleet-admin update   →   fleet-admin status
-  (provision a box)         (roll a new version)      (health / doctor)
+fleet bootstrap   →   fleet update   →   fleet status
+  (provision a box)   (roll a new version)   (health / doctor)
 ```
 
 > **`bootstrap` and `update` operate on a fleet *source checkout*.** They run
@@ -655,7 +661,7 @@ fleet-admin bootstrap   →   fleet-admin update   →   fleet-admin status
 A single **0600** env file (`FLEET_ENV_FILE`, default `.env.local`; on a box
 typically `/etc/fleet/fleet.env`) carries every secret and connection string.
 `deploy/fleet.service` `EnvironmentFile`s it, `fleet` parses the same file via
-`config.Load`, and `fleet-admin` reads it for MCP account secrets — so process
+`config.Load`, and the `fleet` operator CLI reads it for MCP account secrets — so process
 env and config-loaded values stay in sync. `bootstrap` writes/refreshes the
 machine-managed keys in place (preserving your hand-edited lines and comments):
 
@@ -668,7 +674,7 @@ FLEET_ENV_FILE=/etc/fleet/fleet.env            # so config.Load reads this same 
 
 You then add `OPENROUTER_API_KEY`, any listener/admin tokens, the client
 bundle's MCP connector credentials, and per-account MCP secrets
-(`fleet-admin mcp account set <server> <account> --secret KEY=-`, value via
+(`fleet mcp account set <server> <account> --secret KEY=-`, value via
 stdin — never on argv). Account names are **canonicalized**: hyphens and spaces
 fold to underscore and case is ignored, so `client-a`, `client_a`, and
 `Client_A` all resolve to one credential seat (`<VAR>_CLIENT_A`). Use distinct
@@ -703,12 +709,12 @@ The bundle also owns the **sandbox** — see below.
 ### bootstrap — provision a box
 
 ```
-fleet-admin bootstrap --postgres=local                     # dnf+initdb+pg_hba+\gexec, sslmode=disable
-fleet-admin bootstrap --postgres=external                  # validate the DSNs with SELECT 1, sslmode=require
-fleet-admin bootstrap --client-config <git-url|path>       # check out / point at a client bundle
-fleet-admin bootstrap --enable-service                     # systemctl enable --now the fleet unit at the end
-fleet-admin bootstrap --enable-web [--domain <fqdn>]       # also build+enable the web tier (+ Caddy TLS with --domain); implies --enable-service
-fleet-admin bootstrap --dry-run                            # print the plan; touch nothing
+fleet bootstrap --postgres=local                     # dnf+initdb+pg_hba+\gexec, sslmode=disable
+fleet bootstrap --postgres=external                  # validate the DSNs with SELECT 1, sslmode=require
+fleet bootstrap --client-config <git-url|path>       # check out / point at a client bundle
+fleet bootstrap --enable-service                     # systemctl enable --now the fleet unit at the end
+fleet bootstrap --enable-web [--domain <fqdn>]       # also build+enable the web tier (+ Caddy TLS with --domain); implies --enable-service
+fleet bootstrap --dry-run                            # print the plan; touch nothing
 ```
 
 Under `--enable-service` (and `--enable-web`, which implies it) the credential env
@@ -728,9 +734,10 @@ generated when unset; set `CHAT_DB_PASSWORD`/`SCHED_DB_PASSWORD` to pin them.
 ### update — roll a new version in place
 
 ```
-fleet-admin update              # pull → build → conditional sandbox rebuild → restart
-fleet-admin update --no-pull    # rebuild the current checkout(s) only
-fleet-admin update --dry-run    # print the plan
+fleet update              # pull → build → conditional sandbox rebuild → restart
+fleet update --no-pull    # rebuild the current checkout(s) only
+fleet update --dry-run    # print the plan
+fleet update --check      # read-only "commits behind" report; touch nothing
 ```
 
 `update` (ported from the `moc`/`gig` pattern) `git pull`s **both** the fleet
@@ -743,7 +750,7 @@ migrations; it finishes with `systemctl restart fleet` and a unit health check.
 If the pull changed `update.sh` itself, the script **re-execs the fresh copy** in
 rebuild-only mode (bash holds the pre-pull inode open, so the fix would otherwise
 only land on the *next* update). On a build failure the live binary/image is left
-untouched; roll back with `git checkout <sha> && fleet-admin update --no-pull`.
+untouched; roll back with `git checkout <sha> && fleet update --no-pull`.
 
 ### upgrade — drain, swap, health-gate, auto-roll-back
 
@@ -783,8 +790,8 @@ no Go code and runs no migrations.
 ### status (doctor) — is the box healthy?
 
 ```
-fleet-admin status                # ✓/✗ report; exits non-zero if unhealthy
-fleet-admin status --no-sandbox   # skip the podman run check
+fleet status                # ✓/✗ report; exits non-zero if unhealthy
+fleet status --no-sandbox   # skip the podman run check
 ```
 
 `status` runs read-only checks and prints a ✓/✗ line per check, exiting non-zero
@@ -798,7 +805,7 @@ DSN passwords are redacted in the output.
 
 > **Sandbox check + the dedicated service user.** The systemd unit runs `fleet`
 > as a dedicated **`fleet`** user with **rootless Podman** (its own subuid range +
-> image store), so the sandbox image lives in *that* user's store. `fleet-admin
+> image store), so the sandbox image lives in *that* user's store. `fleet
 > status` run as **root** therefore reports the sandbox image as not runnable
 > (root's Podman can't see it) even though the service runs it fine — a false
 > negative. Verify the sandbox as the service user instead, e.g.
@@ -809,13 +816,13 @@ DSN passwords are redacted in the output.
 ### diagnose — a redacted support bundle for issue reports
 
 ```
-fleet-admin diagnose                       # write fleet-diagnose-<UTC>.tar.gz to the cwd
-fleet-admin diagnose --output /tmp/bundle.tar.gz
-fleet-admin diagnose --no-sandbox          # skip the podman image inspection
+fleet diagnose                       # write fleet-diagnose-<UTC>.tar.gz to the cwd
+fleet diagnose --output /tmp/bundle.tar.gz
+fleet diagnose --no-sandbox          # skip the podman image inspection
 ```
 
 `diagnose` collects a single gzipped tar you can attach to an issue. It bundles
-four text sections: `status.txt` (the **exact** `fleet-admin status` ✓/✗ report —
+four text sections: `status.txt` (the **exact** `fleet status` ✓/✗ report —
 the same checks, not a copy), `config.txt` (the **names** of the set
 `FLEET_*`/`CHAT_*`/`DATABASE_URL`/`OPENROUTER_API_KEY` env vars — never their
 values — plus the loaded bundle's app name, model hints, and MCP server names),
@@ -836,12 +843,12 @@ Day-2 conveniences over the host systemd unit, so you never drop to raw
 `systemctl`/`journalctl`:
 
 ```
-fleet-admin restart                 # systemctl restart the fleet unit
-fleet-admin stop                    # systemctl stop the fleet unit
-fleet-admin logs                    # tail the last 50 journal lines (a.k.a. `tail`)
-fleet-admin logs -n 200             # last 200 lines
-fleet-admin logs -f                 # follow (stream) until Ctrl-C
-fleet-admin restart --service foo   # target a non-default unit name
+fleet restart                 # systemctl restart the fleet unit
+fleet stop                    # systemctl stop the fleet unit
+fleet logs                    # tail the last 50 journal lines (a.k.a. `tail`)
+fleet logs -n 200             # last 200 lines
+fleet logs -f                 # follow (stream) until Ctrl-C
+fleet restart --service foo   # target a non-default unit name
 ```
 
 The unit is resolved from `--service`, else `$FLEET_SERVICE_NAME`, else `fleet`.
@@ -885,9 +892,9 @@ fleet keeps every conversation in the **chat** DB and every scheduled task in th
 DSNs, so a single cluster-wide dump would not fit the credential model):
 
 ```
-fleet-admin backup                          # dump BOTH DBs into the cwd (fleet-<db>-<UTC>.dump)
-fleet-admin backup --db=chat --out /backups # dump just chat into /backups
-fleet-admin restore --db=sched FILE.dump    # restore one DB (--clean --if-exists; overwrites it)
+fleet backup                          # dump BOTH DBs into the cwd (fleet-<db>-<UTC>.dump)
+fleet backup --db=chat --out /backups # dump just chat into /backups
+fleet restore --db=sched FILE.dump    # restore one DB (--clean --if-exists; overwrites it)
 ```
 
 `backup` prints each dump path on stdout (scriptable for a cron job). `restore`

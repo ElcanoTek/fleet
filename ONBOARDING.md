@@ -73,7 +73,10 @@ make build      # compile-check ./... AND emit ./fleet + ./fleet-admin
 
 `make build` runs `go build ./...` (compile-check) and then emits the two
 deployable artifacts (`./fleet`, `./fleet-admin`). If this is green your Go
-toolchain is good.
+toolchain is good. The server runs via `fleet serve` (bare `fleet` also serves,
+for back-compat); all other verbs are the operator CLI, and `make install` puts
+`fleet` on PATH. (`fleet-admin <verb>` still works but is deprecated and will be
+removed.)
 
 ---
 

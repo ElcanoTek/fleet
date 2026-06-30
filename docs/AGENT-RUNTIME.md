@@ -186,8 +186,8 @@ credential values never enter the database (they live in the host env file; see
 Set or clear it with the admin CLI (the task must be pending/scheduled):
 
 ```sh
-fleet-admin sched task set-credentials <task_id> --allow github:client-a --allow sendgrid
-fleet-admin sched task set-credentials <task_id> --clear   # revert to global inherit
+fleet sched task set-credentials <task_id> --allow github:client-a --allow sendgrid
+fleet sched task set-credentials <task_id> --clear   # revert to global inherit
 ```
 
 ---
@@ -353,7 +353,7 @@ Memories live in the **scheduler database** (`task_memories`, keyed by
 `(task_id, key)`), not the client-config bundle — this is runtime state, so it
 never touches the operator-owned, git-versioned bundle, and the reproducibility
 guarantee ("the setup that worked is the setup that runs again") is preserved.
-Inspect or clear a task's memory with `fleet-admin task memories list|clear|delete`.
+Inspect or clear a task's memory with `fleet task memories list|clear|delete`.
 
 Off by default (the column is `BOOLEAN NOT NULL DEFAULT FALSE`), so a task that
 does not opt in behaves exactly as before — no extra tools, no injection.
@@ -387,8 +387,8 @@ expired), and a panic during execution.
 Review and replay are operator actions on the box, via the admin CLI:
 
 ```sh
-fleet-admin sched dlq list [--tag <tag>] [--limit N] [--offset N] [--json]
-fleet-admin sched dlq replay <task_id>   # reset to pending; the scheduler re-runs it
+fleet sched dlq list [--tag <tag>] [--limit N] [--offset N] [--json]
+fleet sched dlq replay <task_id>   # reset to pending; the scheduler re-runs it
 ```
 
 `replay` resets the same task to a fresh pending slate (`attempt_count = 0`, the
@@ -596,5 +596,5 @@ operations (driven through bash, the point of the feature) are isolated.
 after the run (optionally after `cleanup_delay_seconds`); with `false` the branch
 is left in place for inspection or a manual push. Orphans from a crashed run (the
 process died between worktree creation and cleanup) are reclaimed by an operator
-with `fleet-admin worktree prune --older-than <dur>` (and `fleet-admin worktree
+with `fleet worktree prune --older-than <dur>` (and `fleet worktree
 list` shows all registered worktrees).
