@@ -2815,7 +2815,7 @@ export function ChatExperience() {
                       setRenamingTitleDraft(null);
                     }
                   }}
-                  className="min-w-0 flex-1 rounded-md border border-[var(--color-accent)] bg-transparent px-1.5 py-1 text-[1.0625rem] font-semibold text-[var(--color-text-primary)] outline-none sm:text-[1.25rem]"
+                  className="min-w-0 flex-1 rounded-md border border-[var(--color-accent)] bg-transparent py-1 pl-0 pr-1.5 text-[1.0625rem] font-semibold text-[var(--color-text-primary)] outline-none sm:text-[1.25rem]"
                 />
               ) : (
                 <h2 className="min-w-0">
@@ -2823,7 +2823,7 @@ export function ChatExperience() {
                     type="button"
                     title="Click to rename"
                     onClick={() => setRenamingTitleDraft(title)}
-                    className="block min-w-0 max-w-full cursor-text truncate rounded-md px-1.5 py-1 text-left text-[1.0625rem] font-semibold text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] sm:text-[1.25rem]"
+                    className="block min-w-0 max-w-full cursor-text truncate rounded-md py-1 pr-1.5 text-left text-[1.0625rem] font-semibold text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] sm:text-[1.25rem]"
                   >
                     {title}
                   </button>
