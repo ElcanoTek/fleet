@@ -517,18 +517,23 @@ func (s *Server) Routes() http.Handler {
 	// leaking the user-list (see membershipMiddleware).
 	auth := s.authMiddleware
 	member := s.membershipMiddleware
-	mux.Handle("/chat", auth(member(s.rateLimitMiddleware(http.HandlerFunc(s.postChat)))))
-	mux.Handle("/attachments", auth(member(http.HandlerFunc(s.postAttachments))))
-	mux.Handle("/conversations", auth(member(http.HandlerFunc(s.listOrCreateConversations))))
-	mux.Handle("/conversations/", auth(member(http.HandlerFunc(s.conversationByID))))
+	// mutate adds the read-only-role gate (#237): a "viewer" account may read
+	// everything it could before but is 403'd on any state-changing method. It is
+	// method-aware, so it safely wraps mixed read+write handlers. It must sit
+	// INSIDE member (member enriches the role mutate reads).
+	mutate := s.rejectViewerWrites
+	mux.Handle("/chat", auth(member(mutate(s.rateLimitMiddleware(http.HandlerFunc(s.postChat))))))
+	mux.Handle("/attachments", auth(member(mutate(http.HandlerFunc(s.postAttachments)))))
+	mux.Handle("/conversations", auth(member(mutate(http.HandlerFunc(s.listOrCreateConversations)))))
+	mux.Handle("/conversations/", auth(member(mutate(http.HandlerFunc(s.conversationByID)))))
 	// Folders (#258): enumerate folders + counts, and rename (a bulk re-tag).
 	// Both are exact (no trailing slash) patterns, so they never shadow each other
 	// regardless of order; /folders/{anything else} simply 404s.
-	mux.Handle("/folders/rename", auth(member(http.HandlerFunc(s.renameFolder))))
+	mux.Handle("/folders/rename", auth(member(mutate(http.HandlerFunc(s.renameFolder)))))
 	mux.Handle("/folders", auth(member(http.HandlerFunc(s.listFolders))))
 	mux.Handle("/search", auth(member(http.HandlerFunc(s.search))))
-	mux.Handle("/memories", auth(member(http.HandlerFunc(s.memories))))
-	mux.Handle("/memories/", auth(member(http.HandlerFunc(s.memoryByID))))
+	mux.Handle("/memories", auth(member(mutate(http.HandlerFunc(s.memories)))))
+	mux.Handle("/memories/", auth(member(mutate(http.HandlerFunc(s.memoryByID)))))
 	mux.Handle("/personas", auth(member(http.HandlerFunc(s.listPersonas))))
 	// Dynamic model discovery (#251): the model catalog, routed through the
 	// backend so the API key stays server-side and the allow-list is applied
@@ -537,9 +542,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/mcp-servers", auth(member(http.HandlerFunc(s.listMCPServerCatalog))))
 	// Per-user remote (hosted) MCP servers + OAuth (#443). The /oauth/mcp/callback
 	// completion is POSTed here by the browser-facing Next.js callback route.
-	mux.Handle("/remote-mcp-servers", auth(member(http.HandlerFunc(s.remoteMCPServers))))
-	mux.Handle("/remote-mcp-servers/", auth(member(http.HandlerFunc(s.remoteMCPServerByID))))
-	mux.Handle("/oauth/mcp/callback", auth(member(http.HandlerFunc(s.remoteMCPOAuthCallback))))
+	mux.Handle("/remote-mcp-servers", auth(member(mutate(http.HandlerFunc(s.remoteMCPServers)))))
+	mux.Handle("/remote-mcp-servers/", auth(member(mutate(http.HandlerFunc(s.remoteMCPServerByID)))))
+	mux.Handle("/oauth/mcp/callback", auth(member(mutate(http.HandlerFunc(s.remoteMCPOAuthCallback)))))
 	mux.Handle("/server-config", auth(member(http.HandlerFunc(s.serverConfig))))
 	mux.Handle("/client-config", auth(member(http.HandlerFunc(s.clientConfigHandler))))
 	// /theme.css themes the shell (incl. the pre-auth login page) from the
@@ -556,6 +561,10 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
+	// Admin Users tab (#237): list accounts + their role/team; PATCH one account's
+	// role/team. Admin-gated like the other /admin/* endpoints.
+	mux.Handle("/admin/users", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUsers)))))
+	mux.Handle("/admin/users/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUserPatch)))))
 	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits
 	// just inside recoverMiddleware and before bodyLimitMiddleware, so a blocked
 	// client IP is dropped before any body parsing, route dispatch, or auth
@@ -919,6 +928,23 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 		// ?folder= restricts to one folder, and ?label= (repeatable, AND
 		// semantics) restricts to conversations carrying every listed label (#258).
 		q := r.URL.Query()
+		// ?scope=team returns the conversations same-team members have shared
+		// (team_visible), read-only (#237) — the manager/teammate view. It is a
+		// distinct, opt-in read path: it never mixes the caller's private
+		// conversations in, and a caller with no team gets 400.
+		if q.Get("scope") == "team" {
+			list, err := s.store.ListTeamConversations(r.Context(), user)
+			if errors.Is(err, store.ErrNoTeam) {
+				http.Error(w, "no team", http.StatusBadRequest)
+				return
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]any{"conversations": list})
+			return
+		}
 		filter := store.ListFilter{
 			ArchivedOnly: q.Get("archived") == "true",
 			Labels:       q["label"],
@@ -1397,6 +1423,9 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 	case sub == "share" && r.Method == http.MethodDelete:
 		// Revoke sharing for this conversation (#226).
 		s.handleConversationUnshare(w, r, id, user)
+	case sub == "share-with-team" && r.Method == http.MethodPost:
+		// Opt this conversation in/out of team visibility (#237). Owner-only.
+		s.handleConversationShareWithTeam(w, r, id, user)
 	case sub == "mcp-servers" && r.Method == http.MethodGet:
 		// Per-conversation MCP-server catalog. Response shape:
 		//   { "servers": [{ name, description, tools: [...], tool_count,
