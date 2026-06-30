@@ -1,174 +1,19 @@
-// Command fleet-admin is the unified admin CLI for a fleet deployment. It folds chat's
-// chat-admin (chat users) and moc's -create-user/-set-role flags (sched users +
-// API keys) into one tool, plus MCP credential-account management, the notes
-// wiki admin verbs, and a thin bootstrap wrapper.
-//
-// Subcommands:
-//
-//	fleet-admin bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
-//	fleet-admin update    [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run]
-//	fleet-admin status    [--service <name>] [--no-sandbox]
-//	fleet-admin diagnose  [--output <file>] [--service <name>] [--no-sandbox]
-//	fleet-admin restart|stop [--service <name>]
-//	fleet-admin logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
-//	fleet-admin chat user add|update|del|list
-//	fleet-admin sched user add|update|set-role|rename|del|list
-//	fleet-admin sched apikey create|list|revoke|delete
-//	fleet-admin sched task export|import|set-model|set-credentials|set-description|tag|estimate|batch-create
-//	fleet-admin task export|import    (definition-only #238: portable JSON/YAML, name-based conflict resolution)
-//	fleet-admin mcp account set|list|del
-//	fleet-admin notes set|get|list|rm
-//	fleet-admin notes proposal publish|reject
-//	fleet-admin worktree list|prune [--workspace DIR] [--older-than DUR]
-//	fleet-admin backup  [--db=chat|sched|all] [--out DIR]
-//	fleet-admin restore  --db=chat|sched <dump-file>
-//
-// The operator lifecycle is bootstrap → update → status: bootstrap provisions a
-// box, update rolls a new version in place, status (a.k.a. doctor) reports
-// health. bootstrap + update are thin wrappers over scripts/bootstrap.sh +
-// scripts/update.sh; status runs in-process read-only checks. restart/stop/logs
-// are day-2 conveniences over the host systemd unit (systemctl/journalctl).
-//
-// Passwords are NEVER taken on argv — pass `--password -` to read from stdin.
-// Email/username normalization, bcrypt.DefaultCost, and the 0-users
-// unprovisioned guard are preserved from the source tools.
+// Command fleet-admin is the DEPRECATED entry point for the fleet operator CLI.
+// The operator CLI is now unified into the single `fleet` binary (#461): use
+// `fleet <verb>` (e.g. `fleet update`, `fleet status`) instead. This shim simply
+// forwards to the same admin dispatch the `fleet` binary uses, after printing a
+// one-line deprecation notice, so existing scripts and muscle memory keep
+// working for one release. It will be removed in a future release.
 package main
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/ElcanoTek/fleet/internal/version"
+	"github.com/ElcanoTek/fleet/internal/admincli"
 )
 
 func main() {
-	os.Exit(dispatch(os.Args[1:]))
-}
-
-func dispatch(argv []string) int {
-	if len(argv) == 0 {
-		usage()
-		return 1
-	}
-	switch argv[0] {
-	case "bootstrap":
-		return cmdBootstrap(argv[1:])
-	case "update":
-		return cmdUpdate(argv[1:])
-	case "status", "doctor":
-		return cmdStatus(argv[1:])
-	case "diagnose":
-		return cmdDiagnose(argv[1:])
-	case "restart":
-		return cmdRestart(argv[1:])
-	case "stop":
-		return cmdStop(argv[1:])
-	case "logs", "tail":
-		return cmdLogs(argv[1:])
-	case "chat":
-		return cmdChat(argv[1:])
-	case "sched":
-		return cmdSched(argv[1:])
-	case "task":
-		return cmdTask(argv[1:])
-	case "mcp":
-		return cmdMCP(argv[1:])
-	case "notes":
-		return cmdNotes(argv[1:])
-	case "worktree":
-		return cmdWorktree(argv[1:])
-	case "backup":
-		return cmdBackup(argv[1:])
-	case "restore":
-		return cmdRestore(argv[1:])
-	case "version", "--version", "-v":
-		// Build identity: the release version stamped from the top-level VERSION
-		// file plus the VCS revision. Touches no DB/host, so it works anywhere.
-		fmt.Println("fleet-admin " + version.String())
-		return 0
-	case "-h", "--help", "help":
-		usage()
-		return 0
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", argv[0])
-		usage()
-		return 1
-	}
-}
-
-func usage() {
-	fmt.Fprint(os.Stderr, `fleet-admin — unified fleet admin CLI
-
-Operator lifecycle (bootstrap → update → status):
-  fleet-admin bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
-  fleet-admin update    [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--yes] [--dry-run]
-  fleet-admin status    [--service <name>] [--no-sandbox]    (a.k.a. doctor; non-zero exit if unhealthy)
-  fleet-admin diagnose  [--output <file>] [--service <name>] [--no-sandbox]
-                                                             (redacted support bundle: status + config names + DB versions + sandbox image → .tar.gz)
-  fleet-admin restart   [--service <name>]                   (systemctl restart; needs root/sudo)
-  fleet-admin stop      [--service <name>]                   (systemctl stop; needs root/sudo)
-  fleet-admin logs      [--service <name>] [-n 50] [-f]      (journalctl tail; -f follows; a.k.a. tail)
-
-Users, credentials, notes:
-  fleet-admin chat user add <email>    --password -
-  fleet-admin chat user update <email> --password -
-  fleet-admin chat user del <email>
-  fleet-admin chat user list
-  fleet-admin sched user add <username> --role admin|client|readonly --password -
-  fleet-admin sched user update <username> --password -
-  fleet-admin sched user set-role <username> --role admin|client|readonly
-  fleet-admin sched user rename <username> <new-username>
-  fleet-admin sched user del <username>
-  fleet-admin sched user list
-  fleet-admin sched apikey create <name> [--role admin]
-  fleet-admin sched apikey list
-  fleet-admin sched apikey revoke <key-id>
-  fleet-admin sched apikey delete <key-id>
-  fleet-admin sched task export > tasks.json    (versioned JSON of scheduled tasks → stdout)
-  fleet-admin sched task import < tasks.json     (recreate tasks from stdin; upsert on id)
-  fleet-admin sched task batch-create --from-file <file> [--atomic]
-                                                 (submit multiple tasks atomically or best-effort from a JSON file)
-  fleet-admin sched task set-model --model <slug> [--fallback-model <slug>] [--from-model <slug>] [--dry-run]
-  fleet-admin sched task set-credentials <task_id> --allow server[:account] ... | --clear   (per-task MCP credential allowlist)
-  fleet-admin sched task set-description <task_id> <text>|-    (operator docs; - reads stdin, e.g. < TASK_README.md)
-  fleet-admin sched task tag <task_id> --add <tag> ... --remove <tag> ...   (organize tasks by label)
-  fleet-admin sched task estimate --model <slug> --prompt <text> [--max-iter N] [--mcp-tools N] [--max-cost USD] [--system-prompt <text>] [--json]   (pre-submission cost forecast; no DB, no model call)
-  fleet-admin task export [--ids uuid1,uuid2] [--format json|yaml] [--recurrence-only]   (definition-only export → stdout; #238)
-  fleet-admin task import [--from tasks.yaml] [--format json|yaml] [--dry-run] [--conflict error|skip|replace]   (definition-only import; #238)
-  fleet-admin mcp account set <server> <account> --secret KEY=-   (value via stdin)
-  fleet-admin mcp account list <server>
-  fleet-admin mcp account del <server> <account>
-    (account names are canonicalized: hyphen/space fold to underscore and case
-     is ignored, so client-a, client_a, and Client_A name ONE seat — use
-     distinct base words, not separators, to keep seats apart)
-  fleet-admin notes set <slug> --title "..."  (body via stdin)
-  fleet-admin notes get <slug>
-  fleet-admin notes list [--all]
-  fleet-admin notes rm <slug>
-  fleet-admin notes proposal publish <id> [--note "..."]
-  fleet-admin notes proposal reject  <id> --reason "..."
-
-Git worktree isolation hygiene (#180; tasks with worktree_config enabled):
-  fleet-admin worktree list  [--workspace DIR]                       (git worktree list --porcelain)
-  fleet-admin worktree prune [--workspace DIR] [--older-than 24h] [--dry-run]
-    (git worktree prune + remove stale <workspace>/.fleet-worktrees/* dirs)
-
-Backup / restore (pg_dump -Fc / pg_restore; one dump file per DB):
-  fleet-admin backup  [--db=chat|sched|all] [--out DIR]   (writes fleet-<db>-<stamp>.dump; prints each path)
-  fleet-admin restore  --db=chat|sched <dump-file>         (--clean --if-exists; overwrites the live DB)
-
-Connection:
-  Chat DB:  --database-url or FLEET_CHAT_DATABASE_URL / DATABASE_URL
-  Sched DB: --database-url or FLEET_SCHED_DATABASE_URL / DATABASE_URL
-  Env file: --env-file or FLEET_ENV_FILE (default .env.local) for mcp account
-
-bootstrap + update wrap scripts/bootstrap.sh + scripts/update.sh (found via
-FLEET_ROOT, ./scripts, or the binary's dir). status runs read-only checks
-in-process: both DBs reachable, the sandbox image present + runnable, required
-env vars set, the client bundle loads, and the systemd unit state.
-
-Passwords are read from stdin with --password - (never on argv).
-
-  fleet-admin version                                       (print build version + VCS revision; a.k.a. --version)
-`)
+	fmt.Fprintln(os.Stderr, "warning: `fleet-admin` is deprecated and will be removed; use `fleet <command>` instead (e.g. `fleet update`).")
+	os.Exit(admincli.Run(os.Args[1:]))
 }

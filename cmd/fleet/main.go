@@ -42,6 +42,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/admincli"
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -76,37 +77,77 @@ import (
 const approvalExpirySweepInterval = 30 * time.Second
 
 func main() {
-	// Subcommand dispatch. With no args (or any non-subcommand arg) fleet boots
-	// THE fleet server (run).
+	// `fleet` is the ONE unified binary (#461). It dispatches three families:
 	//
-	// `fleet version` (also `--version` / `-v`) prints the build identity — the
-	// release version stamped from the top-level VERSION file plus the VCS
-	// revision — and exits. It boots nothing, so it works on a box where the DBs
-	// or sandbox are down.
-	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version" || os.Args[1] == "-v") {
+	//   1. Server-family verbs handled HERE — they boot or inspect the server
+	//      process itself and must not route through the operator CLI.
+	//   2. The daemon — bare `fleet` (back-compat with the historical systemd
+	//      ExecStart=/usr/local/bin/fleet) AND the explicit `fleet serve`. Keeping
+	//      bare `fleet` start the server means a unit file can migrate to
+	//      `fleet serve` on its own schedule WITHOUT a restart-mid-upgrade ever
+	//      bricking the box (the binary understands both forms). See ADR-0012.
+	//   3. Everything else → the operator/admin CLI (internal/admincli): bootstrap,
+	//      update, status, diagnose, restart/stop/logs, chat (the TUI + chat-user
+	//      admin), sched, task, mcp, notes, worktree, backup/restore.
+	argv := os.Args[1:]
+	switch classifyInvocation(argv) {
+	case invokeVersion:
+		// Build identity (top-level VERSION + VCS revision). Boots nothing, so it
+		// works on a box where the DBs or sandbox are down.
 		fmt.Println("fleet " + version.String())
-		return
-	}
-	// `fleet mcp-broker` instead runs the out-of-process MCP credential broker
-	// over stdio (issue #167): it holds the connector secrets + MCP subprocesses
-	// and serves delegated MCP calls back to a parent fleet process. It boots no
-	// HTTP servers / scheduler — it is a single-purpose stdio adapter.
-	if len(os.Args) > 1 && os.Args[1] == "mcp-broker" {
+	case invokeMCPBroker:
+		// The out-of-process MCP credential broker over stdio (issue #167): it holds
+		// the connector secrets + MCP subprocesses and serves delegated MCP calls
+		// back to a parent fleet process. No HTTP servers / scheduler.
 		if err := runMCPBroker(); err != nil {
 			log.Fatalf("fleet mcp-broker: %v", err)
 		}
-		return
+	case invokeValidateConfig:
+		// Preflight checks (#248) against the SAME loaders the server boots through;
+		// exits 0/1. Starts no servers, runs no migrations.
+		os.Exit(runValidateConfig(argv[1:]))
+	case invokeServe:
+		// Daemon: bare `fleet` (legacy) or `fleet serve`. The server is env/config
+		// driven, so any args after `serve` are ignored (no flag parsing here).
+		if err := run(); err != nil {
+			log.Fatalf("fleet: %v", err)
+		}
+	default: // invokeAdmin
+		os.Exit(admincli.Run(argv))
 	}
-	// `fleet validate-config` runs the preflight checks (#248) — env vars, the
-	// manifest bundle, MCP servers, the databases, credentials, the sandbox, and
-	// the model API — against the SAME loaders the server boots through, then exits
-	// 0 (all blocking checks passed) or 1. It starts no servers and runs no
-	// migrations; it is a read-only diagnostic for CI and pre-`systemctl start`.
-	if len(os.Args) > 1 && os.Args[1] == "validate-config" {
-		os.Exit(runValidateConfig(os.Args[2:]))
+}
+
+type invocation int
+
+const (
+	invokeServe invocation = iota // bare `fleet` (legacy ExecStart) OR `fleet serve`
+	invokeVersion
+	invokeMCPBroker
+	invokeValidateConfig
+	invokeAdmin // every operator/admin verb → internal/admincli
+)
+
+// classifyInvocation decides which family the argv belongs to. The load-bearing
+// invariant (ADR-0012, #461): bare `fleet` (no args) AND `fleet serve` BOTH map
+// to invokeServe, so a historical systemd unit running ExecStart=/usr/local/bin/fleet
+// keeps starting the daemon even as units migrate to `fleet serve` — no restart
+// mid-upgrade can ever brick the box. Server-family verbs (version, mcp-broker,
+// validate-config) are handled in-binary; everything else is an admin verb.
+func classifyInvocation(argv []string) invocation {
+	if len(argv) == 0 {
+		return invokeServe
 	}
-	if err := run(); err != nil {
-		log.Fatalf("fleet: %v", err)
+	switch argv[0] {
+	case "serve":
+		return invokeServe
+	case "version", "--version", "-v":
+		return invokeVersion
+	case "mcp-broker":
+		return invokeMCPBroker
+	case "validate-config":
+		return invokeValidateConfig
+	default:
+		return invokeAdmin
 	}
 }
 
