@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { McpServer } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { useToast } from "@/app/shared/ui/Toast";
@@ -21,11 +21,26 @@ import { useToast } from "@/app/shared/ui/Toast";
 export type CredentialAccountAdminProps = {
   servers: McpServer[];
   onChanged?: () => void;
+  // When this admin renders inside the Settings modal, the modal's fixed footer
+  // owns the primary "Save account" action: it hides the inline button
+  // (hideSubmit), registers our submit handler so the footer can trigger it
+  // (registerSubmit), and mirrors our busy state to label/disable that button
+  // (onBusyChange). Rendered standalone, none are passed and the inline button
+  // shows as before.
+  hideSubmit?: boolean;
+  registerSubmit?: (submit: () => void) => void;
+  onBusyChange?: (busy: boolean) => void;
 };
 
 type SecretField = { key: string; value: string };
 
-export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccountAdminProps) {
+export function CredentialAccountAdmin({
+  servers,
+  onChanged,
+  hideSubmit,
+  registerSubmit,
+  onBusyChange,
+}: CredentialAccountAdminProps) {
   const { showToast } = useToast();
   const [server, setServer] = useState<string>(servers[0]?.name ?? "");
   const [account, setAccount] = useState<string>("");
@@ -83,6 +98,19 @@ export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccount
       setSubmitting(false);
     }
   };
+
+  // Re-register submit on every render so the modal footer always invokes the
+  // latest closure (it captures the current server/account/secrets state).
+  useEffect(() => {
+    registerSubmit?.(() => {
+      void submit();
+    });
+  });
+
+  // Mirror busy state so the modal footer button can label/disable itself.
+  useEffect(() => {
+    onBusyChange?.(submitting);
+  }, [submitting, onBusyChange]);
 
   return (
     <div className="credential-account-admin" data-testid="credential-account-admin">
@@ -165,14 +193,16 @@ export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccount
           </button>
         </fieldset>
 
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={submitting}
-          onClick={() => void submit()}
-        >
-          {submitting ? "Saving…" : "Save account"}
-        </button>
+        {hideSubmit ? null : (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={submitting}
+            onClick={() => void submit()}
+          >
+            {submitting ? "Saving…" : "Save account"}
+          </button>
+        )}
       </div>
     </div>
   );
