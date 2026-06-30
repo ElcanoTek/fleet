@@ -1506,8 +1506,18 @@ tr.sla-row-fail {
   max-height: none;
   padding: 1.5rem 1.6rem;
 }
+/* Field rhythm matches the design's task form exactly: 1.6rem between fields
+   (the .task-form gap) and 0.55rem under each label before its control (the
+   .task-field gap). */
 .modal-lg .form-group {
-  margin-bottom: 1.4rem;
+  margin-bottom: 1.6rem;
+}
+.modal-lg .form-group > label {
+  display: block;
+  margin-bottom: 0.55rem;
+}
+.modal-lg .form-label-row {
+  margin-bottom: 0.55rem;
 }
 /* Filled fields to match the design's modal form styling. Scoped to the large
    modals; leaves checkboxes/radios (toggles) and the bare input rule elsewhere
