@@ -28,6 +28,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
+	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -79,6 +80,11 @@ type Server struct {
 	// (branding + empty-state). nil in tests / mock mode that don't supply one;
 	// the endpoint then returns neutral generic defaults.
 	clientConfig *clientconfig.Bundle
+
+	// remoteMCP serves the per-user remote (hosted) MCP + OAuth endpoints (#443).
+	// nil when the feature is unconfigured (no encryption key / public base URL),
+	// in which case the endpoints return a clear "not configured" error.
+	remoteMCP *remotemcp.Service
 
 	// sessionApprovals holds per-conversation batch pre-approvals (#300): in-memory,
 	// session-scoped policies consulted by approvalStager.Stage before staging a card.
@@ -250,6 +256,12 @@ func WithClientConfig(b *clientconfig.Bundle) Option {
 
 // WithStartTime records the process start so the health summary (#301) can
 // report uptime.
+// WithRemoteMCP injects the per-user remote-MCP + OAuth service (#443). Omit it
+// (or pass nil) to leave the feature off.
+func WithRemoteMCP(svc *remotemcp.Service) Option {
+	return func(s *Server) { s.remoteMCP = svc }
+}
+
 func WithStartTime(t time.Time) Option {
 	return func(s *Server) { s.startTime = t }
 }
@@ -522,6 +534,11 @@ func (s *Server) Routes() http.Handler {
 	// before the response reaches the browser.
 	mux.Handle("/api/v1/models", auth(member(http.HandlerFunc(s.handleModels))))
 	mux.Handle("/mcp-servers", auth(member(http.HandlerFunc(s.listMCPServerCatalog))))
+	// Per-user remote (hosted) MCP servers + OAuth (#443). The /oauth/mcp/callback
+	// completion is POSTed here by the browser-facing Next.js callback route.
+	mux.Handle("/remote-mcp-servers", auth(member(http.HandlerFunc(s.remoteMCPServers))))
+	mux.Handle("/remote-mcp-servers/", auth(member(http.HandlerFunc(s.remoteMCPServerByID))))
+	mux.Handle("/oauth/mcp/callback", auth(member(http.HandlerFunc(s.remoteMCPOAuthCallback))))
 	mux.Handle("/server-config", auth(member(http.HandlerFunc(s.serverConfig))))
 	mux.Handle("/client-config", auth(member(http.HandlerFunc(s.clientConfigHandler))))
 	// /theme.css themes the shell (incl. the pre-auth login page) from the
@@ -1817,6 +1834,7 @@ func (s *Server) runTurnAsync(
 		History:                   history,
 		Memories:                  memories,
 		ConversationID:            conv.ID,
+		UserEmail:                 user,
 		OptionalMCPServersEnabled: conv.OptionalMCPServersEnabled,
 		Lockdown:                  conv.Lockdown,
 		ImageAttachments:          imageAttachments,
