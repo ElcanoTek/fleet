@@ -33,6 +33,10 @@ func (h *Handlers) authorizeTaskCreate(w http.ResponseWriter, r *http.Request) (
 	if h.verifyAdminKey(r) {
 		return true
 	}
+	if h.scopedKeyCannotCreate(r) {
+		writeError(w, http.StatusForbidden, "insufficient key scope: this key type cannot create tasks")
+		return false
+	}
 
 	// Scoped API key with the create-task permission.
 	if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {

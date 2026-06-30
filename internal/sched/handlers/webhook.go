@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -78,6 +79,27 @@ type triggerHeaders struct {
 func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
 
+	// A fleet_webhook_ key scoped to this slug (#190) authorizes the trigger as an
+	// ALTERNATIVE to the per-trigger HMAC secret, letting an operator mint a
+	// caller-specific, slug-scoped credential instead of sharing the HMAC secret.
+	// A valid webhook key that does NOT list this slug is a definitive 403. When
+	// no valid webhook key is presented, authorizedByKey stays false and the
+	// existing HMAC path below runs unchanged — including its timing-equalized
+	// unknown-slug handling, since an anonymous (no-key) caller hits exactly the
+	// same code as before.
+	authorizedByKey := false
+	if rawKey := webhookKeyFromRequest(r); rawKey != "" {
+		if kt, _, perr := apikeys.ParseAPIKey(rawKey); perr == nil && kt == apikeys.KeyTypeWebhook {
+			if valid, key, _ := h.apiKeys.ValidateKey(rawKey, nil, nil, nil, nil); valid && key != nil {
+				if !key.AllowsTriggerSlug(slug) {
+					writeError(w, http.StatusForbidden, "trigger slug not permitted for this key")
+					return
+				}
+				authorizedByKey = true
+			}
+		}
+	}
+
 	// Read the (capped) body first, before the DB lookup, so the work done is the
 	// same shape whether or not the slug exists.
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody))
@@ -115,7 +137,10 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 		secret = trig.Secret
 	}
 	sigOK := verifyHMACSHA256(body, secret, sigHeader)
-	if trig == nil || !sigOK {
+	// Fail closed unless the slug exists AND the caller is authorized — either by
+	// a slug-scoped webhook key (checked above) or by a valid HMAC signature. The
+	// dummy-HMAC compute above keeps the no-key miss path timing-equalized.
+	if trig == nil || (!authorizedByKey && !sigOK) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -135,6 +160,19 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID.String()})
+}
+
+// webhookKeyFromRequest extracts a presented API key from either the X-API-Key
+// header or an Authorization: Bearer header (in that order). Empty when neither
+// is present.
+func webhookKeyFromRequest(r *http.Request) string {
+	if k := r.Header.Get("X-API-Key"); k != "" {
+		return k
+	}
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimPrefix(h, "Bearer ")
+	}
+	return ""
 }
 
 // verifyHMACSHA256 reports whether sigHeader is a valid HMAC-SHA256 of body

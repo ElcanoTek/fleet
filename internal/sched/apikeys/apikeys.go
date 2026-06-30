@@ -32,14 +32,22 @@ type APIKey struct {
 	KeyPrefix           string              `json:"key_prefix"`
 	AllowedNodePatterns []string            `json:"allowed_node_patterns"`
 	Permissions         []models.Permission `json:"permissions"`
-	RateLimit           int                 `json:"rate_limit"`
-	CreatedAt           time.Time           `json:"created_at"`
-	RotatedAt           *time.Time          `json:"rotated_at,omitempty"`
-	ExpiresAt           *time.Time          `json:"expires_at,omitempty"`
-	Enabled             bool                `json:"enabled"`
-	Description         string              `json:"description"`
-	PreviousKeyHash     *string             `json:"previous_key_hash,omitempty"`
-	PreviousKeyExpires  *time.Time          `json:"previous_key_expires,omitempty"`
+
+	// Type is the key's access class (#190), encoded in its prefix
+	// (fleet_{type}_…). Empty (KeyTypeLegacy) for untyped sk- keys minted before
+	// typed keys existed — those are NOT subject to the type-scope gate.
+	Type KeyType `json:"type,omitempty"`
+	// AllowedTriggerSlugs scopes a webhook-type key to specific trigger slugs; it
+	// is meaningless (and empty) for the other types.
+	AllowedTriggerSlugs []string   `json:"allowed_trigger_slugs,omitempty"`
+	RateLimit           int        `json:"rate_limit"`
+	CreatedAt           time.Time  `json:"created_at"`
+	RotatedAt           *time.Time `json:"rotated_at,omitempty"`
+	ExpiresAt           *time.Time `json:"expires_at,omitempty"`
+	Enabled             bool       `json:"enabled"`
+	Description         string     `json:"description"`
+	PreviousKeyHash     *string    `json:"previous_key_hash,omitempty"`
+	PreviousKeyExpires  *time.Time `json:"previous_key_expires,omitempty"`
 
 	// Spending caps (nil = unlimited). Cost is accumulated from the LogSession of
 	// every task this key submitted; CheckBudget refuses new submissions once a
@@ -68,6 +76,18 @@ func (k *APIKey) CanTargetNode(nodeName string) bool {
 	}
 	for _, pattern := range k.AllowedNodePatterns {
 		if storage.MatchGlob(pattern, nodeName) {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowsTriggerSlug reports whether this (webhook) key is scoped to fire the
+// given trigger slug. A key whose AllowedTriggerSlugs is empty permits no slug
+// — a webhook key must be explicitly scoped to be useful.
+func (k *APIKey) AllowsTriggerSlug(slug string) bool {
+	for _, s := range k.AllowedTriggerSlugs {
+		if s == slug {
 			return true
 		}
 	}
@@ -107,6 +127,8 @@ func (k *APIKey) ToResponse() models.APIKeyResponse {
 		KeyID:               k.KeyID,
 		Name:                k.Name,
 		KeyPrefix:           k.KeyPrefix,
+		Type:                string(k.Type),
+		AllowedTriggerSlugs: k.AllowedTriggerSlugs,
 		AllowedNodePatterns: k.AllowedNodePatterns,
 		Permissions:         perms,
 		RateLimit:           k.RateLimit,
@@ -199,6 +221,25 @@ func (m *Manager) generateKey() (rawKey, keyHash, keyPrefix string, err error) {
 	rawKey = "sk-" + base64.URLEncoding.EncodeToString(b)
 	keyHash = m.hashKey(rawKey)
 	keyPrefix = rawKey[:11]
+	return rawKey, keyHash, keyPrefix, nil
+}
+
+// generateTypedKey mints a typed key in the fleet_{type}_{base58} format (#190).
+// The full raw key (type segment included) is what gets hashed, so a key's type
+// is bound to its hash and cannot be spoofed on the wire. keyPrefix is a legible
+// display fingerprint (type + first chars of the suffix) — never the full key.
+func (m *Manager) generateTypedKey(kt KeyType) (rawKey, keyHash, keyPrefix string, err error) {
+	suffix, err := randomBase58(keySuffixLen)
+	if err != nil {
+		return "", "", "", err
+	}
+	rawKey = typedKeyPrefix + string(kt) + "_" + suffix
+	keyHash = m.hashKey(rawKey)
+	fp := suffix
+	if len(fp) > 6 {
+		fp = fp[:6]
+	}
+	keyPrefix = typedKeyPrefix + string(kt) + "_" + fp
 	return rawKey, keyHash, keyPrefix, nil
 }
 
@@ -370,6 +411,89 @@ func (m *Manager) CreateKey(name string, allowedNodePatterns []string, permissio
 	return key, rawKey, nil
 }
 
+// CreateTypedKey creates a new typed API key (#190), minting a
+// fleet_{type}_{base58} token whose permission set is DERIVED from the type
+// (KeyType.Permissions). allowedTriggerSlugs scopes a webhook key to specific
+// trigger slugs and is ignored for the other types. The raw key is returned
+// once; only its hash is stored.
+func (m *Manager) CreateTypedKey(name string, kt KeyType, allowedTriggerSlugs, allowedNodePatterns []string, rateLimit int, expiresInDays *int, description string) (*APIKey, string, error) {
+	if !kt.Valid() {
+		return nil, "", fmt.Errorf("invalid key type: %q", kt)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rawKey, keyHash, keyPrefix, err := m.generateTypedKey(kt)
+	if err != nil {
+		return nil, "", err
+	}
+	keyID, err := m.generateKeyID()
+	if err != nil {
+		return nil, "", err
+	}
+
+	var expiresAt *time.Time
+	if expiresInDays != nil && *expiresInDays > 0 {
+		t := time.Now().UTC().AddDate(0, 0, *expiresInDays)
+		expiresAt = &t
+	}
+	if allowedNodePatterns == nil {
+		allowedNodePatterns = []string{}
+	}
+	// Trigger slugs are meaningful only for webhook keys; drop any supplied for
+	// another type so the stored record can't carry misleading scope.
+	if kt != KeyTypeWebhook {
+		allowedTriggerSlugs = nil
+	}
+
+	perms := kt.Permissions()
+	key := &APIKey{
+		KeyID:               keyID,
+		Name:                name,
+		KeyHash:             keyHash,
+		KeyPrefix:           keyPrefix,
+		Type:                kt,
+		AllowedTriggerSlugs: allowedTriggerSlugs,
+		AllowedNodePatterns: allowedNodePatterns,
+		Permissions:         perms,
+		RateLimit:           rateLimit,
+		CreatedAt:           time.Now().UTC(),
+		ExpiresAt:           expiresAt,
+		Enabled:             true,
+		Description:         description,
+	}
+
+	m.keys[keyID] = key
+	m.keyHashIndex[keyHash] = keyID
+
+	if err := m.save(); err != nil {
+		delete(m.keys, keyID)
+		delete(m.keyHashIndex, keyHash)
+		return nil, "", err
+	}
+
+	permStrings := make([]string, len(perms))
+	for i, p := range perms {
+		permStrings[i] = string(p)
+	}
+	m.logAudit(AuditLogEntry{
+		KeyID:        keyID,
+		Action:       "create_key",
+		ResourceType: "api_key",
+		ResourceID:   &keyID,
+		Details: map[string]interface{}{
+			"name":                  name,
+			"type":                  string(kt),
+			"allowed_trigger_slugs": allowedTriggerSlugs,
+			"allowed_node_patterns": allowedNodePatterns,
+			"permissions":           permStrings,
+			"rate_limit":            rateLimit,
+		},
+		Success: true,
+	})
+	return key, rawKey, nil
+}
+
 // RotateKey rotates an API key, keeping the old key valid for a grace period.
 func (m *Manager) RotateKey(keyID string, gracePeriodHours int) (*APIKey, string, error) {
 	m.mu.Lock()
@@ -379,7 +503,18 @@ func (m *Manager) RotateKey(keyID string, gracePeriodHours int) (*APIKey, string
 	if !ok {
 		return nil, "", fmt.Errorf("key %s not found", keyID)
 	}
-	rawKey, keyHash, keyPrefix, err := m.generateKey()
+	// Preserve the key's type across rotation (#190): a typed key rotates to a
+	// fresh token of the SAME type, so its scope is unchanged; a legacy (sk-) key
+	// stays legacy.
+	var (
+		rawKey, keyHash, keyPrefix string
+		err                        error
+	)
+	if key.Type != KeyTypeLegacy {
+		rawKey, keyHash, keyPrefix, err = m.generateTypedKey(key.Type)
+	} else {
+		rawKey, keyHash, keyPrefix, err = m.generateKey()
+	}
 	if err != nil {
 		return nil, "", err
 	}
@@ -533,6 +668,26 @@ func (m *Manager) LookupKeyMeta(rawKey string) (keyID string, rateLimit int, ok 
 		return "", 0, false
 	}
 	return key.KeyID, key.RateLimit, true
+}
+
+// LookupKeyType resolves a raw key to its access class and whether it carries
+// task-create permission, WITHOUT enforcing or mutating any rate-limit state
+// (#190) — a read-only helper for the task-create paths' under-scope gate.
+// Returns ok=false for unknown, disabled, or expired keys. A legacy (untyped)
+// key returns KeyTypeLegacy, so callers can preserve historical behavior for it.
+func (m *Manager) LookupKeyType(rawKey string) (kt KeyType, hasCreate, ok bool) {
+	keyHash := m.hashKey(rawKey)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, found := m.keyHashIndex[keyHash]
+	if !found {
+		return "", false, false
+	}
+	key, found := m.keys[id]
+	if !found || !key.IsValid() {
+		return "", false, false
+	}
+	return key.Type, key.HasPermission(models.PermissionCreateTask), true
 }
 
 // ConsumeN charges a key's hourly rate-limit counter for n additional requests

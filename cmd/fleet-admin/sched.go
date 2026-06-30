@@ -286,7 +286,7 @@ func schedUserList(argv []string) int {
 
 func cmdSchedAPIKey(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched apikey create|list|revoke|delete")
+		return errf(1, "usage: fleet-admin sched apikey create|list|revoke|rotate|delete")
 	}
 	sub := argv[0]
 	rest := argv[1:]
@@ -297,6 +297,8 @@ func cmdSchedAPIKey(argv []string) int {
 		return schedAPIKeyList(rest)
 	case "revoke":
 		return schedAPIKeyRevoke(rest)
+	case "rotate":
+		return schedAPIKeyRotate(rest)
 	case "delete", "del", "rm":
 		return schedAPIKeyDelete(rest)
 	default:
@@ -321,7 +323,9 @@ func openKeyManager() (*apikeys.Manager, int) {
 
 func schedAPIKeyCreate(argv []string) int {
 	fs := flag.NewFlagSet("sched apikey create", flag.ContinueOnError)
-	role := fs.String("role", "admin", "role granted to the key")
+	keyType := fs.String("type", "", "typed key class: admin|task|webhook|readonly (#190). When set, supersedes --role")
+	triggerSlugs := fs.String("trigger-slugs", "", "comma-separated trigger slugs a webhook key may fire (required for --type webhook)")
+	role := fs.String("role", "admin", "legacy role granted to the key (used only when --type is empty)")
 	rateLimit := fs.Int("rate-limit", 0, "per-minute rate limit (0 = unlimited)")
 	name, flagArgs := splitPositional(argv)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -334,6 +338,39 @@ func schedAPIKeyCreate(argv []string) int {
 	if mgr == nil {
 		return code
 	}
+
+	// Typed-key path (#190): the type determines the permission set.
+	if t := strings.TrimSpace(*keyType); t != "" {
+		kt := apikeys.KeyType(t)
+		if !kt.Valid() {
+			return errf(1, "unknown key type %q (want admin|task|webhook|readonly)", t)
+		}
+		slugs := parseScopes(*triggerSlugs)
+		if kt == apikeys.KeyTypeWebhook {
+			if len(slugs) == 0 {
+				return errf(1, "--type webhook requires --trigger-slugs")
+			}
+			// Validate slug shape (matching the HTTP path) so a webhook key can't
+			// be minted scoped to a slug the trigger endpoint would never accept.
+			for _, s := range slugs {
+				if !slugPattern.MatchString(s) {
+					return errf(1, "invalid trigger slug %q (want [a-z0-9][a-z0-9_-]{0,127})", s)
+				}
+			}
+		}
+		key, raw, err := mgr.CreateTypedKey(name, kt, slugs, nil, *rateLimit, nil, "created via fleet-admin")
+		if err != nil {
+			return errf(5, "%v", err)
+		}
+		fmt.Printf("created API key %s (id=%s type=%s)\n", key.Name, key.KeyID, kt)
+		if kt == apikeys.KeyTypeWebhook {
+			fmt.Printf("trigger slugs: %s\n", strings.Join(slugs, ", "))
+		}
+		fmt.Printf("secret (shown once): %s\n", raw)
+		return 0
+	}
+
+	// Legacy role-based path: mints an untyped sk- key, unchanged.
 	roleVal := *role
 	key, raw, err := mgr.CreateKey(name, nil, nil, &roleVal, *rateLimit, nil, "created via fleet-admin")
 	if err != nil {
@@ -355,7 +392,12 @@ func schedAPIKeyList(_ []string) int {
 		return 0
 	}
 	for _, k := range keys {
-		fmt.Printf("%s\t%s\tenabled=%v\n", k.KeyID, k.Name, k.Enabled)
+		typeStr := string(k.Type)
+		if typeStr == "" {
+			typeStr = "legacy"
+		}
+		// Never print the raw key — only its stable ID, name, type and state.
+		fmt.Printf("%s\t%s\ttype=%s\tenabled=%v\n", k.KeyID, k.Name, typeStr, k.Enabled)
 	}
 	return 0
 }
@@ -373,6 +415,35 @@ func schedAPIKeyRevoke(argv []string) int {
 		return errf(5, "%v", err)
 	}
 	fmt.Printf("revoked API key %s\n", keyID)
+	return 0
+}
+
+func schedAPIKeyRotate(argv []string) int {
+	fs := flag.NewFlagSet("sched apikey rotate", flag.ContinueOnError)
+	graceHours := fs.Int("grace-hours", 24, "hours the previous key stays valid during rotation")
+	keyID, flagArgs := splitPositional(argv)
+	if err := fs.Parse(flagArgs); err != nil {
+		return 1
+	}
+	if strings.TrimSpace(keyID) == "" {
+		return errf(1, "key id required")
+	}
+	mgr, code := openKeyManager()
+	if mgr == nil {
+		return code
+	}
+	// RotateKey preserves the key's type (#190); a typed key rotates to a fresh
+	// token of the same type, so its scope is unchanged.
+	key, raw, err := mgr.RotateKey(keyID, *graceHours)
+	if err != nil {
+		return errf(5, "%v", err)
+	}
+	typeStr := string(key.Type)
+	if typeStr == "" {
+		typeStr = "legacy"
+	}
+	fmt.Printf("rotated API key %s (type=%s, previous key valid for %dh)\n", key.KeyID, typeStr, *graceHours)
+	fmt.Printf("secret (shown once): %s\n", raw)
 	return 0
 }
 
