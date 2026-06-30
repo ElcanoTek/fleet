@@ -46,6 +46,12 @@ func DefaultTools() []fantasy.AgentTool {
 // run_python both bound to the supplied sandbox. Cleanup tears down
 // the sandbox (and with it the python kernel and any in-flight bash
 // state) when the turn ends.
+//
+// The #191 git-metadata tools are deliberately NOT added here. They are wired
+// only into the scheduled native set (where code-producing agents live and the
+// per-task MCP selection is narrow), not the interactive chat turn — which runs
+// near the 128-tool ceiling once per-user MCP servers (#449) load — via
+// [MetadataTools]. See internal/scheduledrun.
 func NewTurnTools(sb *sandbox.Sandbox) TurnTools {
 	return TurnTools{
 		Tools: []fantasy.AgentTool{
