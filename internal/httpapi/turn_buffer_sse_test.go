@@ -47,7 +47,7 @@ func TestTurnBuffer_ReconnectFrameOnGap(t *testing.T) {
 	buf.Finish()
 
 	rw := newRecorder()
-	if err := buf.Attach(context.Background(), 1, rw); err != nil { // client last saw id 1
+	if err := buf.Attach(context.Background(), 1, rw, nil); err != nil { // client last saw id 1
 		t.Fatalf("Attach: %v", err)
 	}
 	body := rw.Body()
@@ -69,7 +69,7 @@ func TestTurnBuffer_NoReconnectFrameWhenContiguous(t *testing.T) {
 	buf.Finish()
 
 	rw := newRecorder()
-	if err := buf.Attach(context.Background(), 3, rw); err != nil {
+	if err := buf.Attach(context.Background(), 3, rw, nil); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	if strings.Contains(rw.Body(), "event: reconnect") {
@@ -88,7 +88,7 @@ func TestTurnBuffer_Heartbeat(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		_ = buf.Attach(ctx, 0, rw)
+		_ = buf.Attach(ctx, 0, rw, nil)
 		close(done)
 	}()
 

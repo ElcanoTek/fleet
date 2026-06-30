@@ -403,7 +403,12 @@ func inferTerminalStatus(events []bufferedEvent) store.TurnStatus {
 // buffer is sealed and fully drained, or when ctx is cancelled (client
 // disconnect). Must be called BEFORE any other write to w — it sets
 // the SSE headers + status line itself.
-func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.ResponseWriter) error {
+//
+// caps is the client's declared SSE capability set (#194): a nil set means "no
+// filter, emit everything" (the default for a client that doesn't negotiate),
+// otherwise governed events the client didn't declare are suppressed. Lifecycle
+// and control frames always flow — see shouldEmit.
+func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.ResponseWriter, caps map[SSECapability]bool) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return errors.New("response writer does not support flushing")
@@ -412,8 +417,14 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	setSupportedCapabilitiesHeader(w)
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
+
+	// Advertise supported capabilities as the very first frame so a client that
+	// can't read response headers (browser EventSource) still discovers them.
+	// Best-effort: a write error here is surfaced by the replay/live writes below.
+	_ = writeCapabilitiesFrame(w, flusher)
 
 	// Atomically grab the replay slice and register a live subscription.
 	// Registering under the same lock the publisher uses guarantees no
@@ -448,8 +459,11 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 		}
 	}
 
-	// Pump replay.
+	// Pump replay (filtered by the client's declared capabilities).
 	for _, e := range replay {
+		if !shouldEmit(caps, e.Name) {
+			continue
+		}
 		if err := writeSSEFrame(w, flusher, e); err != nil {
 			b.unsubscribe(subID)
 			return err
@@ -482,6 +496,9 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 			if !ok {
 				// Buffer sealed — our subscription was closed by Finish.
 				return nil
+			}
+			if !shouldEmit(caps, ev.Name) {
+				continue
 			}
 			if err := writeSSEFrame(w, flusher, ev); err != nil {
 				b.unsubscribe(subID)
@@ -553,6 +570,19 @@ func writeReconnectFrame(w http.ResponseWriter, flusher http.Flusher, missed, re
 // without dispatching a client-visible message event.
 func writeHeartbeat(w http.ResponseWriter, flusher http.Flusher) error {
 	if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+// writeCapabilitiesFrame emits the synthetic fleet.capabilities event (#194)
+// advertising the server's supported SSE capability set. Like writeReconnectFrame
+// it omits the id line, so it never advances the client's Last-Event-ID (real
+// event ids start at 1) and is not persisted to turn_events.
+func writeCapabilitiesFrame(w http.ResponseWriter, flusher http.Flusher) error {
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: {\"type\":%q,\"supported\":%s}\n\n",
+		capabilitiesEventName, capabilitiesEventName, supportedCapabilitiesJSON()); err != nil {
 		return err
 	}
 	flusher.Flush()
