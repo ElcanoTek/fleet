@@ -437,6 +437,13 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// Check for Admin API Key first
 	isAdmin := h.verifyAdminKey(r)
 
+	// A valid but under-scoped typed key (readonly/webhook) is a definitive 403,
+	// not a fall-through to the 401 path (#190). Legacy sk- keys are exempt.
+	if !isAdmin && h.scopedKeyCannotCreate(r) {
+		writeError(w, http.StatusForbidden, "insufficient key scope: this key type cannot create tasks")
+		return
+	}
+
 	var creatorID *uuid.UUID
 	// creatorKeyID is the scoped API key that authorized this task (if any), used
 	// to attribute completion cost back to the key for spending caps.
@@ -1817,15 +1824,52 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key, rawKey, err := h.apiKeys.CreateKey(
-		keyCreate.Name,
-		keyCreate.AllowedNodePatterns,
-		nil,
-		keyCreate.Role,
-		keyCreate.RateLimit,
-		keyCreate.ExpiresInDays,
-		keyCreate.Description,
+	var (
+		key    *apikeys.APIKey
+		rawKey string
+		err    error
 	)
+	if keyCreate.Type != "" {
+		// Typed-key path (#190): the type determines the permission set; reject an
+		// unknown type, and require a webhook key to be scoped to ≥1 valid slug.
+		kt := apikeys.KeyType(keyCreate.Type)
+		if !kt.Valid() {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown key type %q (want admin|task|webhook|readonly)", keyCreate.Type))
+			return
+		}
+		if kt == apikeys.KeyTypeWebhook {
+			if len(keyCreate.AllowedTriggerSlugs) == 0 {
+				writeError(w, http.StatusBadRequest, "webhook key requires at least one allowed_trigger_slugs entry")
+				return
+			}
+			for _, s := range keyCreate.AllowedTriggerSlugs {
+				if !triggerSlugShape.MatchString(s) {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid trigger slug %q", s))
+					return
+				}
+			}
+		}
+		key, rawKey, err = h.apiKeys.CreateTypedKey(
+			keyCreate.Name,
+			kt,
+			keyCreate.AllowedTriggerSlugs,
+			keyCreate.AllowedNodePatterns,
+			keyCreate.RateLimit,
+			keyCreate.ExpiresInDays,
+			keyCreate.Description,
+		)
+	} else {
+		// Legacy role-based path: mints an untyped sk- key, unchanged.
+		key, rawKey, err = h.apiKeys.CreateKey(
+			keyCreate.Name,
+			keyCreate.AllowedNodePatterns,
+			nil,
+			keyCreate.Role,
+			keyCreate.RateLimit,
+			keyCreate.ExpiresInDays,
+			keyCreate.Description,
+		)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create API key")
 		return

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -47,6 +48,22 @@ func priorityCapError(maxPriority *int, priority int) error {
 	return nil
 }
 
+// scopedKeyCannotCreate reports whether the request carries a VALID, TYPED API
+// key that lacks task-create permission (a readonly or webhook key). Such a key
+// is a definitive under-scope, so the task-create paths return 403 rather than
+// falling through to the 401 "Unauthorized" path (#190 acceptance criterion:
+// 403, not 401, when a key is valid but under-scoped). Legacy (untyped sk-) keys
+// are exempt — they return false here and keep their historical behavior. The
+// lookup is read-only: it does not consume a rate-limit token.
+func (h *Handlers) scopedKeyCannotCreate(r *http.Request) bool {
+	apiKey := r.Header.Get("X-API-Key")
+	if apiKey == "" {
+		return false
+	}
+	kt, hasCreate, ok := h.apiKeys.LookupKeyType(apiKey)
+	return ok && kt != apikeys.KeyTypeLegacy && !hasCreate
+}
+
 // authorizeTaskCreator is the SAME authorization as CreateTask: an admin API
 // key, a scoped key carrying PermissionCreateTask, a user bearer token, or the
 // Elcano scoped-tier cookie (which must resolve to a provisioned member). On
@@ -58,6 +75,10 @@ func priorityCapError(maxPriority *int, priority int) error {
 func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) (taskCreator, bool) {
 	if h.verifyAdminKey(r) {
 		return taskCreator{isAdmin: true}, true
+	}
+	if h.scopedKeyCannotCreate(r) {
+		writeError(w, http.StatusForbidden, "insufficient key scope: this key type cannot create tasks")
+		return taskCreator{}, false
 	}
 
 	var creator taskCreator

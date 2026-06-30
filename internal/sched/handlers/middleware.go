@@ -75,16 +75,38 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check for scoped API key (X-API-Key header that's not admin)
+		// Check for scoped API key (X-API-Key header that's not admin).
+		//
+		// Validate for VALIDITY only (nil perm), then apply the access decision:
+		//   - Typed keys (#190): the key's type gates the route by method via
+		//     TypeAllowsMethod. A valid but under-scoped typed key (e.g. a webhook
+		//     key on a read route, or a readonly key on a mutation) is a DEFINITIVE
+		//     403 — not a fall-through to the weaker bearer/cookie paths.
+		//   - Legacy (untyped sk-) keys keep their exact historical behavior: these
+		//     routes required PermissionViewTasks, so without it the request falls
+		//     through (→ 401) as before. Adopting typed keys never changes how a
+		//     deployed sk- key behaves.
 		apiKey := r.Header.Get("X-API-Key")
 		if apiKey != "" {
-			perm := models.PermissionViewTasks
-			valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil, nil)
+			valid, key, _ := h.apiKeys.ValidateKey(apiKey, nil, nil, nil, nil)
 			if valid && key != nil {
-				// Store the API key in context for the handler to use
-				ctx := context.WithValue(r.Context(), apiKeyContextKey, key)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
+				authorized := false
+				switch {
+				case key.Type == apikeys.KeyTypeLegacy:
+					authorized = key.HasPermission(models.PermissionViewTasks)
+				case apikeys.TypeAllowsMethod(key.Type, r.Method):
+					authorized = true
+				default:
+					writeError(w, http.StatusForbidden, "insufficient key scope for this route")
+					return
+				}
+				if authorized {
+					// Store the API key in context for the handler to use.
+					ctx := context.WithValue(r.Context(), apiKeyContextKey, key)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				// Legacy key without ViewTasks: fall through to bearer/cookie (→ 401).
 			}
 		}
 
