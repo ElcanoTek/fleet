@@ -604,6 +604,29 @@ paths:
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200": { description: Cancelled }
+  /tasks/{task_id}/output:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Get a task's validated structured output (#244).
+      description: >
+        Returns the validated JSON result of a structured-output task (one created
+        with an output_schema), raw and unwrapped, for direct programmatic
+        consumption. 404 when the task has no structured output (no output_schema
+        was declared, or the agent's answer failed schema validation); 409 while
+        the task has not yet reached a terminal state.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: The validated structured output (shape defined by the task's output_schema).
+          content:
+            application/json:
+              schema: { type: object }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}/tags:
     parameters:
       - name: task_id

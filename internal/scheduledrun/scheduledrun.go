@@ -33,6 +33,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -545,6 +546,12 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// Per-task persona override (#221): a task may name a personas/<name>.yaml to
 	// swap in specialized domain expertise; empty uses the runner's global persona.
 	taskSystemPrompt, taskPersona := r.taskPromptAndPersona(task)
+
+	// Structured-output mode (#244): when the task declares an output_schema, tell
+	// the agent its final answer must be JSON conforming to that schema. The
+	// runner Pool validates the produced output against the same schema after the
+	// run and persists the result in the task's output_json.
+	taskSystemPrompt += structuredoutput.PromptAugmentation(task.OutputSchema)
 
 	// Captain's Log (#285): instruction_self_improve is the per-task opt-in gate
 	// that finally gives the flag runtime effect (#322). Only when it is set does

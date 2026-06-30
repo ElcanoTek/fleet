@@ -551,7 +551,7 @@ func (db *Database) RemoveNode(ctx context.Context, nodeID uuid.UUID) (bool, err
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, assigned_node_id, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -602,8 +602,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
 			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
-			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56)
+			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
@@ -658,12 +658,16 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			sla_breached = EXCLUDED.sla_breached,
 			actual_duration_seconds = EXCLUDED.actual_duration_seconds,
 			sandbox_limits = EXCLUDED.sandbox_limits,
-			allow_delegation = EXCLUDED.allow_delegation`,
+			allow_delegation = EXCLUDED.allow_delegation,
+			output_schema = EXCLUDED.output_schema,
+			output_json = EXCLUDED.output_json`,
 		// effective_priority is deliberately OMITTED from the upsert: it is set
 		// once on INSERT and thereafter mutated ONLY by the anti-starvation sweep
 		// (#230). UpdateTask delegates here, so including it would let a status
 		// update carrying a stale in-memory copy silently un-promote a task.
-		// (sandbox_limits #205 IS in the upsert — it has no out-of-band mutator.)
+		// (sandbox_limits #205 IS in the upsert — it has no out-of-band mutator.
+		// output_schema #244 is immutable post-create; output_json IS written
+		// post-run via UpdateTask→here, like result — both belong in the upsert.)
 		task.ID,
 		task.Name,
 		task.Prompt,
@@ -720,6 +724,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		effectivePriorityValue(task),
 		marshalSandboxLimits(task.SandboxLimits),
 		task.AllowDelegation,
+		marshalRawJSON(task.OutputSchema),
+		marshalRawJSON(task.OutputJSON),
 	)
 	return err
 }
@@ -823,7 +829,9 @@ const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
 			sla_breached = EXCLUDED.sla_breached,
 			actual_duration_seconds = EXCLUDED.actual_duration_seconds,
 			sandbox_limits = EXCLUDED.sandbox_limits,
-			allow_delegation = EXCLUDED.allow_delegation`
+			allow_delegation = EXCLUDED.allow_delegation,
+			output_schema = EXCLUDED.output_schema,
+			output_json = EXCLUDED.output_json`
 
 // taskInsertColumns is the ordered column list for the tasks INSERT, kept in
 // sync with AddTask / AddTaskBatch / AddTaskTx. Extracted as a constant so the
@@ -837,9 +845,9 @@ const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iteratio
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
-			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation`
+			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json`
 
-// taskInsertArgs returns the 55 positional INSERT values for a task, in the
+// taskInsertArgs returns the 58 positional INSERT values for a task, in the
 // exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
 // the single-row and multi-row paths can never disagree on argument ordering.
 // It derives actual_duration_seconds (#274) up front so the batch/tx paths
@@ -903,13 +911,15 @@ func taskInsertArgs(t *models.Task) []any {
 		effectivePriorityValue(t),
 		marshalSandboxLimits(t.SandboxLimits),
 		t.AllowDelegation,
+		marshalRawJSON(t.OutputSchema),
+		marshalRawJSON(t.OutputJSON),
 	}
 }
 
 // taskInsertColumnsCount is the number of columns in taskInsertColumns. Kept as
 // a named const so the multi-row placeholder builder is self-documenting and
 // a future schema migration that adds a column forces a single touch point.
-const taskInsertColumnsCount = 56
+const taskInsertColumnsCount = 58
 
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an
@@ -1155,6 +1165,25 @@ func unmarshalSandboxLimits(ns sql.NullString) *models.TaskSandboxLimits {
 	return &l
 }
 
+// marshalRawJSON serializes an optional raw-JSON column value (output_schema /
+// output_json, #244) for the nullable JSONB column: nil/empty → SQL NULL,
+// non-nil → the bytes verbatim (already valid JSON — validated upstream).
+func marshalRawJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return []byte(raw)
+}
+
+// unmarshalRawJSON reads a nullable raw-JSON column back. NULL/empty → nil so the
+// omitempty field stays absent (#244).
+func unmarshalRawJSON(ns sql.NullString) json.RawMessage {
+	if !ns.Valid || ns.String == "" {
+		return nil
+	}
+	return json.RawMessage(ns.String)
+}
+
 // marshalRetryPolicy serializes the optional retry policy for the nullable JSONB
 // column: nil → SQL NULL (legacy policy), non-nil → its JSON (#201).
 func marshalRetryPolicy(rp *models.RetryPolicy) any {
@@ -1265,6 +1294,8 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		effectivePriority      int
 		sandboxLimits          sql.NullString
 		allowDelegation        bool
+		outputSchema           sql.NullString
+		outputJSON             sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -1278,7 +1309,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&deadLetteredAt, &deadLetterReason, &deadLetterAttempts,
 		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
-		&effectivePriority, &sandboxLimits, &allowDelegation,
+		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -1323,6 +1354,8 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	task.LoopConfig = unmarshalLoopConfig(loopConfig)
 	task.WorktreeConfig = unmarshalWorktreeConfig(worktreeConfig)
 	task.SandboxLimits = unmarshalSandboxLimits(sandboxLimits)
+	task.OutputSchema = unmarshalRawJSON(outputSchema)
+	task.OutputJSON = unmarshalRawJSON(outputJSON)
 	task.RetryPolicy = unmarshalRetryPolicy(retryPolicy)
 	task.Persona = persona.String
 	if sourceTaskID.Valid && sourceTaskID.String != "" {
@@ -2382,7 +2415,9 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			sla_breached = $49,
 			actual_duration_seconds = $50,
 			sandbox_limits = $51,
-			allow_delegation = $52
+			allow_delegation = $52,
+			output_schema = $53,
+			output_json = $54
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -2436,6 +2471,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		task.ActualDurationSeconds,
 		marshalSandboxLimits(task.SandboxLimits),
 		task.AllowDelegation,
+		marshalRawJSON(task.OutputSchema),
+		marshalRawJSON(task.OutputJSON),
 	)
 	return err
 }

@@ -568,6 +568,18 @@ func (s TaskStatus) IsValidReportedStatus() bool {
 	}
 }
 
+// IsTerminal reports whether s is a final state a task will not leave on its own
+// — success, error, cancelled, or dead-lettered. Used to tell "result not ready
+// yet" apart from "no result will ever come" (#244).
+func (s TaskStatus) IsTerminal() bool {
+	switch s {
+	case TaskStatusSuccess, TaskStatusError, TaskStatusCancelled, TaskStatusDeadLettered:
+		return true
+	default:
+		return false
+	}
+}
+
 // Task priority (#230). Convention: LOWER integer = HIGHER urgency, matching
 // POSIX nice / ionice and most job schedulers. The pending queue is claimed in
 // ascending effective_priority, then FIFO (created_at ASC) within a tier.
@@ -766,12 +778,19 @@ type TaskCreate struct {
 	WorktreeConfig *WorktreeConfig `json:"worktree_config,omitempty"`
 	// SandboxLimits, when non-nil, overrides the global FLEET_SANDBOX_* cgroup
 	// ceilings for this task's container (#205). nil = use the global defaults.
-	SandboxLimits          *TaskSandboxLimits `json:"sandbox_limits,omitempty"`
-	Priority               int                `json:"priority"`
-	InstructionSelfImprove bool               `json:"instruction_self_improve,omitempty"`
-	ScheduledFor           *time.Time         `json:"scheduled_for,omitempty"`
-	Recurrence             string             `json:"recurrence,omitempty"`
-	Files                  []string           `json:"files,omitempty"`
+	SandboxLimits *TaskSandboxLimits `json:"sandbox_limits,omitempty"`
+	// OutputSchema, when non-nil, enables structured-output mode (#244): it is a
+	// draft-07 JSON Schema object the agent's final answer must conform to. The
+	// scheduled driver appends the schema to the system prompt and, after the run,
+	// validates the final text as JSON against it (storing the result in the
+	// task's OutputJSON). Validated at create time (must compile). nil = free-form
+	// text mode (the default).
+	OutputSchema           json.RawMessage `json:"output_schema,omitempty"`
+	Priority               int             `json:"priority"`
+	InstructionSelfImprove bool            `json:"instruction_self_improve,omitempty"`
+	ScheduledFor           *time.Time      `json:"scheduled_for,omitempty"`
+	Recurrence             string          `json:"recurrence,omitempty"`
+	Files                  []string        `json:"files,omitempty"`
 	// Tags are user-defined labels for organizing and filtering tasks (#212):
 	// lowercase alphanumeric + '-'/'.', ≤64 chars each, ≤20 per task. Normalized
 	// and validated at create/edit. nil/empty = untagged.
@@ -890,7 +909,14 @@ type Task struct {
 	// SandboxLimits overrides the global sandbox cgroup ceilings for this task's
 	// container (#205). nil = global defaults. See TaskCreate.SandboxLimits.
 	SandboxLimits *TaskSandboxLimits `json:"sandbox_limits,omitempty"`
-	Priority      int                `json:"priority"`
+	// OutputSchema is the draft-07 JSON Schema enabling structured-output mode
+	// (#244). nil = free-form text mode. See TaskCreate.OutputSchema.
+	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
+	// OutputJSON is the validated structured result when OutputSchema was set and
+	// the agent produced conforming JSON (#244). nil when no schema was declared
+	// or validation failed (the free-form Result still holds the text either way).
+	OutputJSON json.RawMessage `json:"output_json,omitempty"`
+	Priority   int             `json:"priority"`
 	// EffectivePriority is the value the scheduler actually orders the pending
 	// queue by (#230). Equal to Priority at creation; only the anti-starvation
 	// sweep lowers it (never Priority) so a long-waiting task is eventually
@@ -1064,6 +1090,7 @@ func NewTask(tc TaskCreate) *Task {
 		LoopConfig:                 tc.LoopConfig,
 		WorktreeConfig:             tc.WorktreeConfig,
 		SandboxLimits:              tc.SandboxLimits,
+		OutputSchema:               tc.OutputSchema,
 		Priority:                   priority,
 		EffectivePriority:          priority,
 		InstructionSelfImprove:     tc.InstructionSelfImprove,
@@ -1179,6 +1206,7 @@ func TaskToCreate(t *Task) TaskCreate {
 		LoopConfig:             t.LoopConfig,
 		WorktreeConfig:         t.WorktreeConfig,
 		SandboxLimits:          t.SandboxLimits,
+		OutputSchema:           t.OutputSchema,
 		RetryPolicy:            t.RetryPolicy,
 		Description:            t.Description,
 		Tags:                   t.Tags,
@@ -1231,6 +1259,7 @@ type TaskExportRecord struct {
 	LoopConfig                 *LoopConfig         `json:"loop_config,omitempty"                yaml:"loop_config,omitempty"`
 	WorktreeConfig             *WorktreeConfig     `json:"worktree_config,omitempty"         yaml:"worktree_config,omitempty"`
 	SandboxLimits              *TaskSandboxLimits  `json:"sandbox_limits,omitempty"          yaml:"sandbox_limits,omitempty"`
+	OutputSchema               json.RawMessage     `json:"output_schema,omitempty"           yaml:"output_schema,omitempty"`
 	Priority                   int                 `json:"priority,omitempty"                   yaml:"priority,omitempty"`
 	InstructionSelfImprove     bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
 	AllowNetwork               bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
@@ -1339,6 +1368,7 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		LoopConfig:                 rec.LoopConfig,
 		WorktreeConfig:             rec.WorktreeConfig,
 		SandboxLimits:              rec.SandboxLimits,
+		OutputSchema:               rec.OutputSchema,
 		Priority:                   rec.Priority,
 		InstructionSelfImprove:     rec.InstructionSelfImprove,
 		AllowNetwork:               rec.AllowNetwork,
@@ -1389,6 +1419,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		LoopConfig:                 t.LoopConfig,
 		WorktreeConfig:             t.WorktreeConfig,
 		SandboxLimits:              t.SandboxLimits,
+		OutputSchema:               t.OutputSchema,
 		Priority:                   t.Priority,
 		InstructionSelfImprove:     t.InstructionSelfImprove,
 		AllowNetwork:               t.AllowNetwork,
@@ -1429,8 +1460,13 @@ type StatusUpdate struct {
 	// WorkspacePath records the per-run workspace directory (#287). When non-nil
 	// the storage layer persists it on the task; nil leaves the existing value
 	// untouched (so a later status update doesn't clobber a recorded path).
-	WorkspacePath *string    `json:"workspace_path,omitempty"`
-	Timestamp     *time.Time `json:"timestamp,omitempty"`
+	WorkspacePath *string `json:"workspace_path,omitempty"`
+	// OutputJSON carries the validated structured result (#244). When non-empty the
+	// storage layer persists it on the task's output_json; empty leaves the
+	// existing value untouched. Set on a running-status update by the runner before
+	// the terminal success, mirroring WorkspacePath.
+	OutputJSON json.RawMessage `json:"output_json,omitempty"`
+	Timestamp  *time.Time      `json:"timestamp,omitempty"`
 }
 
 // TaskAssignment is the task assignment carried to the worker.
