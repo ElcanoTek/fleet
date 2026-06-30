@@ -1526,6 +1526,18 @@ tr.sla-row-fail {
 .modal-lg .form-label-row {
   margin-bottom: 0.55rem;
 }
+/* One consistent input-label typography across both modals: a single size +
+   medium weight for every field label (bare <label>, .form-label, and the
+   secrets <legend>). Classed sub-labels keep their own smaller styling — the
+   MCP picker rows, the "at" date/time connector, and the run_if inline meta
+   labels are intentionally lighter. */
+.modal-lg label:not([class]),
+.modal-lg .form-label,
+.modal-lg legend {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
 /* The Settings credential form lays its fields out as a tight grid; inside the
    modal its Server/Account fields are wrapped in .form-group, so drop the grid
    gap and let those .form-group margins drive the same rhythm as every other
