@@ -7,6 +7,127 @@ import (
 	"testing"
 )
 
+// TestMCPServerTLSParseAndValidate covers the per-server TLS hardening block
+// (#280): a well-formed block threads through to MCPServerConfig, an empty block
+// is treated as "no hardening", and malformed blocks fail the load loudly.
+func TestMCPServerTLSParseAndValidate(t *testing.T) {
+	pin := "aa" + strings.Repeat("bb", 31) // 64 hex chars
+	writeManifest := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	t.Run("valid tls block threads to config", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: secure_http
+    type: http
+    url: "https://secure.test/mcp"
+    always: true
+    tls:
+      ca_cert: /etc/fleet/ca.pem
+      client_cert: /etc/fleet/client.pem
+      client_key: /etc/fleet/client.key
+      pinned_sha256: "`+pin+`"
+      server_name: secure.internal
+`)
+		b, err := Load(dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		sc := b.MCPServerConfigs()["secure_http"]
+		if sc.TLS == nil {
+			t.Fatal("TLS should be carried into MCPServerConfig")
+		}
+		if sc.TLS.CACertFile != "/etc/fleet/ca.pem" || sc.TLS.ClientCertFile != "/etc/fleet/client.pem" ||
+			sc.TLS.ClientKeyFile != "/etc/fleet/client.key" || sc.TLS.ServerName != "secure.internal" || sc.TLS.PinnedSHA256 != pin {
+			t.Errorf("TLS fields wrong: %+v", sc.TLS)
+		}
+	})
+
+	t.Run("empty tls block is no hardening", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: plain
+    type: http
+    url: "https://x.test/mcp"
+    always: true
+    tls: {}
+`)
+		b, err := Load(dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if sc := b.MCPServerConfigs()["plain"]; sc.TLS != nil {
+			t.Errorf("empty tls block should yield nil TLS, got %+v", sc.TLS)
+		}
+	})
+
+	t.Run("mTLS with only client_cert is rejected at load", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: half_mtls
+    type: http
+    url: "https://x.test/mcp"
+    always: true
+    tls:
+      client_cert: /etc/fleet/client.pem
+`)
+		if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "client_key") {
+			t.Fatalf("want mTLS both-or-neither error, got %v", err)
+		}
+	})
+
+	t.Run("malformed pin is rejected at load", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: bad_pin
+    type: http
+    url: "https://x.test/mcp"
+    always: true
+    tls:
+      pinned_sha256: "not-a-valid-hash"
+`)
+		if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "pinned_sha256") {
+			t.Fatalf("want pin format error, got %v", err)
+		}
+	})
+
+	t.Run("tls on a plaintext http:// url is rejected (would be silently ignored)", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: plaintext
+    type: http
+    url: "http://mcp.internal:8080/mcp"
+    always: true
+    tls:
+      pinned_sha256: "`+pin+`"
+`)
+		if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "https") {
+			t.Fatalf("want https-required error, got %v", err)
+		}
+	})
+
+	t.Run("tls on a stdio server is rejected (no TLS transport)", func(t *testing.T) {
+		dir := writeManifest(t, `
+mcp_servers:
+  - name: local
+    command: python3
+    args: ["mcp/x.py"]
+    always: true
+    tls:
+      ca_cert: /etc/fleet/ca.pem
+`)
+		if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "only valid on an http server") {
+			t.Fatalf("want stdio-rejection error, got %v", err)
+		}
+	})
+}
+
 // TestLoadRejectsUnknownManifestKey is the regression guard for strict manifest
 // parsing: a typo'd / unmodeled key must FAIL the load loudly rather than being
 // silently dropped (which could, e.g., leave a `tools:` allowlist unset and

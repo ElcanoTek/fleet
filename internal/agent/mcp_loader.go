@@ -202,6 +202,7 @@ func (a *Agent) mcpBases() map[string]agentcore.MCPServerBase {
 		}
 		if sc.Type == "http" {
 			base.HTTPURL = sc.URL
+			base.HTTPTLS = sc.TLS
 		}
 		bases[name] = base
 	}

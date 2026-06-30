@@ -800,6 +800,7 @@ func (r *Runner) mcpBases() map[string]agentcore.MCPServerBase {
 		}
 		if sc.Type == "http" {
 			base.HTTPURL = sc.URL
+			base.HTTPTLS = sc.TLS
 		}
 		bases[name] = base
 	}
@@ -865,6 +866,7 @@ func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 			Dir:           sc.Dir,
 			URL:           sc.URL,
 			Headers:       sc.Headers,
+			TLS:           sc.TLS,
 			ToolAllowlist: sc.ToolAllowlist,
 			AccountVars:   sc.AccountVars,
 			// Optional-server metadata — without these the chat Manager's

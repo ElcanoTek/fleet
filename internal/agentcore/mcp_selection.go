@@ -60,6 +60,9 @@ type MCPServerBase struct {
 	HTTPURL string
 	// HTTPHeaders are sent with each HTTP request (default seat only).
 	HTTPHeaders map[string]string
+	// HTTPTLS hardens an HTTP server's connection (CA pinning / mTLS / public-key
+	// pin) when set in the manifest (#280); nil = default system TLS.
+	HTTPTLS *mcp.TLSOptions
 	// Required marks a load-bearing server: if it fails to register, the run
 	// aborts. Best-effort servers (the default, Required=false) are skipped with a
 	// warning so one flaky server can't kill an otherwise-healthy run (#182).
@@ -142,7 +145,7 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 
 		// HTTP servers register via headers (no env overlay, no account variants).
 		if base.HTTPURL != "" {
-			if err := client.AddHTTPServerWithHeaders(ctx, name, base.HTTPURL, base.HTTPHeaders); err != nil {
+			if err := client.AddHTTPServerWithOptions(ctx, name, base.HTTPURL, mcp.HTTPServerOptions{Headers: base.HTTPHeaders, TLS: base.HTTPTLS}); err != nil {
 				if base.Required {
 					return registered, fmt.Errorf("register http server %q: %w", name, err)
 				}

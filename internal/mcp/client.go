@@ -263,14 +263,35 @@ type HTTPServerOptions struct {
 	// HTTPClient overrides the default client — pass the SSRF-safe client for
 	// user-supplied URLs. nil = the default bounded client.
 	HTTPClient *http.Client
+	// TLS, when non-nil, hardens the handshake (CA pinning / mTLS / public-key
+	// pin) for an operator-configured server (#280). Ignored when HTTPClient is
+	// set (that caller already owns the full client). nil = default system TLS.
+	TLS *TLSOptions
 }
 
 // AddHTTPServerWithOptions adds an HTTP-based MCP server with full control over
 // the headers and the underlying HTTP client.
 func (c *Client) AddHTTPServerWithOptions(ctx context.Context, name, url string, opts HTTPServerOptions) error {
 	transport := NewHTTPTransportWithHeaders(url, opts.Headers)
-	if opts.HTTPClient != nil {
+	switch {
+	case opts.HTTPClient != nil:
+		// The caller fully owns the client (e.g. the SSRF-safe per-user client);
+		// TLS options, if any, are its responsibility, not ours.
 		transport.client = opts.HTTPClient
+	case opts.TLS != nil && !opts.TLS.IsZero():
+		// Fail closed: a TLSClientConfig is applied by http.Transport only to
+		// https requests, so requesting hardening for a plaintext url would
+		// silently connect unverified. Refuse to register rather than mislead.
+		if !strings.HasPrefix(strings.ToLower(url), "https://") {
+			return fmt.Errorf("mcp server %q: TLS hardening (tls) requires an https url, got %q", name, url)
+		}
+		tlsCfg, err := opts.TLS.build()
+		if err != nil {
+			return fmt.Errorf("mcp server %q: tls: %w", name, err)
+		}
+		if tlsCfg != nil {
+			transport.client = tlsHTTPClient(tlsCfg)
+		}
 	}
 
 	server := &Server{
