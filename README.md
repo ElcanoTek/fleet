@@ -421,6 +421,15 @@ lowers the host's base footprint.
 > `podman stats` is unavailable the feature degrades silently — it never fails a
 > turn.
 
+> **Hypervisor isolation (optional).** By default each sandbox is a rootless
+> container sharing the host kernel. For untrusted prompts or sensitive data,
+> set the bundle manifest's `sandbox.runtime` (or `FLEET_SANDBOX_RUNTIME`) to
+> `kata` or `libkrun` to run every tool call in a dedicated **KVM microVM** with
+> its own guest kernel — an escape then needs a hypervisor CVE, not just a
+> container-escape. Requires `/dev/kvm`; fleet fail-closed preflights it at boot.
+> See [`docs/SANDBOX-RUNTIMES.md`](docs/SANDBOX-RUNTIMES.md) and
+> [ADR-0010](docs/adr/0010-microvm-sandbox-runtimes.md).
+
 ### Quick start (one host)
 
 The topology (Caddy → web app → loopback backends):

@@ -190,6 +190,8 @@ func run() error {
 		}
 	}
 
+	resolveSandboxRuntimeInto(cfg, bundle)
+
 	// Install the bundle's agent tool-behavior policy (parallel-safe tools,
 	// critical-tool suffixes, substitute map). The generic bundle ships none, so
 	// agentcore stays on its base generic critical suffixes. Must run before any
@@ -1057,6 +1059,29 @@ func orchestratorAddr() string {
 }
 
 // ── graceful shutdown helpers (#278) ──
+
+// resolveSandboxRuntimeInto resolves the sandbox OCI runtime (#217) into
+// cfg.SandboxRuntime with the SAME precedence as the image: an explicit
+// FLEET_SANDBOX_RUNTIME env (already in cfg.SandboxRuntime) wins, else the
+// bundle manifest's sandbox.runtime fills it. Both the env and the bundle are
+// operator-authored deployment config — the manifest already controls the
+// sandbox image and Containerfile — so selecting the runtime is a trusted
+// operator choice, not an untrusted downgrade. The friendly name "libkrun" is
+// normalized to podman's "krun" once, here, so every downstream consumer (pool,
+// preflight, readiness probe, validate-config) keys off the same value.
+// Extracted from run() to keep it within the cyclomatic budget.
+func resolveSandboxRuntimeInto(cfg *config.Config, bundle *clientconfig.Bundle) {
+	// One shared resolver (sandbox.ResolveRuntime) so boot, validate-config, and
+	// cutlass all apply the same env-wins-else-bundle precedence + normalization.
+	resolved := sandbox.ResolveRuntime(cfg.SandboxRuntime, bundle.Sandbox().Runtime)
+	if resolved != strings.TrimSpace(cfg.SandboxRuntime) && resolved != "" {
+		//nolint:gosec // G706: runtime name is operator config (FLEET_SANDBOX_RUNTIME / bundle manifest), quoted with %q — not request input.
+		log.Printf("sandbox: runtime resolved to %q (podman OCI runtime name)", resolved)
+	}
+	// Always write back the normalized value so cfg carries the canonical name
+	// (also collapses whitespace-padded env values the loader didn't trim).
+	cfg.SandboxRuntime = resolved
+}
 
 // registerRuntimeMetrics wires the pull-at-scrape gauges (#176): in-flight turn
 // counts (interactive/scheduled) and warm sandbox depth. Extracted from run() to

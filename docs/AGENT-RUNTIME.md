@@ -36,6 +36,22 @@ agent a **no-network** (`--network=none`) per-turn sandbox, so the tool calls
 cannot reach the network while the model loop continues normally. Scheduled
 runs default to this sealed posture — see below.
 
+### Hypervisor-isolated runtimes (Kata / libkrun, #217)
+
+By default the per-turn container runs under Podman's shared-kernel OCI runtime
+(`crun`/`runc`). A deployment handling untrusted prompts or sensitive data can
+raise the isolation posture to a **dedicated KVM VM per tool call** by setting
+the bundle manifest's `sandbox.runtime` (or `FLEET_SANDBOX_RUNTIME`) to `kata`
+or `libkrun` — an escape then requires a hypervisor CVE, not just a
+container-escape. fleet emits the value as `podman run --runtime=<value>`,
+**fail-closed preflights** `/dev/kvm` + the runtime binary at boot (a missing
+KVM aborts startup rather than degrading to a shared-kernel container), and adds
+the Kata guest-memory overhead so the `--memory` cap still reflects usable guest
+RAM. Everything else — credentials staying host-side, seccomp, dropped caps,
+network sealing, per-task limits — is unchanged. See
+[`SANDBOX-RUNTIMES.md`](SANDBOX-RUNTIMES.md) and
+[ADR-0010](adr/0010-microvm-sandbox-runtimes.md).
+
 ### `run_python` kernel lifetime (per-turn vs persistent, #213)
 
 `run_python` executes in a long-lived IPython kernel inside the sandbox, so

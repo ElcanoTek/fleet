@@ -21,6 +21,12 @@ sandbox:
   containerfile: sandbox/Containerfile
   tag: localhost/fleet-sandbox:latest
   image: "${FLEET_SANDBOX_IMAGE:-}"
+  # OCI runtime for `podman run --runtime=<value>` (#217). Empty = podman's
+  # default (rootless container, shared host kernel — no extra host setup).
+  # Set "kata" or "libkrun" for hypervisor-level isolation (a dedicated KVM VM
+  # per tool call); both require /dev/kvm and pass a fail-closed boot preflight.
+  # See docs/SANDBOX-RUNTIMES.md. FLEET_SANDBOX_RUNTIME overrides this.
+  runtime: "${FLEET_SANDBOX_RUNTIME:-}"
 
 branding:
   app_name: "Fleet"

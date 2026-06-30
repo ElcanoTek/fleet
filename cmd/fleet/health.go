@@ -11,6 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/health"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -40,9 +41,13 @@ var (
 // client + cost-aware caching, and MCP liveness needs a real broker round-trip —
 // reporting either without actually probing would violate the honesty invariant.
 func buildReadinessChecks(cfg *config.Config, chatDB, schedDB dbPinger) []health.Check {
-	runtimeBin := strings.TrimSpace(cfg.SandboxRuntime)
-	if runtimeBin == "" {
-		runtimeBin = "podman"
+	// Probe the runtime binary podman would resolve --runtime to: an empty
+	// runtime means the podman default, else the OCI runtime's binary name
+	// ("kata" → "kata-runtime", "krun" → "krun"). Mapping via RuntimeBinary keeps
+	// `<bin> --version` from spuriously failing on a bare "kata" (#217).
+	runtimeBin := "podman"
+	if bin := sandbox.RuntimeBinary(cfg.SandboxRuntime); bin != "" {
+		runtimeBin = bin
 	}
 	return []health.Check{
 		{Name: "chat_db", Critical: true, Probe: pingProbe(chatDB)},

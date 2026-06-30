@@ -47,6 +47,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 )
@@ -110,6 +111,11 @@ func run(argv []string) error {
 			cfg.SandboxImage = ref
 		}
 	}
+	// Honor the bundle's sandbox.runtime (#217) with the same precedence the fleet
+	// boot path uses — env FLEET_SANDBOX_RUNTIME wins, else the manifest — so a
+	// kata/libkrun bundle gets the fail-closed KVM preflight under cutlass too.
+	// buildSandboxPool (via agent.New below) runs PreflightRuntime on this value.
+	cfg.SandboxRuntime = sandbox.ResolveRuntime(cfg.SandboxRuntime, bundle.Sandbox().Runtime)
 
 	// Install the bundle's agent tool-behavior policy before any turn runs.
 	bp := bundle.AgentPolicy()

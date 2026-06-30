@@ -380,16 +380,30 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		return nil, fmt.Errorf("ensure uploads root %s: %w", uploadsRoot, err)
 	}
 
+	// Normalize the OCI runtime name to what podman understands ("libkrun" →
+	// "krun") so the --runtime flag, the preflight, and the probe binary mapping
+	// all key off the same value. main.go normalizes cfg.SandboxRuntime up front;
+	// re-normalizing here is idempotent and keeps a direct buildSandboxPool caller
+	// (tests) on the same path.
+	sandboxRuntime, _ := sandbox.NormalizeRuntime(cfg.SandboxRuntime)
 	poolCfg.Container = sandbox.ContainerConfig{
 		Image:            cfg.SandboxImage,
 		WorkspaceHostDir: workspaceRoot,
-		Runtime:          cfg.SandboxRuntime,
+		Runtime:          sandboxRuntime,
 		MemoryLimit:      cfg.SandboxMemory, // empty → sandbox default (512m)
 		CPULimit:         cfg.SandboxCPUs,   // empty → sandbox default (1.0)
 		PidsLimit:        cfg.SandboxPids,   // 0 → sandbox default (128)
 		DiskLimitGB:      cfg.SandboxDiskGB, // 0 → sandbox default (5); negative disables
 		BridgeDir:        filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
 		ReadOnlyMounts:   absSupportingDocs(personasDir, protocolsDir, systemPromptsDir, skillsDir, uploadsRoot),
+	}
+	// Fail closed BEFORE the warm pool spawns its first container: a kata/krun
+	// runtime whose KVM or runtime binary is missing must abort boot, never
+	// silently degrade to a shared-kernel container (the no-degrade invariant,
+	// ADR-0010). A shared-kernel runtime (runc/crun/runsc/empty) preflights as a
+	// no-op.
+	if err := sandbox.PreflightRuntime(context.Background(), sandboxRuntime); err != nil {
+		return nil, fmt.Errorf("sandbox runtime preflight failed (fail-closed): %w", err)
 	}
 	log.Printf("sandbox: container mode, image=%s, pool=%d, workspace=%s, runtime=%s",
 		poolCfg.Container.Image, poolCfg.Size, poolCfg.Container.WorkspaceHostDir, defaultIfEmpty(poolCfg.Container.Runtime, "podman default"))
