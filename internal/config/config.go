@@ -147,6 +147,8 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_TEMPERATURE":                    true,
 	"FLEET_TITLE_MODEL":                    true,
 	"FLEET_METADATA_MODEL":                 true,
+	"FLEET_ERROR_ANALYSIS_MODEL":           true,
+	"FLEET_ERROR_ANALYSIS_ENABLED":         true,
 	"FLEET_AUTO_TITLE":                     true,
 	"FLEET_APPROVAL_TIMEOUT_SECONDS":       true,
 	"FLEET_AUTO_APPROVE_IN_TEST":           true,
@@ -519,6 +521,16 @@ type Config struct {
 	// produce git metadata. FLEET_METADATA_MODEL, defaulting to TitleModel so
 	// existing deployments need zero new config.
 	MetadataModel string
+	// ErrorAnalysisModel is the fast/cheap model the post-failure error-recovery
+	// diagnosis (#317) calls to classify a terminal task failure + suggest
+	// remediation. FLEET_ERROR_ANALYSIS_MODEL, defaulting to MetadataModel (then
+	// TitleModel) so deployments need zero new config.
+	ErrorAnalysisModel string
+	// ErrorAnalysisEnabled gates the post-failure LLM diagnosis (#317).
+	// FLEET_ERROR_ANALYSIS_ENABLED, default true. When false, no analysis goroutine
+	// or model call fires on a terminal failure (cost/latency escape hatch); the
+	// raw error_message is still recorded as before.
+	ErrorAnalysisEnabled bool
 	// AutoTitle gates the LLM auto-titler (#302). FLEET_AUTO_TITLE, default true.
 	// When false, a new conversation keeps its instant heuristic title and no
 	// title-model call is made (cost/latency escape hatch).
@@ -959,6 +971,8 @@ func Load(envFile string) (*Config, error) {
 		ReasoningEffort:        getenvDefault("REASONING_EFFORT", "medium"),
 		TitleModel:             getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
 		MetadataModel:          getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)),
+		ErrorAnalysisModel:     getenvFleetDefault("ERROR_ANALYSIS_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
+		ErrorAnalysisEnabled:   getenvFleetBool("ERROR_ANALYSIS_ENABLED", true),
 		AutoTitle:              getenvFleetBool("AUTO_TITLE", true),
 		ApprovalTimeoutSeconds: getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 300),
 		AutoApproveInTest:      getenvFleetBool("AUTO_APPROVE_IN_TEST", false),

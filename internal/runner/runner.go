@@ -21,6 +21,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -110,6 +111,23 @@ type Config struct {
 	// https://fleet.example.com. Empty omits the link. Only consulted when Notifier
 	// is set.
 	PublicURLBase string
+	// ErrorAnalyzer, when set, runs a post-failure LLM diagnosis (#317) for tasks
+	// that fail TERMINALLY, off-thread. nil (the default) disables analysis — the
+	// fire path is then a cheap no-op, byte-for-byte unchanged. The analyzer is
+	// fired from a detached, time-bounded goroutine; its errors NEVER affect task
+	// status or the pool's bookkeeping (mirrors Notifier).
+	ErrorAnalyzer ErrorAnalyzer
+}
+
+// ErrorAnalyzer produces a structured post-failure diagnosis for a terminally
+// failed task (#317). The runner passes primitives only (no models.LogSession,
+// no agent types) so the seam stays decoupled from the agent package — the
+// implementation lives in internal/agent and is injected in main.go. It returns
+// validated JSON ({category, summary, remediation}) the runner persists verbatim,
+// or an error (logged, no persistence). Implementations MUST honor ctx (the
+// runner bounds it) and must not panic.
+type ErrorAnalyzer interface {
+	AnalyzeTaskFailure(ctx context.Context, taskPrompt, errMsg, sessionTail string) (json.RawMessage, error)
 }
 
 // Pool is the in-process capped worker pool.
@@ -160,6 +178,11 @@ type Pool struct {
 	// no-op. publicURLBase builds the per-task log link when set.
 	notifier      Notifier
 	publicURLBase string
+
+	// errorAnalyzer runs the post-failure LLM diagnosis (#317). nil = analysis off
+	// (the fire path is a no-op). Fired off-thread, time-bounded; never affects
+	// task status.
+	errorAnalyzer ErrorAnalyzer
 }
 
 // defaultDrainGrace bounds the shutdown wait for in-flight tasks when Config
@@ -204,6 +227,7 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		streams:            newTaskStreamRegistry(),
 		notifier:           cfg.Notifier,
 		publicURLBase:      strings.TrimRight(cfg.PublicURLBase, "/"),
+		errorAnalyzer:      cfg.ErrorAnalyzer,
 	}
 }
 
@@ -545,8 +569,10 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		// replayable rather than indistinguishable from a one-off per-attempt error.
 		reason := fmt.Sprintf("retry budget exhausted after %d attempt(s): %v", task.AttemptCount+1, runErr)
 		p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", start)
-		// Terminal failure (quarantined): fire the outbound notification (#208).
+		// Terminal failure (quarantined): fire the outbound notification (#208) and
+		// the post-failure LLM diagnosis (#317), both off-thread.
 		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+		p.maybeAnalyzeFailure(task, session, runErr)
 	case runErr != nil:
 		// Non-retryable (deterministic) failure: there is no point retrying, so route
 		// straight to the dead-letter queue (#253). This replaces the prior bare-error
@@ -554,8 +580,10 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		// for review rather than silently erroring.
 		reason := "non-retryable failure: " + runErr.Error()
 		p.sendToDeadLetter(task, session, runErr, reason, "non_retryable", start)
-		// Terminal failure (quarantined): fire the outbound notification (#208).
+		// Terminal failure (quarantined): fire the outbound notification (#208) and
+		// the post-failure LLM diagnosis (#317), both off-thread.
 		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+		p.maybeAnalyzeFailure(task, session, runErr)
 	default:
 		// Structured-output mode (#244): if the task declared an output_schema,
 		// validate the agent's final answer against it and persist the validated

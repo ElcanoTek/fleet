@@ -374,7 +374,7 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -1114,6 +1114,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		allowDelegation        bool
 		outputSchema           sql.NullString
 		outputJSON             sql.NullString
+		errorAnalysis          sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -1127,7 +1128,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&deadLetteredAt, &deadLetterReason, &deadLetterAttempts,
 		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
-		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON,
+		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis,
 	)
 	if err != nil {
 		return nil, err
@@ -1173,6 +1174,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	task.SandboxLimits = unmarshalSandboxLimits(sandboxLimits)
 	task.OutputSchema = unmarshalRawJSON(outputSchema)
 	task.OutputJSON = unmarshalRawJSON(outputJSON)
+	task.ErrorAnalysis = unmarshalRawJSON(errorAnalysis)
 	task.RetryPolicy = unmarshalRetryPolicy(retryPolicy)
 	task.Persona = persona.String
 	if sourceTaskID.Valid && sourceTaskID.String != "" {
@@ -1662,6 +1664,26 @@ func (db *Database) GetRunningTasksWithSLA(ctx context.Context) ([]*models.Task,
 func (db *Database) MarkSLABreached(ctx context.Context, taskID uuid.UUID) error {
 	_, err := db.conn.ExecContext(ctx,
 		`UPDATE tasks SET sla_breached = TRUE WHERE id = $1`, taskID)
+	return err
+}
+
+// SetErrorAnalysis persists the post-failure LLM diagnosis (#317) as a narrow,
+// lease-FREE single-column UPDATE. It runs in a detached goroutine AFTER the
+// terminal-failure transition (which already released the lease), so it
+// deliberately does not check lease ownership.
+//
+// The status guard (... AND status IN error/dead_lettered) makes the write a
+// no-op once the row is no longer in a terminal-failure state — specifically, if
+// an admin REPLAYED the dead-lettered task (same id → pending → running) while
+// this analysis goroutine was still in flight, the stale diagnosis is dropped
+// rather than stamped onto the fresh attempt. Writing a diagnostic annotation to
+// a still-terminal-failed row is benign (touches neither status nor lease) and,
+// like MarkSLABreached, the single-column write cannot race a broader row write.
+// nil/empty raw → SQL NULL. Idempotent.
+func (db *Database) SetErrorAnalysis(ctx context.Context, taskID uuid.UUID, raw json.RawMessage) error {
+	_, err := db.conn.ExecContext(ctx,
+		`UPDATE tasks SET error_analysis = $1 WHERE id = $2 AND status IN ($3, $4)`,
+		marshalRawJSON(raw), taskID, string(models.TaskStatusError), string(models.TaskStatusDeadLettered))
 	return err
 }
 

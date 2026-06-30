@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -1021,6 +1022,13 @@ func (s *Storage) MarkSLABreached(ctx context.Context, taskID uuid.UUID) error {
 	return s.db.MarkSLABreached(ctx, taskID)
 }
 
+// SetTaskErrorAnalysis persists the async post-failure error diagnosis (#317) on
+// a task. Lease-free (the diagnosis runs after the terminal transition). See
+// db.SetErrorAnalysis.
+func (s *Storage) SetTaskErrorAnalysis(ctx context.Context, taskID uuid.UUID, raw json.RawMessage) error {
+	return s.db.SetErrorAnalysis(ctx, taskID, raw)
+}
+
 // GetSLAReport aggregates the per-prompt SLA actuals over windowDays (#274).
 // See db.GetSLAReport.
 func (s *Storage) GetSLAReport(ctx context.Context, windowDays int) (*models.SLAReport, error) {
@@ -1067,6 +1075,14 @@ func (s *Storage) ReplayDeadLetteredTask(ctx context.Context, taskID uuid.UUID) 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err
 	}
+	// A replayed task is a fresh slate: clear the prior attempt's error_analysis
+	// (#317) so the re-run doesn't carry a stale diagnosis. UpdateTaskTx omits
+	// error_analysis (it's write-once against status updates), so clear it
+	// explicitly in the same tx rather than through the task struct.
+	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET error_analysis = NULL WHERE id = $1`, taskID); err != nil {
+		return nil, err
+	}
+	task.ErrorAnalysis = nil
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}

@@ -543,6 +543,51 @@ paths:
               schema: { type: object }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/error-analysis:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Get a task's post-failure error diagnosis (#317).
+      description: >
+        Returns the asynchronous LLM diagnosis of a TERMINALLY-failed task — a
+        structured classification plus suggested remediation — raw and unwrapped,
+        for direct programmatic consumption. The diagnosis is produced off-thread
+        after a terminal failure with a cheap model and a hard timeout. 404 when
+        the task has no error analysis (it did not fail terminally, analysis is
+        disabled, or the diagnosis was not produced); 409 while the task has not
+        yet reached a terminal state.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: The error diagnosis.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [category, summary]
+                properties:
+                  category:
+                    type: string
+                    enum:
+                      - configuration
+                      - credentials
+                      - network
+                      - rate_limit
+                      - timeout
+                      - tool_error
+                      - model_refusal
+                      - resource_exhausted
+                      - logic_error
+                      - unknown
+                  summary: { type: string }
+                  remediation:
+                    type: array
+                    items: { type: string }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}/tags:
     parameters:
       - name: task_id

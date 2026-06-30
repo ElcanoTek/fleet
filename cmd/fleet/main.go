@@ -598,6 +598,11 @@ func run() error {
 		DrainGrace:    poolGrace,
 		Notifier:      taskNotifier,
 		PublicURLBase: os.Getenv("FLEET_PUBLIC_URL"),
+		// Post-failure error-recovery diagnosis (#317): the interactive Manager
+		// doubles as the runner's ErrorAnalyzer (it has the host-side resolver +
+		// cheap-model seam, exactly like SuggestTitle). Gated on
+		// FLEET_ERROR_ANALYSIS_ENABLED; nil = off (the analyze path is a no-op).
+		ErrorAnalyzer: errorAnalyzerFor(cfg, mgr),
 	})
 	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 
@@ -886,6 +891,7 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers) h
 		r.Post("/tasks/import", h.HandleTaskImport)
 		r.Get("/tasks/{task_id}", h.GetTask)
 		r.Get("/tasks/{task_id}/output", h.GetTaskOutput)
+		r.Get("/tasks/{task_id}/error-analysis", h.GetTaskErrorAnalysis)
 		r.Put("/tasks/{task_id}", h.UpdateTask)
 		r.Post("/tasks/{task_id}/tags", h.UpdateTaskTags)
 		r.Post("/tasks/{task_id}/rerun", h.RerunTask)
@@ -1250,6 +1256,16 @@ func orchestratorMetricsMiddleware(next http.Handler) http.Handler {
 // unattributed (CreatedBy nil) — like create_task-spawned tasks — so they run
 // against the shared global MCP catalog, NOT the requesting user's personal
 // remote-MCP connections (#443/#449). That is the safe (less-access) direction.
+// errorAnalyzerFor returns the runner's post-failure diagnosis seam (#317): the
+// Manager when FLEET_ERROR_ANALYSIS_ENABLED is on, else nil (analysis off). A
+// tiny helper so run() stays under the gocyclo ceiling.
+func errorAnalyzerFor(cfg *config.Config, mgr *agent.Manager) runner.ErrorAnalyzer {
+	if cfg == nil || !cfg.ErrorAnalysisEnabled {
+		return nil
+	}
+	return mgr
+}
+
 func taskSchedulerProvider(schedStorage *storage.Storage) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
 	return func(ctx context.Context, req httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
 		tc := schedmodels.TaskCreate{

@@ -880,8 +880,16 @@ type Task struct {
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 	Result        *string    `json:"result,omitempty"`
 	ErrorMessage  *string    `json:"error_message,omitempty"`
-	ScheduledFor  *time.Time `json:"scheduled_for,omitempty"`
-	Recurrence    string     `json:"recurrence,omitempty"`
+	// ErrorAnalysis is the JSON-validated post-failure LLM diagnosis (#317): a
+	// structured {category, summary, remediation} object explaining a TERMINAL
+	// failure and how to fix it, distinct from the raw ErrorMessage string. nil
+	// when the task did not fail terminally, analysis was disabled, or the
+	// diagnosis call/validation failed (best-effort). Written async after the
+	// terminal transition via storage.SetTaskErrorAnalysis (lease-free, since the
+	// lease is already released); read back into GET /tasks/{id}/error-analysis.
+	ErrorAnalysis json.RawMessage `json:"error_analysis,omitempty"`
+	ScheduledFor  *time.Time      `json:"scheduled_for,omitempty"`
+	Recurrence    string          `json:"recurrence,omitempty"`
 	// Timezone is the IANA timezone the cron Recurrence is evaluated in. Always
 	// present in responses ("UTC" for legacy/unset tasks). See TaskCreate.Timezone.
 	Timezone string `json:"timezone"`
