@@ -1359,3 +1359,25 @@ func (s *Storage) ActivateLearnedInstruction(ctx context.Context, taskID uuid.UU
 func (s *Storage) DeactivateLearnedInstructions(ctx context.Context, taskID uuid.UUID) (bool, error) {
 	return s.db.DeactivateLearnedInstructions(ctx, taskID)
 }
+
+// ask/notify pause (#510)
+
+// PauseTaskForQuestion parks a running task awaiting a human answer.
+func (s *Storage) PauseTaskForQuestion(ctx context.Context, taskID, leaseOwner uuid.UUID, question string) (bool, error) {
+	return s.db.PauseTaskForQuestion(ctx, taskID, leaseOwner, question)
+}
+
+// ResumeTask answers a paused task and re-queues it.
+func (s *Storage) ResumeTask(ctx context.Context, taskID uuid.UUID, answer string) (bool, error) {
+	return s.db.ResumeTask(ctx, taskID, answer)
+}
+
+// ClearPendingQA clears a resumed task's Q&A once the run consumed them.
+func (s *Storage) ClearPendingQA(ctx context.Context, taskID, leaseOwner uuid.UUID) error {
+	return s.db.ClearPendingQA(ctx, taskID, leaseOwner)
+}
+
+// ListPausedTasks returns tasks awaiting a human answer.
+func (s *Storage) ListPausedTasks(ctx context.Context, limit int) ([]*models.Task, error) {
+	return s.db.ListPausedTasks(ctx, limit)
+}

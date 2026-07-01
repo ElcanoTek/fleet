@@ -60,12 +60,18 @@ const notifyFanoutBudget = 90 * time.Second
 // short display name, and builds the absolute log URL when a public base is
 // configured. No credentials and no raw task internals beyond the truncated name
 // cross into the event.
-func (p *Pool) buildEvent(task *models.Task, status notify.Status, session *models.LogSession, dur time.Duration) notify.Event {
-	name := task.Prompt
+// notifyTaskName is the short, secret-free display label (first 60 chars of the
+// prompt) shared by terminal and progress (#510) notifications.
+func notifyTaskName(prompt string) string {
 	const maxName = 60
-	if len(name) > maxName {
-		name = name[:maxName] + "…"
+	if len(prompt) > maxName {
+		return prompt[:maxName] + "…"
 	}
+	return prompt
+}
+
+func (p *Pool) buildEvent(task *models.Task, status notify.Status, session *models.LogSession, dur time.Duration) notify.Event {
+	name := notifyTaskName(task.Prompt)
 	var cost float64
 	if session != nil {
 		cost = session.Cost

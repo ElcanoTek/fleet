@@ -1231,6 +1231,27 @@ paths:
               schema: { type: string }
         "404": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}/feedback:
+  /tasks/paused:
+    get:
+      summary: List tasks paused awaiting a human answer (#510).
+      description: The "needs a human answer" queue — tasks whose agent called `ask` and parked in paused_awaiting_input (holding no sandbox/lease).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: The paused tasks.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items: { $ref: "#/components/schemas/Task" }
+  /tasks/{task_id}/resume:
     parameters:
       - name: task_id
         in: path
@@ -1243,6 +1264,12 @@ paths:
         down-signals cross the distillation threshold and self-improvement is
         enabled, a learned instruction is DISTILLED and staged as 'proposed'
         (off-thread) — it does not change behavior until activated.
+      summary: Answer a paused task's question and re-queue it (#510).
+      description: >-
+        Supplies the human answer to a task in paused_awaiting_input and
+        re-queues it (status → pending); the next run is given the Q&A and
+        continues. 409 when the task is not paused. Requires operator (cancel)
+        permission.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       requestBody:
         required: true
@@ -1273,6 +1300,12 @@ paths:
       responses:
         "200":
           description: The task's learned instructions.
+              required: [answer]
+              properties:
+                answer: { type: string }
+      responses:
+        "200":
+          description: Re-queued.
           content:
             application/json:
               schema:
@@ -1326,6 +1359,10 @@ paths:
                 properties:
                   deactivated: { type: boolean }
         "403": { $ref: "#/components/responses/Error" }
+                  status: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /admin/queue:
     get:
       summary: Pending task-queue stats — per-tier depth + oldest wait (#230).
