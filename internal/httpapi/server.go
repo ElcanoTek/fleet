@@ -1511,6 +1511,10 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 	case sub == "branch" && r.Method == http.MethodPost:
 		// Fork this conversation at a chosen message into a new conversation (#454).
 		s.handleConversationBranch(w, r, id, user)
+	case sub == "promote-to-task" && r.Method == http.MethodPost:
+		// Synthesize a recurring-task proposal from this chat + stage it as a
+		// schedule_task approval card (#455).
+		s.handlePromoteToTask(w, r, id, user)
 	case sub == "share" && r.Method == http.MethodPost:
 		// Issue (or rotate) a public read-only share token (#226).
 		s.handleConversationShare(w, r, id, user)

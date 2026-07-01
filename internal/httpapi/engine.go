@@ -46,6 +46,10 @@ type turnEngine interface {
 	// (#234), skipping anything in `known`. Returns nil on any failure
 	// (best-effort; never fails a turn).
 	ExtractMemories(ctx context.Context, userMessage, assistantReply string, known []string) []string
+	// SuggestRecurringTask synthesizes a recurring-task proposal (clean prompt +
+	// cron + name) from a conversation transcript (#455), avoiding names in
+	// existingNames. Returns an error on failure (user-initiated action).
+	SuggestRecurringTask(ctx context.Context, transcript string, existingNames []string) (*agent.RecurringTaskProposal, error)
 	// MCPClient exposes the shared MCP client for the out-of-band approval
 	// execution path (runStagedTool).
 	MCPClient() *mcp.Client
