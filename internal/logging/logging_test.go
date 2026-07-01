@@ -10,18 +10,21 @@ import (
 )
 
 func TestParseLevel(t *testing.T) {
-	cases := map[string]slog.Level{
-		"debug": slog.LevelDebug,
-		"info":  slog.LevelInfo,
-		"INFO":  slog.LevelInfo,
-		" warn": slog.LevelWarn,
-		"error": slog.LevelError,
-		"":      slog.LevelInfo,
-		"bogus": slog.LevelInfo,
+	cases := []struct {
+		in   string
+		want slog.Level
+	}{
+		{"debug", slog.LevelDebug},
+		{"info", slog.LevelInfo},
+		{"INFO", slog.LevelInfo},
+		{" warn", slog.LevelWarn}, // leading space trimmed
+		{"error", slog.LevelError},
+		{"", slog.LevelInfo},      // default
+		{"bogus", slog.LevelInfo}, // default
 	}
-	for in, want := range cases {
-		if got := ParseLevel(in); got != want {
-			t.Errorf("ParseLevel(%q) = %v, want %v", in, got, want)
+	for _, c := range cases {
+		if got := ParseLevel(c.in); got != c.want {
+			t.Errorf("ParseLevel(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
 }
