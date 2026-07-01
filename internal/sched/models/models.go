@@ -1676,3 +1676,28 @@ type SLAReport struct {
 	WindowDays int             `json:"window_days"`
 	Tasks      []SLAReportTask `json:"tasks"`
 }
+
+// EvalRun is one eval & regression harness invocation (#502): the set-level
+// aggregate persisted to eval_runs after `fleet eval run <set>` replays a
+// set's goldens through the governed loop. Results holds the marshaled
+// per-case detail ([]evals.CaseResult — scorer verdicts, judge reasoning,
+// cost/duration per case); the typed columns are what history listings and
+// regression comparisons query.
+type EvalRun struct {
+	ID          uuid.UUID `json:"id"`
+	EvalSet     string    `json:"eval_set"`
+	StartedAt   time.Time `json:"started_at"`
+	CompletedAt time.Time `json:"completed_at"`
+	// BundleSHA fingerprints the replayed bundle content (evals.BundleFingerprint):
+	// runs are model-comparable only at an equal sha.
+	BundleSHA string  `json:"bundle_sha,omitempty"`
+	Total     int     `json:"total"`
+	Passed    int     `json:"passed"`
+	MeanScore float64 `json:"mean_score"`
+	// Threshold is the set's pass-fraction gate at run time; Pass records
+	// whether passed/total met it.
+	Threshold float64         `json:"threshold"`
+	Pass      bool            `json:"pass"`
+	CostUSD   float64         `json:"cost_usd"`
+	Results   json.RawMessage `json:"results,omitempty"`
+}
