@@ -14,7 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-func setupTestDB(t *testing.T) *Database {
+func setupTestDB(t testing.TB) *Database {
 	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
 		t.Skip("DATABASE_URL not set, skipping integration tests")

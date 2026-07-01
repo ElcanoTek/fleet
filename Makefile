@@ -1,4 +1,4 @@
-.PHONY: all build compile bins install test test-race test-cover lint lint-go lint-migrations fmt tidy clean help \
+.PHONY: all build compile bins fleet-bench install test test-race test-cover lint lint-go lint-migrations fmt tidy clean help \
 	govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 all: build
@@ -14,6 +14,7 @@ help:
 	@echo "  make test-cover  run the Go test suite with coverage (writes coverage.out)"
 	@echo "  make lint        run golangci-lint + the migration DDL linter"
 	@echo "  make lint-migrations  reject dangerous DDL in changed migration files (#256)"
+	@echo "  make fleet-bench build the load-testing tool (cmd/fleet-bench, #296)"
 	@echo "  make fmt         gofmt the tree"
 	@echo "  make tidy        go mod tidy"
 	@echo ""
@@ -54,6 +55,13 @@ compile:
 bins:
 	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet ./cmd/fleet
 	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet-admin ./cmd/fleet-admin
+
+# fleet-bench: the load-testing tool (#296). A dev/ops utility, NOT part of the
+# deployed runtime — `make build`/`make install` deliberately do not emit it (so
+# a benchmarking tool isn't installed on every box). `make compile` still
+# compile-checks it via `go build ./...`. Build it on demand for a load run.
+fleet-bench:
+	go build -ldflags "$(VERSION_LDFLAGS)" -o ./fleet-bench ./cmd/fleet-bench
 
 # install puts the binaries on PATH so `fleet` and `fleet <verb>` (e.g.
 # `fleet update`, `fleet status`, `fleet chat`) work without cd-ing into the

@@ -63,6 +63,7 @@ web/.e2e-live.env
 /fake-llm
 /fleet
 /fleet-admin
+/fleet-bench
 /cutlass
 fleet-session.json
 

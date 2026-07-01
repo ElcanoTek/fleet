@@ -228,4 +228,6 @@ same PR.
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via
   `fleet mcp reload` / SIGHUP / admin endpoint; scope + concurrency): [`docs/MCP-RELOAD.md`](docs/MCP-RELOAD.md)
+- **Load testing & benchmarks** (`fleet-bench` HTTP chat load via the fake-LLM
+  seam + subsystem throughput benchmarks + the weekly bench workflow): [`docs/LOAD-TESTING.md`](docs/LOAD-TESTING.md)
 - **Reporting a vulnerability:** [`SECURITY.md`](SECURITY.md)
