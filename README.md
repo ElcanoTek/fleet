@@ -31,10 +31,11 @@ them.
 
 ## Screenshots
 
-fleet serves one Next.js app with two surfaces: a **chat** UI for interactive
-work and an **Operations Center** for scheduled tasks — both routing every tool
-call through the same governed sandbox. _(Auto-regenerated on each push to
-`main` by [`.github/workflows/screenshots.yml`](.github/workflows/screenshots.yml).)_
+fleet serves one Next.js app with two surfaces — a **chat** UI for interactive
+work and an **Operations Center** for scheduled tasks — plus a **terminal chat**
+(`fleet chat`) for working from the shell. All route every tool call through the
+same governed sandbox. _(Auto-regenerated on each push to `main` by
+[`.github/workflows/screenshots.yml`](.github/workflows/screenshots.yml).)_
 
 **Chat**
 
@@ -43,6 +44,10 @@ call through the same governed sandbox. _(Auto-regenerated on each push to
 **Operations Center**
 
 ![Fleet Operations Center — scheduled task dashboard](docs/screenshots/web/orchestrator.png)
+
+**Terminal chat (`fleet chat`)**
+
+![Fleet terminal chat TUI](docs/screenshots/tui/chat.png)
 
 ## Why fleet
 
