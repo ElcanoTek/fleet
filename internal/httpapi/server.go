@@ -715,6 +715,19 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 
 type memoryRequest struct {
 	Content string `json:"content"`
+	Kind    string `json:"kind"`
+}
+
+// memoryPatchRequest is the PATCH /memories/{id} body: nil fields untouched
+// (#515). valid_from/valid_to use 0 to clear the bound; retired=true is manual
+// retirement (kept for audit, excluded from injection), false restores.
+type memoryPatchRequest struct {
+	Content   *string `json:"content"`
+	Kind      *string `json:"kind"`
+	Pinned    *bool   `json:"pinned"`
+	Retired   *bool   `json:"retired"`
+	ValidFrom *int64  `json:"valid_from"`
+	ValidTo   *int64  `json:"valid_to"`
 }
 
 func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
@@ -733,7 +746,7 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		memory, err := s.store.CreateMemory(r.Context(), user, req.Content, "manual")
+		memory, err := s.store.CreateMemory(r.Context(), user, req.Content, "manual", req.Kind)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -768,12 +781,19 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPatch:
-		var req memoryRequest
+		var req memoryPatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		memory, err := s.store.UpdateMemory(r.Context(), user, id, req.Content)
+		memory, err := s.store.UpdateMemory(r.Context(), user, id, store.MemoryPatch{
+			Content:   req.Content,
+			Kind:      req.Kind,
+			Pinned:    req.Pinned,
+			Retired:   req.Retired,
+			ValidFrom: req.ValidFrom,
+			ValidTo:   req.ValidTo,
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -1300,6 +1320,7 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			memProposals = append(memProposals, map[string]any{
 				"proposal_id": m.ID,
 				"content":     m.Content,
+				"kind":        m.Kind,
 			})
 		}
 		writeJSON(w, map[string]any{
@@ -1707,21 +1728,49 @@ type chatRequest struct {
 	Lockdown bool `json:"lockdown,omitempty"`
 }
 
+// memoryContents renders the injectable memory bullets (#515): retired and
+// still-proposed rows are EXCLUDED (retirement is the mechanism that stops
+// stale-fact citations — the annotations below are explainability/tiebreaker
+// signal, not staleness control), pinned rows survive the cap first (the
+// store's list order), and a lightweight annotation carries the kind (when
+// not a plain fact) and the user-declared validity window so the model can
+// weigh time-scoped facts.
 func memoryContents(memories []store.Memory) []string {
 	out := make([]string, 0, len(memories))
 	for _, memory := range memories {
-		if memory.Source == "proposed" {
+		if memory.Source == "proposed" || memory.Retired() {
 			continue
 		}
 		if len(out) >= 50 {
 			break
 		}
 		content := strings.TrimSpace(memory.Content)
-		if content != "" {
-			out = append(out, content)
+		if content == "" {
+			continue
 		}
+		if note := memoryAnnotation(&memory); note != "" {
+			content += " (" + note + ")"
+		}
+		out = append(out, content)
 	}
 	return out
+}
+
+// memoryAnnotation builds the parenthetical suffix for one injected memory.
+// Kept deliberately lean — most memories are plain facts and get NO suffix,
+// so the 50-bullet prompt doesn't pay a per-line token tax.
+func memoryAnnotation(m *store.Memory) string {
+	var parts []string
+	if m.Kind != "" && m.Kind != "fact" {
+		parts = append(parts, m.Kind)
+	}
+	if m.ValidFrom != nil {
+		parts = append(parts, "true since "+time.Unix(*m.ValidFrom, 0).UTC().Format("2006-01-02"))
+	}
+	if m.ValidTo != nil {
+		parts = append(parts, "until "+time.Unix(*m.ValidTo, 0).UTC().Format("2006-01-02"))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
@@ -2040,6 +2089,7 @@ func (s *Server) runTurnAsync(
 			conversationID: conv.ID,
 			userEmail:      user,
 			sink:           buf,
+			origin:         "tool",
 		},
 	}, buf)
 	if err != nil {

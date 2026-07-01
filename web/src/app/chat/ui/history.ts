@@ -71,6 +71,7 @@ export type MemoryProposalStatus = "pending" | "saved" | "dismissed";
 export type MemoryProposal = {
   id: string;
   content: string;
+  kind?: string;
   status: MemoryProposalStatus;
 };
 
