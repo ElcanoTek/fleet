@@ -1255,3 +1255,65 @@ func (s *Storage) ListEvalRuns(ctx context.Context, evalSet string, limit int) (
 func (s *Storage) LatestEvalRun(ctx context.Context, evalSet string) (*models.EvalRun, error) {
 	return s.db.LatestEvalRun(ctx, evalSet)
 }
+
+// Dataset / table agent (#514)
+
+// CreateDataset persists a dataset definition.
+func (s *Storage) CreateDataset(ctx context.Context, d *models.Dataset) error {
+	return s.db.CreateDataset(ctx, d)
+}
+
+// GetDataset returns one dataset with per-status row counts.
+func (s *Storage) GetDataset(ctx context.Context, id uuid.UUID) (*models.Dataset, error) {
+	return s.db.GetDataset(ctx, id)
+}
+
+// ListDatasets returns every dataset, newest first.
+func (s *Storage) ListDatasets(ctx context.Context) ([]*models.Dataset, error) {
+	return s.db.ListDatasets(ctx)
+}
+
+// UpdateDatasetStatus applies a guarded status transition.
+func (s *Storage) UpdateDatasetStatus(ctx context.Context, id uuid.UUID, from []string, to string) (bool, error) {
+	return s.db.UpdateDatasetStatus(ctx, id, from, to)
+}
+
+// DeleteDataset removes a dataset and its rows.
+func (s *Storage) DeleteDataset(ctx context.Context, id uuid.UUID) error {
+	return s.db.DeleteDataset(ctx, id)
+}
+
+// AddDatasetRows bulk-appends rows.
+func (s *Storage) AddDatasetRows(ctx context.Context, datasetID uuid.UUID, cells []json.RawMessage) (int, error) {
+	return s.db.AddDatasetRows(ctx, datasetID, cells)
+}
+
+// ListDatasetRows pages a dataset's rows, optionally by status.
+func (s *Storage) ListDatasetRows(ctx context.Context, datasetID uuid.UUID, status string, limit, offset int) ([]*models.DatasetRow, error) {
+	return s.db.ListDatasetRows(ctx, datasetID, status, limit, offset)
+}
+
+// ClaimNextDatasetRow atomically claims one pending row for a worker.
+func (s *Storage) ClaimNextDatasetRow(ctx context.Context, datasetID uuid.UUID) (*models.DatasetRow, error) {
+	return s.db.ClaimNextDatasetRow(ctx, datasetID)
+}
+
+// FinishDatasetRow records one row run's outcome.
+func (s *Storage) FinishDatasetRow(ctx context.Context, rowID uuid.UUID, proposed json.RawMessage, note, errMsg string, costUSD float64) error {
+	return s.db.FinishDatasetRow(ctx, rowID, proposed, note, errMsg, costUSD)
+}
+
+// ApproveDatasetRows merges proposed values into cells for review-approved rows.
+func (s *Storage) ApproveDatasetRows(ctx context.Context, datasetID uuid.UUID, ids []uuid.UUID) (int, error) {
+	return s.db.ApproveDatasetRows(ctx, datasetID, ids)
+}
+
+// ResetDatasetRows returns rows to pending for a re-run.
+func (s *Storage) ResetDatasetRows(ctx context.Context, datasetID uuid.UUID, ids []uuid.UUID) (int, error) {
+	return s.db.ResetDatasetRows(ctx, datasetID, ids)
+}
+
+// ResetStaleRunningDatasets is the boot sweep for crash-orphaned runs.
+func (s *Storage) ResetStaleRunningDatasets(ctx context.Context) error {
+	return s.db.ResetStaleRunningDatasets(ctx)
+}

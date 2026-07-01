@@ -19,6 +19,7 @@ import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
 import { SettingsModal } from "./SettingsModal";
 import { SLAReportPanel } from "./SLAReportPanel";
+import { DatasetsPanel } from "./DatasetsPanel";
 
 // OrchestratorClient — the top-level orchestrator (Operations Center) view. It
 // now renders inside the shared unified rail (#169): when signed in, the
@@ -64,7 +65,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   // Top-level dashboard tab (#274): "tasks" is the legacy Recent Tasks view;
   // "sla" swaps in the SLA report panel. Defaults to tasks so the existing
   // dashboard shape is unchanged on load.
-  const [tab, setTab] = useState<"tasks" | "sla">("tasks");
+  const [tab, setTab] = useState<"tasks" | "sla" | "datasets">("tasks");
 
   // #458 symptom 2: the SLA tab + panel are admin-only. role may be absent (an
   // admin-API-key principal carries no role) — treat absent as non-admin for
@@ -179,6 +180,15 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                 {/* #458 symptom 2: only admins see the SLA tab. The render guard
                     below mirrors this — a non-admin holding a stale tab === "sla"
                     still falls back to the tasks view. */}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === "datasets"}
+                  className={`tab-btn${tab === "datasets" ? " tab-btn-active" : ""}`}
+                  onClick={() => setTab("datasets")}
+                >
+                  Datasets
+                </button>
                 {isAdmin ? (
                   <button
                     type="button"
@@ -192,7 +202,9 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                 ) : null}
               </div>
 
-              {tab === "sla" && isAdmin ? (
+              {tab === "datasets" ? (
+                <DatasetsPanel />
+              ) : tab === "sla" && isAdmin ? (
                 <SLAReportPanel />
               ) : (
                 <TasksTable

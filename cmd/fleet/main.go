@@ -50,6 +50,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/datasets"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -631,6 +632,12 @@ func run() error {
 		return registry.Lookup(taskID)
 	})
 
+	// Dataset / table agent (#514): rows run through the SAME governed
+	// interactive entrypoint (Manager.RunTurn → agentcore.Run). Extracted
+	// wiring: boot sweep + runner construction + handler seam.
+	datasetRunner := setupDatasetRunner(schedStorage, mgr, h)
+	defer datasetRunner.Shutdown()
+
 	// Metrics gauges (#176): live in-flight turn counts + warm sandbox depth,
 	// evaluated at each /metrics scrape. Extracted to keep run() within the
 	// cyclomatic budget.
@@ -1056,6 +1063,21 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// then gates on PermissionAdmin (#458). The bare admin-API-key gate made it
 		// unreachable from the dashboard — the proxy can never send X-API-Key.
 		r.Get("/sla-report", h.GetSLAReport)
+		// Dataset / table agent (#514): typed tables whose rows the agent works
+		// in the background, proposing structured write-backs a human approves.
+		// Reads + review actions live here; run/pause drive the in-process
+		// dataset runner via the SetDatasetRunner seam.
+		r.Get("/datasets", h.ListDatasets)
+		r.Post("/datasets", h.CreateDataset)
+		r.Get("/datasets/{datasetID}", h.GetDataset)
+		r.Delete("/datasets/{datasetID}", h.DeleteDataset)
+		r.Get("/datasets/{datasetID}/rows", h.ListDatasetRows)
+		r.Post("/datasets/{datasetID}/rows", h.ImportDatasetRows)
+		r.Post("/datasets/{datasetID}/run", h.RunDataset)
+		r.Post("/datasets/{datasetID}/pause", h.PauseDataset)
+		r.Post("/datasets/{datasetID}/approve", h.ApproveDatasetRows)
+		r.Post("/datasets/{datasetID}/rerun", h.RerunDatasetRows)
+		r.Get("/datasets/{datasetID}/export", h.ExportDataset)
 		r.Get("/tasks", h.ListTasks)
 		// /tasks/tags is registered before /tasks/{task_id} so the static segment
 		// wins over the wildcard (#212 tag catalogue). /tasks/export and
@@ -1149,6 +1171,20 @@ func toDBPoolStats(s sql.DBStats) metrics.DBPoolStats {
 		MaxIdleClosed:       s.MaxIdleClosed,
 		MaxLifetimeClosed:   s.MaxLifetimeClosed,
 	}
+}
+
+// setupDatasetRunner wires the dataset / table agent (#514): the boot sweep
+// resets crash-orphaned running datasets/rows so work is resumable, the
+// runner drives each row through Manager.RunTurn, and the handler seam keeps
+// sched handlers decoupled from the agent graph. Drain (the caller's defer)
+// cancels active runs; in-flight rows persist their outcome best-effort.
+func setupDatasetRunner(schedStorage *storage.Storage, mgr *agent.Manager, h *handlers.Handlers) *datasets.Runner {
+	if err := schedStorage.ResetStaleRunningDatasets(context.Background()); err != nil {
+		log.Printf("dataset boot sweep: %v", err)
+	}
+	datasetRunner := datasets.New(schedStorage, mgr)
+	h.SetDatasetRunner(datasetRunner)
+	return datasetRunner
 }
 
 func chatDSN(cfg *config.Config) string {

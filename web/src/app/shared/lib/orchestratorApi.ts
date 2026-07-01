@@ -171,6 +171,52 @@ export type DashboardStats = {
 
 export type Paginated<T> = { data: T[]; total: number; limit: number; offset: number };
 
+// Dataset / table agent (#514).
+export type DatasetColumn = {
+  name: string;
+  type: "text" | "number" | "boolean";
+  output?: boolean;
+  description?: string;
+};
+
+export type Dataset = {
+  id: string;
+  name: string;
+  goal: string;
+  columns: DatasetColumn[];
+  model?: string;
+  persona?: string;
+  status: "idle" | "running" | "paused";
+  concurrency: number;
+  created_at: string;
+  updated_at: string;
+  row_counts?: Record<string, number>;
+};
+
+export type DatasetRow = {
+  id: string;
+  dataset_id: string;
+  row_index: number;
+  cells: Record<string, unknown>;
+  status: "pending" | "running" | "proposed" | "approved" | "failed";
+  proposed?: Record<string, unknown>;
+  result_note?: string;
+  error?: string;
+  attempts: number;
+  cost_usd: number;
+  updated_at: string;
+};
+
+export type DatasetCreate = {
+  name: string;
+  goal: string;
+  columns: DatasetColumn[];
+  model: string;
+  persona?: string;
+  concurrency?: number;
+};
+
+
 // The MCP server catalog row. Mirrors chat's /mcp-servers row + the per-server
 // credential-account names (never secret values).
 export type McpServer = {
@@ -293,6 +339,38 @@ export const orchestratorApi = {
     request<ConcurrencyConfig>("/concurrency", {
       method: "PUT",
       body: JSON.stringify({ max_concurrent_agents: max }),
+    }),
+
+  // Dataset / table agent (#514).
+  datasets: () => request<{ datasets: Dataset[] }>("/datasets"),
+  dataset: (id: string) => request<Dataset>(`/datasets/${encodeURIComponent(id)}`),
+  createDataset: (body: DatasetCreate) =>
+    request<Dataset>("/datasets", { method: "POST", body: JSON.stringify(body) }),
+  deleteDataset: (id: string) =>
+    request<void>(`/datasets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  datasetRows: (id: string, qs = "") =>
+    request<{ rows: DatasetRow[]; row_counts: Record<string, number> }>(
+      `/datasets/${encodeURIComponent(id)}/rows${qs}`,
+    ),
+  importDatasetRowsCSV: (id: string, csv: string) =>
+    request<{ imported: number }>(`/datasets/${encodeURIComponent(id)}/rows`, {
+      method: "POST",
+      headers: { "Content-Type": "text/csv" },
+      body: csv,
+    }),
+  runDataset: (id: string) =>
+    request<{ status: string }>(`/datasets/${encodeURIComponent(id)}/run`, { method: "POST" }),
+  pauseDataset: (id: string) =>
+    request<{ status: string }>(`/datasets/${encodeURIComponent(id)}/pause`, { method: "POST" }),
+  approveDatasetRows: (id: string, rowIds?: string[]) =>
+    request<{ approved: number }>(`/datasets/${encodeURIComponent(id)}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ row_ids: rowIds ?? [] }),
+    }),
+  rerunDatasetRows: (id: string, rowIds?: string[]) =>
+    request<{ reset: number }>(`/datasets/${encodeURIComponent(id)}/rerun`, {
+      method: "POST",
+      body: JSON.stringify({ row_ids: rowIds ?? [] }),
     }),
 
   uploadFile: async (file: File): Promise<{ filename: string }> => {
