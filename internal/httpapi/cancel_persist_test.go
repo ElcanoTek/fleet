@@ -23,8 +23,8 @@ import (
 type fakeTurnEngine struct {
 	started      chan struct{} // closed once RunTurn is entered
 	partialText  string
-	emitOnCancel bool     // emit a turn.cancelled SSE frame before returning
-	extractFacts []string // returned by ExtractMemories (auto-index tests)
+	emitOnCancel bool                  // emit a turn.cancelled SSE frame before returning
+	extractFacts []agent.ExtractedFact // returned by ExtractMemories (auto-index tests)
 
 	recurringProposal *agent.RecurringTaskProposal // returned by SuggestRecurringTask (#455 promote tests)
 	recurringErr      error
@@ -57,7 +57,7 @@ func (f *fakeTurnEngine) Summarize(context.Context, SummarizeInput) (*SummarizeR
 	return &SummarizeResult{}, nil
 }
 func (f *fakeTurnEngine) SuggestTitle(context.Context, string, string) string { return "" }
-func (f *fakeTurnEngine) ExtractMemories(context.Context, string, string, []string) []string {
+func (f *fakeTurnEngine) ExtractMemories(context.Context, string, string, []string) []agent.ExtractedFact {
 	return f.extractFacts
 }
 func (f *fakeTurnEngine) SuggestRecurringTask(context.Context, string, []string) (*agent.RecurringTaskProposal, error) {

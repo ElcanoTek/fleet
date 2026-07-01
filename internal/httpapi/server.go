@@ -771,12 +771,15 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 		sub = parts[1]
 	}
 	if sub == "accept" && r.Method == http.MethodPost {
-		memory, err := s.store.AcceptMemoryProposal(r.Context(), user, id)
+		memory, supersede, err := s.store.AcceptMemoryProposal(r.Context(), user, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, memory)
+		// The envelope (vs the bare memory) carries the #515 stage-2 outcome:
+		// what happened to the older fact this proposal claimed to replace
+		// ("retired", or the guard that kept it — pinned/changed/missing/…).
+		writeJSON(w, map[string]any{"memory": memory, "supersede": supersede})
 		return
 	}
 	switch r.Method {
@@ -1315,13 +1318,37 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// Resolve supersede-claim targets so re-hydrated cards can render
+		// "replaces: …" — one user-scoped list lookup covers every claim.
+		var byID map[string]store.Memory
+		for _, m := range pendingMems {
+			if m.Supersedes == "" {
+				continue
+			}
+			all, err := s.store.ListMemories(r.Context(), user)
+			if err != nil {
+				break // display-only enrichment; the card still renders without it
+			}
+			byID = make(map[string]store.Memory, len(all))
+			for _, mm := range all {
+				byID[mm.ID] = mm
+			}
+			break
+		}
 		memProposals := make([]map[string]any, 0, len(pendingMems))
 		for _, m := range pendingMems {
-			memProposals = append(memProposals, map[string]any{
+			entry := map[string]any{
 				"proposal_id": m.ID,
 				"content":     m.Content,
 				"kind":        m.Kind,
-			})
+			}
+			if m.Supersedes != "" {
+				entry["supersedes_id"] = m.Supersedes
+				if t, ok := byID[m.Supersedes]; ok {
+					entry["supersedes_content"] = excerpt(t.Content, 200)
+				}
+			}
+			memProposals = append(memProposals, entry)
 		}
 		writeJSON(w, map[string]any{
 			"conversation":             conv,
@@ -2238,7 +2265,7 @@ func (s *Server) runTurnAsync(
 	// cancelled/empty turns. Off by default (opt-in).
 	if s.cfg.MemoryAutoIndexEnabled && !res.Cancelled && strings.TrimSpace(res.FinalText) != "" {
 		memCtx, memCancel := context.WithTimeout(turnCtx, 30*time.Second)
-		s.autoIndexMemories(memCtx, buf, conv.ID, user, userInput, res.FinalText, memories)
+		s.autoIndexMemories(memCtx, buf, conv.ID, user, userInput, res.FinalText)
 		memCancel()
 	}
 }

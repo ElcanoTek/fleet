@@ -1353,6 +1353,7 @@ export function ChatExperience() {
           proposal_id: string;
           content: string;
           kind?: string;
+          supersedes_content?: string;
         }>;
       };
       setActiveConversationId(data.conversation.id);
@@ -1389,6 +1390,7 @@ export function ChatExperience() {
           id: p.proposal_id,
           content: p.content,
           kind: p.kind,
+          supersedesContent: p.supersedes_content,
           status: "pending",
         }));
         const lastAssistantIdx = (() => {
