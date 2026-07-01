@@ -64,7 +64,7 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 		"(2) `cron` — a STANDARD 5-field cron expression for a sensible cadence implied by the task (e.g. a daily report → \"0 9 * * *\"; a weekday check → \"0 8 * * MON-FRI\"). If the conversation gives no hint, choose a reasonable daily time. " +
 		"(3) `name` — a short (≤6 word) label, distinct from the user's existing task names. " +
 		"(4) `rationale` — one sentence on why this cadence + prompt fit. " +
-		"The user will review and can edit or cancel before anything is created. " +
+		"The user will review the proposal and either approve or cancel it before anything is created (they cannot edit it inline), so make the prompt and cadence correct and ready-to-run as written. " +
 		structuredoutput.PromptAugmentation(json.RawMessage(recurringTaskSchema))
 
 	var b strings.Builder
@@ -80,7 +80,9 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 		b.WriteString("\n")
 	}
 	b.WriteString("CONVERSATION TRANSCRIPT:\n")
-	b.WriteString(truncate(transcript, 12000))
+	// Keep the MOST RECENT turns when truncating: the refined result the user
+	// wants to make recurring is at the END of a long exploration, not the start.
+	b.WriteString(keepRecentTranscript(transcript, recurringTranscriptMaxRunes))
 
 	ag := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(sys),
@@ -125,3 +127,17 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 }
 
 const recurringTaskMaxOutputTokens = 1200
+
+// recurringTranscriptMaxRunes bounds the transcript fed to the synthesizer.
+const recurringTranscriptMaxRunes = 12000
+
+// keepRecentTranscript returns the last maxRunes of s (rune-safe), so a long
+// conversation is synthesized from its refined tail rather than its exploratory
+// opening. A marker flags that earlier turns were dropped.
+func keepRecentTranscript(s string, maxRunes int) string {
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return "…[earlier turns omitted]…\n" + string(r[len(r)-maxRunes:])
+}

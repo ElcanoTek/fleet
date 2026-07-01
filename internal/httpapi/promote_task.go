@@ -102,11 +102,16 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 	// user-initiated action they may take a moment to review.
 	sink := &promoteCaptureSink{}
 	stager := &approvalStager{
-		ctx:                  ctx,
-		store:                s.store,
-		conversationID:       convID,
-		userEmail:            user,
-		sink:                 sink,
+		ctx:            ctx,
+		store:          s.store,
+		conversationID: convID,
+		userEmail:      user,
+		sink:           sink,
+		// Honor the conversation's per-chat approval-timeout override if set
+		// (same as the turn-time stager); otherwise fall back to a generous 1h
+		// window, since this is a deliberate user-initiated action they may take a
+		// moment to review.
+		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
 		globalTimeoutSeconds: promoteApprovalTimeoutSeconds,
 	}
 	if _, err := stager.Stage("schedule_task", "", string(rawInput)); err != nil {

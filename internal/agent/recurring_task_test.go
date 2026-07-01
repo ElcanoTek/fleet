@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
@@ -25,5 +26,21 @@ func TestRecurringTaskSchema(t *testing.T) {
 	bad := `{"name":"x","cron":"0 9 * * *","rationale":"y"}`
 	if _, err := structuredoutput.ValidateOutput(bad, raw); err == nil {
 		t.Error("a proposal missing `prompt` must be rejected")
+	}
+}
+
+// TestKeepRecentTranscript verifies truncation keeps the TAIL (recent turns),
+// which is where the refined result lives — not the exploratory opening.
+func TestKeepRecentTranscript(t *testing.T) {
+	if got := keepRecentTranscript("short", 100); got != "short" {
+		t.Errorf("under-limit input should pass through, got %q", got)
+	}
+	long := strings.Repeat("a", 50) + "FINAL_RESULT"
+	got := keepRecentTranscript(long, 20)
+	if !strings.HasSuffix(got, "FINAL_RESULT") {
+		t.Errorf("truncation must keep the recent tail; got %q", got)
+	}
+	if !strings.Contains(got, "earlier turns omitted") {
+		t.Errorf("truncation should mark dropped earlier turns; got %q", got)
 	}
 }
