@@ -485,6 +485,11 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	runCtx = scheduledrun.WithWorkspaceReporter(runCtx, func(_ context.Context, path string) {
 		p.reportWorkspacePath(task.ID, path)
 	})
+	// Collect the named artifacts the agent publishes via publish_artifact (#204);
+	// persisted on the success path below, before the terminal transition clears
+	// the lease.
+	artifactColl := scheduledrun.NewArtifactCollector()
+	runCtx = scheduledrun.WithArtifactCollector(runCtx, artifactColl)
 
 	session, runErr := p.runner.Run(runCtx, task)
 
@@ -594,6 +599,9 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		if len(task.OutputSchema) > 0 {
 			p.recordStructuredOutput(task, session)
 		}
+		// Persist the published-artifact manifest (#204) under the held lease,
+		// before the terminal success clears it. No-op when nothing was published.
+		p.recordArtifacts(task.ID, artifactColl.Marshal())
 		if _, err := p.reportStatus(task.ID, models.TaskStatusSuccess, "Task completed successfully"); err != nil {
 			log.Printf("runner: failed to report success for task %s: %v", task.ID, err)
 		}
@@ -733,6 +741,25 @@ func (p *Pool) recordStructuredOutput(task *models.Task, session *models.LogSess
 		OutputJSON: out,
 	}); err != nil {
 		log.Printf("runner: task %s failed to persist output_json: %v", task.ID, err)
+	}
+}
+
+// recordArtifacts persists the published-artifact manifest (#204) the run's
+// agent produced via publish_artifact, riding a TaskStatusRunning update under
+// the held lease exactly like recordStructuredOutput — BEFORE the terminal
+// success clears the lease. An empty manifest persists nothing (the column
+// stays NULL and GET /tasks/{id}/artifacts 404s); a persist failure is logged
+// and swallowed so the run still succeeds.
+func (p *Pool) recordArtifacts(taskID uuid.UUID, manifest json.RawMessage) {
+	if len(manifest) == 0 {
+		return
+	}
+	if _, err := p.store.UpdateTaskStatusAtomicWithContext(context.Background(), taskID, p.leaseOwner, &models.StatusUpdate{
+		TaskID:    taskID,
+		Status:    models.TaskStatusRunning,
+		Artifacts: manifest,
+	}); err != nil {
+		log.Printf("runner: task %s failed to persist artifacts: %v", taskID, err)
 	}
 }
 

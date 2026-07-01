@@ -588,6 +588,41 @@ paths:
                     items: { type: string }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/artifacts:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: List a task's published output artifacts (#204).
+      description: >
+        Returns the curated manifest of named output files the run's agent
+        explicitly published via the publish_artifact tool — a JSON array of
+        {name, path, description, size} — distinct from the raw per-run workspace
+        the workspace endpoints expose. Each entry's path is downloadable via the
+        task's workspace file endpoint. Restricted to the task's creator (or an
+        admin), like the workspace file endpoints — the manifest indexes the
+        creator-private workspace. 404 when the run published no artifacts; 409
+        while the task has not yet reached a terminal state.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: The published-artifact manifest.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [name, path, size]
+                  properties:
+                    name: { type: string }
+                    path: { type: string }
+                    description: { type: string }
+                    size: { type: integer, format: int64 }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}/tags:
     parameters:
       - name: task_id

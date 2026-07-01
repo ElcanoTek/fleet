@@ -1279,6 +1279,64 @@ func (h *Handlers) GetTaskErrorAnalysis(w http.ResponseWriter, r *http.Request) 
 	_, _ = w.Write(task.ErrorAnalysis) //nolint:gosec // G705: validated JSON served as application/json, not an HTML/XSS context
 }
 
+// GetTaskArtifacts handles GET /tasks/{task_id}/artifacts (#204): the curated
+// manifest of named output files the run's agent published via publish_artifact,
+// returned raw as application/json — a JSON array of {name, path, description,
+// size}. Each entry's path is downloadable via the task's workspace file
+// endpoint. 404 when the run published no artifacts; 409 while the task has not
+// reached a terminal state (the manifest isn't final — poll again). Mirrors
+// GetTaskOutput.
+func (h *Handlers) GetTaskArtifacts(w http.ResponseWriter, r *http.Request) {
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionViewTasks) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return
+	}
+
+	taskIDStr := chi.URLParam(r, "task_id")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid task ID")
+		return
+	}
+
+	task, err := h.storage.GetTask(taskID)
+	if err != nil || task == nil {
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+
+	// The manifest is the directory index of the creator-private per-run workspace
+	// (#287) — paths plus agent-authored descriptions — so it is gated with the
+	// SAME creator-only ownership check as the workspace file endpoints, NOT the
+	// permissive task-visibility scope check the /output and /error-analysis
+	// siblings use. Otherwise it would leak another user's workspace file metadata
+	// under a looser gate than the bytes it indexes (which taskWorkspaceOwned
+	// already restricts to admin/creator).
+	if !taskWorkspaceOwned(p, task) {
+		writeError(w, http.StatusForbidden, "Artifacts are private to the task creator")
+		return
+	}
+
+	if len(task.Artifacts) == 0 {
+		// Distinguish "not ready yet" (still pending/running — the manifest is
+		// persisted on the success path) from "never will be" (terminal, but the
+		// run published nothing) so a poller knows whether to retry.
+		if !task.Status.IsTerminal() {
+			writeError(w, http.StatusConflict, "Task has not finished; the artifact manifest is not yet final")
+			return
+		}
+		writeError(w, http.StatusNotFound, "Task published no artifacts")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	// artifacts is a marshaled []models.TaskArtifact served as application/json —
+	// not HTML — so there is no XSS sink here.
+	_, _ = w.Write(task.Artifacts) //nolint:gosec // G705: server-built JSON served as application/json, not an HTML/XSS context
+}
+
 // CleanupHistory handles POST /tasks/cleanup
 func (h *Handlers) CleanupHistory(w http.ResponseWriter, r *http.Request) {
 	days := 7

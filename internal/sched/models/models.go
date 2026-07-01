@@ -850,7 +850,14 @@ type Task struct {
 	// the agent produced conforming JSON (#244). nil when no schema was declared
 	// or validation failed (the free-form Result still holds the text either way).
 	OutputJSON json.RawMessage `json:"output_json,omitempty"`
-	Priority   int             `json:"priority"`
+	// Artifacts is the manifest of named output files the run's agent explicitly
+	// PUBLISHED via the publish_artifact tool (#204) — a curated list of
+	// deliverables (a marshaled []TaskArtifact), distinct from the raw workspace
+	// the file-browser endpoints expose. nil when the run published none. Each
+	// entry's Path is a workspace-relative path downloadable via the workspace
+	// file endpoint. Persisted on the run's success path; not client-settable.
+	Artifacts json.RawMessage `json:"artifacts,omitempty"`
+	Priority  int             `json:"priority"`
 	// EffectivePriority is the value the scheduler actually orders the pending
 	// queue by (#230). Equal to Priority at creation; only the anti-starvation
 	// sweep lowers it (never Priority) so a long-waiting task is eventually
@@ -1407,7 +1414,23 @@ type StatusUpdate struct {
 	// existing value untouched. Set on a running-status update by the runner before
 	// the terminal success, mirroring WorkspacePath.
 	OutputJSON json.RawMessage `json:"output_json,omitempty"`
-	Timestamp  *time.Time      `json:"timestamp,omitempty"`
+	// Artifacts carries the published-artifact manifest (#204), a marshaled
+	// []TaskArtifact. When non-empty the storage layer persists it on the task's
+	// artifacts column; empty leaves the existing value untouched. Set on a
+	// running-status update by the runner before terminal success, like OutputJSON.
+	Artifacts json.RawMessage `json:"artifacts,omitempty"`
+	Timestamp *time.Time      `json:"timestamp,omitempty"`
+}
+
+// TaskArtifact is one named output file a scheduled run's agent published via the
+// publish_artifact tool (#204). Path is workspace-relative (the same namespace
+// the workspace file-browser serves), so a client lists artifacts via
+// GET /tasks/{id}/artifacts and downloads each via the workspace file endpoint.
+type TaskArtifact struct {
+	Name        string `json:"name"`                  // base filename, sanitized
+	Path        string `json:"path"`                  // workspace-relative path
+	Description string `json:"description,omitempty"` // optional agent-supplied note
+	Size        int64  `json:"size"`                  // bytes at publish time
 }
 
 // TaskAssignment is the task assignment carried to the worker.

@@ -437,6 +437,38 @@ DLQ task persists until it is replayed (or explicitly removed).
 
 ---
 
+## Published output artifacts (#204)
+
+A scheduled run's agent can mark files it produced in the workspace as **named
+output artifacts** via the `publish_artifact` tool — a *curated* manifest of
+deliverables (the report, the processed dataset, the rendered document),
+distinct from the raw per-run workspace the file-browser endpoints already
+expose. The agent writes a file, then publishes its workspace-relative path with
+an optional description; the tool validates the path stays inside the workspace
+(no traversal / symlink escape) and names an existing regular file, then records
+`{name, path, description, size}`. It never reads, copies, or moves the bytes —
+the file stays in the workspace.
+
+The tool is **scheduled-only** (assembled beside `create_task` / the metadata
+tools) and **ungated**: it can only record files in the run's own workspace,
+which the operator can already browse, so it grants no new access. A per-run cap
+bounds the manifest; re-publishing a path updates it in place.
+
+The manifest is persisted on the run's **success path**, under the held lease,
+just before the terminal transition (riding a running-status update like the
+structured-output capture, #244) into a nullable `artifacts` JSONB column. The
+column is deliberately excluded from the task upsert, so a later status update
+cannot clobber it. `GET /tasks/{id}/artifacts` returns the manifest (404 when the
+run published none; 409 while non-terminal); each entry's path is downloadable
+via the existing workspace file endpoint. Because the manifest indexes the
+creator-private workspace (#287), the endpoint is gated to the task's **creator
+or an admin** — the same ownership check as the workspace file endpoints, not the
+looser task-visibility used by `/output`. A re-run (lease recovery) clears the
+prior attempt's manifest, so a task only ever serves the artifacts of its
+latest, successful attempt.
+
+---
+
 ## The scheduled end-of-run verifier
 
 Scheduled runs layer an extra host-side LLM re-check on top of the shared

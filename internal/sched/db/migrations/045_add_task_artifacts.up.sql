@@ -1,0 +1,11 @@
+-- 045_add_task_artifacts.up.sql — task artifact management (#204).
+--
+-- artifacts is an optional manifest (nullable JSONB) of the named output files a
+-- scheduled run's agent explicitly PUBLISHED via the publish_artifact tool: a
+-- marshaled []TaskArtifact ({name, path, description, size}). It is a CURATED
+-- list of deliverables, distinct from the raw per-run workspace the file-browser
+-- endpoints already expose. NULL on every existing row and on a run that
+-- published nothing = no manifest (the prior behaviour), so existing tasks are
+-- byte-for-byte unchanged. Written on the run's success path via the lease-
+-- checked atomic status update (like output_json, #244); never set on create.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS artifacts JSONB;
