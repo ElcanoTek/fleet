@@ -10,6 +10,8 @@ import (
 // ProposeMemoryParams are the typed parameters for the propose_memory tool.
 type ProposeMemoryParams struct {
 	Content string `json:"content" description:"The memory text to propose saving. Should be concise (1-2 sentences) and capture a durable user preference, fact, or context."`
+	// Kind types the memory (#515). Optional; unknown values are stored as "fact".
+	Kind string `json:"kind,omitempty" description:"What sort of memory this is: fact | preference | identity | constraint | context. Omit if unsure (defaults to fact)."`
 }
 
 // NewProposeMemoryTool creates the propose_memory native tool.

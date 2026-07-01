@@ -171,9 +171,20 @@ type UserMemory = {
   id: string;
   content: string;
   source: "manual" | "chat" | string;
+  kind?: string;
+  origin?: string;
+  conversation_id?: string;
+  pinned?: boolean;
+  valid_from?: number;
+  valid_to?: number;
+  learned_at?: number;
+  retired_at?: number;
+  retired_by?: string;
   created_at: number;
   updated_at: number;
 };
+
+const MEMORY_KINDS = ["fact", "preference", "identity", "constraint", "context"] as const;
 
 // ── streaming helpers ────────────────────────────────────────────────────
 // minimumThinkingMs / streamIdleTimeoutMs moved into ./useTurnStream alongside
@@ -421,6 +432,7 @@ export function ChatExperience() {
   const [memories, setMemories] = useState<UserMemory[]>([]);
   const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("");
+  const [memoryKindDraft, setMemoryKindDraft] = useState<string>("fact");
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
   const [memoryError, setMemoryError] = useState<string | null>(null);
   const [isLoadingMemories, setIsLoadingMemories] = useState(false);
@@ -1172,6 +1184,7 @@ export function ChatExperience() {
   const openMemoryManager = () => {
     setMemoryManagerOpen(true);
     setMemoryDraft("");
+    setMemoryKindDraft("fact");
     setEditingMemoryId(null);
     void loadMemories();
   };
@@ -1188,10 +1201,11 @@ export function ChatExperience() {
       const response = await fetch(url, {
         method: editingMemoryId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, kind: memoryKindDraft }),
       });
       if (!response.ok) throw new Error(await response.text());
       setMemoryDraft("");
+      setMemoryKindDraft("fact");
       setEditingMemoryId(null);
       await loadMemories();
     } catch (err) {
@@ -1213,6 +1227,24 @@ export function ChatExperience() {
       }
     } catch (err) {
       setMemoryError(err instanceof Error && err.message ? err.message : "Unable to delete memory.");
+    }
+  };
+
+  // Partial update for the #515 controls (pin/unpin, retire/restore). The
+  // server treats absent fields as untouched, so each action sends only its
+  // own flag.
+  const patchMemory = async (id: string, patch: { pinned?: boolean; retired?: boolean }) => {
+    setMemoryError(null);
+    try {
+      const response = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      await loadMemories();
+    } catch (err) {
+      setMemoryError(err instanceof Error && err.message ? err.message : "Unable to update memory.");
     }
   };
 
@@ -1320,6 +1352,7 @@ export function ChatExperience() {
         pending_memory_proposals?: Array<{
           proposal_id: string;
           content: string;
+          kind?: string;
         }>;
       };
       setActiveConversationId(data.conversation.id);
@@ -1355,6 +1388,7 @@ export function ChatExperience() {
         const memoryCards: MemoryProposal[] = pendingMemoryProposals.map((p) => ({
           id: p.proposal_id,
           content: p.content,
+          kind: p.kind,
           status: "pending",
         }));
         const lastAssistantIdx = (() => {
@@ -2556,9 +2590,23 @@ export function ChatExperience() {
                   onChange={(event) => setMemoryDraft(event.target.value)}
                 />
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[0.72rem] text-[var(--color-text-muted)]">
-                    Chat also auto-saves explicit phrases like “remember this:” or “memorize that:”.
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[0.72rem] text-[var(--color-text-muted)]" htmlFor="memory-kind">
+                      Kind
+                    </label>
+                    <select
+                      id="memory-kind"
+                      className="rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                      value={memoryKindDraft}
+                      onChange={(event) => setMemoryKindDraft(event.target.value)}
+                    >
+                      {MEMORY_KINDS.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <div className="flex items-center gap-2">
                     {editingMemoryId ? (
                       <button
@@ -2599,44 +2647,90 @@ export function ChatExperience() {
                   </p>
                 ) : (
                   <div className="grid gap-2">
-                    {memories.map((memory) => (
-                      <div
-                        key={memory.id}
-                        className="rounded-[0.9rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3"
-                      >
-                        <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)]">
-                          {memory.content}
-                        </p>
-                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
-                          <span>
-                            {memory.source === "chat"
-                              ? "Saved from chat"
-                              : memory.source === "proposed"
-                                ? "Proposed"
-                                : "Manual"}
-                          </span>
-                          <div className="flex items-center gap-3">
-                            <button
-                              type="button"
-                              className="hover:text-[var(--color-text-primary)]"
-                              onClick={() => {
-                                setEditingMemoryId(memory.id);
-                                setMemoryDraft(memory.content);
-                              }}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              className="hover:text-[var(--color-danger)]"
-                              onClick={() => void deleteMemory(memory.id)}
-                            >
-                              Delete
-                            </button>
+                    {memories.map((memory) => {
+                      const retired = memory.retired_at != null;
+                      const sourceLabel =
+                        memory.source === "chat"
+                          ? memory.origin === "auto"
+                            ? "Auto-extracted from chat"
+                            : "Saved from chat"
+                          : memory.source === "proposed"
+                            ? "Proposed"
+                            : "Manual";
+                      const learned = memory.learned_at
+                        ? new Date(memory.learned_at * 1000).toLocaleDateString()
+                        : null;
+                      return (
+                        <div
+                          key={memory.id}
+                          className={`rounded-[0.9rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 ${retired ? "opacity-60" : ""}`}
+                        >
+                          <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)]">
+                            {memory.pinned ? <span title="Pinned">📌 </span> : null}
+                            {memory.content}
+                          </p>
+                          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
+                            <span>
+                              {memory.kind && memory.kind !== "fact" ? (
+                                <span className="mr-1.5 rounded-full border border-[var(--color-border)] px-1.5 py-0.5">
+                                  {memory.kind}
+                                </span>
+                              ) : null}
+                              {sourceLabel}
+                              {learned ? ` · learned ${learned}` : ""}
+                              {retired ? " · retired" : ""}
+                            </span>
+                            <div className="flex items-center gap-3">
+                              {retired ? (
+                                <button
+                                  type="button"
+                                  className="hover:text-[var(--color-text-primary)]"
+                                  onClick={() => void patchMemory(memory.id, { retired: false })}
+                                >
+                                  Restore
+                                </button>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="hover:text-[var(--color-text-primary)]"
+                                    onClick={() => void patchMemory(memory.id, { pinned: !memory.pinned })}
+                                  >
+                                    {memory.pinned ? "Unpin" : "Pin"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="hover:text-[var(--color-text-primary)]"
+                                    onClick={() => {
+                                      setEditingMemoryId(memory.id);
+                                      setMemoryDraft(memory.content);
+                                      setMemoryKindDraft(memory.kind ?? "fact");
+                                    }}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="hover:text-[var(--color-text-primary)]"
+                                    title="Keep for audit, stop injecting into chats"
+                                    onClick={() => void patchMemory(memory.id, { retired: true })}
+                                  >
+                                    Retire
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                className="hover:text-[var(--color-danger)]"
+                                onClick={() => void deleteMemory(memory.id)}
+                              >
+                                Delete
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

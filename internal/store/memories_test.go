@@ -21,15 +21,15 @@ func TestMemoryProposalConversationScope(t *testing.T) {
 	convB := "conv-b"
 
 	// Two proposals on conv-a, one on conv-b.
-	a1, err := s.CreateMemoryProposal(ctx, user, convA, "first thought")
+	a1, err := s.CreateMemoryProposal(ctx, user, convA, "first thought", "", "tool")
 	if err != nil {
 		t.Fatalf("create A1: %v", err)
 	}
-	a2, err := s.CreateMemoryProposal(ctx, user, convA, "second thought")
+	a2, err := s.CreateMemoryProposal(ctx, user, convA, "second thought", "", "tool")
 	if err != nil {
 		t.Fatalf("create A2: %v", err)
 	}
-	b1, err := s.CreateMemoryProposal(ctx, user, convB, "third thought")
+	b1, err := s.CreateMemoryProposal(ctx, user, convB, "third thought", "", "tool")
 	if err != nil {
 		t.Fatalf("create B1: %v", err)
 	}
@@ -121,11 +121,114 @@ func TestMemoryProposalEmptyContent(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.CreateMemoryProposal(ctx, "test@example.com", "conv-x", "   \n\t  ")
+	_, err := s.CreateMemoryProposal(ctx, "test@example.com", "conv-x", "   \n\t  ", "", "tool")
 	if err == nil {
 		t.Fatal("expected error for whitespace-only content")
 	}
 	if !strings.Contains(err.Error(), "content required") {
 		t.Errorf("error = %v, want 'content required'", err)
+	}
+}
+
+// #515 typed memory MVP: kind normalization, partial patch, retirement,
+// validity window, pinned-first ordering, and provenance retention on accept.
+func TestTypedMemoryLifecycle(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	user := "typed@example.com"
+
+	// Unknown kind normalizes to "fact"; known kinds stick.
+	m, err := s.CreateMemory(ctx, user, "likes terse answers", "manual", "preference")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Kind != "preference" || m.Origin != "manual" || m.LearnedAt == 0 {
+		t.Fatalf("typed create: %+v", m)
+	}
+	weird, err := s.CreateMemory(ctx, user, "weird kind", "manual", "vibe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if weird.Kind != "fact" {
+		t.Fatalf("unknown kind must normalize to fact, got %q", weird.Kind)
+	}
+
+	// Partial patch: pin + validity window; content untouched.
+	from := int64(1700000000)
+	pinTrue := true
+	patched, err := s.UpdateMemory(ctx, user, m.ID, MemoryPatch{Pinned: &pinTrue, ValidFrom: &from})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !patched.Pinned || patched.ValidFrom == nil || *patched.ValidFrom != from || patched.Content != "likes terse answers" {
+		t.Fatalf("patch: %+v", patched)
+	}
+	// 0 clears a validity bound.
+	zero := int64(0)
+	cleared, err := s.UpdateMemory(ctx, user, m.ID, MemoryPatch{ValidFrom: &zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.ValidFrom != nil {
+		t.Fatalf("valid_from must clear on 0, got %v", *cleared.ValidFrom)
+	}
+	// Empty patch is an error.
+	if _, err := s.UpdateMemory(ctx, user, m.ID, MemoryPatch{}); err == nil {
+		t.Fatal("empty patch must error")
+	}
+
+	// Manual retirement + restore.
+	retire := true
+	retired, err := s.UpdateMemory(ctx, user, weird.ID, MemoryPatch{Retired: &retire})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retired.Retired() || retired.RetiredBy != "" {
+		t.Fatalf("manual retire: %+v", retired)
+	}
+	// Retired rows list AFTER active ones; pinned actives first.
+	list, err := s.ListMemories(ctx, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || list[0].ID != m.ID || !list[0].Pinned || !list[1].Retired() {
+		t.Fatalf("ordering: %+v", list)
+	}
+	restore := false
+	restored, err := s.UpdateMemory(ctx, user, weird.ID, MemoryPatch{Retired: &restore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Retired() {
+		t.Fatalf("restore failed: %+v", restored)
+	}
+}
+
+func TestAcceptMemoryProposalRetainsProvenance(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	user := "prov@example.com"
+	p, err := s.CreateMemoryProposal(ctx, user, "conv-42", "team uses trunk-based dev", "constraint", "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Kind != "constraint" || p.Origin != "auto" || p.ConversationID != "conv-42" {
+		t.Fatalf("proposal provenance: %+v", p)
+	}
+	got, err := s.AcceptMemoryProposal(ctx, user, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// #515: conversation_id is provenance and must SURVIVE acceptance.
+	if got.Source != "chat" || got.ConversationID != "conv-42" || got.Kind != "constraint" || got.Origin != "auto" {
+		t.Fatalf("accept must retain provenance: %+v", got)
+	}
+	// Retained conversation_id must NOT re-mark the row as pending.
+	pending, err := s.ListPendingMemoryProposalsForConversation(ctx, user, "conv-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("accepted row still pending: %+v", pending)
 	}
 }

@@ -415,7 +415,7 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 
 	if len(memories) > 0 {
 		sb.WriteString("## User Memories\n\n")
-		sb.WriteString("These memories are explicitly saved by this authenticated user and apply across their conversations. Treat them as durable user context, but do not reveal private memory contents unless relevant to the user's request.\n\n")
+		sb.WriteString("These memories are explicitly saved by this authenticated user and apply across their conversations. Treat them as durable user context, but do not reveal private memory contents unless relevant to the user's request. If two memories conflict, prefer the one with the more recent validity annotation; when in doubt, ask the user rather than assert a stale fact.\n\n")
 		for _, memory := range memories {
 			memory = strings.TrimSpace(memory)
 			if memory == "" {

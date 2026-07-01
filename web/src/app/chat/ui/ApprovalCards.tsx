@@ -1088,6 +1088,11 @@ export function MemoryProposalCard({
           M
         </span>
         Save this memory?
+        {proposal.kind && proposal.kind !== "fact" ? (
+          <span className="rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[0.65rem] font-normal text-[var(--color-text-muted)]">
+            {proposal.kind}
+          </span>
+        ) : null}
       </div>
       <p className="mb-3 whitespace-pre-wrap text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
         {proposal.content}
