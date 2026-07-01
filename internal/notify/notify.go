@@ -107,6 +107,10 @@ const (
 	// StatusFailure is a task that reached a terminal failure (errored,
 	// dead-lettered, or interrupted) — anything the operator would want paged on.
 	StatusFailure Status = "failure"
+	// StatusProgress is a NON-terminal, out-of-band update (#510 notify /
+	// ask-pause): a heads-up mid-run, not a completion. Fires under the same
+	// On-list filter as terminal statuses.
+	StatusProgress Status = "progress"
 )
 
 // Event is the fully-resolved, secret-free outcome of one task run. The runner
@@ -131,6 +135,10 @@ type Event struct {
 	// LogURL is the absolute link to the run's log in the orchestrator UI, or ""
 	// when no public base URL is configured.
 	LogURL string
+	// Message is an optional free-text line for a StatusProgress event (#510):
+	// the notify/ask text. Empty for terminal events. Rendered into the email
+	// body; the default webhook template omits it (additive, no template churn).
+	Message string
 }
 
 // shouldFire reports whether this status is one the config asked to be notified

@@ -575,6 +575,18 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// (only reachable via a test double) makes the tool return a clear error.
 	nativeTools = append(nativeTools, tools.MetadataTools(r.mgr, r.cfg.MetadataModel)...)
 
+	// ask / notify (#510): human-in-the-loop message types, SCHEDULED-only (a
+	// human is present in interactive chat). notify is registered whenever a
+	// notify handler is installed; ask ONLY when an ask handler is (the runner
+	// installs both on the run context). Absent handlers → the tools aren't
+	// registered, so the model never sees a capability it can't use.
+	if tools.NotifyHandlerInstalled(ctx) {
+		nativeTools = append(nativeTools, tools.NewNotifyTool())
+	}
+	if tools.AskHandlerInstalled(ctx) {
+		nativeTools = append(nativeTools, tools.NewAskTool())
+	}
+
 	// publish_artifact (#204) lets a run mark workspace files as named, downloadable
 	// deliverables (a curated manifest, distinct from the raw workspace the
 	// file-browser endpoints already expose). Wired ONLY when the runner installed
@@ -612,6 +624,16 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// Per-task persona override (#221): a task may name a personas/<name>.yaml to
 	// swap in specialized domain expertise; empty uses the runner's global persona.
 	taskSystemPrompt, taskPersona := r.taskPromptAndPersona(task)
+
+	// Resumed after ask (#510): this run follows a human answer to a question a
+	// prior run posed. Inject the Q&A so the agent continues with the answer in
+	// hand; the runner clears the pending columns once the run has started.
+	if strings.TrimSpace(task.PendingAnswer) != "" {
+		taskSystemPrompt += "\n\n## Resumed — Human Answer\n\n" +
+			"A previous run of this task paused to ask a human a question. Continue the task using their answer.\n\n" +
+			"Your question was: " + strings.TrimSpace(task.PendingQuestion) + "\n\n" +
+			"The human answered: " + strings.TrimSpace(task.PendingAnswer) + "\n"
+	}
 
 	// Structured-output mode (#244): when the task declares an output_schema, tell
 	// the agent its final answer must be JSON conforming to that schema. The

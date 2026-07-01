@@ -374,7 +374,7 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -1114,6 +1114,8 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		allowDelegation        bool
 		outputSchema           sql.NullString
 		outputJSON             sql.NullString
+		pendingQuestion        sql.NullString
+		pendingAnswer          sql.NullString
 		errorAnalysis          sql.NullString
 		artifacts              sql.NullString
 	)
@@ -1130,6 +1132,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
 		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis, &artifacts,
+		&pendingQuestion, &pendingAnswer,
 	)
 	if err != nil {
 		return nil, err
@@ -1176,6 +1179,12 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	task.OutputSchema = unmarshalRawJSON(outputSchema)
 	task.OutputJSON = unmarshalRawJSON(outputJSON)
 	task.ErrorAnalysis = unmarshalRawJSON(errorAnalysis)
+	if pendingQuestion.Valid {
+		task.PendingQuestion = pendingQuestion.String
+	}
+	if pendingAnswer.Valid {
+		task.PendingAnswer = pendingAnswer.String
+	}
 	task.Artifacts = unmarshalRawJSON(artifacts)
 	task.RetryPolicy = unmarshalRetryPolicy(retryPolicy)
 	task.Persona = persona.String
@@ -1667,6 +1676,70 @@ func (db *Database) MarkSLABreached(ctx context.Context, taskID uuid.UUID) error
 	_, err := db.conn.ExecContext(ctx,
 		`UPDATE tasks SET sla_breached = TRUE WHERE id = $1`, taskID)
 	return err
+}
+
+// PauseTaskForQuestion parks a RUNNING task in paused_awaiting_input with the
+// agent's question (#510), clearing the lease so the paused task holds no
+// sandbox/container. Guarded on the caller's lease so a recovered run can't
+// pause a task it no longer owns. Returns whether it applied.
+func (db *Database) PauseTaskForQuestion(ctx context.Context, taskID, leaseOwner uuid.UUID, question string) (bool, error) {
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET status = 'paused_awaiting_input', pending_question = $1,
+			lease_owner = NULL, lease_expires_at = NULL
+		WHERE id = $2 AND lease_owner = $3 AND status = 'running'`,
+		question, taskID, leaseOwner)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ResumeTask answers a paused task's question and re-queues it (#510): status →
+// pending, pending_answer set, scheduled_for = now so it is immediately
+// claimable. Guarded on the paused status. Returns whether it applied.
+func (db *Database) ResumeTask(ctx context.Context, taskID uuid.UUID, answer string) (bool, error) {
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET status = 'pending', pending_answer = $1, scheduled_for = now()
+		WHERE id = $2 AND status = 'paused_awaiting_input'`,
+		answer, taskID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ClearPendingQA clears a resumed task's question+answer once the run has
+// consumed them, under the run's lease so a stale writer can't wipe a fresh
+// pause. Best-effort (the run proceeds regardless).
+func (db *Database) ClearPendingQA(ctx context.Context, taskID, leaseOwner uuid.UUID) error {
+	_, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET pending_question = NULL, pending_answer = NULL
+		WHERE id = $1 AND lease_owner = $2`, taskID, leaseOwner)
+	return err
+}
+
+// ListPausedTasks returns tasks awaiting a human answer (#510), newest first.
+func (db *Database) ListPausedTasks(ctx context.Context, limit int) ([]*models.Task, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := db.conn.QueryContext(ctx,
+		"SELECT "+taskColumns+" FROM tasks WHERE status = 'paused_awaiting_input' ORDER BY started_at DESC NULLS LAST, created_at DESC LIMIT $1", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*models.Task
+	for rows.Next() {
+		t, err := db.scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
 
 // SetErrorAnalysis persists the post-failure LLM diagnosis (#317) as a narrow,

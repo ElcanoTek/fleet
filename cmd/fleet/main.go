@@ -1113,6 +1113,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Get("/tasks/{task_id}/learned-instructions", h.LearnedInstructions)
 		r.Post("/tasks/{task_id}/learned-instructions/{version}/activate", h.LearnedInstructions)
 		r.Delete("/tasks/{task_id}/learned-instructions/active", h.LearnedInstructions)
+		// ask/notify (#510): the "needs a human answer" queue + resume with an
+		// answer (re-queues the paused task). /tasks/paused is registered before
+		// /tasks/{task_id} static-vs-param, but chi routes them distinctly.
+		r.Get("/tasks/paused", h.ListPausedTasks)
+		r.Post("/tasks/{task_id}/resume", h.ResumeTask)
 		r.Get("/logs/{task_id}", h.GetLogs)
 		// Live SSE run-log stream for an in-progress task, falling back to a one-shot
 		// replay of the persisted log once finished (#200). Same auth/ownership gate

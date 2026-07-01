@@ -532,6 +532,12 @@ const (
 	// per-attempt / interrupted / panicked failures that are NOT final. The runner
 	// is the ONLY writer of this status (workers cannot self-report it).
 	TaskStatusDeadLettered TaskStatus = "dead_lettered"
+	// TaskStatusPausedAwaitingInput is the non-terminal pause a scheduled run
+	// enters when its agent calls `ask` (#510): the run has ended and released
+	// its sandbox/lease, and the task waits for a human answer that re-queues it.
+	// NOT terminal (it resumes) — so IsTerminal excludes it and the paused row
+	// holds no lease.
+	TaskStatusPausedAwaitingInput TaskStatus = "paused_awaiting_input"
 )
 
 // IsValidReportedStatus reports whether s is a status a worker is allowed to
@@ -857,7 +863,12 @@ type Task struct {
 	// entry's Path is a workspace-relative path downloadable via the workspace
 	// file endpoint. Persisted on the run's success path; not client-settable.
 	Artifacts json.RawMessage `json:"artifacts,omitempty"`
-	Priority  int             `json:"priority"`
+	// PendingQuestion / PendingAnswer back the ask/notify pause (#510): the
+	// question the agent posed (set on pause), and the human answer that
+	// re-queued it (injected + cleared at the resumed run's start).
+	PendingQuestion string `json:"pending_question,omitempty"`
+	PendingAnswer   string `json:"pending_answer,omitempty"`
+	Priority        int    `json:"priority"`
 	// EffectivePriority is the value the scheduler actually orders the pending
 	// queue by (#230). Equal to Priority at creation; only the anti-starvation
 	// sweep lowers it (never Priority) so a long-waiting task is eventually
