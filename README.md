@@ -31,6 +31,16 @@ them.
   the sandbox: they are isolated by the **out-of-process MCP broker**, which
   injects them only when it runs a delegated MCP call host-side (issue #167).
 
+- **Choose your isolation posture.** By default that sandbox uses the
+  shared-kernel OCI runtime (`runc`/`crun`) — namespaces, cgroups, and seccomp.
+  For untrusted prompts or sensitive data, raise it to a **dedicated KVM microVM
+  per tool call** by setting the sandbox runtime to `kata` or `libkrun`: an
+  escape then requires a *hypervisor* CVE, not just a container break-out. fleet
+  fail-closed-preflights `/dev/kvm` and the runtime binary at boot (a missing
+  KVM aborts startup rather than silently degrading), and every other guarantee
+  — host-side credentials, network sealing, per-task limits — is unchanged. See
+  [`docs/SANDBOX-RUNTIMES.md`](docs/SANDBOX-RUNTIMES.md).
+
 - **Cost-controlled.** Each turn runs against configurable per-task cost and
   token **ceilings**, with usage and cost accounting tracked as the agent works.
   A model that won't stop calling tools is bounded by the ceiling, the
@@ -140,7 +150,10 @@ matter.
   per-conversation workspace, with no fast path that skips it; the host enforces
   all policy. The agent loop runs in the fleet process but holds no privileged
   executor of its own — each tool call is handed to the sandbox under host
-  policy, so the agent can only act through that governed seam.
+  policy, so the agent can only act through that governed seam. For a stronger
+  boundary, that sandbox can run under a **KVM microVM runtime** (`kata` /
+  `libkrun`) so a tool call is isolated by a hypervisor, not just a shared kernel
+  (see [`docs/SANDBOX-RUNTIMES.md`](docs/SANDBOX-RUNTIMES.md)).
 - **Credentials stay out of reach.** MCP credentials are isolated by the
   out-of-process MCP broker: it injects them only when it runs a delegated MCP
   call host-side, so they never enter the sandbox, the model's context, or the
