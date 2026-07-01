@@ -693,7 +693,10 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return nil, err
 	}
 	defer sbCleanup()
-	turnTools := tools.NewTurnTools(sb)
+	turnTools := tools.NewTurnTools(sb, tools.WithBrowser(tools.BrowserConfig{
+		Enabled:  m.config.BrowserEnabled,
+		Lockdown: in.Lockdown,
+	}))
 
 	model, err := m.resolver.Resolve(ctx, in.Model)
 	if err != nil {
