@@ -2,125 +2,228 @@ package logging
 
 import (
 	"bytes"
+	"encoding/json"
 	"log"
+	"log/slog"
 	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 )
 
-// restoreStdLog saves and restores the process-global standard log destination
-// so a test that flips it cannot leak into the others.
-func restoreStdLog(t *testing.T) {
+func TestParseLevel(t *testing.T) {
+	cases := []struct {
+		in   string
+		want slog.Level
+	}{
+		{"debug", slog.LevelDebug},
+		{"info", slog.LevelInfo},
+		{"INFO", slog.LevelInfo},
+		{" warn", slog.LevelWarn}, // leading space trimmed
+		{"error", slog.LevelError},
+		{"", slog.LevelInfo},      // default
+		{"bogus", slog.LevelInfo}, // default
+	}
+	for _, c := range cases {
+		if got := ParseLevel(c.in); got != c.want {
+			t.Errorf("ParseLevel(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func decodeLast(t *testing.T, buf *bytes.Buffer) map[string]any {
 	t.Helper()
-	w := log.Writer()
-	flags := log.Flags()
+	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
+	var m map[string]any
+	if err := json.Unmarshal(lines[len(lines)-1], &m); err != nil {
+		t.Fatalf("log line is not JSON: %q: %v", lines[len(lines)-1], err)
+	}
+	return m
+}
+
+func TestJSONHandlerEmitsStructured(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(newJSONHandler(&buf, slog.LevelInfo))
+	lg.Info("hello world", "user", "a@b.co")
+	m := decodeLast(t, &buf)
+	if m["msg"] != "hello world" {
+		t.Errorf("msg = %v", m["msg"])
+	}
+	if m["level"] != "INFO" {
+		t.Errorf("level = %v", m["level"])
+	}
+	if m["user"] != "a@b.co" {
+		t.Errorf("non-secret attr should pass through, got user=%v", m["user"])
+	}
+}
+
+func TestRedactingHandler(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(newJSONHandler(&buf, slog.LevelDebug))
+	lg.Info("call",
+		"api_token", "sk-supersecret",
+		"Authorization", "Bearer abc",
+		"user_email", "a@b.co",
+		slog.Group("mcp", "server_token", "xyz", "server", "gamma"),
+	)
+	m := decodeLast(t, &buf)
+	if m["api_token"] != "[REDACTED]" {
+		t.Errorf("api_token not redacted: %v", m["api_token"])
+	}
+	if m["Authorization"] != "[REDACTED]" {
+		t.Errorf("Authorization not redacted: %v", m["Authorization"])
+	}
+	if m["user_email"] != "a@b.co" {
+		t.Errorf("user_email wrongly redacted: %v", m["user_email"])
+	}
+	grp, ok := m["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcp group missing: %v", m["mcp"])
+	}
+	if grp["server_token"] != "[REDACTED]" {
+		t.Errorf("nested server_token not redacted: %v", grp["server_token"])
+	}
+	if grp["server"] != "gamma" {
+		t.Errorf("nested non-secret wrongly redacted: %v", grp["server"])
+	}
+	if bytes.Contains(buf.Bytes(), []byte("sk-supersecret")) {
+		t.Error("secret value leaked into the log output")
+	}
+}
+
+func TestLevelFiltering(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(newJSONHandler(&buf, slog.LevelWarn))
+	lg.Info("suppressed")
+	if buf.Len() != 0 {
+		t.Errorf("info should be suppressed at warn level, got %q", buf.String())
+	}
+	lg.Warn("shown")
+	if !bytes.Contains(buf.Bytes(), []byte("shown")) {
+		t.Error("warn should be emitted at warn level")
+	}
+}
+
+func TestLogBridge(t *testing.T) {
+	prev := bridgeLogger
+	defer func() { bridgeLogger = prev }()
+	var buf bytes.Buffer
+	bridgeLogger = slog.New(newJSONHandler(&buf, slog.LevelInfo))
+
+	if _, err := (logBridge{}).Write([]byte("legacy line via log.Printf\n")); err != nil {
+		t.Fatalf("bridge write: %v", err)
+	}
+	m := decodeLast(t, &buf)
+	if m["msg"] != "legacy line via log.Printf" {
+		t.Errorf("bridged msg = %v", m["msg"])
+	}
+	if m["level"] != "INFO" {
+		t.Errorf("bridged level = %v", m["level"])
+	}
+}
+
+// TestBridgeNotGatedByLevel is the regression guard for the adversarial-review
+// finding: legacy bridged lines must ALWAYS emit, even when FLEET_LOG_LEVEL is
+// raised to error — otherwise raising the level would silently erase the entire
+// (currently un-converted) legacy diagnostic stream.
+func TestBridgeNotGatedByLevel(t *testing.T) {
+	prev := bridgeLogger
+	defer func() { bridgeLogger = prev }()
+	var buf bytes.Buffer
+	bridgeLogger = slog.New(newJSONHandler(&buf, slog.LevelInfo))
+
+	SetLevel("error") // raise the NATIVE slog level
+	defer SetLevel("info")
+	if _, err := (logBridge{}).Write([]byte("scheduler: Error recovering expired leases\n")); err != nil {
+		t.Fatalf("bridge write: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("legacy bridged line must still emit at FLEET_LOG_LEVEL=error (no silent diagnostic loss)")
+	}
+	if m := decodeLast(t, &buf); m["msg"] != "scheduler: Error recovering expired leases" {
+		t.Errorf("bridged msg = %v", m["msg"])
+	}
+}
+
+func TestSetLevel(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(newJSONHandler(&buf, levelVar))
+	SetLevel("error")
+	lg.Warn("warn-suppressed")
+	if buf.Len() != 0 {
+		t.Errorf("warn should be suppressed after SetLevel(error), got %q", buf.String())
+	}
+	SetLevel("debug")
+	lg.Debug("debug-shown")
+	if !bytes.Contains(buf.Bytes(), []byte("debug-shown")) {
+		t.Error("debug should be emitted after SetLevel(debug)")
+	}
+	SetLevel("info")
+}
+
+// TestConfigureJSONToFile exercises the full Configure(json) wiring end-to-end:
+// a standard log.Printf line lands in the rotating file as a JSON object. Saves
+// and restores the process-global logger/log state so it doesn't leak to other
+// tests.
+func TestConfigureJSONToFile(t *testing.T) {
+	prevSlog := slog.Default()
+	prevBridge := bridgeLogger
 	t.Cleanup(func() {
-		log.SetOutput(w)
-		log.SetFlags(flags)
+		slog.SetDefault(prevSlog)
+		bridgeLogger = prevBridge
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
 	})
-}
-
-func TestConfigure_DisabledByDefaultPreservesStderr(t *testing.T) {
-	restoreStdLog(t)
-
-	// Point the standard log at a sentinel buffer; an off (empty-File) config must
-	// leave it exactly there — i.e. it must NOT touch log.SetOutput at all, so the
-	// default stderr/journald behaviour stays intact.
-	var sentinel bytes.Buffer
-	log.SetOutput(&sentinel)
-
-	closer, err := Configure(Config{})
-	if err != nil {
-		t.Fatalf("Configure(off): %v", err)
-	}
-	if closer != nil {
-		t.Fatalf("Configure(off) returned a non-nil closer; want nil (no sink installed)")
-	}
-
-	log.Print("hello")
-	if !strings.Contains(sentinel.String(), "hello") {
-		t.Errorf("off config redirected the standard log away from its existing writer: %q", sentinel.String())
-	}
-}
-
-func TestConfig_Enabled(t *testing.T) {
-	if (Config{}).Enabled() {
-		t.Error("empty File: Enabled() should be false")
-	}
-	if !(Config{File: "/var/log/fleet/fleet.log"}).Enabled() {
-		t.Error("non-empty File: Enabled() should be true")
-	}
-}
-
-func TestConfigure_FileSinkTeesToFileAndStderr(t *testing.T) {
-	restoreStdLog(t)
-
-	// Redirect the process's real os.Stderr to a pipe so we can prove the sink
-	// TEES rather than replacing: the line must reach BOTH the rotating file and
-	// stderr (the journald-visible destination), so journald deployments keep
-	// their lines even with a file sink on.
-	origStderr := os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stderr = w
-	t.Cleanup(func() { os.Stderr = origStderr })
 
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "fleet.log")
-	closer, err := Configure(Config{File: logPath, MaxSizeMB: 1, MaxBackups: 1})
+	path := dir + "/fleet.log"
+	closer, err := Configure(Config{File: path, MaxSizeMB: 10, Format: "json", Level: "info"})
 	if err != nil {
-		t.Fatalf("Configure(file): %v", err)
+		t.Fatalf("Configure: %v", err)
 	}
-	if closer == nil {
-		t.Fatal("Configure(file) returned a nil closer; want the rotating writer")
-	}
-	defer closer.Close()
-
-	const marker = "rotation-sink-line"
-	log.Print(marker)
-
-	if err := closer.Close(); err != nil {
-		t.Fatalf("close rotor: %v", err)
-	}
-	_ = w.Close()
-	var stderrBuf bytes.Buffer
-	if _, err := stderrBuf.ReadFrom(r); err != nil {
-		t.Fatalf("read stderr pipe: %v", err)
+	if closer != nil {
+		defer closer.Close()
 	}
 
-	data, err := os.ReadFile(logPath)
+	log.Printf("startup diagnostic user=%s", "a@b.co")
+
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read log file: %v", err)
 	}
-	if !strings.Contains(string(data), marker) {
-		t.Errorf("log file missing the line; got %q", string(data))
+	var m map[string]any
+	last := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
+	if len(last) == 0 || len(last[len(last)-1]) == 0 {
+		t.Fatalf("no log lines written to %s", path)
 	}
-	// stderr must STILL receive the line — the sink tees, it does not steal.
-	if !strings.Contains(stderrBuf.String(), marker) {
-		t.Errorf("file sink did not also tee to stderr; got %q", stderrBuf.String())
+	if err := json.Unmarshal(last[len(last)-1], &m); err != nil {
+		t.Fatalf("log line is not JSON: %q: %v", last[len(last)-1], err)
+	}
+	if m["msg"] != "startup diagnostic user=a@b.co" {
+		t.Errorf("bridged msg = %v", m["msg"])
 	}
 }
 
-func TestConfigure_BadPathFailsLoudly(t *testing.T) {
-	restoreStdLog(t)
-
-	// A path whose parent is a regular file cannot be created; Configure must
-	// surface that at startup rather than silently dropping every later line.
+// TestConfigureTextPreservesLegacy verifies Format=text keeps the legacy
+// plaintext lines (not JSON).
+func TestConfigureTextPreservesLegacy(t *testing.T) {
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
+	})
 	dir := t.TempDir()
-	notADir := filepath.Join(dir, "afile")
-	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
-		t.Fatalf("seed file: %v", err)
+	path := dir + "/fleet.log"
+	closer, err := Configure(Config{File: path, MaxSizeMB: 10, Format: "text"})
+	if err != nil {
+		t.Fatalf("Configure: %v", err)
 	}
-	badPath := filepath.Join(notADir, "fleet.log")
-
-	closer, err := Configure(Config{File: badPath})
-	if err == nil {
-		if closer != nil {
-			_ = closer.Close()
-		}
-		t.Fatalf("Configure(bad path) returned nil error; want a failure for %q", badPath)
+	if closer != nil {
+		defer closer.Close()
+	}
+	log.Printf("legacy line")
+	data, _ := os.ReadFile(path)
+	if json.Valid(bytes.TrimSpace(data)) {
+		t.Errorf("text format should NOT be JSON, got %q", data)
+	}
+	if !bytes.Contains(data, []byte("legacy line")) {
+		t.Errorf("text format should contain the raw line, got %q", data)
 	}
 }

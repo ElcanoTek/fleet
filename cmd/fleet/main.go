@@ -210,6 +210,8 @@ func run() error {
 		MaxAgeDays: cfg.Log.MaxAgeDays,
 		MaxBackups: cfg.Log.MaxBackups,
 		Compress:   cfg.Log.Compress,
+		Format:     cfg.Log.Format,
+		Level:      cfg.Log.Level,
 	})
 	if err != nil {
 		return fmt.Errorf("configure log file sink (FLEET_LOG_FILE=%q): %w", cfg.Log.File, err)
