@@ -112,3 +112,23 @@ WORKDIR /workspace
 # container repeatedly (e.g. running a long-lived bridge process via
 # `podman exec -i`). One-shot callers can override.
 CMD ["sleep", "infinity"]
+
+# ── OPTIONAL: governed browser tool (#503) ──────────────────────────────────
+# The in-sandbox browser tool (FLEET_BROWSER_ENABLED=true) needs Chromium +
+# Playwright in this image. It is OFF by default and NOT installed here because
+# a bundled Chromium adds image weight and its own CVE surface (the CI Grype
+# gate fails on fixable CRITICALs). A deployment that wants the browser adds the
+# layer below to its OWN client-config Containerfile and pins the version so a
+# CVE is a single deliberate bump. Rootless-Podman notes: the tool launches
+# Chromium with --no-sandbox --disable-dev-shm-usage (Chromium's own sandbox
+# fights rootless user namespaces, and /dev/shm is small in the container), and
+# the container's --init reaps the Chromium process tree. Run the browser under
+# the ALLOWLISTED egress posture (FLEET_DEFAULT_NETWORK_MODE=allowlisted) so a
+# prompt-injected page can't exfiltrate via navigate-to-arbitrary-host.
+#
+#   USER root
+#   # Pin the Playwright version and let it pull the matching Chromium.
+#   RUN pip install --no-cache-dir "playwright==1.49.1" \
+#       && python3 -m playwright install --with-deps chromium
+#   RUN chown -R sandbox:sandbox /home/sandbox/.cache 2>/dev/null || true
+#   USER sandbox

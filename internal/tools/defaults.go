@@ -53,8 +53,24 @@ func DefaultTools() []fantasy.AgentTool {
 // per-task MCP selection is narrow), not the interactive chat turn — which runs
 // near the 128-tool ceiling once per-user MCP servers (#449) load — via
 // [MetadataTools]. See internal/scheduledrun.
-func NewTurnTools(sb *sandbox.Sandbox) TurnTools {
-	return TurnTools{
+// TurnOption tunes the interactive turn tool set (#503 browser gating, etc.).
+type TurnOption func(*turnOptions)
+
+type turnOptions struct {
+	browser BrowserConfig
+}
+
+// WithBrowser registers the governed browser tool (#503) when cfg.Enabled.
+func WithBrowser(cfg BrowserConfig) TurnOption {
+	return func(o *turnOptions) { o.browser = cfg }
+}
+
+func NewTurnTools(sb *sandbox.Sandbox, opts ...TurnOption) TurnTools {
+	var o turnOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	tt := TurnTools{
 		Tools: []fantasy.AgentTool{
 			NewBashTool(sb),
 			NewViewFileTool(),
@@ -74,4 +90,11 @@ func NewTurnTools(sb *sandbox.Sandbox) TurnTools {
 		},
 		Cleanup: sb.Close,
 	}
+	// Governed browser (#503): interactive-only, opt-in per deployment, and
+	// registered even in lockdown so the model gets a clear per-call refusal
+	// (the tool itself errors) rather than the capability silently vanishing.
+	if o.browser.Enabled {
+		tt.Tools = append(tt.Tools, NewBrowserTool(sb, o.browser))
+	}
+	return tt
 }

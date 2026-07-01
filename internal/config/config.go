@@ -284,6 +284,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SANDBOX_IMAGE":            true,
 	"FLEET_SANDBOX_RUNTIME":          true,
 	"FLEET_DEFAULT_NETWORK_MODE":     true,
+	"FLEET_BROWSER_ENABLED":          true,
 	"FLEET_SANDBOX_MEMORY":           true,
 	"FLEET_SANDBOX_CPUS":             true,
 	"FLEET_SANDBOX_PIDS":             true,
@@ -771,6 +772,11 @@ type Config struct {
 	// ── sandbox ──
 	SandboxImage   string
 	SandboxRuntime string
+	// BrowserEnabled turns on the in-sandbox governed browser tool (#503) for
+	// interactive turns. Default OFF: the tool needs Chromium+Playwright in the
+	// sandbox image (an optional client-bundle Containerfile addition, not the
+	// default image), so it is opt-in per deployment. From FLEET_BROWSER_ENABLED.
+	BrowserEnabled bool
 	// DefaultNetworkMode is the fleet-wide sandbox egress posture (#211):
 	// "" / "open" (full slirp4netns egress for networked work — the default),
 	// "allowlisted" (networked sandboxes route HTTP(S) through the host egress
@@ -1100,6 +1106,7 @@ func Load(envFile string) (*Config, error) {
 		// ── sandbox ──
 		SandboxImage:       getenvFleet("SANDBOX_IMAGE"),
 		SandboxRuntime:     getenvFleet("SANDBOX_RUNTIME"),
+		BrowserEnabled:     getenvFleetBool("BROWSER_ENABLED", false),
 		DefaultNetworkMode: strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
 		SandboxMemory:      getenvFleet("SANDBOX_MEMORY"),
 		SandboxCPUs:        getenvFleet("SANDBOX_CPUS"),
