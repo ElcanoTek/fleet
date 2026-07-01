@@ -55,7 +55,12 @@ type Server struct {
 	// share TOKEN (not IP — the endpoint sits behind the Next proxy, so per-IP
 	// would see only the proxy's address). Always on, independent of the per-user
 	// rate-limit master switch, because /shared is the most exposed surface.
-	shareRL       *ratelimit.Limiter
+	shareRL *ratelimit.Limiter
+	// webhookRL throttles authenticated inbound webhook triggers (#268), keyed by
+	// the CONFIGURED trigger slug (a bounded set). Always on, independent of the
+	// per-user rate-limit master switch, and consulted only after a request
+	// authenticates so an unknown-slug probe never creates a bucket.
+	webhookRL     *ratelimit.Limiter
 	hasUsers      atomic.Bool
 	lastUserCheck atomic.Int64
 
@@ -361,6 +366,9 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		// real viewers, a hard ceiling against scraping/DDoS amplification of a
 		// single link. No daily window.
 		shareRL: ratelimit.New(sharedReadsPerMinutePerToken, 0),
+		// Per-slug cap on authenticated inbound webhook triggers (#268). No daily
+		// window. Overridable via FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE.
+		webhookRL: ratelimit.New(envInt("FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE", webhookTriggersPerMinutePerSlug), 0),
 	}
 	// Rate limiting is a single master switch. When on, the RPM/day window and
 	// the per-user concurrent-turn cap are both live; when off, both limiters are
@@ -598,6 +606,13 @@ func (s *Server) Routes() http.Handler {
 	// its own per-token rate limit + expiry. The Next layer exposes /shared/{token}
 	// to logged-out viewers.
 	mux.Handle("/shared/", s.tokenOnlyMiddleware(http.HandlerFunc(s.handleSharedConversation)))
+	// Inbound webhook-triggered conversations (#268). Like /shared, this is
+	// registered OUTSIDE the auth(member(mutate(…))) chain because external
+	// callers (GitHub, Slack, CI) cannot present a Fleet session token — the
+	// per-trigger HMAC / Slack signing secret proves authenticity instead (see
+	// postWebhook + docs/adr/0016). It is EXEMPT from the OpenAPI route-parity
+	// test, which walks only the orchestrator chi router, not this chat mux.
+	mux.Handle("/webhooks/", http.HandlerFunc(s.postWebhook))
 	mux.Handle("/auth/membership", auth(member(http.HandlerFunc(s.handleMembership))))
 	mux.Handle("/auth/verify", auth(http.HandlerFunc(s.handleAuthVerify)))
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))

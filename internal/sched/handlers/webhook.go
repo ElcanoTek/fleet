@@ -1,11 +1,6 @@
 package handlers
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -21,6 +16,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/webhooks"
 )
 
 // maxWebhookBody caps the inbound webhook payload at 1 MiB to prevent memory
@@ -36,20 +32,10 @@ var triggerSlugShape = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
 // dummyTriggerSecret is a per-process random HMAC key used to equalize work on
 // the slug-miss path: an unknown (or malformed) slug still computes one
 // HMAC-SHA256 before returning 401, so response timing cannot distinguish a
-// valid slug with a bad signature from a slug that does not exist. Its value is
-// never security-load-bearing — it only ever produces a guaranteed-failing
-// comparison — but sourcing it from crypto/rand makes it unguessable regardless.
-var dummyTriggerSecret = newDummyTriggerSecret()
-
-func newDummyTriggerSecret() string {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		// crypto/rand should never fail; a fixed fallback keeps the package
-		// loadable and still yields a failing comparison.
-		return "fleet-dummy-trigger-secret"
-	}
-	return hex.EncodeToString(buf)
-}
+// valid slug with a bad signature from a slug that does not exist. The shared
+// webhooks package owns the generation (single source of truth for the inbound
+// verification primitives, reused by the chat webhook endpoint in #268).
+var dummyTriggerSecret = webhooks.NewDummySecret()
 
 // triggerTemplateData is the data passed to a trigger's prompt_template. The
 // template is a Go text/template (NOT html/template — the output is a plain-text
@@ -136,7 +122,7 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 	if trig != nil {
 		secret = trig.Secret
 	}
-	sigOK := verifyHMACSHA256(body, secret, sigHeader)
+	sigOK := webhooks.VerifyHMACSHA256(body, secret, sigHeader)
 	// Fail closed unless the slug exists AND the caller is authorized — either by
 	// a slug-scoped webhook key (checked above) or by a valid HMAC signature. The
 	// dummy-HMAC compute above keeps the no-key miss path timing-equalized.
@@ -173,23 +159,6 @@ func webhookKeyFromRequest(r *http.Request) string {
 		return strings.TrimPrefix(h, "Bearer ")
 	}
 	return ""
-}
-
-// verifyHMACSHA256 reports whether sigHeader is a valid HMAC-SHA256 of body
-// under secret. It accepts the GitHub-style "sha256=" prefix and compares in
-// constant time. An empty secret or malformed signature fails closed.
-func verifyHMACSHA256(body []byte, secret, sigHeader string) bool {
-	if secret == "" {
-		return false
-	}
-	sig := strings.TrimPrefix(sigHeader, "sha256=")
-	if len(sig) != hex.EncodedLen(sha256.Size) {
-		return false
-	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	expected := hex.EncodeToString(mac.Sum(nil))
-	return subtle.ConstantTimeCompare([]byte(strings.ToLower(sig)), []byte(expected)) == 1
 }
 
 // renderTriggerTemplate renders a trigger's prompt_template against the inbound
