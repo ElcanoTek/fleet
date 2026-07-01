@@ -105,6 +105,27 @@ jobs:
         # allowlist in .gitleaks.toml is just local-run robustness.
         run: gitleaks dir . --redact --exit-code 1
 
+  migrations:
+    name: Migration DDL lint (#256)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history so the merge-base with origin/main resolves and the
+          # linter can diff the branch's new/changed migration files.
+          fetch-depth: 0
+
+      - name: Lint changed migrations for dangerous DDL
+        # Diff-scoped: only migrations added/modified in this branch are checked,
+        # so the existing corpus is untouched. Passes cleanly when nothing changed.
+        env:
+          # PR base SHA for a pull_request; the pushed-from SHA for a push. Empty
+          # for edge cases (new branch / force-push) → the script falls back to
+          # `git merge-base HEAD origin/main`, then to a clean skip.
+          MIGRATION_LINT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: scripts/check-migrations.sh
+
   go:
     name: Go build / vet / lint / test
     runs-on: ubuntu-latest
@@ -647,7 +668,7 @@ jobs:
     # allowed (docs-only), but any failure or cancellation fails the gate.
     name: CI gate
     if: ${{ always() }}
-    needs: [changes, gitleaks, go, web, playwright, e2e-live, grype-scan]
+    needs: [changes, gitleaks, migrations, go, web, playwright, e2e-live, grype-scan]
     runs-on: ubuntu-latest
     steps:
       - name: Require all upstream jobs to have succeeded or been skipped
