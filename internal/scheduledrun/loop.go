@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/scorers"
 )
 
 // Iterative verification loops (#179). A task with a LoopConfig runs its worker
@@ -172,34 +172,20 @@ func (r *Runner) evaluateExitCondition(ctx context.Context, lc *models.LoopConfi
 	}
 }
 
+// evalShellExit / evalRegexExit delegate to the shared internal/scorers
+// implementations (#502 extracted them so the eval harness judges output the
+// same way loop exit-conditions do). The nil-sandbox guard stays HERE: a typed
+// nil *sandbox.Sandbox inside the scorers.BashRunner interface would defeat a
+// nil check on the other side.
 func (r *Runner) evalShellExit(ctx context.Context, sb *sandbox.Sandbox, cmd string) (bool, string) {
 	if sb == nil {
 		return false, "shell:no_sandbox"
 	}
-	res, err := sb.RunBash(ctx, sandbox.BashRequest{Command: cmd, Timeout: shellExitTimeout})
-	if err != nil {
-		log.Printf("scheduled loop: shell exit check failed: %v", err)
-		return false, "shell:error"
-	}
-	if res.TimedOut {
-		return false, "shell:timeout"
-	}
-	if res.ExitCode == 0 {
-		return true, "shell:passed"
-	}
-	return false, fmt.Sprintf("shell:exit_%d", res.ExitCode)
+	return scorers.Shell(ctx, sb, cmd, shellExitTimeout)
 }
 
 func evalRegexExit(pattern, text string) (bool, string) {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		log.Printf("scheduled loop: invalid regex exit_condition %q: %v", pattern, err)
-		return false, "regex:invalid"
-	}
-	if re.MatchString(text) {
-		return true, "regex:matched"
-	}
-	return false, "regex:no_match"
+	return scorers.Regex(pattern, text)
 }
 
 func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session *models.LogSession, fallback fantasy.LanguageModel) (bool, string) {
@@ -245,21 +231,12 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 // firstWordIsYes reports whether the verifier's reply begins with YES (ignoring
 // case, leading whitespace, and a leading markdown/quote/backtick character).
 func firstWordIsYes(s string) bool {
-	s = strings.TrimLeft(strings.TrimSpace(s), "*_`\"'> ")
-	return strings.HasPrefix(strings.ToUpper(s), "YES")
+	return scorers.FirstWordIsYes(s)
 }
 
 // lastAssistantMessage returns the text of the worker's final assistant message,
 // which a regex: / llm exit condition judges and which is fed forward as context
 // to the next iteration.
 func lastAssistantMessage(session *models.LogSession) string {
-	if session == nil {
-		return ""
-	}
-	for i := len(session.Messages) - 1; i >= 0; i-- {
-		if session.Messages[i].Role == "assistant" {
-			return session.Messages[i].Content
-		}
-	}
-	return ""
+	return scorers.LastAssistantMessage(session)
 }
