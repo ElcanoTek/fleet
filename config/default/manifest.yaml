@@ -158,6 +158,40 @@ mcp_servers: []
 #     prompt_template: "{{.payload.event.user}} asks: {{.payload.event.text}}"
 #     notify_user: "brad@elcanotek.com"
 
+# LLM provider routing (issue #289). By default fleet routes EVERY model through
+# OpenRouter (set OPENROUTER_API_KEY and you're done — no providers: block needed).
+# Declare providers: to route specific model slugs natively to Anthropic, OpenAI,
+# or a self-hosted Ollama instead — for failover, data residency, or to avoid the
+# OpenRouter markup. See docs/PROVIDERS.md and docs/adr/0017-multi-provider-llm.md.
+#
+# SECURITY — api_key_env names an env var; its VALUE is read HOST-SIDE at boot
+# (auto-allowlisted from the manifest like an MCP credential) and never enters the
+# manifest, the sandbox, the model context, or the logs.
+#
+# Routing precedence per slug: (1) explicit "<name>/<model>" when <name> is a
+# provider name; (2) first provider whose models: list contains the slug (a listed
+# model beats a catch-all wherever it sits); (3) first catch-all (empty models:).
+#
+# The generic bundle ships NO providers: block, so OpenRouter stays the sole
+# provider. Example (commented out):
+#
+# providers:
+#   - name: openrouter          # catch-all: any slug not matched below
+#     type: openrouter
+#     api_key_env: OPENROUTER_API_KEY
+#   - name: anthropic-direct    # route these Claude slugs straight to Anthropic
+#     type: anthropic
+#     api_key_env: ANTHROPIC_API_KEY
+#     models: ["claude-opus-4-8", "claude-sonnet-4-6"]
+#   - name: openai-direct
+#     type: openai
+#     api_key_env: OPENAI_API_KEY
+#     models: ["gpt-4o", "gpt-4o-mini"]
+#   - name: local               # self-hosted Ollama (OpenAI-compatible; no key)
+#     type: ollama
+#     base_url: http://localhost:11434/v1
+#     models: ["llama3.2", "qwen2.5-coder"]
+
 # Agent tool-behavior policy. Client-specific (e.g. ad-tech DSP deal tools); the
 # generic bundle ships NONE, so fleet stays on its base generic critical
 # suffixes (send_email, send_template_email — always enforced regardless of this
