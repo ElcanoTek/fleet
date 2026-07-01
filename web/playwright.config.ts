@@ -66,6 +66,13 @@ const serverCommand = useProdServer
 const canaryMode = process.env.E2E_CANARY === "1";
 const liveMode = process.env.E2E_LIVE === "1" || canaryMode;
 
+// E2E_SCREENSHOTS=1 selects the docs-screenshot suite (e2e/screenshots/*): the
+// SAME mocked Next server as the default lane, but a separate project so the
+// screenshot capture never runs on (or gates) the PR mocked suite. The
+// screenshot workflow (#487) invokes it with `--project=screenshots` on push to
+// main and commits the captured PNGs.
+const screenshotMode = process.env.E2E_SCREENSHOTS === "1";
+
 // The live suite boots the whole real stack (incl. the Next server) via
 // scripts/e2e-boot-server.sh, which is repo-root-relative; Playwright runs from
 // web/, so the command reaches up one directory.
@@ -137,7 +144,15 @@ export default defineConfig({
   //   E2E_LIVE=1        → the real-backend "live" project.
   // This keeps `--project=live` from silently running against the mocked server
   // (and vice-versa): the live project simply isn't present unless E2E_LIVE=1.
-  projects: canaryMode
+  projects: screenshotMode
+    ? [
+        {
+          name: "screenshots",
+          testDir: "./e2e/screenshots",
+          use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
+        },
+      ]
+    : canaryMode
     ? [
         {
           name: "canary",

@@ -1,0 +1,83 @@
+# Regenerate the docs GUI screenshots on every push to main (#487).
+#
+# It drives the SAME deterministic mocked Next app the `Web e2e (Playwright,
+# mocked)` CI lane uses — no backend, no LLM, no Podman — captures a full-page
+# PNG of the chat and Operations Center views via the dedicated `screenshots`
+# Playwright project, and commits the refreshed PNGs back to docs/screenshots/web/.
+#
+# Loop-safe: `paths-ignore` keeps a screenshots-only commit from re-triggering
+# this workflow, and the commit carries `[skip ci]`. The push is best-effort — if
+# main is protected against direct pushes, the step warns instead of failing the
+# run, and the baseline PNGs committed in the repo still serve.
+name: Screenshots
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/screenshots/**'
+
+# Only the newest push to main needs fresh screenshots; cancel superseded runs.
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  screenshots:
+    name: Generate GUI screenshots
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    env:
+      # Same throwaway build-time secrets as the mocked e2e lane: the mocked app
+      # route-intercepts every backend, so nothing real is reached. At runtime
+      # playwright.config.ts regenerates a fresh Ed25519 keypair per run.
+      CHAT_MOCK_MODE: '1'
+      APP_SESSION_SECRET: e2e-session-secret-0123456789abcdef
+      AUTH_SIGNING_PUBKEY: P8Lyn/xy8bS2SWcnPkg2kKiGBctyJZdEMMzNEixh0As=
+      CHAT_SERVER_URL: http://127.0.0.1:18080
+      CHAT_SERVER_TOKEN: e2e-shared-secret
+      ORCHESTRATOR_SERVER_URL: http://127.0.0.1:18000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Build
+        run: npm run build
+
+      - name: Capture screenshots
+        # Non-gating: a capture hiccup should not turn main red, and simply leaves
+        # the previous committed screenshots in place.
+        run: npm run test:e2e:screenshots || echo "::warning::screenshot capture failed; keeping the existing images"
+
+      - name: Commit refreshed screenshots
+        working-directory: ${{ github.workspace }}
+        run: |
+          if git diff --quiet -- docs/screenshots/web; then
+            echo "No screenshot changes — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots/web
+          git commit -m "docs(screenshots): refresh GUI screenshots [skip ci]"
+          # main may require PRs; a rejected push warns rather than failing the run.
+          git push origin HEAD:main \
+            || echo "::warning::could not push refreshed screenshots (is main protected against direct pushes? allow the github-actions bot, or refresh via PR). The committed baseline still serves."
