@@ -173,6 +173,8 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_LOG_MAX_SIZE_MB":  true,
 	"FLEET_LOG_MAX_AGE_DAYS": true,
 	"FLEET_LOG_MAX_BACKUPS":  true,
+	"FLEET_LOG_FORMAT":       true,
+	"FLEET_LOG_LEVEL":        true,
 	"FLEET_LOG_COMPRESS":     true,
 
 	// ── personas / protocols ──
@@ -427,6 +429,15 @@ type LogConfig struct {
 	MaxAgeDays int    // FLEET_LOG_MAX_AGE_DAYS — delete rotated files older than this (0 = no age limit)
 	MaxBackups int    // FLEET_LOG_MAX_BACKUPS — keep this many rotated files (default 7)
 	Compress   bool   // FLEET_LOG_COMPRESS — gzip rotated files (default true)
+	// Format selects the process-log output format (#178): "json" (default) emits
+	// structured log/slog JSON — aggregation-friendly (Loki/Datadog/journald JSON)
+	// — by routing the standard log package through an slog JSON handler; "text"
+	// keeps the legacy plaintext lines exactly as before. FLEET_LOG_FORMAT.
+	Format string
+	// Level is the minimum slog level to emit: debug|info|warn|error (default
+	// info). FLEET_LOG_LEVEL. Applies to the json format; the text format is
+	// unlevelled (legacy behavior).
+	Level string
 }
 
 // Config holds the union runtime configuration for fleet (interactive +
@@ -1059,6 +1070,8 @@ func Load(envFile string) (*Config, error) {
 			MaxAgeDays: getenvFleetInt("LOG_MAX_AGE_DAYS", 0),
 			MaxBackups: getenvFleetInt("LOG_MAX_BACKUPS", 7),
 			Compress:   getenvFleetBool("LOG_COMPRESS", true),
+			Format:     getenvFleetDefault("LOG_FORMAT", "json"),
+			Level:      getenvFleetDefault("LOG_LEVEL", "info"),
 		},
 
 		// ── log archival (#272) ── default OFF (0): opt in deliberately.
