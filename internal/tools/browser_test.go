@@ -70,9 +70,11 @@ func TestBrowserSnippet_UntrustedInputEscaped(t *testing.T) {
 }
 
 func TestRunBrowserAction_LockdownRefused(t *testing.T) {
-	_, err := runBrowserAction(context.Background(), nil, BrowserConfig{Enabled: true, Lockdown: true}, BrowserParams{Action: "read"})
-	if err == nil || !strings.Contains(err.Error(), "BROWSER_UNAVAILABLE") {
-		t.Fatalf("lockdown must refuse: %v", err)
+	// Lockdown returns the refusal as the tool RESPONSE (nil error) so the model
+	// reads a clear message rather than an opaque error.
+	out, err := runBrowserAction(context.Background(), nil, BrowserConfig{Enabled: true, Lockdown: true}, BrowserParams{Action: "read"})
+	if err != nil || !strings.Contains(out, "BROWSER_UNAVAILABLE") {
+		t.Fatalf("lockdown must refuse with a clear response: out=%q err=%v", out, err)
 	}
 }
 
@@ -81,17 +83,17 @@ func TestInterpretBrowserResult(t *testing.T) {
 		return sandbox.PythonResult{Vars: vars, Stderr: stderr}
 	}
 
-	// Missing playwright → clear not-installed error.
-	if _, err := interpretBrowserResult(mk(nil, "ModuleNotFoundError: No module named 'playwright'")); err == nil ||
-		!strings.Contains(err.Error(), "BROWSER_NOT_INSTALLED") {
-		t.Fatalf("not-installed detection: %v", err)
+	// Missing playwright → clear not-installed message (as a response, not error).
+	if out, err := interpretBrowserResult(mk(nil, "ModuleNotFoundError: No module named 'playwright'")); err != nil ||
+		!strings.Contains(out, "BROWSER_NOT_INSTALLED") {
+		t.Fatalf("not-installed detection: out=%q err=%v", out, err)
 	}
 
-	// Session lost → recoverable error.
-	if _, err := interpretBrowserResult(mk(map[string]any{
+	// Session lost → recoverable message (as a response, not error).
+	if out, err := interpretBrowserResult(mk(map[string]any{
 		"_fleet_browser_result": map[string]any{"session_lost": true},
-	}, "")); err == nil || !strings.Contains(err.Error(), "BROWSER_SESSION_LOST") {
-		t.Fatalf("session-lost detection: %v", err)
+	}, "")); err != nil || !strings.Contains(out, "BROWSER_SESSION_LOST") {
+		t.Fatalf("session-lost detection: out=%q err=%v", out, err)
 	}
 
 	// Action failure surfaces the error.
