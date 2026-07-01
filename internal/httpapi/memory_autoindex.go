@@ -14,27 +14,36 @@ import (
 // chat UI renders as a Save/Don't-Save card). It writes nothing live — the user
 // still confirms every fact — so it respects the human-on-the-loop memory model.
 //
-// It dedups against the user's known live memories AND this conversation's
-// already-pending proposals, so a fact stated across several turns is proposed
-// once, not on every turn. Best-effort: extraction returning nothing, or a
-// single proposal failing, is logged and skipped, never fatal. The caller gates
-// it on cfg.MemoryAutoIndexEnabled and skips cancelled/empty turns.
+// It dedups against the user's ENTIRE memory set — live (chat/manual) AND
+// still-pending 'proposed' rows, across ALL conversations — so a fact is
+// proposed once and never again: not after it is saved, not in another
+// conversation, and not because it ranked past the 50-item prompt snapshot the
+// model was shown. This bounds the memories table's growth to DISTINCT new
+// facts. `known` (the capped prompt snapshot) is only the model's do-not-repeat
+// hint; the authoritative dedup below uses the full set.
+//
+// Best-effort: extraction returning nothing, or a single proposal failing, is
+// logged and skipped, never fatal. It FAILS SAFE — if the dedup set can't be
+// loaded it proposes nothing (a missed suggestion beats duplicate-spamming the
+// same fact every turn). The caller gates it on cfg.MemoryAutoIndexEnabled and
+// skips cancelled/empty turns.
 func (s *Server) autoIndexMemories(ctx context.Context, sink agent.EventSink, conversationID, user, userInput, finalText string, known []string) {
 	facts := s.agent.ExtractMemories(ctx, userInput, finalText, known)
 	if len(facts) == 0 {
 		return
 	}
 
-	seen := make(map[string]bool, len(known)+len(facts))
-	for _, k := range known {
-		seen[normalizeFact(k)] = true
+	// ListMemories applies no source filter, so it returns 'proposed' rows too —
+	// giving one dedup set covering saved memories AND undecided proposals in
+	// every conversation.
+	existing, err := s.store.ListMemories(ctx, user)
+	if err != nil {
+		log.Printf("autoIndexMemories: dedup load (user=%s): %v; skipping this turn", user, err)
+		return
 	}
-	// A fact already staged (source='proposed') for this conversation must not be
-	// re-proposed — the earlier card is still pending the user's decision.
-	if pending, err := s.store.ListPendingMemoryProposalsForConversation(ctx, user, conversationID); err == nil {
-		for _, p := range pending {
-			seen[normalizeFact(p.Content)] = true
-		}
+	seen := make(map[string]bool, len(existing)+len(facts))
+	for _, m := range existing {
+		seen[normalizeFact(m.Content)] = true
 	}
 
 	proposer := &memoryProposer{ctx: ctx, store: s.store, conversationID: conversationID, userEmail: user, sink: sink}

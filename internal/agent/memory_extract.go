@@ -13,7 +13,8 @@ import (
 )
 
 // memoryExtractMaxFacts caps how many durable facts one turn may yield, bounding
-// both the model's output and the number of proposals a turn can spawn.
+// both the model's output and the number of proposals a turn can spawn. Keep it
+// in sync with the schema's "maxItems" below.
 const memoryExtractMaxFacts = 5
 
 // memoryExtractionSchema is the draft-07 JSON Schema the memory auto-indexer
@@ -106,7 +107,10 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 	}
 	validated, err := structuredoutput.ValidateOutput(out.String(), json.RawMessage(memoryExtractionSchema))
 	if err != nil {
-		log.Printf("ExtractMemories: output did not validate: %v", err)
+		// Deliberately do NOT log the validation error verbatim: it can echo the
+		// model's non-conforming output, which is derived from conversation
+		// content. The bare failure is enough to diagnose.
+		log.Printf("ExtractMemories: output failed schema validation; skipping")
 		return nil
 	}
 	var parsed struct {
