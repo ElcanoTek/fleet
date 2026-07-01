@@ -1701,3 +1701,76 @@ type EvalRun struct {
 	CostUSD   float64         `json:"cost_usd"`
 	Results   json.RawMessage `json:"results,omitempty"`
 }
+
+// Dataset / table agent (#514): a typed table whose rows an agent processes in
+// the background toward Goal, proposing structured cell write-backs a human
+// reviews. Rows run through the one governed loop; the write-back must conform
+// to the schema derived from the output columns (free-form answers become a
+// row note, never a cell).
+
+// DatasetColumnType is the closed set of dataset cell types.
+const (
+	DatasetColumnText    = "text"
+	DatasetColumnNumber  = "number"
+	DatasetColumnBoolean = "boolean"
+)
+
+// DatasetColumn defines one column. Output=true columns are what the agent
+// fills (they define the structured-output schema); input columns carry the
+// row's UNTRUSTED source data.
+type DatasetColumn struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"` // text | number | boolean
+	Output      bool   `json:"output"`
+	Description string `json:"description,omitempty"`
+}
+
+// Dataset statuses. Running is an in-process claim by the server's dataset
+// runner; a stale 'running' (crash) is reset to 'paused' at boot.
+const (
+	DatasetStatusIdle    = "idle"
+	DatasetStatusRunning = "running"
+	DatasetStatusPaused  = "paused"
+)
+
+// Dataset is the table-level definition + run state.
+type Dataset struct {
+	ID          uuid.UUID       `json:"id"`
+	Name        string          `json:"name"`
+	Goal        string          `json:"goal"`
+	Columns     []DatasetColumn `json:"columns"`
+	Model       string          `json:"model,omitempty"`
+	Persona     string          `json:"persona,omitempty"`
+	Status      string          `json:"status"`
+	Concurrency int             `json:"concurrency"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	// RowCounts is populated on reads that aggregate row status (list/get).
+	RowCounts map[string]int `json:"row_counts,omitempty"`
+}
+
+// Dataset row statuses.
+const (
+	DatasetRowPending  = "pending"
+	DatasetRowRunning  = "running"
+	DatasetRowProposed = "proposed"
+	DatasetRowApproved = "approved"
+	DatasetRowFailed   = "failed"
+)
+
+// DatasetRow is one work item. Cells holds input values (and, after approval,
+// the merged output values); Proposed holds the validated agent write-back
+// awaiting review.
+type DatasetRow struct {
+	ID         uuid.UUID       `json:"id"`
+	DatasetID  uuid.UUID       `json:"dataset_id"`
+	RowIndex   int             `json:"row_index"`
+	Cells      json.RawMessage `json:"cells"`
+	Status     string          `json:"status"`
+	Proposed   json.RawMessage `json:"proposed,omitempty"`
+	ResultNote string          `json:"result_note,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	Attempts   int             `json:"attempts"`
+	CostUSD    float64         `json:"cost_usd"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+}

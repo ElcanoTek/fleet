@@ -241,6 +241,11 @@ var schemaModelRegistry = map[string]any{
 	// schemas verbatim via writeJSON, backed by exported reflectable models.
 	"SLAReport":     models.SLAReport{},
 	"SLAReportTask": models.SLAReportTask{},
+	// Dataset / table agent (#514): the dataset handlers return these models
+	// verbatim via writeJSON.
+	"Dataset":       models.Dataset{},
+	"DatasetColumn": models.DatasetColumn{},
+	"DatasetRow":    models.DatasetRow{},
 	// Pre-submission cost forecast (#233/#405). The estimate handler returns
 	// agentcore.CostForecast verbatim via writeJSON, so these three reusable
 	// schemas are backed by the exported, reflectable agentcore types.
