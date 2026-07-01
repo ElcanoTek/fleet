@@ -368,7 +368,7 @@ func (m *Manager) ListPersonas() ([]string, error) {
 //     referenced by name.
 //  5. The per-conversation workspace path, so the agent can hand it to
 //     MCP tools whose cwd is not per-conversation.
-func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, notes []agentcore.Note, enabledOptionalMCPServers []string) (string, error) {
+func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, projectInstructions string, notes []agentcore.Note, enabledOptionalMCPServers []string) (string, error) {
 	var sb strings.Builder
 
 	fastIOOn := m.fastIOEnabledForTurn(enabledOptionalMCPServers)
@@ -412,6 +412,15 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 	// 3. runtime date
 	sb.WriteString(runtimeDateContext(time.Now()))
 	sb.WriteString("\n\n")
+
+	// Project standing instructions (#509): the shared workspace's context,
+	// injected before personal memories so project framing precedes user facts.
+	if strings.TrimSpace(projectInstructions) != "" {
+		sb.WriteString("## Project Instructions\n\n")
+		sb.WriteString("This conversation belongs to a shared project. Follow these standing instructions from the project owner:\n\n")
+		sb.WriteString(strings.TrimSpace(projectInstructions))
+		sb.WriteString("\n\n")
+	}
 
 	if len(memories) > 0 {
 		sb.WriteString("## User Memories\n\n")
