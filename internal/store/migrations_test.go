@@ -125,6 +125,65 @@ func TestMigrations_PreservesExistingData(t *testing.T) {
 	}
 }
 
+func TestMigrationStatusDB(t *testing.T) {
+	s := newTestStore(t) // opens + runs every migration
+	ctx := context.Background()
+
+	rep, err := MigrationStatusDB(ctx, s.db)
+	if err != nil {
+		t.Fatalf("MigrationStatusDB: %v", err)
+	}
+	if rep.DB != "chat" || rep.Runner != "hand-rolled" || rep.MigrationTable != "schema_migrations" {
+		t.Fatalf("unexpected metadata: %+v", rep)
+	}
+	embedded, err := loadMigrations()
+	if err != nil {
+		t.Fatalf("loadMigrations: %v", err)
+	}
+	if len(rep.Pending) != 0 {
+		t.Errorf("a fully-migrated DB should report 0 pending, got %d: %+v", len(rep.Pending), rep.Pending)
+	}
+	if len(rep.Applied) != len(embedded) {
+		t.Errorf("applied=%d, want=%d (every embedded migration)", len(rep.Applied), len(embedded))
+	}
+	for i, m := range rep.Applied {
+		if m.AppliedAt == nil {
+			t.Errorf("applied migration %q is missing applied_at", m.Name)
+		}
+		if i > 0 && rep.Applied[i-1].Version >= m.Version {
+			t.Errorf("Applied not strictly ascending at index %d (%d then %d)", i, rep.Applied[i-1].Version, m.Version)
+		}
+	}
+
+	// A schema_migrations row the running binary does not know about (a DB ahead
+	// of the build) must still surface under Applied so a downgrade is visible.
+	const future = 100000
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)`,
+		future, "100000_from_a_newer_build", int64(1700000000)); err != nil {
+		t.Fatalf("seed future migration row: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.db.ExecContext(context.Background(), `DELETE FROM schema_migrations WHERE version = $1`, future)
+	})
+	rep2, err := MigrationStatusDB(ctx, s.db)
+	if err != nil {
+		t.Fatalf("MigrationStatusDB (ahead): %v", err)
+	}
+	if len(rep2.Applied) != len(embedded)+1 {
+		t.Errorf("applied with a future row = %d, want %d", len(rep2.Applied), len(embedded)+1)
+	}
+	var found bool
+	for _, m := range rep2.Applied {
+		if m.Version == future {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a schema_migrations row ahead of the embedded set must appear in Applied")
+	}
+}
+
 func TestMigrations_LoadOrderAndDedup(t *testing.T) {
 	ms, err := loadMigrations()
 	if err != nil {

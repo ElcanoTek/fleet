@@ -95,6 +95,13 @@ func (s *Storage) SetDatabase(database *db.Database) {
 	s.db = database
 }
 
+// MigrationStatus reports the orchestrator DB's applied vs pending migrations
+// (#256). Read-only; delegates to the db layer's status reader. The context
+// bounds the queries.
+func (s *Storage) MigrationStatus(ctx context.Context) (db.MigrationReport, error) {
+	return db.MigrationStatus(ctx, s.db.Conn())
+}
+
 // SetTimezone sets the timezone for scheduling operations.
 func (s *Storage) SetTimezone(timezone string) {
 	loc, err := time.LoadLocation(timezone)

@@ -1,4 +1,4 @@
-.PHONY: all build compile bins install test test-race test-cover lint lint-go fmt tidy clean help \
+.PHONY: all build compile bins install test test-race test-cover lint lint-go lint-migrations fmt tidy clean help \
 	govulncheck ci-go ci-web ci-e2e-mocked ci-local
 
 all: build
@@ -12,7 +12,8 @@ help:
 	@echo "  make test        run the Go test suite"
 	@echo "  make test-race   run the Go test suite with the race detector"
 	@echo "  make test-cover  run the Go test suite with coverage (writes coverage.out)"
-	@echo "  make lint        run golangci-lint"
+	@echo "  make lint        run golangci-lint + the migration DDL linter"
+	@echo "  make lint-migrations  reject dangerous DDL in changed migration files (#256)"
 	@echo "  make fmt         gofmt the tree"
 	@echo "  make tidy        go mod tidy"
 	@echo ""
@@ -88,10 +89,16 @@ test-cover:
 	go test -coverprofile=coverage.out -covermode=atomic -p 1 -tags fleet_host_executor ./...
 	@go tool cover -func=coverage.out | tail -1
 
-lint: lint-go
+lint: lint-go lint-migrations
 
 lint-go:
 	golangci-lint run
+
+# lint-migrations: reject dangerous DDL in NEW/CHANGED migration files (#256).
+# Diff-scoped (vs the merge-base with origin/main), so the existing corpus is
+# untouched; a no-op when no migration files changed or no base ref resolves.
+lint-migrations:
+	scripts/check-migrations.sh
 
 fmt:
 	gofmt -w .

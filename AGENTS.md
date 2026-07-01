@@ -222,4 +222,6 @@ same PR.
 - **Why the invariants are the way they are:** [`docs/adr/`](docs/adr/)
   (Architecture Decision Records)
 - **Contributor workflow + CI gates:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
+  linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
 - **Reporting a vulnerability:** [`SECURITY.md`](SECURITY.md)

@@ -822,6 +822,47 @@ paths:
         "200": { description: OK }
         "400": { $ref: "#/components/responses/Error" }
 
+  /admin/migrations:
+    get:
+      summary: Migration status — applied vs pending sched-DB migrations (#256).
+      description: >-
+        Read-only operator view of the scheduler (sched) database's schema
+        migrations: the current golang-migrate version, whether the tracking row
+        is dirty (a prior migration failed mid-flight and needs a `migrate force`
+        + restart), and the applied vs pending migration lists derived from the
+        embedded `.up.sql` files. Applies nothing — safe to call any time.
+        Admin-only. The chat server exposes the equivalent for its own database
+        at the same path on its port.
+      security: [{ adminApiKey: [] }]
+      responses:
+        "200":
+          description: Migration status for the sched database.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  db: { type: string }
+                  runner: { type: string }
+                  migration_table: { type: string }
+                  current_version: { type: integer, nullable: true }
+                  dirty: { type: boolean }
+                  applied:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        version: { type: integer }
+                        name: { type: string }
+                  pending:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        version: { type: integer }
+                        name: { type: string }
+        "500": { $ref: "#/components/responses/Error" }
+
   /admin/queue:
     get:
       summary: Pending task-queue stats — per-tier depth + oldest wait (#230).
