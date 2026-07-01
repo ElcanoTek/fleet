@@ -25,6 +25,9 @@ type fakeTurnEngine struct {
 	partialText  string
 	emitOnCancel bool     // emit a turn.cancelled SSE frame before returning
 	extractFacts []string // returned by ExtractMemories (auto-index tests)
+
+	recurringProposal *agent.RecurringTaskProposal // returned by SuggestRecurringTask (#455 promote tests)
+	recurringErr      error
 }
 
 func (f *fakeTurnEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
@@ -56,6 +59,9 @@ func (f *fakeTurnEngine) Summarize(context.Context, SummarizeInput) (*SummarizeR
 func (f *fakeTurnEngine) SuggestTitle(context.Context, string, string) string { return "" }
 func (f *fakeTurnEngine) ExtractMemories(context.Context, string, string, []string) []string {
 	return f.extractFacts
+}
+func (f *fakeTurnEngine) SuggestRecurringTask(context.Context, string, []string) (*agent.RecurringTaskProposal, error) {
+	return f.recurringProposal, f.recurringErr
 }
 func (f *fakeTurnEngine) MCPClient() *mcp.Client                       { return nil }
 func (f *fakeTurnEngine) SandboxPool() *sandbox.Pool                   { return nil }

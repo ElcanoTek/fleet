@@ -227,6 +227,7 @@ function ConversationKebab({
   onPin,
   onRename,
   onDownload,
+  onPromote,
   onSetFolder,
   onSetLabels,
   onShare,
@@ -242,6 +243,7 @@ function ConversationKebab({
   onPin: () => void;
   onRename: () => void;
   onDownload: () => void;
+  onPromote: () => void;
   onSetFolder: (folder: string | null) => void;
   onSetLabels: (labels: string[]) => void;
   onShare: () => void;
@@ -375,6 +377,15 @@ function ConversationKebab({
           }}
         >
           Download as JSON
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name="clock" className="size-4" />}
+          onClick={() => {
+            onPromote();
+            close();
+          }}
+        >
+          Make recurring task…
         </MenuItem>
         {isShared ? (
           <>
@@ -634,6 +645,7 @@ export function ConversationSidebar({
   toggleArchive,
   renameConversation,
   downloadConversation,
+  promoteConversation,
   setPendingDeleteConversation,
   setConversationFolder,
   setConversationLabels,
@@ -679,6 +691,7 @@ export function ConversationSidebar({
   toggleArchive: (conversation: ConversationSummary, archived: boolean) => Promise<void>;
   renameConversation: (conversationId: string, nextTitle: string) => Promise<boolean>;
   downloadConversation: (conversation: ConversationSummary) => Promise<void>;
+  promoteConversation: (conversation: ConversationSummary) => Promise<void>;
   setPendingDeleteConversation: Dispatch<SetStateAction<PendingDeleteConversation | null>>;
   setConversationFolder: (conversationId: string, folder: string | null) => void;
   setConversationLabels: (conversationId: string, labels: string[]) => void;
@@ -757,6 +770,7 @@ export function ConversationSidebar({
       onPin={() => void togglePin(conversation)}
       onRename={() => setEditingId(conversation.id)}
       onDownload={() => void downloadConversation(conversation)}
+      onPromote={() => void promoteConversation(conversation)}
       onSetFolder={(folder) => setConversationFolder(conversation.id, folder)}
       onSetLabels={(labels) => setConversationLabels(conversation.id, labels)}
       isShared={Boolean(conversation.share_token)}
