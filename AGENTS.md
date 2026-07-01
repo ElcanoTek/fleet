@@ -224,4 +224,6 @@ same PR.
 - **Contributor workflow + CI gates:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
+- **MCP server hot-reload** (add/remove/update MCP servers without a restart via
+  `fleet mcp reload` / SIGHUP / admin endpoint; scope + concurrency): [`docs/MCP-RELOAD.md`](docs/MCP-RELOAD.md)
 - **Reporting a vulnerability:** [`SECURITY.md`](SECURITY.md)

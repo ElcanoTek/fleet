@@ -154,6 +154,10 @@ Users, credentials, notes:
   fleet mcp account set <server> <account> --secret KEY=-   (value via stdin)
   fleet mcp account list <server>
   fleet mcp account del <server> <account>
+  fleet mcp reload [--server <addr>] [--admin-key <key>] [--json]
+    (hot-reload the MCP catalog without a restart (#218); re-reads the bundle
+     and applies server add/remove/restart to the live agent. Equivalent to
+     kill -HUP. Uses ADMIN_API_KEY / FLEET_ORCHESTRATOR_ADDR by default.)
     (account names are canonicalized: hyphen/space fold to underscore and case
      is ignored, so client-a, client_a, and Client_A name ONE seat — use
      distinct base words, not separators, to keep seats apart)

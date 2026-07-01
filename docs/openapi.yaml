@@ -943,6 +943,34 @@ paths:
         "500": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
 
+  /admin/mcp-servers/reload:
+    post:
+      summary: Hot-reload the MCP server catalog without a restart (#218).
+      description: >-
+        Re-reads the client-config bundle's MCP catalog (manifest.yaml) and
+        applies the minimum set of server mutations to the live interactive
+        agent — starting newly-added servers, draining + closing removed ones,
+        and restarting changed ones — WITHOUT tearing down unchanged servers or
+        restarting the process. The change takes effect on the next interactive
+        chat turn and the next scheduled run that uses the shared catalog;
+        in-flight runs finish on their current tool set. Equivalent to sending
+        SIGHUP. Admin-only. Returns a summary of what changed.
+      security: [{ adminApiKey: [] }]
+      responses:
+        "200":
+          description: Summary of the servers added, removed, restarted, or left unchanged.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added: { type: array, items: { type: string } }
+                  removed: { type: array, items: { type: string } }
+                  restarted: { type: array, items: { type: string } }
+                  unchanged: { type: array, items: { type: string } }
+        "500": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
   /sla-report:
     get:
       summary: SLA report — per-task actual-duration p50/p95 + breach rate (#274).

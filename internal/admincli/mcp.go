@@ -1,11 +1,16 @@
 package admincli
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
@@ -19,12 +24,25 @@ import (
 // folded to underscore), so `client-a` and `client_a` write the SAME key and
 // never fork two seats. This is the same convention creds.ApplyClientSuffix
 // overlays at run time.
+const mcpUsage = "usage: fleet mcp account set|list|del  |  fleet mcp reload"
+
 func cmdMCP(argv []string) int {
-	if len(argv) < 1 || argv[0] != "account" {
-		return errf(1, "usage: fleet-admin mcp account set|list|del")
+	if len(argv) < 1 {
+		return errf(1, mcpUsage)
 	}
+	switch argv[0] {
+	case "account":
+		return cmdMCPAccount(argv[1:])
+	case "reload":
+		return mcpReload(argv[1:])
+	default:
+		return errf(1, mcpUsage)
+	}
+}
+
+func cmdMCPAccount(argv []string) int {
 	sub := ""
-	rest := argv[1:]
+	rest := argv
 	if len(rest) > 0 {
 		sub = rest[0]
 		rest = rest[1:]
@@ -37,8 +55,93 @@ func cmdMCP(argv []string) int {
 	case "del", "delete", "rm":
 		return mcpAccountDel(rest)
 	default:
-		return errf(1, "usage: fleet-admin mcp account set|list|del")
+		return errf(1, "usage: fleet mcp account set|list|del")
 	}
+}
+
+// mcpReload triggers a hot-reload of the MCP catalog (#218) by POSTing to the
+// orchestrator's admin endpoint. It re-reads the client-config bundle and applies
+// server add/remove/restart to the live agent without a process restart, then
+// pretty-prints the summary. Auth is the orchestrator admin key (X-API-Key).
+func mcpReload(argv []string) int {
+	fs := flag.NewFlagSet("mcp reload", flag.ContinueOnError)
+	addr := fs.String("server", "", "orchestrator address (default FLEET_ORCHESTRATOR_ADDR or 127.0.0.1:8000)")
+	adminKey := fs.String("admin-key", "", "admin API key (default ADMIN_API_KEY env)")
+	asJSON := fs.Bool("json", false, "emit the raw JSON summary")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	key := strings.TrimSpace(*adminKey)
+	if key == "" {
+		key = strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
+	}
+	if key == "" {
+		return errf(1, "admin key required: pass --admin-key or set ADMIN_API_KEY")
+	}
+	url := resolveOrchestratorURL(*addr) + "/admin/mcp-servers/reload"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return errf(1, "build request: %v", err)
+	}
+	req.Header.Set("X-API-Key", key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return errf(5, "POST %s: %v", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return errf(5, "reload failed (%s): %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	if *asJSON {
+		fmt.Println(strings.TrimSpace(string(body)))
+		return 0
+	}
+	var sum struct {
+		Added     []string `json:"added"`
+		Removed   []string `json:"removed"`
+		Restarted []string `json:"restarted"`
+		Unchanged []string `json:"unchanged"`
+	}
+	if err := json.Unmarshal(body, &sum); err != nil {
+		fmt.Println(strings.TrimSpace(string(body)))
+		return 0
+	}
+	fmt.Printf("MCP reload complete: added=%d removed=%d restarted=%d unchanged=%d\n",
+		len(sum.Added), len(sum.Removed), len(sum.Restarted), len(sum.Unchanged))
+	printReloadList("added", sum.Added)
+	printReloadList("removed", sum.Removed)
+	printReloadList("restarted", sum.Restarted)
+	return 0
+}
+
+func printReloadList(label string, names []string) {
+	for _, n := range names {
+		fmt.Printf("  %s: %s\n", label, n)
+	}
+}
+
+// resolveOrchestratorURL turns a flag/env address into a base URL. Accepts a full
+// URL, a host:port, or a bare ":port" (localhost assumed). Defaults to the
+// orchestrator's 127.0.0.1:8000.
+func resolveOrchestratorURL(flagAddr string) string {
+	addr := strings.TrimSpace(flagAddr)
+	if addr == "" {
+		addr = strings.TrimSpace(os.Getenv("FLEET_ORCHESTRATOR_ADDR"))
+	}
+	if addr == "" {
+		addr = "127.0.0.1:8000"
+	}
+	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
+		return strings.TrimRight(addr, "/")
+	}
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	return "http://" + addr
 }
 
 // mcpAccountSet writes <VAR>_<UPPER(account)>=<stdin> into the env file, with

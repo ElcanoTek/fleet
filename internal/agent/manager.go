@@ -294,7 +294,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 		personaPolicies:      opts.PersonaPolicies,
 		remoteMCP:            opts.RemoteMCP,
 	}
-	m.mcpToolRoster = m.computeMCPToolRoster()
+	m.mcpToolRoster = m.computeMCPToolRoster(allow)
 	m.optionalServerMetadata = m.buildOptionalServerMetadata(opts.ServerSpecs)
 	return m, nil
 }
@@ -503,15 +503,18 @@ func (m *Manager) Close() error {
 }
 
 // computeMCPToolRoster walks the live MCP registry once and returns a sorted
-// list of the tool names that survive the per-server allowlist filter.
-func (m *Manager) computeMCPToolRoster() []string {
+// list of the tool names that survive the per-server allowlist filter. The
+// allowlist is passed in (rather than read from m.allowlist) so this stays
+// pure over the gating snapshot — the boot path and a hot reload (#218) each
+// call it with their own allowlist without a lock.
+func (m *Manager) computeMCPToolRoster(allow mcpAllowlist) []string {
 	if m.mcpClient == nil {
 		return nil
 	}
 	all := m.mcpClient.GetAllTools()
 	names := make([]string, 0, len(all))
 	for _, st := range all {
-		if list, ok := m.allowlist[st.ServerName]; ok && len(list) > 0 {
+		if list, ok := allow[st.ServerName]; ok && len(list) > 0 {
 			allowed := false
 			for _, n := range list {
 				if n == st.Tool.Name {
@@ -737,6 +740,11 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		}
 	}
 
+	// Snapshot the MCP gating together under one RLock so this turn sees a
+	// consistent (allowlist, optional-set) pair even if a hot reload (#218)
+	// swaps them concurrently.
+	turnAllowlist, turnOptional := m.mcpGates()
+
 	tc := TurnConfig{
 		SystemPrompt:    systemPrompt,
 		Messages:        messages,
@@ -749,8 +757,8 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		NativeTools:     turnTools.Tools,
 		Sandbox:         sb,
 		MCPClient:       m.mcpClient,
-		Allowlist:       agentcore.MCPAllowlist(m.allowlist),
-		OptionalServers: agentcore.MCPOptionalSet(m.optionalServers),
+		Allowlist:       agentcore.MCPAllowlist(turnAllowlist),
+		OptionalServers: agentcore.MCPOptionalSet(turnOptional),
 		Selection:       selection,
 		Persona:         persona,
 		PersonaPolicy:   m.personaPolicy(persona),

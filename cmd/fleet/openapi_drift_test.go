@@ -55,7 +55,7 @@ func liveRoutes(t *testing.T) map[string]bool {
 	t.Helper()
 	h := handlers.New(handlers.Config{}, nil, nil)
 	notes := handlers.NewNotesHandlers(nil, h)
-	router, ok := buildOrchestratorMux(h, notes, reloadConfigHandler(nil)).(chi.Routes)
+	router, ok := buildOrchestratorMux(h, notes, reloadConfigHandler(nil), mcpReloadHandler(nil)).(chi.Routes)
 	if !ok {
 		t.Fatal("orchestrator router is not chi.Routes")
 	}
