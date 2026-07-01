@@ -1236,3 +1236,22 @@ func InitGlobalStorage(dataDir string) error {
 	globalStorage = New()
 	return globalStorage.Initialize(filepath.Join(dataDir, "orchestrator.db"), db.DefaultPoolConfig())
 }
+
+// Eval & regression harness (#502)
+
+// AddEvalRun persists one immutable eval-run record.
+func (s *Storage) AddEvalRun(ctx context.Context, r *models.EvalRun) error {
+	return s.db.AddEvalRun(ctx, r)
+}
+
+// ListEvalRuns returns the newest-first eval-run history for a set (every set
+// when evalSet is empty), capped at limit.
+func (s *Storage) ListEvalRuns(ctx context.Context, evalSet string, limit int) ([]*models.EvalRun, error) {
+	return s.db.ListEvalRuns(ctx, evalSet, limit)
+}
+
+// LatestEvalRun returns the most recent eval run for a set, or nil when the
+// set has never run.
+func (s *Storage) LatestEvalRun(ctx context.Context, evalSet string) (*models.EvalRun, error) {
+	return s.db.LatestEvalRun(ctx, evalSet)
+}

@@ -1,0 +1,40 @@
+# Example eval set (#502) — a template for the evals/ bundle contract.
+#
+# An eval set is a group of GOLDEN cases: prompts replayed through fleet's
+# governed run loop at a pinned model and scored against expectations, so a
+# model swap or a persona/bundle edit can be gated on "did my known-good tasks
+# get worse?" (`fleet eval run example`). Real sets live in YOUR client bundle's
+# evals/ dir — capture cases from real runs with `fleet eval capture`.
+# See docs/EVALS.md for the full format and the CI-gate recipe.
+set: example
+description: Template set demonstrating the golden-case format and every scorer kind.
+# The gate: the fraction of cases that must pass (absent = 1.0, all of them).
+threshold: 1.0
+# Default model for llm_judge scorers (a scorer's own `model` wins; when both
+# are absent the judge runs on the case's pinned model).
+judge_model: "anthropic/claude-sonnet-4-6"
+cases:
+  - name: arithmetic-sanity
+    prompt: "What is 17 * 23? Reply with just the number."
+    # The pinned model this golden replays at — the thing a model-swap eval
+    # compares. Change it (or run the set twice with an edited pin) to compare
+    # candidates on identical goldens.
+    model: "anthropic/claude-sonnet-4-6"
+    scorers:
+      - contains: "391"
+  - name: summarize-judged
+    prompt: >-
+      Summarize in one sentence why running evaluations before swapping a
+      production model matters.
+    model: "anthropic/claude-sonnet-4-6"
+    # A reference answer strengthens the judge's grading (optional).
+    expected: >-
+      Evaluations catch quality regressions on known-good tasks before a model
+      swap silently degrades production workflows.
+    scorers:
+      - regex: "(?i)(regress|degrad|worse|quality)"
+      - llm_judge:
+          rubric: >-
+            Does the answer give a correct, coherent reason that evals protect
+            against quality regressions when changing models?
+          min_score: 0.7

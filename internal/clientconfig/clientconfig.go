@@ -157,6 +157,11 @@ type Bundle struct {
 	ProtocolsDir     string
 	SkillsDir        string
 	MCPDir           string
+	// EvalsDir holds the bundle's eval & regression sets (#502): one YAML file
+	// per set of golden cases, loaded by internal/evals.LoadSets. Optional like
+	// every content dir — a bundle without evals/ simply has no eval sets. It is
+	// a HOST-side dir (read by `fleet eval`), not bind-mounted into the sandbox.
+	EvalsDir string
 }
 
 // AgentPolicy is the bundle's client-configurable agent tool-behavior policy. It
@@ -728,6 +733,7 @@ func Load(dir string) (*Bundle, error) {
 		ProtocolsDir:      filepath.Join(abs, "protocols"),
 		SkillsDir:         filepath.Join(abs, "skills"),
 		MCPDir:            filepath.Join(abs, "mcp"),
+		EvalsDir:          filepath.Join(abs, "evals"),
 	}
 	applyBrandingDefaults(&b.Branding)
 	if err := b.validate(); err != nil {

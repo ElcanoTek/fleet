@@ -111,6 +111,10 @@ func main() {
 		// Preflight checks (#248) against the SAME loaders the server boots through;
 		// exits 0/1. Starts no servers, runs no migrations.
 		os.Exit(runValidateConfig(argv[1:]))
+	case invokeEval:
+		// Eval & regression harness (#502): replay bundle goldens through the
+		// governed loop and gate on the set threshold; exits 0/1 (2 = usage).
+		os.Exit(runEvalCmd(argv[1:]))
 	case invokeServe:
 		// Daemon: bare `fleet` (legacy) or `fleet serve`. The server is env/config
 		// driven, so any args after `serve` are ignored (no flag parsing here).
@@ -129,6 +133,7 @@ const (
 	invokeVersion
 	invokeMCPBroker
 	invokeValidateConfig
+	invokeEval
 	invokeAdmin // every operator/admin verb → internal/admincli
 )
 
@@ -151,6 +156,8 @@ func classifyInvocation(argv []string) invocation {
 		return invokeMCPBroker
 	case "validate-config":
 		return invokeValidateConfig
+	case "eval":
+		return invokeEval
 	default:
 		return invokeAdmin
 	}
