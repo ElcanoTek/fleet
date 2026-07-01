@@ -45,6 +45,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 const (
@@ -167,6 +168,11 @@ type Pool struct {
 	// StopTask. mu also guards taskCancel and stopRequested.
 	mu     sync.Mutex
 	active map[uuid.UUID]activeRun
+	// pauseRequested records the QUESTION a running task's agent posed via `ask`
+	// (#510), set from the run context's ask handler; executeTask parks the
+	// task in paused_awaiting_input (releasing the sandbox/lease) instead of a
+	// terminal write. mu guards it alongside active/stopRequested.
+	pauseRequested map[uuid.UUID]string
 	// stopRequested records WHO asked a task to stop (task ID → operator
 	// label) between StopTask firing the cancel and executeTask classifying
 	// the outcome — the marker that routes the run to the "stopped" terminal
@@ -232,6 +238,7 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		leaseOwner:         uuid.New(),
 		active:             make(map[uuid.UUID]activeRun),
 		stopRequested:      make(map[uuid.UUID]string),
+		pauseRequested:     make(map[uuid.UUID]string),
 		streams:            newTaskStreamRegistry(),
 		notifier:           cfg.Notifier,
 		publicURLBase:      strings.TrimRight(cfg.PublicURLBase, "/"),
@@ -440,6 +447,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 				p.mu.Lock()
 				delete(p.active, task.ID)
 				delete(p.stopRequested, task.ID)
+				delete(p.pauseRequested, task.ID)
 				p.mu.Unlock()
 				release() // release AFTER cleanup
 			}()
@@ -520,6 +528,14 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	if _, err := p.reportStatus(task.ID, models.TaskStatusRunning, "Starting task execution"); err != nil {
 		log.Printf("runner: failed to report running for task %s: %v", task.ID, err)
 	}
+	// Resumed-after-ask (#510): the run injects the pending Q&A from the
+	// in-memory task struct; clear the DB columns now (under our lease) so a
+	// later run doesn't re-inject a stale answer. Best-effort.
+	if task.PendingQuestion != "" || task.PendingAnswer != "" {
+		if err := p.store.ClearPendingQA(context.Background(), task.ID, p.leaseOwner); err != nil {
+			log.Printf("runner: failed to clear pending Q&A for task %s: %v", task.ID, err)
+		}
+	}
 
 	// Install the workspace-path reporter (#287): the scheduled runner invokes it
 	// once it has resolved this run's effective workspace directory (a per-run
@@ -536,6 +552,23 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// the lease.
 	artifactColl := scheduledrun.NewArtifactCollector()
 	runCtx = scheduledrun.WithArtifactCollector(runCtx, artifactColl)
+	// ask/notify (#510): the ask handler records the question + cancels THIS
+	// task's run so it ends and releases the sandbox/lease; executeTask then
+	// parks the task in paused_awaiting_input. notify fires an out-of-band
+	// progress update and returns immediately (the run continues).
+	runCtx = tools.WithAskHandler(runCtx, func(question string) error {
+		p.mu.Lock()
+		p.pauseRequested[task.ID] = question
+		cancel := p.activeCancel(task.ID)
+		p.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return nil
+	})
+	runCtx = tools.WithNotifyHandler(runCtx, func(message string) {
+		p.notifyProgress(task, message)
+	})
 
 	session, runErr := p.runner.Run(runCtx, task)
 
@@ -558,12 +591,16 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	p.mu.Lock()
 	stoppedBy, wasStopped := p.stopRequested[task.ID]
 	delete(p.stopRequested, task.ID)
+	pauseQuestion, wasPaused := p.pauseRequested[task.ID]
+	delete(p.pauseRequested, task.ID)
 	p.mu.Unlock()
 
 	// Emit a terminal lifecycle status (the always-last frame). The deferred release
 	// seals the buffer so attached clients see EOF; the registry retains it briefly.
 	termStatus := "succeeded"
 	switch {
+	case wasPaused:
+		termStatus = "paused"
 	case wasStopped:
 		termStatus = "stopped"
 	case runErr != nil || taskCtx.Err() != nil:
@@ -580,6 +617,23 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		terminalFrame["stopped_by"] = stoppedBy
 	}
 	buf.Emit("status", terminalFrame)
+
+	if wasPaused {
+		// ask (#510): park the task awaiting a human answer. The lease-guarded
+		// pause clears the lease so no sandbox is held while waiting; the
+		// partial transcript persists (submitLog is lease-free) and an
+		// out-of-band notification tells the human a task needs them. NOT a
+		// failure — no retry/dead-letter/error-analysis.
+		if ok, err := p.store.PauseTaskForQuestion(context.Background(), task.ID, p.leaseOwner, pauseQuestion); err != nil {
+			log.Printf("runner: task %s pause write failed: %v", task.ID, err)
+		} else if !ok {
+			log.Printf("runner: task %s pause did not apply (lease lost or not running)", task.ID)
+		}
+		p.submitLog(task, session, "Paused awaiting human input: "+pauseQuestion)
+		p.notifyProgress(task, "Task is paused and needs your answer: "+pauseQuestion)
+		log.Printf("runner: task %s paused awaiting input after %v", task.ID, time.Since(start).Round(time.Second))
+		return
+	}
 
 	if wasStopped {
 		// The cancel handler already flipped the row to cancelled (with the
@@ -890,6 +944,39 @@ func (p *Pool) submitLog(task *models.Task, session *models.LogSession, failureR
 
 // stillOwns reports whether the pool still holds task with the given claim token
 // (the active-map entry hasn't been replaced by a re-claim after recovery).
+// activeCancel returns the per-task cancel func for an in-flight task (#510
+// ask uses it to end its own run). Caller holds p.mu.
+func (p *Pool) activeCancel(taskID uuid.UUID) context.CancelFunc {
+	if r, ok := p.active[taskID]; ok {
+		return r.cancel
+	}
+	return nil
+}
+
+// notifyProgress fires a non-blocking, out-of-band progress notification for a
+// task (#510 notify / ask-pause). Off-thread + no-op when no notifier is wired.
+func (p *Pool) notifyProgress(task *models.Task, message string) {
+	if p.notifier == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ev := notify.Event{
+			Status:  notify.StatusProgress,
+			TaskID:  task.ID.String(),
+			Name:    notifyTaskName(task.Prompt),
+			Message: message,
+		}
+		if p.publicURLBase != "" {
+			ev.LogURL = p.publicURLBase + "/orchestrator/tasks/" + task.ID.String()
+		}
+		if err := p.notifier.Notify(ctx, ev); err != nil {
+			log.Printf("runner: progress notify for task %s failed: %v", task.ID, err)
+		}
+	}()
+}
+
 func (p *Pool) stillOwns(taskID, token uuid.UUID) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
