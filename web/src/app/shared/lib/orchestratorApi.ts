@@ -300,6 +300,20 @@ export function createSSEParser(onFrame: (frame: TaskStreamFrame) => void): (chu
   };
 }
 
+
+// #516 self-improving memory.
+export type TaskLearnedInstruction = {
+  id: string;
+  task_id: string;
+  version: number;
+  content: string;
+  status: "proposed" | "active" | "archived";
+  signal_count: number;
+  created_at: number;
+  activated_at?: number;
+  activated_by?: string;
+};
+
 class OrchestratorError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -347,6 +361,26 @@ export const orchestratorApi = {
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  // #516 self-improving memory: feedback + versioned learned instructions.
+  submitFeedback: (taskId: string, rating: "up" | "down", critique?: string) =>
+    request<unknown>(`/tasks/${encodeURIComponent(taskId)}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({ rating, critique: critique ?? "" }),
+    }),
+  learnedInstructions: (taskId: string) =>
+    request<{ learned_instructions: TaskLearnedInstruction[] }>(
+      `/tasks/${encodeURIComponent(taskId)}/learned-instructions`,
+    ),
+  activateLearnedInstruction: (taskId: string, version: number) =>
+    request<TaskLearnedInstruction>(
+      `/tasks/${encodeURIComponent(taskId)}/learned-instructions/${version}/activate`,
+      { method: "POST" },
+    ),
+  deactivateLearnedInstruction: (taskId: string) =>
+    request<{ deactivated: boolean }>(
+      `/tasks/${encodeURIComponent(taskId)}/learned-instructions/active`,
+      { method: "DELETE" },
+    ),
   // Cancel/stop a task (#508): flips the row to cancelled with who-stopped-it
   // attribution and interrupts a live run at the governed loop's next
   // checkpoint. Admin permission required server-side.

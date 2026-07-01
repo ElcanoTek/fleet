@@ -73,9 +73,10 @@ type Agent struct {
 	//
 	// taskMemory + taskID + taskMemoryConfig back the remember/recall tools and the
 	// run-start memory injection (#198).
-	taskMemory       tools.TaskMemoryStore
-	taskID           uuid.UUID
-	taskMemoryConfig tools.TaskMemoryConfig
+	learnedInstruction string
+	taskMemory         tools.TaskMemoryStore
+	taskID             uuid.UUID
+	taskMemoryConfig   tools.TaskMemoryConfig
 
 	// phoneAFriendEnabled gates the one-time "phone a friend" super-LLM review
 	// (part of #175). OFF by default — config/default behaviour is unchanged.
@@ -151,6 +152,12 @@ type Options struct {
 	TaskMemory       tools.TaskMemoryStore
 	TaskID           uuid.UUID
 	TaskMemoryConfig tools.TaskMemoryConfig
+
+	// LearnedInstruction is the task's ACTIVE distilled instruction (#516),
+	// resolved by the driver from feedback and injected at run-start. Empty =
+	// none (the default; a task with no activated instruction is byte-for-byte
+	// unchanged).
+	LearnedInstruction string
 
 	// CredentialAllowlist scopes which (server, account) MCP pairs this task may
 	// call (Gate-3, #184). nil = inherit global. Threaded into RunConfig so the
@@ -252,6 +259,7 @@ func NewAgent(opts Options) *Agent {
 		notesProvider:       opts.NotesProvider,
 		noteProposer:        opts.NoteProposer,
 		taskMemory:          opts.TaskMemory,
+		learnedInstruction:  opts.LearnedInstruction,
 		taskID:              opts.TaskID,
 		taskMemoryConfig:    opts.TaskMemoryConfig,
 		credentialAllowlist: opts.CredentialAllowlist,
@@ -468,6 +476,14 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 			mems = nil
 		}
 		systemPrompt = appendTaskMemorySection(systemPrompt, mems)
+	}
+
+	// Learned instruction (#516): the human-activated, distilled-from-feedback
+	// standing instruction for this task. Injected as its own section so a run
+	// visibly follows what prior feedback taught, and revertible (deactivating
+	// it removes the section on the next run).
+	if strings.TrimSpace(a.learnedInstruction) != "" {
+		systemPrompt = appendLearnedInstructionSection(systemPrompt, a.learnedInstruction)
 	}
 
 	// Scheduled policy: audit gating + finish enforcement (agentcore) + verifier.
@@ -704,6 +720,24 @@ func appendTaskMemorySection(base string, mems []tools.TaskMemory) string {
 		fmt.Fprintf(&sb, "- **%s**: %s\n", m.Key, strings.TrimSpace(m.Value))
 	}
 	sb.WriteString("\n")
+	return sb.String()
+}
+
+// appendLearnedInstructionSection appends the task's active learned instruction
+// (#516) — distilled from user feedback and human-activated — to the scheduled
+// base prompt. It is deliberately framed as a standing directive the run must
+// follow, distinct from persistent memory (facts) and admin notes (knowledge).
+func appendLearnedInstructionSection(base, instruction string) string {
+	var sb strings.Builder
+	sb.WriteString(base)
+	if !strings.HasSuffix(base, "\n\n") {
+		sb.WriteString("\n\n")
+	}
+	sb.WriteString("## Learned Instruction\n\n")
+	sb.WriteString("Prior runs of this task received user feedback that distilled into the standing " +
+		"instruction below. Follow it unless it conflicts with the task's explicit request:\n\n")
+	sb.WriteString(strings.TrimSpace(instruction))
+	sb.WriteString("\n\n")
 	return sb.String()
 }
 

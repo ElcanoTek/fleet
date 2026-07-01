@@ -1774,3 +1774,45 @@ type DatasetRow struct {
 	CostUSD    float64         `json:"cost_usd"`
 	UpdatedAt  time.Time       `json:"updated_at"`
 }
+
+// Self-improving memory (#516): feedback signals distilled into versioned,
+// revertible per-task learned instructions injected at run time. Layered on the
+// #285 Captain's Log primitive; does NOT write the client bundle or skills.
+
+// Task-feedback ratings.
+const (
+	FeedbackUp   = "up"
+	FeedbackDown = "down"
+)
+
+// TaskFeedback is one raw signal on a task's output.
+type TaskFeedback struct {
+	ID        uuid.UUID `json:"id"`
+	TaskID    uuid.UUID `json:"task_id"`
+	Rating    string    `json:"rating"`
+	Critique  string    `json:"critique,omitempty"`
+	Consumed  bool      `json:"consumed"`
+	CreatedAt int64     `json:"created_at"`
+	CreatedBy string    `json:"created_by,omitempty"`
+}
+
+// Learned-instruction statuses.
+const (
+	LearnedProposed = "proposed"
+	LearnedActive   = "active"
+	LearnedArchived = "archived"
+)
+
+// TaskLearnedInstruction is a distilled, versioned instruction for a task. At
+// most one is 'active' per task (the run-time injection target).
+type TaskLearnedInstruction struct {
+	ID          uuid.UUID `json:"id"`
+	TaskID      uuid.UUID `json:"task_id"`
+	Version     int       `json:"version"`
+	Content     string    `json:"content"`
+	Status      string    `json:"status"`
+	SignalCount int       `json:"signal_count"`
+	CreatedAt   int64     `json:"created_at"`
+	ActivatedAt *int64    `json:"activated_at,omitempty"`
+	ActivatedBy string    `json:"activated_by,omitempty"`
+}

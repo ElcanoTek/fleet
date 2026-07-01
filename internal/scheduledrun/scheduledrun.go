@@ -74,6 +74,10 @@ type Options struct {
 	TaskMemory       tools.TaskMemoryStore
 	TaskMemoryConfig tools.TaskMemoryConfig
 
+	// LearnedInstructions resolves a task's active distilled instruction (#516)
+	// for run-start injection. nil = feature off (unchanged behavior).
+	LearnedInstructions LearnedInstructionProvider
+
 	// RemoteMCP resolves a task owner's OAuth-connected remote (hosted) MCP servers
 	// and mints their bearer tokens, so a scheduled (headless) run can use the same
 	// per-user servers a chat turn would (#443). nil = feature off. OwnerEmail maps
@@ -116,8 +120,9 @@ type Runner struct {
 
 	// Captain's Log persistent task memory (#285), handed to a run only when the
 	// task opted in (instruction_self_improve). nil = capability disabled.
-	taskMemory       tools.TaskMemoryStore
-	taskMemoryConfig tools.TaskMemoryConfig
+	taskMemory          tools.TaskMemoryStore
+	taskMemoryConfig    tools.TaskMemoryConfig
+	learnedInstructions LearnedInstructionProvider
 
 	// remoteMCP + ownerEmail wire a task owner's OAuth-connected remote (hosted)
 	// MCP servers into a headless run (#443). nil = feature off.
@@ -132,25 +137,33 @@ type IterationStore interface {
 	AddTaskIteration(ctx context.Context, it *models.TaskIteration) error
 }
 
+// LearnedInstructionProvider is the narrow subset of sched storage the runner
+// needs to inject a task's active learned instruction (#516). *storage.Storage
+// satisfies it. nil = feature off.
+type LearnedInstructionProvider interface {
+	ActiveLearnedInstruction(ctx context.Context, taskID uuid.UUID) (*models.TaskLearnedInstruction, error)
+}
+
 // New builds a Runner. The base system prompt + persona are read once at
 // construction (operators editing them in place take effect on the next process
 // restart, matching the scheduled path's prior behaviour).
 func New(opts Options) *Runner {
 	r := &Runner{
-		cfg:              opts.Config,
-		mgr:              opts.Manager,
-		notesProvider:    opts.NotesProvider,
-		noteProposer:     opts.NoteProposer,
-		personasDir:      opts.PersonasDir,
-		systemPromptsDir: opts.SystemPromptsDir,
-		protocolsDir:     opts.ProtocolsDir,
-		iterationStore:   opts.IterationStore,
-		taskEnqueuer:     opts.TaskEnqueuer,
-		personaPolicies:  opts.PersonaPolicies,
-		taskMemory:       opts.TaskMemory,
-		taskMemoryConfig: opts.TaskMemoryConfig,
-		remoteMCP:        opts.RemoteMCP,
-		ownerEmail:       opts.OwnerEmail,
+		cfg:                 opts.Config,
+		mgr:                 opts.Manager,
+		notesProvider:       opts.NotesProvider,
+		noteProposer:        opts.NoteProposer,
+		personasDir:         opts.PersonasDir,
+		systemPromptsDir:    opts.SystemPromptsDir,
+		protocolsDir:        opts.ProtocolsDir,
+		iterationStore:      opts.IterationStore,
+		learnedInstructions: opts.LearnedInstructions,
+		taskEnqueuer:        opts.TaskEnqueuer,
+		personaPolicies:     opts.PersonaPolicies,
+		taskMemory:          opts.TaskMemory,
+		taskMemoryConfig:    opts.TaskMemoryConfig,
+		remoteMCP:           opts.RemoteMCP,
+		ownerEmail:          opts.OwnerEmail,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -240,6 +253,20 @@ func (r *Runner) taskPromptAndPersona(task *models.Task) (systemPrompt, persona 
 // recurrence grant) are enforced INSIDE the tool as defence in depth; this gate
 // only decides whether the tool exists for the run. The per-run spawn counter is
 // allocated here so it is scoped to exactly one task run.
+// activeLearnedInstruction resolves the task's active distilled instruction
+// (#516) for run-start injection. Best-effort: any error (or no provider)
+// yields "" so a run never fails on the self-improvement layer.
+func (r *Runner) activeLearnedInstruction(ctx context.Context, taskID uuid.UUID) string {
+	if r.learnedInstructions == nil {
+		return ""
+	}
+	li, err := r.learnedInstructions.ActiveLearnedInstruction(ctx, taskID)
+	if err != nil || li == nil {
+		return ""
+	}
+	return li.Content
+}
+
 // selfImproveTaskMemory is the per-task Captain's Log (#285) opt-in gate: it
 // returns the persistent task-memory store for a task ONLY when the task set
 // instruction_self_improve, and nil otherwise. Centralizing the gate here keeps
@@ -608,6 +635,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// for agents to improve the shared knowledge base. The flag gates only the NEW
 	// capability — persistent task memory. "Off = today's behaviour" is the rule.
 	taskMemory := r.selfImproveTaskMemory(task)
+	learnedInstruction := r.activeLearnedInstruction(ctx, task.ID)
 
 	a := agent.NewAgent(agent.Options{
 		Config:        r.cfg,
@@ -625,6 +653,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		TaskMemory:          taskMemory,
 		TaskID:              task.ID,
 		TaskMemoryConfig:    r.taskMemoryConfig,
+		LearnedInstruction:  learnedInstruction,
 		CredentialAllowlist: taskCredentialAllowlist(task),
 		PersonaPolicy:       r.personaPolicy(taskPersona),
 		Overlay:             remoteOverlay,

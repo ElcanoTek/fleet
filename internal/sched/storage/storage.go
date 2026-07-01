@@ -1322,3 +1322,40 @@ func (s *Storage) ResetDatasetRows(ctx context.Context, datasetID uuid.UUID, ids
 func (s *Storage) ResetStaleRunningDatasets(ctx context.Context) error {
 	return s.db.ResetStaleRunningDatasets(ctx)
 }
+
+// Self-improving memory (#516): feedback + learned instructions.
+
+// AddTaskFeedback records one feedback signal.
+func (s *Storage) AddTaskFeedback(ctx context.Context, f *models.TaskFeedback) error {
+	return s.db.AddTaskFeedback(ctx, f)
+}
+
+// UnconsumedFeedback returns a task's fresh feedback signals.
+func (s *Storage) UnconsumedFeedback(ctx context.Context, taskID uuid.UUID) ([]*models.TaskFeedback, error) {
+	return s.db.UnconsumedFeedback(ctx, taskID)
+}
+
+// ProposeLearnedInstruction stages a distilled instruction (marks its evidence consumed).
+func (s *Storage) ProposeLearnedInstruction(ctx context.Context, taskID uuid.UUID, content string, evidenceIDs []uuid.UUID, now int64) (*models.TaskLearnedInstruction, error) {
+	return s.db.ProposeLearnedInstruction(ctx, taskID, content, evidenceIDs, now)
+}
+
+// ListLearnedInstructions returns a task's instructions, newest version first.
+func (s *Storage) ListLearnedInstructions(ctx context.Context, taskID uuid.UUID) ([]*models.TaskLearnedInstruction, error) {
+	return s.db.ListLearnedInstructions(ctx, taskID)
+}
+
+// ActiveLearnedInstruction returns the task's active instruction (run-time injection target), or nil.
+func (s *Storage) ActiveLearnedInstruction(ctx context.Context, taskID uuid.UUID) (*models.TaskLearnedInstruction, error) {
+	return s.db.ActiveLearnedInstruction(ctx, taskID)
+}
+
+// ActivateLearnedInstruction activates (or reverts to) a version.
+func (s *Storage) ActivateLearnedInstruction(ctx context.Context, taskID uuid.UUID, version int, who string, now int64) (*models.TaskLearnedInstruction, error) {
+	return s.db.ActivateLearnedInstruction(ctx, taskID, version, who, now)
+}
+
+// DeactivateLearnedInstructions archives the active instruction (full revert).
+func (s *Storage) DeactivateLearnedInstructions(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	return s.db.DeactivateLearnedInstructions(ctx, taskID)
+}

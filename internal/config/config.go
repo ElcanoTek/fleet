@@ -151,6 +151,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_METADATA_MODEL":                 true,
 	"FLEET_ERROR_ANALYSIS_MODEL":           true,
 	"FLEET_ERROR_ANALYSIS_ENABLED":         true,
+	"FLEET_SELF_IMPROVE_ENABLED":           true,
 	"FLEET_AUTO_TITLE":                     true,
 	"FLEET_MEMORY_MODEL":                   true,
 	"FLEET_MEMORY_AUTOINDEX_ENABLED":       true,
@@ -543,6 +544,10 @@ type Config struct {
 	// remediation. FLEET_ERROR_ANALYSIS_MODEL, defaulting to MetadataModel (then
 	// TitleModel) so deployments need zero new config.
 	ErrorAnalysisModel string
+	// SelfImproveEnabled gates the feedback→learned-instruction distiller (#516).
+	// FLEET_SELF_IMPROVE_ENABLED, default false: feedback is always recorded,
+	// but distillation + run-time injection only happen when enabled.
+	SelfImproveEnabled bool
 	// ErrorAnalysisEnabled gates the post-failure LLM diagnosis (#317).
 	// FLEET_ERROR_ANALYSIS_ENABLED, default true. When false, no analysis goroutine
 	// or model call fires on a terminal failure (cost/latency escape hatch); the
@@ -1027,6 +1032,7 @@ func Load(envFile string) (*Config, error) {
 		MetadataModel:          getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)),
 		ErrorAnalysisModel:     getenvFleetDefault("ERROR_ANALYSIS_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		ErrorAnalysisEnabled:   getenvFleetBool("ERROR_ANALYSIS_ENABLED", true),
+		SelfImproveEnabled:     getenvFleetBool("SELF_IMPROVE_ENABLED", false),
 		AutoTitle:              getenvFleetBool("AUTO_TITLE", true),
 		MemoryModel:            getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		RecurringTaskModel:     getenvFleetDefault("RECURRING_TASK_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
