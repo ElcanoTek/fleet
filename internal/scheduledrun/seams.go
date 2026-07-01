@@ -45,4 +45,3 @@ func reportWorkspacePath(ctx context.Context, path string) {
 		r(ctx, path)
 	}
 }
-

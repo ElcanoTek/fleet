@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // TestStopTaskInterruptsAndAttributes exercises the #508 operator stop: the
@@ -121,5 +122,57 @@ func TestShutdownCancelNotMislabeledSuccess(t *testing.T) {
 	success, _ := store.GetTasksByStatus(models.TaskStatusSuccess)
 	if len(success) != 0 {
 		t.Fatal("force-cancelled run mislabeled as success")
+	}
+}
+
+// TestAskPausesTaskAndReleasesLease pins #510: an agent `ask` ends the run,
+// parks the task in paused_awaiting_input holding NO lease, persists the
+// partial transcript, and does NOT retry/error.
+func TestAskPausesTaskAndReleasesLease(t *testing.T) {
+	store := newTestStore(t)
+	seedPending(t, store, 1)
+
+	started := make(chan struct{})
+	runner := TaskRunnerFunc(func(ctx context.Context, task *models.Task) (*models.LogSession, error) {
+		// Simulate the ask tool: pull the handler off the run ctx, fire it
+		// (records pause + cancels this run), then return the partial session.
+		if h := tools.AskHandlerFromContextForTest(ctx); h != nil {
+			_ = h("which region should I use?")
+		}
+		close(started)
+		<-ctx.Done()
+		return &models.LogSession{ID: "s-" + task.ID.String(), Messages: []models.LogMessage{{Role: "assistant", Content: "posing question"}}}, nil
+	})
+
+	pool := NewPool(store, runner, Config{MaxConcurrentAgents: 1, PollInterval: 20 * time.Millisecond, LeaseRenewInterval: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { pool.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	<-started
+	waitFor(t, 3*time.Second, func() bool {
+		paused, _ := store.GetTasksByStatus(models.TaskStatusPausedAwaitingInput)
+		return len(paused) == 1
+	})
+
+	paused, _ := store.GetTasksByStatus(models.TaskStatusPausedAwaitingInput)
+	if len(paused) != 1 {
+		t.Fatalf("want 1 paused task, got %d", len(paused))
+	}
+	p := paused[0]
+	if p.PendingQuestion != "which region should I use?" {
+		t.Fatalf("question not stored: %q", p.PendingQuestion)
+	}
+	if p.LeaseOwner != nil {
+		t.Fatalf("paused task must hold NO lease: %v", p.LeaseOwner)
+	}
+	// Not retried / errored.
+	if errored, _ := store.GetTasksByStatus(models.TaskStatusError); len(errored) != 0 {
+		t.Fatal("ask-pause must not error the task")
+	}
+	// Partial transcript persisted.
+	if logs, _ := store.GetAllLogs(); len(logs) != 1 {
+		t.Fatalf("partial transcript must persist: %d logs", len(logs))
 	}
 }

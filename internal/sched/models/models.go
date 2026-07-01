@@ -868,7 +868,7 @@ type Task struct {
 	// re-queued it (injected + cleared at the resumed run's start).
 	PendingQuestion string `json:"pending_question,omitempty"`
 	PendingAnswer   string `json:"pending_answer,omitempty"`
-	Priority  int             `json:"priority"`
+	Priority        int    `json:"priority"`
 	// EffectivePriority is the value the scheduler actually orders the pending
 	// queue by (#230). Equal to Priority at creation; only the anti-starvation
 	// sweep lowers it (never Priority) so a long-waiting task is eventually

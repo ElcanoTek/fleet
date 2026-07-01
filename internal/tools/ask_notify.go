@@ -126,3 +126,8 @@ func NewAskTool() fantasy.AgentTool {
 // act (keeping the model's tool list honest).
 func AskHandlerInstalled(ctx context.Context) bool    { return askHandlerFromContext(ctx) != nil }
 func NotifyHandlerInstalled(ctx context.Context) bool { return notifyHandlerFromContext(ctx) != nil }
+
+// AskHandlerFromContextForTest exposes the installed ask handler for tests in
+// sibling packages (the runner's pause integration test); production code uses
+// the unexported accessor.
+func AskHandlerFromContextForTest(ctx context.Context) AskHandler { return askHandlerFromContext(ctx) }
