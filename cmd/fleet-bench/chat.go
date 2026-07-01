@@ -155,13 +155,17 @@ func runChatLoad(opts chatOptions) chatReport {
 	var memAfter runtime.MemStats
 	runtime.ReadMemStats(&memAfter)
 
+	// Heap byte counts are far below math.MaxInt64; the signed delta is a
+	// diagnostic leak signal, not a precise measurement.
+	heapGrowth := int64(memAfter.HeapAlloc) - int64(memBefore.HeapAlloc) //nolint:gosec // G115: HeapAlloc << MaxInt64
+
 	return chatReport{
 		latencies:  latencies,
 		turns:      turns.Load(),
 		errors:     errs.Load(),
 		wall:       wall,
 		goroutines: runtime.NumGoroutine() - goroutinesBefore,
-		heapGrowth: int64(memAfter.HeapAlloc) - int64(memBefore.HeapAlloc),
+		heapGrowth: heapGrowth,
 	}
 }
 

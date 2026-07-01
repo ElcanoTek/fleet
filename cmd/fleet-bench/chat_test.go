@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -45,7 +46,7 @@ func TestReadTurnToTerminal(t *testing.T) {
 		t.Errorf("errored stream → (%q, %v), want (turn.error, nil)", ev, err)
 	}
 	truncated := "event: text.delta\ndata: {}\n\n" // no terminal event
-	if _, err := readTurnToTerminal(strings.NewReader(truncated)); err != io.EOF {
+	if _, err := readTurnToTerminal(strings.NewReader(truncated)); !errors.Is(err, io.EOF) {
 		t.Errorf("truncated stream should return io.EOF, got %v", err)
 	}
 }
