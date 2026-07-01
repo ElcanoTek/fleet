@@ -134,6 +134,28 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		persona = s.cfg.PersonaDefault
 	}
 	user := strings.TrimSpace(trig.NotifyUser)
+	model := strings.TrimSpace(trig.Model)
+
+	// Honor the server-wide lockdown seal exactly like postChat and
+	// POST /conversations (server.go). A webhook is an external caller and cannot
+	// opt a conversation OUT of the global seal, so lockdown is simply
+	// s.cfg.LockdownOnly (no per-request override). This matters precisely on the
+	// untrusted-payload path: on a CHAT_LOCKDOWN_ONLY box the triggered turn must
+	// run in the same --network=none sandbox as every human turn. Fail closed
+	// (never create an unenforceable lockdown conversation) on misconfiguration.
+	lockdown := s.cfg.LockdownOnly
+	if lockdown {
+		if !s.cfg.LockdownAvailable() {
+			metrics.RecordWebhookTrigger(trig.Slug, "error")
+			http.Error(w, "lockdown is unavailable on this server (no sandbox image configured)", http.StatusInternalServerError)
+			return
+		}
+		if model != "" && !s.cfg.LockdownAllows(model) {
+			metrics.RecordWebhookTrigger(trig.Slug, "error")
+			http.Error(w, "webhook trigger model not allowed in lockdown mode", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	// Concurrency admission keyed by the trigger owner, so a burst of webhooks
 	// can't hold every worker slot. admitConcurrentTurn writes its own 429.
@@ -143,7 +165,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conv, err := s.store.CreateConversation(r.Context(), user, agent.HeuristicTitle(prompt), persona, strings.TrimSpace(trig.Model), false)
+	conv, err := s.store.CreateConversation(r.Context(), user, agent.HeuristicTitle(prompt), persona, model, lockdown)
 	if err != nil {
 		releaseSlot()
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
@@ -241,12 +263,11 @@ func renderWebhookPrompt(tmpl string, payload map[string]any, raw []byte) (strin
 	if strings.TrimSpace(tmpl) == "" {
 		return string(raw), nil
 	}
-	// G708: prompt_template is operator-authored (a manifest field, an admin-only
-	// path), NEVER attacker-supplied. The inbound payload is exposed only as DATA
+	// prompt_template is operator-authored (a manifest field, an admin-only path),
+	// NEVER attacker-supplied. The inbound payload is exposed only as DATA
 	// (.payload / .raw), not as the template text, and the rendered output is a
 	// plain-text LLM prompt consumed inside the mandatory sandbox — never
 	// interpolated into a host-side shell — so text/template is the right choice.
-	//nolint:gosec // G708: prompt_template is operator-authored, not request input.
 	t, err := template.New("webhook").Option("missingkey=zero").Parse(tmpl)
 	if err != nil {
 		return "", err

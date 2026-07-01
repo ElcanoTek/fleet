@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 const (
@@ -113,7 +114,7 @@ func TestWebhookValidHMACCreatesConversationAndRunsTurn(t *testing.T) {
 	}
 
 	// The turn runs fire-and-forget in a goroutine (no SSE attach).
-	eventually(t, 2*time.Second, func() bool {
+	eventually(t, func() bool {
 		engine.mu.Lock()
 		defer engine.mu.Unlock()
 		return engine.turns == 1
@@ -234,6 +235,58 @@ func TestWebhookMethodNotAllowed(t *testing.T) {
 	}
 }
 
+// TestWebhookHonorsLockdownOnly asserts that on a CHAT_LOCKDOWN_ONLY server the
+// webhook-triggered conversation is created network-sealed (lockdown=true), the
+// same as every human chat turn — the webhook path must not silently drop the
+// operator's global seal on the untrusted-payload path.
+func TestWebhookHonorsLockdownOnly(t *testing.T) {
+	t.Setenv(webhookSecretEnv, "hmac-signing-secret")
+	engine := &fakeEngine{}
+	st := newFakeChatStore()
+	cfg := &config.Config{
+		SharedToken:        "tok",
+		PersonaDefault:     "generic",
+		ConversationTTL:    14,
+		UnpinnedCap:        50,
+		MockMode:           false,
+		EmailAttachmentDir: t.TempDir(),
+		LockdownOnly:       true,
+		SandboxImage:       "fleet-sandbox:test", // makes LockdownAvailable() true
+	}
+	srv := New(cfg, engine, st)
+	srv.isMember = allowAllMembers
+	srv.clientConfig = &clientconfig.Bundle{
+		WebhookTriggers: []clientconfig.WebhookTriggerDef{{
+			Slug:          "gh",
+			HMACSecretEnv: webhookSecretEnv,
+			Persona:       "code-reviewer",
+			// No model, so the lockdown model-allowlist check is skipped.
+			PromptTemplate: "PR: {{.payload.title}}",
+			NotifyUser:     webhookOwner,
+		}},
+	}
+
+	body := []byte(`{"title":"x"}`)
+	w := postWebhook(t, srv, "gh", body, map[string]string{
+		"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body),
+	})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	st.mu.Lock()
+	conv := st.convs[resp.ConversationID]
+	st.mu.Unlock()
+	if conv == nil || !conv.Lockdown {
+		t.Fatalf("conversation lockdown = %+v, want lockdown=true (CHAT_LOCKDOWN_ONLY must apply to webhooks)", conv)
+	}
+}
+
 func TestWebhookSlackSignatureAndChallenge(t *testing.T) {
 	engine := &fakeEngine{}
 	st := newFakeChatStore()
@@ -272,7 +325,7 @@ func TestWebhookSlackSignatureAndChallenge(t *testing.T) {
 	if w2.Code != http.StatusAccepted {
 		t.Fatalf("slack event status %d, want 202: %s", w2.Code, w2.Body.String())
 	}
-	eventually(t, 2*time.Second, func() bool {
+	eventually(t, func() bool {
 		st.mu.Lock()
 		defer st.mu.Unlock()
 		return st.created == 1

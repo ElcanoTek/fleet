@@ -120,6 +120,8 @@ counts requests (the `slug` label is populated only for configured triggers).
 - **The secret never enters the sandbox, the model, or the logs** — it is read
   host-side at request time, like an MCP connector credential.
 - **The turn runs through the one governed core** (`agentcore.Run`): same policy,
-  ceilings, audit, and mandatory sandbox as any chat turn.
+  ceilings, audit, and mandatory sandbox as any chat turn. It honors
+  `CHAT_LOCKDOWN_ONLY` too — on a lockdown-only server the triggered conversation
+  runs network-sealed like every human turn.
 - **A webhook acts as its configured `notify_user`** and cannot impersonate any
   other account.

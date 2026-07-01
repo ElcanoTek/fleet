@@ -84,7 +84,11 @@ Containment is layered, not a claim that injection is impossible:
 
 1. **The mandatory sandbox.** Every tool call the triggered agent makes runs in
    the rootless-Podman sandbox under host policy — the same containment as any
-   turn. The webhook opens no new tool-execution path.
+   turn. The webhook opens no new tool-execution path. It also honors the
+   server-wide `CHAT_LOCKDOWN_ONLY` seal exactly like `POST /chat`: on a
+   lockdown-only box the triggered turn runs in the same `--network=none`
+   sandbox as every human turn (a webhook, being an external caller, cannot opt a
+   conversation *out* of the global seal).
 2. **The operator-chosen persona** bounds the agent's role and (via #294 persona
    tool policies) can narrow its tool roster.
 3. **The per-turn cost / token / iteration ceilings** bound the blast radius of a
