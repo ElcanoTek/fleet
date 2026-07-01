@@ -18,6 +18,7 @@ const (
 	nameIPBlocked     = "fleet_ip_blocked_total"
 	nameDeadLettered  = "fleet_dead_letter_queued_total"
 	nameTasksSkipped  = "fleet_tasks_skipped_total"
+	nameWebhookTrig   = "fleet_webhook_triggers_total"
 
 	// SLA monitoring (#274). Labeled by a BOUNDED task-name (the prompt's first
 	// line truncated to 64 chars — see slamonitor.TaskName), NOT a free-form
@@ -65,6 +66,21 @@ func RecordDeadLetterQueued(reason string) {
 	}
 	incCounter(nameDeadLettered, "Total tasks routed to the dead-letter queue, by reason class.",
 		[]string{"reason"}, []string{reason}, 1)
+}
+
+// RecordWebhookTrigger counts one inbound webhook-triggered conversation request
+// (#268), labeled by result ("ok" | "rejected" | "throttled" | "error") and by
+// slug. The slug label is populated ONLY for a CONFIGURED trigger (a bounded,
+// operator-authored set); the rejected-unknown/bad-signature path passes an
+// empty slug so an attacker probing arbitrary slugs cannot inflate the
+// time-series set — the cardinality anti-pattern the #263 sandbox gauges call
+// out. Per-trigger attribution beyond the configured set is not a metrics concern.
+func RecordWebhookTrigger(slug, result string) {
+	if result == "" {
+		result = "unknown"
+	}
+	incCounter(nameWebhookTrig, "Total inbound webhook-triggered conversation requests, by slug and result.",
+		[]string{"slug", "result"}, []string{slug, result}, 1)
 }
 
 // RecordSLAWarn counts one in-flight task that crossed its SLA warn threshold

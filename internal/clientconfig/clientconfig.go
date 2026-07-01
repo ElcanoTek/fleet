@@ -48,6 +48,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/goccy/go-yaml"
@@ -118,6 +119,13 @@ type Bundle struct {
 	// alongside the MCP catalog — no MCP subprocess required. Empty in the generic
 	// bundle (defaults unchanged). See HTTPToolDef.
 	HTTPTools []HTTPToolDef
+
+	// WebhookTriggers is the manifest's inbound conversation-trigger catalog (the
+	// webhook_triggers: section, #268), in manifest order. Each entry maps a
+	// signed inbound webhook (POST /webhooks/{slug}) to a fresh conversation.
+	// Empty in the generic bundle. Look one up via WebhookTrigger. See
+	// WebhookTriggerDef.
+	WebhookTriggers []WebhookTriggerDef
 
 	// PricingConfig carries the bundle's optional custom model-pricing overrides
 	// (#297). Empty in the generic bundle. cmd/fleet translates it into
@@ -547,21 +555,76 @@ type HTTPToolDef struct {
 	Critical     bool                   `yaml:"critical"`
 }
 
+// WebhookTriggerDef is one inbound conversation trigger from the manifest's
+// webhook_triggers: section (#268). An external system (GitHub, Slack, CI, a
+// Zapier hook) that presents a valid signature to POST /webhooks/{slug} starts
+// a fresh interactive conversation under NotifyUser, seeded with a prompt
+// rendered from PromptTemplate against the request payload. The turn runs
+// through the SAME governed core (agentcore.Run) as any chat turn — this is an
+// inbound I/O adapter, not a second agent loop.
+//
+// SECURITY — the trigger definition is BUNDLE-AUTHOR-DEFINED and therefore
+// trusted (same trust level as an mcp_servers or http_tools entry). The inbound
+// PAYLOAD, by contrast, is UNTRUSTED attacker-controllable input: it is exposed
+// to PromptTemplate only as DATA ({{.payload…}}), never as template text, and
+// the resulting prompt is untrusted model input bounded by the mandatory
+// sandbox, the operator-chosen Persona, and the per-turn cost/iteration
+// ceilings. See docs/adr/0016-webhook-triggered-conversations.md.
+//
+//   - Exactly one authentication method is configured per trigger:
+//     HMACSecretEnv (GitHub-style HMAC-SHA256 over the raw body, verified against
+//     HMACHeader) OR TokenSecretEnv (Slack v0 signing secret). The env-var NAME
+//     is declared here; its VALUE is read host-side from the process env at
+//     request time (registered via EnvVarNames → RegisterAllowedEnvVars so it
+//     flows from .env), exactly like an MCP connector credential. The secret
+//     never enters the sandbox, the model context, or the logs.
+type WebhookTriggerDef struct {
+	Slug           string `yaml:"slug"`             // URL-safe path segment; unique within the manifest
+	Description    string `yaml:"description"`      // human-readable, for operator docs
+	HMACSecretEnv  string `yaml:"hmac_secret_env"`  // env var holding the GitHub-style HMAC secret
+	HMACHeader     string `yaml:"hmac_header"`      // signature header (default X-Hub-Signature-256)
+	TokenSecretEnv string `yaml:"token_secret_env"` // env var holding the Slack signing secret
+	Persona        string `yaml:"persona"`          // persona for the triggered conversation
+	Model          string `yaml:"model"`            // model slug (optional; falls back to the server default)
+	PromptTemplate string `yaml:"prompt_template"`  // Go text/template; {{.payload}} is the decoded JSON body
+	NotifyUser     string `yaml:"notify_user"`      // email whose conversation store the trigger writes to (required)
+}
+
+// DefaultHMACHeader is the signature header a GitHub-style HMAC trigger reads
+// when the manifest does not override HMACHeader.
+const DefaultHMACHeader = "X-Hub-Signature-256"
+
+// UsesSlack reports whether the trigger authenticates via the Slack v0 signing
+// secret (TokenSecretEnv) rather than a GitHub-style HMAC (HMACSecretEnv).
+func (t WebhookTriggerDef) UsesSlack() bool {
+	return strings.TrimSpace(t.TokenSecretEnv) != "" && strings.TrimSpace(t.HMACSecretEnv) == ""
+}
+
+// SignatureHeader is the request header carrying the GitHub-style HMAC
+// signature, defaulting to DefaultHMACHeader when the manifest omits it.
+func (t WebhookTriggerDef) SignatureHeader() string {
+	if h := strings.TrimSpace(t.HMACHeader); h != "" {
+		return h
+	}
+	return DefaultHMACHeader
+}
+
 // manifest is the on-disk YAML shape. Sandbox is a pointer so an absent block
 // (a minimal/legacy bundle that never opted into the sandbox-as-config contract)
 // is distinguishable from a present-but-empty one: only a DECLARED sandbox block
 // enforces the Containerfile-exists invariant.
 type manifest struct {
-	Branding      Branding         `yaml:"branding"`
-	Models        Models           `yaml:"models"`
-	MCPServers    []ServerDef      `yaml:"mcp_servers"`
-	HTTPTools     []HTTPToolDef    `yaml:"http_tools"`
-	EmptyState    EmptyState       `yaml:"empty_state"`
-	TaskTemplates []TaskTemplate   `yaml:"task_templates"`
-	AgentPolicy   AgentPolicy      `yaml:"agent_policy"`
-	Personas      []PersonaDef     `yaml:"personas"`
-	Pricing       PricingConfig    `yaml:"pricing"`
-	Sandbox       *sandboxManifest `yaml:"sandbox"`
+	Branding        Branding            `yaml:"branding"`
+	Models          Models              `yaml:"models"`
+	MCPServers      []ServerDef         `yaml:"mcp_servers"`
+	HTTPTools       []HTTPToolDef       `yaml:"http_tools"`
+	WebhookTriggers []WebhookTriggerDef `yaml:"webhook_triggers"`
+	EmptyState      EmptyState          `yaml:"empty_state"`
+	TaskTemplates   []TaskTemplate      `yaml:"task_templates"`
+	AgentPolicy     AgentPolicy         `yaml:"agent_policy"`
+	Personas        []PersonaDef        `yaml:"personas"`
+	Pricing         PricingConfig       `yaml:"pricing"`
+	Sandbox         *sandboxManifest    `yaml:"sandbox"`
 }
 
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
@@ -625,6 +688,7 @@ func Load(dir string) (*Bundle, error) {
 		TaskTemplates:     m.TaskTemplates,
 		MCPCatalog:        m.MCPServers,
 		HTTPTools:         m.HTTPTools,
+		WebhookTriggers:   m.WebhookTriggers,
 		AgentPolicyConfig: m.AgentPolicy,
 		Personas:          m.Personas,
 		PricingConfig:     m.Pricing,
@@ -790,10 +854,73 @@ func (b *Bundle) validate() error {
 	if err := b.validatePersonas(); err != nil {
 		return err
 	}
+	if err := b.validateWebhookTriggers(); err != nil {
+		return err
+	}
 	if err := validatePricing(b.PricingConfig); err != nil {
 		return err
 	}
 	return nil
+}
+
+// webhookSlugShape bounds a manifest webhook trigger slug to the same URL-safe
+// shape the orchestrator's task-trigger CLI enforces, so the two inbound-webhook
+// surfaces share one slug grammar.
+var webhookSlugShape = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
+
+// validateWebhookTriggers fails the load on a malformed webhook_triggers[] entry
+// (#268): a missing/duplicate/out-of-shape slug, a missing notify_user, or a
+// missing authentication method. Like the rest of validate this is fail-loud at
+// startup — a trigger with no secret env configured would otherwise silently
+// reject every inbound call (fail-closed), and a trigger with no notify_user
+// would have nowhere to create its conversation. An empty prompt_template is
+// allowed (the raw payload still reaches the model via the default rendering).
+func (b *Bundle) validateWebhookTriggers() error {
+	seen := map[string]bool{}
+	for i := range b.WebhookTriggers {
+		t := &b.WebhookTriggers[i]
+		slug := strings.TrimSpace(t.Slug)
+		if slug == "" {
+			return fmt.Errorf("webhook_triggers[%d]: slug is required", i)
+		}
+		if !webhookSlugShape.MatchString(slug) {
+			return fmt.Errorf("webhook_triggers[%q]: slug must match %s", slug, webhookSlugShape.String())
+		}
+		if seen[slug] {
+			return fmt.Errorf("webhook_triggers: duplicate slug %q", slug)
+		}
+		seen[slug] = true
+		if strings.TrimSpace(t.NotifyUser) == "" {
+			return fmt.Errorf("webhook_triggers[%q]: notify_user is required", slug)
+		}
+		hasHMAC := strings.TrimSpace(t.HMACSecretEnv) != ""
+		hasToken := strings.TrimSpace(t.TokenSecretEnv) != ""
+		if !hasHMAC && !hasToken {
+			return fmt.Errorf("webhook_triggers[%q]: an authentication method is required (set hmac_secret_env or token_secret_env)", slug)
+		}
+		if hasHMAC && hasToken {
+			return fmt.Errorf("webhook_triggers[%q]: set only one of hmac_secret_env or token_secret_env", slug)
+		}
+	}
+	return nil
+}
+
+// WebhookTrigger returns the manifest webhook trigger for slug (defensively
+// copied) and whether one exists (#268). The lookup is a linear scan over the
+// manifest-order slice; the catalog is small and read once per inbound request.
+// An unknown slug returns (zero, false), which the handler treats identically to
+// a bad signature (timing-equalized 401) so a caller cannot enumerate slugs.
+func (b *Bundle) WebhookTrigger(slug string) (WebhookTriggerDef, bool) {
+	want := strings.TrimSpace(slug)
+	if want == "" {
+		return WebhookTriggerDef{}, false
+	}
+	for i := range b.WebhookTriggers {
+		if strings.TrimSpace(b.WebhookTriggers[i].Slug) == want {
+			return b.WebhookTriggers[i], true
+		}
+	}
+	return WebhookTriggerDef{}, false
 }
 
 // validateServerTLS rejects a per-server TLS block that is malformed OR could
@@ -1202,6 +1329,14 @@ func (b *Bundle) EnvVarNames() []string {
 				add(name)
 			}
 		}
+	}
+	// Webhook trigger signing secrets (#268) are named directly (not ${VAR}
+	// references) and are read host-side from the process env at request time, so
+	// their env-var names must survive the .env-file allowlist exactly like an MCP
+	// connector credential.
+	for i := range b.WebhookTriggers {
+		add(b.WebhookTriggers[i].HMACSecretEnv)
+		add(b.WebhookTriggers[i].TokenSecretEnv)
 	}
 	return out
 }
