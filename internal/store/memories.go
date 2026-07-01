@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -41,6 +43,11 @@ type Memory struct {
 	LearnedAt      int64  `json:"learned_at"`
 	RetiredAt      *int64 `json:"retired_at,omitempty"`
 	RetiredBy      string `json:"retired_by,omitempty"`
+	// Supersedes (proposals only) names the saved memory this proposal claims
+	// to contradict/outdate; SupersedesHash snapshots that target's content at
+	// claim time so an edited target is never retired on a stale justification.
+	Supersedes     string `json:"supersedes,omitempty"`
+	SupersedesHash string `json:"-"`
 	CreatedAt      int64  `json:"created_at"`
 	UpdatedAt      int64  `json:"updated_at"`
 }
@@ -53,6 +60,7 @@ func (m *Memory) Retired() bool { return m.RetiredAt != nil }
 const memoryColumns = `id, user_email, content, source, kind, origin,
 	COALESCE(conversation_id, ''), pinned, valid_from, valid_to,
 	COALESCE(learned_at, created_at), retired_at, COALESCE(retired_by, ''),
+	COALESCE(supersedes, ''), COALESCE(supersedes_hash, ''),
 	created_at, updated_at`
 
 func scanMemory(scanner interface{ Scan(...any) error }) (*Memory, error) {
@@ -60,6 +68,7 @@ func scanMemory(scanner interface{ Scan(...any) error }) (*Memory, error) {
 	if err := scanner.Scan(&m.ID, &m.UserEmail, &m.Content, &m.Source, &m.Kind, &m.Origin,
 		&m.ConversationID, &m.Pinned, &m.ValidFrom, &m.ValidTo,
 		&m.LearnedAt, &m.RetiredAt, &m.RetiredBy,
+		&m.Supersedes, &m.SupersedesHash,
 		&m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -257,39 +266,91 @@ func (s *Store) DeleteMemory(ctx context.Context, userEmail, id string) error {
 	return nil
 }
 
+// MemoryProposalParams shape one memory proposal. Supersedes (optional, set
+// by the auto-extractor's contradiction candidates, #515 stage 2) names the
+// SAVED memory this proposal claims to replace; SupersedesHash must be
+// MemoryContentHash of that target's content at claim time.
+type MemoryProposalParams struct {
+	Content        string
+	Kind           string
+	Origin         string
+	Supersedes     string
+	SupersedesHash string
+}
+
+// MemoryContentHash is the snapshot hash stored alongside a supersede claim —
+// at accept time a differing hash means the target was edited after the claim
+// and must NOT be retired on the stale justification.
+func MemoryContentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
 // CreateMemoryProposal creates a memory with source="proposed" scoped to
 // the conversation it was proposed in. The conversation_id lets the UI
 // re-hydrate the Save/Don't-Save card on conversation load — without it,
 // any focus/visibility event triggers a loadConversation that wipes the
-// transient client-side proposal state. origin records WHO proposed it:
+// transient client-side proposal state. p.Origin records WHO proposed it:
 // "tool" (the agent's propose_memory call) or "auto" (the post-turn
 // extractor, #234) — provenance the explainability contract requires.
-func (s *Store) CreateMemoryProposal(ctx context.Context, userEmail, conversationID, content, kind, origin string) (*Memory, error) {
-	content = normalizeMemoryContent(content)
+func (s *Store) CreateMemoryProposal(ctx context.Context, userEmail, conversationID string, p MemoryProposalParams) (*Memory, error) {
+	content := normalizeMemoryContent(p.Content)
 	if content == "" {
 		return nil, errors.New("memory content required")
 	}
-	kind = NormalizeMemoryKind(kind)
-	origin = normalizeMemoryOrigin(origin)
+	kind := NormalizeMemoryKind(p.Kind)
+	origin := normalizeMemoryOrigin(p.Origin)
+	var supersedes, supersedesHash *string
+	if strings.TrimSpace(p.Supersedes) != "" {
+		sup, hash := p.Supersedes, p.SupersedesHash
+		supersedes, supersedesHash = &sup, &hash
+	}
 	id := uuid.NewString()
 	now := time.Now().Unix()
 	row := s.db.QueryRowContext(ctx,
-		`INSERT INTO memories (id, user_email, conversation_id, content, source, kind, origin, learned_at, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, 'proposed', $5, $6, $7, $7, $7)
+		`INSERT INTO memories (id, user_email, conversation_id, content, source, kind, origin, supersedes, supersedes_hash, learned_at, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, 'proposed', $5, $6, $7, $8, $9, $9, $9)
 		 RETURNING `+memoryColumns,
-		id, normalizeEmail(userEmail), conversationID, content, kind, origin, now,
+		id, normalizeEmail(userEmail), conversationID, content, kind, origin, supersedes, supersedesHash, now,
 	)
 	return scanMemory(row)
 }
+
+// Supersede outcomes for AcceptMemoryProposal. Every guard failure is a
+// RESULT, never an error — the acceptance itself still succeeds; the caller
+// surfaces what happened to the older fact.
+const (
+	SupersedeNone           = ""                // proposal made no supersede claim
+	SupersedeRetired        = "retired"         // target retired, retired_by = new memory
+	SupersedeTargetPinned   = "target_pinned"   // target pinned → kept (user protected it)
+	SupersedeTargetChanged  = "target_changed"  // target edited since the claim → kept
+	SupersedeTargetMissing  = "target_missing"  // target deleted since the claim
+	SupersedeTargetRetired  = "target_retired"  // target already retired by something else
+	SupersedeTargetProposed = "target_proposed" // target is itself still a proposal → kept
+)
 
 // AcceptMemoryProposal changes a proposed memory's source to "chat" so it
 // becomes a saved (global) memory. conversation_id is RETAINED as provenance
 // (#515: "who/what wrote it" must survive acceptance) — the pending-proposal
 // queries filter on source='proposed', so a retained id no longer marks the
 // row as pending.
-func (s *Store) AcceptMemoryProposal(ctx context.Context, userEmail, id string) (*Memory, error) {
+//
+// When the proposal carries a supersede claim (#515 stage 2), the accept and
+// the retirement happen in ONE transaction, with the retirement guarded: the
+// target must still exist, still be active, not pinned, not itself a
+// proposal, and its content must still hash to the claim-time snapshot. Any
+// guard failure keeps the target and reports the outcome — a human approved
+// "save the new fact", so that always proceeds; retiring the old one on a
+// justification that no longer holds does not.
+func (s *Store) AcceptMemoryProposal(ctx context.Context, userEmail, id string) (*Memory, string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, SupersedeNone, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	now := time.Now().Unix()
-	row := s.db.QueryRowContext(ctx,
+	row := tx.QueryRowContext(ctx,
 		`UPDATE memories SET source = 'chat', updated_at = $1
 		 WHERE id = $2 AND user_email = $3 AND source = 'proposed'
 		 RETURNING `+memoryColumns,
@@ -298,11 +359,68 @@ func (s *Store) AcceptMemoryProposal(ctx context.Context, userEmail, id string) 
 	m, err := scanMemory(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("memory proposal not found")
+			return nil, SupersedeNone, errors.New("memory proposal not found")
 		}
-		return nil, err
+		return nil, SupersedeNone, err
 	}
-	return m, nil
+
+	outcome := SupersedeNone
+	if m.Supersedes != "" {
+		outcome, err = supersedeWithinTx(ctx, tx, normalizeEmail(userEmail), m, now)
+		if err != nil {
+			return nil, SupersedeNone, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, SupersedeNone, err
+	}
+	return m, outcome, nil
+}
+
+// supersedeWithinTx applies the guarded retirement of accepted.Supersedes
+// inside the accept transaction and returns the outcome label.
+func supersedeWithinTx(ctx context.Context, tx *sql.Tx, userEmail string, accepted *Memory, now int64) (string, error) {
+	var (
+		content   string
+		source    string
+		pinned    bool
+		retiredAt *int64
+	)
+	err := tx.QueryRowContext(ctx,
+		`SELECT content, source, pinned, retired_at FROM memories
+		 WHERE id = $1 AND user_email = $2 FOR UPDATE`,
+		accepted.Supersedes, userEmail,
+	).Scan(&content, &source, &pinned, &retiredAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SupersedeTargetMissing, nil
+	}
+	if err != nil {
+		return SupersedeNone, err
+	}
+	switch {
+	case retiredAt != nil:
+		return SupersedeTargetRetired, nil
+	case pinned:
+		return SupersedeTargetPinned, nil
+	case source == "proposed":
+		return SupersedeTargetProposed, nil
+	case MemoryContentHash(content) != accepted.SupersedesHash:
+		return SupersedeTargetChanged, nil
+	}
+	// Guarded write: the WHERE re-checks liveness so a concurrent accept of a
+	// second proposal against the same target cannot double-retire it.
+	res, err := tx.ExecContext(ctx,
+		`UPDATE memories SET retired_at = $1, retired_by = $2, updated_at = $1
+		 WHERE id = $3 AND user_email = $4 AND retired_at IS NULL AND pinned = FALSE AND source != 'proposed'`,
+		now, accepted.ID, accepted.Supersedes, userEmail,
+	)
+	if err != nil {
+		return SupersedeNone, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return SupersedeTargetRetired, nil
+	}
+	return SupersedeRetired, nil
 }
 
 // ListPendingMemoryProposalsForConversation returns proposals (source='proposed')

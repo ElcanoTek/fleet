@@ -45,7 +45,7 @@ type turnEngine interface {
 	// ExtractMemories mines a completed exchange for durable, reusable facts
 	// (#234), skipping anything in `known`. Returns nil on any failure
 	// (best-effort; never fails a turn).
-	ExtractMemories(ctx context.Context, userMessage, assistantReply string, known []string) []string
+	ExtractMemories(ctx context.Context, userMessage, assistantReply string, known []string) []agent.ExtractedFact
 	// SuggestRecurringTask synthesizes a recurring-task proposal (clean prompt +
 	// cron + name) from a conversation transcript (#455), avoiding names in
 	// existingNames. Returns an error on failure (user-initiated action).

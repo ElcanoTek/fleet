@@ -8,9 +8,10 @@ import (
 )
 
 // TestMemoryExtractionSchema pins the extraction contract without a live model:
-// the schema compiles, a conforming {"facts":[...]} validates and parses, and a
-// non-conforming payload is rejected. This is what guards ExtractMemories from
-// silently accepting garbage the model might emit.
+// the schema compiles, a conforming {"facts":[{...}]} validates and parses, and
+// a non-conforming payload is rejected. This is what guards ExtractMemories
+// from silently accepting garbage the model might emit. Since #515 each fact is
+// a typed OBJECT (content + optional kind + optional replaces number).
 func TestMemoryExtractionSchema(t *testing.T) {
 	schema := json.RawMessage(memoryExtractionSchema)
 
@@ -19,17 +20,23 @@ func TestMemoryExtractionSchema(t *testing.T) {
 	}
 
 	t.Run("conforming output validates and parses", func(t *testing.T) {
-		out, err := structuredoutput.ValidateOutput(`{"facts":["uses ruff for linting","prod db host is db.prod.internal"]}`, schema)
+		out, err := structuredoutput.ValidateOutput(
+			`{"facts":[{"content":"uses ruff for linting","kind":"preference"},{"content":"prod db host is db.prod.internal","replaces":2}]}`, schema)
 		if err != nil {
 			t.Fatalf("conforming output should validate: %v", err)
 		}
 		var parsed struct {
-			Facts []string `json:"facts"`
+			Facts []struct {
+				Content  string `json:"content"`
+				Kind     string `json:"kind"`
+				Replaces int    `json:"replaces"`
+			} `json:"facts"`
 		}
 		if err := json.Unmarshal(out, &parsed); err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		if len(parsed.Facts) != 2 || parsed.Facts[0] != "uses ruff for linting" {
+		if len(parsed.Facts) != 2 || parsed.Facts[0].Content != "uses ruff for linting" ||
+			parsed.Facts[0].Kind != "preference" || parsed.Facts[1].Replaces != 2 {
 			t.Errorf("facts = %+v", parsed.Facts)
 		}
 	})
@@ -41,12 +48,15 @@ func TestMemoryExtractionSchema(t *testing.T) {
 	})
 
 	t.Run("non-conforming output is rejected", func(t *testing.T) {
-		// facts must be an array of strings, and no extra properties are allowed.
 		for _, bad := range []string{
 			`{"facts":"not-an-array"}`,
-			`{"facts":[1,2,3]}`,
-			`{"facts":["ok"],"extra":true}`,
-			`{}`,
+			`{"facts":["bare-string"]}`,                  // pre-#515 shape: facts must be objects now
+			`{"facts":[{"kind":"fact"}]}`,                // content is required
+			`{"facts":[{"content":"ok","kind":"vibe"}]}`, // kind outside the closed set
+			`{"facts":[{"content":"ok","replaces":0}]}`,  // replaces is 1-based
+			`{"facts":[{"content":"ok","extra":true}]}`,  // no extra fact fields
+			`{"facts":[{"content":"ok"}],"extra":true}`,  // no extra top-level fields
+			`{}`, // facts required
 		} {
 			if _, err := structuredoutput.ValidateOutput(bad, schema); err == nil {
 				t.Errorf("expected %s to be rejected", bad)

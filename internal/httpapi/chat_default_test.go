@@ -72,7 +72,7 @@ func (f *fakeEngine) Summarize(context.Context, SummarizeInput) (*SummarizeResul
 // SuggestTitle returns "" so runTurnAsync skips the auto-title UpdateTitle path,
 // keeping the fake store surface minimal.
 func (f *fakeEngine) SuggestTitle(context.Context, string, string) string { return "" }
-func (f *fakeEngine) ExtractMemories(context.Context, string, string, []string) []string {
+func (f *fakeEngine) ExtractMemories(context.Context, string, string, []string) []agent.ExtractedFact {
 	return nil
 }
 func (f *fakeEngine) SuggestRecurringTask(context.Context, string, []string) (*agent.RecurringTaskProposal, error) {
