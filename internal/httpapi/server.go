@@ -2110,6 +2110,18 @@ func (s *Server) runTurnAsync(
 		}
 	}
 
+	// Conversation memory auto-indexing (#234): when enabled, mine the completed
+	// turn for durable facts and surface each NEW one as a memory PROPOSAL — the
+	// SAME seam the propose_memory tool uses, so nothing is written live without
+	// the user's Save. Best-effort on this already-detached goroutine, with its
+	// own LLM-call budget (independent of persistCtx's 10s); any error is
+	// swallowed. Skips cancelled/empty turns. Off by default (opt-in).
+	if s.cfg.MemoryAutoIndexEnabled && !res.Cancelled && strings.TrimSpace(res.FinalText) != "" {
+		memCtx, memCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		s.autoIndexMemories(memCtx, buf, conv.ID, user, userInput, res.FinalText, memories)
+		memCancel()
+	}
+
 	// Auto-archive (#282): file away unpinned conversations untouched for
 	// FLEET_AUTO_ARCHIVE_AFTER_DAYS. Runs before the sweep so freshly archived
 	// rows are exempt from the cap eviction on the same pass. Disabled (no-op)

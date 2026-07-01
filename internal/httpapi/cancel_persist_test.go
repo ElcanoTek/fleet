@@ -23,7 +23,8 @@ import (
 type fakeTurnEngine struct {
 	started      chan struct{} // closed once RunTurn is entered
 	partialText  string
-	emitOnCancel bool // emit a turn.cancelled SSE frame before returning
+	emitOnCancel bool     // emit a turn.cancelled SSE frame before returning
+	extractFacts []string // returned by ExtractMemories (auto-index tests)
 }
 
 func (f *fakeTurnEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
@@ -53,11 +54,14 @@ func (f *fakeTurnEngine) Summarize(context.Context, SummarizeInput) (*SummarizeR
 	return &SummarizeResult{}, nil
 }
 func (f *fakeTurnEngine) SuggestTitle(context.Context, string, string) string { return "" }
-func (f *fakeTurnEngine) MCPClient() *mcp.Client                              { return nil }
-func (f *fakeTurnEngine) SandboxPool() *sandbox.Pool                          { return nil }
-func (f *fakeTurnEngine) MCPServerCatalog() []agent.OptionalServerInfo        { return nil }
-func (f *fakeTurnEngine) ListPersonas() ([]string, error)                     { return nil, nil }
-func (f *fakeTurnEngine) ProviderHealth() []agentcore.ModelHealth             { return nil }
+func (f *fakeTurnEngine) ExtractMemories(context.Context, string, string, []string) []string {
+	return f.extractFacts
+}
+func (f *fakeTurnEngine) MCPClient() *mcp.Client                       { return nil }
+func (f *fakeTurnEngine) SandboxPool() *sandbox.Pool                   { return nil }
+func (f *fakeTurnEngine) MCPServerCatalog() []agent.OptionalServerInfo { return nil }
+func (f *fakeTurnEngine) ListPersonas() ([]string, error)              { return nil, nil }
+func (f *fakeTurnEngine) ProviderHealth() []agentcore.ModelHealth      { return nil }
 
 // TestChatCancel_PersistsPartialTurn pins the interactive cancel contract: when
 // a turn is stopped mid-flight (the Stop button → POST /cancel → turnCancel),
