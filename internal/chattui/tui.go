@@ -342,7 +342,12 @@ func (m *model) contentWidth() int {
 	return 78
 }
 
-func (m *model) View() tea.View {
+func (m *model) View() tea.View { return altView(m.render()) }
+
+// render builds the full ANSI frame (header · viewport · status · input line).
+// Split out from View so the deterministic screenshot generator (#487) can
+// capture the exact frame the alt-screen shows, without a Program or terminal.
+func (m *model) render() string {
 	header := styleHeader.Render("⚓ fleet chat")
 	conv := "new conversation"
 	if m.convID != "" {
@@ -354,13 +359,12 @@ func (m *model) View() tea.View {
 	} else if m.statusErr != "" {
 		status = styleErr.Render("⚠ " + m.statusErr)
 	}
-	body := strings.Join([]string{
+	return strings.Join([]string{
 		header,
 		m.vp.View(),
 		status,
 		styleAccent.Render("› ") + m.input.View(),
 	}, "\n")
-	return altView(body)
 }
 
 // ── small helpers ──
