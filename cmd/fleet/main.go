@@ -555,6 +555,10 @@ func run() error {
 		SystemPromptsDir: systemPromptsDir,
 		ProtocolsDir:     protocolsDir,
 		PersonaPolicies:  personaPolicies,
+		// Self-improving memory (#516): the active distilled learned instruction
+		// is injected at run-start. Gated on FLEET_SELF_IMPROVE_ENABLED — nil
+		// provider leaves scheduled runs byte-for-byte unchanged.
+		LearnedInstructions: learnedInstructionProvider(cfg, schedStorage),
 		// Captain's Log persistent memory (#198, #285): handed to a run only when its
 		// task set instruction_self_improve. Caps bound per-task memory growth
 		// (FLEET_TASK_MEMORY_MAX_*).
@@ -635,6 +639,10 @@ func run() error {
 	// process now interrupts the governed run at its next checkpoint, with
 	// who-stopped-it attribution on the terminal record.
 	h.SetTaskStopper(pool.StopTask)
+	// Self-improving memory (#516): the feedback→learned-instruction distiller,
+	// gated on FLEET_SELF_IMPROVE_ENABLED (default off; nil leaves feedback
+	// recorded but never auto-distilled).
+	h.SetLearnedInstructionDistiller(selfImproveDistiller(cfg, mgr))
 
 	// Dataset / table agent (#514): rows run through the SAME governed
 	// interactive entrypoint (Manager.RunTurn → agentcore.Run). Extracted
@@ -1099,6 +1107,12 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Post("/tasks/{task_id}/rerun", h.RerunTask)
 		r.Post("/tasks/{task_id}/clone", h.CloneTask)
 		r.Delete("/tasks/{task_id}", h.CancelTask)
+		// Self-improving memory (#516): feedback capture + versioned learned
+		// instructions (list / activate a version / deactivate).
+		r.Post("/tasks/{task_id}/feedback", h.SubmitFeedback)
+		r.Get("/tasks/{task_id}/learned-instructions", h.LearnedInstructions)
+		r.Post("/tasks/{task_id}/learned-instructions/{version}/activate", h.LearnedInstructions)
+		r.Delete("/tasks/{task_id}/learned-instructions/active", h.LearnedInstructions)
 		r.Get("/logs/{task_id}", h.GetLogs)
 		// Live SSE run-log stream for an in-progress task, falling back to a one-shot
 		// replay of the persisted log once finished (#200). Same auth/ownership gate
@@ -1498,6 +1512,25 @@ func orchestratorMetricsMiddleware(next http.Handler) http.Handler {
 // unattributed (CreatedBy nil) — like create_task-spawned tasks — so they run
 // against the shared global MCP catalog, NOT the requesting user's personal
 // remote-MCP connections (#443/#449). That is the safe (less-access) direction.
+// selfImproveDistiller returns the feedback→learned-instruction distiller
+// (#516), or nil when self-improvement is disabled.
+func selfImproveDistiller(cfg *config.Config, mgr *agent.Manager) handlers.LearnedInstructionDistiller {
+	if !cfg.SelfImproveEnabled {
+		return nil
+	}
+	return mgr
+}
+
+// learnedInstructionProvider returns the run-start learned-instruction source
+// (#516), or nil when self-improvement is disabled — in which case scheduled
+// runs never inject a learned instruction (byte-for-byte unchanged).
+func learnedInstructionProvider(cfg *config.Config, st *storage.Storage) scheduledrun.LearnedInstructionProvider {
+	if !cfg.SelfImproveEnabled {
+		return nil
+	}
+	return st
+}
+
 // errorAnalyzerFor returns the runner's post-failure diagnosis seam (#317): the
 // Manager when FLEET_ERROR_ANALYSIS_ENABLED is on, else nil (analysis off). A
 // tiny helper so run() stays under the gocyclo ceiling.

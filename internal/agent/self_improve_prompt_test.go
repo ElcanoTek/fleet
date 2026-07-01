@@ -31,3 +31,17 @@ func TestAppendTaskMemorySection(t *testing.T) {
 		t.Error("empty section must not render any facts")
 	}
 }
+
+// TestAppendLearnedInstructionSection pins the #516 injection: the active
+// instruction renders as its own directive section, and an empty one adds
+// nothing (the deactivated/none case).
+func TestAppendLearnedInstructionSection(t *testing.T) {
+	with := appendLearnedInstructionSection("BASE", "Keep summaries under 200 words.")
+	if !strings.Contains(with, "## Learned Instruction") ||
+		!strings.Contains(with, "Keep summaries under 200 words.") {
+		t.Fatalf("learned-instruction section missing:\n%s", with)
+	}
+	if !strings.HasPrefix(with, "BASE") {
+		t.Fatal("must append to the base prompt")
+	}
+}

@@ -68,6 +68,28 @@ components:
       description: The Elcano unified-auth Ed25519-signed identity cookie (scoped-user tier).
 
   schemas:
+    TaskFeedback:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        task_id: { type: string, format: uuid }
+        rating: { type: string, enum: [up, down] }
+        critique: { type: string }
+        consumed: { type: boolean }
+        created_at: { type: integer }
+        created_by: { type: string }
+    TaskLearnedInstruction:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        task_id: { type: string, format: uuid }
+        version: { type: integer }
+        content: { type: string }
+        status: { type: string, enum: [proposed, active, archived] }
+        signal_count: { type: integer }
+        created_at: { type: integer }
+        activated_at: { type: integer }
+        activated_by: { type: string }
     DatasetColumn:
       type: object
       properties:
@@ -1208,6 +1230,102 @@ paths:
             text/csv:
               schema: { type: string }
         "404": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/feedback:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Submit feedback on a task's output (#516 self-improving memory).
+      description: >-
+        Records a thumbs up/down (optional critique) signal. When fresh
+        down-signals cross the distillation threshold and self-improvement is
+        enabled, a learned instruction is DISTILLED and staged as 'proposed'
+        (off-thread) — it does not change behavior until activated.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating: { type: string, enum: [up, down] }
+                critique: { type: string }
+      responses:
+        "200":
+          description: The recorded feedback.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskFeedback" }
+        "400": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/learned-instructions:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: List a task's learned instructions (#516), newest version first.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: The task's learned instructions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  learned_instructions:
+                    type: array
+                    items: { $ref: "#/components/schemas/TaskLearnedInstruction" }
+  /tasks/{task_id}/learned-instructions/{version}/activate:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: version
+        in: path
+        required: true
+        schema: { type: integer }
+    post:
+      summary: Activate (or revert to) a learned-instruction version (#516).
+      description: >-
+        Makes the version the task's sole active learned instruction (archiving
+        any prior active) — this is both the activate and the revert primitive.
+        Requires operator (cancel) permission.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: The activated instruction.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskLearnedInstruction" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /tasks/{task_id}/learned-instructions/active:
+    parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      summary: Deactivate the active learned instruction (#516 full revert).
+      description: Archives the task's active learned instruction so future runs inject none. Requires operator (cancel) permission.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: Whether an instruction was active.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deactivated: { type: boolean }
+        "403": { $ref: "#/components/responses/Error" }
   /admin/queue:
     get:
       summary: Pending task-queue stats — per-tier depth + oldest wait (#230).
