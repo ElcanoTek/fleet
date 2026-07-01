@@ -98,10 +98,20 @@ provider builds it. `agentcore.Run` remains the one governed loop.
   requests therefore get the base request — **no extended thinking, no upstream
   pin, no 1M header**. Translating those to `anthropic.NewProviderOptions` /
   `openai.NewProviderOptions` is a follow-on.
-- **Cost accounting uses the OpenRouter price table.** A native-provider slug not
-  in the pricing table falls back to the configured pricing default, so cost
-  figures for native providers may be approximate until a provider-aware price
-  source lands.
+- **Native-provider runtime cost accrues as $0 unless a pricing override is
+  configured — so `FLEET_MAX_COST_USD` does NOT bound a native run.** Runtime cost
+  accounting reads the USD figure OpenRouter returns in per-step provider
+  metadata; a native Anthropic/OpenAI response carries none, so a native step's
+  cost is $0 unless a matching manifest **pricing override (#297)** prices it
+  locally from token counts. The OpenRouter price table (`KnownModelPricing`) is
+  consulted only by the pre-submission cost *forecast* (#233), and only for
+  OpenRouter-style slugs — a bare native slug (`claude-opus-4-8`, `gpt-4o`)
+  reports `pricing_known=false` there too. **Consequence:** because `CostUSD`
+  stays 0 for native routes, the per-run USD cost ceiling never trips for a native
+  run; only the **token** ceiling (`FLEET_MAX_TOTAL_TOKENS`) constrains it (native
+  responses DO populate token counts). Configure a #297 pricing override for the
+  native slug to restore USD cost tracking and re-enable the USD ceiling. A
+  provider-aware price source is a follow-on.
 - **No `fallback_providers` chain.** The engine's single `fallbackModel` still
   works (and a fallback slug can now resolve to a *different* provider), but the
   issue's ordered multi-provider fallback list is not wired.

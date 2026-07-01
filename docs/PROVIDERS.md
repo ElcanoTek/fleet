@@ -83,8 +83,12 @@ So in the example above: `gpt-4o` → `openai-direct`; `claude-opus-4-8` →
   1M-context Anthropic beta header, and extended thinking (#220) are OpenRouter
   provider options; a natively-routed Anthropic/OpenAI request gets the base
   request without them (a documented follow-on).
-- **Cost accounting** uses the OpenRouter price table; native-provider slugs not
-  in it fall back to the pricing default (approximate).
+- **Native-provider cost accrues as $0** at runtime unless a #297 manifest
+  pricing override prices the slug (a native response carries no OpenRouter cost
+  metadata; the price table feeds only the pre-submission forecast). Because
+  native runtime cost stays $0, **`FLEET_MAX_COST_USD` does not bound native
+  runs** — only the token ceiling (`FLEET_MAX_TOTAL_TOKENS`) does. Add a pricing
+  override to track native USD cost and re-enable the USD ceiling.
 - **No `fallback_providers` chain / per-task `preferred_provider` field** yet —
   per-task pinning is available via the explicit `provider-name/model` slug form.
 - A **misconfigured provider fails at boot**, not on first use.
