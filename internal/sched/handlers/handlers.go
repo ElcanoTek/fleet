@@ -170,6 +170,10 @@ type Handlers struct {
 	// SetDatasetRunner so handlers stay decoupled from the agent graph.
 	datasetRunner DatasetRunController
 
+	// learnedDistiller turns feedback into a proposed learned instruction (#516);
+	// nil = self-improvement distillation off (feedback is still recorded).
+	learnedDistiller LearnedInstructionDistiller
+
 	// taskStopper interrupts a task executing in THIS process (#508) —
 	// injected from the runner pool via SetTaskStopper (mirrors
 	// SetTaskStreamProvider). nil = cancel stays a DB-only transition.

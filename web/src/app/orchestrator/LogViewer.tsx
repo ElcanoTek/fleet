@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Task, TaskStreamFrame } from "@/app/shared/lib/orchestratorApi";
+import type { Task, TaskStreamFrame, TaskLearnedInstruction } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { stripAnsiCodes } from "@/app/shared/lib/format";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
@@ -49,7 +49,7 @@ export function LogViewer({ task, onClose, canStop }: LogViewerProps) {
   if (live) {
     return <LiveTaskView key={task.id} task={task} onClose={onClose} canStop={!!canStop} />;
   }
-  return <LogViewerBody key={task.id} task={task} onClose={onClose} />;
+  return <LogViewerBody key={task.id} task={task} onClose={onClose} canStop={!!canStop} />;
 }
 
 // ── #508 live activity view ──────────────────────────────────────────────────
@@ -183,7 +183,7 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
   );
 }
 
-function LogViewerBody({ task, onClose }: { task: Task; onClose: () => void }) {
+function LogViewerBody({ task, onClose, canStop }: { task: Task; onClose: () => void; canStop: boolean }) {
   // The shared hook owns the cancelled-ref guard and the lone setState after
   // the await, so this component no longer needs its own one-shot load-flag
   // setState-in-effect disable.
@@ -207,6 +207,7 @@ function LogViewerBody({ task, onClose }: { task: Task; onClose: () => void }) {
         </div>
         {task.expected_duration_minutes ? <SLADetail task={task} /> : null}
         <div className="modal-body" data-testid="log-modal-body">
+          <SelfImprovePanel task={task} canManage={canStop} />
           <TaskRunIfBanner task={task} />
           {loading ? (
             <div className="loading">
@@ -414,6 +415,128 @@ function TaskRunIfBanner({ task }: { task: Task }) {
           <div>Last skip: {task.last_skip_at ? new Date(task.last_skip_at).toLocaleString() : "—"}</div>
           <div>Reason: {task.last_skip_reason ?? "—"}</div>
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+// SelfImprovePanel (#516): thumbs up/down + critique on a finished task's
+// output, and the versioned learned instructions distilled from that feedback
+// — activate a version, or revert (deactivate). Operators (canManage) see the
+// activate/revert controls; anyone who can view can leave feedback.
+function SelfImprovePanel({ task, canManage }: { task: Task; canManage: boolean }) {
+  const [instructions, setInstructions] = useState<TaskLearnedInstruction[]>([]);
+  const [critique, setCritique] = useState("");
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const res = await orchestratorApi.learnedInstructions(task.id);
+      setInstructions(res.learned_instructions ?? []);
+    } catch {
+      setInstructions([]);
+    }
+  }, [task.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void reload();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, reload]);
+
+  const feedback = async (rating: "up" | "down") => {
+    if (busy) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      await orchestratorApi.submitFeedback(task.id, rating, rating === "down" ? critique : "");
+      setCritique("");
+      setNote(rating === "up" ? "Thanks — recorded." : "Recorded. Enough down-votes distills a learned instruction to review.");
+      if (open) await reload();
+    } catch (err) {
+      setNote(`Failed: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const activate = async (version: number) => {
+    setBusy(true);
+    try {
+      await orchestratorApi.activateLearnedInstruction(task.id, version);
+      await reload();
+    } catch (err) {
+      setNote(`Failed: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deactivate = async () => {
+    setBusy(true);
+    try {
+      await orchestratorApi.deactivateLearnedInstruction(task.id);
+      await reload();
+    } catch (err) {
+      setNote(`Failed: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="self-improve-panel" data-testid="self-improve-panel" style={{ borderBottom: "1px solid var(--color-border)", paddingBottom: "0.75rem", marginBottom: "0.75rem" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+        <span style={{ fontSize: "0.8125rem", color: "var(--color-text-secondary)" }}>Was this run useful?</span>
+        <button type="button" className="btn btn-small" disabled={busy} onClick={() => void feedback("up")}>👍</button>
+        <button type="button" className="btn btn-small" disabled={busy} onClick={() => void feedback("down")}>👎</button>
+        <input
+          aria-label="Critique (optional)"
+          placeholder="what to improve (optional)"
+          value={critique}
+          onChange={(e) => setCritique(e.target.value)}
+          style={{ flex: "1 1 12rem", minWidth: 0, fontSize: "0.8rem", padding: "0.25rem 0.5rem", borderRadius: "0.5rem", border: "1px solid var(--color-border-strong)", background: "transparent", color: "var(--color-text-primary)" }}
+        />
+        <button type="button" className="btn btn-small" onClick={() => setOpen((v) => !v)}>
+          {open ? "Hide" : "Learned instructions"}
+        </button>
+      </div>
+      {note ? <div style={{ marginTop: "0.4rem", fontSize: "0.75rem", color: "var(--color-text-muted)" }}>{note}</div> : null}
+      {open ? (
+        instructions.length === 0 ? (
+          <div style={{ marginTop: "0.5rem", fontSize: "0.78rem", color: "var(--color-text-muted)" }}>
+            No learned instructions yet. Down-votes with critique distill into a reviewable instruction once self-improvement is enabled.
+          </div>
+        ) : (
+          <ul style={{ marginTop: "0.5rem", display: "grid", gap: "0.35rem", listStyle: "none", padding: 0 }}>
+            {instructions.map((li) => (
+              <li key={li.id} style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", display: "flex", gap: "0.5rem", alignItems: "flex-start", justifyContent: "space-between" }}>
+                <span>
+                  <span className={`status-badge status-${li.status === "active" ? "success" : li.status === "proposed" ? "running" : "cancelled"}`} style={{ marginRight: 6 }}>
+                    v{li.version} {li.status}
+                  </span>
+                  {li.content}
+                </span>
+                {canManage ? (
+                  <span style={{ whiteSpace: "nowrap" }}>
+                    {li.status !== "active" ? (
+                      <button type="button" className="btn btn-small" disabled={busy} onClick={() => void activate(li.version)}>Activate</button>
+                    ) : (
+                      <button type="button" className="btn btn-small" disabled={busy} onClick={() => void deactivate()}>Deactivate</button>
+                    )}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )
       ) : null}
     </div>
   );

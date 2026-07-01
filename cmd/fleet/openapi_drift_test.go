@@ -246,6 +246,9 @@ var schemaModelRegistry = map[string]any{
 	"Dataset":       models.Dataset{},
 	"DatasetColumn": models.DatasetColumn{},
 	"DatasetRow":    models.DatasetRow{},
+	// Self-improving memory (#516).
+	"TaskFeedback":           models.TaskFeedback{},
+	"TaskLearnedInstruction": models.TaskLearnedInstruction{},
 	// Pre-submission cost forecast (#233/#405). The estimate handler returns
 	// agentcore.CostForecast verbatim via writeJSON, so these three reusable
 	// schemas are backed by the exported, reflectable agentcore types.
