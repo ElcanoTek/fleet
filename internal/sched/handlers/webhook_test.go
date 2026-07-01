@@ -27,36 +27,9 @@ func sign(secret string, body []byte) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-func TestVerifyHMACSHA256(t *testing.T) {
-	secret := "this-is-a-32-byte-minimum-secret!"
-	body := []byte(`{"action":"opened"}`)
-	good := sign(secret, body)
-
-	cases := []struct {
-		name   string
-		secret string
-		body   []byte
-		header string
-		want   bool
-	}{
-		{"valid with sha256= prefix", secret, body, good, true},
-		{"valid without prefix", secret, body, strings.TrimPrefix(good, "sha256="), true},
-		{"valid uppercase hex digest", secret, body, "sha256=" + strings.ToUpper(strings.TrimPrefix(good, "sha256=")), true},
-		{"wrong secret", "other-secret-also-32-bytes-long!!", body, good, false},
-		{"tampered body", secret, []byte(`{"action":"closed"}`), good, false},
-		{"empty secret fails closed", "", body, good, false},
-		{"empty header", secret, body, "", false},
-		{"malformed (short) sig", secret, body, "sha256=deadbeef", false},
-		{"non-hex sig of right length", secret, body, "sha256=" + strings.Repeat("z", 64), false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := verifyHMACSHA256(tc.body, tc.secret, tc.header); got != tc.want {
-				t.Errorf("verifyHMACSHA256 = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
+// The HMAC verification primitive itself now lives in internal/webhooks
+// (shared with the chat webhook endpoint, #268) and is unit-tested there. These
+// tests exercise the sched handler that consumes it end to end.
 
 func TestRenderTriggerTemplate(t *testing.T) {
 	body := []byte(`{"action":"opened","pr":{"number":7}}`)

@@ -326,17 +326,23 @@ func TestChatTurnPersistsTranscript_NoDBNoProvider(t *testing.T) {
 
 	// FinishTurn (the turn-event ledger seal) runs in the buffer's persister flow
 	// AFTER subscribers are closed, so it is eventual relative to the response.
-	eventually(t, 2*time.Second, func() bool {
+	eventually(t, func() bool {
 		st.mu.Lock()
 		defer st.mu.Unlock()
 		return st.finishes == 1
 	}, "FinishTurn was not called (turn never sealed)")
 }
 
-// eventually polls cond until it is true or the timeout elapses.
-func eventually(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
+// eventuallyTimeout bounds how long eventually polls before failing. A single
+// constant (rather than a per-call parameter that every caller passes the same
+// value for) keeps the helper's contract uniform across the package's async
+// assertions.
+const eventuallyTimeout = 2 * time.Second
+
+// eventually polls cond until it is true or eventuallyTimeout elapses.
+func eventually(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(eventuallyTimeout)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return

@@ -119,6 +119,45 @@ mcp_servers: []
 #         message: { type: string }
 #       required: ["channel", "message"]
 
+# Inbound webhook-triggered conversations (issue #268). An external system
+# (GitHub, Slack, CI) that presents a valid signature to POST /webhooks/{slug}
+# starts a fresh conversation under notify_user, seeded from prompt_template
+# rendered against the request payload. The turn runs through the SAME governed
+# core (agentcore.Run) as any chat turn — an inbound I/O adapter, not a second
+# agent loop. See docs/WEBHOOKS.md and docs/adr/0016-webhook-triggered-conversations.md.
+#
+# SECURITY — the trigger DEFINITION is operator-authored/trusted, but the inbound
+# PAYLOAD is UNTRUSTED attacker input: it reaches the model as data (never as the
+# template text), bounded by the mandatory sandbox, the chosen persona, the
+# per-turn cost/iteration ceilings, and a per-slug rate limit. Authentication is
+# by the HMAC / Slack signing secret (set exactly one of hmac_secret_env /
+# token_secret_env); the secret value is read host-side and never enters the
+# sandbox, the model, or the logs. An unknown slug and a bad signature return an
+# identical, timing-equalized 401 (no slug enumeration).
+#
+# The generic bundle ships NONE (the list is absent) so the endpoint rejects
+# every call by default. Example (commented out):
+#
+# webhook_triggers:
+#   - slug: "github-pr-review"
+#     description: "Triggered when a GitHub PR is opened"
+#     hmac_secret_env: GITHUB_WEBHOOK_SECRET   # value comes from .env, auto-allowlisted
+#     hmac_header: "X-Hub-Signature-256"       # optional; this is the default
+#     persona: "code-reviewer"
+#     model: "anthropic/claude-sonnet-4-6"     # optional; falls back to the server default
+#     prompt_template: |
+#       A pull request was opened: {{.payload.pull_request.title}}
+#       URL: {{.payload.pull_request.html_url}}
+#       Review it for correctness, security issues, and code quality.
+#     notify_user: "brad@elcanotek.com"        # required: whose conversation this creates
+#
+#   - slug: "slack-requests"
+#     description: "Triggered by a message in #fleet-requests"
+#     token_secret_env: SLACK_SIGNING_SECRET   # Slack v0 signing secret (mutually exclusive with hmac_secret_env)
+#     persona: "assistant"
+#     prompt_template: "{{.payload.event.user}} asks: {{.payload.event.text}}"
+#     notify_user: "brad@elcanotek.com"
+
 # Agent tool-behavior policy. Client-specific (e.g. ad-tech DSP deal tools); the
 # generic bundle ships NONE, so fleet stays on its base generic critical
 # suffixes (send_email, send_template_email — always enforced regardless of this

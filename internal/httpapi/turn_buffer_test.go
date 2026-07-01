@@ -124,7 +124,7 @@ func TestTurnBuffer_FanOutToMultipleSubscribers(t *testing.T) {
 
 	// Wait until both Attach goroutines have registered (poll, not a fixed
 	// sleep) so Emit can't fire before a subscriber attaches.
-	eventually(t, 2*time.Second, func() bool { return buf.subscriberCount() == len(rws) }, "subscribers register")
+	eventually(t, func() bool { return buf.subscriberCount() == len(rws) }, "subscribers register")
 
 	for i := 1; i <= 3; i++ {
 		buf.Emit("delta", map[string]any{"i": i})
@@ -157,7 +157,7 @@ func TestTurnBuffer_ClientDisconnectReleasesSubscriber(t *testing.T) {
 	}()
 
 	// Wait until the subscriber has registered (poll, not a fixed sleep).
-	eventually(t, 2*time.Second, func() bool { return buf.subscriberCount() == 1 }, "subscriber registers")
+	eventually(t, func() bool { return buf.subscriberCount() == 1 }, "subscriber registers")
 	cancel()
 
 	select {
