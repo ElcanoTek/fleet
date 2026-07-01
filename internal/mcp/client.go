@@ -54,6 +54,12 @@ const (
 type Client struct {
 	servers map[string]*Server
 	mu      sync.RWMutex
+
+	// reloadMu serializes Reload (#218) so two concurrent reloads can't both
+	// build a server for the same name and leak the loser's transport, and can't
+	// interleave their map swaps. It is NOT held during a tool call — only across
+	// a reload's diff+swap+drain.
+	reloadMu sync.Mutex
 }
 
 // Server represents a connection to an MCP server
@@ -62,6 +68,18 @@ type Server struct {
 	name      string
 	transport Transport
 	tools     []Tool
+
+	// def is the descriptor this server was built from, retained so a hot
+	// reload (#218) can diff the live server against a new manifest and decide
+	// unchanged / restart. Empty for the synthetic inline-http-tools server.
+	def ServerDef
+
+	// retired is set under mu when a reload (#218) removes or replaces this
+	// server, after its transport is closed. callTool refuses a call to a
+	// retired server, so a caller that captured this *Server just before the
+	// registry swap can't resurrect a killed stdio subprocess via the
+	// dead-transport restart path (which would leak an unreachable process).
+	retired bool
 
 	// Restart state for stdio servers (nil for HTTP servers).
 	stdioCommand string
@@ -223,6 +241,7 @@ func (c *Client) AddStdioServer(ctx context.Context, name, command string, args 
 	server := &Server{
 		name:         name,
 		transport:    transport,
+		def:          ServerDef{Name: name, Command: command, Args: args, Env: env, Dir: dir},
 		stdioCommand: command,
 		stdioArgs:    args,
 		stdioEnv:     env,
@@ -297,6 +316,10 @@ func (c *Client) AddHTTPServerWithOptions(ctx context.Context, name, url string,
 	server := &Server{
 		name:      name,
 		transport: transport,
+		// Retain the operator-configured descriptor for hot-reload diffing
+		// (#218). The per-user SSRF client (opts.HTTPClient) case is never
+		// manifest-reloaded, so leaving its def http-shaped is harmless.
+		def: ServerDef{Name: name, URL: url, Headers: opts.Headers, TLS: opts.TLS},
 	}
 
 	// Initialize the server and get tools
@@ -512,6 +535,17 @@ func (s *Server) callTool(ctx context.Context, name string, arguments map[string
 	// concurrent callers from using a half-restarted transport.
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// A reload (#218) may have retired this server (closed its transport, removed
+	// it from the registry) between a caller capturing the *Server and reaching
+	// here. Refuse rather than call a closed transport — for a stdio server that
+	// would otherwise trip the dead-transport restart path and spawn an orphaned,
+	// unreachable subprocess. drainAndClose sets `retired` under this same mutex,
+	// so a call already in flight when the reload lands completes first (and the
+	// reload closes whatever transport it leaves behind).
+	if s.retired {
+		return nil, fmt.Errorf("MCP server %s was retired by a reload", s.name)
+	}
 
 	result, err := s.transport.Call(ctx, "tools/call", map[string]interface{}{
 		jsonRPCFieldName: name,

@@ -51,6 +51,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
@@ -509,7 +510,7 @@ func run() error {
 		return bundle.TaskTemplates
 	})
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
-	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg))
+	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr))
 
 	// ── scheduler ticker (promote scheduled→pending + recover leases) ──
 	sch := scheduler.New(schedStorage, timezone())
@@ -663,6 +664,10 @@ func run() error {
 	// Config hot-reload on SIGUSR2 (#286): re-read the reloadable settings without
 	// a restart. Extracted to a helper so run() stays within the cyclomatic budget.
 	defer watchConfigReloadSignal(ctx, cfg)()
+
+	// MCP hot-reload on SIGHUP (#218): re-read the bundle's MCP catalog and apply
+	// server add/remove/restart to the live Manager without a restart.
+	defer watchMCPReloadSignal(ctx, mgr)()
 
 	// Worker pool runs until ctx is cancelled, then drains. Guarded so a panic in
 	// the pool loop is a contained, logged event — and poolDone still closes
@@ -870,6 +875,77 @@ func watchConfigReloadSignal(ctx context.Context, cfg *config.Config) func() {
 	return func() { signal.Stop(reloadSig) }
 }
 
+// reloadMCPServers re-reads the client-config bundle's MCP catalog fresh (so
+// operator edits to manifest.yaml take effect) and hot-reloads the running
+// Manager's MCP servers without a restart (#218). It builds specs from a
+// throwaway config carrying only the freshly-loaded MCPServers, so it never
+// mutates the shared cfg.MCPServers that the scheduled path reads concurrently.
+func reloadMCPServers(ctx context.Context, mgr *agent.Manager) (*mcp.ReloadSummary, error) {
+	if mgr == nil {
+		return &mcp.ReloadSummary{}, nil
+	}
+	bundle, err := clientconfig.Load(clientconfig.Dir())
+	if err != nil {
+		return nil, fmt.Errorf("reload client-config bundle: %w", err)
+	}
+	specs := scheduledrun.BuildMCPSpecs(&config.Config{MCPServers: bundle.MCPServerConfigs()})
+	return mgr.ReloadMCPServers(ctx, specs)
+}
+
+// mcpReloadHandler serves POST /admin/mcp-servers/reload (#218): it hot-reloads
+// the MCP catalog and returns a JSON ReloadSummary. mgr may be nil in
+// route-walking tests (the route only needs to exist there); a real request
+// against a nil mgr returns 503.
+func mcpReloadHandler(mgr *agent.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if mgr == nil {
+			http.Error(w, "mcp reload unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		summary, err := reloadMCPServers(r.Context(), mgr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(summary)
+	}
+}
+
+// watchMCPReloadSignal hot-reloads the MCP catalog on every SIGHUP until ctx is
+// cancelled, and returns a stop func that deregisters the signal (#218). SIGHUP
+// is the canonical "reload configuration" signal and is deliberately left free
+// by the config-reload path (which uses SIGUSR2). A panic in a reload is
+// contained per-iteration.
+func watchMCPReloadSignal(ctx context.Context, mgr *agent.Manager) func() {
+	reloadSig := make(chan os.Signal, 1)
+	signal.Notify(reloadSig, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-reloadSig:
+				func() {
+					defer safe.Recover("cmd.mcp-reload", nil)
+					logMCPReload(reloadMCPServers(ctx, mgr))
+				}()
+			}
+		}
+	}()
+	return func() { signal.Stop(reloadSig) }
+}
+
+// logMCPReload logs the outcome of a SIGHUP-triggered MCP reload.
+func logMCPReload(summary *mcp.ReloadSummary, err error) {
+	if err != nil {
+		log.Printf("mcp reload (SIGHUP): error: %v", err)
+		return
+	}
+	log.Printf("mcp reload (SIGHUP): added=%d removed=%d restarted=%d unchanged=%d",
+		len(summary.Added), len(summary.Removed), len(summary.Restarted), len(summary.Unchanged))
+}
+
 // logConfigReload logs the outcome of a SIGUSR2-triggered reload.
 func logConfigReload(result config.ReloadResult, err error) {
 	if err != nil {
@@ -885,7 +961,7 @@ func logConfigReload(result config.ReloadResult, err error) {
 
 // buildOrchestratorMux registers the orchestrator routes (chi), mirroring moc's
 // auth groups, plus the P6b notes CRUD + proposal-decision routes (admin-gated).
-func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig http.HandlerFunc) http.Handler {
+func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig, reloadMCP http.HandlerFunc) http.Handler {
 	r := chi.NewRouter()
 	// ClientIPFromXFF replaces the deprecated, spoofable middleware.RealIP
 	// (GHSA-3fxj-6jh8-hvhx et al.): with no trusted prefixes it reads the
@@ -927,6 +1003,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// other sensitive mutations; returns a JSON diff of what changed, what was
 		// skipped (non-reloadable, needs restart), and any parse errors.
 		r.Post("/admin/reload-config", reloadConfig)
+		// MCP hot-reload (#218): re-read the client-config bundle's MCP catalog and
+		// apply server add/remove/restart to the live interactive Manager without a
+		// restart. Admin-gated like the other sensitive mutations; returns a JSON
+		// summary of what changed. Equivalent to sending SIGHUP.
+		r.Post("/admin/mcp-servers/reload", reloadMCP)
 		r.Post("/users", h.CreateUser)
 		r.Post("/keys", h.CreateAPIKey)
 		r.Get("/keys", h.ListAPIKeys)
