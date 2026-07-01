@@ -3,7 +3,9 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -48,34 +50,15 @@ func serverDefEqual(a, b ServerDef) bool {
 		a.Dir == b.Dir &&
 		a.URL == b.URL &&
 		eqStrings(a.Args, b.Args) &&
-		eqStringMap(a.Env, b.Env) &&
-		eqStringMap(a.Headers, b.Headers) &&
+		maps.Equal(a.Env, b.Env) &&
+		maps.Equal(a.Headers, b.Headers) &&
 		reflect.DeepEqual(a.TLS, b.TLS)
 }
 
-func eqStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func eqStringMap(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
-}
+// eqStrings compares two string slices, treating nil and empty as equal.
+// slices.Equal (rather than a hand-rolled index loop) keeps this gosec-clean
+// (no G602 bounds concern) and is used by tests too.
+func eqStrings(a, b []string) bool { return slices.Equal(a, b) }
 
 // buildServer creates and initializes a Server from a def WITHOUT registering it
 // on the client (holds no lock). The caller inserts it under c.mu. Handles the
