@@ -42,6 +42,10 @@ type turnEngine interface {
 	// SuggestTitle generates a short sidebar title for the opening exchange.
 	// Returns "" on any failure (best-effort; never fails a turn).
 	SuggestTitle(ctx context.Context, userMessage, assistantReply string) string
+	// ExtractMemories mines a completed exchange for durable, reusable facts
+	// (#234), skipping anything in `known`. Returns nil on any failure
+	// (best-effort; never fails a turn).
+	ExtractMemories(ctx context.Context, userMessage, assistantReply string, known []string) []string
 	// MCPClient exposes the shared MCP client for the out-of-band approval
 	// execution path (runStagedTool).
 	MCPClient() *mcp.Client

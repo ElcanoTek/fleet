@@ -72,11 +72,14 @@ func (f *fakeEngine) Summarize(context.Context, SummarizeInput) (*SummarizeResul
 // SuggestTitle returns "" so runTurnAsync skips the auto-title UpdateTitle path,
 // keeping the fake store surface minimal.
 func (f *fakeEngine) SuggestTitle(context.Context, string, string) string { return "" }
-func (f *fakeEngine) MCPClient() *mcp.Client                              { return nil }
-func (f *fakeEngine) SandboxPool() *sandbox.Pool                          { return nil }
-func (f *fakeEngine) MCPServerCatalog() []agent.OptionalServerInfo        { return nil }
-func (f *fakeEngine) ListPersonas() ([]string, error)                     { return nil, nil }
-func (f *fakeEngine) ProviderHealth() []agentcore.ModelHealth             { return f.providerHealth }
+func (f *fakeEngine) ExtractMemories(context.Context, string, string, []string) []string {
+	return nil
+}
+func (f *fakeEngine) MCPClient() *mcp.Client                       { return nil }
+func (f *fakeEngine) SandboxPool() *sandbox.Pool                   { return nil }
+func (f *fakeEngine) MCPServerCatalog() []agent.OptionalServerInfo { return nil }
+func (f *fakeEngine) ListPersonas() ([]string, error)              { return nil, nil }
+func (f *fakeEngine) ProviderHealth() []agentcore.ModelHealth      { return f.providerHealth }
 
 // fakeChatStore is an in-memory chatStore. It embeds a nil *store.Store so it
 // satisfies the (wide) interface for free; only the handful of methods the

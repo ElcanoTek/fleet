@@ -152,6 +152,8 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_ERROR_ANALYSIS_MODEL":           true,
 	"FLEET_ERROR_ANALYSIS_ENABLED":         true,
 	"FLEET_AUTO_TITLE":                     true,
+	"FLEET_MEMORY_MODEL":                   true,
+	"FLEET_MEMORY_AUTOINDEX_ENABLED":       true,
 	"FLEET_APPROVAL_TIMEOUT_SECONDS":       true,
 	"FLEET_AUTO_APPROVE_IN_TEST":           true,
 	"FLEET_MAX_CONCURRENT_AGENTS":          true,
@@ -537,6 +539,19 @@ type Config struct {
 	// When false, a new conversation keeps its instant heuristic title and no
 	// title-model call is made (cost/latency escape hatch).
 	AutoTitle bool
+
+	// MemoryModel is the fast/cheap model the conversation memory auto-indexer
+	// (#234) uses to extract durable facts from a completed turn.
+	// FLEET_MEMORY_MODEL, defaulting to MetadataModel (then TitleModel) so
+	// deployments need zero new config.
+	MemoryModel string
+	// MemoryAutoIndexEnabled gates the memory auto-indexer (#234). Default
+	// FALSE (opt-in): when off, the only memory-write paths are the manual
+	// propose_memory tool + POST /memories, exactly as before. When on, each
+	// completed turn is mined for durable facts that are surfaced as memory
+	// PROPOSALS the user reviews — nothing is written live without consent.
+	// FLEET_MEMORY_AUTOINDEX_ENABLED.
+	MemoryAutoIndexEnabled bool
 
 	// ApprovalTimeoutSeconds is the global default-deny window (in seconds) for
 	// critical-tool approval cards on the web path (#225). FLEET_APPROVAL_TIMEOUT_SECONDS,
@@ -989,6 +1004,8 @@ func Load(envFile string) (*Config, error) {
 		ErrorAnalysisModel:     getenvFleetDefault("ERROR_ANALYSIS_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		ErrorAnalysisEnabled:   getenvFleetBool("ERROR_ANALYSIS_ENABLED", true),
 		AutoTitle:              getenvFleetBool("AUTO_TITLE", true),
+		MemoryModel:            getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
+		MemoryAutoIndexEnabled: getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
 		ApprovalTimeoutSeconds: getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 300),
 		AutoApproveInTest:      getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
 		MaxConcurrentAgents:    getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),
