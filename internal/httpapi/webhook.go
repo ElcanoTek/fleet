@@ -220,7 +220,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 			s.activeTurns.Done()
 		}()
 		defer releaseSlot()
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, userMessage, history, memoryContents(memories), nil)
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, userMessage, history, memoryContents(memories), "", nil)
 	}()
 
 	metrics.RecordWebhookTrigger(trig.Slug, "ok")

@@ -238,7 +238,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
         onClose={() => setSettingsOpen(false)}
         onChanged={reloadServers}
       />
-      <LogViewer task={logTask} onClose={() => setLogTask(null)} />
+      <LogViewer task={logTask} onClose={() => setLogTask(null)} canStop={isAdmin} />
     </div>
   );
 }

@@ -631,6 +631,10 @@ func run() error {
 	h.SetTaskStreamProvider(func(taskID uuid.UUID) (handlers.TaskStream, bool) {
 		return registry.Lookup(taskID)
 	})
+	// Live-run take-over (#508): DELETE /tasks/{id} on a task executing in this
+	// process now interrupts the governed run at its next checkpoint, with
+	// who-stopped-it attribution on the terminal record.
+	h.SetTaskStopper(pool.StopTask)
 
 	// Dataset / table agent (#514): rows run through the SAME governed
 	// interactive entrypoint (Manager.RunTurn → agentcore.Run). Extracted

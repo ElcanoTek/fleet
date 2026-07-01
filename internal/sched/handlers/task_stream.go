@@ -104,7 +104,28 @@ func (h *Handlers) StreamTaskLogs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "No log found for this task")
 		return
 	}
-	replayStoredLog(w, taskID, session)
+	// The replay's terminal frame reports the task's REAL outcome (#508 — it
+	// was previously hardcoded "succeeded", misreporting failed/stopped runs).
+	terminal := "succeeded"
+	if task, terr := h.storage.GetTask(taskID); terr == nil && task != nil {
+		terminal = replayTerminalStatus(task.Status)
+	}
+	replayStoredLog(w, taskID, session, terminal)
+}
+
+// replayTerminalStatus maps a terminal task status onto the stream's status
+// vocabulary (running|succeeded|failed|stopped).
+func replayTerminalStatus(status models.TaskStatus) string {
+	switch status {
+	case models.TaskStatusSuccess:
+		return "succeeded"
+	case models.TaskStatusCancelled:
+		return "stopped"
+	case models.TaskStatusError, models.TaskStatusDeadLettered:
+		return "failed"
+	default:
+		return "succeeded"
+	}
 }
 
 // replayStoredLog re-emits a completed task's persisted log as SSE frames using the
@@ -112,7 +133,7 @@ func (h *Handlers) StreamTaskLogs(w http.ResponseWriter, r *http.Request) {
 // followed by a terminal status frame, then closes. This gives a client attaching
 // AFTER completion the same shape it would have seen live. Best-effort: a write
 // error means the client went away, so we stop.
-func replayStoredLog(w http.ResponseWriter, taskID uuid.UUID, session *models.LogSession) {
+func replayStoredLog(w http.ResponseWriter, taskID uuid.UUID, session *models.LogSession, terminalStatus string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "Streaming unsupported")
@@ -171,6 +192,13 @@ func replayStoredLog(w http.ResponseWriter, taskID uuid.UUID, session *models.Lo
 	}
 
 	emit("status", map[string]any{
-		"type": "status", "status": "succeeded", "task_id": taskID.String(), "cost_usd": session.Cost,
+		"type": "status", "status": terminalStatus, "task_id": taskID.String(), "cost_usd": session.Cost,
 	})
+}
+
+// SetTaskStopper injects the runner pool's live-run interrupt (#508) so
+// CancelTask can halt a task executing in this process, not just flip its DB
+// row. Mirrors SetTaskStreamProvider.
+func (h *Handlers) SetTaskStopper(stop func(taskID uuid.UUID, who string) bool) {
+	h.taskStopper = stop
 }
