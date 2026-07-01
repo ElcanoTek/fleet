@@ -1,9 +1,9 @@
 "use client";
 
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Task } from "@/app/shared/lib/orchestratorApi";
+import type { Task, TaskStreamFrame } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { stripAnsiCodes } from "@/app/shared/lib/format";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
@@ -35,14 +35,152 @@ import { resolveTaskWorkspaceHref } from "@/app/chat/ui/workspaceHref";
 export type LogViewerProps = {
   task: Task | null;
   onClose: () => void;
+  // canStop shows the Stop button on a live run (#508). The server enforces
+  // the real permission (admin); this only gates the affordance.
+  canStop?: boolean;
 };
 
-export function LogViewer({ task, onClose }: LogViewerProps) {
+export function LogViewer({ task, onClose, canStop }: LogViewerProps) {
   if (!task) return null;
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
   // change" behavior cleanly, without a manual reset effect.
+  const live = task.status === "running" || task.status === "assigned";
+  if (live) {
+    return <LiveTaskView key={task.id} task={task} onClose={onClose} canStop={!!canStop} />;
+  }
   return <LogViewerBody key={task.id} task={task} onClose={onClose} />;
+}
+
+// ── #508 live activity view ──────────────────────────────────────────────────
+
+type ActivityEntry = {
+  key: string;
+  kind: "message" | "tool_call" | "tool_result";
+  name?: string;
+  text: string;
+  isError?: boolean;
+};
+
+const clampText = (s: string, max = 600) => (s.length > max ? s.slice(0, max) + "…" : s);
+
+// LiveTaskView attaches to GET /tasks/{id}/stream and renders the run's
+// tool-by-tool activity as it happens (#508): each tool call, its result, and
+// the assistant's text, chronologically, with an optional Stop control that
+// interrupts the governed run at its next checkpoint (with who-stopped-it
+// attribution recorded server-side).
+function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => void; canStop: boolean }) {
+  const [entries, setEntries] = useState<ActivityEntry[]>([]);
+  const [runStatus, setRunStatus] = useState<string>("running");
+  const [stoppedBy, setStoppedBy] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const seq = useRef(0);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    const onFrame = (frame: TaskStreamFrame) => {
+      if (frame.type === "status") {
+        if (frame.status && frame.status !== "running") {
+          setRunStatus(frame.status);
+          if (frame.stopped_by) setStoppedBy(frame.stopped_by);
+        }
+        return;
+      }
+      const key = `e${seq.current++}`;
+      let entry: ActivityEntry | null = null;
+      if (frame.type === "agent_message" && frame.content) {
+        entry = { key, kind: "message", text: frame.content };
+      } else if (frame.type === "tool_call") {
+        entry = { key, kind: "tool_call", name: frame.name, text: clampText(frame.input ?? "") };
+      } else if (frame.type === "tool_result") {
+        entry = { key, kind: "tool_result", name: frame.name, text: clampText(frame.output ?? ""), isError: !!frame.error };
+      }
+      if (entry) {
+        setEntries((prev) => [...prev, entry]);
+      }
+    };
+    orchestratorApi
+      .streamTaskActivity(task.id, onFrame, ac.signal)
+      .catch((err: unknown) => {
+        if (!ac.signal.aborted) {
+          setStreamError(err instanceof Error ? err.message : "stream failed");
+        }
+      });
+    return () => ac.abort();
+  }, [task.id]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "end" });
+  }, [entries.length, runStatus]);
+
+  const stop = async () => {
+    if (stopping) return;
+    setStopping(true);
+    try {
+      await orchestratorApi.cancelTask(task.id);
+      // The terminal "stopped" frame arrives on the stream; nothing else to do.
+    } catch (err) {
+      setStreamError(err instanceof Error ? err.message : "stop failed");
+      setStopping(false);
+    }
+  };
+
+  const terminal = runStatus !== "running";
+  return (
+    <div className="modal-overlay is-open" role="dialog" aria-modal="true" aria-label="Live task activity">
+      <div className="modal">
+        <div className="modal-header">
+          <h3>
+            Live activity
+            <span className={`status-badge status-${terminal ? (runStatus === "succeeded" ? "success" : runStatus === "stopped" ? "cancelled" : "error") : "running"}`} style={{ marginLeft: 8 }} data-testid="live-run-status">
+              {runStatus}
+              {stoppedBy ? ` by ${stoppedBy}` : ""}
+            </span>
+          </h3>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            {canStop && !terminal ? (
+              <button
+                type="button"
+                className="btn btn-danger"
+                data-testid="stop-task-button"
+                disabled={stopping}
+                onClick={() => void stop()}
+              >
+                {stopping ? "Stopping…" : "Stop run"}
+              </button>
+            ) : null}
+            <button type="button" className="icon-action modal-close" aria-label="Close modal" onClick={onClose}>
+              ×
+            </button>
+          </div>
+        </div>
+        <div className="modal-body" data-testid="live-activity-body">
+          {streamError ? <div className="table-error">Live stream error: {streamError}</div> : null}
+          {entries.length === 0 && !streamError ? (
+            <div className="loading">
+              <p>Waiting for activity…</p>
+            </div>
+          ) : (
+            <div className="log-session" aria-live="polite">
+              {entries.map((e) => (
+                <div key={e.key} className={`log-message log-message--${e.kind === "message" ? "assistant" : "tool"}`}>
+                  <div className="log-message-role">
+                    {e.kind === "tool_call" ? `▶ ${e.name ?? "tool"}` : e.kind === "tool_result" ? `${e.isError ? "✗" : "✓"} ${e.name ?? "result"}` : "assistant"}
+                  </div>
+                  <div className="log-message-content">
+                    <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: e.kind === "message" ? "inherit" : undefined }}>{e.text}</pre>
+                  </div>
+                </div>
+              ))}
+              <div ref={bottomRef} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function LogViewerBody({ task, onClose }: { task: Task; onClose: () => void }) {
