@@ -1,0 +1,66 @@
+# Weekly subsystem benchmarks (#296) — NON-BLOCKING.
+#
+# Runs the throughput benchmarks for the two highest-leverage subsystems —
+# scheduler claim (FOR UPDATE SKIP LOCKED) and chat SSE fan-out — against a
+# fresh Postgres, so capacity regressions surface over time. It is NOT a PR gate
+# (benchmark timings are noisy); it runs on a schedule and on manual dispatch,
+# and prints the results to the run log. The cmd/fleet-bench load tool is a
+# separate operator utility (build with `make fleet-bench`) that drives a running
+# instance and is not exercised here.
+name: Weekly benchmarks
+
+on:
+  schedule:
+    - cron: '0 8 * * 1' # Every Monday at 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    name: Subsystem throughput benchmarks
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: fleet
+          POSTGRES_PASSWORD: fleet
+          POSTGRES_DB: fleet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fleet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable
+      FLEET_CLIENT_CONFIG_DIR: ${{ github.workspace }}/config/default
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          check-latest: true
+
+      - name: Create test database
+        run: |
+          PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
+            -c 'CREATE DATABASE fleet_sched_test;'
+
+      - name: Run subsystem benchmarks
+        # The tag matches the main suite so the test packages compile. -run '^$'
+        # skips ordinary tests; -benchmem reports allocations alongside ns/op.
+        run: |
+          go test -run '^$' -bench 'BenchmarkClaimNextPendingTask' -benchmem -tags fleet_host_executor ./internal/sched/db/
+          go test -run '^$' -bench 'BenchmarkSSEFanOut' -benchmem -tags fleet_host_executor ./internal/httpapi/
