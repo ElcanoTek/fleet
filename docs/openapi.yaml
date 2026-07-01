@@ -68,6 +68,45 @@ components:
       description: The Elcano unified-auth Ed25519-signed identity cookie (scoped-user tier).
 
   schemas:
+    DatasetColumn:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [text, number, boolean] }
+        output: { type: boolean }
+        description: { type: string }
+    Dataset:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        goal: { type: string }
+        columns:
+          type: array
+          items: { $ref: "#/components/schemas/DatasetColumn" }
+        model: { type: string }
+        persona: { type: string }
+        status: { type: string, enum: [idle, running, paused] }
+        concurrency: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        row_counts:
+          type: object
+          additionalProperties: { type: integer }
+    DatasetRow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        dataset_id: { type: string, format: uuid }
+        row_index: { type: integer }
+        cells: {}
+        status: { type: string, enum: [pending, running, proposed, approved, failed] }
+        proposed: {}
+        result_note: { type: string }
+        error: { type: string }
+        attempts: { type: integer }
+        cost_usd: { type: number }
+        updated_at: { type: string, format: date-time }
     ErrorResponse:
       type: object
       properties:
@@ -902,6 +941,266 @@ paths:
                         name: { type: string }
         "500": { $ref: "#/components/responses/Error" }
 
+  /datasets:
+    get:
+      summary: List datasets (#514).
+      description: Every dataset (table agent) with per-status row counts, newest first.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: The dataset list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  datasets:
+                    type: array
+                    items: { $ref: "#/components/schemas/Dataset" }
+    post:
+      summary: Create a dataset (#514).
+      description: >-
+        Defines a table agent: a name, the per-row goal, typed columns (at least
+        one output column — those define the structured write-back schema), the
+        pinned model each row runs at, and an optional persona + worker
+        concurrency (1..8, default 2).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, goal, columns, model]
+              properties:
+                name: { type: string, maxLength: 128 }
+                goal: { type: string, maxLength: 8000 }
+                columns:
+                  type: array
+                  items: { $ref: "#/components/schemas/DatasetColumn" }
+                model: { type: string }
+                persona: { type: string }
+                concurrency: { type: integer, minimum: 0, maximum: 8 }
+      responses:
+        "200":
+          description: The created dataset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dataset" }
+        "400": { $ref: "#/components/responses/Error" }
+  /datasets/{datasetID}:
+    parameters:
+      - name: datasetID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: Get one dataset (#514).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: The dataset with row counts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dataset" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Delete a dataset and its rows (#514).
+      description: Refused (409) while the dataset is running — pause it first.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "204": { description: Deleted. }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /datasets/{datasetID}/rows:
+    parameters:
+      - name: datasetID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: List a dataset's rows (#514).
+      description: Ordered by row_index; filter with ?status= and page with ?limit=&offset= (default limit 200).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, running, proposed, approved, failed] }
+        - name: limit
+          in: query
+          schema: { type: integer }
+        - name: offset
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: The rows plus the dataset's per-status counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rows:
+                    type: array
+                    items: { $ref: "#/components/schemas/DatasetRow" }
+                  row_counts:
+                    type: object
+                    additionalProperties: { type: integer }
+    post:
+      summary: Import rows (#514).
+      description: >-
+        Appends rows from JSON ({"rows":[{column: value}]}) or CSV
+        (Content-Type text/csv; the header row names INPUT columns). Values may
+        only target input columns; unknown names are rejected. Capped at 5000
+        rows / 16 MiB per request.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rows:
+                  type: array
+                  items: { type: object }
+          text/csv:
+            schema: { type: string }
+      responses:
+        "200":
+          description: Rows imported.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  imported: { type: integer }
+        "400": { $ref: "#/components/responses/Error" }
+  /datasets/{datasetID}/run:
+    parameters:
+      - name: datasetID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      summary: Start working the dataset's pending rows (#514).
+      description: >-
+        Claims the dataset (idle|paused → running) and fans out its configured
+        worker concurrency; each row runs through the governed loop and lands as
+        a PROPOSED write-back for review. 409 when already running.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: Run started.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /datasets/{datasetID}/pause:
+    parameters:
+      - name: datasetID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      summary: Pause a running dataset (#514).
+      description: Cancels the active run between rows; pending rows stay pending and resume on the next run.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: Paused.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /datasets/{datasetID}/approve:
+    parameters:
+      - name: datasetID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      summary: Approve proposed write-backs (#514 review queue).
+      description: >-
+        Merges each proposed object into the row's cells and marks the row
+        approved. Empty/omitted row_ids approves EVERY proposed row (bulk
+        approve). Only rows in status "proposed" are touched.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                row_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Rows approved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  approved: { type: integer }
+  /datasets/{datasetID}/rerun:
+    parameters:
+      - name: datasetID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      summary: Reset rows to pending for a re-run (#514).
+      description: >-
+        The given row_ids (any non-running status), or EVERY failed row when
+        omitted (bulk retry). Clears proposed/error state; approved cells stay.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                row_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Rows reset.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reset: { type: integer }
+  /datasets/{datasetID}/export:
+    parameters:
+      - name: datasetID
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: Export the dataset as CSV (#514).
+      description: All columns (approved values merged) plus _status/_note/_error per row.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: The CSV export.
+          content:
+            text/csv:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Error" }
   /admin/queue:
     get:
       summary: Pending task-queue stats — per-tier depth + oldest wait (#230).

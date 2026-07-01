@@ -165,6 +165,10 @@ type Handlers struct {
 	// counts only the task prompt + tool schemas (the system-prompt token line
 	// reads 0). See estimate.go.
 	systemPromptForPersona func(persona string) string
+
+	// datasetRunner starts/pauses dataset runs (#514) — injected via
+	// SetDatasetRunner so handlers stay decoupled from the agent graph.
+	datasetRunner DatasetRunController
 }
 
 // statsCache caches dashboard statistics.
