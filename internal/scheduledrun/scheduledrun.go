@@ -548,6 +548,17 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// (only reachable via a test double) makes the tool return a clear error.
 	nativeTools = append(nativeTools, tools.MetadataTools(r.mgr, r.cfg.MetadataModel)...)
 
+	// publish_artifact (#204) lets a run mark workspace files as named, downloadable
+	// deliverables (a curated manifest, distinct from the raw workspace the
+	// file-browser endpoints already expose). Wired ONLY when the runner installed
+	// an artifact collector on the run context (the production path); tests and the
+	// cutlass one-shot leave it unset, so the tool is absent and behaviour is
+	// unchanged. Scheduled-only and ungated — it only records files in the run's own
+	// workspace, granting no access the operator didn't already have.
+	if ac := ArtifactCollectorFromContext(ctx); ac != nil {
+		nativeTools = append(nativeTools, tools.NewPublishArtifactTool(ac))
+	}
+
 	maxIter := r.cfg.LiveMaxIterations()
 	if task.MaxIterations != nil && *task.MaxIterations > 0 {
 		maxIter = *task.MaxIterations
