@@ -90,6 +90,18 @@ type chatStore interface {
 	RecordToolCalls(ctx context.Context, entries []store.ToolCallEntry) error
 	ListToolCalls(ctx context.Context, conversationID, toolFilter string, fromUnix int64, limit int) ([]store.ToolCallEntry, error)
 
+	// Projects / Spaces (#509).
+	CreateProject(ctx context.Context, p *store.Project) (*store.Project, error)
+	GetProject(ctx context.Context, id string) (*store.Project, error)
+	ListProjectsForUser(ctx context.Context, email, teamID string) ([]store.Project, error)
+	UpdateProject(ctx context.Context, ownerEmail, id string, patch store.ProjectPatch) (*store.Project, error)
+	DeleteProject(ctx context.Context, ownerEmail, id string) error
+	CreateProjectConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool, projectID string, mcpServers []string) (*store.Conversation, error)
+	CreateProjectMemory(ctx context.Context, projectID, creatorEmail, content, kind string) (*store.Memory, error)
+	ListProjectMemories(ctx context.Context, projectID string) ([]store.Memory, error)
+	DeleteProjectMemory(ctx context.Context, projectID, memoryID string) error
+	ListProjectConversationIDs(ctx context.Context, projectID string) ([]string, error)
+
 	// Memories + memory proposals.
 	ListMemories(ctx context.Context, userEmail string) ([]store.Memory, error)
 	CreateMemory(ctx context.Context, userEmail, content, source, kind string) (*store.Memory, error)

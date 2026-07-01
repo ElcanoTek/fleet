@@ -582,6 +582,10 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/folders/rename", auth(member(mutate(http.HandlerFunc(s.renameFolder)))))
 	mux.Handle("/folders", auth(member(http.HandlerFunc(s.listFolders))))
 	mux.Handle("/search", auth(member(http.HandlerFunc(s.search))))
+	// Projects / Spaces (#509): shared team workspaces binding instructions +
+	// curated connectors + shared memory + membership (team RBAC).
+	mux.Handle("/projects", auth(member(mutate(http.HandlerFunc(s.projects)))))
+	mux.Handle("/projects/", auth(member(mutate(http.HandlerFunc(s.projectByID)))))
 	mux.Handle("/memories", auth(member(mutate(http.HandlerFunc(s.memories)))))
 	mux.Handle("/memories/", auth(member(mutate(http.HandlerFunc(s.memoryByID)))))
 	mux.Handle("/personas", auth(member(http.HandlerFunc(s.listPersonas))))
@@ -1000,6 +1004,10 @@ type createConversationRequest struct {
 	// this as a "New lockdown chat" affordance. Server rejects when
 	// CHAT_LOCKDOWN_ENABLED is false.
 	Lockdown bool `json:"lockdown,omitempty"`
+	// ProjectID binds the conversation to a project/space (#509): membership
+	// is validated and the project's default persona/model + curated
+	// connector selection are inherited (explicit request values win).
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Request) {
@@ -1145,9 +1153,8 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
 			return
 		}
-		conv, err := s.store.CreateConversation(r.Context(), user, title, persona, model, lockdown)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		conv, ok := s.createConversationForRequest(w, r, user, req.ProjectID, title, persona, model, lockdown)
+		if !ok {
 			return
 		}
 		writeJSON(w, conv)
@@ -1930,6 +1937,10 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Project context (#509): a conversation in a project injects the
+	// project's standing instructions plus its SHARED memories (tagged
+	// "[project] ") alongside personal memory.
+	projectInstructions, projectMemoryBullets := s.projectTurnContext(r, conv)
 	memories, err := s.store.ListMemories(r.Context(), user)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2025,7 +2036,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		defer releaseSlot()
 		// turnCtx is intentionally NOT derived from r.Context() — the turn must
 		// outlive the HTTP request (see the comment above registerTurn).
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, userMessage, history, memoryContents(memories), toAgentImageAttachments(imageAttachments))
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, userMessage, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments))
 	}()
 
 	// Attach this HTTP response as the initial subscriber. Blocks until
@@ -2051,6 +2062,7 @@ func (s *Server) runTurnAsync(
 	user, userInput, userMessage string,
 	history []agent.HistoryEntry,
 	memories []string,
+	projectInstructions string,
 	imageAttachments []agent.ImageAttachment,
 ) {
 	// Turn-start timestamp, stamped on every tool-call audit row derived from
@@ -2092,6 +2104,7 @@ func (s *Server) runTurnAsync(
 		Model:                     conv.Model,
 		History:                   history,
 		Memories:                  memories,
+		ProjectInstructions:       projectInstructions,
 		ConversationID:            conv.ID,
 		UserEmail:                 user,
 		OptionalMCPServersEnabled: conv.OptionalMCPServersEnabled,

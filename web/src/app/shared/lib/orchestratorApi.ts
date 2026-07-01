@@ -257,6 +257,49 @@ export type LogSession = {
   messages?: LogMessage[];
 };
 
+
+// #508 live task activity stream frames (GET /tasks/{id}/stream).
+export type TaskStreamFrame = {
+  type: "agent_message" | "tool_call" | "tool_result" | "status" | string;
+  role?: string;
+  content?: string;
+  call_id?: string;
+  name?: string;
+  input?: string;
+  output?: string;
+  error?: boolean;
+  status?: string;
+  task_id?: string;
+  cost_usd?: number;
+  stopped_by?: string;
+};
+
+// createSSEParser returns a chunk-feeder that assembles SSE frames (split on
+// blank lines, `data:` JSON payloads) and invokes onFrame per parsed frame.
+// Exported for unit tests; used by streamTaskActivity below.
+export function createSSEParser(onFrame: (frame: TaskStreamFrame) => void): (chunk: string) => void {
+  let buffer = "";
+  return (chunk: string) => {
+    buffer += chunk;
+    for (;;) {
+      const sep = buffer.indexOf("\n\n");
+      if (sep < 0) break;
+      const raw = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      let data = "";
+      for (const line of raw.split("\n")) {
+        if (line.startsWith("data:")) data += line.slice(5).trim();
+      }
+      if (!data) continue; // heartbeat / comment frame
+      try {
+        onFrame(JSON.parse(data) as TaskStreamFrame);
+      } catch {
+        // tolerate a malformed frame rather than killing the stream
+      }
+    }
+  };
+}
+
 class OrchestratorError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -304,6 +347,36 @@ export const orchestratorApi = {
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  // Cancel/stop a task (#508): flips the row to cancelled with who-stopped-it
+  // attribution and interrupts a live run at the governed loop's next
+  // checkpoint. Admin permission required server-side.
+  cancelTask: (taskId: string) =>
+    request<Task>(`/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
+  // Attach to a task's live activity stream (#508). Resolves when the stream
+  // ends (terminal frame or server close); rejects on transport errors. Abort
+  // via the signal to detach.
+  streamTaskActivity: async (
+    taskId: string,
+    onFrame: (frame: TaskStreamFrame) => void,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const res = await fetch(`/api/orchestrator/tasks/${encodeURIComponent(taskId)}/stream`, {
+      headers: authHeaders({ Accept: "text/event-stream" }),
+      cache: "no-store",
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      throw new OrchestratorError(`stream failed (${res.status})`, res.status);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    const feed = createSSEParser(onFrame);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      feed(decoder.decode(value, { stream: true }));
+    }
+  },
   config: () => request<{ version?: string; timezone?: string }>("/config"),
   me: () => request<{ authenticated: boolean; username?: string; role?: string }>("/me"),
 

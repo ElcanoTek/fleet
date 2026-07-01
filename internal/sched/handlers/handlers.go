@@ -169,6 +169,11 @@ type Handlers struct {
 	// datasetRunner starts/pauses dataset runs (#514) — injected via
 	// SetDatasetRunner so handlers stay decoupled from the agent graph.
 	datasetRunner DatasetRunController
+
+	// taskStopper interrupts a task executing in THIS process (#508) —
+	// injected from the runner pool via SetTaskStopper (mirrors
+	// SetTaskStreamProvider). nil = cancel stays a DB-only transition.
+	taskStopper func(taskID uuid.UUID, who string) bool
 }
 
 // statsCache caches dashboard statistics.
@@ -1459,8 +1464,10 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Use atomic cancel to prevent race conditions
-	task, err := h.storage.CancelTaskAtomic(taskID)
+	// Atomic cancel with WHO-stopped-it attribution (#508): the reason lands on
+	// the task's terminal record, so an operator stop is auditable.
+	who := p.stopLabel()
+	task, err := h.storage.CancelTaskAtomic(taskID, "stopped by "+who)
 	if err != nil {
 		if strings.Contains(err.Error(), "cannot cancel") {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -1474,8 +1481,36 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Task cancelled: %s", taskID) //nolint:gosec // G706 false positive: taskID is a uuid.UUID parsed via uuid.Parse; String() is canonical and cannot carry CR/LF.
+	// If the task is executing in THIS process, interrupt the live run (#508):
+	// the governed loop halts at its next checkpoint, the sandbox/MCP client are
+	// released by the run's defers, and the partial transcript persists. A task
+	// running nowhere (pending) or in a prior process's orphaned lease simply
+	// stays cancelled in the DB, exactly as before.
+	if h.taskStopper != nil && h.taskStopper(taskID, who) {
+		log.Printf("Task cancelled: %s (live run interrupted, stopped by %s)", taskID, logSafe(who)) //nolint:gosec // G706: taskID is a parsed uuid.UUID; who passes logSafe.
+	} else {
+		log.Printf("Task cancelled: %s (stopped by %s)", taskID, logSafe(who)) //nolint:gosec // G706: taskID is a parsed uuid.UUID; who passes logSafe.
+	}
 	writeJSON(w, http.StatusOK, task)
+}
+
+// stopLabel renders the cancelling principal for the who-stopped-it audit
+// trail (#508): the authenticated username, the scoped API key's name, or
+// "admin" for the bootstrap admin key.
+func (p principal) stopLabel() string {
+	switch {
+	case p.user != nil && strings.TrimSpace(p.user.Username) != "":
+		return p.user.Username
+	case p.apiKey != nil:
+		if strings.TrimSpace(p.apiKey.Name) != "" {
+			return "api-key:" + p.apiKey.Name
+		}
+		return "api-key:" + p.apiKey.KeyID
+	case p.isAdmin:
+		return "admin"
+	default:
+		return "operator"
+	}
 }
 
 // UpdateTask handles PUT /tasks/{task_id}

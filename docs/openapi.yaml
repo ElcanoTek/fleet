@@ -594,10 +594,17 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Task" }
     delete:
-      summary: Cancel a task.
+      summary: Cancel a task — and stop its live run (#508).
+      description: >-
+        Flips the task to cancelled with who-stopped-it attribution recorded on
+        the terminal result ("stopped by <principal>"). If the task is executing
+        in this server process, the governed run is interrupted at its next
+        checkpoint: the sandbox is released, the partial transcript persists,
+        and the live stream's terminal frame reports "stopped". Requires the
+        cancel permission (admin).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
-        "200": { description: Cancelled }
+        "200": { description: Cancelled (attribution on the task's result). }
   /tasks/{task_id}/output:
     parameters:
       - name: task_id

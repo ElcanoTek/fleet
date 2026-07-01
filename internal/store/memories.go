@@ -48,8 +48,12 @@ type Memory struct {
 	// claim time so an edited target is never retired on a stale justification.
 	Supersedes     string `json:"supersedes,omitempty"`
 	SupersedesHash string `json:"-"`
-	CreatedAt      int64  `json:"created_at"`
-	UpdatedAt      int64  `json:"updated_at"`
+	// ProjectID scopes the memory to a project/space (#509): set = shared
+	// project memory (visible to members, injected into project chats);
+	// empty = personal. Personal queries exclude project rows.
+	ProjectID string `json:"project_id,omitempty"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 // Retired reports whether the memory is soft-retired (excluded from injection).
@@ -61,6 +65,7 @@ const memoryColumns = `id, user_email, content, source, kind, origin,
 	COALESCE(conversation_id, ''), pinned, valid_from, valid_to,
 	COALESCE(learned_at, created_at), retired_at, COALESCE(retired_by, ''),
 	COALESCE(supersedes, ''), COALESCE(supersedes_hash, ''),
+	COALESCE(project_id, ''),
 	created_at, updated_at`
 
 func scanMemory(scanner interface{ Scan(...any) error }) (*Memory, error) {
@@ -69,6 +74,7 @@ func scanMemory(scanner interface{ Scan(...any) error }) (*Memory, error) {
 		&m.ConversationID, &m.Pinned, &m.ValidFrom, &m.ValidTo,
 		&m.LearnedAt, &m.RetiredAt, &m.RetiredBy,
 		&m.Supersedes, &m.SupersedesHash,
+		&m.ProjectID,
 		&m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -157,7 +163,7 @@ func (s *Store) CreateMemory(ctx context.Context, userEmail, content, source, ki
 func (s *Store) ListMemories(ctx context.Context, userEmail string) ([]Memory, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+memoryColumns+`
-		 FROM memories WHERE user_email = $1
+		 FROM memories WHERE user_email = $1 AND project_id IS NULL
 		 ORDER BY (retired_at IS NOT NULL) ASC, pinned DESC, updated_at DESC, id DESC`,
 		normalizeEmail(userEmail),
 	)

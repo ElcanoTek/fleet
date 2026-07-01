@@ -57,7 +57,14 @@ type TurnInput struct {
 	OptionalMCPServersEnabled []string
 
 	// Memories are user-scoped long-term facts injected into the system prompt.
+	// Project-scoped shared memories (#509) ride the same slice, prefixed
+	// "[project] " by the HTTP layer.
 	Memories []string
+
+	// ProjectInstructions are the standing instructions of the project/space
+	// this conversation belongs to (#509); injected as a dedicated system-prompt
+	// section. Empty = no project.
+	ProjectInstructions string
 
 	// ApprovalStager, when set, intercepts critical tool calls (send_email /
 	// risky bash / preview_email / suggest_advanced_model) and routes them
@@ -676,7 +683,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		}
 	}
 
-	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, notes, in.OptionalMCPServersEnabled)
+	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled)
 	if err != nil {
 		return nil, fmt.Errorf("compose system prompt: %w", err)
 	}

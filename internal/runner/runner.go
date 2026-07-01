@@ -162,10 +162,17 @@ type Pool struct {
 	// taskWG tracks in-flight task goroutines so Shutdown drains them.
 	taskWG sync.WaitGroup
 
-	// active tracks tasks currently executing (by lease token) for lease renewal.
-	// mu also guards taskCancel.
+	// active tracks tasks currently executing (lease token + the per-task
+	// cancel an operator Stop fires, #508) for lease renewal / stillOwns /
+	// StopTask. mu also guards taskCancel and stopRequested.
 	mu     sync.Mutex
-	active map[uuid.UUID]uuid.UUID // task ID → per-claim lease token
+	active map[uuid.UUID]activeRun
+	// stopRequested records WHO asked a task to stop (task ID → operator
+	// label) between StopTask firing the cancel and executeTask classifying
+	// the outcome — the marker that routes the run to the "stopped" terminal
+	// branch instead of retry/dead-letter (and instead of the shutdown
+	// "interrupted" label).
+	stopRequested map[uuid.UUID]string
 
 	// taskCancel cancels the context shared by all in-flight task executions. It
 	// is decoupled from Run's ctx so a shutdown signal stops NEW claims at once
@@ -223,7 +230,8 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		leaseRenewInterval: renew,
 		drainGrace:         grace,
 		leaseOwner:         uuid.New(),
-		active:             make(map[uuid.UUID]uuid.UUID),
+		active:             make(map[uuid.UUID]activeRun),
+		stopRequested:      make(map[uuid.UUID]string),
 		streams:            newTaskStreamRegistry(),
 		notifier:           cfg.Notifier,
 		publicURLBase:      strings.TrimRight(cfg.PublicURLBase, "/"),
@@ -334,6 +342,37 @@ func (p *Pool) drainWithGrace(grace time.Duration) bool {
 	}
 }
 
+// activeRun is one in-flight task's bookkeeping: the per-claim lease token
+// (terminal-write fencing) and the per-task cancel (#508 operator stop).
+type activeRun struct {
+	token  uuid.UUID
+	cancel context.CancelFunc
+}
+
+// StopTask requests an operator stop of one running task (#508): it records
+// who asked (the attribution executeTask writes into the terminal record) and
+// cancels that task's context. The run halts at the governed loop's next
+// checkpoint — an in-flight sandbox exec is killed via its context, the
+// sandbox/MCP client are returned by the existing defers, and the partial
+// session log still persists (submitLog is lease-free). Returns false when
+// the task is not executing in this process.
+func (p *Pool) StopTask(taskID uuid.UUID, who string) bool {
+	p.mu.Lock()
+	entry, ok := p.active[taskID]
+	if ok {
+		if strings.TrimSpace(who) == "" {
+			who = "operator"
+		}
+		p.stopRequested[taskID] = who
+	}
+	p.mu.Unlock()
+	if !ok {
+		return false
+	}
+	entry.cancel()
+	return true
+}
+
 // ForceCancel cancels the in-flight task context immediately, regardless of the
 // grace period — the fast-exit path (SIGINT / dev Ctrl-C / listener error).
 // In-flight tasks see ctx.Err() at their next checkpoint and exit. Safe to call
@@ -385,16 +424,22 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 		// clobber a fresh claim's state. We tag the active map and re-verify
 		// ownership before terminal writes.
 		token := uuid.New()
+		// Per-task cancellable context derived from the pool-wide taskCtx: a
+		// shutdown still cancels every task, and StopTask (#508) can now cancel
+		// exactly one without touching its neighbors.
+		runTaskCtx, cancelTask := context.WithCancel(taskCtx)
 		p.mu.Lock()
-		p.active[task.ID] = token
+		p.active[task.ID] = activeRun{token: token, cancel: cancelTask}
 		p.mu.Unlock()
 
 		p.taskWG.Add(1)
 		go func(task *models.Task, token uuid.UUID, release func()) {
 			defer p.taskWG.Done()
 			defer func() {
+				cancelTask() // release the per-task context on every exit path
 				p.mu.Lock()
 				delete(p.active, task.ID)
+				delete(p.stopRequested, task.ID)
 				p.mu.Unlock()
 				release() // release AFTER cleanup
 			}()
@@ -426,9 +471,10 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 					})
 				})
 			})
-			// Run on the decoupled taskCtx (not the claim ctx) so a shutdown lets
-			// this task finish naturally up to the grace period.
-			p.executeTask(taskCtx, task, token)
+			// Run on the decoupled per-task context (not the claim ctx) so a
+			// shutdown lets this task finish naturally up to the grace period
+			// and an operator StopTask halts only this task.
+			p.executeTask(runTaskCtx, task, token)
 		}(task, token, release)
 		// Loop to claim another task if a slot is still free (drains a burst).
 	}
@@ -504,19 +550,48 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		})
 	}
 
+	// Operator stop (#508): consume the attribution marker StopTask recorded
+	// BEFORE classifying the outcome. This must come first — a cancelled
+	// agentcore run returns a nil error with a partial session (Result.Cancelled
+	// is dropped by the scheduled driver), so without the marker an operator
+	// stop would be mislabeled as success.
+	p.mu.Lock()
+	stoppedBy, wasStopped := p.stopRequested[task.ID]
+	delete(p.stopRequested, task.ID)
+	p.mu.Unlock()
+
 	// Emit a terminal lifecycle status (the always-last frame). The deferred release
 	// seals the buffer so attached clients see EOF; the registry retains it briefly.
 	termStatus := "succeeded"
-	if runErr != nil {
+	switch {
+	case wasStopped:
+		termStatus = "stopped"
+	case runErr != nil || taskCtx.Err() != nil:
 		termStatus = "failed"
 	}
 	var costUSD float64
 	if session != nil {
 		costUSD = session.Cost
 	}
-	buf.Emit("status", map[string]any{
+	terminalFrame := map[string]any{
 		"type": "status", "status": termStatus, "task_id": task.ID.String(), "cost_usd": costUSD,
-	})
+	}
+	if wasStopped {
+		terminalFrame["stopped_by"] = stoppedBy
+	}
+	buf.Emit("status", terminalFrame)
+
+	if wasStopped {
+		// The cancel handler already flipped the row to cancelled (with the
+		// "stopped by <who>" attribution) and cleared the lease, so there is no
+		// terminal status write here — just persist the partial transcript
+		// (submitLog is lease-free) and skip retry/dead-letter/notify/analysis:
+		// a deliberate operator stop is not a failure to diagnose.
+		msg := "Task stopped by " + stoppedBy
+		p.submitLog(task, session, msg)
+		log.Printf("runner: task %s stopped by %s after %v", task.ID, logSafeRunner(stoppedBy), time.Since(start).Round(time.Second))
+		return
+	}
 
 	// If our lease was recovered out from under us (another claim now owns the
 	// task), do not clobber its state.
@@ -525,13 +600,16 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		return
 	}
 
-	// Interrupted only when the run itself failed AND the task context was
-	// cancelled — which, with the decoupled taskCtx, happens ONLY when the
-	// shutdown grace period expired (or ForceCancel fired). A task that returns
-	// during the grace window keeps its full context and records its real outcome;
-	// a long task that outlasts the grace is force-cancelled here and re-queues via
-	// lease expiry on the next start.
-	interrupted := runErr != nil && taskCtx.Err() != nil
+	// Interrupted when the task context was cancelled — with the decoupled
+	// per-task ctx that happens ONLY when the shutdown grace period expired (or
+	// ForceCancel fired); the operator-stop case returned above. runErr is NOT
+	// required: a cancelled agentcore run reports Cancelled via a nil error, so
+	// requiring runErr here used to mislabel a force-cancelled single-pass run
+	// as success with a truncated transcript. (The narrow race — a run that
+	// completed fully in the same instant the grace expired — now records as
+	// interrupted; re-running a completed task is safer than trusting a
+	// possibly-truncated "success".)
+	interrupted := taskCtx.Err() != nil
 	switch {
 	case interrupted:
 		msg := "Task interrupted: server shutdown (grace period expired)"
@@ -610,6 +688,12 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		// Terminal success: fire the outbound notification off-thread (#208).
 		p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
 	}
+}
+
+// logSafeRunner strips CR/LF from operator-supplied text before it lands in a
+// log line (the handlers' logSafe pattern).
+func logSafeRunner(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
 // classifyFailure maps a clean run failure to a RetryPolicy failure class (#201).
@@ -810,7 +894,7 @@ func (p *Pool) stillOwns(taskID, token uuid.UUID) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	cur, ok := p.active[taskID]
-	return ok && cur == token
+	return ok && cur.token == token
 }
 
 // renewActiveLeases re-asserts running for every in-flight task so the

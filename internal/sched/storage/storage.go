@@ -523,8 +523,10 @@ func (s *Storage) GetScheduledTasks(cutoff time.Time, limit int) ([]*models.Task
 	return s.db.GetScheduledTasks(context.Background(), cutoff, limit)
 }
 
-// CancelTaskAtomic cancels a task atomically.
-func (s *Storage) CancelTaskAtomic(taskID uuid.UUID) (*models.Task, error) {
+// CancelTaskAtomic cancels a task atomically. reason records WHO/why (#508 —
+// e.g. "stopped by admin"); stored on the task's Result so the attribution
+// survives as the terminal record. Empty keeps the legacy unattributed cancel.
+func (s *Storage) CancelTaskAtomic(taskID uuid.UUID, reason string) (*models.Task, error) {
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
@@ -552,6 +554,9 @@ func (s *Storage) CancelTaskAtomic(taskID uuid.UUID) (*models.Task, error) {
 	task.CompletedAt = &now
 	task.LeaseOwner = nil
 	task.LeaseExpiresAt = nil
+	if reason != "" {
+		task.Result = &reason
+	}
 
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
 		return nil, err

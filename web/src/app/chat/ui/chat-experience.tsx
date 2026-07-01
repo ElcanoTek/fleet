@@ -45,6 +45,7 @@ import {
 } from "./history";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { Icon } from "./Icon";
+import { ProjectsModal } from "./ProjectsModal";
 import {
   ConversationTotalsChip,
   type PendingAttachment,
@@ -431,6 +432,7 @@ export function ChatExperience() {
   const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
   const [memories, setMemories] = useState<UserMemory[]>([]);
   const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("");
   const [memoryKindDraft, setMemoryKindDraft] = useState<string>("fact");
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
@@ -1760,6 +1762,30 @@ export function ChatExperience() {
     }
   };
 
+  // startProjectChat creates a conversation bound to a project (#509) — the
+  // server validates membership and inherits the project's defaults +
+  // curated connector selection — then opens it.
+  const startProjectChat = async (projectID: string) => {
+    try {
+      const response = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "New conversation", project_id: projectID }),
+      });
+      if (!response.ok) {
+        console.error("project chat failed:", response.status, await response.text());
+        return;
+      }
+      const conv = (await response.json()) as { id?: string };
+      if (!conv.id) return;
+      setProjectsOpen(false);
+      await refreshConversations();
+      await loadConversation(conv.id);
+    } catch (err) {
+      console.error("project chat error:", err);
+    }
+  };
+
   // buildShareUrl turns a share token into the absolute, copy-paste link a
   // recipient opens. window.origin is the deployment origin the user is on (#226).
   const buildShareUrl = (token: string) =>
@@ -2558,6 +2584,14 @@ export function ChatExperience() {
           />
         ) : null}
 
+        {projectsOpen ? (
+          <ProjectsModal
+            userEmail={userEmail}
+            onClose={() => setProjectsOpen(false)}
+            onStartChat={(id) => void startProjectChat(id)}
+          />
+        ) : null}
+
         {memoryManagerOpen ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
             <button
@@ -2849,6 +2883,15 @@ export function ChatExperience() {
                   onClick={() => setShortcutsOpen(true)}
                 >
                   <Icon name="info" className="size-5" />
+                </button>
+                <button
+                  aria-label="Projects"
+                  className="relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                  title="Projects"
+                  type="button"
+                  onClick={() => setProjectsOpen(true)}
+                >
+                  <Icon name="grid" className="size-5" />
                 </button>
                 <button
                   aria-label="Manage memories"
