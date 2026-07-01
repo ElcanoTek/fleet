@@ -68,11 +68,27 @@ Three mechanisms, all equivalent:
 and initialized *outside* the registry lock (a subprocess spawn / HTTP handshake
 can block); the registry map is then swapped under a brief write lock; and each
 retired server is drained under its own lock — a tool call holds that lock for
-its whole duration, so acquiring it waits for the call to finish. A server that
-still has a call in flight after a bounded timeout (30s) is force-closed (which,
-for a stdio server, kills + reaps the subprocess; the blocked call then errors
-out cleanly). If any new server fails to initialize, the reload rolls back the
-servers it already started and leaves the live registry unchanged.
+its whole duration, so acquiring it waits for the call to finish (a graceful
+drain). The wait is bounded because every transport call respects its context
+(the stdio transport selects on `ctx.Done`; the HTTP transport uses a bounded
+client). A retired server is marked so `callTool` refuses a late call rather than
+resurrecting a killed stdio subprocess via its dead-transport restart path. If a
+new server fails to initialize, the reload rolls back the servers it already
+started and leaves the live registry unchanged.
+
+Reloads are **serialized** end-to-end (both at the client and at the manager
+level), so two triggers firing at once (e.g. `kill -HUP` during a `fleet mcp
+reload`) run one after another rather than interleaving into a state where the
+live client and the published tool-gating describe different manifests.
+
+A newly-added *optional* server's gating is published **before** its tools go
+live, so it can never be briefly treated as always-on (which could otherwise
+push a near-full turn past the 128-tool ceiling). One narrow residual remains: a
+turn is single-threaded here but reads its optional-server gating at turn start
+and the live tool catalog slightly later, so a turn whose start straddles a
+reload may, for that one turn, see a just-*removed* optional server's tools; it
+self-heals on the next turn. Removing a server never adds tools, so it cannot
+cause a ceiling failure.
 
 ## Not yet implemented (honest scope)
 

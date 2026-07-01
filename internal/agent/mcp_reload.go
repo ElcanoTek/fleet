@@ -2,16 +2,9 @@ package agent
 
 import (
 	"context"
-	"time"
 
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
-
-// mcpReloadDrainTimeout bounds how long a retired/restarted server waits for an
-// in-flight tool call to finish before it is force-closed. A generous bound: a
-// normal tool call is far shorter, and force-closing only affects the one server
-// being retired.
-const mcpReloadDrainTimeout = 30 * time.Second
 
 // mcpGates returns the (allowlist, optional-set) gating pair under the gating
 // RLock, so a caller sees a consistent snapshot even while ReloadMCPServers
@@ -68,16 +61,13 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 	if m.mcpClient == nil {
 		return &mcp.ReloadSummary{}, nil
 	}
+	// Serialize the whole reload so the client reload + gating swap land as a
+	// unit; two overlapping reloads must not interleave into a client/gating
+	// mismatch.
+	m.mcpReloadMu.Lock()
+	defer m.mcpReloadMu.Unlock()
 
-	// 1. Reload the live client's servers first, so the roster + metadata we
-	//    rebuild below reflect the new connection set.
-	summary, err := m.mcpClient.Reload(ctx, specsToServerDefs(newSpecs), mcpReloadDrainTimeout)
-	if err != nil {
-		return summary, err
-	}
-
-	// 2. Rebuild the spec-derived gating from the new specs (fresh maps/slices,
-	//    never a mutation of the published ones).
+	// Build the spec-derived gates (fresh maps, never mutating a published one).
 	allow := mcpAllowlist{}
 	optional := mcpOptionalSet{}
 	for name, spec := range newSpecs {
@@ -91,13 +81,33 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 			optional[name] = true
 		}
 	}
-	roster := m.computeMCPToolRoster(allow)
-	metadata := m.buildOptionalServerMetadata(newSpecs)
 
-	// 3. Swap the gating atomically under the write lock.
+	// Publish the allowlist + optional-set BEFORE the client gains new servers, so
+	// a newly-added OPTIONAL server is gated before its tools go live — otherwise
+	// a turn in the window would see the new tools as always-on (the #433 128-tool
+	// ceiling regression). Capture the old gates to revert if the client reload
+	// fails (its swap is all-or-nothing, so on error the client is unchanged and
+	// the gates must match).
 	m.mcpGatingMu.Lock()
+	prevAllow, prevOptional := m.allowlist, m.optionalServers
 	m.allowlist = allow
 	m.optionalServers = optional
+	m.mcpGatingMu.Unlock()
+
+	summary, err := m.mcpClient.Reload(ctx, specsToServerDefs(newSpecs))
+	if err != nil {
+		m.mcpGatingMu.Lock()
+		m.allowlist = prevAllow
+		m.optionalServers = prevOptional
+		m.mcpGatingMu.Unlock()
+		return summary, err
+	}
+
+	// Refresh the roster (prefixed tool-name list for the system prompt) and the
+	// picker metadata — both read the now-reloaded client — and swap them in.
+	roster := m.computeMCPToolRoster(allow)
+	metadata := m.buildOptionalServerMetadata(newSpecs)
+	m.mcpGatingMu.Lock()
 	m.mcpToolRoster = roster
 	m.optionalServerMetadata = metadata
 	m.mcpGatingMu.Unlock()

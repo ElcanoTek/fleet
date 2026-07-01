@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
-	"time"
 )
 
 // mcpHTTPTestServer starts an in-process MCP-over-HTTP server advertising a
@@ -70,7 +69,7 @@ func TestReload_AddRemoveRestartUnchanged(t *testing.T) {
 	sum, err := c.Reload(ctx, []ServerDef{
 		{Name: "A", URL: srvA.URL},
 		{Name: "C", URL: srvC.URL},
-	}, time.Second)
+	})
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -94,7 +93,7 @@ func TestReload_AddRemoveRestartUnchanged(t *testing.T) {
 	sum, err = c.Reload(ctx, []ServerDef{
 		{Name: "A", URL: srvA2.URL},
 		{Name: "C", URL: srvC.URL},
-	}, time.Second)
+	})
 	if err != nil {
 		t.Fatalf("reload restart: %v", err)
 	}
@@ -126,7 +125,7 @@ func TestReload_PreservesSyntheticHTTPToolServer(t *testing.T) {
 	if !c.HasServer(HTTPToolServerName) {
 		t.Fatal("precondition: synthetic server should exist")
 	}
-	if _, err := c.Reload(ctx, nil, time.Second); err != nil {
+	if _, err := c.Reload(ctx, nil); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 	if !c.HasServer(HTTPToolServerName) {
@@ -148,12 +147,38 @@ func TestReload_BuildFailureLeavesRegistryUnchanged(t *testing.T) {
 	_, err := c.Reload(ctx, []ServerDef{
 		{Name: "A", URL: srvA.URL},
 		{Name: "B"},
-	}, time.Second)
+	})
 	if err == nil {
 		t.Fatal("expected reload to fail on an invalid server def")
 	}
 	if names := serverNames(c); !names["A"] || names["B"] {
 		t.Errorf("registry after failed reload = %v; want unchanged (A only)", names)
+	}
+}
+
+// TestReload_RetiredServerRefusesCall verifies that a caller holding a *Server
+// captured (as CallToolOn does) just before a reload REMOVES it cannot call the
+// now-closed transport: callTool refuses a retired server. This is what stops a
+// removed stdio server from being resurrected (a new orphaned subprocess) via
+// the dead-transport restart path.
+func TestReload_RetiredServerRefusesCall(t *testing.T) {
+	ctx := context.Background()
+	srv := mcpHTTPTestServer(t, "tool_x")
+	c := NewClient()
+	t.Cleanup(func() { _ = c.Close() })
+	if err := c.AddHTTPServer(ctx, "X", srv.URL); err != nil {
+		t.Fatalf("add X: %v", err)
+	}
+	// Capture the *Server the way CallToolOn does, before the reload.
+	c.mu.RLock()
+	old := c.servers["X"]
+	c.mu.RUnlock()
+
+	if _, err := c.Reload(ctx, nil); err != nil { // removes X
+		t.Fatalf("reload: %v", err)
+	}
+	if _, err := old.callTool(ctx, "tool_x", nil); err == nil {
+		t.Error("callTool on a retired server must refuse, got nil error")
 	}
 }
 
@@ -201,7 +226,7 @@ func TestReload_Concurrent(t *testing.T) {
 		{{Name: "s2", URL: srv2.URL}, {Name: "s3", URL: srv3.URL}},
 	}
 	for i := 0; i < 30; i++ {
-		if _, err := c.Reload(ctx, sets[i%len(sets)], 500*time.Millisecond); err != nil {
+		if _, err := c.Reload(ctx, sets[i%len(sets)]); err != nil {
 			t.Errorf("reload %d: %v", i, err)
 			break
 		}

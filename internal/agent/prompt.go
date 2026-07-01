@@ -74,6 +74,13 @@ type Manager struct {
 	// use a returned snapshot lock-free. Mirrors config hot-reload (#286).
 	mcpGatingMu sync.RWMutex
 
+	// mcpReloadMu serializes ReloadMCPServers (#218) across its triggers (SIGHUP
+	// + the admin HTTP endpoint), so one reload's live-client reload AND gating
+	// swap complete as a unit before another starts — otherwise two overlapping
+	// reloads could leave the client describing one manifest and the published
+	// gating another (an optional server stuck always-on).
+	mcpReloadMu sync.Mutex
+
 	// resolver loads + caches OpenRouter models per slug (nil in the
 	// prompt/roster unit tests, which never run a turn). RunTurn / Summarize /
 	// SuggestTitle resolve through it.

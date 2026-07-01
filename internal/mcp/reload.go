@@ -3,12 +3,10 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"log"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
-	"time"
 )
 
 // ServerDef is a portable, transport-agnostic description of one MCP server
@@ -131,28 +129,23 @@ func buildServer(ctx context.Context, def ServerDef) (*Server, error) {
 	return s, nil
 }
 
-// drainAndClose retires an old server: it waits for any in-flight tool call to
-// finish (callTool holds Server.mu for the whole call, so acquiring it IS the
-// drain) up to inFlightTimeout, then closes the transport. If the drain times
-// out it force-closes anyway — safe because StdioTransport.Close kills+reaps the
-// subprocess (the blocked call's read then errors out) and HTTPTransport.Close
-// is a no-op (the in-flight request completes on its own, bounded by its ctx).
-// Closing is what reaps a stdio subprocess, so it must always run.
-func drainAndClose(s *Server, inFlightTimeout time.Duration) {
-	deadline := time.Now().Add(inFlightTimeout)
-	for {
-		if s.mu.TryLock() {
-			_ = s.transport.Close()
-			s.mu.Unlock()
-			return
-		}
-		if time.Now().After(deadline) {
-			log.Printf("MCP reload: server %q still has an in-flight call after %s; force-closing", s.name, inFlightTimeout)
-			_ = s.transport.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+// drainAndClose retires an old server: it acquires Server.mu — which, because
+// callTool holds that mutex for the whole call, waits for any in-flight tool
+// call to finish (a graceful drain) — then marks the server retired and closes
+// its transport. The wait is bounded: every transport Call respects its context
+// (StdioTransport selects on ctx.Done; HTTPTransport uses a bounded client), so
+// an in-flight call cannot block the lock forever.
+//
+// Doing this under Server.mu is what makes retirement race-free: a call that
+// captured this *Server before the registry swap either (a) hasn't taken the
+// mutex yet, so it observes retired==true here and refuses, or (b) holds the
+// mutex mid-call, so we wait — and if it restarts the transport meanwhile, we
+// close whatever transport it leaves behind, so no stdio subprocess leaks.
+func drainAndClose(s *Server) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retired = true
+	_ = s.transport.Close()
 }
 
 // Reload diffs newServers against the live registry and applies the minimum set
@@ -172,7 +165,14 @@ func drainAndClose(s *Server, inFlightTimeout time.Duration) {
 // returns the error with a partial summary; the live registry is left unchanged
 // in that case (the swap is all-or-nothing — it happens only after every new
 // server initializes).
-func (c *Client) Reload(ctx context.Context, newServers []ServerDef, inFlightTimeout time.Duration) (*ReloadSummary, error) {
+//
+// Reload is serialized with itself (reloadMu): concurrent reloads run one at a
+// time, so two can't both build a server for the same name and leak the loser's
+// transport.
+func (c *Client) Reload(ctx context.Context, newServers []ServerDef) (*ReloadSummary, error) {
+	c.reloadMu.Lock()
+	defer c.reloadMu.Unlock()
+
 	want := make(map[string]ServerDef, len(newServers))
 	for _, d := range newServers {
 		if d.Name == HTTPToolServerName {
@@ -262,7 +262,7 @@ func (c *Client) Reload(ctx context.Context, newServers []ServerDef, inFlightTim
 		wg.Add(1)
 		go func(s *Server) {
 			defer wg.Done()
-			drainAndClose(s, inFlightTimeout)
+			drainAndClose(s)
 		}(s)
 	}
 	wg.Wait()
