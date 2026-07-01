@@ -1871,6 +1871,26 @@ export function ChatExperience() {
     }
   };
 
+  // promoteConversation asks the server to synthesize a recurring-task proposal
+  // from this conversation and stage it as a schedule_task approval (#455). On
+  // success it opens the conversation and re-hydrates, so the pre-filled
+  // ScheduleTaskCard appears for the user to review and approve (or cancel) —
+  // the task is created only on approve, via the existing #239 path.
+  const promoteConversation = async (conversation: ConversationSummary) => {
+    try {
+      const response = await fetch(`/api/conversations/${conversation.id}/promote-to-task`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        console.error("promote-to-task failed", response.status, await response.text());
+        return;
+      }
+      await loadConversation(conversation.id);
+    } catch (err) {
+      console.error("promote-to-task failed", err);
+    }
+  };
+
   const startThinkingCrossfade = (assistantId: number) => {
     setCrossfadingMessageIds((current) =>
       current.includes(assistantId) ? current : [...current, assistantId],
@@ -2401,6 +2421,7 @@ export function ChatExperience() {
           toggleArchive={toggleArchive}
           renameConversation={renameConversation}
           downloadConversation={downloadConversation}
+          promoteConversation={promoteConversation}
           setPendingDeleteConversation={setPendingDeleteConversation}
           setConversationFolder={setConversationFolder}
           setConversationLabels={setConversationLabels}

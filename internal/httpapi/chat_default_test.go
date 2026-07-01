@@ -75,6 +75,9 @@ func (f *fakeEngine) SuggestTitle(context.Context, string, string) string { retu
 func (f *fakeEngine) ExtractMemories(context.Context, string, string, []string) []string {
 	return nil
 }
+func (f *fakeEngine) SuggestRecurringTask(context.Context, string, []string) (*agent.RecurringTaskProposal, error) {
+	return nil, nil
+}
 func (f *fakeEngine) MCPClient() *mcp.Client                       { return nil }
 func (f *fakeEngine) SandboxPool() *sandbox.Pool                   { return nil }
 func (f *fakeEngine) MCPServerCatalog() []agent.OptionalServerInfo { return nil }

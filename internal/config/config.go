@@ -154,6 +154,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_AUTO_TITLE":                     true,
 	"FLEET_MEMORY_MODEL":                   true,
 	"FLEET_MEMORY_AUTOINDEX_ENABLED":       true,
+	"FLEET_RECURRING_TASK_MODEL":           true,
 	"FLEET_APPROVAL_TIMEOUT_SECONDS":       true,
 	"FLEET_AUTO_APPROVE_IN_TEST":           true,
 	"FLEET_MAX_CONCURRENT_AGENTS":          true,
@@ -545,6 +546,12 @@ type Config struct {
 	// FLEET_MEMORY_MODEL, defaulting to MetadataModel (then TitleModel) so
 	// deployments need zero new config.
 	MemoryModel string
+	// RecurringTaskModel is the model the "promote a chat into a recurring task"
+	// synthesizer (#455) uses to turn a conversation transcript into a clean,
+	// self-contained scheduled-task prompt + suggested cadence. FLEET_RECURRING_TASK_MODEL,
+	// defaulting to MetadataModel (then TitleModel) so deployments need zero new
+	// config; point it at a larger model for richer prompt synthesis.
+	RecurringTaskModel string
 	// MemoryAutoIndexEnabled gates the memory auto-indexer (#234). Default
 	// FALSE (opt-in): when off, the only memory-write paths are the manual
 	// propose_memory tool + POST /memories, exactly as before. When on, each
@@ -1005,6 +1012,7 @@ func Load(envFile string) (*Config, error) {
 		ErrorAnalysisEnabled:   getenvFleetBool("ERROR_ANALYSIS_ENABLED", true),
 		AutoTitle:              getenvFleetBool("AUTO_TITLE", true),
 		MemoryModel:            getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
+		RecurringTaskModel:     getenvFleetDefault("RECURRING_TASK_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		MemoryAutoIndexEnabled: getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
 		ApprovalTimeoutSeconds: getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 300),
 		AutoApproveInTest:      getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
