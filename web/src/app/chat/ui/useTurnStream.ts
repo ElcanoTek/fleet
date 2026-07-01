@@ -477,7 +477,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     }
 
     if (event.event === "memory.proposed") {
-      const p = payload as { proposal_id: string; content: string };
+      const p = payload as { proposal_id: string; content: string; kind?: string };
       patchAssistantMessage(ctx.target, ctx.assistantId, (m) => {
         // Idempotent against the re-hydrated proposal a focus-event
         // loadConversation may have just dropped on this same message.
@@ -489,7 +489,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           ...m,
           memoryProposals: [
             ...existing,
-            { id: p.proposal_id, content: p.content, status: "pending" },
+            { id: p.proposal_id, content: p.content, kind: p.kind, status: "pending" },
           ],
         };
       });

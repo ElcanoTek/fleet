@@ -260,16 +260,20 @@ type memoryProposer struct {
 	conversationID string
 	userEmail      string
 	sink           agent.EventSink
+	// origin records WHO is proposing (#515 provenance): "tool" for the
+	// agent's propose_memory calls, "auto" for the post-turn extractor.
+	origin string
 }
 
-func (m *memoryProposer) Propose(content string) (string, error) {
-	memory, err := m.store.CreateMemoryProposal(m.ctx, m.userEmail, m.conversationID, content)
+func (m *memoryProposer) Propose(content, kind string) (string, error) {
+	memory, err := m.store.CreateMemoryProposal(m.ctx, m.userEmail, m.conversationID, content, kind, m.origin)
 	if err != nil {
 		return "", err
 	}
 	m.sink.Emit("memory.proposed", map[string]any{
 		"proposal_id": memory.ID,
 		"content":     memory.Content,
+		"kind":        memory.Kind,
 	})
 	return memory.ID, nil
 }

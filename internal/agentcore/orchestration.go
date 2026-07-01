@@ -125,8 +125,10 @@ const (
 )
 
 // MemoryProposer stages a memory proposal for user confirmation (interactive).
+// kind classifies the memory (#515: fact/preference/identity/constraint/
+// context); implementations normalize unknown values to "fact".
 type MemoryProposer interface {
-	Propose(content string) (proposalID string, err error)
+	Propose(content, kind string) (proposalID string, err error)
 }
 
 // newOrchestrationState matches cutlass's constructor signature (the one the
@@ -399,11 +401,12 @@ func (o *orchestrationState) checkMemoryProposal(toolName, rawInput string) (boo
 	}
 	var args struct {
 		Content string `json:"content"`
+		Kind    string `json:"kind"`
 	}
 	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
 		return true, fmt.Sprintf("MEMORY_PROPOSAL_FAILED: invalid arguments (%v).", err)
 	}
-	id, err := o.memoryProposer.Propose(args.Content)
+	id, err := o.memoryProposer.Propose(args.Content, args.Kind)
 	if err != nil {
 		return true, fmt.Sprintf("MEMORY_PROPOSAL_FAILED: could not stage proposal (%v).", err)
 	}

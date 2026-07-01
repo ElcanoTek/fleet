@@ -110,7 +110,7 @@ type ApprovalStager interface {
 // propose_memory, the tool result is intercepted and routed through this
 // proposer, which creates a pending memory row and emits an SSE event.
 type MemoryProposer interface {
-	Propose(content string) (proposalID string, err error)
+	Propose(content, kind string) (proposalID string, err error)
 }
 
 func newOrchestrationState() *orchestrationState {
@@ -296,11 +296,12 @@ func (o *orchestrationState) checkMemoryProposal(toolName, rawInput string) (boo
 	}
 	var args struct {
 		Content string `json:"content"`
+		Kind    string `json:"kind"`
 	}
 	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
 		return true, fmt.Sprintf("MEMORY_PROPOSAL_FAILED: invalid arguments (%v).", err)
 	}
-	id, err := o.memoryProposer.Propose(args.Content)
+	id, err := o.memoryProposer.Propose(args.Content, args.Kind)
 	if err != nil {
 		return true, fmt.Sprintf("MEMORY_PROPOSAL_FAILED: could not stage proposal (%v).", err)
 	}

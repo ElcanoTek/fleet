@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // captureSink records the SSE event names autoIndexMemories emits.
@@ -24,7 +26,7 @@ func TestAutoIndexMemories_DedupAndPropose(t *testing.T) {
 		t.Fatalf("CreateConversation: %v", err)
 	}
 	// A fact the user already has as a live memory — must NOT be re-proposed.
-	if _, err := s.store.CreateMemory(ctx, user, "uses ruff for linting", "chat"); err != nil {
+	if _, err := s.store.CreateMemory(ctx, user, "uses ruff for linting", "chat", ""); err != nil {
 		t.Fatalf("CreateMemory: %v", err)
 	}
 
@@ -71,5 +73,33 @@ func TestAutoIndexMemories_DedupAndPropose(t *testing.T) {
 	}
 	if again, _ := s.store.ListPendingMemoryProposalsForConversation(ctx, user, conv.ID); len(again) != 2 {
 		t.Errorf("pending count should stay 2 after a repeat pass, got %d", len(again))
+	}
+}
+
+// #515: memoryContents must exclude retired + proposed rows and annotate
+// non-fact kinds / validity windows for explainability.
+func TestMemoryContentsTypedFiltering(t *testing.T) {
+	from := int64(1719878400) // 2024-07-02 UTC
+	retiredAt := int64(1719878400)
+	memories := []store.Memory{
+		{Content: "plain fact", Kind: "fact"},
+		{Content: "likes short answers", Kind: "preference"},
+		{Content: "on-call until Friday", Kind: "context", ValidFrom: &from},
+		{Content: "old address", Kind: "fact", RetiredAt: &retiredAt},
+		{Content: "undecided", Kind: "fact", Source: "proposed"},
+	}
+	got := memoryContents(memories)
+	want := []string{
+		"plain fact",
+		"likes short answers (preference)",
+		"on-call until Friday (context, true since 2024-07-02)",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("bullet %d: got %q want %q", i, got[i], want[i])
+		}
 	}
 }

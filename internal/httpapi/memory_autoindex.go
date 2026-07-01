@@ -46,14 +46,14 @@ func (s *Server) autoIndexMemories(ctx context.Context, sink agent.EventSink, co
 		seen[normalizeFact(m.Content)] = true
 	}
 
-	proposer := &memoryProposer{ctx: ctx, store: s.store, conversationID: conversationID, userEmail: user, sink: sink}
+	proposer := &memoryProposer{ctx: ctx, store: s.store, conversationID: conversationID, userEmail: user, sink: sink, origin: "auto"}
 	for _, f := range facts {
 		key := normalizeFact(f)
 		if key == "" || seen[key] {
 			continue
 		}
 		seen[key] = true
-		if _, err := proposer.Propose(f); err != nil {
+		if _, err := proposer.Propose(f, ""); err != nil {
 			log.Printf("autoIndexMemories: propose (user=%s conv=%s): %v", user, conversationID, err)
 		}
 	}
