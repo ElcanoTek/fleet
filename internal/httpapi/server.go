@@ -602,6 +602,9 @@ func (s *Server) Routes() http.Handler {
 	// role/team. Admin-gated like the other /admin/* endpoints.
 	mux.Handle("/admin/users", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUsers)))))
 	mux.Handle("/admin/users/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUserPatch)))))
+	// Migration status (#256): applied vs pending chat-DB migrations. Admin-gated
+	// like the other /admin/* reads; strictly read-only (applies nothing).
+	mux.Handle("/admin/migrations", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleMigrations)))))
 	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits
 	// just inside recoverMiddleware and before bodyLimitMiddleware, so a blocked
 	// client IP is dropped before any body parsing, route dispatch, or auth

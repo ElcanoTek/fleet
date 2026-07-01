@@ -188,6 +188,102 @@ func loadAppliedVersions(ctx context.Context, db *sql.DB) (map[int]bool, error) 
 	return out, rows.Err()
 }
 
+// MigrationInfo is one migration in a MigrationReport. AppliedAt is nil for a
+// pending (not-yet-run) migration and the unix-second timestamp recorded in
+// schema_migrations for an applied one.
+type MigrationInfo struct {
+	Version   int    `json:"version"`
+	Name      string `json:"name"`
+	AppliedAt *int64 `json:"applied_at,omitempty"`
+}
+
+// MigrationReport is the read-only applied-vs-pending view of the chat DB's
+// migrations, served at GET /admin/migrations (#256) and printed by
+// `fleet migrate status`.
+type MigrationReport struct {
+	DB             string          `json:"db"`              // always "chat"
+	Runner         string          `json:"runner"`          // always "hand-rolled"
+	MigrationTable string          `json:"migration_table"` // always "schema_migrations"
+	Applied        []MigrationInfo `json:"applied"`
+	Pending        []MigrationInfo `json:"pending"`
+}
+
+// MigrationStatusDB reports applied vs pending chat-DB migrations by comparing
+// the embedded migration set against the schema_migrations tracking table
+// (#256). It is strictly READ-ONLY: it never applies a migration and never
+// creates a table, so it is safe to call at any time — including against a fresh
+// database where the tracking table does not exist yet (every migration is then
+// reported as pending). Applied migrations the running binary does not know
+// about (a DB ahead of the build) are still surfaced under Applied so a
+// downgrade is visible rather than hidden.
+func MigrationStatusDB(ctx context.Context, db *sql.DB) (MigrationReport, error) {
+	report := MigrationReport{DB: "chat", Runner: "hand-rolled", MigrationTable: "schema_migrations"}
+	embedded, err := loadMigrations()
+	if err != nil {
+		return report, err
+	}
+
+	type appliedRow struct {
+		name string
+		at   int64
+	}
+	applied := map[int]appliedRow{}
+
+	// to_regclass returns NULL (not an error) when the relation is absent, so we
+	// can probe for the tracking table without a failing query or error-string
+	// matching, and stay read-only against a not-yet-migrated database.
+	var tbl sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT to_regclass('schema_migrations')`).Scan(&tbl); err != nil {
+		return report, fmt.Errorf("probe schema_migrations: %w", err)
+	}
+	if tbl.Valid {
+		rows, err := db.QueryContext(ctx, `SELECT version, name, applied_at FROM schema_migrations`)
+		if err != nil {
+			return report, fmt.Errorf("read schema_migrations: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var v int
+			var n string
+			var at int64
+			if err := rows.Scan(&v, &n, &at); err != nil {
+				return report, err
+			}
+			applied[v] = appliedRow{name: n, at: at}
+		}
+		if err := rows.Err(); err != nil {
+			return report, err
+		}
+	}
+
+	seen := map[int]bool{}
+	for _, m := range embedded {
+		seen[m.version] = true
+		if a, ok := applied[m.version]; ok {
+			at := a.at
+			report.Applied = append(report.Applied, MigrationInfo{Version: m.version, Name: m.name, AppliedAt: &at})
+		} else {
+			report.Pending = append(report.Pending, MigrationInfo{Version: m.version, Name: m.name})
+		}
+	}
+	for v, a := range applied {
+		if !seen[v] {
+			at := a.at
+			report.Applied = append(report.Applied, MigrationInfo{Version: v, Name: a.name, AppliedAt: &at})
+		}
+	}
+	sort.Slice(report.Applied, func(i, j int) bool { return report.Applied[i].Version < report.Applied[j].Version })
+	// Pending inherits loadMigrations' ascending order.
+	return report, nil
+}
+
+// MigrationStatus is the Store-scoped wrapper around MigrationStatusDB, so the
+// HTTP layer can report migration status through the narrow chatStore interface
+// without exposing the underlying *sql.DB.
+func (s *Store) MigrationStatus(ctx context.Context) (MigrationReport, error) {
+	return MigrationStatusDB(ctx, s.db)
+}
+
 // applyMigration runs one migration inside a transaction and records
 // the applied version.
 func applyMigration(ctx context.Context, db *sql.DB, m migration) error {

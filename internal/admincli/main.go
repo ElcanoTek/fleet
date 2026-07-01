@@ -83,6 +83,8 @@ func Run(argv []string) int {
 		return cmdNotes(argv[1:])
 	case "worktree":
 		return cmdWorktree(argv[1:])
+	case "migrate":
+		return cmdMigrate(argv[1:])
 	case "backup":
 		return cmdBackup(argv[1:])
 	case "restore":
@@ -166,6 +168,9 @@ Git worktree isolation hygiene (#180; tasks with worktree_config enabled):
   fleet worktree list  [--workspace DIR]                       (git worktree list --porcelain)
   fleet worktree prune [--workspace DIR] [--older-than 24h] [--dry-run]
     (git worktree prune + remove stale <workspace>/.fleet-worktrees/* dirs)
+
+Database migrations (#256):
+  fleet migrate status [--database-url <dsn>] [--json]   (read-only: applied vs pending for the chat + sched DBs)
 
 Backup / restore (pg_dump -Fc / pg_restore; one dump file per DB):
   fleet backup  [--db=chat|sched|all] [--out DIR]   (writes fleet-<db>-<stamp>.dump; prints each path)

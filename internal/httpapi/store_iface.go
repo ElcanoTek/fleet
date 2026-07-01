@@ -135,6 +135,9 @@ type chatStore interface {
 	ListTeamConversations(ctx context.Context, callerEmail string) ([]store.Conversation, error)
 	SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) error
 	AdminStats(ctx context.Context) ([]store.AdminRow, error)
+	// MigrationStatus reports applied vs pending chat-DB migrations for
+	// GET /admin/migrations (#256). Read-only.
+	MigrationStatus(ctx context.Context) (store.MigrationReport, error)
 	SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap int) (expired int, evicted int, err error)
 	AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int, error)
 	SweepOrphanWorkspaces(ctx context.Context, root string) (int, error)

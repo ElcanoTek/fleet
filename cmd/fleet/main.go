@@ -918,6 +918,10 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// operator can see backlog and starvation. Admin-gated like the other
 		// sensitive reads.
 		r.Get("/admin/queue", h.QueueStats)
+		// Migration status (#256): applied vs pending sched-DB migrations, the
+		// current golang-migrate version + dirty flag. Admin-gated like the other
+		// sensitive reads; strictly read-only (applies nothing).
+		r.Get("/admin/migrations", h.MigrationStatus)
 		// Config hot-reload (#286): re-read the reloadable settings (cost/token/
 		// iteration ceilings, temperatures) without a restart. Admin-gated like the
 		// other sensitive mutations; returns a JSON diff of what changed, what was
