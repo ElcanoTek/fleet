@@ -90,6 +90,8 @@ func (m *Manager) buildOptionalServerMetadata(specs map[string]MCPServerSpec) []
 // re-use the same picker UI for parity. Non-optional servers never appear
 // here; they're always on.
 func (m *Manager) MCPServerCatalog() []OptionalServerInfo {
+	m.mcpGatingMu.RLock()
+	defer m.mcpGatingMu.RUnlock()
 	return m.optionalServerMetadata
 }
 

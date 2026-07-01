@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/fantasy"
@@ -62,6 +63,16 @@ type Manager struct {
 
 	mcpClient *mcp.Client
 	allowlist mcpAllowlist
+
+	// mcpGatingMu guards the four MCP spec-derived gating fields below
+	// (allowlist, mcpToolRoster, optionalServers, optionalServerMetadata) so a
+	// hot reload (#218, ReloadMCPServers) can swap them race-free while turns
+	// read them. Boot construction and unit-test literals set the fields
+	// directly (single goroutine, happens-before any turn); every RUNTIME read
+	// goes through the accessors that RLock this, and Reload assigns FRESH
+	// maps/slices under Lock (never mutates a published one), so a reader may
+	// use a returned snapshot lock-free. Mirrors config hot-reload (#286).
+	mcpGatingMu sync.RWMutex
 
 	// resolver loads + caches OpenRouter models per slug (nil in the
 	// prompt/roster unit tests, which never run a turn). RunTurn / Summarize /
@@ -293,17 +304,18 @@ func (m *Manager) fastIOEnabledForTurn(enabledOptIns []string) bool {
 // frozen startup roster, then filters Optional servers unless the conversation
 // opted in. This keeps prompt guidance aligned with buildFantasyTools.
 func (m *Manager) activeMCPToolNames(enabledOptIns []string) []string {
-	if len(m.optionalServers) == 0 {
-		return m.mcpToolRoster
+	optionalServers, roster := m.mcpRosterSnapshot()
+	if len(optionalServers) == 0 {
+		return roster
 	}
 	enabled := make(map[string]bool, len(enabledOptIns))
 	for _, n := range enabledOptIns {
 		enabled[strings.TrimSpace(n)] = true
 	}
-	out := make([]string, 0, len(m.mcpToolRoster))
-	for _, name := range m.mcpToolRoster {
+	out := make([]string, 0, len(roster))
+	for _, name := range roster {
 		optionalServer := ""
-		for server := range m.optionalServers {
+		for server := range optionalServers {
 			if strings.HasPrefix(name, "mcp_"+server+"_") {
 				optionalServer = server
 				break

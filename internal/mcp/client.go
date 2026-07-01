@@ -63,6 +63,11 @@ type Server struct {
 	transport Transport
 	tools     []Tool
 
+	// def is the descriptor this server was built from, retained so a hot
+	// reload (#218) can diff the live server against a new manifest and decide
+	// unchanged / restart. Empty for the synthetic inline-http-tools server.
+	def ServerDef
+
 	// Restart state for stdio servers (nil for HTTP servers).
 	stdioCommand string
 	stdioArgs    []string
@@ -223,6 +228,7 @@ func (c *Client) AddStdioServer(ctx context.Context, name, command string, args 
 	server := &Server{
 		name:         name,
 		transport:    transport,
+		def:          ServerDef{Name: name, Command: command, Args: args, Env: env, Dir: dir},
 		stdioCommand: command,
 		stdioArgs:    args,
 		stdioEnv:     env,
@@ -297,6 +303,10 @@ func (c *Client) AddHTTPServerWithOptions(ctx context.Context, name, url string,
 	server := &Server{
 		name:      name,
 		transport: transport,
+		// Retain the operator-configured descriptor for hot-reload diffing
+		// (#218). The per-user SSRF client (opts.HTTPClient) case is never
+		// manifest-reloaded, so leaving its def http-shaped is harmless.
+		def: ServerDef{Name: name, URL: url, Headers: opts.Headers, TLS: opts.TLS},
 	}
 
 	// Initialize the server and get tools
