@@ -224,6 +224,9 @@ same PR.
 - **Why the invariants are the way they are:** [`docs/adr/`](docs/adr/)
   (Architecture Decision Records)
 - **Contributor workflow + CI gates:** [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- **HTTP API versioning** (the `/v1` prefix + `X-Fleet-API-Version` + `/api-info`
+  discovery + deprecation contract; `internal/apiversion` wraps both servers with
+  zero route-registration churn): [`docs/api-versioning.md`](docs/api-versioning.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via
