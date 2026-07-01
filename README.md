@@ -19,6 +19,21 @@ them.
 > in place and exercised by an extensive test suite (Go + web + live e2e), but
 > APIs and config shapes can still change. Expect rough edges.
 
+## Screenshots
+
+fleet serves one Next.js app with two surfaces: a **chat** UI for interactive
+work and an **Operations Center** for scheduled tasks — both routing every tool
+call through the same governed sandbox. _(Auto-regenerated on each push to
+`main` by [`.github/workflows/screenshots.yml`](.github/workflows/screenshots.yml).)_
+
+**Chat**
+
+![Fleet chat UI](docs/screenshots/web/chat.png)
+
+**Operations Center**
+
+![Fleet Operations Center — scheduled task dashboard](docs/screenshots/web/orchestrator.png)
+
 ## Why fleet
 
 - **Any model.** fleet runs its own native agent loop and lets you choose the

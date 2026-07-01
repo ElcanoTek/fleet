@@ -13,6 +13,7 @@
     "test:e2e:mocked": "playwright test --project=mocked",
     "test:e2e:live": "E2E_LIVE=1 playwright test --project=live",
     "test:e2e:canary": "E2E_CANARY=1 playwright test --project=canary",
+    "test:e2e:screenshots": "E2E_SCREENSHOTS=1 playwright test --project=screenshots",
     "test:all": "npm run test && npm run test:e2e"
   },
   "dependencies": {
