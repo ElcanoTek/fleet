@@ -411,6 +411,9 @@ func run() error {
 		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
 		PersonaPolicies:      personaPolicies,
 		RemoteMCP:            remoteMCPResolver,
+		// Multi-provider LLM routing (#289): nil when the bundle declares no
+		// providers: block, which keeps the single-OpenRouter default.
+		LLMProviders: toAgentcoreProviders(bundle),
 	})
 	if err != nil {
 		return fmt.Errorf("build interactive engine: %w", err)
@@ -1289,6 +1292,32 @@ func toAgentcorePersonaPolicies(bundle *clientconfig.Bundle) map[string]agentcor
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// toAgentcoreProviders translates the bundle manifest's providers: block (#289)
+// into the agentcore resolver's provider table, resolving each API-key env var
+// HOST-SIDE (os.Getenv) so the secret is handed to the resolver in memory and
+// never lives in the manifest. Returns nil when the bundle declares no providers,
+// which routes the Manager to the historical single-OpenRouter resolver.
+func toAgentcoreProviders(bundle *clientconfig.Bundle) []agentcore.ProviderConfig {
+	if bundle == nil || len(bundle.Providers) == 0 {
+		return nil
+	}
+	out := make([]agentcore.ProviderConfig, 0, len(bundle.Providers))
+	for _, p := range bundle.Providers {
+		key := ""
+		if env := strings.TrimSpace(p.APIKeyEnv); env != "" {
+			key = os.Getenv(env)
+		}
+		out = append(out, agentcore.ProviderConfig{
+			Name:    strings.TrimSpace(p.Name),
+			Type:    agentcore.ProviderType(strings.TrimSpace(p.Type)),
+			APIKey:  key,
+			BaseURL: strings.TrimSpace(p.BaseURL),
+			Models:  p.Models,
+		})
 	}
 	return out
 }

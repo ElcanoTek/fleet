@@ -160,6 +160,13 @@ type ManagerOptions struct {
 	// mints their bearer tokens for the per-turn overlay (#443). nil = the feature
 	// is off; turns run exactly as before.
 	RemoteMCP RemoteMCPResolver
+
+	// LLMProviders is the resolved multi-provider routing table (#289), translated
+	// by cmd/fleet from the bundle manifest's providers: block (API-key env vars
+	// already resolved host-side). Empty = the historical single-OpenRouter path
+	// (NewModelResolver with cfg.OpenRouterAPIKey), so existing deployments are
+	// unchanged.
+	LLMProviders []agentcore.ProviderConfig
 }
 
 // New constructs a Manager: it dials OpenRouter (via the model resolver),
@@ -238,7 +245,18 @@ func New(opts ManagerOptions) (*Manager, error) {
 		return nil, fmt.Errorf("config required")
 	}
 
-	resolver, err := agentcore.NewModelResolver(cfg.OpenRouterAPIKey, agentcore.DefaultProviderHeaders)
+	// Multi-provider LLM routing (#289): when the bundle declares a providers:
+	// block, resolve models across the configured providers; otherwise fall back
+	// to the historical single-OpenRouter resolver (byte-identical behavior).
+	var (
+		resolver *agentcore.ModelResolver
+		err      error
+	)
+	if len(opts.LLMProviders) > 0 {
+		resolver, err = agentcore.NewModelResolverWithProviders(opts.LLMProviders, agentcore.DefaultProviderHeaders)
+	} else {
+		resolver, err = agentcore.NewModelResolver(cfg.OpenRouterAPIKey, agentcore.DefaultProviderHeaders)
+	}
 	if err != nil {
 		return nil, err
 	}
