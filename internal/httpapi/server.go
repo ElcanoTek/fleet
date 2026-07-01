@@ -24,6 +24,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/metrics"
@@ -33,6 +34,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
+	"github.com/ElcanoTek/fleet/internal/version"
 )
 
 // Server wires the agent Manager + store + shared-secret auth into an
@@ -547,6 +549,9 @@ func (s *Server) getInflight(convID string) (inflightEntry, bool) {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.healthz)
+	// Version discovery (#321): unauthenticated, like /healthz. Also served at
+	// /v1/api-info via the apiversion.Router wrapper in cmd/fleet.
+	mux.HandleFunc("/api-info", apiversion.InfoHandler(version.Version()))
 
 	// auth = shared-secret + X-User-Email (identity). member adds the
 	// scoped-tier user-list gate. /auth/verify stays on auth alone so the

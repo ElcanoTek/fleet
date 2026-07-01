@@ -26,10 +26,26 @@ info:
     and is not described here.
 
 servers:
+  - url: /v1
+    description: >-
+      The versioned orchestrator API (#321) — the stability-guaranteed surface
+      for external consumers. Every response carries an X-Fleet-API-Version
+      header. Prefer this base; path keys below are relative to it.
   - url: /
-    description: The orchestrator listener (same origin as the dashboard).
+    description: >-
+      Legacy unversioned paths, served by the SAME handlers for backward
+      compatibility. Responses carry Deprecation + Link (successor-version)
+      headers; migrate to the /v1 base. (The version prefix is applied by a
+      wrapper, so both bases resolve to the identical routes.)
 
 components:
+  headers:
+    XFleetApiVersion:
+      description: >-
+        The HTTP API major version (#321). Present on every /v1 response;
+        increments only on a breaking API change (independent of the fleet
+        binary semver). Clients may assert it to confirm compatibility.
+      schema: { type: string, example: "1" }
   securitySchemes:
     adminApiKey:
       type: apiKey
@@ -259,6 +275,29 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HealthResponse" }
+  /api-info:
+    get:
+      summary: API version discovery (#321).
+      description: >-
+        Machine-readable version metadata so a client can assert compatibility
+        at startup: the API major version (which changes only on a breaking
+        change — see docs/api-versioning.md), the fleet binary version, and the
+        supported/deprecated version lists. Unauthenticated (same posture as
+        /health); reachable at both /api-info and /v1/api-info.
+      security: []
+      responses:
+        "200":
+          description: Version metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_version: { type: string }
+                  fleet_version: { type: string }
+                  supported_versions: { type: array, items: { type: string } }
+                  deprecated_versions: { type: array, items: { type: string } }
+                  schema_url: { type: string }
   /metrics:
     get:
       summary: Prometheus metrics (text exposition format). Admin-API-key gated.

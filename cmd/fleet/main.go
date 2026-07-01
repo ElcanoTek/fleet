@@ -47,6 +47,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
@@ -633,8 +634,12 @@ func run() error {
 	// and one drain signal (chatSrv.BeginShutdown is the single graceful-drain
 	// trigger, so both ports report not_ready while draining).
 	readinessChecks := buildReadinessChecks(cfg, chatStore, schedStorage.DB())
-	chatHandler := securityHeadersMiddleware(withHealthProbes(chatSrv.Routes(), startTime, chatSrv.IsDraining, readinessChecks), tlsActive(cfg))
-	orchHandlerWithProbes := withHealthProbes(orchHandler, startTime, chatSrv.IsDraining, readinessChecks)
+	// apiversion.Router (#321) makes both servers reachable under a /v1 prefix
+	// (X-Fleet-API-Version on those responses) while the legacy bare paths keep
+	// working with a Deprecation signal. It wraps INSIDE the health-probe layer so
+	// /healthz stays unversioned + untagged. Route registration is untouched.
+	chatHandler := securityHeadersMiddleware(withHealthProbes(apiversion.Router(chatSrv.Routes()), startTime, chatSrv.IsDraining, readinessChecks), tlsActive(cfg))
+	orchHandlerWithProbes := withHealthProbes(apiversion.Router(orchHandler), startTime, chatSrv.IsDraining, readinessChecks)
 
 	chatServer := &http.Server{Addr: chatAddr, Handler: chatHandler, ReadHeaderTimeout: 30 * time.Second}
 	orchServer := &http.Server{Addr: orchAddr, Handler: orchHandlerWithProbes, ReadHeaderTimeout: 30 * time.Second}
@@ -980,6 +985,9 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 
 	r.Get("/health", h.HealthCheck)
 	r.Get("/api/config", h.GetDashboardConfig)
+	// Version discovery (#321): unauthenticated, unversioned-forever (like /health).
+	// Also reachable at /v1/api-info via the apiversion.Router wrapper.
+	r.Get("/api-info", apiversion.InfoHandler(version.Version()))
 
 	// Admin-gated mutations.
 	r.Group(func(r chi.Router) {
