@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -34,7 +35,7 @@ func TestAvailableMigrations(t *testing.T) {
 func TestMigrationStatus(t *testing.T) {
 	db := setupTestDB(t) // Init runs every migration
 
-	rep, err := MigrationStatus(db.Conn())
+	rep, err := MigrationStatus(context.Background(), db.Conn())
 	if err != nil {
 		t.Fatalf("MigrationStatus: %v", err)
 	}

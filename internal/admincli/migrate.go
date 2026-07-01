@@ -124,7 +124,7 @@ func schedMigrationStatus(ctx context.Context, dsn string) (scheddb.MigrationRep
 	if err := db.PingContext(ctx); err != nil {
 		return scheddb.MigrationReport{}, err
 	}
-	return scheddb.MigrationStatus(db)
+	return scheddb.MigrationStatus(ctx, db)
 }
 
 func printChatMigrations(r store.MigrationReport) {

@@ -113,12 +113,23 @@ It is **diff-scoped** — it only inspects migrations added or modified in your
 branch (diffed against the merge-base with `origin/main`), so the existing
 corpus, which includes several intentional historical `DROP COLUMN`s from this
 single-box project, is never re-flagged. `.down.sql` files are skipped (a
-rollback is expected to drop). Statements are checked whole, so a pattern split
-across lines is still caught, and SQL comments are ignored.
+rollback is expected to drop).
+
+Before matching, SQL comments (`--` and `/* */`) are removed and single-quoted
+string literals are blanked, respecting quote state — so a `--` or a keyword
+inside a string literal neither hides following DDL nor causes a false hit.
+Statements are then checked whole (a pattern split across lines is still
+caught), and the `NOT NULL`-without-`DEFAULT` check runs **per comma-separated
+column clause**, so a `DEFAULT` on one column can't mask a dangerous sibling in
+the same `ALTER TABLE`. (It is a guardrail, not a full SQL parser: `$$`-quoted
+function bodies and string literals spanning multiple physical lines are not
+tokenized — migrations here use neither.)
 
 If a migration **must** use a flagged pattern — most often a deliberate,
 reviewed `DROP COLUMN` that permanently removes data — opt out explicitly by
-adding a marker comment anywhere in the file:
+adding a dedicated comment **directive line** (its own line, matched by an exact
+`allow-dangerous` token, so a passing mention in prose or a string literal
+cannot silently disable the checks):
 
 ```sql
 -- migration-lint: allow-dangerous  drops the never-populated legacy_flags column

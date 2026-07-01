@@ -6,8 +6,8 @@ import "net/http"
 // migrations (#256), admin-gated by the route group. It is strictly read-only:
 // it reads golang-migrate's tracking row and the embedded migration set,
 // applying nothing.
-func (h *Handlers) MigrationStatus(w http.ResponseWriter, _ *http.Request) {
-	report, err := h.storage.MigrationStatus()
+func (h *Handlers) MigrationStatus(w http.ResponseWriter, r *http.Request) {
+	report, err := h.storage.MigrationStatus(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to read migration status")
 		return

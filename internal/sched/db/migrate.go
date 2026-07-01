@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"errors"
@@ -107,8 +108,9 @@ func availableMigrations() ([]MigrationInfo, error) {
 // directly (guarded by to_regclass) rather than via postgres.WithInstance, which
 // would CREATE that table as a side effect — so it applies nothing and creates
 // nothing, and is safe to call against a fresh database (every migration is then
-// reported pending).
-func MigrationStatus(conn *sql.DB) (MigrationReport, error) {
+// reported pending). The context bounds both queries so a hung DB (or a
+// disconnected HTTP client) can't block indefinitely.
+func MigrationStatus(ctx context.Context, conn *sql.DB) (MigrationReport, error) {
 	report := MigrationReport{DB: "sched", Runner: "golang-migrate", MigrationTable: "schema_migrations"}
 	available, err := availableMigrations()
 	if err != nil {
@@ -116,14 +118,14 @@ func MigrationStatus(conn *sql.DB) (MigrationReport, error) {
 	}
 
 	var tbl sql.NullString
-	if err := conn.QueryRow(`SELECT to_regclass('schema_migrations')`).Scan(&tbl); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT to_regclass('schema_migrations')`).Scan(&tbl); err != nil {
 		return report, fmt.Errorf("probe schema_migrations: %w", err)
 	}
 	var current *int
 	if tbl.Valid {
 		var v int64
 		var dirty bool
-		switch err := conn.QueryRow(`SELECT version, dirty FROM schema_migrations LIMIT 1`).Scan(&v, &dirty); {
+		switch err := conn.QueryRowContext(ctx, `SELECT version, dirty FROM schema_migrations LIMIT 1`).Scan(&v, &dirty); {
 		case errors.Is(err, sql.ErrNoRows):
 			// Table exists but empty → nothing applied.
 		case err != nil:
