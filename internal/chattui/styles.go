@@ -34,6 +34,12 @@ type markdownRenderer struct {
 	mu    sync.Mutex
 	width int
 	r     *glamour.TermRenderer
+
+	// forceStyle overrides glamour's terminal auto-detection. Empty = auto (the
+	// production default: dark/light/notty by the real terminal). The screenshot
+	// generator (#487) sets "dark" so the captured frame shows glamour's styled
+	// output instead of the no-TTY plain fallback that a piped `go test` gets.
+	forceStyle string
 }
 
 func (m *markdownRenderer) render(md string, width int) string {
@@ -46,7 +52,11 @@ func (m *markdownRenderer) render(md string, width int) string {
 	}
 	m.mu.Lock()
 	if m.r == nil || m.width != width {
-		r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(width))
+		styleOpt := glamour.WithAutoStyle()
+		if m.forceStyle != "" {
+			styleOpt = glamour.WithStandardStyle(m.forceStyle)
+		}
+		r, err := glamour.NewTermRenderer(styleOpt, glamour.WithWordWrap(width))
 		if err != nil {
 			m.mu.Unlock()
 			return md // fall back to raw markdown — never lose the content

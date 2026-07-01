@@ -1,9 +1,15 @@
-# Regenerate the docs GUI screenshots on every push to main (#487).
+# Regenerate the docs screenshots on every push to main (#487).
 #
-# It drives the SAME deterministic mocked Next app the `Web e2e (Playwright,
+# GUI: drives the SAME deterministic mocked Next app the `Web e2e (Playwright,
 # mocked)` CI lane uses — no backend, no LLM, no Podman — captures a full-page
 # PNG of the chat and Operations Center views via the dedicated `screenshots`
-# Playwright project, and commits the refreshed PNGs back to docs/screenshots/web/.
+# Playwright project, into docs/screenshots/web/.
+#
+# TUI: renders a representative `fleet chat` TUI frame DETERMINISTICALLY from
+# in-memory model state (no server, no real conversation data) and freezes the
+# ANSI to a PNG via charmbracelet/freeze, into docs/screenshots/tui/.
+#
+# Both refreshed images are committed back in a single push.
 #
 # Loop-safe: `paths-ignore` keeps a screenshots-only commit from re-triggering
 # this workflow, and the commit carries `[skip ci]`. The push is best-effort — if
@@ -62,22 +68,33 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Capture screenshots
+      - name: Capture GUI screenshots
         # Non-gating: a capture hiccup should not turn main red, and simply leaves
         # the previous committed screenshots in place.
-        run: npm run test:e2e:screenshots || echo "::warning::screenshot capture failed; keeping the existing images"
+        run: npm run test:e2e:screenshots || echo "::warning::GUI screenshot capture failed; keeping the existing images"
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          check-latest: true
+
+      - name: Capture TUI screenshot
+        # Renders the chat TUI frame + freezes it to a PNG. Non-gating, same as GUI.
+        working-directory: ${{ github.workspace }}
+        run: scripts/generate-tui-screenshot.sh || echo "::warning::TUI screenshot capture failed; keeping the existing image"
 
       - name: Commit refreshed screenshots
         working-directory: ${{ github.workspace }}
         run: |
-          if git diff --quiet -- docs/screenshots/web; then
+          if git diff --quiet -- docs/screenshots; then
             echo "No screenshot changes — nothing to commit."
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/screenshots/web
-          git commit -m "docs(screenshots): refresh GUI screenshots [skip ci]"
+          git add docs/screenshots
+          git commit -m "docs(screenshots): refresh GUI + TUI screenshots [skip ci]"
           # main may require PRs; a rejected push warns rather than failing the run.
           git push origin HEAD:main \
             || echo "::warning::could not push refreshed screenshots (is main protected against direct pushes? allow the github-actions bot, or refresh via PR). The committed baseline still serves."
