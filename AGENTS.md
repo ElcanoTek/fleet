@@ -251,4 +251,8 @@ same PR.
   Ollama alongside OpenRouter via a manifest `providers:` block; routing +
   credential boundary + honest-scope limits): [`docs/PROVIDERS.md`](docs/PROVIDERS.md)
   + [`docs/adr/0017-multi-provider-llm.md`](docs/adr/0017-multi-provider-llm.md)
+- **Prompt-cache prefix-stability contract** (what must stay byte-stable in the
+  cacheable prefix — tool defs + system prompt — so the provider prompt cache
+  keeps hitting; the `prefix_stability_test.go` guard + breakpoint placement):
+  [`docs/PROMPT-CACHE-CONTRACT.md`](docs/PROMPT-CACHE-CONTRACT.md)
 - **Reporting a vulnerability:** [`SECURITY.md`](SECURITY.md)
