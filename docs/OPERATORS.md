@@ -259,9 +259,31 @@ not replace — so journald/Docker log drivers keep working alongside the file. 
 file directory must be writable by the service user (the systemd unit's
 `StateDirectory`/`ReadWritePaths` model); a bad path fails loudly at startup.
 
-This rotates the **existing** log lines as-is. It does **not** convert the log to
-structured JSON — the std-`log`-to-`slog` migration is tracked separately
-([#178](https://github.com/ElcanoTek/fleet/issues/178)).
+### structured JSON format (#178)
+
+As of #178 the `fleet serve` process log is emitted as **structured `log/slog`
+JSON by default** — every line is a JSON object (`time`/`level`/`msg`), which
+log aggregators (Loki, Datadog, CloudWatch, journald JSON mode) ingest and index
+natively. This applies to both stderr and the rotating file above.
+
+```
+FLEET_LOG_FORMAT=json                      # default; structured JSON. Use "text" for the legacy plaintext lines.
+FLEET_LOG_LEVEL=info                        # debug|info|warn|error (default info)
+```
+
+Two operator notes:
+
+- **`FLEET_LOG_FORMAT=text`** restores the exact prior plaintext behavior if you
+  prefer it (or have tooling that parses the old format).
+- **`FLEET_LOG_LEVEL`** currently sets the threshold for *native* structured
+  (`slog`) call sites. The bulk of today's lines are emitted through a
+  compatibility bridge (the standard-`log`→`slog` conversion is ongoing) and
+  **always emit at info regardless of the level** — so raising the level will not
+  silently suppress existing diagnostics/error lines. Its reach grows as call
+  sites are converted to native `slog` (#178).
+
+CLI verbs (`fleet status`, `fleet migrate status`, …) are unaffected — they keep
+human-readable plaintext output.
 
 ## backup · restore — disaster recovery
 

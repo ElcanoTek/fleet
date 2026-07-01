@@ -122,14 +122,27 @@ func Configure(cfg Config) (io.Closer, error) {
 	}
 
 	// Structured JSON (default): install an slog JSON handler + redactor as the
-	// default logger, and bridge the standard log package into it so existing
-	// call sites emit JSON without being rewritten.
+	// default logger (gated by FLEET_LOG_LEVEL, for native slog call sites), plus
+	// an UNGATED bridge logger so the standard log package emits JSON without
+	// being rewritten AND without being level-filtered — see bridgeLogger.
 	levelVar.Set(ParseLevel(cfg.Level))
 	slog.SetDefault(slog.New(newJSONHandler(dest, levelVar)))
+	bridgeLogger = slog.New(newJSONHandler(dest, slog.LevelInfo))
 	log.SetFlags(0) // slog stamps its own time; drop the stdlib "2006/01/02 …" prefix
 	log.SetOutput(logBridge{})
 	return closer, nil
 }
+
+// bridgeLogger emits bridged standard-library log lines. It is deliberately
+// pinned to a fixed info threshold and is NOT gated by FLEET_LOG_LEVEL: today
+// the bulk of the process log still flows through the standard `log` package
+// (the per-call-site slog conversion is ongoing, #178) and a bridged line's TRUE
+// severity is unknown (assumed info). Gating it by level would let
+// FLEET_LOG_LEVEL=warn silently erase the ENTIRE legacy diagnostic stream —
+// including error/warning lines and a fatal-startup explanation. So legacy lines
+// always emit; FLEET_LOG_LEVEL gates only native slog call sites. Reassigned once
+// in Configure (before any concurrent logging); defaults to stderr pre-Configure.
+var bridgeLogger = slog.New(newJSONHandler(os.Stderr, slog.LevelInfo))
 
 // newJSONHandler builds the structured-JSON handler stack: an slog JSON handler
 // at dest, gated by level, wrapped in the secret redactor. Extracted so tests
@@ -144,7 +157,7 @@ func newJSONHandler(dest io.Writer, level slog.Leveler) slog.Handler {
 type logBridge struct{}
 
 func (logBridge) Write(p []byte) (int, error) {
-	slog.Default().LogAttrs(context.Background(), slog.LevelInfo, strings.TrimRight(string(p), "\n"))
+	bridgeLogger.LogAttrs(context.Background(), slog.LevelInfo, strings.TrimRight(string(p), "\n"))
 	return len(p), nil
 }
 

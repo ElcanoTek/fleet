@@ -100,10 +100,10 @@ func TestLevelFiltering(t *testing.T) {
 }
 
 func TestLogBridge(t *testing.T) {
-	prev := slog.Default()
-	defer slog.SetDefault(prev)
+	prev := bridgeLogger
+	defer func() { bridgeLogger = prev }()
 	var buf bytes.Buffer
-	slog.SetDefault(slog.New(newJSONHandler(&buf, slog.LevelInfo)))
+	bridgeLogger = slog.New(newJSONHandler(&buf, slog.LevelInfo))
 
 	if _, err := (logBridge{}).Write([]byte("legacy line via log.Printf\n")); err != nil {
 		t.Fatalf("bridge write: %v", err)
@@ -114,6 +114,29 @@ func TestLogBridge(t *testing.T) {
 	}
 	if m["level"] != "INFO" {
 		t.Errorf("bridged level = %v", m["level"])
+	}
+}
+
+// TestBridgeNotGatedByLevel is the regression guard for the adversarial-review
+// finding: legacy bridged lines must ALWAYS emit, even when FLEET_LOG_LEVEL is
+// raised to error — otherwise raising the level would silently erase the entire
+// (currently un-converted) legacy diagnostic stream.
+func TestBridgeNotGatedByLevel(t *testing.T) {
+	prev := bridgeLogger
+	defer func() { bridgeLogger = prev }()
+	var buf bytes.Buffer
+	bridgeLogger = slog.New(newJSONHandler(&buf, slog.LevelInfo))
+
+	SetLevel("error") // raise the NATIVE slog level
+	defer SetLevel("info")
+	if _, err := (logBridge{}).Write([]byte("scheduler: Error recovering expired leases\n")); err != nil {
+		t.Fatalf("bridge write: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("legacy bridged line must still emit at FLEET_LOG_LEVEL=error (no silent diagnostic loss)")
+	}
+	if m := decodeLast(t, &buf); m["msg"] != "scheduler: Error recovering expired leases" {
+		t.Errorf("bridged msg = %v", m["msg"])
 	}
 }
 
@@ -139,8 +162,10 @@ func TestSetLevel(t *testing.T) {
 // tests.
 func TestConfigureJSONToFile(t *testing.T) {
 	prevSlog := slog.Default()
+	prevBridge := bridgeLogger
 	t.Cleanup(func() {
 		slog.SetDefault(prevSlog)
+		bridgeLogger = prevBridge
 		log.SetOutput(os.Stderr)
 		log.SetFlags(log.LstdFlags)
 	})
