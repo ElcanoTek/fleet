@@ -127,6 +127,13 @@ type Bundle struct {
 	// WebhookTriggerDef.
 	WebhookTriggers []WebhookTriggerDef
 
+	// Providers is the manifest's LLM-provider routing table (the providers:
+	// section, #289), in precedence order. Empty in the generic bundle, which
+	// keeps the historical single-OpenRouter behavior. cmd/fleet translates each
+	// into an agentcore.ProviderConfig (resolving the API-key env host-side) and
+	// hands them to the model resolver. See ProviderDef.
+	Providers []ProviderDef
+
 	// PricingConfig carries the bundle's optional custom model-pricing overrides
 	// (#297). Empty in the generic bundle. cmd/fleet translates it into
 	// agentcore.PricingConfig and installs it via agentcore.ConfigurePricing.
@@ -609,6 +616,26 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 	return DefaultHMACHeader
 }
 
+// ProviderDef is one LLM provider from the manifest's providers: block (#289).
+// It selects a backend for a set of model slugs, letting a deployment route
+// inference natively to Anthropic / OpenAI / a self-hosted Ollama endpoint
+// instead of exclusively through OpenRouter (for failover, data residency, or to
+// avoid the OpenRouter markup). A bundle with NO providers: block keeps the
+// historical single-OpenRouter behavior unchanged.
+//
+// SECURITY — the credential boundary mirrors the MCP catalog: APIKeyEnv names an
+// env var; its VALUE is read HOST-SIDE from the process env at boot (registered
+// via EnvVarNames → RegisterAllowedEnvVars, so it flows from .env) and handed to
+// the model resolver. The secret never enters the manifest, the sandbox, the
+// model context, or the logs.
+type ProviderDef struct {
+	Name      string   `yaml:"name"`        // routing name; unique within the manifest
+	Type      string   `yaml:"type"`        // openrouter | anthropic | openai | ollama
+	APIKeyEnv string   `yaml:"api_key_env"` // env var holding the credential (not needed for ollama)
+	BaseURL   string   `yaml:"base_url"`    // optional endpoint override
+	Models    []string `yaml:"models"`      // slugs this provider serves; empty = catch-all
+}
+
 // manifest is the on-disk YAML shape. Sandbox is a pointer so an absent block
 // (a minimal/legacy bundle that never opted into the sandbox-as-config contract)
 // is distinguishable from a present-but-empty one: only a DECLARED sandbox block
@@ -619,6 +646,7 @@ type manifest struct {
 	MCPServers      []ServerDef         `yaml:"mcp_servers"`
 	HTTPTools       []HTTPToolDef       `yaml:"http_tools"`
 	WebhookTriggers []WebhookTriggerDef `yaml:"webhook_triggers"`
+	Providers       []ProviderDef       `yaml:"providers"`
 	EmptyState      EmptyState          `yaml:"empty_state"`
 	TaskTemplates   []TaskTemplate      `yaml:"task_templates"`
 	AgentPolicy     AgentPolicy         `yaml:"agent_policy"`
@@ -689,6 +717,7 @@ func Load(dir string) (*Bundle, error) {
 		MCPCatalog:        m.MCPServers,
 		HTTPTools:         m.HTTPTools,
 		WebhookTriggers:   m.WebhookTriggers,
+		Providers:         m.Providers,
 		AgentPolicyConfig: m.AgentPolicy,
 		Personas:          m.Personas,
 		PricingConfig:     m.Pricing,
@@ -857,6 +886,9 @@ func (b *Bundle) validate() error {
 	if err := b.validateWebhookTriggers(); err != nil {
 		return err
 	}
+	if err := b.validateProviders(); err != nil {
+		return err
+	}
 	if err := validatePricing(b.PricingConfig); err != nil {
 		return err
 	}
@@ -900,6 +932,42 @@ func (b *Bundle) validateWebhookTriggers() error {
 		}
 		if hasHMAC && hasToken {
 			return fmt.Errorf("webhook_triggers[%q]: set only one of hmac_secret_env or token_secret_env", slug)
+		}
+	}
+	return nil
+}
+
+// providerTypes is the set of LLM provider backends the resolver can build (#289).
+var providerTypes = map[string]bool{"openrouter": true, "anthropic": true, "openai": true, "ollama": true}
+
+// validateProviders fails the load on a malformed providers[] entry (#289): a
+// blank/duplicate name, an unknown type, or a missing api_key_env for a backend
+// that requires one (every type except ollama, which is local). Like the rest of
+// validate this is fail-loud at startup — a typo'd provider type or a missing
+// credential env would otherwise only surface as a resolver error on the first
+// turn that routed to it. An empty providers block is valid (single-OpenRouter
+// default).
+func (b *Bundle) validateProviders() error {
+	seen := map[string]bool{}
+	for i := range b.Providers {
+		p := &b.Providers[i]
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			return fmt.Errorf("providers[%d]: name is required", i)
+		}
+		if seen[name] {
+			return fmt.Errorf("providers: duplicate provider name %q", name)
+		}
+		seen[name] = true
+		typ := strings.TrimSpace(p.Type)
+		if typ == "" {
+			return fmt.Errorf("providers[%q]: type is required (openrouter|anthropic|openai|ollama)", name)
+		}
+		if !providerTypes[typ] {
+			return fmt.Errorf("providers[%q]: unknown type %q (want openrouter|anthropic|openai|ollama)", name, typ)
+		}
+		if typ != "ollama" && strings.TrimSpace(p.APIKeyEnv) == "" {
+			return fmt.Errorf("providers[%q]: api_key_env is required for a %q provider", name, typ)
 		}
 	}
 	return nil
@@ -1337,6 +1405,12 @@ func (b *Bundle) EnvVarNames() []string {
 	for i := range b.WebhookTriggers {
 		add(b.WebhookTriggers[i].HMACSecretEnv)
 		add(b.WebhookTriggers[i].TokenSecretEnv)
+	}
+	// LLM provider API-key env vars (#289) are named directly (not ${VAR}
+	// references) and read host-side at boot, so their names must survive the
+	// .env-file allowlist exactly like an MCP connector credential.
+	for i := range b.Providers {
+		add(b.Providers[i].APIKeyEnv)
 	}
 	return out
 }

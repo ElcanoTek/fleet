@@ -10,38 +10,74 @@ import (
 	"charm.land/fantasy"
 )
 
-// ModelResolver is the exported, cached OpenRouter model loader the interactive
-// driver (agent.Manager) and the scheduled boot path use. The server holds no
-// default model — the frontend sends a slug per turn — so an empty slug is a
-// hard error rather than a silent fallback. Loaded models are memoized so a
-// given slug pays the load cost only once across the whole process.
+// ModelResolver is the exported, cached model loader the interactive driver
+// (agent.Manager) and the scheduled boot path use. The server holds no default
+// model — the frontend sends a slug per turn — so an empty slug is a hard error
+// rather than a silent fallback. Loaded models are memoized so a given slug pays
+// the load cost only once across the whole process.
 //
-// This wraps the package-private fantasy provider + upstream-pin plumbing so
-// the driver package can resolve models without re-importing openrouter or
-// duplicating the cache; it is the one exported entry point for "give me a
+// It resolves the slug to one of its configured providers (#289) and loads the
+// model through that provider. With a single OpenRouter provider (the default,
+// via NewModelResolver) it behaves exactly as the historical OpenRouter-only
+// resolver. It is the one exported entry point for "give me a
 // fantasy.LanguageModel for this slug".
 type ModelResolver struct {
-	provider fantasy.Provider
+	providers []ProviderConfig            // routing table, in precedence order
+	built     map[string]fantasy.Provider // provider handle by name (eager)
 
 	mu    sync.RWMutex
-	cache map[string]fantasy.LanguageModel
+	cache map[string]fantasy.LanguageModel // by ORIGINAL slug
 }
 
-// NewModelResolver dials the OpenRouter provider with the given API key +
-// identity headers and returns a cached resolver.
+// NewModelResolver builds a resolver backed by a single catch-all OpenRouter
+// provider — the historical, backward-compatible default. An empty API key is a
+// hard error (OpenRouter is the sole credential in this mode).
 func NewModelResolver(apiKey string, headers ProviderHeaders) (*ModelResolver, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY required")
 	}
-	provider, err := newOpenRouterProvider(apiKey, headers)
-	if err != nil {
-		return nil, fmt.Errorf("openrouter provider: %w", err)
-	}
-	return &ModelResolver{provider: provider, cache: map[string]fantasy.LanguageModel{}}, nil
+	return NewModelResolverWithProviders([]ProviderConfig{{
+		Name:   "openrouter",
+		Type:   ProviderTypeOpenRouter,
+		APIKey: apiKey,
+	}}, headers)
 }
 
-// Resolve returns the LanguageModel for the given slug, loading + caching it on
-// first use. An empty slug is an error.
+// NewModelResolverWithProviders builds a resolver over an explicit, ordered set
+// of providers (#289). Each provider is constructed eagerly (no network — just
+// the client handle) so a misconfigured provider fails at boot, not on the first
+// turn that needs it. Provider names must be non-empty and unique.
+func NewModelResolverWithProviders(providers []ProviderConfig, headers ProviderHeaders) (*ModelResolver, error) {
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("at least one LLM provider is required")
+	}
+	built := make(map[string]fantasy.Provider, len(providers))
+	seen := make(map[string]bool, len(providers))
+	for i := range providers {
+		name := strings.TrimSpace(providers[i].Name)
+		if name == "" {
+			return nil, fmt.Errorf("provider[%d]: name is required", i)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("duplicate provider name %q", name)
+		}
+		seen[name] = true
+		p, err := buildProvider(providers[i], headers)
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: %w", name, err)
+		}
+		built[name] = p
+	}
+	return &ModelResolver{
+		providers: append([]ProviderConfig(nil), providers...),
+		built:     built,
+		cache:     map[string]fantasy.LanguageModel{},
+	}, nil
+}
+
+// Resolve returns the LanguageModel for the given slug, selecting the provider
+// that serves it (#289), then loading + caching the model on first use. An empty
+// slug is an error, as is a slug no configured provider serves.
 func (r *ModelResolver) Resolve(ctx context.Context, slug string) (fantasy.LanguageModel, error) {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
@@ -55,11 +91,21 @@ func (r *ModelResolver) Resolve(ctx context.Context, slug string) (fantasy.Langu
 	}
 	r.mu.RUnlock()
 
+	pc, modelSlug, err := selectProvider(r.providers, slug)
+	if err != nil {
+		return nil, err
+	}
+	provider, ok := r.built[pc.Name]
+	if !ok {
+		// Unreachable: every configured provider is built at construction.
+		return nil, fmt.Errorf("provider %q not built", pc.Name)
+	}
+
 	loadCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	mdl, err := r.provider.LanguageModel(loadCtx, slug)
+	mdl, err := provider.LanguageModel(loadCtx, modelSlug)
 	if err != nil {
-		return nil, fmt.Errorf("load model %q: %w", slug, err)
+		return nil, fmt.Errorf("load model %q via provider %q: %w", modelSlug, pc.Name, err)
 	}
 
 	r.mu.Lock()
