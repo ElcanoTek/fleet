@@ -1041,6 +1041,26 @@ function toRecipientList(...groups: Array<string | string[] | undefined>): strin
 
 // ── Memory proposal card ─────────────────────────────────────────────────
 
+// supersedeNote maps the accept endpoint's supersede outcome to card copy.
+// Guard outcomes are surfaced honestly — silently keeping two contradictory
+// facts is the failure mode #515 exists to avoid.
+function supersedeNote(outcome?: string): string | undefined {
+  switch (outcome) {
+    case "retired":
+      return "Replaced the older fact (kept for audit, no longer used).";
+    case "target_pinned":
+      return "The older fact is pinned, so it was kept — unpin it to let this replace it.";
+    case "target_changed":
+      return "The older fact was edited since this was proposed, so it was kept.";
+    case "target_missing":
+      return "The older fact had already been deleted.";
+    case "target_retired":
+      return "The older fact was already retired.";
+    default:
+      return undefined;
+  }
+}
+
 export function MemoryProposalCard({
   proposal,
   onResolved,
@@ -1063,7 +1083,16 @@ export function MemoryProposalCard({
           onResolved({ ...proposal, status: "dismissed" });
           return;
         }
-        onResolved({ ...proposal, status: "saved" });
+        // #515 stage 2: the accept response reports what happened to the
+        // older fact this proposal claimed to replace.
+        let note: string | undefined;
+        try {
+          const body = (await response.json()) as { supersede?: string };
+          note = supersedeNote(body.supersede);
+        } catch {
+          // body is display-only; a parse failure never affects the save
+        }
+        onResolved({ ...proposal, status: "saved", resolutionNote: note });
       } else {
         const response = await fetch(`/api/memories/${encodeURIComponent(proposal.id)}`, {
           method: "DELETE",
@@ -1097,6 +1126,12 @@ export function MemoryProposalCard({
       <p className="mb-3 whitespace-pre-wrap text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
         {proposal.content}
       </p>
+      {proposal.supersedesContent ? (
+        <p className="mb-3 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
+          Replaces: <span className="line-through">{proposal.supersedesContent}</span>
+          <span className="ml-1">(the older fact is retired only if you save)</span>
+        </p>
+      ) : null}
       {proposal.status === "pending" ? (
         <div className="flex items-center gap-2">
           <button
@@ -1118,7 +1153,9 @@ export function MemoryProposalCard({
         </div>
       ) : (
         <div className="text-[0.75rem] text-[var(--color-text-muted)]">
-          {proposal.status === "saved" ? "Saved to memories." : "Dismissed."}
+          {proposal.status === "saved"
+            ? `Saved to memories.${proposal.resolutionNote ? " " + proposal.resolutionNote : ""}`
+            : "Dismissed."}
         </div>
       )}
     </div>

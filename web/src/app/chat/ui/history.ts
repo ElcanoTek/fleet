@@ -72,7 +72,14 @@ export type MemoryProposal = {
   id: string;
   content: string;
   kind?: string;
+  // supersedesContent is the CURRENT text of the saved memory this proposal
+  // claims to replace (#515 stage 2) — display-only; the server resolves the
+  // claim by stable id and re-checks every guard on accept.
+  supersedesContent?: string;
   status: MemoryProposalStatus;
+  // resolutionNote surfaces what happened to the older fact after Save
+  // ("Replaced the older fact." / "The older fact is pinned and was kept." …).
+  resolutionNote?: string;
 };
 
 export type Approval = {

@@ -21,15 +21,15 @@ func TestMemoryProposalConversationScope(t *testing.T) {
 	convB := "conv-b"
 
 	// Two proposals on conv-a, one on conv-b.
-	a1, err := s.CreateMemoryProposal(ctx, user, convA, "first thought", "", "tool")
+	a1, err := s.CreateMemoryProposal(ctx, user, convA, MemoryProposalParams{Content: "first thought", Origin: "tool"})
 	if err != nil {
 		t.Fatalf("create A1: %v", err)
 	}
-	a2, err := s.CreateMemoryProposal(ctx, user, convA, "second thought", "", "tool")
+	a2, err := s.CreateMemoryProposal(ctx, user, convA, MemoryProposalParams{Content: "second thought", Origin: "tool"})
 	if err != nil {
 		t.Fatalf("create A2: %v", err)
 	}
-	b1, err := s.CreateMemoryProposal(ctx, user, convB, "third thought", "", "tool")
+	b1, err := s.CreateMemoryProposal(ctx, user, convB, MemoryProposalParams{Content: "third thought", Origin: "tool"})
 	if err != nil {
 		t.Fatalf("create B1: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestMemoryProposalConversationScope(t *testing.T) {
 	// Accept A1: it should no longer surface as pending for conv-a, AND
 	// it should appear in the user's saved memories (source='chat') with
 	// conversation_id cleared.
-	saved, err := s.AcceptMemoryProposal(ctx, user, a1.ID)
+	saved, _, err := s.AcceptMemoryProposal(ctx, user, a1.ID)
 	if err != nil {
 		t.Fatalf("accept A1: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestMemoryProposalEmptyContent(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.CreateMemoryProposal(ctx, "test@example.com", "conv-x", "   \n\t  ", "", "tool")
+	_, err := s.CreateMemoryProposal(ctx, "test@example.com", "conv-x", MemoryProposalParams{Content: "   \n\t  ", Origin: "tool"})
 	if err == nil {
 		t.Fatal("expected error for whitespace-only content")
 	}
@@ -208,14 +208,14 @@ func TestAcceptMemoryProposalRetainsProvenance(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	user := "prov@example.com"
-	p, err := s.CreateMemoryProposal(ctx, user, "conv-42", "team uses trunk-based dev", "constraint", "auto")
+	p, err := s.CreateMemoryProposal(ctx, user, "conv-42", MemoryProposalParams{Content: "team uses trunk-based dev", Kind: "constraint", Origin: "auto"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.Kind != "constraint" || p.Origin != "auto" || p.ConversationID != "conv-42" {
 		t.Fatalf("proposal provenance: %+v", p)
 	}
-	got, err := s.AcceptMemoryProposal(ctx, user, p.ID)
+	got, _, err := s.AcceptMemoryProposal(ctx, user, p.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,5 +230,104 @@ func TestAcceptMemoryProposalRetainsProvenance(t *testing.T) {
 	}
 	if len(pending) != 0 {
 		t.Fatalf("accepted row still pending: %+v", pending)
+	}
+}
+
+// #515 stage 2: supersede-on-accept — the accepted proposal retires its
+// claimed target only when every guard holds; every guard failure is an
+// OUTCOME (the accept still succeeds), never a silent retire.
+func TestAcceptMemoryProposalSupersede(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	user := "supersede@example.com"
+
+	mkTarget := func(content string) *Memory {
+		t.Helper()
+		m, err := s.CreateMemory(ctx, user, content, "chat", "fact")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	mkProposal := func(content string, target *Memory, hash string) *Memory {
+		t.Helper()
+		p, err := s.CreateMemoryProposal(ctx, user, "conv-1", MemoryProposalParams{
+			Content: content, Kind: "fact", Origin: "auto",
+			Supersedes: target.ID, SupersedesHash: hash,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	// Happy path: target retired, retired_by links the accepted memory.
+	target := mkTarget("office is in Boston")
+	prop := mkProposal("office is in Austin", target, MemoryContentHash(target.Content))
+	accepted, outcome, err := s.AcceptMemoryProposal(ctx, user, prop.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != SupersedeRetired || accepted.Source != "chat" {
+		t.Fatalf("outcome=%q accepted=%+v", outcome, accepted)
+	}
+	list, _ := s.ListMemories(ctx, user)
+	var reloaded *Memory
+	for i := range list {
+		if list[i].ID == target.ID {
+			reloaded = &list[i]
+		}
+	}
+	if reloaded == nil || !reloaded.Retired() || reloaded.RetiredBy != accepted.ID {
+		t.Fatalf("target retirement: %+v", reloaded)
+	}
+
+	// Pinned target: kept, outcome reported.
+	pinnedTarget := mkTarget("timezone is EST")
+	pin := true
+	if _, err := s.UpdateMemory(ctx, user, pinnedTarget.ID, MemoryPatch{Pinned: &pin}); err != nil {
+		t.Fatal(err)
+	}
+	prop2 := mkProposal("timezone is PST", pinnedTarget, MemoryContentHash(pinnedTarget.Content))
+	_, outcome, err = s.AcceptMemoryProposal(ctx, user, prop2.ID)
+	if err != nil || outcome != SupersedeTargetPinned {
+		t.Fatalf("pinned guard: outcome=%q err=%v", outcome, err)
+	}
+
+	// Target edited after the claim: hash mismatch → kept.
+	edited := mkTarget("editor is vim")
+	prop3 := mkProposal("editor is emacs", edited, MemoryContentHash(edited.Content))
+	newContent := "editor is neovim"
+	if _, err := s.UpdateMemory(ctx, user, edited.ID, MemoryPatch{Content: &newContent}); err != nil {
+		t.Fatal(err)
+	}
+	_, outcome, err = s.AcceptMemoryProposal(ctx, user, prop3.ID)
+	if err != nil || outcome != SupersedeTargetChanged {
+		t.Fatalf("hash guard: outcome=%q err=%v", outcome, err)
+	}
+
+	// Two proposals against the same target: the second accept reports
+	// target_retired instead of double-retiring.
+	shared := mkTarget("runs postgres 15")
+	pA := mkProposal("runs postgres 16", shared, MemoryContentHash(shared.Content))
+	pB := mkProposal("runs postgres 17", shared, MemoryContentHash(shared.Content))
+	_, o1, err := s.AcceptMemoryProposal(ctx, user, pA.ID)
+	if err != nil || o1 != SupersedeRetired {
+		t.Fatalf("first accept: %q %v", o1, err)
+	}
+	_, o2, err := s.AcceptMemoryProposal(ctx, user, pB.ID)
+	if err != nil || o2 != SupersedeTargetRetired {
+		t.Fatalf("second accept must not double-retire: %q %v", o2, err)
+	}
+
+	// Deleted target: outcome target_missing, accept still succeeds.
+	gone := mkTarget("uses jira")
+	prop4 := mkProposal("uses linear", gone, MemoryContentHash(gone.Content))
+	if err := s.DeleteMemory(ctx, user, gone.ID); err != nil {
+		t.Fatal(err)
+	}
+	acc4, o4, err := s.AcceptMemoryProposal(ctx, user, prop4.ID)
+	if err != nil || o4 != SupersedeTargetMissing || acc4.Source != "chat" {
+		t.Fatalf("missing guard: %q %v %+v", o4, err, acc4)
 	}
 }

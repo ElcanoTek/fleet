@@ -266,16 +266,38 @@ type memoryProposer struct {
 }
 
 func (m *memoryProposer) Propose(content, kind string) (string, error) {
-	memory, err := m.store.CreateMemoryProposal(m.ctx, m.userEmail, m.conversationID, content, kind, m.origin)
+	return m.propose(store.MemoryProposalParams{Content: content, Kind: kind, Origin: m.origin}, "")
+}
+
+// propose is the shared core. supersededContent (display-only) is the CURRENT
+// text of the memory a supersede claim targets, echoed onto the SSE payload so
+// the card can show "replaces: …" without a second fetch.
+func (m *memoryProposer) propose(p store.MemoryProposalParams, supersededContent string) (string, error) {
+	p.Origin = m.origin
+	memory, err := m.store.CreateMemoryProposal(m.ctx, m.userEmail, m.conversationID, p)
 	if err != nil {
 		return "", err
 	}
-	m.sink.Emit("memory.proposed", map[string]any{
+	payload := map[string]any{
 		"proposal_id": memory.ID,
 		"content":     memory.Content,
 		"kind":        memory.Kind,
-	})
+	}
+	if memory.Supersedes != "" {
+		payload["supersedes_id"] = memory.Supersedes
+		payload["supersedes_content"] = excerpt(supersededContent, 200)
+	}
+	m.sink.Emit("memory.proposed", payload)
 	return memory.ID, nil
+}
+
+// excerpt clamps display text for a card payload.
+func excerpt(s string, maxChars int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= maxChars {
+		return s
+	}
+	return s[:maxChars] + "…"
 }
 
 // StageSuggestion stages a suggest_advanced_model approval if the

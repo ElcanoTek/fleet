@@ -95,8 +95,8 @@ type chatStore interface {
 	CreateMemory(ctx context.Context, userEmail, content, source, kind string) (*store.Memory, error)
 	UpdateMemory(ctx context.Context, userEmail, id string, patch store.MemoryPatch) (*store.Memory, error)
 	DeleteMemory(ctx context.Context, userEmail, id string) error
-	CreateMemoryProposal(ctx context.Context, userEmail, conversationID, content, kind, origin string) (*store.Memory, error)
-	AcceptMemoryProposal(ctx context.Context, userEmail, id string) (*store.Memory, error)
+	CreateMemoryProposal(ctx context.Context, userEmail, conversationID string, p store.MemoryProposalParams) (*store.Memory, error)
+	AcceptMemoryProposal(ctx context.Context, userEmail, id string) (*store.Memory, string, error)
 	ListPendingMemoryProposalsForConversation(ctx context.Context, userEmail, conversationID string) ([]store.Memory, error)
 
 	// Approvals.
