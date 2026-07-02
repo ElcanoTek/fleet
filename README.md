@@ -9,7 +9,8 @@ sandbox, on a budget, connected to your data.**
 fleet is how a whole department adopts AI agents without losing sleep: every
 tool call sandboxed, every turn metered against a budget, every credential held
 server-side, and every working setup versioned so it runs again tomorrow — for
-the next person, on a schedule. MIT-licensed, on your infrastructure.
+the next person, on a schedule. MIT-licensed, on your infrastructure: your
+compute, your data, your know-how. You own the means of production.
 
 ## See it in action
 
@@ -46,7 +47,9 @@ same connected tools, the same guardrails — fleet is the place to standardize
 them.
 
 - **Any model.** fleet runs its own native agent loop and lets you choose the
-  **best model for each task** rather than hard-wiring one vendor.
+  **best model for each task** rather than hard-wiring one vendor. You decide,
+  **at the model layer**, who sees your data — task by task, and you can
+  change your mind tomorrow.
 
 - **Sandboxed by default.** Every tool call — bash, Python, file I/O, MCP —
   runs in an ephemeral rootless-Podman container with **no fast path around
@@ -238,7 +241,10 @@ inside fleet's database or binary:
 - **`manifest.yaml`** — MCP catalog, tool policy, model defaults, sandbox block
 - **`sandbox/Containerfile`** — the exact image your tool calls run in
 
-Versioned files you control, over an open protocol ([MCP](#standards)): your
+These files encode how your business actually works — your prompts, playbooks,
+and connectors carry real competitive knowledge. Safety here means owning them
+outright, rather than trusting a vendor's roadmap to stay clear of your market.
+Versioned, under your control, over an open protocol ([MCP](#standards)): your
 agent setup travels with you — fork it per team, share it across orgs, or point
 it at another MCP-capable platform. Moving off fleet doesn't mean starting
 over, which keeps adoption low-risk. The public template
