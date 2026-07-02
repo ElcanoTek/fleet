@@ -13,6 +13,28 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- Built-in MCP connector directory: fleet now embeds a curated directory of
+  ~290 vendor-hosted MCP servers (`internal/clientconfig/builtin_remote_catalog.yaml`)
+  spanning 19 categories, inherited by every client bundle by default — the
+  directory is a listing only; nothing connects until a user explicitly adds a
+  server and completes the per-user OAuth flow (#443). Catalog entries gain
+  `category`, `tags`, `provenance` (`official` | `third_party` | `community`),
+  `repo_url`, and `auth` metadata; the built-in file requires all of them
+  explicitly (CI-enforced) while bundle entries keep back-compat defaults. New
+  manifest knobs: `remote_mcp_catalog_builtin: false` (opt out),
+  `remote_mcp_catalog_community: true` (opt into community-hosted entries,
+  off by default), and `remote_mcp_catalog_hidden: [...]` (tombstone
+  individual entries — also the between-release kill switch for a dead or
+  compromised endpoint). Bundle entries override built-ins by name; an
+  `mcp_servers` name collision shadows the built-in entry with a loud log
+  line instead of failing the load. Settings → Connections becomes a
+  searchable, category-grouped connector directory with provenance badges,
+  docs/source vet-links, auth hints, and an explicit operator-named consent
+  step before adding any non-official endpoint. Every shipped URL was
+  verified against the vendor's own documentation. See `docs/MCP-CATALOG.md`.
+
 ### Changed
 
 - Web UI polish — rail, composer, motion, responsive (design-handoff parity):

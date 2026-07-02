@@ -1,0 +1,4055 @@
+# Fleet's built-in directory of HOSTED third-party MCP servers.
+#
+# Every client bundle inherits this list by default (it is a LISTING, not a
+# connection: fleet never contacts a URL here until a user explicitly adds the
+# server through Settings -> Connections and completes the per-user OAuth
+# flow, #443). A bundle overrides an entry by redefining its name in its own
+# remote_mcp_catalog:, hides one via remote_mcp_catalog_hidden:, opts out
+# entirely with remote_mcp_catalog_builtin: false, and opts INTO the
+# community-provenance tier with remote_mcp_catalog_community: true.
+#
+# Curation rules (enforced by internal/clientconfig tests):
+#   - url is the vendor's officially documented hosted MCP endpoint, https
+#     only, verified against docs_url before shipping;
+#   - provenance is explicit on every entry: official (the service's own
+#     vendor operates the endpoint), third_party (an identifiable company
+#     hosts access to OTHER vendors' services -- it sees the traffic and often
+#     holds delegated tokens), community (an identifiable maintainer, neither
+#     of the above). Never list an endpoint that cannot be attributed to a
+#     named operator; prefer a repo_url so users can vet the code.
+#   - category groups the directory UI; auth hints what connecting takes
+#     (oauth | api_key | open | tenant -- tenant means the URL carries a
+#     {placeholder} the user must fill from their own org/workspace).
+#
+# A static shipped catalog rots: endpoints move, vendors sunset betas. The
+# per-entry docs_url is the source of truth; operators can hide a dead entry
+# with remote_mcp_catalog_hidden in a config-only change between releases.
+
+
+servers:
+
+  # ── development ─────────────────────────────────────────────────
+  - name: apollo-graphql
+    display_name: Apollo GraphOS MCP Tools
+    description: >-
+      Fixed-endpoint hosted server exposing Apollo documentation and connector-
+      spec tools (ApolloDocsRead, ApolloDocsSearch, ApolloConnectorsSpec) over
+      Streamable HTTP. No API key or configuration required.
+    url: "https://mcp.apollographql.com"
+    vendor: Apollo Graph, Inc.
+    docs_url: "https://www.apollographql.com/docs/graphos/platform/graphos-mcp-tools"
+    category: development
+    tags: [graphql, documentation, api, graphos]
+    provenance: official
+    auth: open
+  - name: browserstack
+    display_name: BrowserStack
+    description: >-
+      Hosted server for BrowserStack's cross-browser and real-device testing
+      platform: automated/manual test execution, debugging, Percy visual
+      testing, and App Automate workflows. No local install; works behind
+      enterprise firewalls.
+    url: "https://mcp.browserstack.com/mcp"
+    vendor: BrowserStack Inc.
+    docs_url: "https://www.browserstack.com/docs/browserstack-mcp-server/get-started/remote-mcp-server"
+    repo_url: "https://github.com/browserstack/mcp-server"
+    category: development
+    tags: [testing, browsers, devices, qa, automation]
+    provenance: official
+    auth: oauth
+  - name: buildkite
+    display_name: Buildkite
+    description: >-
+      Vendor-hosted endpoint exposing pipeline, build, and job tools. OAuth by
+      default (12-hour tokens); documented /direct (API-token pass-through) and
+      /mcp/readonly variants are also available.
+    url: "https://mcp.buildkite.com/mcp"
+    vendor: Buildkite Pty Ltd
+    docs_url: "https://buildkite.com/docs/apis/mcp-server"
+    repo_url: "https://github.com/buildkite/buildkite-mcp-server"
+    category: development
+    tags: [ci, cd, pipelines, builds]
+    provenance: official
+    auth: oauth
+  - name: chromatic
+    display_name: Chromatic
+    description: >-
+      Chromatic publishes a remote MCP server alongside every Storybook build,
+      exposing component and UI documentation context (Docs tools) to coding
+      agents; Development and Testing tool categories remain local-only.
+    url: "https://{app-id}.chromatic.com/mcp"
+    vendor: Chroma Software Inc.
+    docs_url: "https://www.chromatic.com/docs/mcp/"
+    category: development
+    tags: [storybook, ui, design-system, visual-testing]
+    provenance: official
+    auth: tenant
+  - name: context7
+    display_name: Context7
+    description: >-
+      Up-to-date, version-specific library documentation and code examples for
+      coding agents. Works without an API key at lower rate limits.
+    url: "https://mcp.context7.com/mcp"
+    vendor: Upstash, Inc.
+    docs_url: "https://github.com/upstash/context7"
+    repo_url: "https://github.com/upstash/context7"
+    category: development
+    tags: [documentation, libraries, code-examples, coding]
+    provenance: official
+    auth: open
+  - name: deepwiki
+    display_name: DeepWiki
+    description: >-
+      Query DeepWiki's AI-generated documentation of public GitHub repos — list
+      topics, read docs, ask questions. Free, no authentication.
+    url: "https://mcp.deepwiki.com/mcp"
+    vendor: Cognition AI, Inc.
+    docs_url: "https://docs.devin.ai/work-with-devin/deepwiki-mcp"
+    category: development
+    tags: [documentation, github, repositories, q-and-a]
+    provenance: official
+    auth: open
+  - name: devin
+    display_name: Devin
+    description: >-
+      Cognition's hosted server for Devin: repo documentation/search, session
+      management, playbooks, knowledge, and scheduling tools over Streamable
+      HTTP. Requires a service-user API key (legacy apk_ keys unsupported).
+    url: "https://mcp.devin.ai/mcp"
+    vendor: Cognition AI, Inc.
+    docs_url: "https://docs.devin.ai/work-with-devin/devin-mcp"
+    category: development
+    tags: [coding-agent, sessions, playbooks, automation]
+    provenance: official
+    auth: api_key
+  - name: expo
+    display_name: Expo
+    description: >-
+      GA hosted server providing Expo/EAS documentation search, page reading,
+      and dependency-compatibility tools over Streamable HTTP. Requires an Expo
+      account (OAuth or personal access token).
+    url: "https://mcp.expo.dev/mcp"
+    vendor: 650 Industries, Inc. (Expo)
+    docs_url: "https://docs.expo.dev/mcp/"
+    category: development
+    tags: [react-native, mobile, eas, documentation]
+    provenance: official
+    auth: oauth
+  - name: github
+    display_name: GitHub
+    description: >-
+      Repositories, issues, pull requests, CI/CD workflow runs, and security
+      alerts. The trailing slash is part of the documented URL.
+    url: "https://api.githubcopilot.com/mcp/"
+    vendor: GitHub, Inc.
+    docs_url: "https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server"
+    repo_url: "https://github.com/github/github-mcp-server"
+    category: development
+    tags: [git, repositories, issues, pull-requests, ci]
+    provenance: official
+    auth: oauth
+  - name: gitlab
+    display_name: GitLab
+    description: >-
+      Remote endpoint on GitLab.com exposing issues, merge requests, pipelines,
+      and repository tools via the Duo Agent Platform; beta as of GitLab 18.6.
+      Self-managed instances expose the same path on their own host.
+    url: "https://gitlab.com/api/v4/mcp"
+    vendor: GitLab Inc.
+    docs_url: "https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/"
+    category: development
+    tags: [git, ci, merge-requests, pipelines, beta]
+    provenance: official
+    auth: oauth
+  - name: gram
+    display_name: Gram (Speakeasy) Hosted MCP Servers
+    description: >-
+      Speakeasy's Gram platform hosts per-toolset MCP servers generated from
+      OpenAPI specs or custom TypeScript functions; each server gets its own
+      slug-keyed URL with public (API-key header) or private (Gram API key)
+      visibility.
+    url: "https://app.getgram.ai/mcp/{server-slug}"
+    vendor: Speakeasy API, Inc.
+    docs_url: "https://www.speakeasy.com/docs/gram/examples/creating-taskmaster-mcp-server"
+    repo_url: "https://github.com/speakeasy-api/gram"
+    category: development
+    tags: [openapi, toolsets, api-generation, hosting]
+    provenance: official
+    auth: tenant
+  - name: greptile
+    display_name: Greptile
+    description: >-
+      Hosted endpoint exposing 11 tools across custom context, pull requests,
+      code reviews, and review comments (including fetching and applying fixes
+      for unaddressed Greptile review comments) from IDE agents.
+    url: "https://api.greptile.com/mcp"
+    vendor: Greptile, Inc.
+    docs_url: "https://www.greptile.com/docs/mcp/overview"
+    category: development
+    tags: [code-review, pull-requests, codebase-context]
+    provenance: official
+    auth: api_key
+  - name: jetbrains-youtrack
+    display_name: JetBrains YouTrack Cloud
+    description: >-
+      Per-workspace hosted endpoint on YouTrack Cloud exposing issue, article,
+      project, group, user, and time-tracking tools; OAuth or permanent-token
+      bearer auth. URL varies by YouTrack Cloud instance.
+    url: "https://{instance-name}.youtrack.cloud/mcp"
+    vendor: JetBrains s.r.o.
+    docs_url: "https://www.jetbrains.com/help/youtrack/cloud/model-context-protocol-server.html"
+    category: development
+    tags: [issue-tracking, youtrack, projects, jetbrains]
+    provenance: official
+    auth: tenant
+  - name: kong-konnect
+    display_name: Kong Konnect
+    description: >-
+      Hosted MCP server for querying and analyzing Kong Gateway/Konnect
+      configurations, traffic, and analytics; region-pinned endpoints (US shown,
+      EU/AU/IN variants documented), authenticated with a Konnect Personal or
+      System Account Access Token; enabled by default but org admins can disable
+      it.
+    url: "https://us.mcp.konghq.com/"
+    vendor: Kong Inc.
+    docs_url: "https://developer.konghq.com/konnect-platform/konnect-mcp/installation/"
+    category: development
+    tags: [api-gateway, kong, konnect, observability, analytics]
+    provenance: official
+    auth: api_key
+  - name: lambdatest
+    display_name: LambdaTest (TestMu AI)
+    description: >-
+      Hosted server from LambdaTest (rebranded TestMu AI) exposing HyperExecute,
+      Automation, SmartUI visual-regression, and Accessibility testing tools to
+      AI coding agents.
+    url: "https://mcp.lambdatest.com/mcp"
+    vendor: LambdaTest Inc.
+    docs_url: "https://www.testmuai.com/support/docs/testmu-mcp-server/"
+    category: development
+    tags: [testing, qa, visual-regression, accessibility]
+    provenance: official
+    auth: oauth
+  - name: mux
+    display_name: Mux
+    description: >-
+      Hosted "Code Mode" server for Mux's video platform: a docs-search tool
+      plus a sandboxed TypeScript code-execution tool against the Mux Node SDK
+      for uploading video, managing live streams, and analyzing playback
+      performance.
+    url: "https://mcp.mux.com"
+    vendor: Mux, Inc.
+    docs_url: "https://www.mux.com/docs/integrations/mcp-server"
+    category: development
+    tags: [video, streaming, api, sdk]
+    provenance: official
+    auth: oauth
+  - name: postman
+    display_name: Postman
+    description: >-
+      Manage Postman workspaces, collections, specs, mocks, and monitors with
+      100+ tools (minimal/code variants and an EU host exist).
+    url: "https://mcp.postman.com/mcp"
+    vendor: Postman, Inc.
+    docs_url: "https://learning.postman.com/docs/reference/postman-api/postman-mcp-server/postman-mcp-remote-server"
+    repo_url: "https://github.com/postmanlabs/postman-api-mcp-server"
+    category: development
+    tags: [api, collections, testing, mocks]
+    provenance: official
+    auth: oauth
+  - name: semaphore
+    display_name: Semaphore
+    description: >-
+      Hosted server exposing read tools for organizations, projects, workflows,
+      pipelines, jobs, logs, test results, and docs; write tools (workflow
+      run/rerun) require elevated permissions. Beta — contact
+      support@semaphore.io to enable for your organization. OAuth 2.1
+      recommended, bearer API token supported.
+    url: "https://mcp.semaphoreci.com/mcp"
+    vendor: Semaphore Technologies
+    docs_url: "https://docs.semaphore.io/using-semaphore/ai/mcp-server"
+    category: development
+    tags: [ci, cd, pipelines, jobs, beta]
+    provenance: official
+    auth: oauth
+  - name: sourcegraph
+    display_name: Sourcegraph
+    description: >-
+      Code search, repository/history navigation, and Deep Search agent tools
+      served from a customer's Sourcegraph Cloud or self-hosted (7.0+) instance;
+      GA since February 2026 on Enterprise plans. OAuth 2.0 with dynamic client
+      registration or bearer tokens with the mcp scope.
+    url: "https://{sourcegraph-instance}/.api/mcp"
+    vendor: Sourcegraph, Inc.
+    docs_url: "https://sourcegraph.com/docs/api/mcp"
+    category: development
+    tags: [code-search, code-intelligence, enterprise]
+    provenance: official
+    auth: tenant
+  - name: stainless
+    display_name: Stainless Hosted
+    description: >-
+      Stainless hosts generated MCP servers for SDK/API projects on per-project
+      subdomains (enable "Host with Stainless" in SDK Studio, ~5 minute
+      provisioning), using the same auth scheme as the underlying API
+      (bearer/basic/OAuth).
+    url: "https://{project}.stlmcp.com"
+    vendor: Stainless Software, Inc.
+    docs_url: "https://www.stainless.com/docs/mcp/remote/"
+    category: development
+    tags: [sdk, openapi, codegen, hosting]
+    provenance: official
+    auth: tenant
+  - name: temporal-docs
+    display_name: Temporal Knowledge Base
+    description: >-
+      Vendor-hosted (Kapa.ai-powered) MCP server giving AI tools real-time
+      access to Temporal's documentation, tutorials, forum answers, and Slack
+      knowledge; a docs/knowledge-base assistant, not a workflow-orchestration
+      control plane. Requires MCP OAuth (Google or GitHub sign-in) for rate
+      limiting.
+    url: "https://temporal.mcp.kapa.ai"
+    vendor: Temporal Technologies
+    docs_url: "https://docs.temporal.io/with-ai"
+    category: development
+    tags: [workflow, orchestration, documentation, knowledge-base, temporal]
+    provenance: official
+    auth: oauth
+
+  # ── cloud-infrastructure ────────────────────────────────────────
+  - name: aws-mcp
+    display_name: AWS
+    description: >-
+      AWS-managed remote MCP server (GA May 2026) exposing call_aws for 15,000+
+      AWS API operations under your IAM identity, plus AWS docs lookups and
+      prebuilt Agent SOPs. Requests must be SigV4-signed with AWS credentials,
+      typically via the local mcp-proxy-for-aws signer; endpoints in us-east-1
+      and eu-central-1 only (https://aws-mcp.eu-central-1.api.aws/mcp).
+    url: "https://aws-mcp.us-east-1.api.aws/mcp"
+    vendor: Amazon Web Services, Inc.
+    docs_url: "https://docs.aws.amazon.com/agent-toolkit/latest/userguide/getting-started-aws-mcp-server.html"
+    category: cloud-infrastructure
+    tags: [aws, iam, cloud-api, sigv4, agents]
+    provenance: official
+    auth: api_key
+  - name: azure-devops
+    display_name: Azure DevOps
+    description: >-
+      Microsoft-hosted MCP server (public preview) for Azure DevOps work items,
+      repos, pull requests, pipelines, wikis, and test plans; tools filtered via
+      X-MCP-Toolsets/X-MCP-Tools headers, read-only mode via X-MCP-Readonly.
+      Microsoft Entra ID OAuth; currently only VS Code and Visual Studio clients
+      are supported.
+    url: "https://mcp.dev.azure.com/{organization}"
+    vendor: Microsoft Corporation
+    docs_url: "https://learn.microsoft.com/en-us/azure/devops/mcp-server/remote-mcp-server?view=azure-devops"
+    repo_url: "https://github.com/microsoft/azure-devops-mcp"
+    category: cloud-infrastructure
+    tags: [azure, devops, pipelines, repos, work-items]
+    provenance: official
+    auth: tenant
+  - name: cast-ai
+    display_name: CAST AI
+    description: >-
+      Direct API access to CAST AI Kubernetes cost-optimization functionality,
+      e.g. listing and inspecting clusters. Auth via X-API-Key header (required
+      on Claude Desktop's mcp-remote bridge) or Authorization Bearer elsewhere.
+    url: "https://docs.cast.ai/mcp"
+    vendor: CAST AI Group, Inc.
+    docs_url: "https://docs.cast.ai/reference/mcp"
+    category: cloud-infrastructure
+    tags: [castai, kubernetes, cost-optimization, autoscaling]
+    provenance: official
+    auth: api_key
+  - name: cloudflare
+    display_name: Cloudflare
+    description: >-
+      Cloudflare's main hosted MCP server covering 2,500+ API endpoints; one of
+      a family of Cloudflare-hosted servers at <service>.mcp.cloudflare.com.
+    url: "https://mcp.cloudflare.com/mcp"
+    vendor: Cloudflare, Inc.
+    docs_url: "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/"
+    repo_url: "https://github.com/cloudflare/mcp-server-cloudflare"
+    category: cloud-infrastructure
+    tags: [cdn, dns, workers, edge]
+    provenance: official
+    auth: oauth
+  - name: digitalocean
+    display_name: DigitalOcean
+    description: >-
+      Manage DigitalOcean via a family of per-product servers at
+      <service>.mcp.digitalocean.com (App Platform endpoint shown; droplets,
+      databases, DOKS, Spaces, docs, and more).
+    url: "https://apps.mcp.digitalocean.com/mcp"
+    vendor: DigitalOcean, LLC
+    docs_url: "https://docs.digitalocean.com/reference/mcp/configure-mcp/"
+    repo_url: "https://github.com/digitalocean/digitalocean-mcp"
+    category: cloud-infrastructure
+    tags: [hosting, droplets, app-platform, kubernetes]
+    provenance: official
+    auth: oauth
+  - name: firefly
+    display_name: Firefly
+    description: >-
+      Firefly's hosted MCP v2 for cloud asset discovery across connected
+      cloud/SaaS accounts and codification of discovered resources into IaC.
+      Auth via X-access-Key and X-secret-Key headers; clients surface at most 30
+      tools at once. The v1 mcp.firefly.ai/sse endpoint is deprecated (April
+      2026).
+    url: "https://mcpv2.firefly.ai/mcp"
+    vendor: Firefly (Infralight Ltd.)
+    docs_url: "https://docs.firefly.ai/integrations/integrating-mcp-v2"
+    category: cloud-infrastructure
+    tags: [firefly, iac, cloud-inventory, codification, governance]
+    provenance: official
+    auth: api_key
+  - name: google-cloud
+    display_name: Google Cloud & Workspace (per-product)
+    description: >-
+      Google-managed remote MCP servers (50+ across GA and Preview) for Cloud
+      products and Workspace apps — e.g. bigquery.googleapis.com/mcp and
+      gmailmcp.googleapis.com/mcp/v1. Replace the placeholder with the product's
+      service host.
+    url: "https://{service}.googleapis.com/mcp"
+    vendor: Google LLC
+    docs_url: "https://docs.cloud.google.com/mcp/supported-products"
+    category: cloud-infrastructure
+    tags: [gcp, bigquery, workspace, gmail]
+    provenance: official
+    auth: tenant
+  - name: harness
+    display_name: Harness
+    description: >-
+      Hosted endpoint for Harness SaaS customers exposing 11 generic verb tools
+      (harness_list, harness_get, harness_create, ...) over 139 resource types
+      across 30 toolsets (CI/CD, GitOps, IaC management, cloud cost, chaos
+      engineering, IDP). OAuth via Harness ID; OAuth may need enabling by
+      Harness Support on the account.
+    url: "https://mcp.harness.io/mcp"
+    vendor: Harness Inc.
+    docs_url: "https://developer.harness.io/docs/platform/harness-ai/harness-mcp-server/"
+    repo_url: "https://github.com/harness/mcp-server"
+    category: cloud-infrastructure
+    tags: [harness, cicd, gitops, cloud-cost, chaos]
+    provenance: official
+    auth: oauth
+  - name: heroku
+    display_name: Heroku
+    description: >-
+      App lifecycle management — list, create, and update apps, teams, Private
+      Spaces, and add-ons.
+    url: "https://mcp.heroku.com/mcp"
+    vendor: Salesforce, Inc. (Heroku)
+    docs_url: "https://devcenter.heroku.com/articles/heroku-remote-mcp-server"
+    category: cloud-infrastructure
+    tags: [paas, apps, dynos, add-ons]
+    provenance: official
+    auth: oauth
+  - name: netlify
+    display_name: Netlify
+    description: >-
+      Deploy and build sites; manage functions, blobs, database, forms,
+      redirects, caching, and the AI Gateway.
+    url: "https://netlify-mcp.netlify.app/mcp"
+    vendor: Netlify, Inc.
+    docs_url: "https://docs.netlify.com/welcome/build-with-ai/netlify-mcp-server/"
+    category: cloud-infrastructure
+    tags: [hosting, deploy, functions, jamstack]
+    provenance: official
+    auth: oauth
+  - name: oracle-autonomous-db
+    display_name: Oracle Autonomous AI Database
+    description: >-
+      Built-in managed MCP server on each OCI Autonomous AI Database exposing
+      governed, admin-curated SQL tools (Select AI Agent) over streamable HTTP.
+      Endpoint is scoped per region and database OCID, with bearer-token auth on
+      top.
+    url: "https://dataaccess.adb.{region-identifier}.oraclecloudapps.com/adb/mcp/v1/databases/{database-ocid}"
+    vendor: Oracle Corporation
+    docs_url: "https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/use-mcp-server.html"
+    category: cloud-infrastructure
+    tags: [oracle, oci, database, sql, autonomous]
+    provenance: official
+    auth: tenant
+  - name: ovhcloud
+    display_name: OVHcloud
+    description: >-
+      OVHcloud-operated beta MCP server for managing OVHcloud services and
+      account via natural language, starting with Public Cloud. Regional
+      endpoints for EU, US (mcp.us.ovhcloud.com), and CA (mcp.ca.ovhcloud.com);
+      OAuth2 sign-in.
+    url: "https://mcp.eu.ovhcloud.com/mcp"
+    vendor: OVH Groupe SA
+    docs_url: "https://www.ovhcloud.com/en/public-cloud/mcp-server/"
+    category: cloud-infrastructure
+    tags: [ovh, public-cloud, compute, europe]
+    provenance: official
+    auth: oauth
+  - name: pulumi
+    display_name: Pulumi
+    description: >-
+      Pulumi's hosted remote MCP server: Pulumi Cloud tools (stacks, resource
+      search, policy violations, users), Registry schema lookups, Neo agent
+      delegation, and a deploy-to-aws tool. OAuth flow requires a Pulumi Cloud
+      account and access token.
+    url: "https://mcp.ai.pulumi.com/mcp"
+    vendor: Pulumi Corp.
+    docs_url: "https://www.pulumi.com/docs/ai/mcp-server/"
+    category: cloud-infrastructure
+    tags: [pulumi, iac, stacks, registry, policy]
+    provenance: official
+    auth: oauth
+  - name: qovery
+    display_name: Qovery
+    description: >-
+      Exposes a devops_copilot tool for managing Qovery environments, services,
+      deployments, projects, and logs in natural language. Read-only by default;
+      append ?read_write=true for write mode. OAuth recommended, API token
+      supported.
+    url: "https://mcp.qovery.com/mcp"
+    vendor: BIRDSIGHT SAS (Qovery)
+    docs_url: "https://www.qovery.com/docs/copilot/mcp-server"
+    category: cloud-infrastructure
+    tags: [qovery, paas, deployments, devops, kubernetes]
+    provenance: official
+    auth: oauth
+  - name: railway
+    display_name: Railway
+    description: >-
+      Manage Railway projects, services, and deployments; OAuth chooses which
+      workspaces and projects the client may access.
+    url: "https://mcp.railway.com"
+    vendor: Railway Corp.
+    docs_url: "https://docs.railway.com/ai/mcp-server"
+    repo_url: "https://github.com/railwayapp/railway-mcp-server"
+    category: cloud-infrastructure
+    tags: [hosting, deploy, services, paas]
+    provenance: official
+    auth: oauth
+  - name: render
+    display_name: Render
+    description: >-
+      Manage Render infrastructure — create services and datastores, view
+      metrics, logs, and deploys, and query databases.
+    url: "https://mcp.render.com/mcp"
+    vendor: Render Services, Inc.
+    docs_url: "https://render.com/docs/mcp-server"
+    category: cloud-infrastructure
+    tags: [hosting, deploy, datastores, paas]
+    provenance: official
+    auth: oauth
+  - name: replit
+    display_name: Replit
+    description: >-
+      Beta hosted server backed by Replit Agent with three tools:
+      create_app_from_prompt, update_app_using_prompt, and ask_question — builds
+      and modifies live full-stack apps hosted on Replit. OAuth 2.1 with PKCE;
+      note the endpoint lives on the standalone replit-mcp.com domain per
+      Replit's docs.
+    url: "https://replit-mcp.com/server/mcp"
+    vendor: Replit, Inc.
+    docs_url: "https://docs.replit.com/platforms/mcp-server"
+    category: cloud-infrastructure
+    tags: [replit, app-hosting, agents, code-generation, paas]
+    provenance: official
+    auth: oauth
+  - name: runpod
+    display_name: RunPod
+    description: >-
+      Hosted server for RunPod GPU cloud: create/manage Pods, Serverless
+      endpoints, templates, network volumes, and container registries via the
+      RunPod REST API. Stateless streamable HTTP with "Sign in with Runpod"
+      OAuth (Bearer API key also accepted).
+    url: "https://mcp.getrunpod.io/"
+    vendor: RunPod, Inc.
+    docs_url: "https://docs.runpod.io/get-started/mcp-servers"
+    repo_url: "https://github.com/runpod/runpod-mcp"
+    category: cloud-infrastructure
+    tags: [runpod, gpu, serverless, pods, ai-compute]
+    provenance: official
+    auth: oauth
+  - name: sevalla
+    display_name: Sevalla
+    description: >-
+      Stateless "code mode" server with two tools: search (discover Sevalla PaaS
+      API endpoints from the OpenAPI spec) and execute (run sandboxed JS calling
+      sevalla.request() against any endpoint). Browser OAuth login; no keys in
+      client config.
+    url: "https://mcp.sevalla.com/mcp"
+    vendor: Kinsta Inc. (Sevalla)
+    docs_url: "https://mcp.sevalla.com/"
+    repo_url: "https://github.com/sevalla-hosting/mcp"
+    category: cloud-infrastructure
+    tags: [sevalla, paas, hosting, kinsta, deployments]
+    provenance: official
+    auth: oauth
+  - name: spacelift
+    display_name: Spacelift
+    description: >-
+      Per-account endpoint with discover/query (read-only GraphQL over the
+      Spacelift API), provider (Terraform/OpenTofu schema inspection), and gated
+      mutate/intent tools for read+write sessions, scoped by RBAC. Browser OAuth
+      by default; spacectl-issued tokens for headless use. Legacy /intent/mcp
+      path is deprecated (sunset 2026-08-01).
+    url: "https://{account-name}.app.spacelift.io/mcp"
+    vendor: Spacelift, Inc.
+    docs_url: "https://docs.spacelift.io/concepts/intelligence/spacelift-mcp"
+    category: cloud-infrastructure
+    tags: [spacelift, iac, terraform, opentofu, graphql]
+    provenance: official
+    auth: tenant
+  - name: tigris
+    display_name: Tigris
+    description: >-
+      Hosted server for Tigris S3-compatible object storage: bucket management,
+      object upload/download/move/delete, folder operations, and pre-signed URL
+      generation. OAuth via Tigris's own open-source mcp-oidc-provider.
+    url: "https://mcp.storage.dev/mcp"
+    vendor: Tigris Data, Inc.
+    docs_url: "https://www.tigrisdata.com/docs/mcp/remote/"
+    repo_url: "https://github.com/tigrisdata/tigris-mcp-server"
+    category: cloud-infrastructure
+    tags: [tigris, object-storage, s3, buckets, storage]
+    provenance: official
+    auth: oauth
+  - name: upsun
+    display_name: Upsun (Platform.sh)
+    description: >-
+      Beta hosted server with 40+ tools for Upsun projects, environments,
+      organizations, activities, SSH keys, domains/certificates, routing, and
+      backups. Read-only by default; write ops need an enable-write: true header
+      alongside the upsun-api-token header.
+    url: "https://mcp.upsun.com/mcp"
+    vendor: Platform.sh SAS
+    docs_url: "https://devcenter.upsun.com/posts/upsun-mcp-announcement/"
+    repo_url: "https://github.com/upsun/upsun-mcp-server"
+    category: cloud-infrastructure
+    tags: [upsun, platformsh, paas, environments, backups]
+    provenance: official
+    auth: api_key
+  - name: val-town
+    display_name: Val Town
+    description: >-
+      Manage Val Town serverless JS/TS: create HTTP endpoints (vals), schedule
+      cron jobs, run SQLite queries, send email, and handle OAuth flows on the
+      platform. OAuth sign-in.
+    url: "https://api.val.town/v3/mcp"
+    vendor: Val Town, Inc.
+    docs_url: "https://docs.val.town/guides/prompting/mcp/"
+    category: cloud-infrastructure
+    tags: [valtown, serverless, cron, sqlite, javascript]
+    provenance: official
+    auth: oauth
+  - name: vercel
+    display_name: Vercel
+    description: >-
+      Search Vercel documentation and manage teams, projects, deployments, and
+      deployment logs. Only reviewed and approved AI clients may connect.
+    url: "https://mcp.vercel.com"
+    vendor: Vercel Inc.
+    docs_url: "https://vercel.com/docs/mcp/vercel-mcp"
+    category: cloud-infrastructure
+    tags: [hosting, deploy, frontend, nextjs]
+    provenance: official
+    auth: oauth
+  - name: vultr
+    display_name: Vultr
+    description: >-
+      Official hosted server covering 494 tools across 39 Vultr API categories
+      (instances, Kubernetes, managed databases, DNS, block storage, IAM).
+      Category-scoped paths like /instances or /kubernetes reduce token load;
+      auth via X-Vultr-API-Key header, Bearer token, or api_key query param
+      (OAuth also supported).
+    url: "https://vultrmcp.com/"
+    vendor: The Constant Company, LLC (Vultr)
+    docs_url: "https://github.com/vultr/vultr-mcp"
+    repo_url: "https://github.com/vultr/vultr-mcp"
+    category: cloud-infrastructure
+    tags: [vultr, vps, kubernetes, dns, compute]
+    provenance: official
+    auth: api_key
+
+  # ── databases ───────────────────────────────────────────────────
+  - name: aiven
+    display_name: Aiven
+    description: >-
+      Hosted MCP server for the Aiven platform: list
+      projects/services/integrations, create/update/delete services (PostgreSQL,
+      Apache Kafka), view metrics, logs, config, and plans, plus docs access.
+      OAuth 2.0 with PKCE; read-only mode and per-service tool scoping
+      available.
+    url: "https://mcp.aiven.live/mcp"
+    vendor: Aiven Oy
+    docs_url: "https://aiven.io/docs/tools/mcp-server"
+    category: databases
+    tags: [postgres, kafka, clickhouse, opensearch, managed]
+    provenance: official
+    auth: oauth
+  - name: alloydb
+    display_name: AlloyDB for PostgreSQL
+    description: >-
+      Google-managed remote MCP server for AlloyDB: instance lifecycle
+      (create/list/get), user management, and SQL execution (execute_sql, needs
+      Data API enabled, 10 MB response cap; execute_sql_read_only requires
+      PostgreSQL 17+). IAM OAuth bearer tokens only — API keys not accepted.
+      Regional preview endpoints at
+      https://alloydb.{region}.rep.googleapis.com/mcp.
+    url: "https://alloydb.googleapis.com/mcp"
+    vendor: Google LLC
+    docs_url: "https://docs.cloud.google.com/alloydb/docs/ai/use-alloydb-mcp"
+    category: databases
+    tags: [postgres, sql, gcp, managed]
+    provenance: official
+    auth: oauth
+  - name: chroma-package-search
+    display_name: Chroma Package Search
+    description: >-
+      Chroma Cloud's hosted MCP for its Package Search product: regex grep,
+      hybrid semantic+regex search, and file reads over indexed open-source
+      package code. Note this is code search on Chroma Cloud, not general
+      vector-database CRUD (the general chroma-mcp client is locally run). Auth
+      via x-chroma-token header.
+    url: "https://mcp.trychroma.com/package-search/v1"
+    vendor: Chroma Inc.
+    docs_url: "https://docs.trychroma.com/cloud/package-search"
+    category: databases
+    tags: [code-search, semantic-search, vector, embeddings]
+    provenance: official
+    auth: api_key
+  - name: clickhouse
+    display_name: ClickHouse Cloud
+    description: >-
+      Vendor-hosted remote MCP server for ClickHouse Cloud: read-only SQL
+      (list_databases, list_tables, run_select_query — SELECT only) plus
+      org/service management, backups, ClickPipes, and cost-monitoring tools.
+      Must be enabled per service via "Connect with MCP".
+    url: "https://mcp.clickhouse.cloud/mcp"
+    vendor: ClickHouse, Inc.
+    docs_url: "https://clickhouse.com/docs/use-cases/AI/MCP/remote_mcp"
+    category: databases
+    tags: [olap, sql, analytics, data-warehouse, read-only]
+    provenance: official
+    auth: oauth
+  - name: cockroachdb
+    display_name: CockroachDB Cloud
+    description: >-
+      Managed MCP server for CockroachDB Cloud: read tools (clusters, databases,
+      tables, schema, select_query, explain_query, show_running_queries) plus
+      opt-in write tools (create_database, create_table, insert_rows). Requires
+      Cluster Admin/Operator role; scoped to one configured cluster; read-only
+      by default. Also supports service-account bearer tokens.
+    url: "https://cockroachlabs.cloud/mcp"
+    vendor: Cockroach Labs, Inc.
+    docs_url: "https://www.cockroachlabs.com/docs/cockroachcloud/connect-to-the-cockroachdb-cloud-mcp-server"
+    category: databases
+    tags: [distributed-sql, postgres, sql, cloud]
+    provenance: official
+    auth: oauth
+  - name: influxdb-docs
+    display_name: InfluxDB Docs
+    description: >-
+      InfluxData's official hosted docs MCP (run on kapa.ai) with a single
+      search_influxdb_knowledge_sources tool over InfluxDB documentation. Docs
+      search only — the influxdb3 database-access MCP is self-hosted. Sign-in
+      required; rate-limited to 40 req/hour, 200/day.
+    url: "https://influxdb-docs.mcp.kapa.ai"
+    vendor: InfluxData Inc.
+    docs_url: "https://docs.influxdata.com/influxdb/v2/tools/mcp-server/"
+    category: databases
+    tags: [time-series, docs, influxdb]
+    provenance: official
+    auth: oauth
+  - name: motherduck
+    display_name: MotherDuck
+    description: >-
+      Hosted MCP server with 25+ tools: catalog exploration and search, read-
+      only and read-write SQL, share attach/detach, docs Q&A, Dives
+      visualizations, and scheduled Python jobs (Flights). Query results transit
+      the remote server — note for strict data-residency requirements; can be
+      restricted to read-only.
+    url: "https://api.motherduck.com/mcp"
+    vendor: MotherDuck, Inc.
+    docs_url: "https://motherduck.com/docs/sql-reference/mcp/"
+    category: databases
+    tags: [duckdb, sql, data-warehouse, analytics]
+    provenance: official
+    auth: oauth
+  - name: neon
+    display_name: Neon
+    description: >-
+      Manage Neon Postgres projects — create and manage branches, inspect and
+      modify schemas, run SQL, and configure data access.
+    url: "https://mcp.neon.tech/mcp"
+    vendor: Neon Inc. (a Databricks company)
+    docs_url: "https://neon.com/docs/ai/neon-mcp-server"
+    repo_url: "https://github.com/neondatabase-labs/mcp-server-neon"
+    category: databases
+    tags: [postgres, serverless, branching, sql]
+    provenance: official
+    auth: oauth
+  - name: pinecone-assistant
+    display_name: Pinecone Assistant
+    description: >-
+      Pinecone-managed MCP endpoint per Assistant exposing a context retrieval
+      tool over files uploaded to that Assistant (MCP-native analog of the
+      Assistant Context API). Requires Api-Key bearer auth; the older /sse
+      endpoint was retired Aug 2025 in favor of streamable HTTP. Pinecone's
+      index/CRUD Developer MCP remains local-only.
+    url: "https://{assistant-host}/mcp/assistants/{assistant-name}"
+    vendor: Pinecone Systems, Inc.
+    docs_url: "https://docs.pinecone.io/guides/assistant/mcp-server"
+    repo_url: "https://github.com/pinecone-io/assistant-mcp"
+    category: databases
+    tags: [vector, rag, retrieval, assistant]
+    provenance: official
+    auth: tenant
+  - name: planetscale
+    display_name: PlanetScale
+    description: >-
+      Hosted MCP server with 16 tools covering org/database/branch discovery,
+      schema inspection, read/write query execution, Insights and schema
+      recommendations, and billing. Writes without WHERE, TRUNCATE, and DDL
+      require confirmation; reads default to replicas. A read-only insights-only
+      variant is also available at /mcp/planetscale-insights-only.
+    url: "https://mcp.pscale.dev/mcp/planetscale"
+    vendor: PlanetScale, Inc.
+    docs_url: "https://planetscale.com/docs/connect/mcp"
+    category: databases
+    tags: [mysql, postgres, sql, schema, insights]
+    provenance: official
+    auth: oauth
+  - name: prisma
+    display_name: Prisma Postgres
+    description: >-
+      Manage Prisma Postgres databases — create, back up, restore, run SQL,
+      introspect schemas, and search Prisma docs.
+    url: "https://mcp.prisma.io/mcp"
+    vendor: Prisma Data, Inc.
+    docs_url: "https://www.prisma.io/docs/postgres/integrations/mcp-server"
+    repo_url: "https://github.com/prisma/mcp"
+    category: databases
+    tags: [postgres, orm, schema, sql]
+    provenance: official
+    auth: oauth
+  - name: snowflake
+    display_name: Snowflake
+    description: >-
+      Snowflake-managed MCP servers created in-account expose Cortex Search,
+      Cortex Analyst (semantic views), Cortex Agents, SQL execution (optional
+      read-only), and custom tools from UDFs/stored procedures. Max 50 tools per
+      server; tool responses capped at 250 KB; non-streaming responses only.
+    url: "https://{account-locator}.snowflakecomputing.com/api/v2/databases/{database}/schemas/{schema}/mcp-servers/{name}"
+    vendor: Snowflake Inc.
+    docs_url: "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents-mcp"
+    category: databases
+    tags: [data-warehouse, sql, cortex, semantic-layer, ai]
+    provenance: official
+    auth: tenant
+  - name: supabase
+    display_name: Supabase
+    description: >-
+      Connect to Supabase projects — database queries and SQL, logs, Edge
+      Functions, project administration, and docs search; supports read-only
+      mode and project scoping.
+    url: "https://mcp.supabase.com/mcp"
+    vendor: Supabase Inc.
+    docs_url: "https://supabase.com/docs/guides/getting-started/mcp"
+    repo_url: "https://github.com/supabase-community/supabase-mcp"
+    category: databases
+    tags: [postgres, edge-functions, auth, sql]
+    provenance: official
+    auth: oauth
+  - name: tigerdata-docs
+    display_name: Tiger Data Docs (pg-aiguide)
+    description: >-
+      Tiger Data's hosted docs MCP (pg-aiguide): semantic search over
+      PostgreSQL, TimescaleDB, and Tiger Cloud documentation and design guides.
+      Documentation search only — Tiger's database-access MCP runs locally via
+      the Tiger CLI and is not remote.
+    url: "https://mcp.tigerdata.com/docs"
+    vendor: Timescale, Inc. (Tiger Data)
+    docs_url: "https://mcp.tigerdata.com/docs"
+    repo_url: "https://github.com/timescale/pg-aiguide"
+    category: databases
+    tags: [postgres, timescaledb, docs, time-series]
+    provenance: official
+    auth: open
+  - name: tinybird
+    display_name: Tinybird
+    description: >-
+      Hosted streamable-HTTP MCP server that auto-exposes every published
+      Tinybird API endpoint as a tool, plus explore_data, text_to_sql,
+      execute_query, and list tools. Token is passed as a URL query parameter;
+      tool visibility and rate limits follow token scopes (static tokens or
+      JWTs).
+    url: "https://mcp.tinybird.co?token={tinybird-token}"
+    vendor: Tinybird
+    docs_url: "https://www.tinybird.co/docs/forward/work-with-data/mcp"
+    category: databases
+    tags: [real-time, analytics, clickhouse, sql, api]
+    provenance: official
+    auth: tenant
+
+  # ── data-analytics ──────────────────────────────────────────────
+  - name: airbyte
+    display_name: Airbyte Agents
+    description: >-
+      Hosted streamable-HTTP MCP for Airbyte's Agents product:
+      list/get/search/create/update tools across the third-party connectors
+      linked to your Airbyte account, scoped strictly to the authenticated org.
+      Distinct from the classic Airbyte Cloud ELT product, which has no remote
+      MCP of its own.
+    url: "https://mcp.airbyte.ai/mcp"
+    vendor: Airbyte, Inc.
+    docs_url: "https://docs.airbyte.com/ai-agents/interfaces/mcp"
+    category: data-analytics
+    tags: [etl, connectors, integration, agents]
+    provenance: official
+    auth: oauth
+  - name: amplitude
+    display_name: Amplitude
+    description: >-
+      Hosted streamable-HTTP MCP with access to charts, dashboards, notebooks,
+      experiments, cohorts, events/taxonomy, feature flags, session replays, and
+      surveys, respecting existing RBAC via progressive tool discovery. Not an
+      event-ingestion endpoint. EU residency endpoint:
+      https://mcp.eu.amplitude.com/mcp.
+    url: "https://mcp.amplitude.com/mcp"
+    vendor: Amplitude, Inc.
+    docs_url: "https://amplitude.com/docs/amplitude-ai/amplitude-mcp"
+    category: data-analytics
+    tags: [product-analytics, experiments, cohorts, dashboards]
+    provenance: official
+    auth: oauth
+  - name: confluent
+    display_name: Confluent Cloud
+    description: >-
+      Read-only, org-wide Confluent Cloud operations (environments, clusters,
+      connectors, metrics); regional servers additionally inspect topics,
+      schemas, and messages.
+    url: "https://api.confluent.cloud/mcp/v1"
+    vendor: Confluent, Inc.
+    docs_url: "https://docs.confluent.io/cloud/current/ai/ai-tools/managed-mcp-server.html"
+    category: data-analytics
+    tags: [kafka, streaming, topics, schemas]
+    provenance: official
+    auth: api_key
+  - name: cube
+    display_name: Cube Cloud
+    description: >-
+      Per-deployment MCP server for Cube Cloud's semantic layer with
+      listDeployments, chat, and loadQueryResults tools. OAuth 2.1
+      authorization-code + PKCE (scope mcp-agent-access); Premium/Enterprise
+      plans only; requires Viewer role or higher and admins can restrict
+      reachable deployments.
+    url: "https://{cube-mcp-host}/api/mcp"
+    vendor: Cube Dev, Inc.
+    docs_url: "https://docs.cube.dev/docs/integrations/mcp-server"
+    repo_url: "https://github.com/cubedevinc/cube-mcp-server"
+    category: data-analytics
+    tags: [semantic-layer, bi, sql, metrics]
+    provenance: official
+    auth: tenant
+  - name: databricks
+    display_name: Databricks (managed, per-workspace)
+    description: >-
+      Databricks-managed MCP servers hosted inside each customer workspace —
+      Genie spaces, vector search, Databricks SQL, and Unity Catalog functions
+      with UC-enforced permissions. Replace the placeholder with your workspace
+      hostname.
+    url: "https://{workspace-hostname}/api/2.0/mcp/"
+    vendor: Databricks, Inc.
+    docs_url: "https://docs.databricks.com/aws/en/generative-ai/mcp/managed-mcp"
+    category: data-analytics
+    tags: [lakehouse, sql, genie, unity-catalog]
+    provenance: official
+    auth: tenant
+  - name: dbt
+    display_name: dbt
+    description: >-
+      dbt platform remote MCP exposing Semantic Layer, SQL execution, Discovery,
+      Admin API, and Fusion tools; local CLI commands (dbt run/build/test) are
+      not available remotely. Requires x-dbt-prod-environment-id header;
+      execute_sql needs a personal access token; OAuth is beta on Enterprise
+      plans.
+    url: "https://{dbt-host}/api/ai/v1/mcp/"
+    vendor: dbt Labs, Inc.
+    docs_url: "https://docs.getdbt.com/docs/dbt-ai/setup-remote-mcp"
+    repo_url: "https://github.com/dbt-labs/dbt-mcp"
+    category: data-analytics
+    tags: [transformation, semantic-layer, sql, analytics-engineering]
+    provenance: official
+    auth: tenant
+  - name: definite
+    display_name: Definite
+    description: >-
+      Hosted MCP with a broad tool surface: SQL and Cube semantic-layer query
+      execution, semantic-model CRUD, integration/OAuth management, sync
+      orchestration, notebook-style docs CRUD/execution, and drive file
+      management. API key auth for Claude Code/Cursor; OAuth for Claude.ai.
+    url: "https://api.definite.app/v3/mcp/http"
+    vendor: Definite Inc.
+    docs_url: "https://docs.definite.app/mcp/mcp"
+    category: data-analytics
+    tags: [bi, sql, semantic-layer, etl]
+    provenance: official
+    auth: api_key
+  - name: dune
+    display_name: Dune
+    description: >-
+      Hosted MCP with ~30 tools for onchain analytics: discovery
+      (docs/tables/blockchains, contract lookup), query lifecycle
+      (create/update/execute, fetch results), materialized views,
+      visualizations, dashboards, and usage. OAuth or x-dune-api-key header;
+      long-running queries can exceed default client tool timeouts (raise to
+      ~300s).
+    url: "https://api.dune.com/mcp/v1"
+    vendor: Dune Analytics AS
+    docs_url: "https://docs.dune.com/api-reference/agents/mcp"
+    category: data-analytics
+    tags: [blockchain, crypto, sql, dashboards, analytics]
+    provenance: official
+    auth: oauth
+  - name: hex
+    display_name: Hex
+    description: >-
+      Remote MCP (beta) with four tools: search projects and create/get/continue
+      Threads for natural-language data exploration via Hex's AI chat. Requires
+      Explorer workspace role or higher; text-only prompts. Single-
+      tenant/EU/HIPAA customers use their own hostname (e.g. eu.hex.tech/mcp,
+      hc.hex.tech/mcp).
+    url: "https://app.hex.tech/mcp"
+    vendor: Hex Technologies Inc.
+    docs_url: "https://learn.hex.tech/docs/api-integrations/mcp-server"
+    category: data-analytics
+    tags: [notebooks, bi, ai-chat, exploration]
+    provenance: official
+    auth: oauth
+  - name: looker
+    display_name: Looker
+    description: >-
+      Google-managed MCP server (preview) per Looker instance, enforcing
+      existing Looker user permissions and honoring VPC Service Controls and
+      CMEK. Requires an admin to register an OAuth 2.1 client app via the
+      oauth_client_apps API before agents can connect.
+    url: "https://{looker-instance}/mcp"
+    vendor: Google LLC
+    docs_url: "https://docs.cloud.google.com/looker/docs/mcp"
+    category: data-analytics
+    tags: [bi, lookml, semantic-layer, gcp]
+    provenance: official
+    auth: tenant
+  - name: metabase
+    display_name: Metabase
+    description: >-
+      MCP endpoint built into each Metabase instance (Cloud or self-hosted)
+      exposing construct_query (table/metric query builder) and execute_sql
+      (requires native-query permission; can be disabled instance-wide). Off by
+      default — an admin must enable it under Admin > AI > MCP; access scoped to
+      the connecting user's permissions via Metabase's embedded OAuth server.
+    url: "https://{your-metabase-host}/api/metabase-mcp"
+    vendor: Metabase, Inc.
+    docs_url: "https://www.metabase.com/docs/latest/ai/mcp"
+    category: data-analytics
+    tags: [bi, sql, dashboards, queries]
+    provenance: official
+    auth: tenant
+  - name: mixpanel
+    display_name: Mixpanel
+    description: >-
+      Hosted streamable-HTTP MCP with 50+ tools across
+      insights/funnels/flows/retention, dashboards, data discovery and lexicon,
+      data editing/tagging, session replays, and beta experiments/flags. Off by
+      default — an org admin must enable it; 600 requests/hour/user; HIPAA not
+      supported. EU and IN regional endpoints available.
+    url: "https://mcp.mixpanel.com/mcp"
+    vendor: Mixpanel, Inc.
+    docs_url: "https://docs.mixpanel.com/docs/mcp"
+    category: data-analytics
+    tags: [product-analytics, funnels, retention, dashboards]
+    provenance: official
+    auth: oauth
+  - name: omni
+    display_name: Omni
+    description: >-
+      Per-instance MCP server for querying Omni semantic models in natural
+      language (pickModel, pickTopic, getData, searchOmniDocs), scoped to the
+      user's model/topic permissions. OAuth 2.1 recommended (requires personal
+      access tokens enabled) or manual API key with the tenant URL shown.
+    url: "https://{your-omni-instance}/mcp/https"
+    vendor: Omni Analytics, Inc.
+    docs_url: "https://docs.omni.co/ai/mcp"
+    category: data-analytics
+    tags: [bi, semantic-layer, nlq, metrics]
+    provenance: official
+    auth: tenant
+  - name: posthog
+    display_name: PostHog
+    description: >-
+      Hosted MCP covering product analytics/HogQL queries, feature flags,
+      experiments, error tracking, CDP destinations, and support triage; auto-
+      routes to your US/EU data region. Free to connect, but some tools invoke
+      LLMs internally and bill as PostHog AI spend; AI tools require org-level
+      AI data processing enabled.
+    url: "https://mcp.posthog.com/mcp"
+    vendor: PostHog Inc.
+    docs_url: "https://posthog.com/docs/model-context-protocol"
+    repo_url: "https://github.com/PostHog/mcp"
+    category: data-analytics
+    tags: [product-analytics, feature-flags, experiments, hogql]
+    provenance: official
+    auth: oauth
+  - name: preset
+    display_name: Preset
+    description: >-
+      Preset's hosted multi-tenant MCP (v2) for managed Apache Superset:
+      dashboard, chart, dataset, and SQL Lab tools with full Superset RBAC
+      enforcement, workspace isolation, audit logging, and response-size guards.
+      OAuth 2.1 PKCE for interactive clients or API-key bearer for headless use;
+      a deprecated v1 path remains for legacy clients.
+    url: "https://api.superset.sh/api/v2/agent/mcp"
+    vendor: Preset, Inc.
+    docs_url: "https://docs.superset.sh/mcp"
+    category: data-analytics
+    tags: [bi, superset, dashboards, sql]
+    provenance: official
+    auth: oauth
+
+  # ── web-search ──────────────────────────────────────────────────
+  - name: anchor-browser
+    display_name: Anchor Browser
+    description: >-
+      Cloud browser-automation MCP (Playwright-driven) with built-in proxies and
+      stealth features for agentic web interaction; runs on Anchor's own
+      servers.
+    url: "https://api.anchorbrowser.io/mcp"
+    vendor: Anchor Browser
+    docs_url: "https://docs.anchorbrowser.io/advanced/mcp"
+    category: web-search
+    tags: [browser-automation, scraping, stealth, playwright]
+    provenance: official
+    auth: api_key
+  - name: apify
+    display_name: Apify
+    description: >-
+      Discover and run Actors from the Apify Store for web scraping and
+      automation, access run results, and search Apify docs.
+    url: "https://mcp.apify.com"
+    vendor: Apify Technologies s.r.o.
+    docs_url: "https://docs.apify.com/platform/integrations/mcp"
+    repo_url: "https://github.com/apify/apify-mcp-server"
+    category: web-search
+    tags: [scraping, automation, actors, crawling]
+    provenance: official
+    auth: oauth
+  - name: bright-data
+    display_name: Bright Data
+    description: >-
+      Managed cloud MCP server fronting Bright Data's scraping/unlocker
+      infrastructure (e-commerce, social, search tool groups); 5,000 free
+      requests/month shared pool, token passed as a query param.
+    url: "https://mcp.brightdata.com/mcp?token={api_token}"
+    vendor: Bright Data
+    docs_url: "https://docs.brightdata.com/ai/mcp-server/remote/quickstart"
+    category: web-search
+    tags: [scraping, unlocker, ecommerce-data, proxies]
+    provenance: official
+    auth: tenant
+  - name: browserbase
+    display_name: Browserbase
+    description: >-
+      Cloud browser automation via Stagehand — navigate, act, extract, and take
+      screenshots in a hosted browser session.
+    url: "https://mcp.browserbase.com/mcp"
+    vendor: Browserbase, Inc.
+    docs_url: "https://docs.browserbase.com/integrations/mcp/setup"
+    repo_url: "https://github.com/browserbase/mcp-server-browserbase"
+    category: web-search
+    tags: [browser, automation, screenshots, stagehand]
+    provenance: official
+    auth: oauth
+  - name: exa
+    display_name: Exa
+    description: >-
+      Web search and retrieval — web_search_exa and web_fetch_exa by default,
+      plus optional advanced search and multi-step research tools.
+    url: "https://mcp.exa.ai/mcp"
+    vendor: Exa Labs, Inc.
+    docs_url: "https://exa.ai/docs/reference/exa-mcp"
+    repo_url: "https://github.com/exa-labs/exa-mcp-server"
+    category: web-search
+    tags: [search, retrieval, research, crawling]
+    provenance: official
+    auth: api_key
+  - name: firecrawl
+    display_name: Firecrawl
+    description: >-
+      Web scraping, crawling, search, mapping, and extraction. The keyless
+      endpoint is rate-limited per IP; authenticate with a Bearer header for
+      real use.
+    url: "https://mcp.firecrawl.dev/v2/mcp"
+    vendor: Firecrawl, Inc.
+    docs_url: "https://docs.firecrawl.dev/mcp-server"
+    repo_url: "https://github.com/firecrawl/firecrawl-mcp-server"
+    category: web-search
+    tags: [scraping, crawling, extraction, search]
+    provenance: official
+    auth: api_key
+  - name: jina
+    display_name: Jina AI
+    description: >-
+      Hosted MCP server exposing Jina's content extraction (reader), web/image
+      search, academic/deep search, and deduplication tools; Streamable HTTP
+      with a legacy /sse alias, API key optional for some endpoints.
+    url: "https://mcp.jina.ai/v1"
+    vendor: Jina AI
+    docs_url: "https://jina.ai/news/agentic-workflow-with-jina-remote-mcp-server/"
+    repo_url: "https://github.com/jina-ai/MCP"
+    category: web-search
+    tags: [web-search, scraping, reader, embeddings, academic-search]
+    provenance: official
+    auth: api_key
+  - name: linkup
+    display_name: Linkup
+    description: >-
+      Real-time web search MCP with a single linkup-search tool for natural-
+      language queries and page-content fetching over trusted sources.
+    url: "https://mcp.linkup.so/mcp"
+    vendor: Linkup
+    docs_url: "https://docs.linkup.so/pages/integrations/mcp/mcp"
+    repo_url: "https://github.com/LinkupPlatform/linkup-mcp-server"
+    category: web-search
+    tags: [web-search, real-time, natural-language]
+    provenance: official
+    auth: api_key
+  - name: parallel-search
+    display_name: Parallel Search
+    description: >-
+      Real-time web search and content extraction for search-grounded agent
+      workflows; usable with no API key at low rate limits, or a Bearer token
+      for higher limits.
+    url: "https://search.parallel.ai/mcp"
+    vendor: Parallel Web Systems
+    docs_url: "https://docs.parallel.ai/integrations/mcp/search-mcp"
+    category: web-search
+    tags: [web-search, content-extraction, real-time, research]
+    provenance: official
+    auth: open
+  - name: parallel-task
+    display_name: Parallel Task
+    description: >-
+      Asynchronous "task" MCP server that runs complex, long-running web
+      research jobs in the background and returns structured results.
+    url: "https://task-mcp.parallel.ai/mcp"
+    vendor: Parallel Web Systems
+    docs_url: "https://parallel.ai/blog/parallel-task-mcp-server"
+    category: web-search
+    tags: [web-search, research, async-tasks, automation]
+    provenance: official
+    auth: api_key
+  - name: scrapfly
+    display_name: Scrapfly
+    description: >-
+      Enterprise-grade scraping and AI-extraction MCP server with anti-bot-
+      aware data access as first-class tools.
+    url: "https://mcp.scrapfly.io/mcp"
+    vendor: Scrapfly
+    docs_url: "https://github.com/scrapfly/scrapfly-mcp"
+    repo_url: "https://github.com/scrapfly/scrapfly-mcp"
+    category: web-search
+    tags: [scraping, anti-bot, ai-extraction]
+    provenance: official
+    auth: api_key
+  - name: scrapingbee
+    display_name: ScrapingBee
+    description: >-
+      Hosted scraping MCP that browses, screenshots, downloads files, and
+      queries specialized extractors, handling proxies/CAPTCHAs/JS rendering;
+      API key passed as a query param.
+    url: "https://mcp.scrapingbee.com/mcp?api_key={api_key}"
+    vendor: ScrapingBee (Oxylabs)
+    docs_url: "https://mcp.scrapingbee.com/"
+    category: web-search
+    tags: [scraping, screenshots, captcha, js-rendering]
+    provenance: official
+    auth: tenant
+  - name: tavily
+    display_name: Tavily
+    description: >-
+      Real-time web search and scraping — tavily-search, extract, map, and crawl
+      tools.
+    url: "https://mcp.tavily.com/mcp/"
+    vendor: Tavily Inc.
+    docs_url: "https://docs.tavily.com/documentation/mcp"
+    repo_url: "https://github.com/tavily-ai/tavily-mcp"
+    category: web-search
+    tags: [search, extract, crawl, research]
+    provenance: official
+    auth: api_key
+  - name: valyu
+    display_name: Valyu
+    description: >-
+      Deepsearch API MCP server for web search plus academic/financial content
+      (Wikipedia, arXiv, textbooks, market data); API key passed as a URL query
+      param.
+    url: "https://mcp.valyu.ai/mcp"
+    vendor: Valyu
+    docs_url: "https://docs.valyu.ai/integrations/mcp-server"
+    repo_url: "https://github.com/valyuAI/valyu-mcp"
+    category: web-search
+    tags: [web-search, knowledge, academic, finance, deepsearch]
+    provenance: official
+    auth: api_key
+
+  # ── productivity ────────────────────────────────────────────────
+  - name: airtable
+    display_name: Airtable
+    description: >-
+      Query Airtable bases, create and update records, analyze data, and create
+      new bases, respecting your existing Airtable permissions.
+    url: "https://mcp.airtable.com/mcp"
+    vendor: Formagrid Inc. (Airtable)
+    docs_url: "https://support.airtable.com/docs/using-the-airtable-mcp-server"
+    category: productivity
+    tags: [database, spreadsheet, no-code, records]
+    provenance: official
+    auth: oauth
+  - name: akiflow
+    display_name: Akiflow
+    description: >-
+      Akiflow's single shared hosted MCP endpoint for managing tasks, calendar
+      events, time slots, projects/tags, and Meeting Assistant transcripts.
+    url: "https://mcp.akiflow.com/mcp"
+    vendor: Akiflow
+    docs_url: "https://product.akiflow.com/en/help/articles/4302815-akiflow-mcp"
+    category: productivity
+    tags: [tasks, calendar, time-blocking, meetings]
+    provenance: official
+    auth: oauth
+  - name: asana
+    display_name: Asana
+    description: >-
+      Work with the Asana Work Graph — find tasks, create work, list project
+      sections, and read status updates.
+    url: "https://mcp.asana.com/v2/mcp"
+    vendor: Asana, Inc.
+    docs_url: "https://developers.asana.com/docs/using-asanas-mcp-server"
+    category: productivity
+    tags: [tasks, projects, work-management]
+    provenance: official
+    auth: oauth
+  - name: atlassian
+    display_name: Atlassian (Rovo)
+    description: >-
+      Search, summarize, create, and update work in Jira, Confluence, Jira
+      Service Management, Bitbucket, and Compass with your existing permissions.
+    url: "https://mcp.atlassian.com/v1/mcp/authv2"
+    vendor: Atlassian Pty Ltd
+    docs_url: "https://support.atlassian.com/atlassian-rovo-mcp-server/docs/getting-started-with-the-atlassian-remote-mcp-server/"
+    repo_url: "https://github.com/atlassian/atlassian-mcp-server"
+    category: productivity
+    tags: [jira, confluence, tickets, wiki, bitbucket]
+    provenance: official
+    auth: oauth
+  - name: box
+    display_name: Box
+    description: >-
+      OAuth-authorized access to enterprise content in Box — search, Box AI, and
+      file/folder operations. Requires admin enablement in the Box Admin
+      Console.
+    url: "https://mcp.box.com"
+    vendor: Box, Inc.
+    docs_url: "https://developer.box.com/guides/box-mcp"
+    category: productivity
+    tags: [files, storage, documents, enterprise]
+    provenance: official
+    auth: oauth
+  - name: cal-com
+    display_name: Cal.com
+    description: >-
+      Official hosted MCP server for Cal.com covering event types, bookings,
+      schedules, availability, organizations, and routing forms (34 tools).
+    url: "https://mcp.cal.com/mcp"
+    vendor: Cal.com, Inc.
+    docs_url: "https://cal.com/docs/mcp-server"
+    repo_url: "https://github.com/calcom/cal-mcp"
+    category: productivity
+    tags: [scheduling, calendar, bookings, meetings]
+    provenance: official
+    auth: oauth
+  - name: calendly
+    display_name: Calendly
+    description: >-
+      Fully-hosted Calendly MCP server for managing event types, availability,
+      scheduling links, and scheduled events. OAuth-only with dynamic client
+      registration (no PATs).
+    url: "https://mcp.calendly.com"
+    vendor: Calendly LLC
+    docs_url: "https://developer.calendly.com/calendly-mcp-server"
+    category: productivity
+    tags: [scheduling, calendar, meetings, availability]
+    provenance: official
+    auth: oauth
+  - name: clickup
+    display_name: ClickUp
+    description: >-
+      Natural-language access to ClickUp Workspace data — tasks, lists, folders,
+      and docs.
+    url: "https://mcp.clickup.com/mcp"
+    vendor: Mango Technologies, Inc. (ClickUp)
+    docs_url: "https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server"
+    category: productivity
+    tags: [tasks, projects, docs, work-management]
+    provenance: official
+    auth: oauth
+  - name: coda
+    display_name: Coda
+    description: >-
+      Official beta MCP server for Coda letting AI clients read and write docs,
+      pages, tables, and rows. Free plan is capped (30 req/week, read-only
+      tools).
+    url: "https://coda.io/apis/mcp"
+    vendor: Coda Project Inc.
+    docs_url: "https://help.coda.io/hc/en-us/articles/44722661982989-Connect-to-the-Coda-MCP"
+    category: productivity
+    tags: [docs, tables, wiki, beta]
+    provenance: official
+    auth: api_key
+  - name: craft
+    display_name: Craft
+    description: >-
+      Craft's official remote MCP server for reading, searching, and updating
+      documents, blocks, collections, and tasks in a Craft space.
+    url: "https://mcp.craft.do/my/mcp"
+    vendor: Luki Labs Ltd. (Craft)
+    docs_url: "https://www.craft.do/imagine/guide/mcp/mcp"
+    category: productivity
+    tags: [docs, notes, collaboration, tasks]
+    provenance: official
+    auth: oauth
+  - name: dropbox
+    display_name: Dropbox
+    description: >-
+      Browse, search, extract content from, share, and manage files and folders
+      in Dropbox (open beta).
+    url: "https://mcp.dropbox.com/mcp"
+    vendor: Dropbox, Inc.
+    docs_url: "https://help.dropbox.com/integrations/connect-dropbox-mcp-server"
+    category: productivity
+    tags: [files, storage, sharing, search]
+    provenance: official
+    auth: oauth
+  - name: fibery
+    display_name: Fibery
+    description: >-
+      Fibery's remote MCP server (replacing the deprecated local server)
+      exposing 50+ tools for querying databases, running GraphQL, creating
+      entities, and managing workflows.
+    url: "https://mcp.fibery.io/mcp"
+    vendor: Fibery Inc.
+    docs_url: "https://the.fibery.io/@public/User_Guide/Guide/Fibery-MCP-Server-401"
+    repo_url: "https://github.com/Fibery-inc/fibery-mcp-server"
+    category: productivity
+    tags: [database, workflow, no-code, graphql]
+    provenance: official
+    auth: oauth
+  - name: google-calendar
+    display_name: Google Calendar (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for Calendar -- list events
+      and schedule meetings. Requires a Google Cloud project with an OAuth
+      client.
+    url: "https://calendarmcp.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/calendar/api/v3/reference/mcp"
+    category: productivity
+    tags: [calendar, scheduling, google-workspace, preview]
+    provenance: official
+    auth: oauth
+  - name: google-drive
+    display_name: Google Drive (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for Drive -- search and
+      retrieve files, upload content. Requires a Google Cloud project with an
+      OAuth client.
+    url: "https://drivemcp.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    category: productivity
+    tags: [file-storage, google-workspace, preview, oauth]
+    provenance: official
+    auth: oauth
+  - name: guru
+    display_name: Guru
+    description: >-
+      Guru's hosted MCP server bringing verified, permission-aware knowledge-
+      base answers and Card create/update actions into AI workflows.
+    url: "https://mcp.api.getguru.com/mcp"
+    vendor: Guru Technologies, Inc.
+    docs_url: "https://developer.getguru.com/docs/guru-mcp-server-overview"
+    category: productivity
+    tags: [knowledge-base, wiki, search, enterprise]
+    provenance: official
+    auth: oauth
+  - name: linear
+    display_name: Linear
+    description: >-
+      Find, create, and update Linear issues, projects, and comments.
+    url: "https://mcp.linear.app/mcp"
+    vendor: Linear Orbit, Inc.
+    docs_url: "https://linear.app/docs/mcp"
+    category: productivity
+    tags: [issues, projects, engineering, tracking]
+    provenance: official
+    auth: oauth
+  - name: microsoft-workiq-calendar
+    display_name: Microsoft Work IQ Calendar
+    description: >-
+      Microsoft Agent 365 (preview) hosted MCP server for Outlook Calendar --
+      create/list/update/delete events, accept/decline, resolve conflicts. URL
+      is tenant-scoped.
+    url: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_CalendarTools"
+    vendor: Microsoft Corporation
+    docs_url: "https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-calendar-work-iq"
+    category: productivity
+    tags: [calendar, outlook, enterprise, preview]
+    provenance: official
+    auth: tenant
+  - name: microsoft-workiq-sharepoint
+    display_name: Microsoft Work IQ SharePoint
+    description: >-
+      Microsoft Agent 365 (preview) hosted MCP server for SharePoint -- upload
+      files, get metadata, search, and manage lists. URL is tenant-scoped.
+    url: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_SharePointTools"
+    vendor: Microsoft Corporation
+    docs_url: "https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-sharepoint-work-iq"
+    category: productivity
+    tags: [file-storage, sharepoint, enterprise, preview]
+    provenance: official
+    auth: tenant
+  - name: monday
+    display_name: monday.com
+    description: >-
+      Read boards, items, and users; create and modify items, boards, groups,
+      columns, and forms; query the full monday.com GraphQL API.
+    url: "https://mcp.monday.com/mcp"
+    vendor: monday.com Ltd.
+    docs_url: "https://github.com/mondaycom/mcp"
+    repo_url: "https://github.com/mondaycom/mcp"
+    category: productivity
+    tags: [boards, projects, work-management, graphql]
+    provenance: official
+    auth: oauth
+  - name: notion
+    display_name: Notion
+    description: >-
+      Search, read, create, and update Notion pages and databases per your
+      permissions, with Markdown-optimized, token-efficient tools.
+    url: "https://mcp.notion.com/mcp"
+    vendor: Notion Labs, Inc.
+    docs_url: "https://developers.notion.com/docs/get-started-with-mcp"
+    category: productivity
+    tags: [notes, wiki, databases, pages]
+    provenance: official
+    auth: oauth
+  - name: plane
+    display_name: Plane
+    description: >-
+      Plane's official hosted MCP server for creating/updating work items,
+      cycles, and modules. OAuth endpoint shown; a PAT-based `/http/api-key/mcp`
+      variant also exists.
+    url: "https://mcp.plane.so/http/mcp"
+    vendor: Plane (Makeplane, Inc.)
+    docs_url: "https://developers.plane.so/dev-tools/mcp-server"
+    repo_url: "https://github.com/makeplane/plane-mcp-server"
+    category: productivity
+    tags: [project-management, issues, agile, open-source]
+    provenance: official
+    auth: oauth
+  - name: shortcut
+    display_name: Shortcut
+    description: >-
+      Hosted MCP server for Shortcut exposing tools to find, create, and update
+      Stories, Epics, and Docs. Zero local setup; all future development targets
+      this remote endpoint.
+    url: "https://mcp.shortcut.com/mcp"
+    vendor: Shortcut (useshortcut.com)
+    docs_url: "https://help.shortcut.com/hc/en-us/articles/36443434285844-MCP-Server"
+    repo_url: "https://github.com/useshortcut/mcp-server-shortcut"
+    category: productivity
+    tags: [project-management, stories, epics, agile]
+    provenance: official
+    auth: oauth
+  - name: slite
+    display_name: Slite
+    description: >-
+      Centrally-hosted Slite MCP server for searching, creating, and updating
+      docs, finding users/channels, and editing specific document blocks.
+    url: "https://api.slite.com/mcp"
+    vendor: Slite
+    docs_url: "https://slite.com/changelog/slite-mcp-server"
+    category: productivity
+    tags: [wiki, docs, notes, knowledge-base]
+    provenance: official
+    auth: oauth
+  - name: smartsheet
+    display_name: Smartsheet
+    description: >-
+      Officially hosted Smartsheet MCP server for querying and modifying sheets,
+      rows, and columns. Regional endpoints exist for EU (mcp.smartsheet.eu) and
+      Australia (mcp.smartsheet.au).
+    url: "https://mcp.smartsheet.com"
+    vendor: Smartsheet Inc.
+    docs_url: "https://developers.smartsheet.com/ai-mcp/smartsheet/mcp-server"
+    repo_url: "https://github.com/smartsheet-platform/smar-mcp"
+    category: productivity
+    tags: [spreadsheet, project-management, sheets, enterprise]
+    provenance: official
+    auth: api_key
+  - name: sunsama
+    display_name: Sunsama
+    description: >-
+      Sunsama's hosted MCP server for creating and managing tasks and daily
+      planning workflows; clients without native remote-MCP support can bridge
+      via mcp-remote.
+    url: "https://api.sunsama.com/mcp"
+    vendor: Sunsama
+    docs_url: "https://help.sunsama.com/docs/integrations/mcp/"
+    category: productivity
+    tags: [daily-planning, tasks, calendar]
+    provenance: official
+    auth: oauth
+  - name: teamwork
+    display_name: Teamwork.com
+    description: >-
+      TeamworkAI's hosted MCP server reading and acting on projects, tasks, Desk
+      tickets, and knowledge spaces, scoped to the connected user's permissions.
+    url: "https://mcp.ai.teamwork.com"
+    vendor: Teamwork.com
+    docs_url: "https://www.teamwork.com/ai/mcp/"
+    repo_url: "https://github.com/Teamwork/mcp"
+    category: productivity
+    tags: [project-management, tasks, helpdesk, agile]
+    provenance: official
+    auth: oauth
+  - name: ticktick
+    display_name: TickTick
+    description: >-
+      TickTick's official hosted MCP server exposing tasks, lists, habits, focus
+      records, and countdowns; supports both OAuth and personal Bearer-token
+      auth.
+    url: "https://mcp.ticktick.com"
+    vendor: Appest Inc. (TickTick)
+    docs_url: "https://help.ticktick.com/articles/7438129581631995904"
+    category: productivity
+    tags: [tasks, todo, habits, calendar]
+    provenance: official
+    auth: oauth
+  - name: todoist
+    display_name: Todoist
+    description: >-
+      Read, create, and update Todoist tasks and projects — rename, reschedule,
+      and move tasks on your behalf.
+    url: "https://ai.todoist.net/mcp"
+    vendor: Doist Inc.
+    docs_url: "https://www.todoist.com/help/articles/use-chatgpt-with-todoist-mcp-WEeLx9d8h"
+    category: productivity
+    tags: [tasks, projects, reminders, personal]
+    provenance: official
+    auth: oauth
+  - name: wrike
+    display_name: Wrike
+    description: >-
+      Wrike's hosted MCP server for querying projects, tasks, and folders, and
+      creating/updating work items. Streamable HTTP is the default; SSE is
+      offered as a fallback.
+    url: "https://mcp.wrike.com/app/mcp/stream"
+    vendor: Wrike, Inc. (Citrix)
+    docs_url: "https://developers.wrike.com/docs/wrike-mcp-server-overview"
+    category: productivity
+    tags: [project-management, tasks, enterprise, oauth]
+    provenance: official
+    auth: oauth
+  - name: zenhub
+    display_name: Zenhub
+    description: >-
+      Official Zenhub MCP endpoint wrapping the Zenhub GraphQL API to search and
+      modify issues and inspect sprints. Requires a personal API token and
+      workspace ID via headers.
+    url: "https://api.zenhub.com/mcp"
+    vendor: Zenhub Inc.
+    docs_url: "https://developers.zenhub.com/mcp/index.html"
+    category: productivity
+    tags: [agile, sprints, issues, github]
+    provenance: official
+    auth: api_key
+
+  # ── communication ───────────────────────────────────────────────
+  - name: fellow
+    display_name: Fellow
+    description: >-
+      Fellow's official MCP connector bringing meeting notes and action items
+      into LLM apps; listed as a verified Connector in Claude's directory.
+    url: "https://fellow.app/mcp"
+    vendor: Fellow.app Inc.
+    docs_url: "https://help.fellow.ai/en/articles/12622641-fellow-s-mcp-server"
+    category: communication
+    tags: [meetings, notes, action-items]
+    provenance: official
+    auth: oauth
+  - name: fireflies
+    display_name: Fireflies.ai
+    description: >-
+      Meeting data — transcripts, metadata, speaker information, and AI
+      summaries.
+    url: "https://api.fireflies.ai/mcp"
+    vendor: Fireflies.ai Corp.
+    docs_url: "https://docs.fireflies.ai/getting-started/mcp-configuration"
+    category: communication
+    tags: [meetings, transcripts, summaries, notes]
+    provenance: official
+    auth: api_key
+  - name: google-chat
+    display_name: Google Chat (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for Chat -- read and post to
+      spaces/messages. Requires a Google Cloud project with an OAuth client.
+    url: "https://chatmcp.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    category: communication
+    tags: [chat, messaging, google-workspace, preview]
+    provenance: official
+    auth: oauth
+  - name: google-gmail
+    display_name: Google Gmail (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for Gmail -- search email and
+      create drafts. Requires a Google Cloud project with an OAuth client and
+      the gmailmcp API enabled.
+    url: "https://gmailmcp.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/gmail/api/reference/mcp"
+    category: communication
+    tags: [email, google-workspace, preview, oauth]
+    provenance: official
+    auth: oauth
+  - name: grain
+    display_name: Grain
+    description: >-
+      Grain's official MCP server for meetings, transcripts/notes, and (on
+      Business/Enterprise plans) deal-intelligence and coaching-feedback tools.
+    url: "https://api.grain.com/_/mcp"
+    vendor: Grain Intelligence, Inc.
+    docs_url: "https://developers.grain.com/mcp"
+    category: communication
+    tags: [meetings, transcription, sales-intelligence, notes]
+    provenance: official
+    auth: oauth
+  - name: microsoft-workiq-mail
+    display_name: Microsoft Work IQ Mail
+    description: >-
+      Microsoft Agent 365 (preview) hosted MCP server for Outlook mail --
+      create, update, delete, reply, and semantically search messages. URL is
+      tenant-scoped; requires an M365 Copilot license and Entra app
+      registration.
+    url: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_MailTools"
+    vendor: Microsoft Corporation
+    docs_url: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
+    category: communication
+    tags: [email, outlook, enterprise, preview]
+    provenance: official
+    auth: tenant
+  - name: microsoft-workiq-teams
+    display_name: Microsoft Work IQ Teams
+    description: >-
+      Microsoft Agent 365 (preview) hosted MCP server for Teams -- create/update
+      chats, add members, post messages, and manage channels. URL is tenant-
+      scoped.
+    url: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_TeamsTools"
+    vendor: Microsoft Corporation
+    docs_url: "https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-teams-work-iq"
+    category: communication
+    tags: [chat, teams, enterprise, preview]
+    provenance: official
+    auth: tenant
+  - name: otter-ai
+    display_name: Otter.ai
+    description: >-
+      Otter's hosted MCP server for transcript search and retrieval, usable via
+      Claude's connector directory or any remote-MCP client through the public
+      URL.
+    url: "https://mcp.otter.ai/mcp"
+    vendor: Otter.ai, Inc.
+    docs_url: "https://help.otter.ai/hc/en-us/articles/35287607569687-Otter-MCP-Server"
+    category: communication
+    tags: [meetings, transcription, notes, voice]
+    provenance: official
+    auth: oauth
+  - name: pearl
+    display_name: Pearl
+    description: >-
+      Connects agents to Pearl's 12,000+ certified human experts plus AI-
+      generated answers; tools include askPearlAi, askPearlExpert, and
+      askExpert. Bearer/X-API-KEY auth.
+    url: "https://mcp.pearl.com/sse"
+    vendor: Pearl.com
+    docs_url: "https://www.pearl.com/api/docs/pearl-api-mcp-server"
+    repo_url: "https://github.com/Pearl-com/pearl_mcp_server"
+    category: communication
+    tags: [expert-network, qa, human-in-the-loop, support]
+    provenance: official
+    auth: api_key
+  - name: read-ai
+    display_name: Read.ai
+    description: >-
+      Read.ai's hosted MCP server exposing two tools -- fetch a meeting by ULID
+      and browse/filter meeting history -- via OAuth 2.1 with dynamic client
+      registration.
+    url: "https://api.read.ai/mcp"
+    vendor: Read AI, Inc.
+    docs_url: "https://support.read.ai/hc/en-us/articles/49381158409491-MCP-Server"
+    category: communication
+    tags: [meetings, transcription, analytics, notes]
+    provenance: official
+    auth: oauth
+  - name: slack
+    display_name: Slack
+    description: >-
+      Search messages and files, retrieve and send messages, manage canvases,
+      and look up users. Workspace admins must approve MCP client integrations.
+    url: "https://mcp.slack.com/mcp"
+    vendor: Slack Technologies, LLC (Salesforce)
+    docs_url: "https://docs.slack.dev/ai/slack-mcp-server/"
+    category: communication
+    tags: [chat, messages, channels, canvases]
+    provenance: official
+    auth: oauth
+  - name: superhuman-mail
+    display_name: Superhuman Mail
+    description: >-
+      Superhuman-hosted MCP server connecting AI assistants to a user's
+      Superhuman inbox and calendar. Requires Business/Enterprise plan with Ask
+      AI enabled.
+    url: "https://mcp.mail.superhuman.com/mcp"
+    vendor: Superhuman Labs, Inc.
+    docs_url: "https://help.superhuman.com/hc/en-us/articles/46005696690317-Superhuman-Mail-MCP-Server"
+    category: communication
+    tags: [email, inbox, calendar, enterprise]
+    provenance: official
+    auth: oauth
+  - name: twilio
+    display_name: Twilio
+    description: >-
+      Search-then-retrieve access to Twilio's full public OpenAPI surface
+      (~1,800 endpoints across 30+ products). Docs and spec retrieval only — it
+      does not execute API calls.
+    url: "https://mcp.twilio.com/docs"
+    vendor: Twilio Inc.
+    docs_url: "https://www.twilio.com/docs/ai/mcp"
+    category: communication
+    tags: [sms, voice, api-reference, docs]
+    provenance: official
+    auth: open
+  - name: zoom
+    display_name: Zoom
+    description: >-
+      Zoom's hosted MCP server for searching meetings/Zoom Docs and reading
+      cloud recording assets and transcripts. Requires a General app with user-
+      level OAuth and MCP-specific scopes.
+    url: "https://mcp.zoom.us/mcp/zoom/streamable"
+    vendor: Zoom Communications, Inc.
+    docs_url: "https://developers.zoom.us/docs/mcp/servers/connect-to-zoom-mcp-servers/"
+    category: communication
+    tags: [meetings, recordings, video, transcripts]
+    provenance: official
+    auth: oauth
+
+  # ── crm-sales ───────────────────────────────────────────────────
+  - name: apollo-io
+    display_name: Apollo.io
+    description: >-
+      Sales intelligence: search prospects and companies, enrich records, manage
+      contacts, sequences, and tasks.
+    url: "https://mcp.apollo.io/mcp"
+    vendor: ZenLeads Inc. (Apollo.io)
+    docs_url: "https://docs.apollo.io/docs/apollo-mcp"
+    category: crm-sales
+    tags: [sales, prospecting, leads, enrichment]
+    provenance: official
+    auth: oauth
+  - name: attio
+    display_name: Attio
+    description: >-
+      Hosted MCP server for Attio CRM exposing 40+ tools spanning records,
+      lists, notes, tasks, meetings/calls, emails, workspace info, an aggregate-
+      reporting tool, and a read-only SQL query tool; writes require user
+      confirmation.
+    url: "https://mcp.attio.com/mcp"
+    vendor: Attio Labs, Inc.
+    docs_url: "https://docs.attio.com/mcp/overview"
+    category: crm-sales
+    tags: [crm, records, notes, reporting, oauth]
+    provenance: official
+    auth: oauth
+  - name: close
+    display_name: Close CRM
+    description: >-
+      CRM operations on leads, contacts, opportunities, and activities, with
+      tiered permission scopes for safe vs destructive writes.
+    url: "https://mcp.close.com/mcp"
+    vendor: Elastic Inc. (Close)
+    docs_url: "https://developer.close.com/mcp"
+    category: crm-sales
+    tags: [crm, sales, leads, opportunities]
+    provenance: official
+    auth: oauth
+  - name: hubspot
+    display_name: HubSpot
+    description: >-
+      Access HubSpot CRM data — contacts, companies, deals, and tickets — using
+      your OAuth credentials.
+    url: "https://mcp.hubspot.com"
+    vendor: HubSpot, Inc.
+    docs_url: "https://developers.hubspot.com/mcp"
+    category: crm-sales
+    tags: [crm, contacts, deals, marketing]
+    provenance: official
+    auth: oauth
+  - name: lusha
+    display_name: Lusha
+    description: >-
+      Lusha's fully managed remote MCP server exposing 18 tools for contact and
+      company search, prospecting, enrichment, and intent/activity signals;
+      supports one-click OAuth (Claude/ChatGPT) or an x-api-key header for
+      direct client config.
+    url: "https://mcp.lusha.com"
+    vendor: Lusha Systems Inc.
+    docs_url: "https://docs.lusha.com/mcp-docs"
+    category: crm-sales
+    tags: [sales-intelligence, prospecting, enrichment, b2b-data]
+    provenance: official
+    auth: oauth
+  - name: outreach
+    display_name: Outreach
+    description: >-
+      Official remote MCP server for the Outreach sales engagement platform,
+      exposing ~32 tools (prospect search, sequence management, pipeline
+      context) over Streamable HTTP with OAuth 2.1 + Dynamic Client
+      Registration; requires an active licensed seat with the Amplify add-on.
+    url: "https://api.outreach.io/mcp/"
+    vendor: Outreach Corporation
+    docs_url: "https://developers.outreach.io/mcp-server/usage-guide"
+    category: crm-sales
+    tags: [sales-engagement, prospecting, sequences, oauth]
+    provenance: official
+    auth: oauth
+  - name: pipedrive
+    display_name: Pipedrive
+    description: >-
+      Pipedrive's native MCP server (beta, launched June 2026) letting AI
+      assistants search, create, and update deals, contacts, organizations, and
+      activities under the connecting user's existing permissions, with all
+      actions recorded in Pipedrive's change log.
+    url: "https://mcp.pipedrive.ai/mcp"
+    vendor: Pipedrive Inc.
+    docs_url: "https://support.pipedrive.com/en/article/mcp-claude"
+    category: crm-sales
+    tags: [crm, deals, pipeline, contacts, oauth]
+    provenance: official
+    auth: oauth
+  - name: salesforce
+    display_name: Salesforce (hosted, per-org)
+    description: >-
+      Fully managed MCP servers exposing org data and logic — SObject CRUD,
+      Flows, invocable Apex, Data 360, Tableau Next. Endpoint is per-org; copy
+      it from Setup → API Catalog → MCP Servers.
+    url: "https://api.salesforce.com/platform/mcp/v1/{environment}/platform/{server}"
+    vendor: Salesforce, Inc.
+    docs_url: "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/references/reference/servers-reference.html"
+    category: crm-sales
+    tags: [crm, sobjects, flows, apex, enterprise]
+    provenance: official
+    auth: tenant
+  - name: zoominfo
+    display_name: ZoomInfo
+    description: >-
+      ZoomInfo's hosted MCP server providing company/contact search, enrichment,
+      and account/contact research tools over ZoomInfo's B2B intelligence
+      database (100M+ companies, 300M+ contacts).
+    url: "https://mcp.zoominfo.com/mcp"
+    vendor: ZoomInfo Technologies LLC
+    docs_url: "https://docs.zoominfo.com/docs/zi-api-mcp-overview"
+    category: crm-sales
+    tags: [sales-intelligence, b2b-data, enrichment, prospecting]
+    provenance: official
+    auth: oauth
+
+  # ── customer-support ────────────────────────────────────────────
+  - name: crisp
+    display_name: Crisp
+    description: >-
+      Official Crisp live-chat MCP server for reading workspace data and
+      performing write actions (change conversation state, send messages, post
+      comments). Authenticated via a workspace-scoped bearer token generated in
+      Crisp Dashboard settings.
+    url: "https://api.crisp.chat/mcp/"
+    vendor: Crisp IM SAS
+    docs_url: "https://docs.crisp.chat/guides/mcp-server/quickstart/"
+    repo_url: "https://github.com/crisp-im/crisp-mcp-demo"
+    category: customer-support
+    tags: [live-chat, conversations, helpdesk, messaging]
+    provenance: official
+    auth: api_key
+  - name: dixa
+    display_name: Dixa
+    description: >-
+      Vendor-run public-beta MCP server (built on FastMCP, hosted by Dixa's own
+      GitHub org) exposing ~79 tools across analytics, conversations, agents,
+      end-users, tags, knowledge base, and settings. Explicitly disclaimed as
+      not covered by Dixa's official support channels.
+    url: "https://dixa-mcp-public.fastmcp.app/mcp"
+    vendor: Dixa ApS
+    docs_url: "https://docs.dixa.io/docs/dixamcp/dixa-mcp"
+    repo_url: "https://github.com/Dixa-public/dixa-mcp-public"
+    category: customer-support
+    tags: [contact-center, conversations, analytics, beta]
+    provenance: official
+    auth: api_key
+  - name: freshdesk
+    display_name: Freshdesk
+    description: >-
+      Freshworks' EAP/beta MCP integration for Freshdesk exposes 30+ tools
+      across tickets, conversations, contacts, agents, groups, companies, and
+      solution articles. Enterprise-plan only, admin/agent privileges required,
+      rate limited to 100 calls/min and 5,000/month.
+    url: "https://{your-freshdesk-domain}/mcp"
+    vendor: Freshworks Inc.
+    docs_url: "https://support.freshdesk.com/support/solutions/articles/50000012670-model-context-protocol-mcp-integration-in-freshdesk-eap-"
+    category: customer-support
+    tags: [helpdesk, tickets, beta, enterprise-only]
+    provenance: official
+    auth: tenant
+  - name: front
+    display_name: Front
+    description: >-
+      Official Front MCP server exposing 18 tools across conversations,
+      comments, tags, contacts, and organization data (search, read, draft,
+      reply, assign, tag). Requires a confidential OAuth 2.1+PKCE client; most
+      endpoints are read-only with tool calls attributed per-teammate.
+    url: "https://mcp.frontapp.com/mcp"
+    vendor: Front (Front App, Inc.)
+    docs_url: "https://dev.frontapp.com/docs/mcp-server"
+    category: customer-support
+    tags: [shared-inbox, conversations, contacts, tagging, oauth]
+    provenance: official
+    auth: oauth
+  - name: gorgias
+    display_name: Gorgias
+    description: >-
+      Official Gorgias MCP server for reading/replying to tickets, posting
+      internal notes, auditing AI Agent setup/handovers, managing helpdesk
+      settings and macros, and querying analytics (CSAT, response time, volume
+      trends). Browser-based OAuth with per-subdomain authorization.
+    url: "https://mcp.gorgias.com/mcp"
+    vendor: Gorgias Inc.
+    docs_url: "https://docs.gorgias.com/en-US/connect-your-ai-assistant-to-the-gorgias-mcp-6310546"
+    category: customer-support
+    tags: [helpdesk, tickets, ecommerce, analytics]
+    provenance: official
+    auth: oauth
+  - name: intercom
+    display_name: Intercom
+    description: >-
+      Search and fetch conversations, contacts, companies, and Help Center
+      articles (including creating and updating articles). US-hosted workspaces
+      only.
+    url: "https://mcp.intercom.com/mcp"
+    vendor: Intercom, Inc.
+    docs_url: "https://developers.intercom.com/docs/guides/mcp"
+    category: customer-support
+    tags: [support, conversations, help-center, contacts]
+    provenance: official
+    auth: oauth
+  - name: plain
+    display_name: Plain
+    description: >-
+      Official Plain MCP server exposing 30 tools across threads, customers,
+      tenants, help-center articles, and workspace/user info. OAuth-based so the
+      MCP session shares context with the calling web-app user; most write
+      operations require client-side confirmation.
+    url: "https://mcp.plain.com/mcp"
+    vendor: Plain Software Ltd.
+    docs_url: "https://help.plain.com/article/mcp-server"
+    category: customer-support
+    tags: [b2b-support, threads, tenants, help-center, oauth]
+    provenance: official
+    auth: oauth
+  - name: pylon
+    display_name: Pylon
+    description: >-
+      Official Pylon MCP server (Streamable HTTP, stateless) exposing issue,
+      account, contact, and user tools (search/get/create/update issues, search
+      accounts, get contacts). OAuth-only; requires the "MCP Access" role
+      enabled per member/admin.
+    url: "https://mcp.usepylon.com"
+    vendor: Pylon Technologies, Inc.
+    docs_url: "https://docs.usepylon.com/pylon-docs/integrations/pylon-mcp"
+    category: customer-support
+    tags: [b2b-support, issues, accounts, oauth]
+    provenance: official
+    auth: oauth
+
+  # ── commerce-payments ───────────────────────────────────────────
+  - name: airwallex
+    display_name: Airwallex
+    description: >-
+      Production remote MCP for Airwallex accounts via OAuth; companion hosted
+      servers at mcp-demo.airwallex.com/developer (docs plus sandbox simulation
+      tools) and mcp-demo.airwallex.com/docs (documentation-only, no auth).
+    url: "https://mcp.airwallex.com/mcp"
+    vendor: Airwallex (Hong Kong) Limited
+    docs_url: "https://www.airwallex.com/docs/developer-tools/ai/developer-mcp"
+    category: commerce-payments
+    tags: [payments, fx, treasury, payouts, sandbox]
+    provenance: official
+    auth: oauth
+  - name: chargebee
+    display_name: Chargebee Custom
+    description: >-
+      Hosted per-tenant MCP where admins expose selected Chargebee toolsets
+      (subscriptions, invoices, customer/data lookup, onboarding) at a custom
+      endpoint. Currently available for test/sandbox sites only — not yet
+      enabled for live production sites.
+    url: "https://{subdomain}.mcp.chargebee.com/{server-slug}"
+    vendor: Chargebee Inc.
+    docs_url: "https://www.chargebee.com/docs/billing/2.0/ai-in-chargebee/custom-mcp-server"
+    category: commerce-payments
+    tags: [billing, subscriptions, invoicing, saas, sandbox]
+    provenance: official
+    auth: tenant
+  - name: checkout-com
+    display_name: Checkout.com
+    description: >-
+      Hosted MCP (Beta) exposing payment-operations and docs tools (Guide,
+      DocsSearch, ApiSearch, SupportSearch, ListOperations, GetOperation,
+      GetSchema) for querying payment status, issuing refunds, voiding payments,
+      and managing payment links. Requires a Checkout.com Dashboard account;
+      sandbox endpoint also documented.
+    url: "https://mcp.checkout.com"
+    vendor: Checkout.com
+    docs_url: "https://www.checkout.com/docs/developer-resources/checkout-com-mcp-server"
+    category: commerce-payments
+    tags: [payments, refunds, payment-links, docs-search, psp]
+    provenance: official
+    auth: oauth
+  - name: circle-codegen
+    display_name: Circle Codegen
+    description: >-
+      Circle's official hosted MCP that helps LLMs/AI IDEs generate and fix code
+      for Circle's Wallets, Contracts, CCTP, and Gateway products; a codegen
+      assistant, not a live transaction/execution API.
+    url: "https://api.circle.com/v1/codegen/mcp"
+    vendor: Circle Internet Financial, LLC
+    docs_url: "https://developers.circle.com/ai/mcp"
+    category: commerce-payments
+    tags: [usdc, stablecoin, cctp, wallets, codegen]
+    provenance: official
+    auth: open
+  - name: commercetools-knowledge
+    display_name: commercetools Knowledge
+    description: >-
+      Stateless, vendor-hosted MCP exposing commercetools documentation-search
+      and API-schema tools. Serves only public content — no live store or
+      transactional data access (the transactional Commerce MCP is self-hosted
+      only).
+    url: "https://docs.commercetools.com/apis/mcp"
+    vendor: commercetools GmbH
+    docs_url: "https://docs.commercetools.com/dev-tooling/mcp/knowledge-mcp"
+    category: commerce-payments
+    tags: [commerce, headless, documentation, composable-commerce]
+    provenance: official
+    auth: open
+  - name: dodo-payments
+    display_name: Dodo Payments
+    description: >-
+      Hosted SSE MCP providing a documentation-search tool and a sandboxed
+      TypeScript code-execution tool for calling the Dodo Payments API/SDK;
+      OAuth flow prompts for an API key and environment (test/live) on first
+      connection.
+    url: "https://mcp.dodopayments.com/sse"
+    vendor: Dodo Payments, Inc.
+    docs_url: "https://docs.dodopayments.com/developer-resources/mcp-server"
+    category: commerce-payments
+    tags: [payments, billing, saas, merchant-of-record]
+    provenance: official
+    auth: oauth
+  - name: etsy-dev
+    display_name: Etsy Dev
+    description: >-
+      Etsy's official documentation/spec-helper MCP exposing tools such as
+      learn_etsy_api and search_etsy_api for looking up Etsy Open API v3
+      endpoints, schemas, and OAuth scopes. Not a live-data or transactional
+      connector.
+    url: "https://mcp.api.etsycloud.com/mcp"
+    vendor: Etsy, Inc.
+    docs_url: "https://developers.etsy.com/documentation/mcp_server/devmcpserver/"
+    category: commerce-payments
+    tags: [marketplace, api-docs, developer-tools]
+    provenance: official
+    auth: open
+  - name: gocardless
+    display_name: GoCardless
+    description: >-
+      Remote MCP for bank-payment operations: docs/integration guidance plus
+      live account tools to query payments, customers, mandates and
+      subscriptions, create payments and issue refunds (money-moving actions
+      require user confirmation). Sensitive customer data is masked; sandbox or
+      live environment chosen at OAuth sign-in.
+    url: "https://mcp.gocardless.com"
+    vendor: GoCardless Ltd
+    docs_url: "https://developer.gocardless.com/developer-tools/mcp/"
+    category: commerce-payments
+    tags: [direct-debit, bank-payments, mandates, refunds]
+    provenance: official
+    auth: oauth
+  - name: medusa-docs
+    display_name: Medusa MCP Remote Server
+    description: >-
+      Medusa-hosted Streamable HTTP MCP for searching and retrieving Medusa
+      documentation from IDEs/agents. Available to Medusa Cloud account users
+      only (OAuth or personal access key); documentation lookup, not live
+      commerce-data access.
+    url: "https://docs.medusajs.com/mcp"
+    vendor: Medusa (medusajs)
+    docs_url: "https://docs.medusajs.com/learn/introduction/build-with-llms-ai/mcp-server"
+    category: commerce-payments
+    tags: [commerce, documentation, headless, cloud]
+    provenance: official
+    auth: oauth
+  - name: mercado-libre
+    display_name: Mercado Libre
+    description: >-
+      Official marketplace MCP for Latin America's largest e-commerce platform;
+      OAuth 2.0 flow (access tokens expire every 6 hours).
+    url: "https://mcp.mercadolibre.com/mcp"
+    vendor: Mercado Libre
+    docs_url: "https://global-selling.mercadolibre.com/devsite/mcp-server-from-mercado-libre"
+    repo_url: "https://github.com/mercadolibre/mercadolibre-mcp-server"
+    category: commerce-payments
+    tags: [ecommerce, marketplace, latin-america, oauth]
+    provenance: official
+    auth: oauth
+  - name: mercado-pago
+    display_name: Mercado Pago
+    description: >-
+      Official LATAM payments MCP: searches Mercado Pago developer docs, manages
+      applications and credentials, configures webhooks, creates test users and
+      scores integration quality before go-live. Account tools require the OAuth
+      browser flow; application access tokens also accepted.
+    url: "https://mcp.mercadopago.com/mcp"
+    vendor: MercadoLibre, Inc. (Mercado Pago)
+    docs_url: "https://www.mercadopago.com.co/developers/en/docs/mcp-server/connection"
+    repo_url: "https://github.com/mercadolibre/mercadopago-mcp-server"
+    category: commerce-payments
+    tags: [payments, latam, checkout, webhooks, integration]
+    provenance: official
+    auth: oauth
+  - name: mollie
+    display_name: Mollie
+    description: >-
+      Hosted proxy over Mollie's public API covering Payments, Payment Links,
+      Balances, Customers, Mandates, Subscriptions, Settlements, Invoices,
+      Terminals and Webhooks. Requires an organization access token with at
+      least profile.read scope; tool availability follows token scopes.
+    url: "https://mcp.mollie.com/mcp"
+    vendor: Mollie B.V.
+    docs_url: "https://docs.mollie.com/docs/mollie-mcp-server"
+    category: commerce-payments
+    tags: [payments, subscriptions, settlements, europe, psp]
+    provenance: official
+    auth: api_key
+  - name: paddle
+    display_name: Paddle
+    description: >-
+      Paddle's hosted MCP exposes a compact codemode interface (search, execute,
+      report_missing_tool) that lets an agent chain up to 50 Paddle Billing API
+      calls per invocation — products, prices, subscriptions, customers,
+      transactions, and reports. Sandbox at sandbox-mcp.paddle.com/mcp.
+    url: "https://mcp.paddle.com/mcp"
+    vendor: Paddle.com Market Ltd.
+    docs_url: "https://developer.paddle.com/build/tools/ai/mcp"
+    repo_url: "https://github.com/PaddleHQ/paddle-mcp-server"
+    category: commerce-payments
+    tags: [payments, billing, subscriptions, merchant-of-record]
+    provenance: official
+    auth: api_key
+  - name: paypal
+    display_name: PayPal
+    description: >-
+      Merchant operations via natural language — create invoices, manage
+      payments and transactions, and reporting (sandbox endpoint also
+      available).
+    url: "https://mcp.paypal.com/http"
+    vendor: PayPal, Inc.
+    docs_url: "https://docs.paypal.ai/developer/tools/ai/mcp-quickstart/"
+    repo_url: "https://github.com/paypal/agent-toolkit"
+    category: commerce-payments
+    tags: [payments, invoices, transactions, merchant]
+    provenance: official
+    auth: oauth
+  - name: polar
+    display_name: Polar
+    description: >-
+      Polar's hosted MCP exposes ~41 scoped tools spanning customers, products,
+      subscriptions, orders, payments, webhooks, and metrics for a connected
+      Polar organization; separate production and sandbox endpoints, with scope-
+      based permissions (e.g. payments:read).
+    url: "https://mcp.polar.sh/mcp/polar-mcp"
+    vendor: Polar Software Inc.
+    docs_url: "https://polar.sh/docs/integrate/mcp"
+    repo_url: "https://github.com/polarsource/skills"
+    category: commerce-payments
+    tags: [payments, subscriptions, billing, saas]
+    provenance: official
+    auth: oauth
+  - name: razorpay
+    display_name: Razorpay
+    description: >-
+      Razorpay's hosted MCP server exposing payment tools (payment links,
+      orders, settlements, refunds and more) over Streamable HTTP; the older
+      /sse endpoint was deprecated in favor of /mcp.
+    url: "https://mcp.razorpay.com/mcp"
+    vendor: Razorpay Software Private Limited
+    docs_url: "https://razorpay.com/docs/mcp-server/remote/"
+    repo_url: "https://github.com/razorpay/razorpay-mcp-server"
+    category: commerce-payments
+    tags: [payments, payment-links, orders, refunds, india]
+    provenance: official
+    auth: api_key
+  - name: saleor
+    display_name: Saleor Commerce
+    description: >-
+      Read-only Streamable HTTP MCP operated by Saleor that proxies GraphQL
+      queries for products, customers, and orders against a customer's
+      saleor.cloud instance (3.21+); the target store URL and auth token are
+      passed as request headers.
+    url: "https://mcp.saleor.app/mcp"
+    vendor: Saleor Commerce
+    docs_url: "https://github.com/saleor/saleor-mcp"
+    repo_url: "https://github.com/saleor/saleor-mcp"
+    category: commerce-payments
+    tags: [commerce, graphql, read-only, multi-tenant, headless]
+    provenance: official
+    auth: api_key
+  - name: shopify-storefront
+    display_name: Shopify Storefront (per-store)
+    description: >-
+      Every store's own domain exposes cart tools, policy and FAQ search, and
+      catalog search for browse-and-buy flows. Replace the placeholder with the
+      store domain; no auth for public data.
+    url: "https://{store}.myshopify.com/api/mcp"
+    vendor: Shopify Inc.
+    docs_url: "https://shopify.dev/docs/apps/build/storefront-mcp/servers/storefront"
+    category: commerce-payments
+    tags: [ecommerce, storefront, cart, catalog]
+    provenance: official
+    auth: tenant
+  - name: square
+    display_name: Square
+    description: >-
+      Bridge to the full Square API platform — customers, orders, catalog, and
+      payments — with granular permissions.
+    url: "https://mcp.squareup.com/sse"
+    vendor: Block, Inc.
+    docs_url: "https://developer.squareup.com/docs/mcp"
+    repo_url: "https://github.com/square/square-mcp-server"
+    category: commerce-payments
+    tags: [payments, orders, catalog, pos]
+    provenance: official
+    auth: oauth
+  - name: stripe
+    display_name: Stripe
+    description: >-
+      Call the Stripe API — customers, payments, refunds, invoices,
+      subscriptions, payment links — and search Stripe's docs and knowledge
+      base.
+    url: "https://mcp.stripe.com"
+    vendor: Stripe, Inc.
+    docs_url: "https://docs.stripe.com/mcp"
+    repo_url: "https://github.com/stripe/agent-toolkit"
+    category: commerce-payments
+    tags: [payments, subscriptions, invoices, refunds]
+    provenance: official
+    auth: oauth
+  - name: whop
+    display_name: Whop API
+    description: >-
+      Whop-hosted MCP that lets agents list, create, and update live Whop
+      resources (products, memberships, payments, promo codes, affiliates) over
+      HTTP streaming or SSE (/sse), authenticated with a Company or App API key.
+      A separate docs.whop.com/mcp server exists for docs search.
+    url: "https://mcp.whop.com/mcp"
+    vendor: Whop Technologies, Inc.
+    docs_url: "https://docs.whop.com/developer/guides/ai_and_mcp"
+    category: commerce-payments
+    tags: [commerce, payments, memberships, creator-economy]
+    provenance: official
+    auth: api_key
+
+  # ── finance ─────────────────────────────────────────────────────
+  - name: alchemy
+    display_name: Alchemy
+    description: >-
+      Alchemy's official hosted MCP exposing 168 tools across 100+ chains (EVM
+      JSON-RPC, Token/NFT/Prices APIs, tracing/debug, ERC-4337 account
+      abstraction, Solana RPC and DAS); Streamable HTTP with OAuth 2.1 + PKCE
+      sign-in, no manual API key required.
+    url: "https://mcp.alchemy.com/mcp"
+    vendor: Alchemy Insights, Inc.
+    docs_url: "https://www.alchemy.com/docs/alchemy-mcp-server"
+    repo_url: "https://github.com/alchemyplatform/alchemy-mcp-server"
+    category: finance
+    tags: [blockchain, rpc, nft, solana, evm, web3]
+    provenance: official
+    auth: oauth
+  - name: alpha-vantage
+    display_name: Alpha Vantage
+    description: >-
+      Hosted MCP exposing 100+ Alpha Vantage market-data tools (time series,
+      technical indicators, fundamentals, forex, crypto, options, economic
+      indicators); connects via OAuth consent flow using your Alpha Vantage API
+      key, with a deprecated apikey-in-URL variant.
+    url: "https://mcp.alphavantage.co/mcp"
+    vendor: Alpha Vantage Inc.
+    docs_url: "https://mcp.alphavantage.co/"
+    repo_url: "https://github.com/alphavantage/alpha_vantage_mcp"
+    category: finance
+    tags: [stocks, market-data, technical-indicators, fundamentals, forex]
+    provenance: official
+    auth: oauth
+  - name: avalara-avatax
+    display_name: Avalara AvaTax
+    description: >-
+      Avalara-hosted MCP for AvaTax exposing tax calculation, transaction
+      management, nexus handling, and compliance-data tools over Streamable
+      HTTP, authorized via OAuth 2.1.
+    url: "https://mcp.avalara.com/avatax"
+    vendor: Avalara, Inc.
+    docs_url: "https://developer.avalara.com/mcp-servers/avatax/"
+    category: finance
+    tags: [tax, compliance, nexus, avatax]
+    provenance: official
+    auth: oauth
+  - name: brex
+    display_name: Brex
+    description: >-
+      Brex's hosted MCP (beta) with 50+ tools spanning users, expenses
+      (including receipt upload), cards, banking transactions, bills/vendors,
+      and travel. Approvals and card management actions are not yet available;
+      OAuth recommended, API-key bearer auth also supported.
+    url: "https://api.brex.com/mcp"
+    vendor: Brex Inc.
+    docs_url: "https://developer.brex.com/docs/mcp"
+    category: finance
+    tags: [spend-management, corporate-cards, expenses, banking, bills]
+    provenance: official
+    auth: oauth
+  - name: coinbase-cdp-docs
+    display_name: Coinbase CDP Docs
+    description: >-
+      Coinbase's official hosted MCP for Coinbase Developer Platform
+      documentation; exposes docs search/retrieval tools only and explicitly
+      does not execute API calls, trades, or wallet operations.
+    url: "https://docs.cdp.coinbase.com/mcp"
+    vendor: Coinbase Global, Inc.
+    docs_url: "https://docs.cdp.coinbase.com/get-started/build-with-ai/docs-for-ai/cdp-docs-mcp"
+    category: finance
+    tags: [coinbase, cdp, docs-search, crypto, developer-tools]
+    provenance: official
+    auth: open
+  - name: coingecko
+    display_name: CoinGecko
+    description: >-
+      CoinGecko's official hosted MCP for live/historical prices, market caps,
+      trending coins, and onchain DEX data (via GeckoTerminal) across 15k+ coins
+      and 200+ networks. Free keyless tier is shared-rate-limited; a separate
+      Pro endpoint (mcp.pro-api.coingecko.com) accepts an API key.
+    url: "https://mcp.api.coingecko.com/mcp"
+    vendor: CoinGecko
+    docs_url: "https://docs.coingecko.com/docs/mcp-server"
+    category: finance
+    tags: [crypto-prices, market-data, defi, onchain, nft]
+    provenance: official
+    auth: open
+  - name: coinmarketcap
+    display_name: CoinMarketCap
+    description: >-
+      CoinMarketCap's official hosted MCP exposing 12 tools for market quotes,
+      technical analysis, global market metrics, derivatives, trending
+      narratives, macro events, and news; on-chain/DEX data is explicitly marked
+      work-in-progress. Auth via X-CMC-MCP-API-KEY header.
+    url: "https://mcp.coinmarketcap.com/mcp"
+    vendor: CoinMarketCap OpCo, LLC
+    docs_url: "https://coinmarketcap.com/api/documentation/ai-agent-hub/mcp"
+    category: finance
+    tags: [crypto-prices, market-data, technical-analysis, news]
+    provenance: official
+    auth: api_key
+  - name: etherscan
+    display_name: Etherscan
+    description: >-
+      Etherscan's official hosted MCP (Beta) wrapping its API v2 across 60+ EVM
+      chains (balances, transactions, token transfers, contract ABI/source, gas,
+      logs); tool access is gated by the caller's Etherscan API usage tier.
+    url: "https://mcp.etherscan.io/mcp"
+    vendor: Etherscan.io
+    docs_url: "https://docs.etherscan.io/ai/mcp.md"
+    category: finance
+    tags: [ethereum, evm, blockchain-explorer, contracts]
+    provenance: official
+    auth: api_key
+  - name: expensify
+    display_name: Expensify
+    description: >-
+      Expensify's hosted MCP: search expenses and reports, summarize spending,
+      find missing receipts, and analyze trends. Read-only — cannot approve
+      reports, edit expenses, reimburse, or change workspace settings. OAuth 2.1
+      with PKCE.
+    url: "https://www.expensify.com/mcp"
+    vendor: Expensify, Inc.
+    docs_url: "https://help.expensify.com/articles/new-expensify/connections/connect-ai-assistants/Connect-Claude-to-Expensify-Using-MCP"
+    category: finance
+    tags: [expenses, receipts, reports, spend-analysis, read-only]
+    provenance: official
+    auth: oauth
+  - name: fi-money
+    display_name: Fi Money
+    description: >-
+      Personal-finance MCP over a Fi Money user's connected accounts:
+      fetch_net_worth, fetch_credit_report, fetch_epf_details,
+      fetch_mf_transactions, fetch_bank_transactions, fetch_stock_transactions.
+      Auth via a short-lived passcode generated in the Fi app; note the non-
+      standard :8080 port.
+    url: "https://mcp.fi.money:8080/mcp/stream"
+    vendor: Epifi Technologies Pvt. Ltd. (Fi Money)
+    docs_url: "https://fi.money/features/getting-started-with-fi-mcp"
+    repo_url: "https://github.com/epiFi/mcp-docs"
+    category: finance
+    tags: [personal-finance, net-worth, banking, mutual-funds, india]
+    provenance: official
+    auth: api_key
+  - name: financial-datasets
+    display_name: Financial Datasets
+    description: >-
+      Official remote MCP for the Financial Datasets stock-market API, exposing
+      25+ tools (income statements, balance sheets, cash flow, SEC filings,
+      insider trades, institutional holdings, stock prices, news, screener).
+      KPI/guidance tools restricted to Pro/Enterprise plans.
+    url: "https://mcp.financialdatasets.ai/"
+    vendor: Financial Datasets, Inc.
+    docs_url: "https://docs.financialdatasets.ai/mcp-server"
+    category: finance
+    tags: [stocks, sec-filings, financial-statements, market-data, screener]
+    provenance: official
+    auth: oauth
+  - name: mercury
+    display_name: Mercury
+    description: >-
+      Mercury's hosted MCP (beta) for business banking: read-only access to
+      account balances, transactions with category/merchant detail, PDF
+      statements, cards, and recipients. Scoped read-only by design; supports
+      OAuth 2.0 Dynamic Client Registration.
+    url: "https://mcp.mercury.com/mcp"
+    vendor: Mercury Technologies, Inc.
+    docs_url: "https://docs.mercury.com/docs/connecting-mercury-mcp"
+    category: finance
+    tags: [banking, accounts, transactions, cards, read-only]
+    provenance: official
+    auth: oauth
+  - name: messari
+    display_name: Messari
+    description: >-
+      Hosted MCP for Messari crypto market intelligence: ask_messari natural-
+      language queries, timeseries catalog/data tools, and async deep-research
+      report tools. Requires a Messari Enterprise subscription with AI Toolkit
+      access; queries consume Messari AI credits.
+    url: "https://mcp.messari.io/mcp"
+    vendor: Messari, Inc.
+    docs_url: "https://docs.messari.io/mcp-server/hosted"
+    repo_url: "https://github.com/messari/skills"
+    category: finance
+    tags: [crypto, research, market-data, timeseries]
+    provenance: official
+    auth: oauth
+  - name: nansen
+    display_name: Nansen
+    description: >-
+      Streamable HTTP MCP exposing Nansen's blockchain intelligence — smart-
+      money flows, token/wallet profiling and onchain analytics tools.
+      Authenticates with a NANSEN-API-KEY header; usage draws from the same
+      credit pool as regular Nansen API keys.
+    url: "https://mcp.nansen.ai/ra/mcp"
+    vendor: Nansen Pte. Ltd.
+    docs_url: "https://docs.nansen.ai/mcp/connecting"
+    category: finance
+    tags: [crypto, onchain-analytics, smart-money, wallets]
+    provenance: official
+    auth: api_key
+  - name: netsuite
+    display_name: NetSuite AI Connector Service (MCP Standard Tools)
+    description: >-
+      Oracle NetSuite's official remote MCP endpoint exposes SuiteQL query
+      building, saved-search execution, record read/create/update, and report
+      access against a customer's NetSuite account. The Administrator role is
+      blocked by design; requires a dedicated custom role with MCP permissions.
+    url: "https://{accountid}.suitetalk.api.netsuite.com/services/mcp/v1/suiteapp/com.netsuite.mcpstandardtools"
+    vendor: Oracle NetSuite
+    docs_url: "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_0714082142.html"
+    category: finance
+    tags: [erp, accounting, suiteql, oauth2]
+    provenance: official
+    auth: tenant
+  - name: octagon
+    display_name: Octagon
+    description: >-
+      Official remote MCP for Octagon's market-intelligence platform: agent
+      tools over SEC filings, earnings-call transcripts, financial metrics,
+      private/public market data, deep research, and prediction-market research.
+      OAuth recommended; a non-OAuth variant embeds the API key in the path.
+    url: "https://mcp.octagonagents.com/mcp"
+    vendor: Octagon AI, Inc.
+    docs_url: "https://octagonai.co/docs/guide/mcp-server"
+    repo_url: "https://github.com/OctagonAI/octagon-mcp-server"
+    category: finance
+    tags: [sec-filings, earnings-transcripts, market-intelligence, deep-research]
+    provenance: official
+    auth: oauth
+  - name: plaid
+    display_name: Plaid
+    description: >-
+      Production diagnostics and analytics — debug Items, review Link conversion
+      analytics, check usage metrics. Requires an approved Production Plaid
+      account.
+    url: "https://api.dashboard.plaid.com/mcp/"
+    vendor: Plaid Inc.
+    docs_url: "https://plaid.com/docs/resources/mcp/"
+    category: finance
+    tags: [banking, fintech, diagnostics, analytics]
+    provenance: official
+    auth: oauth
+  - name: ramp
+    display_name: Ramp
+    description: >-
+      Hosted MCP for Ramp spend management: query transactions, cards, vendors,
+      bills, and spend analytics scoped to the signed-in user's permissions.
+      Bill approvals and receipt uploads are not available; admin-only tools
+      require Admin or Business Owner roles.
+    url: "https://mcp.ramp.com/mcp"
+    vendor: Ramp Business Corporation
+    docs_url: "https://docs.ramp.com/developer-api/v1/guides/ramp-mcp-remote"
+    category: finance
+    tags: [spend-management, corporate-cards, expenses, bills, transactions]
+    provenance: official
+    auth: oauth
+  - name: sage-intacct
+    display_name: Sage Intacct
+    description: >-
+      Sage's official remote MCP for Sage Intacct: read-only access to Accounts
+      Payable, Accounts Receivable, General Ledger, Cash Management, Purchasing,
+      and Order Entry data via natural language/structured queries. Requires an
+      AI-Enabled Web Services Developer License and OAuth.
+    url: "https://mcp.intacct.com/mcp"
+    vendor: Sage Intacct, Inc.
+    docs_url: "https://developer.sage.com/intacct/mcps/intacct-mcp/latest/intacct-mcp-server/setup-and-connection-guide"
+    category: finance
+    tags: [accounting, erp, general-ledger, read-only]
+    provenance: official
+    auth: oauth
+  - name: thirdweb
+    display_name: thirdweb
+    description: >-
+      The full thirdweb web3 platform as a remote MCP: 45+ tools spanning
+      wallets, contract reads/writes, transactions, tokens, bridging and x402
+      payments (e.g. fetchWithPayment, getWalletBalance). Authenticates with a
+      project secret key passed as a query parameter; tools can be filtered via
+      a tools= query parameter.
+    url: "https://api.thirdweb.com/mcp"
+    vendor: Thirdweb Pte. Ltd.
+    docs_url: "https://portal.thirdweb.com/ai/mcp"
+    category: finance
+    tags: [web3, wallets, smart-contracts, x402, crypto-payments]
+    provenance: official
+    auth: api_key
+  - name: twelve-data
+    display_name: Twelve Data
+    description: >-
+      Hosted market-data MCP: real-time and historical prices for stocks, ETFs,
+      forex, crypto and commodities, 60+ technical indicators, fundamentals,
+      fund holdings, news and SEC filings. Browser login linking your Twelve
+      Data API key, or key as Authorization header; tool coverage depends on
+      subscription plan.
+    url: "https://mcp.twelvedata.com/mcp"
+    vendor: Twelve Data Pte. Ltd.
+    docs_url: "https://github.com/twelvedata/mcp"
+    repo_url: "https://github.com/twelvedata/mcp"
+    category: finance
+    tags: [market-data, stocks, forex, crypto, indicators]
+    provenance: official
+    auth: oauth
+  - name: upstox
+    display_name: Upstox
+    description: >-
+      Official broker MCP giving read-only access to holdings, orders,
+      positions, mutual funds, funds, profile, market quotes and historical
+      data. Cannot place or modify orders; OAuth link-up with mandatory daily
+      re-authorization.
+    url: "https://mcp.upstox.com/mcp"
+    vendor: Upstox (RKSV Securities India Pvt. Ltd.)
+    docs_url: "https://upstox.com/developer/api-documentation/mcp-integration/"
+    repo_url: "https://github.com/upstox/mcp-server-upstox-api"
+    category: finance
+    tags: [trading, brokerage, portfolio, market-data, india]
+    provenance: official
+    auth: oauth
+  - name: zerodha-kite
+    display_name: Zerodha Kite
+    description: >-
+      Official hosted MCP for Zerodha brokerage accounts: market quotes,
+      historical data, instrument search, holdings, positions, margins and read-
+      only order/GTT data. The hosted instance deliberately excludes
+      place/modify/cancel order tools; SSE also available at /sse.
+    url: "https://mcp.kite.trade/mcp"
+    vendor: Zerodha Broking Ltd.
+    docs_url: "https://zerodha.com/products/mcp/"
+    repo_url: "https://github.com/zerodha/kite-mcp-server"
+    category: finance
+    tags: [trading, brokerage, portfolio, market-data, india]
+    provenance: official
+    auth: oauth
+
+  # ── design-media ────────────────────────────────────────────────
+  - name: audioscrape
+    display_name: Audioscrape
+    description: >-
+      Search and semantically query 1M+ hours of podcasts, interviews, talks,
+      and private audio uploads with speaker ID and timestamps.
+    url: "https://mcp.audioscrape.com"
+    vendor: Audioscrape
+    docs_url: "https://www.audioscrape.com/docs/mcp"
+    category: design-media
+    tags: [audio, podcasts, transcripts, media-search]
+    provenance: official
+    auth: oauth
+  - name: canva
+    display_name: Canva
+    description: >-
+      Design generation and editing, asset and brand management, library search,
+      export (PDF/PNG/PPTX/MP4), and commenting.
+    url: "https://mcp.canva.com/mcp"
+    vendor: Canva Pty Ltd
+    docs_url: "https://www.canva.dev/docs/mcp/"
+    category: design-media
+    tags: [design, graphics, presentations, export]
+    provenance: official
+    auth: oauth
+  - name: figma
+    display_name: Figma
+    description: >-
+      Design context (variables, components, layout) for codegen plus write-to-
+      canvas — create and update frames, components, and FigJam boards.
+    url: "https://mcp.figma.com/mcp"
+    vendor: Figma, Inc.
+    docs_url: "https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/"
+    category: design-media
+    tags: [design, prototypes, components, codegen]
+    provenance: official
+    auth: oauth
+  - name: miro
+    display_name: Miro
+    description: >-
+      Search and summarize board content, create boards and structured layouts
+      (frames, sticky notes, shapes, cards, tables), generate diagrams, and
+      manage comments.
+    url: "https://mcp.miro.com/"
+    vendor: RealtimeBoard, Inc. (Miro)
+    docs_url: "https://developers.miro.com/docs/miro-mcp"
+    category: design-media
+    tags: [whiteboard, diagrams, boards, collaboration]
+    provenance: official
+    auth: oauth
+  - name: webflow
+    display_name: Webflow
+    description: >-
+      Designer and canvas operations (elements, styles, variables), CMS
+      collections, custom code, assets, and site data.
+    url: "https://mcp.webflow.com/mcp"
+    vendor: Webflow, Inc.
+    docs_url: "https://developers.webflow.com/mcp/reference/getting-started"
+    repo_url: "https://github.com/webflow/mcp-server"
+    category: design-media
+    tags: [website-builder, cms, design, no-code]
+    provenance: official
+    auth: oauth
+  - name: wix
+    display_name: Wix
+    description: >-
+      Search Wix documentation (REST/SDK/Headless), write code for the Wix
+      platform, and make API calls against Wix sites.
+    url: "https://mcp.wix.com/mcp"
+    vendor: Wix.com Ltd.
+    docs_url: "https://dev.wix.com/docs/sdk/articles/use-the-wix-mcp/about-the-wix-mcp"
+    repo_url: "https://github.com/wix/wix-mcp"
+    category: design-media
+    tags: [website-builder, cms, headless, no-code]
+    provenance: official
+    auth: oauth
+
+  # ── observability ───────────────────────────────────────────────
+  - name: axiom
+    display_name: Axiom
+    description: >-
+      Hosted MCP server with ~24 tools for APL/metrics querying, dashboard and
+      monitor CRUD, schema inspection, and prebuilt analysis prompts. SSE
+      variant at https://mcp.axiom.co/sse; OAuth or PAT Bearer with x-axiom-org-
+      id header.
+    url: "https://mcp.axiom.co/mcp"
+    vendor: Axiom, Inc.
+    docs_url: "https://axiom.co/docs/console/intelligence/mcp-server"
+    repo_url: "https://github.com/axiomhq/mcp"
+    category: observability
+    tags: [logs, events, apl, dashboards, monitors]
+    provenance: official
+    auth: oauth
+  - name: better-stack
+    display_name: Better Stack
+    description: >-
+      Hosted remote MCP server spanning Uptime (monitors, incidents, on-call,
+      status pages), Telemetry (log/trace/metric queries, dashboards, alerts),
+      and error tracking. Tool exposure filterable via X-MCP-Tools-Only/Except
+      headers; OAuth or Bearer API token.
+    url: "https://mcp.betterstack.com"
+    vendor: Better Stack, Inc.
+    docs_url: "https://betterstack.com/docs/getting-started/integrations/mcp/"
+    repo_url: "https://github.com/BetterStackHQ/betterstack-mcp"
+    category: observability
+    tags: [uptime, incidents, logs, on-call, status-pages]
+    provenance: official
+    auth: oauth
+  - name: braintrust
+    display_name: Braintrust
+    description: >-
+      Official hosted MCP for the Braintrust eval/observability platform,
+      exposing search_docs, resolve_object, list_recent_objects, infer_schema,
+      sql_query, summarize_experiment, and generate_permalink tools. Separate EU
+      data-plane endpoint at https://api-eu.braintrust.dev/mcp; supports OAuth
+      as an alternative to API-key bearer auth.
+    url: "https://api.braintrust.dev/mcp"
+    vendor: Braintrust Data, Inc.
+    docs_url: "https://www.braintrust.dev/docs/integrations/developer-tools/mcp"
+    category: observability
+    tags: [evals, experiments, tracing, sql, datasets]
+    provenance: official
+    auth: api_key
+  - name: bugsnag
+    display_name: BugSnag MCP (SmartBear)
+    description: >-
+      SmartBear-hosted remote MCP server for BugSnag: error/event querying,
+      stack traces, affected users, and release/deployment correlation. OAuth
+      browser flow; no tokens or local install required.
+    url: "https://bugsnag.mcp.smartbear.com/mcp"
+    vendor: SmartBear Software, Inc.
+    docs_url: "https://developer.smartbear.com/smartbear-mcp/docs/remote-bugsnag"
+    repo_url: "https://github.com/SmartBear/smartbear-mcp"
+    category: observability
+    tags: [errors, crash-reporting, releases, debugging]
+    provenance: official
+    auth: oauth
+  - name: checkly
+    display_name: Checkly
+    description: >-
+      Hosted-only MCP server (beta) for check status/results, test sessions,
+      Rocky AI root-cause analyses, on-demand check execution, env vars, and
+      status pages/incidents. OAuth restricted to Checkly-approved clients;
+      dynamic client registration rejected.
+    url: "https://api.checklyhq.com/mcp"
+    vendor: Checkly Inc.
+    docs_url: "https://www.checklyhq.com/docs/ai/mcp-server"
+    category: observability
+    tags: [synthetic-monitoring, uptime, checks, incidents]
+    provenance: official
+    auth: oauth
+  - name: chronosphere
+    display_name: Chronosphere
+    description: >-
+      Per-tenant hosted MCP server with read-only tools: PromQL queries, log and
+      trace retrieval, change-event correlation, dashboards, monitors, and SLO
+      review. No mutation tools; Bearer API token or OAuth 2.0.
+    url: "https://{tenant}.chronosphere.io/api/mcp/mcp"
+    vendor: Chronosphere, Inc.
+    docs_url: "https://docs.chronosphere.io/integrate/mcp-server"
+    repo_url: "https://github.com/chronosphereio/chronosphere-mcp"
+    category: observability
+    tags: [metrics, logs, traces, promql, slo]
+    provenance: official
+    auth: tenant
+  - name: coralogix
+    display_name: Coralogix
+    description: >-
+      Region-scoped hosted MCP server for logs/traces/metrics/RUM queries plus
+      alerts, parsing and recording rules, Events2Metrics, SLOs, TCO policies,
+      and notification routing. Regions us1/us2/eu1/eu2/ap1-ap3; OAuth 2.1 or
+      personal API key Bearer.
+    url: "https://api.{region}.coralogix.com/mgmt/api/v1/mcp"
+    vendor: Coralogix Ltd.
+    docs_url: "https://coralogix.com/docs/user-guides/mcp-server/setup/"
+    category: observability
+    tags: [logs, metrics, traces, alerts, slo]
+    provenance: official
+    auth: tenant
+  - name: datadog
+    display_name: Datadog
+    description: >-
+      Observability data for AI agents — APM, logs, metrics, monitors,
+      dashboards, security signals, and incident context (US1 host shown;
+      region-specific hosts exist).
+    url: "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp"
+    vendor: Datadog, Inc.
+    docs_url: "https://docs.datadoghq.com/bits_ai/mcp_server/"
+    category: observability
+    tags: [monitoring, apm, logs, metrics, incidents]
+    provenance: official
+    auth: oauth
+  - name: dynatrace
+    display_name: Dynatrace
+    description: >-
+      Per-environment hosted MCP gateway for DQL query generation/execution,
+      problem and vulnerability investigation, Kubernetes event analysis,
+      forecasting, and docs search. Bearer auth via platform token or OAuth
+      client requiring mcp-gateway scopes.
+    url: "https://{environment}.apps.dynatrace.com/platform-reserved/mcp-gateway/v0.1/servers/dynatrace-mcp/mcp"
+    vendor: Dynatrace, Inc.
+    docs_url: "https://docs.dynatrace.com/docs/dynatrace-intelligence/dynatrace-mcp"
+    repo_url: "https://github.com/dynatrace-oss/dynatrace-mcp"
+    category: observability
+    tags: [dql, problems, vulnerabilities, kubernetes, forecasting]
+    provenance: official
+    auth: tenant
+  - name: elastic-agent-builder
+    display_name: Elastic Agent Builder
+    description: >-
+      Elastic Cloud's hosted Agent Builder MCP endpoint on each deployment's
+      Kibana URL, exposing built-in and custom Agent Builder tools over
+      Elasticsearch data. GA on Serverless and Stack 9.3+; auth via
+      "Authorization: ApiKey" header with Agent Builder privileges.
+    url: "https://{kibana-host}/api/agent_builder/mcp"
+    vendor: Elastic N.V.
+    docs_url: "https://www.elastic.co/docs/explore-analyze/ai-features/agent-builder/mcp-server"
+    category: observability
+    tags: [elasticsearch, search, logs, analytics]
+    provenance: official
+    auth: tenant
+  - name: galileo
+    display_name: Galileo
+    description: >-
+      Hosted MCP for the Galileo AI evaluation/observability platform exposing
+      dataset creation and synthetic data generation, prompt template building,
+      experiment setup, log-stream/signal analysis, and docs search. Self-hosted
+      deployments expose an equivalent endpoint at https://api-{instance-
+      domain}/mcp/http/mcp.
+    url: "https://api.galileo.ai/mcp/http/mcp"
+    vendor: Galileo Technologies, Inc.
+    docs_url: "https://docs.galileo.ai/getting-started/mcp/setup-galileo-mcp"
+    category: observability
+    tags: [evals, datasets, experiments, agent-observability, logging]
+    provenance: official
+    auth: api_key
+  - name: globalping
+    display_name: Globalping
+    description: >-
+      Run real network measurements (ping, traceroute, DNS, MTR, HTTP) from
+      thousands of probes worldwide. Works unauthenticated at lower rate limits.
+    url: "https://mcp.globalping.dev/mcp"
+    vendor: Volentio JSD Limited (jsDelivr)
+    docs_url: "https://github.com/jsdelivr/globalping-mcp-server"
+    repo_url: "https://github.com/jsdelivr/globalping-mcp-server"
+    category: observability
+    tags: [network, ping, traceroute, dns, latency]
+    provenance: official
+    auth: open
+  - name: grafana-cloud
+    display_name: Grafana Cloud
+    description: >-
+      Hosted Grafana Cloud MCP server (public preview): dashboards, datasources,
+      Prometheus/Loki/Tempo/Pyroscope queries, alerting, incidents, OnCall and
+      Sift investigations. Streamable HTTP only (SSE not supported); Grafana
+      Cloud stacks only.
+    url: "https://mcp.grafana.com/mcp"
+    vendor: Grafana Labs
+    docs_url: "https://grafana.com/docs/grafana-cloud/machine-learning/assistant/configure/cloud-mcp/"
+    repo_url: "https://github.com/grafana/mcp-grafana"
+    category: observability
+    tags: [metrics, logs, traces, dashboards, alerting, prometheus]
+    provenance: official
+    auth: oauth
+  - name: groundcover
+    display_name: groundcover
+    description: >-
+      Hosted MCP server for querying logs/traces/metrics, root-cause analysis,
+      auto-debugging with observability context, and deployment validation. Docs
+      label it work-in-progress; OAuth default or API key Bearer.
+    url: "https://mcp.groundcover.com/api/mcp"
+    vendor: Groundcover Ltd.
+    docs_url: "https://docs.groundcover.com/getting-started/groundcover-mcp/configure-groundcovers-mcp-server"
+    category: observability
+    tags: [kubernetes, logs, traces, metrics, ebpf]
+    provenance: official
+    auth: oauth
+  - name: honeycomb
+    display_name: Honeycomb
+    description: >-
+      Hosted MCP server for querying traces/metrics/logs, BubbleUp
+      investigations, triggers and SLO status, and creating boards. Requires
+      Honeycomb Intelligence enrollment; EU endpoint at
+      https://mcp.eu1.honeycomb.io/mcp. OAuth 2.1 or API key.
+    url: "https://mcp.honeycomb.io/mcp"
+    vendor: Hound Technology, Inc.
+    docs_url: "https://docs.honeycomb.io/integrations/mcp"
+    category: observability
+    tags: [traces, metrics, logs, slo, bubbleup]
+    provenance: official
+    auth: oauth
+  - name: incident-io
+    display_name: incident.io
+    description: >-
+      Hosted remote MCP server (public beta) with 38 tools across incidents,
+      investigations, postmortems, alert analysis, on-call/escalation, and
+      cross-vendor telemetry queries. Must be enabled in Settings > MCP; OAuth
+      or scoped API key.
+    url: "https://mcp.incident.io/mcp"
+    vendor: Pineapple Technology Ltd (incident.io)
+    docs_url: "https://docs.incident.io/ai/remote-mcp"
+    category: observability
+    tags: [incidents, on-call, postmortems, alerts]
+    provenance: official
+    auth: oauth
+  - name: langfuse
+    display_name: Langfuse
+    description: >-
+      Built-in hosted MCP on Langfuse Cloud exposing prompt management and
+      trace/observability tools over Streamable HTTP; regional endpoints at
+      us.cloud.langfuse.com, jp.cloud.langfuse.com, hipaa.cloud.langfuse.com,
+      and self-hosted at https://{your-domain}/api/public/mcp. Basic Auth with
+      base64-encoded public/secret API key pair.
+    url: "https://cloud.langfuse.com/api/public/mcp"
+    vendor: Langfuse GmbH
+    docs_url: "https://langfuse.com/docs/api-and-data-platform/features/mcp-server"
+    repo_url: "https://github.com/langfuse/langfuse"
+    category: observability
+    tags: [tracing, prompt-management, evals, open-source, llm-observability]
+    provenance: official
+    auth: api_key
+  - name: langsmith
+    display_name: LangSmith
+    description: >-
+      OAuth 2.1-authenticated remote MCP hosted on LangSmith Cloud exposing
+      tools across threads/conversations, prompt management, traces and runs,
+      datasets, experiments/evaluations, and billing usage. Regional endpoints
+      for GCP EU (eu.api.smith.langchain.com/mcp), APAC, and AWS US; supersedes
+      a deprecated onrender.com-hosted server.
+    url: "https://api.smith.langchain.com/mcp"
+    vendor: LangChain, Inc.
+    docs_url: "https://docs.langchain.com/langsmith/langsmith-mcp-server"
+    repo_url: "https://github.com/langchain-ai/langsmith-mcp-server"
+    category: observability
+    tags: [tracing, evals, datasets, prompt-management, oauth]
+    provenance: official
+    auth: oauth
+  - name: last9
+    display_name: Last9
+    description: >-
+      Org-scoped hosted MCP server for exceptions, service performance,
+      dependency graphs, PromQL queries, logs, traces, alerts, and dashboard
+      CRUD. OAuth 2.0 browser flow (Bearer token for programmatic use).
+    url: "https://app.last9.io/api/v4/organizations/{org_slug}/mcp"
+    vendor: Last9 Inc.
+    docs_url: "https://last9.io/docs/integrations/mcp/"
+    repo_url: "https://github.com/last9/last9-mcp-server"
+    category: observability
+    tags: [metrics, logs, traces, promql, alerts]
+    provenance: official
+    auth: tenant
+  - name: new-relic
+    display_name: New Relic
+    description: >-
+      Observability data — entities, metrics, incidents, and NRQL queries —
+      governed by New Relic RBAC (US endpoint shown; EU exists).
+    url: "https://mcp.newrelic.com/mcp/"
+    vendor: New Relic, Inc.
+    docs_url: "https://docs.newrelic.com/docs/agentic-ai/mcp/setup/"
+    category: observability
+    tags: [monitoring, nrql, incidents, metrics]
+    provenance: official
+    auth: oauth
+  - name: pagerduty
+    display_name: PagerDuty
+    description: >-
+      Hosted remote MCP server covering incident lifecycle
+      (retrieve/ack/resolve), services, on-call schedules, escalation policies,
+      orchestration, and status pages. Auth via "Authorization: Token <api-
+      token>" header (not Bearer) or OAuth; EU endpoint at
+      https://mcp.eu.pagerduty.com/mcp. Distinct from the stdio-only OSS server.
+    url: "https://mcp.pagerduty.com/mcp"
+    vendor: PagerDuty, Inc.
+    docs_url: "https://support.pagerduty.com/main/docs/pagerduty-mcp-server-integration-guide"
+    category: observability
+    tags: [incidents, on-call, escalation, paging]
+    provenance: official
+    auth: api_key
+  - name: pydantic-logfire
+    display_name: Pydantic Logfire
+    description: >-
+      Hosted MCP server for SQL querying of telemetry, schema inspection,
+      exception finding, dashboards, alerts, and feature flags. EU endpoint at
+      https://logfire-eu.pydantic.dev/mcp; OAuth or read-token Bearer.
+    url: "https://logfire-us.pydantic.dev/mcp"
+    vendor: Pydantic Services Inc.
+    docs_url: "https://pydantic.dev/docs/logfire/guides/mcp-server/"
+    repo_url: "https://github.com/pydantic/logfire-mcp"
+    category: observability
+    tags: [traces, logs, sql, python, dashboards]
+    provenance: official
+    auth: oauth
+  - name: raygun
+    display_name: Raygun
+    description: >-
+      Hosted MCP endpoint for error/crash reporting with stack traces,
+      deployment tracking, RUM and performance insights, and time-series
+      analytics. Bearer auth with a Raygun Personal Access Token.
+    url: "https://api.raygun.com/v3/mcp"
+    vendor: Raygun Limited
+    docs_url: "https://github.com/MindscapeHQ/mcp-server-raygun"
+    repo_url: "https://github.com/MindscapeHQ/mcp-server-raygun"
+    category: observability
+    tags: [errors, crash-reporting, rum, deployments]
+    provenance: official
+    auth: api_key
+  - name: rootly
+    display_name: Rootly
+    description: >-
+      Hosted MCP server exposing 200+ tools auto-generated from Rootly's OpenAPI
+      spec plus agentic incident/on-call tools; slim ~70-tool profile selectable
+      via header. SSE alternative at https://mcp.rootly.com/sse; OAuth2 or
+      Bearer API token.
+    url: "https://mcp.rootly.com/mcp"
+    vendor: Rootly, Inc.
+    docs_url: "https://docs.rootly.com/integrations/mcp-server"
+    repo_url: "https://github.com/Rootly-AI-Labs/Rootly-MCP-server"
+    category: observability
+    tags: [incidents, on-call, retrospectives, alerts]
+    provenance: official
+    auth: oauth
+  - name: sentry
+    display_name: Sentry
+    description: >-
+      Query projects, issues, and errors in your Sentry org and invoke Seer for
+      root-cause analysis and fixes.
+    url: "https://mcp.sentry.dev/mcp"
+    vendor: Functional Software, Inc. (Sentry)
+    docs_url: "https://mcp.sentry.dev/"
+    repo_url: "https://github.com/getsentry/sentry-mcp"
+    category: observability
+    tags: [errors, monitoring, root-cause, issues]
+    provenance: official
+    auth: oauth
+  - name: signoz
+    display_name: SigNoz Cloud
+    description: >-
+      Region-scoped hosted MCP server for metrics queries, alert rule and
+      dashboard CRUD, trace/log search, service analysis, and docs search.
+      Regions US/EU/IN/US2/EU2/IN2; OAuth 2.1 (DCR+PKCE) or SIGNOZ-API-KEY
+      header.
+    url: "https://mcp.{region}.signoz.cloud/mcp"
+    vendor: SigNoz, Inc.
+    docs_url: "https://signoz.io/docs/ai/signoz-mcp-server/"
+    repo_url: "https://github.com/SigNoz/signoz-mcp-server"
+    category: observability
+    tags: [metrics, traces, logs, alerts, opentelemetry]
+    provenance: official
+    auth: tenant
+  - name: uptime-robot
+    display_name: UptimeRobot
+    description: >-
+      Hosted MCP server for monitor CRUD and stats, incidents and comments,
+      status pages, announcements, tags, and response-time analytics. Some tools
+      gated by subscription tier; OAuth or Bearer API key (read-only keys block
+      writes).
+    url: "https://mcp.uptimerobot.com/mcp"
+    vendor: UptimeRobot s.r.o.
+    docs_url: "https://help.uptimerobot.com/en/articles/12928342-uptimerobot-mcp-integration-guide"
+    category: observability
+    tags: [uptime, monitoring, incidents, status-pages]
+    provenance: official
+    auth: oauth
+  - name: victoriametrics-cloud
+    display_name: VictoriaMetrics Cloud
+    description: >-
+      Vendor-hosted MCP server for VictoriaMetrics Cloud: read-only metrics
+      queries, label/series exploration, alerting/recording rule analysis, and
+      cardinality stats. Metrics only for now; auth via X-VM-Cloud-Access token
+      header. Documented via the vendor's Cloud release notes and in-console
+      guide rather than the main docs site.
+    url: "https://mcp-vm.victoriametrics.cloud/mcp"
+    vendor: VictoriaMetrics, Inc.
+    docs_url: "https://victoriametrics.com/blog/q1-2026-whats-new-victoriametrics-cloud/"
+    repo_url: "https://github.com/VictoriaMetrics/mcp-victoriametrics"
+    category: observability
+    tags: [metrics, promql, timeseries, cardinality]
+    provenance: official
+    auth: api_key
+  - name: wandb
+    display_name: Weights & Biases
+    description: >-
+      W&B-managed multi-tenant hosted MCP exposing run/experiment queries, Weave
+      trace queries and evaluation summaries, report creation, artifact/registry
+      listing and diffing, plus W&B docs search. Dedicated Cloud and Self-
+      Managed deployments expose the same tools at https://{instance}/mcp.
+    url: "https://mcp.withwandb.com/mcp"
+    vendor: Weights & Biases, Inc.
+    docs_url: "https://docs.wandb.ai/platform/mcp-server"
+    repo_url: "https://github.com/wandb/wandb-mcp-server"
+    category: observability
+    tags: [experiment-tracking, tracing, weave, artifacts, ml-ops]
+    provenance: official
+    auth: api_key
+
+  # ── security ────────────────────────────────────────────────────
+  - name: bugcrowd
+    display_name: Bugcrowd AI Connect
+    description: >-
+      Bugcrowd-hosted MCP server (SSE transport) exposing submissions,
+      engagements, and engagement-brief data from bug bounty/pentest programs,
+      scoped to programs where AI Connect is explicitly enabled.
+    url: "https://stream.bugcrowd.com/mcp"
+    vendor: Bugcrowd Inc.
+    docs_url: "https://docs.bugcrowd.com/customers/ai-capabilities/ai-connect/"
+    category: security
+    tags: [bug-bounty, vulnerability-disclosure, pentest, crowdsourced-security, sse]
+    provenance: official
+    auth: api_key
+  - name: censys
+    display_name: Censys Platform
+    description: >-
+      Censys-hosted Platform MCP server exposing 13 tools (host investigation,
+      attack-surface discovery, CVE-to-asset lookup, query
+      validation/generation) over the Censys Internet Map and Platform APIs.
+      Separate hosted ASM and Adversary Investigation MCP servers exist at
+      sibling subdomains.
+    url: "https://mcp.platform.censys.io/platform/mcp/"
+    vendor: Censys, Inc.
+    docs_url: "https://docs.censys.com/docs/platform-mcp-server"
+    category: security
+    tags: [attack-surface, internet-scanning, threat-hunting, recon, cve]
+    provenance: official
+    auth: api_key
+  - name: orca-security
+    display_name: Orca Security
+    description: >-
+      Orca-hosted MCP server for cloud security posture queries, alert triage
+      (with behavioral timelines and risk summaries), asset inventory, and CVE
+      data. Primary OAuth2 endpoint; a token-auth alternative exists at
+      api.orcasecurity.io/mcp for service accounts.
+    url: "https://mcp.orcasecurity.io"
+    vendor: Orca Security
+    docs_url: "https://github.com/orcasecurity/orca-skills"
+    category: security
+    tags: [cloud-security, cspm, cnapp, alert-triage, vulnerabilities]
+    provenance: official
+    auth: oauth
+  - name: semgrep
+    display_name: Semgrep
+    description: >-
+      Scan code for security vulnerabilities with Semgrep's static-analysis
+      engine (part of Semgrep Guardian).
+    url: "https://mcp.semgrep.ai/mcp"
+    vendor: Semgrep, Inc.
+    docs_url: "https://github.com/semgrep/mcp"
+    repo_url: "https://github.com/semgrep/mcp"
+    category: security
+    tags: [sast, vulnerabilities, code-scanning, static-analysis]
+    provenance: official
+    auth: oauth
+  - name: socket
+    display_name: Socket
+    description: >-
+      Socket's hosted MCP server exposes the depscore tool and related package-
+      scoring endpoints to check dependency security/quality across npm, PyPI,
+      cargo, Maven, NuGet, RubyGems, and Go Modules ecosystems.
+    url: "https://mcp.socket.dev/"
+    vendor: Socket Security, Inc.
+    docs_url: "https://docs.socket.dev/docs/remote-socket-mcp"
+    repo_url: "https://github.com/SocketDev/socket-mcp"
+    category: security
+    tags: [supply-chain, dependency-security, sca, npm, package-scoring]
+    provenance: official
+    auth: oauth
+  - name: tenable
+    display_name: Tenable Hexa AI
+    description: >-
+      Tenable-hosted MCP server exposing 90 structured tools over Tenable's
+      Exposure Data Fabric (assets, vulnerabilities, scans, dashboards, tagging,
+      reports). Requires a Tenable One Foundation/Advanced license; not
+      available in Tenable FedRAMP Moderate environments.
+    url: "https://cloud.tenable.com/mcp/"
+    vendor: Tenable, Inc.
+    docs_url: "https://docs.tenable.com/vulnerability-management/Content/getting-started/hexa-AI-MCP.htm"
+    category: security
+    tags: [vulnerability-management, exposure-management, asset-inventory, scanning]
+    provenance: official
+    auth: api_key
+  - name: wiz
+    display_name: Wiz
+    description: >-
+      Wiz's generally-available hosted MCP server exposes cloud security
+      findings, issues, vulnerabilities, attack paths, and ownership data from
+      the Wiz CNAPP platform. Access requires a Wiz integration-portal
+      entitlement; full docs are customer-gated.
+    url: "https://mcp.app.wiz.io/"
+    vendor: Wiz, Inc.
+    docs_url: "https://docs.wiz.io/docs/set-up-wiz-mcp-server"
+    category: security
+    tags: [cloud-security, cspm, cnapp, vulnerabilities, compliance]
+    provenance: official
+    auth: oauth
+
+  # ── ai-ml ───────────────────────────────────────────────────────
+  - name: assemblyai-docs
+    display_name: AssemblyAI Docs
+    description: >-
+      Documentation search/fetch tools over AssemblyAI's docs (Streamable HTTP,
+      no auth). Docs-lookup only — it does not expose transcription or LLM
+      Gateway API calls; AssemblyAI's product-API MCP options are local-only.
+    url: "https://assemblyai.com/docs/mcp"
+    vendor: AssemblyAI, Inc.
+    docs_url: "https://www.assemblyai.com/docs/coding-agent-prompts"
+    category: ai-ml
+    tags: [speech-to-text, transcription, docs, search]
+    provenance: official
+    auth: open
+  - name: black-forest-labs
+    display_name: Black Forest Labs (FLUX)
+    description: >-
+      FLUX.2 image generation: generate_image (text-to-image, edit, inpaint,
+      outpaint, up to 8 in parallel), variations, history, and credit balance.
+      OAuth-only Streamable HTTP; org selection at sign-in determines billing.
+    url: "https://mcp.bfl.ai"
+    vendor: Black Forest Labs Inc.
+    docs_url: "https://docs.bfl.ml/api_integration/mcp_integration"
+    repo_url: "https://github.com/black-forest-labs/flux-mcp"
+    category: ai-ml
+    tags: [image-generation, flux, text-to-image, inpainting]
+    provenance: official
+    auth: oauth
+  - name: cartesia
+    display_name: Cartesia
+    description: >-
+      Full Cartesia voice API surface: text-to-speech, speech-to-text, voice
+      cloning/localization, pronunciation dictionaries, and credit usage. OAuth
+      sign-in via play.cartesia.ai; the org must have at least one API key
+      provisioned for the hosted server to work.
+    url: "https://mcp.cartesia.ai"
+    vendor: Cartesia AI, Inc.
+    docs_url: "https://docs.cartesia.ai/integrations/mcp"
+    category: ai-ml
+    tags: [tts, stt, voice-cloning, speech, audio]
+    provenance: official
+    auth: oauth
+  - name: deepgram-docs
+    display_name: Deepgram Docs
+    description: >-
+      Documentation Q&A server (Kapa-backed, hosted under Deepgram's domain)
+      answering questions about Deepgram APIs, SDKs, and features. Docs-lookup
+      only — Deepgram's product-API MCP (dg mcp) is local/self-hosted only.
+    url: "https://api.dx.deepgram.com/kapa/mcp"
+    vendor: Deepgram, Inc.
+    docs_url: "https://developers.deepgram.com/developer-tools/agentic-tools"
+    category: ai-ml
+    tags: [speech-to-text, voice, docs, search]
+    provenance: official
+    auth: open
+  - name: fal-ai
+    display_name: fal.ai
+    description: >-
+      Official hosted MCP for the fal platform: 9 tools across discovery
+      (search_models, get_model_schema, get_pricing, search_docs), execution
+      (run_model, submit_job, check_job), and utility (upload_file,
+      recommend_model) over 1,000+ generative media models. Stateless Streamable
+      HTTP; OAuth not yet supported (bearer API key header only).
+    url: "https://mcp.fal.ai/mcp"
+    vendor: fal.ai
+    docs_url: "https://fal.ai/docs/documentation/setting-up/mcp"
+    category: ai-ml
+    tags: [inference, image-generation, video-generation, media-generation]
+    provenance: official
+    auth: api_key
+  - name: google-gemini-agent-platform
+    display_name: Google Gemini Enterprise Agent Platform (Vertex AI)
+    description: >-
+      Google Cloud's official remote MCP server for the Gemini Enterprise Agent
+      Platform (formerly Vertex AI): toolset endpoints for Gemini content
+      generation, prediction, model registry, endpoints, tuning, evaluation,
+      notebooks, and prompt management, with per-region hosts available.
+      Requires Google Cloud OAuth 2.0/IAM credentials.
+    url: "https://aiplatform.googleapis.com/mcp/generate"
+    vendor: Google LLC
+    docs_url: "https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/use-agent-platform-mcp"
+    category: ai-ml
+    tags: [gemini, vertex-ai, inference, google-cloud, model-platform]
+    provenance: official
+    auth: oauth
+  - name: heygen
+    display_name: HeyGen
+    description: >-
+      40 tools covering the HeyGen API surface: Video Agent, avatar videos,
+      voices, audio, lip sync, translation, assets, brand, and account. OAuth
+      tied to HeyGen account credits; custom-domain agents require whitelisting.
+    url: "https://mcp.heygen.com/mcp/v1/"
+    vendor: HeyGen
+    docs_url: "https://developers.heygen.com/mcp/overview"
+    category: ai-ml
+    tags: [avatar-video, video-generation, lip-sync, translation]
+    provenance: official
+    auth: oauth
+  - name: hugging-face
+    display_name: Hugging Face
+    description: >-
+      Semantic search over Hub models, datasets, Spaces, papers, and docs, plus
+      user-selected Gradio Spaces exposed as callable tools.
+    url: "https://huggingface.co/mcp"
+    vendor: Hugging Face, Inc.
+    docs_url: "https://huggingface.co/docs/hub/en/hf-mcp-server"
+    repo_url: "https://github.com/evalstate/hf-mcp-server"
+    category: ai-ml
+    tags: [models, datasets, spaces, papers]
+    provenance: official
+    auth: oauth
+  - name: ideogram
+    display_name: Ideogram
+    description: >-
+      Image generation and editing: bulk generation, upscale, edit, reframe,
+      collections, plus dataset upload and custom model training. Usage draws
+      from the same subscription as the Ideogram web app.
+    url: "https://mcp.ideogram.ai/mcp"
+    vendor: Ideogram AI Inc.
+    docs_url: "https://ideogram.ai/features/mcp/"
+    category: ai-ml
+    tags: [image-generation, text-to-image, editing, typography]
+    provenance: official
+    auth: oauth
+  - name: leonardo-ai
+    display_name: Leonardo.Ai
+    description: >-
+      Image generation via a single generate-image tool (prompt, model,
+      dimensions, guidance) supporting Lucid Origin, Lucid Realism, and Ideogram
+      3.0; docs note more tools coming. Auth via API-Key header.
+    url: "https://mcp.leonardo.ai/v1/mcp"
+    vendor: Leonardo Interactive Pty Ltd
+    docs_url: "https://docs.leonardo.ai/docs/connect-to-leonardoai-mcp"
+    category: ai-ml
+    tags: [image-generation, text-to-image, art]
+    provenance: official
+    auth: api_key
+  - name: livekit-docs
+    display_name: LiveKit Docs
+    description: >-
+      LiveKit's documentation/answer-engine server: docs search, code search,
+      changelog, and pricing lookup tools. Docs-lookup only — it does not
+      provision rooms or control LiveKit realtime/voice infrastructure.
+    url: "https://docs.livekit.io/mcp"
+    vendor: LiveKit, Inc.
+    docs_url: "https://docs.livekit.io/home/get-started/mcp-server/"
+    category: ai-ml
+    tags: [webrtc, voice, realtime, docs, search]
+    provenance: official
+    auth: open
+  - name: magnific-freepik
+    display_name: Magnific (Freepik)
+    description: >-
+      Freepik's hosted MCP, branded under Magnific: 40+ tools for image
+      generation/editing/upscaling, video generation, audio/TTS, 3D models,
+      custom character/style training, and workspace management.
+      docs.freepik.com/mcp redirects to docs.magnific.com.
+    url: "https://mcp.magnific.com"
+    vendor: Freepik Company S.L.
+    docs_url: "https://docs.magnific.com/modelcontextprotocol"
+    category: ai-ml
+    tags: [image-generation, upscaling, video-generation, tts, 3d]
+    provenance: official
+    auth: oauth
+  - name: openai-developer-docs
+    display_name: OpenAI Developer Docs
+    description: >-
+      Official OpenAI-hosted MCP server providing read-only search and page
+      retrieval over OpenAI developer documentation (API, Agents SDK, Codex,
+      Apps SDK). Streamable HTTP, no authentication. Documentation-only — does
+      not call the OpenAI API on your behalf.
+    url: "https://developers.openai.com/mcp"
+    vendor: OpenAI
+    docs_url: "https://developers.openai.com/learn/docs-mcp"
+    category: ai-ml
+    tags: [documentation, openai, docs-search, developer-tools]
+    provenance: official
+    auth: open
+  - name: openrouter
+    display_name: OpenRouter
+    description: >-
+      Live model catalog, model details and endpoints, account credits, daily
+      rankings, benchmarks, docs search, and billable test messages.
+    url: "https://mcp.openrouter.ai/mcp"
+    vendor: OpenRouter, Inc.
+    docs_url: "https://openrouter.ai/docs/mcp-server"
+    category: ai-ml
+    tags: [models, llm, routing, pricing]
+    provenance: official
+    auth: oauth
+  - name: pika
+    display_name: Pika
+    description: >-
+      Dozens of atomic media tools spanning image/video/lipsync/music/speech
+      generation, generative video editing, scene composition, and avatar/voice
+      management. Vendor labels it an experiment ("intentionally rough around
+      the edges"); OAuth browser login or dk_* developer keys, billed via Pika
+      credits.
+    url: "https://experiment-mcp.pika.art/api/mcp"
+    vendor: Pika Labs, Inc.
+    docs_url: "https://experiment.pika.art/mcp"
+    repo_url: "https://github.com/Pika-Labs/Pika-Plugins"
+    category: ai-ml
+    tags: [video-generation, image-generation, music, lipsync, avatars]
+    provenance: official
+    auth: oauth
+  - name: recraft
+    display_name: Recraft
+    description: >-
+      Full Recraft API surface: raster and vector text-to-image, variations,
+      selective editing, background removal/replacement, vectorization,
+      upscaling, and custom styles. Consumes Recraft subscription credits (not
+      API units); OAuth on first connect.
+    url: "https://mcp.recraft.ai/mcp"
+    vendor: Recraft, Inc.
+    docs_url: "https://www.recraft.ai/docs/mcp-reference/remote-server"
+    category: ai-ml
+    tags: [image-generation, vector, design, editing]
+    provenance: official
+    auth: oauth
+  - name: replicate
+    display_name: Replicate
+    description: >-
+      Official hosted MCP server for Replicate's API: search, compare, and run
+      models from the catalog (image, video, audio, language) and inspect
+      predictions. SSE-only endpoint on Cloudflare Workers; browser-based
+      connect flow stores your API token and issues an OAuth session.
+    url: "https://mcp.replicate.com/sse"
+    vendor: Replicate, Inc.
+    docs_url: "https://replicate.com/docs/reference/mcp"
+    category: ai-ml
+    tags: [inference, image-generation, video-generation, model-hosting, sse]
+    provenance: official
+    auth: oauth
+  - name: retell-ai
+    display_name: Retell AI
+    description: >-
+      Broad platform control for Retell voice agents over Streamable HTTP: agent
+      lifecycle, phone/web calls, phone numbers, knowledge bases, voice cloning,
+      chats, QA/testing, alerts, and webhooks. Docs advise least-privilege API
+      keys due to prompt-injection risk.
+    url: "https://mcp.retellai.com"
+    vendor: Retell AI, Inc.
+    docs_url: "https://docs.retellai.com/get-started/mcp-server"
+    category: ai-ml
+    tags: [voice-agents, telephony, calls, tts]
+    provenance: official
+    auth: api_key
+  - name: runway
+    display_name: Runway
+    description: >-
+      Image and video generation via Runway's hosted connector across Gen-4.5,
+      Veo 3.1, Kling 3.0, Seedance 2.0, GPT Image 2 and more. Sign in with a
+      Runway account; billing draws from account credits. Distinct from the
+      older local-only runway-api-mcp-server repo.
+    url: "https://mcp.runwayml.com/mcp"
+    vendor: Runway AI, Inc.
+    docs_url: "https://runwayml.com/mcp"
+    category: ai-ml
+    tags: [video-generation, image-generation, generative-video]
+    provenance: official
+    auth: oauth
+  - name: vapi
+    display_name: Vapi
+    description: >-
+      Voice-agent platform control: list/create assistants, create and inspect
+      calls (including scheduled calls), and manage phone numbers and tools.
+      Streamable HTTP at /mcp; a legacy SSE endpoint is also documented at
+      https://mcp.vapi.ai/sse.
+    url: "https://mcp.vapi.ai/mcp"
+    vendor: Vapi, Inc.
+    docs_url: "https://docs.vapi.ai/sdk/mcp-server"
+    repo_url: "https://github.com/VapiAI/mcp-server"
+    category: ai-ml
+    tags: [voice-agents, telephony, calls, assistants]
+    provenance: official
+    auth: api_key
+
+  # ── automation ──────────────────────────────────────────────────
+  - name: composio
+    display_name: Composio
+    description: >-
+      Managed MCP gateway routing to 500+/1000+ app integrations (Gmail, Slack,
+      Notion, etc.) through per-tenant server IDs; requires an x-api-key header
+      and a user_id query param.
+    url: "https://backend.composio.dev/v3/mcp/{SERVER_ID}?user_id={USER_ID}"
+    vendor: Composio
+    docs_url: "https://docs.composio.dev/mcp/introduction"
+    category: automation
+    tags: [aggregator, integrations, tool-router, saas]
+    provenance: third_party
+    auth: tenant
+  - name: make
+    display_name: Make
+    description: >-
+      Expose your Make scenarios as MCP tools — run scenarios and view or modify
+      scenarios and related entities.
+    url: "https://mcp.make.com"
+    vendor: Make (Celonis s.r.o.)
+    docs_url: "https://developers.make.com/mcp-server"
+    category: automation
+    tags: [workflows, scenarios, integration, no-code]
+    provenance: third_party
+    auth: oauth
+  - name: pipedream
+    display_name: Pipedream
+    description: >-
+      Tools for 2,800+ integrated apps with fully managed OAuth and credential
+      storage (app/user targeting via request headers).
+    url: "https://remote.mcp.pipedream.net/v3"
+    vendor: Pipedream, Inc.
+    docs_url: "https://pipedream.com/docs/connect/mcp/developers"
+    repo_url: "https://github.com/PipedreamHQ/pipedream"
+    category: automation
+    tags: [integrations, workflows, apis, aggregator]
+    provenance: third_party
+    auth: api_key
+  - name: smithery
+    display_name: Smithery
+    description: >-
+      Hosting/registry platform that runs third-party MCP servers on managed
+      infrastructure and exposes them via per-namespace gateway URLs bundling
+      multiple connections behind one endpoint.
+    url: "https://server.smithery.ai/{server}/mcp"
+    vendor: Smithery
+    docs_url: "https://smithery.ai/docs/use/connect"
+    category: automation
+    tags: [aggregator, registry, hosting-platform, gateway]
+    provenance: third_party
+    auth: tenant
+  - name: zapier
+    display_name: Zapier
+    description: >-
+      40,000+ actions across 9,000+ apps via natural language. The endpoint is
+      per-user — generate your personalized URL or token in the Zapier MCP
+      dashboard.
+    url: "https://mcp.zapier.com/api/v1/connect"
+    vendor: Zapier Inc.
+    docs_url: "https://help.zapier.com/hc/en-us/articles/36265392843917-Use-Zapier-MCP-with-your-client"
+    category: automation
+    tags: [integrations, workflows, apps, aggregator]
+    provenance: third_party
+    auth: oauth
+
+  # ── marketing-social ────────────────────────────────────────────
+  - name: ahrefs
+    display_name: Ahrefs
+    description: >-
+      Official Ahrefs remote MCP server exposing Ahrefs API data (backlinks,
+      keywords, site audit, rank tracking) to AI agents; requires Lite plan or
+      higher, row/unit limits per plan, and is restricted to interactive AI-
+      client use (no scripts/bridges).
+    url: "https://api.ahrefs.com/mcp/mcp"
+    vendor: Ahrefs Inc.
+    docs_url: "https://docs.ahrefs.com/en/mcp/docs/introduction"
+    repo_url: "https://github.com/ahrefs/ahrefs-mcp-server"
+    category: marketing-social
+    tags: [seo, backlinks, keyword-research, rank-tracking, site-audit]
+    provenance: official
+    auth: oauth
+  - name: brevo
+    display_name: Brevo
+    description: >-
+      Official Brevo-hosted MCP covering 27 modules: email/SMS/WhatsApp
+      campaigns, contact and list management, transactional messaging, CRM
+      (deals/companies/tasks), templates, sender/domain config, webhooks, and
+      analytics. Bearer-token auth.
+    url: "https://mcp.brevo.com/v1/brevo/mcp"
+    vendor: Sendinblue SA (Brevo)
+    docs_url: "https://developers.brevo.com/docs/mcp-protocol"
+    category: marketing-social
+    tags: [email, sms, whatsapp, crm, transactional]
+    provenance: official
+    auth: api_key
+  - name: buffer
+    display_name: Buffer
+    description: >-
+      Official Buffer remote HTTP MCP server giving AI tools access to Buffer's
+      GraphQL API for managing channels, posts, drafts, content ideas, and
+      analytics across connected social platforms.
+    url: "https://mcp.buffer.com/mcp"
+    vendor: Buffer, Inc.
+    docs_url: "https://developers.buffer.com/guides/integrations/mcp.html"
+    category: marketing-social
+    tags: [social-media, scheduling, publishing, content-calendar]
+    provenance: official
+    auth: api_key
+  - name: customer-io
+    display_name: Customer.io
+    description: >-
+      Official Customer.io-hosted MCP giving AI tools full read/write/delete
+      access to the Journeys UI API and CDP Data Pipelines API via generic
+      cio_read_api/cio_write_api/cio_delete_api tools, plus schema discovery and
+      skills. Separate US and EU endpoints.
+    url: "https://mcp.customer.io/mcp"
+    vendor: Peaberry Software, Inc. (Customer.io)
+    docs_url: "https://docs.customer.io/ai/mcp/get-started/"
+    category: marketing-social
+    tags: [email, journeys, cdp, segmentation, campaigns]
+    provenance: official
+    auth: oauth
+  - name: hootsuite
+    display_name: Hootsuite Perch
+    description: >-
+      Official Hootsuite MCP server for Perch, covering content creation,
+      planning, publishing, and analytics; connects to ChatGPT, Claude, Copilot,
+      and Gemini via one-time Hootsuite OAuth sign-in.
+    url: "https://mcp.hootsuite.com/perch"
+    vendor: Hootsuite Inc.
+    docs_url: "https://www.hootsuite.com/integrations/mcp"
+    category: marketing-social
+    tags: [social-media, publishing, content-planning, analytics]
+    provenance: official
+    auth: oauth
+  - name: hootsuite-lumen
+    display_name: Hootsuite Lumen (Talkwalker)
+    description: >-
+      Official Hootsuite MCP server for Lumen (Talkwalker), giving AI assistants
+      secure access to social listening and media-monitoring data via Hootsuite
+      OAuth sign-in.
+    url: "https://app.talkwalker.com/app/mcp"
+    vendor: Hootsuite Inc. (Talkwalker/Lumen)
+    docs_url: "https://www.hootsuite.com/integrations/mcp"
+    category: marketing-social
+    tags: [social-listening, media-monitoring, analytics, brand-monitoring]
+    provenance: official
+    auth: oauth
+  - name: hootsuite-nest
+    display_name: Hootsuite Nest
+    description: >-
+      Official Hootsuite MCP server for Nest, connecting the social inbox and
+      customer care workflow (reviewing messages, triaging support requests,
+      summarizing feedback) to AI tools via Hootsuite OAuth.
+    url: "https://mcp.hootsuite.com/nest"
+    vendor: Hootsuite Inc.
+    docs_url: "https://www.hootsuite.com/integrations/mcp"
+    category: marketing-social
+    tags: [social-media, customer-care, social-inbox, engagement]
+    provenance: official
+    auth: oauth
+  - name: instantly
+    display_name: Instantly
+    description: >-
+      Official Instantly-hosted remote MCP for cold email operations; 31 tools
+      spanning campaign creation/management, lead operations, email actions,
+      sending-account management, and analytics.
+    url: "https://mcp.instantly.ai/mcp"
+    vendor: Instantly.ai
+    docs_url: "https://help.instantly.ai/en/articles/12980002-instantly-mcp-model-context-protocol"
+    category: marketing-social
+    tags: [cold-email, outbound, campaigns, lead-generation, deliverability]
+    provenance: official
+    auth: api_key
+  - name: klaviyo
+    display_name: Klaviyo
+    description: >-
+      Official Klaviyo-hosted remote MCP exposing ~40 core tools across
+      campaigns, flows, profiles, segments, catalogs, events, images, templates,
+      and reporting; supports read-only and core-tools-only query-parameter
+      modes.
+    url: "https://mcp.klaviyo.com/mcp"
+    vendor: Klaviyo, Inc.
+    docs_url: "https://developers.klaviyo.com/en/docs/klaviyo_mcp_server"
+    category: marketing-social
+    tags: [email, sms, campaigns, ecommerce, segmentation]
+    provenance: official
+    auth: oauth
+  - name: lemlist
+    display_name: lemlist
+    description: >-
+      Official lemlist-hosted MCP for outbound sales; covers campaign
+      management, lead management/search across a 450M+ B2B database, email
+      finding/verification, and team performance metrics. Supports OAuth or API-
+      key auth.
+    url: "https://app.lemlist.com/mcp"
+    vendor: lemlist SAS
+    docs_url: "https://developer.lemlist.com/mcp/setup"
+    category: marketing-social
+    tags: [cold-email, outbound, lead-generation, campaigns, b2b]
+    provenance: official
+    auth: oauth
+  - name: mailchimp-mandrill
+    display_name: Mailchimp Transactional (Mandrill)
+    description: >-
+      Official hosted MCP for Mailchimp's Transactional Messaging (Mandrill)
+      API; exposes account status, template building, API discovery/description,
+      and failed-send diagnostics. Requires an API key with the "AI Agents"
+      permission group enabled.
+    url: "https://mandrillapp.com/mcp"
+    vendor: Mailchimp (Intuit Inc.)
+    docs_url: "https://mailchimp.com/developer/transactional/guides/how-to-use-mailchimps-transactional-messaging-mcp/"
+    category: marketing-social
+    tags: [email, transactional, mandrill, diagnostics]
+    provenance: official
+    auth: api_key
+  - name: mailerlite
+    display_name: MailerLite
+    description: >-
+      Official MailerLite-hosted streamable-HTTP MCP for subscriber, campaign,
+      group/segment, automation, form, and e-commerce management, plus AI-
+      assisted subject-line and content generation.
+    url: "https://mcp.mailerlite.com/mcp"
+    vendor: MailerLite
+    docs_url: "https://developers.mailerlite.com/mcp"
+    category: marketing-social
+    tags: [email, campaigns, automation, ecommerce, subscribers]
+    provenance: official
+    auth: oauth
+  - name: meta-ads
+    display_name: Meta Ads
+    description: >-
+      Meta's official Ads MCP server (launched April 29, 2026) giving AI agents
+      read/write access to Facebook and Instagram ad accounts across campaign
+      management, product catalog, accounts/pages, signal diagnostics, and
+      insights (29 tools); standard Meta Business OAuth, rolled out per-ad-
+      account, no undo/draft mode, ~200 calls/hour per ad account.
+    url: "https://mcp.facebook.com/ads"
+    vendor: Meta Platforms, Inc.
+    docs_url: "https://www.facebook.com/business/news/meta-ads-ai-connectors"
+    category: marketing-social
+    tags: [advertising, facebook-ads, instagram-ads, campaign-management]
+    provenance: official
+    auth: oauth
+  - name: semrush
+    display_name: Semrush
+    description: >-
+      Official Semrush remote MCP server providing SEO API, Trends API, and
+      read-only Projects API data to AI agents; uses standard Semrush API unit
+      consumption and requires an SEO or Trends API subscription.
+    url: "https://mcp.semrush.com/v2/mcp"
+    vendor: Semrush Inc.
+    docs_url: "https://developer.semrush.com/api/introduction/semrush-mcp/"
+    category: marketing-social
+    tags: [seo, keyword-research, competitive-intelligence, traffic-analytics]
+    provenance: official
+    auth: oauth
+  - name: similarweb
+    display_name: Similarweb
+    description: >-
+      Official Similarweb remote MCP server exposing 24+ tools across Web
+      Intelligence (traffic, rank, audience, PPC spend), Search Intelligence
+      (SERP data), and App Intelligence; requires API-only, Business, or
+      Enterprise plan and consumes standard API data credits.
+    url: "https://mcp.similarweb.com"
+    vendor: Similarweb Ltd.
+    docs_url: "https://developers.similarweb.com/docs/similarweb-mcp"
+    category: marketing-social
+    tags: [web-analytics, traffic-data, competitive-intelligence, serp]
+    provenance: official
+    auth: api_key
+  - name: smartlead
+    display_name: Smartlead
+    description: >-
+      Official Smartlead-hosted MCP for cold outbound; 116+ tools across
+      campaign management, lead lifecycle, mailbox/deliverability diagnostics,
+      analytics, and webhooks. SSE-only transport; the API key is passed as a
+      user_api_key query parameter on the endpoint URL.
+    url: "https://mcp.smartlead.ai/sse"
+    vendor: Smartlead
+    docs_url: "https://helpcenter.smartlead.ai/en/articles/300-smartlead-mcp-server"
+    category: marketing-social
+    tags: [cold-email, outbound, deliverability, campaigns, analytics]
+    provenance: official
+    auth: api_key
+  - name: sprout-social
+    display_name: Sprout Social
+    description: >-
+      Official Sprout Social remote MCP server documented for the ChatGPT
+      connector, currently scoped to TikTok published-insights and post-
+      performance data; connected via OAuth from the AI client's connector
+      settings.
+    url: "https://mcp.sproutsocial.com/mcp"
+    vendor: Sprout Social, Inc.
+    docs_url: "https://support.sproutsocial.com/hc/en-us/articles/41236268336653-ChatGPT-Connection-Overview-and-Setup"
+    category: marketing-social
+    tags: [social-media, analytics, tiktok, reporting]
+    provenance: official
+    auth: oauth
+  - name: surveymonkey
+    display_name: SurveyMonkey
+    description: >-
+      Official SurveyMonkey-hosted MCP (also distributed as a Claude connector)
+      for creating/editing/sending surveys and analyzing responses via natural
+      language. OAuth-protected Streamable HTTP endpoint.
+    url: "https://mcp.surveymonkey.com/mcp"
+    vendor: Momentive AI (SurveyMonkey)
+    docs_url: "https://www.surveymonkey.com/newsroom/surveymonkey-claude-ai-integration/"
+    category: marketing-social
+    tags: [surveys, feedback, forms, analytics, nps]
+    provenance: official
+    auth: oauth
+  - name: synter-ads
+    display_name: Synter Ads
+    description: >-
+      Community-hosted multi-platform ads MCP server covering Google Ads, Meta,
+      TikTok, LinkedIn, Reddit, Pinterest, Snapchat, Microsoft Ads, and more,
+      with 100+ tools for reporting, campaign/audience management, and creative
+      generation; API key passed via X-Synter-Key header. Notable as a hosted
+      route to Reddit and TikTok ads, which lack GA official hosted MCPs as of
+      July 2026.
+    url: "https://syntermedia.ai/mcp"
+    vendor: Synter Media AI
+    docs_url: "https://syntermedia.ai/mcp"
+    repo_url: "https://github.com/Synter-Media-AI/mcp-server"
+    category: marketing-social
+    tags: [advertising, reddit-ads, tiktok-ads, multi-platform, reporting]
+    provenance: community
+    auth: api_key
+  - name: typeform
+    display_name: Typeform
+    description: >-
+      Official Typeform-hosted remote MCP (beta) exposing 46 tools across
+      accounts, forms (read plus create/delete), contacts (full CRUD), and
+      response insights. Streamable HTTP only, no SSE; regional endpoint
+      variants exist for EU-hosted accounts.
+    url: "https://api.typeform.com/mcp"
+    vendor: Typeform S.L.
+    docs_url: "https://www.typeform.com/developers/get-started/mcp/"
+    category: marketing-social
+    tags: [forms, surveys, contacts, insights, lead-capture]
+    provenance: official
+    auth: oauth
+  - name: x
+    display_name: X (Twitter)
+    description: >-
+      200+ X API endpoints — post search and lookup, user lookups, bookmarks,
+      trends, news, and article drafting (read-focused; no Write API posting).
+    url: "https://api.x.com/mcp"
+    vendor: X Corp.
+    docs_url: "https://docs.x.com/tools/mcp"
+    category: marketing-social
+    tags: [twitter, social, posts, trends]
+    provenance: official
+    auth: oauth
+
+  # ── knowledge-docs ──────────────────────────────────────────────
+  - name: aws-knowledge
+    display_name: AWS Knowledge
+    description: >-
+      Up-to-date AWS documentation, API references, What's New posts, Well-
+      Architected guidance, and regional availability data. Free, no AWS account
+      required.
+    url: "https://knowledge-mcp.global.api.aws"
+    vendor: Amazon Web Services, Inc.
+    docs_url: "https://awslabs.github.io/mcp/servers/aws-knowledge-mcp-server"
+    repo_url: "https://github.com/awslabs/mcp"
+    category: knowledge-docs
+    tags: [aws, documentation, cloud, reference]
+    provenance: official
+    auth: open
+  - name: cloudflare-docs
+    display_name: Cloudflare Docs
+    description: >-
+      Answers questions against up-to-date Cloudflare documentation. No
+      authentication required.
+    url: "https://docs.mcp.cloudflare.com/mcp"
+    vendor: Cloudflare, Inc.
+    docs_url: "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/"
+    repo_url: "https://github.com/cloudflare/mcp-server-cloudflare"
+    category: knowledge-docs
+    tags: [cloudflare, documentation, reference]
+    provenance: official
+    auth: open
+  - name: microsoft-learn
+    display_name: Microsoft Learn
+    description: >-
+      Semantic search over official Microsoft and Azure documentation, full
+      articles as markdown, and code samples. Free, no authentication.
+    url: "https://learn.microsoft.com/api/mcp"
+    vendor: Microsoft Corporation
+    docs_url: "https://learn.microsoft.com/en-us/training/support/mcp"
+    repo_url: "https://github.com/microsoftdocs/mcp"
+    category: knowledge-docs
+    tags: [microsoft, azure, documentation, reference]
+    provenance: official
+    auth: open
+  - name: x-docs
+    display_name: X Docs
+    description: >-
+      Search and retrieve X API documentation pages. Open access, no credentials
+      required.
+    url: "https://docs.x.com/mcp"
+    vendor: X Corp.
+    docs_url: "https://docs.x.com/tools/mcp"
+    category: knowledge-docs
+    tags: [twitter, api, documentation, reference]
+    provenance: official
+    auth: open
+
+  # ── travel-local ────────────────────────────────────────────────
+  - name: google-maps
+    display_name: Google Maps Grounding Lite
+    description: >-
+      Google-run remote MCP server for grounding LLM answers in Maps data: place
+      search, weather lookup, route computation, and place-ID/URL resolution
+      tools.
+    url: "https://mapstools.googleapis.com/mcp"
+    vendor: Google
+    docs_url: "https://developers.google.com/maps/ai/grounding-lite/reference/mcp"
+    category: travel-local
+    tags: [maps, places, weather, routing, google]
+    provenance: official
+    auth: api_key
+  - name: kiwi-flights
+    display_name: Kiwi.com Flight Search
+    description: >-
+      Official flight-search MCP server letting agents search (and route toward
+      booking) flights directly from Kiwi.com's inventory.
+    url: "https://mcp.kiwi.com"
+    vendor: Kiwi.com (hosted via Alpic)
+    docs_url: "https://mcp-install-instructions.alpic.cloud/servers/kiwi-com-flight-search"
+    repo_url: "https://github.com/alpic-ai/kiwi-mcp-server-public"
+    category: travel-local
+    tags: [travel, flights, booking, search]
+    provenance: official
+    auth: open
+  - name: mapbox
+    display_name: Mapbox
+    description: >-
+      Hosted MCP exposing global geocoding, POI search, multi-modal routing,
+      travel-time matrices, route optimization, and map matching. OAuth flow on
+      first connect; mcp-remote needed for clients without native remote MCP
+      support.
+    url: "https://mcp.mapbox.com/mcp"
+    vendor: Mapbox
+    docs_url: "https://docs.mapbox.com/api/guides/mcp-server/"
+    repo_url: "https://github.com/mapbox/mcp-server"
+    category: travel-local
+    tags: [maps, geocoding, routing, location]
+    provenance: official
+    auth: oauth
