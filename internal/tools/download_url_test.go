@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -322,6 +323,47 @@ func TestDownloadURL_RelativeOutputDirAnchorsToWorkspace(t *testing.T) {
 	want := filepath.Join(workspaceDir, "subdir", "nested")
 	if filepath.Dir(res.SavedTo) != want {
 		t.Fatalf("saved under %s, want %s", filepath.Dir(res.SavedTo), want)
+	}
+}
+
+// TestDownloadURL_RelativeOutputDirTraversalRejected pins the #564 fix: a
+// relative output_dir with ".." components must be rejected with a
+// PathSecurityError BEFORE anything touches the filesystem — filepath.Join
+// collapses "../.." so without the reject it would escape the workspace and
+// write attacker-fetched bytes to an arbitrary host path. Covered both with a
+// conversation id in context (interactive chat) and without (scheduled runs).
+func TestDownloadURL_RelativeOutputDirTraversalRejected(t *testing.T) {
+	ctx, _ := downloadCtx(t)
+	for name, c := range map[string]context.Context{
+		"with conversation id":    ctx,
+		"without conversation id": context.Background(),
+	} {
+		// resolveDownloadDir runs before any dial, so no server is needed —
+		// the reject must fire before the fetch.
+		res := runDownloadURL(c, DownloadURLParams{
+			URL:       "http://example.invalid/x",
+			OutputDir: "../../../../../../etc",
+		})
+		if res.Status != downloadStatusError {
+			t.Fatalf("%s: want error status for '..' output_dir, got %+v", name, res)
+		}
+		if !strings.Contains(res.Error, "..") {
+			t.Errorf("%s: error should name the '..' violation, got %q", name, res.Error)
+		}
+		if res.SavedTo != "" {
+			t.Errorf("%s: nothing must be written, got saved_to=%q", name, res.SavedTo)
+		}
+	}
+
+	// The typed error contract: resolveDownloadDir itself returns a
+	// *PathSecurityError for the traversal, same as the absolute branch.
+	if _, err := resolveDownloadDir(ctx, "../../etc"); err == nil {
+		t.Fatal("resolveDownloadDir accepted '../../etc'")
+	} else {
+		var pse *PathSecurityError
+		if !errors.As(err, &pse) {
+			t.Errorf("want *PathSecurityError, got %T: %v", err, err)
+		}
 	}
 }
 

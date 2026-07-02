@@ -214,8 +214,11 @@ type MemoryPatch struct {
 	ValidTo   *int64
 }
 
-// UpdateMemory applies a partial update to a user's memory. An empty patch is
-// an error (the caller sent nothing to change).
+// UpdateMemory applies a partial update to a user's PERSONAL memory. An empty
+// patch is an error (the caller sent nothing to change). project_id IS NULL
+// mirrors ListMemories: the personal API can only touch personal rows, so a
+// project-scoped memory (which carries its creator's user_email) is "not
+// found" here and mutable only via the project-scoped methods (#577).
 func (s *Store) UpdateMemory(ctx context.Context, userEmail, id string, patch MemoryPatch) (*Memory, error) {
 	if patch.Content == nil && patch.Kind == nil && patch.Pinned == nil &&
 		patch.Retired == nil && patch.ValidFrom == nil && patch.ValidTo == nil {
@@ -261,7 +264,7 @@ func (s *Store) UpdateMemory(ctx context.Context, userEmail, id string, patch Me
 				WHEN $7::bigint = 0 THEN NULL
 				ELSE $7::bigint END,
 			updated_at = $5
-		 WHERE id = $8 AND user_email = $9
+		 WHERE id = $8 AND user_email = $9 AND project_id IS NULL
 		 RETURNING `+memoryColumns,
 		content, kind, patch.Pinned, patch.Retired, now, patch.ValidFrom, patch.ValidTo,
 		id, normalizeEmail(userEmail),
@@ -276,9 +279,12 @@ func (s *Store) UpdateMemory(ctx context.Context, userEmail, id string, patch Me
 	return m, nil
 }
 
+// DeleteMemory removes a user's PERSONAL memory. project_id IS NULL mirrors
+// ListMemories/UpdateMemory: a project-scoped row is deletable only via
+// DeleteProjectMemory, never through the personal API (#577).
 func (s *Store) DeleteMemory(ctx context.Context, userEmail, id string) error {
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM memories WHERE id = $1 AND user_email = $2`,
+		`DELETE FROM memories WHERE id = $1 AND user_email = $2 AND project_id IS NULL`,
 		id, normalizeEmail(userEmail),
 	)
 	if err != nil {
