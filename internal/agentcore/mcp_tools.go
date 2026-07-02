@@ -104,7 +104,10 @@ func buildFantasyTools(
 	// VERBATIM — wrapping them would double the gate and drop RecordToolResult.
 	allTools = append(allTools, cfg.preGatedTools...)
 
-	mcpRegistered := 0
+	// The MCP tools that pass gates 1+2 — these are the DEFERRABLE set (#506):
+	// registered directly when the roster fits, or hidden behind the disclosure
+	// bridges when it would blow the ceiling.
+	mcpTools := make([]fantasy.AgentTool, 0, len(mcpServerTools))
 	mcpSkippedOptional := 0
 	mcpSkippedAllowlist := 0
 	for _, st := range mcpServerTools {
@@ -124,21 +127,47 @@ func buildFantasyTools(
 		// seam every MCP call routes through, so the allowlist holds for every
 		// caller. The tool is advertised; a denied call is refused at dispatch with
 		// a governance message.
-		allTools = append(allTools, &mcpTool{
+		mcpTools = append(mcpTools, &mcpTool{
 			serverName: st.ServerName,
 			tool:       st.Tool,
 			broker:     broker,
 			policy:     policy,
 		})
-		mcpRegistered++
 	}
 
+	confirmAudit := []fantasy.AgentTool{}
 	if cfg.includeConfirmAudit {
-		allTools = append(allTools, &policyGuardedTool{inner: buildConfirmAuditPolicyTool(policy), policy: policy})
+		confirmAudit = append(confirmAudit, &policyGuardedTool{inner: buildConfirmAuditPolicyTool(policy), policy: policy})
 	}
+
+	// Progressive tool disclosure (#506): core (already in allTools) + confirm
+	// audit are never deferred. If registering every MCP tool directly would
+	// exceed the disclosure threshold, hide them behind the three bridge tools
+	// backed by a BM25 index instead — removing the hard 128-tool ceiling and
+	// cutting per-turn schema tokens. Small catalogs are unchanged (deferral
+	// only triggers above the threshold).
+	threshold := disclosureThreshold()
+	directTotal := len(allTools) + len(mcpTools) + len(confirmAudit)
+	if directTotal > threshold && len(mcpTools) > 0 {
+		reg := newDeferredToolRegistry(mcpTools)
+		bridges := reg.bridgeTools()
+		for _, b := range bridges {
+			allTools = append(allTools, &policyGuardedTool{inner: b, policy: policy})
+		}
+		allTools = append(allTools, confirmAudit...)
+		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist)",
+			len(allTools), len(nativeTools), len(cfg.loaderTools), len(bridges), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist)
+		if len(allTools) > maxToolsPerRequest {
+			return nil, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
+		}
+		return allTools, nil
+	}
+
+	allTools = append(allTools, mcpTools...)
+	allTools = append(allTools, confirmAudit...)
 
 	log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d MCP, %d MCP skipped optional, %d MCP skipped allowlist)",
-		len(allTools), len(nativeTools), len(cfg.loaderTools), mcpRegistered, mcpSkippedOptional, mcpSkippedAllowlist)
+		len(allTools), len(nativeTools), len(cfg.loaderTools), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist)
 
 	if len(allTools) > maxToolsPerRequest {
 		return nil, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
