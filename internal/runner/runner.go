@@ -118,6 +118,11 @@ type Config struct {
 	// fired from a detached, time-bounded goroutine; its errors NEVER affect task
 	// status or the pool's bookkeeping (mirrors Notifier).
 	ErrorAnalyzer ErrorAnalyzer
+	// EmailReplier, when set, sends a reply to an inbound-email trigger's sender
+	// when an email-spawned run succeeds (#511 reply-back). nil (the default)
+	// disables reply-back — the fire path is a cheap no-op. Fired from a detached,
+	// time-bounded goroutine; its errors NEVER affect task status (mirrors Notifier).
+	EmailReplier EmailReplier
 }
 
 // ErrorAnalyzer produces a structured post-failure diagnosis for a terminally
@@ -129,6 +134,16 @@ type Config struct {
 // runner bounds it) and must not panic.
 type ErrorAnalyzer interface {
 	AnalyzeTaskFailure(ctx context.Context, taskPrompt, errMsg, sessionTail string) (json.RawMessage, error)
+}
+
+// EmailReplier sends a reply to an inbound-email trigger's original sender when
+// an email-spawned run succeeds (#511 reply-back). Primitive params keep the seam
+// decoupled from the notify package; the implementation is *notify.Notifier,
+// injected in main.go. Implementations MUST honor ctx and must not panic; a nil
+// return means sent (or a no-op when SMTP isn't configured), a non-nil error is
+// logged and never affects task status.
+type EmailReplier interface {
+	ReplyToEmailEvent(ctx context.Context, to, subject, body, inReplyTo string) error
 }
 
 // Pool is the in-process capped worker pool.
@@ -196,6 +211,11 @@ type Pool struct {
 	// (the fire path is a no-op). Fired off-thread, time-bounded; never affects
 	// task status.
 	errorAnalyzer ErrorAnalyzer
+
+	// emailReplier sends a reply to an inbound-email trigger's sender when an
+	// email-spawned run succeeds (#511 reply-back). nil = reply-back off (the fire
+	// path is a no-op). Fired off-thread, time-bounded; never affects task status.
+	emailReplier EmailReplier
 }
 
 // defaultDrainGrace bounds the shutdown wait for in-flight tasks when Config
@@ -243,6 +263,7 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		notifier:           cfg.Notifier,
 		publicURLBase:      strings.TrimRight(cfg.PublicURLBase, "/"),
 		errorAnalyzer:      cfg.ErrorAnalyzer,
+		emailReplier:       cfg.EmailReplier,
 	}
 }
 
@@ -745,6 +766,9 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		log.Printf("runner: task %s completed in %v", task.ID, time.Since(start).Round(time.Second))
 		// Terminal success: fire the outbound notification off-thread (#208).
 		p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
+		// If this run answered an inbound email (#511), reply to the sender with
+		// the result. Off-thread, no-op unless the run came from an email trigger.
+		p.maybeReplyToEmailEvent(task, session)
 	}
 }
 
@@ -975,6 +999,36 @@ func (p *Pool) notifyProgress(task *models.Task, message string) {
 		}
 		if err := p.notifier.Notify(ctx, ev); err != nil {
 			log.Printf("runner: progress notify for task %s failed: %v", task.ID, err)
+		}
+	}()
+}
+
+// maybeReplyToEmailEvent replies to an inbound-email trigger's sender with the
+// run's result when an email-spawned run succeeds (#511 reply-back). Everything
+// (the event lookup and the send) runs off-thread and time-bounded so the
+// terminal path is never blocked; it is a no-op when reply-back is unwired, when
+// the run did not originate from an email trigger event (the lookup returns
+// sql.ErrNoRows), or when the event has no recorded sender. Its error is logged
+// and NEVER affects task status (mirrors notifyTerminal / maybeAnalyzeFailure).
+func (p *Pool) maybeReplyToEmailEvent(task *models.Task, session *models.LogSession) {
+	if p.emailReplier == nil {
+		return
+	}
+	body := strings.TrimSpace(finalAssistantText(session))
+	if body == "" {
+		return // nothing to send back
+	}
+	replier := p.emailReplier
+	taskID := task.ID
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ev, err := p.store.GetTriggerEventByRunID(ctx, taskID)
+		if err != nil || ev == nil || strings.TrimSpace(ev.Sender) == "" {
+			return // not an email-triggered run, or no reply target
+		}
+		if err := replier.ReplyToEmailEvent(ctx, ev.Sender, ev.Subject, body, ev.MessageID); err != nil {
+			log.Printf("runner: email reply for task %s failed: %v", taskID, err)
 		}
 	}()
 }

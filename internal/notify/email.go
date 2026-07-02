@@ -44,6 +44,42 @@ func renderEmail(from string, to []string, ev Event) []byte {
 	return []byte(b.String())
 }
 
+// renderReplyEmail builds the RFC 5322 bytes for a reply to an inbound-email
+// trigger's original sender (#511 reply-back): a single text/plain part carrying
+// the run's result, threaded to the original message via In-Reply-To/References.
+// to/subject/inReplyTo derive from the UNTRUSTED inbound email, so every header
+// value is CR/LF-sanitized (sanitizeHeader) to foreclose header injection; the
+// body sits after the header/body separator and cannot inject headers.
+func renderReplyEmail(from, to, subject, body, inReplyTo string) []byte {
+	var b strings.Builder
+	b.WriteString("From: " + sanitizeHeader(from) + "\r\n")
+	b.WriteString("To: " + sanitizeHeader(to) + "\r\n")
+	b.WriteString("Subject: " + sanitizeHeader(replySubject(subject)) + "\r\n")
+	if trimmed := strings.TrimSpace(inReplyTo); trimmed != "" {
+		b.WriteString("In-Reply-To: " + sanitizeHeader(trimmed) + "\r\n")
+		b.WriteString("References: " + sanitizeHeader(trimmed) + "\r\n")
+	}
+	b.WriteString("MIME-Version: 1.0\r\n")
+	b.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
+	b.WriteString("\r\n")
+	b.WriteString(body)
+	b.WriteString("\r\n")
+	return []byte(b.String())
+}
+
+// replySubject prefixes "Re: " unless the subject already carries one (any case).
+// A blank subject becomes a bare "Re:".
+func replySubject(subject string) string {
+	s := strings.TrimSpace(subject)
+	if s == "" {
+		return "Re:"
+	}
+	if strings.HasPrefix(strings.ToLower(s), "re:") {
+		return s
+	}
+	return "Re: " + s
+}
+
 // buildTextBody renders the plain-text alternative.
 func buildTextBody(ev Event) string {
 	var b strings.Builder
