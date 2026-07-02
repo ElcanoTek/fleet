@@ -10,6 +10,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // The LLM-judge: one rubric-driven grading call whose verdict is validated
@@ -86,11 +87,11 @@ func RunJudge(ctx context.Context, resolver ModelResolver, slug, rubric, prompt,
 		structuredoutput.PromptAugmentation(json.RawMessage(judgeVerdictSchema))
 
 	var user strings.Builder
-	fmt.Fprintf(&user, "Rubric:\n%s\n\nOriginal prompt:\n%s\n\n", truncate(rubric, judgeMaxRubricChars), truncate(prompt, judgeMaxPromptChars))
+	fmt.Fprintf(&user, "Rubric:\n%s\n\nOriginal prompt:\n%s\n\n", truncateText(rubric, judgeMaxRubricChars), truncateText(prompt, judgeMaxPromptChars))
 	if strings.TrimSpace(expected) != "" {
-		fmt.Fprintf(&user, "Reference answer (a known-good output for comparison):\n%s\n\n", truncate(expected, judgeMaxExpectedChars))
+		fmt.Fprintf(&user, "Reference answer (a known-good output for comparison):\n%s\n\n", truncateText(expected, judgeMaxExpectedChars))
 	}
-	fmt.Fprintf(&user, "Answer under evaluation:\n%s", truncate(actual, judgeMaxActualChars))
+	fmt.Fprintf(&user, "Answer under evaluation:\n%s", truncateText(actual, judgeMaxActualChars))
 
 	ag := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(sys),
@@ -154,12 +155,8 @@ func judgeGenerate(ctx context.Context, ag fantasy.Agent, messages []fantasy.Mes
 	return out.String(), nil
 }
 
-// truncate clamps s to max chars with an ellipsis marker (rune-safe enough for
-// prompt material — clamping mid-rune only risks one mangled character in a
-// truncation notice).
-func truncate(s string, maxChars int) string {
-	if len(s) <= maxChars {
-		return s
-	}
-	return s[:maxChars] + "\n…[truncated]"
+// truncateText clamps s to max chars with an ellipsis marker, on a rune
+// boundary (#595) so prompt material is always valid UTF-8.
+func truncateText(s string, maxChars int) string {
+	return truncate.Clamp(s, maxChars, "\n…[truncated]")
 }

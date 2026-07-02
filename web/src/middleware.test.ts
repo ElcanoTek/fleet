@@ -119,4 +119,40 @@ describe("middleware", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();
   });
+
+  // ── Content-Security-Policy (#590) ──────────────────────────────────────
+  // The public /shared view renders assistant-authored HTML in a sandbox=""
+  // iframe; sandbox blocks scripts but NOT sub-resource loads, so the page
+  // CSP (inherited by the srcdoc iframe) is what stops <img>/@import beacons
+  // to attacker hosts. /shared/* must NOT allow external https images.
+  it("serves /shared/* without a session and with a restrictive CSP (no external img hosts)", async () => {
+    getSessionFromRequestMock.mockResolvedValue(null);
+    const res = await middleware(req("/shared/some-token"));
+    expect(res.status).toBe(200);
+    const csp = res.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("img-src 'self' data: blob:");
+    expect(csp).not.toContain("https:");
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+  });
+
+  it("carries the baseline CSP on authenticated pages (external https images allowed)", async () => {
+    getSessionFromRequestMock.mockResolvedValue({ email: "a@x.com", exp: 0, source: "elcano" });
+    const res = await middleware(req("/chat"));
+    const csp = res.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("img-src 'self' data: blob: https:");
+    expect(csp).toContain("frame-ancestors 'none'");
+  });
+
+  it("stamps the CSP on redirect and 401 responses too", async () => {
+    getSessionFromRequestMock.mockResolvedValue(null);
+    const redirect = await middleware(req("/chat"));
+    expect(redirect.headers.get("content-security-policy")).toContain("default-src 'self'");
+    const denied = await middleware(req("/api/conversations"));
+    expect(denied.headers.get("content-security-policy")).toContain("default-src 'self'");
+  });
 });

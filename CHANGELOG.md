@@ -15,6 +15,40 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Scheduler liveness (#566): `ProcessScheduledTasks` no longer live-locks when
+  a full batch of due tasks makes no forward progress — e.g. ≥1000 one-shot
+  tasks all soft-held by a declining `run_if` gate. The old loop paged with a
+  plain `LIMIT` and terminated only on a short batch, so a full batch of
+  soft-held rows (which stay scheduled + due by design) was re-fetched
+  identically forever, hanging the scheduler goroutine and with it lease
+  recovery and starvation promotion for the whole box. The due set is now
+  walked with a keyset cursor over the total order `(scheduled_for, id)` — each
+  row is handled at most once per tick, a held prefix can't mask due work
+  behind it (the `id` tiebreaker makes pages stable even when many rows share
+  one `scheduled_for`), per-tick cost is linear, and a defensive 100k-rows valve
+  bounds a pathological tick. Soft-hold semantics are unchanged: a held one-shot
+  stays scheduled and is re-evaluated next tick.
+- Web rate limiter (#561): `(*rateLimiter).wait` no longer double-unlocks its
+  mutex when the context is cancelled mid-wait. Cancelling a `web_fetch` /
+  `web_search` turn while it was blocked in the minimum-interval (or per-minute)
+  wait triggered `fatal error: sync: unlock of unlocked mutex`, which `recover()`
+  cannot catch and which crashed the whole `fleet` process — killing every
+  user's in-flight session. Both waits are now context-aware and release the
+  lock exactly once on every path.
+- Recurring tasks (#565): the next occurrence of a recurring task now preserves
+  every definition field. The recurrence path built each new occurrence from a
+  hand-maintained `TaskCreate` literal that omitted many fields, so occurrence
+  #2+ silently reset `allow_network`, `carry_context`, `output_schema`,
+  `sandbox_limits`, the delegation / task-creation / event-trigger capability
+  bits, `persona`, and the SLA config to their zero values — e.g. a daily
+  `allow_network:true` task had its sandbox resealed `--network=none` from the
+  second run on and failed silently. The path now delegates to the canonical
+  `TaskToCreate` clone (also used by re-run/clone #270), and `TaskToCreate` was
+  itself completed to carry `persona` and `carry_context`, which it had been
+  dropping — so re-run/clone stops losing them too. A reflection guard
+  (`TestTaskToCreateCarriesEveryDefinitionField`) now fails if a new `TaskCreate`
+  definition field is added without being carried. Network posture is preserved,
+  never widened.
 - Structured output extraction (#244 hardening): a final answer carrying
   SEVERAL top-level JSON values (a narrated intermediate plus the restated
   final object — observed in a live run) now validates to the last conforming
@@ -36,6 +70,17 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Usage analytics (#601 part 1): admin-only `GET /admin/usage?group_by=&from=&to=`
+  rolls the already-persisted metering (per-iteration `task_iterations` ⋈
+  `tasks`, plus the chat `turn_metrics` session log) up by user, API key,
+  project, model, or day/week time bucket over a requested window — a pure
+  read model: no new accounting path, no new tables. Rendered in the
+  Operations Center as an admin-only "Usage" tab (KPI tiles, single-hue
+  bar/column charts coherent in light + dark, full table view). Honest scope
+  (#289): native-provider runs accrue $0 unless a pricing override is
+  configured, so the endpoint and panel always show token totals alongside
+  dollars and say so. Per-principal budgets are part 2 of #601 and are not
+  included here. See `docs/USAGE-ANALYTICS.md`.
 - `fleet task run <task.yaml>` — the local one-shot harness (run a single task
   to completion through the governed scheduled runtime, no server/DB) is now a
   verb of the unified CLI instead of the separate `cutlass` binary; the logic

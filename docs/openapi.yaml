@@ -272,6 +272,17 @@ components:
         id: { type: string, format: uuid }
         username: { type: string }
         role: { type: string }
+    CurrentUserResponse:
+      type: object
+      description: >-
+        The GET /api/me probe body. `username` and `role` are present only when
+        the credential resolves to a user record (bearer token or Elcano
+        cookie); an API-key credential yields just `authenticated: true`.
+      properties:
+        authenticated: { type: boolean }
+        username: { type: string }
+        role: { type: string }
+      required: [authenticated]
     LoginRequest:
       type: object
       properties:
@@ -317,6 +328,52 @@ components:
         breach_rate_pct: { type: number }
         sample_count: { type: integer }
       required: [task_name, expected_minutes, p50_actual_minutes, p95_actual_minutes, breach_rate_pct, sample_count]
+
+    UsageReport:
+      type: object
+      description: >-
+        The GET /admin/usage response (#601 part 1): cost + token totals over
+        [from, to) grouped by group_by, sourced from the already-persisted
+        metering (task_iterations ⋈ tasks in the sched DB, plus the chat
+        turn_metrics log). `sources` lists which meters contributed ("tasks"
+        always; "chat" when the chat store is wired). `note` carries the
+        honest-scope caveat: dollar figures cover only runs with model pricing
+        available (#289) — token totals are complete regardless.
+      properties:
+        group_by: { type: string, enum: [user, key, project, model, day, week] }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        buckets:
+          type: array
+          items: { $ref: "#/components/schemas/UsageBucket" }
+        totals: { $ref: "#/components/schemas/UsageBucket" }
+        sources:
+          type: array
+          items: { type: string }
+        note: { type: string }
+      required: [group_by, from, to, buckets, totals, sources, note]
+    UsageBucket:
+      type: object
+      description: >-
+        One aggregated usage row (#601 part 1). `key` is the grouping value
+        (user email/username, API key id, project id, model slug, or the
+        YYYY-MM-DD bucket start for day/week); the empty key collects rows
+        without that dimension (tasks have no project; chat turns have no API
+        key). Per-source splits (task_* / chat_*) are kept alongside the
+        combined totals; cached_tokens is chat-only (task iterations do not
+        persist a cached-token count).
+      properties:
+        key: { type: string }
+        label: { type: string, description: "Human-friendly name when one exists (project name)." }
+        cost_usd: { type: number }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        cached_tokens: { type: integer }
+        task_cost_usd: { type: number }
+        chat_cost_usd: { type: number }
+        task_iterations: { type: integer }
+        chat_turns: { type: integer }
+      required: [key, cost_usd, prompt_tokens, completion_tokens, cached_tokens, task_cost_usd, chat_cost_usd, task_iterations, chat_turns]
 
   responses:
     Error:
@@ -1601,6 +1658,48 @@ paths:
               schema: { $ref: "#/components/schemas/SLAReport" }
         "500": { $ref: "#/components/responses/Error" }
 
+  /admin/usage:
+    get:
+      summary: Usage analytics — cost/token roll-up by principal, project, model, or time bucket (#601 part 1).
+      description: >-
+        Aggregates the already-persisted metering over a window: task-side from
+        task_iterations joined to tasks (cost_usd, prompt/completion tokens per
+        iteration, keyed by created_by / created_by_key_id / model), chat-side
+        from the turn_metrics session log (keyed by user email, project,
+        conversation model). Admin-only — spend data is global across all
+        principals. Like /sla-report, the gate is enforced in-handler on the
+        admin permission so both the admin API key and an admin-role dashboard
+        session are accepted (#458). group_by defaults to user; from/to default
+        to the trailing 30 days (to is exclusive; the window is clamped to 366
+        days). Dollar figures depend on pricing configuration (#289): native-
+        provider runs accrue $0 unless a pricing override is set — token totals
+        are complete regardless.
+      security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: group_by
+          in: query
+          required: false
+          schema: { type: string, enum: [user, key, project, model, day, week], default: user }
+        - name: from
+          in: query
+          required: false
+          description: Window start (inclusive), RFC 3339 or YYYY-MM-DD. Default = to − 30 days.
+          schema: { type: string }
+        - name: to
+          in: query
+          required: false
+          description: Window end (exclusive), RFC 3339 or YYYY-MM-DD. Default = now.
+          schema: { type: string }
+      responses:
+        "200":
+          description: The usage report for the window.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageReport" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+
   /logs/{task_id}:
     parameters:
       - name: task_id
@@ -1627,7 +1726,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/UserCreate" }
       responses:
-        "200":
+        "201":
           description: Created
           content:
             application/json:
@@ -1641,7 +1740,7 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/UserResponse" }
+              schema: { $ref: "#/components/schemas/CurrentUserResponse" }
   /stats:
     get:
       summary: Dashboard stats.

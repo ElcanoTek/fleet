@@ -48,16 +48,16 @@ func TestResolveBashWorkingDir_Forced(t *testing.T) {
 func TestResolveWorkspacePath_Forced(t *testing.T) {
 	forced := t.TempDir()
 
-	if got := resolveWorkspacePath(WithForcedWorkingDir(context.Background(), forced), "report.md"); got != filepath.Join(forced, "report.md") {
-		t.Errorf("relative path not scoped to forced dir: got %q", got)
+	if got, err := resolveWorkspacePath(WithForcedWorkingDir(context.Background(), forced), "report.md"); err != nil || got != filepath.Join(forced, "report.md") {
+		t.Errorf("relative path not scoped to forced dir: got %q, err %v", got, err)
 	}
 	// Absolute paths are never rewritten.
-	if got := resolveWorkspacePath(WithForcedWorkingDir(context.Background(), forced), "/abs/p"); got != "/abs/p" {
-		t.Errorf("absolute path must pass through unchanged: got %q", got)
+	if got, err := resolveWorkspacePath(WithForcedWorkingDir(context.Background(), forced), "/abs/p"); err != nil || got != "/abs/p" {
+		t.Errorf("absolute path must pass through unchanged: got %q, err %v", got, err)
 	}
 	// No forced dir, no convID → unchanged (legacy behaviour).
-	if got := resolveWorkspacePath(context.Background(), "report.md"); got != "report.md" {
-		t.Errorf("without forced dir/convID the path must be unchanged: got %q", got)
+	if got, err := resolveWorkspacePath(context.Background(), "report.md"); err != nil || got != "report.md" {
+		t.Errorf("without forced dir/convID the path must be unchanged: got %q, err %v", got, err)
 	}
 }
 

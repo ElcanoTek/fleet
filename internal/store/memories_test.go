@@ -331,3 +331,66 @@ func TestAcceptMemoryProposalSupersede(t *testing.T) {
 		t.Fatalf("missing guard: %q %v %+v", o4, err, acc4)
 	}
 }
+
+// TestPersonalMemoryMutatorsExcludeProjectRows pins the #577 scope contract:
+// the personal UpdateMemory/DeleteMemory can only touch personal rows
+// (project_id IS NULL, mirroring ListMemories), so a project-scoped memory —
+// which carries its creator's user_email — is "not found" through the
+// personal API and mutable only via the project-scoped methods.
+func TestPersonalMemoryMutatorsExcludeProjectRows(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const owner = "alice@x.com"
+	if _, err := s.CreateUser(ctx, owner, "password123"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	proj, err := s.CreateProject(ctx, &Project{OwnerEmail: owner, Name: "Quant"})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	pm, err := s.CreateProjectMemory(ctx, proj.ID, owner, "shared fact", "note")
+	if err != nil {
+		t.Fatalf("CreateProjectMemory: %v", err)
+	}
+
+	// Personal PATCH/DELETE must not reach the project row, even though its
+	// user_email matches the caller.
+	edited := "edited via personal API"
+	if _, err := s.UpdateMemory(ctx, owner, pm.ID, MemoryPatch{Content: &edited}); err == nil || err.Error() != "memory not found" {
+		t.Errorf("UpdateMemory on project row: err = %v, want \"memory not found\"", err)
+	}
+	retired := true
+	if _, err := s.UpdateMemory(ctx, owner, pm.ID, MemoryPatch{Retired: &retired}); err == nil || err.Error() != "memory not found" {
+		t.Errorf("retire via personal API: err = %v, want \"memory not found\"", err)
+	}
+	if err := s.DeleteMemory(ctx, owner, pm.ID); err == nil || err.Error() != "memory not found" {
+		t.Errorf("DeleteMemory on project row: err = %v, want \"memory not found\"", err)
+	}
+	shared, err := s.ListProjectMemories(ctx, proj.ID)
+	if err != nil || len(shared) != 1 {
+		t.Fatalf("ListProjectMemories = %d rows, err %v (want the row untouched)", len(shared), err)
+	}
+	if shared[0].Content != "shared fact" || shared[0].RetiredAt != nil {
+		t.Errorf("project memory mutated through the personal API: %+v", shared[0])
+	}
+
+	// Personal rows stay fully mutable through the personal API.
+	personal, err := s.CreateMemory(ctx, owner, "personal fact", "manual", "note")
+	if err != nil {
+		t.Fatalf("CreateMemory: %v", err)
+	}
+	if _, err := s.UpdateMemory(ctx, owner, personal.ID, MemoryPatch{Content: &edited}); err != nil {
+		t.Fatalf("UpdateMemory(personal): %v", err)
+	}
+	if err := s.DeleteMemory(ctx, owner, personal.ID); err != nil {
+		t.Fatalf("DeleteMemory(personal): %v", err)
+	}
+
+	// The project-scoped path still deletes the shared row.
+	if err := s.DeleteProjectMemory(ctx, proj.ID, pm.ID); err != nil {
+		t.Fatalf("DeleteProjectMemory: %v", err)
+	}
+	if shared, _ := s.ListProjectMemories(ctx, proj.ID); len(shared) != 0 {
+		t.Errorf("project memory not deleted via project path: %d rows", len(shared))
+	}
+}

@@ -247,9 +247,20 @@ func (s *Store) UpdatePassword(ctx context.Context, email, plainPassword string)
 // user), so uploaded attachments and scratch files don't outlive the
 // account that produced them.
 //
+// It also purges the user's remote MCP servers — cascading their encrypted
+// OAuth tokens and in-flight authorization flows — so a deleted account's
+// third-party credentials can never be inherited by a later account
+// re-provisioned under the same address (#563). Projects OWNED by the user
+// are removed with DeleteProject semantics: member conversations are
+// detached (their history belongs to their users) and the project's shared
+// memories go with the project.
+//
 // The cascade is done in a single transaction so a partial failure
 // can't leave orphan rows; the workspace sweep is best-effort and
-// happens separately, off the hot path.
+// happens separately, off the hot path. Provider-side OAuth token
+// revocation is a remotemcp-service concern (it needs an HTTP client and
+// the decrypted refresh token) and is NOT attempted here — the rows, and
+// with them the only ciphertext copies, are gone after this commit.
 func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	email = normalizeEmail(email)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -265,6 +276,30 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM memories WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete memories: %w", err)
+	}
+	// Remote MCP servers: the ON DELETE CASCADE on remote_mcp_oauth and
+	// remote_mcp_oauth_flow (migration 022) removes the encrypted OAuth
+	// tokens and any in-flight authorization state with the server rows.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM remote_mcp_servers WHERE user_email = $1`, email); err != nil {
+		return fmt.Errorf("delete remote mcp servers: %w", err)
+	}
+	// Owned projects: mirror DeleteProject — detach every member's
+	// conversations (the history belongs to its user), delete the shared
+	// project memories (they are project state), then the projects.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET project_id = NULL
+		 WHERE project_id IN (SELECT id FROM projects WHERE owner_email = $1)`, email); err != nil {
+		return fmt.Errorf("detach project conversations: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM memories
+		 WHERE project_id IN (SELECT id FROM projects WHERE owner_email = $1)`, email); err != nil {
+		return fmt.Errorf("delete project memories: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM projects WHERE owner_email = $1`, email); err != nil {
+		return fmt.Errorf("delete projects: %w", err)
 	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE email = $1`, email)
 	if err != nil {

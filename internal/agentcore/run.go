@@ -215,7 +215,11 @@ type Result struct {
 	Usage RunUsage
 }
 
-// RunUsage is the accumulated token + cost accounting for a run.
+// RunUsage is the accumulated token + cost accounting for a run. It follows the
+// LogSession token convention: PromptTokens INCLUDES cache reads, CachedTokens
+// is that cached subset (so uncached spend is PromptTokens - CachedTokens, the
+// checkCeilings math), and LastStepInputTokens is the final step's total input
+// size (fresh + cache-read — the context-window-fill signal).
 type RunUsage struct {
 	PromptTokens        int
 	LastStepInputTokens int

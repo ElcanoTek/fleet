@@ -195,6 +195,22 @@ func ValidateDirectory(path string) (string, error) {
 	return absPath, nil
 }
 
+// containsDotDotComponent reports whether path contains a ".." path
+// component. The check is component-wise (not a substring match), so a
+// legitimate filename like "my..report.csv" passes while "../x" and a
+// bare ".." are caught. Tools that anchor a model-supplied relative
+// path under a workspace root must call this BEFORE filepath.Join:
+// Join collapses ".." away, so no containment check on the joined
+// result can see the escape afterwards (#564, #575).
+func containsDotDotComponent(path string) bool {
+	for _, comp := range strings.Split(filepath.ToSlash(path), "/") {
+		if comp == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // isSubPath checks if child is a subpath of parent
 func isSubPath(parent, child string) bool {
 	parent = filepath.Clean(parent)
