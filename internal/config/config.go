@@ -369,6 +369,44 @@ func RegisterAllowedEnvVars(names ...string) {
 	}
 }
 
+// registeredNonReloadableSecrets holds env-var names registered at startup as
+// per-request AUTH secrets — the client bundle's webhook/Slack signing-secret
+// env vars, which verification reads via os.Getenv on every request. Config
+// hot-reload (#286) documents auth secrets as explicitly NON-reloadable, but a
+// file-sourced secret is not a process-env winner at boot, so the bootEnv
+// restore alone would let a drifted .env copy silently rotate the live secret
+// on reload (#584). Reload pins every name registered here to its boot value
+// and reports a drifted file copy in Skipped instead. Guarded by registerMu
+// (registration runs at startup before Load).
+var registeredNonReloadableSecrets = map[string]bool{}
+
+// RegisterNonReloadableSecretEnvVars marks the given env-var names as
+// boot-pinned auth secrets: Reload restores their boot values (set OR unset)
+// after re-applying the env file and surfaces any drift in
+// ReloadResult.Skipped. Call once at startup, before Load — cmd/fleet registers
+// the bundle's webhook signing-secret env names. This is orthogonal to the
+// .env allowlist; callers still admit the names via RegisterAllowedEnvVars.
+func RegisterNonReloadableSecretEnvVars(names ...string) {
+	registerMu.Lock()
+	defer registerMu.Unlock()
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" {
+			registeredNonReloadableSecrets[n] = true
+		}
+	}
+}
+
+// nonReloadableSecretNames snapshots the registered auth-secret env-var names.
+func nonReloadableSecretNames() []string {
+	registerMu.RLock()
+	defer registerMu.RUnlock()
+	out := make([]string, 0, len(registeredNonReloadableSecrets))
+	for n := range registeredNonReloadableSecrets {
+		out = append(out, n)
+	}
+	return out
+}
+
 // RegisterAllowedEnvPrefixes admits open-ended env-var prefixes from the client
 // bundle (e.g. a per-user API-key prefix). Call once at startup, before Load.
 func RegisterAllowedEnvPrefixes(prefixes ...string) {
