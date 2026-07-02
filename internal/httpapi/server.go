@@ -1867,6 +1867,38 @@ func memoryAnnotation(m *store.Memory) string {
 	return strings.Join(parts, ", ")
 }
 
+// applyTurnModelOverride handles postChat's per-turn model override on an
+// existing conversation: if the caller passed a NEW non-empty slug, persist it
+// so the next reload reflects the user's choice. An empty reqModel is treated
+// as "no opinion, keep whatever's stored" — otherwise a transient state race on
+// the client (new-chat reset, reload before the `conversation` event rehydrates
+// selectedModel) silently wipes the stored override and the next turn quietly
+// falls back to the server primary. To explicitly clear the override, the
+// dedicated PATCH /conversations/{id}/model endpoint can send "".
+//
+// Lockdown model allow-list (#568): the override must pass the SAME guard as
+// PATCH /conversations/{id}/model and conversation create — otherwise this
+// would be the one path that lets a lockdown conversation persist and run a
+// model the operator excluded from CHAT_LOCKDOWN_ALLOWED_MODELS. Reports false
+// after writing the HTTP error; the caller must return without running the turn.
+func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, reqModel string) bool {
+	if reqModel == "" {
+		return true
+	}
+	if conv.Lockdown && !s.cfg.LockdownAllows(reqModel) {
+		http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
+		return false
+	}
+	if reqModel != conv.Model {
+		if err := s.store.SetModel(r.Context(), user, conv.ID, reqModel); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return false
+		}
+		conv.Model = reqModel
+	}
+	return true
+}
+
 func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1906,21 +1938,8 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
 		}
-		// Per-turn model override: if the caller passed a NEW non-empty slug,
-		// persist it so the next reload reflects the user's choice. An empty
-		// reqModel is treated as "no opinion, keep whatever's stored" —
-		// otherwise a transient state race on the client (new-chat reset,
-		// reload before the `conversation` event rehydrates selectedModel)
-		// silently wipes the stored override and the next turn quietly
-		// falls back to the server primary. To explicitly clear the
-		// override, the dedicated PATCH /conversations/{id}/model endpoint
-		// can send "".
-		if reqModel != "" && reqModel != conv.Model {
-			if err := s.store.SetModel(r.Context(), user, conv.ID, reqModel); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			conv.Model = reqModel
+		if !s.applyTurnModelOverride(w, r, user, conv, reqModel) {
+			return
 		}
 		// Sending a message to an archived conversation un-archives it (#282) —
 		// mirrors how replying to an archived email brings it back to the inbox.
