@@ -187,7 +187,10 @@ type Manager struct {
 	keys         map[string]*APIKey
 	keyHashIndex map[string]string
 	rateLimits   map[string]*RateLimitState
-	mu           sync.RWMutex
+	// loadedModTime is the key file's mtime as of the last (re)load — the
+	// cheap staleness check behind refreshIfChangedLocked.
+	loadedModTime time.Time
+	mu            sync.RWMutex
 }
 
 // NewManager creates a new API key manager.
@@ -252,6 +255,9 @@ func (m *Manager) generateKeyID() (string, error) {
 }
 
 func (m *Manager) load() error {
+	if st, err := os.Stat(m.storagePath); err == nil {
+		m.loadedModTime = st.ModTime()
+	}
 	data, err := os.ReadFile(m.storagePath)
 	if os.IsNotExist(err) {
 		return nil
@@ -277,6 +283,51 @@ func (m *Manager) load() error {
 		}
 	}
 	return nil
+}
+
+// refreshIfChangedLocked re-reads the key file when its mtime moved past what
+// this Manager last loaded — the seam that makes a key minted by the CLI (a
+// SEPARATE process appending to api_keys.json) usable without restarting the
+// server. Called with m.mu held, only on a LOOKUP MISS, so the steady state
+// (known key, or garbage key against an unchanged file) never touches the
+// filesystem beyond one Stat. Existing in-memory keys are kept (their runtime
+// rate/budget state lives on the structs); only unseen key IDs are added, so a
+// reload can never resurrect a key RevokeKey just removed but hadn't yet
+// persisted. Returns true when new keys appeared and a retry is worthwhile.
+func (m *Manager) refreshIfChangedLocked() bool {
+	st, err := os.Stat(m.storagePath)
+	if err != nil || !st.ModTime().After(m.loadedModTime) {
+		return false
+	}
+	m.loadedModTime = st.ModTime()
+	data, err := os.ReadFile(m.storagePath)
+	if err != nil {
+		return false
+	}
+	var fileData struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.Unmarshal(data, &fileData); err != nil {
+		return false
+	}
+	added := false
+	for _, keyData := range fileData.Keys {
+		var key APIKey
+		if err := json.Unmarshal(keyData, &key); err != nil {
+			continue
+		}
+		if _, known := m.keys[key.KeyID]; known {
+			continue
+		}
+		k := key
+		m.keys[k.KeyID] = &k
+		m.keyHashIndex[k.KeyHash] = k.KeyID
+		if k.PreviousKeyHash != nil {
+			m.keyHashIndex[*k.PreviousKeyHash] = k.KeyID
+		}
+		added = true
+	}
+	return added
 }
 
 func (m *Manager) save() error {
@@ -585,6 +636,9 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 	defer m.mu.Unlock()
 
 	keyID, ok := m.keyHashIndex[keyHash]
+	if !ok && m.refreshIfChangedLocked() {
+		keyID, ok = m.keyHashIndex[keyHash]
+	}
 	if !ok {
 		return false, nil, "Invalid API key"
 	}
@@ -658,8 +712,19 @@ func (m *Manager) ValidateKey(rawKey string, requiredPermission *models.Permissi
 func (m *Manager) LookupKeyMeta(rawKey string) (keyID string, rateLimit int, ok bool) {
 	keyHash := m.hashKey(rawKey)
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	id, found := m.keyHashIndex[keyHash]
+	if !found {
+		// Miss: the key may have been minted by another process (the CLI) since
+		// this Manager loaded. Upgrade to a write lock, refresh, retry once.
+		m.mu.RUnlock()
+		m.mu.Lock()
+		if m.refreshIfChangedLocked() {
+			id, found = m.keyHashIndex[keyHash]
+		}
+		m.mu.Unlock()
+		m.mu.RLock()
+	}
+	defer m.mu.RUnlock()
 	if !found {
 		return "", 0, false
 	}
@@ -678,8 +743,18 @@ func (m *Manager) LookupKeyMeta(rawKey string) (keyID string, rateLimit int, ok 
 func (m *Manager) LookupKeyType(rawKey string) (kt KeyType, hasCreate, ok bool) {
 	keyHash := m.hashKey(rawKey)
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	id, found := m.keyHashIndex[keyHash]
+	if !found {
+		// Same CLI-minted-key refresh as LookupKeyMeta.
+		m.mu.RUnlock()
+		m.mu.Lock()
+		if m.refreshIfChangedLocked() {
+			id, found = m.keyHashIndex[keyHash]
+		}
+		m.mu.Unlock()
+		m.mu.RLock()
+	}
+	defer m.mu.RUnlock()
 	if !found {
 		return "", false, false
 	}
