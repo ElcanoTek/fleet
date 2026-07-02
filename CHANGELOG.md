@@ -44,6 +44,14 @@ prior versions are listed because none have shipped.
   `generate-tui-gif.sh` with a verified-take retry loop) and documented in
   `docs/generating-demo-gif.md`.
 
+- `fleet cleanup [--dry-run] [--deep]` — reclaim host-side build/deploy cruft:
+  dangling podman image layers (each sandbox rebuild strands ~1.3 GB) and the
+  Go build/test caches; `--deep` additionally prunes unused named images,
+  stopped containers, and networks. Never touches databases, workspaces, or
+  the client bundle. `scripts/update.sh` now prunes dangling layers
+  automatically after a successful sandbox rebuild, so routine updates can't
+  fill the disk. CLI usage strings now name the unified `fleet` binary
+  instead of the deprecated `fleet-admin`.
 - Browser push notifications via the Web Push API (#292): opt in per browser
   under Settings → Connections and get a low-detail alert — task complete or
   failed (`FLEET_PUSH_ON_TASK_COMPLETE`), approval needed

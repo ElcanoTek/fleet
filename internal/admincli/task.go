@@ -25,7 +25,7 @@ import (
 // is a full-Task backup that preserves IDs and runtime state.
 func cmdTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin task export|import|memories")
+		return errf(1, "usage: fleet task export|import|memories")
 	}
 	switch argv[0] {
 	case "export":

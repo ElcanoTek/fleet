@@ -156,7 +156,7 @@ func mcpAccountSet(argv []string) int {
 		return 1
 	}
 	if len(pos) < 2 {
-		return errf(1, "usage: fleet-admin mcp account set <server> <account> --secret KEY=-")
+		return errf(1, "usage: fleet mcp account set <server> <account> --secret KEY=-")
 	}
 	server, account := pos[0], pos[1]
 	if strings.TrimSpace(*secret) == "" {
@@ -201,7 +201,7 @@ func mcpAccountList(argv []string) int {
 		return 1
 	}
 	if strings.TrimSpace(server) == "" {
-		return errf(1, "usage: fleet-admin mcp account list <server>")
+		return errf(1, "usage: fleet mcp account list <server>")
 	}
 	path := envFilePath(*envFile)
 	keys, err := creds.ListEnvKeys(path)
@@ -246,7 +246,7 @@ func mcpAccountDel(argv []string) int {
 		return 1
 	}
 	if len(pos) < 2 {
-		return errf(1, "usage: fleet-admin mcp account del [--key VAR] <server> <account>")
+		return errf(1, "usage: fleet mcp account del [--key VAR] <server> <account>")
 	}
 	server, account := pos[0], pos[1]
 	path := envFilePath(*envFile)
