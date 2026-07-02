@@ -67,6 +67,24 @@ func (f *fakeStore) FinishDatasetRow(_ context.Context, rowID uuid.UUID, propose
 	return errors.New("row not found")
 }
 
+func (f *fakeStore) RequeueDatasetRow(_ context.Context, rowID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.rows {
+		if r.ID == rowID {
+			if r.Status != models.DatasetRowRunning {
+				return errors.New("not running")
+			}
+			r.Status = models.DatasetRowPending
+			if r.Attempts > 0 {
+				r.Attempts--
+			}
+			return nil
+		}
+	}
+	return errors.New("row not found")
+}
+
 func (f *fakeStore) UpdateDatasetStatus(_ context.Context, _ uuid.UUID, from []string, to string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -240,6 +258,60 @@ func TestRunner_PauseParksAsPaused(t *testing.T) {
 	waitFor(t, func() bool {
 		st := store.rowStatuses()
 		return st[models.DatasetRowPending] == 0 && st[models.DatasetRowRunning] == 0
+	})
+}
+
+// TestRunner_PauseReturnsInFlightRowsToPending pins the #586 fix: pausing a
+// running dataset must NOT mark the in-flight rows failed — the cancelled rows
+// return to pending (attempt refunded) so a resume re-claims and re-runs them.
+func TestRunner_PauseReturnsInFlightRowsToPending(t *testing.T) {
+	store, turns, r := newFixture(6, func(string) (string, error) {
+		return `{"summary":"x"}`, nil
+	})
+	turns.block = make(chan struct{}) // park every RunTurn until ctx-cancelled
+	if err := r.Start(context.Background(), store.dataset.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		turns.mu.Lock()
+		defer turns.mu.Unlock()
+		return turns.inFlight == 2
+	})
+	if !r.Pause(store.dataset.ID) {
+		t.Fatal("Pause should find an active run")
+	}
+	waitFor(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.status == models.DatasetStatusPaused
+	})
+
+	// The pause casualties are back to pending — never failed, never stuck
+	// running — with their claim attempt refunded.
+	st := store.rowStatuses()
+	if st[models.DatasetRowFailed] != 0 || st[models.DatasetRowRunning] != 0 || st[models.DatasetRowPending] != 6 {
+		t.Fatalf("after pause: %v, want all 6 rows pending (0 failed, 0 running)", st)
+	}
+	store.mu.Lock()
+	for _, row := range store.rows {
+		if row.Attempts != 0 {
+			t.Errorf("row %d attempts = %d after pause requeue, want 0 (attempt refunded)", row.RowIndex, row.Attempts)
+		}
+	}
+	store.mu.Unlock()
+
+	// Resume: every row (including the pause casualties) runs to proposed.
+	turns.mu.Lock()
+	turns.block = nil
+	turns.mu.Unlock()
+	if err := r.Start(context.Background(), store.dataset.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return store.rowStatuses()[models.DatasetRowProposed] == 6 })
+	waitFor(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.status == models.DatasetStatusIdle
 	})
 }
 
