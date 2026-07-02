@@ -24,7 +24,7 @@ them.
 
 ## Contents
 
-- [Why fleet](#why-fleet) · [Built for trust](#built-for-trust-governed-auditable-delegation) · [Architecture at a glance](#architecture-at-a-glance) · [Standards](#standards)
+- [Why fleet](#why-fleet) · [Batteries included](#batteries-included) · [Built for trust](#built-for-trust-governed-auditable-delegation) · [Architecture at a glance](#architecture-at-a-glance) · [Standards](#standards)
 - [Repository layout](#repository-layout) · [The client-config bundle](#the-client-config-bundle) · [No lock-in](#no-lock-in-your-agent-ip-is-portable) · [Development](#development)
 - [Deploy](#deploy) · [Operating fleet](#operating-fleet) · [Documentation](#documentation)
 - [Built by Elcano](#built-by-elcano-commercial-support) · [Contributing](#contributing) · [License](#license)
@@ -47,7 +47,10 @@ same governed sandbox. _(Auto-regenerated on each push to `main` by
 
 **Terminal chat (`fleet chat`)**
 
-![Fleet terminal chat TUI](docs/screenshots/tui/chat.png)
+![Fleet terminal chat TUI demo](docs/screenshots/tui/demo.gif)
+
+_(The demo is a scripted recording against a mock server — no model, no keys, fully
+reproducible: [`docs/generating-demo-gif.md`](docs/generating-demo-gif.md).)_
 
 ## Why fleet
 
@@ -130,6 +133,44 @@ same governed sandbox. _(Auto-regenerated on each push to `main` by
   runtime emits structured observer events for every turn — tool calls, results,
   usage, enforcement nudges — so you can see exactly what an agent did and what
   it cost.
+
+## Batteries included
+
+fleet ships usable on day one — the platform pieces you'd otherwise assemble
+yourself are already in the box, tested, and governed by the same core:
+
+- **An MCP connector library, two trust classes deep.** Your bundle's own
+  connectors run **in the sandbox with credentials brokered host-side**, and a
+  curated directory of **65 verified official vendor-hosted MCP servers**
+  (GitHub, Google, Notion, Slack, Stripe, X, OpenRouter, Hugging Face, AWS, …)
+  is one OAuth click away — each explicitly badged *Bundled* vs *Third-party*
+  so users know what they're opting into ([`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md)).
+  Inline `http_tools` cover the "just call this REST endpoint" cases without an
+  MCP subprocess.
+- **A real scheduler, not a cron wrapper.** Priority queues with
+  anti-starvation, transient-only retries with backoff, SLA tracking, dead-letter
+  + replay, per-task sandbox limits, structured JSON output (`output_schema`),
+  live SSE run streams, batch/import/export, and an Upcoming-runs view.
+- **Automation surface for your own ecosystem.** Typed API keys + an
+  OpenAPI-specified HTTP API to enqueue and consume governed agent jobs from CI,
+  cron, bots, or other tasks ([`docs/BUILDING-ON-FLEET.md`](docs/BUILDING-ON-FLEET.md));
+  inbound HMAC webhooks and email triggers to spawn work; outbound
+  signed-webhook/email/browser-push notifications when it finishes.
+- **Memory that can be trusted.** Typed, provenanced user memory with
+  approval-gated writes, pin/retire lifecycle, human-confirmed supersession,
+  and a derived temporal knowledge graph with as-of queries
+  ([`docs/MEMORY.md`](docs/MEMORY.md)).
+- **Team surfaces.** Projects/spaces with shared instructions + curated
+  connectors + shared memory, team RBAC, read-only share links, conversation
+  branching, folders/labels, and a dataset/table agent for row-by-row
+  background work with human-approved write-backs.
+- **Quality gates for your agents.** A self-hosted eval & regression harness
+  (`fleet eval`) that replays golden prompts through the real loop and gates
+  model/bundle changes ([`docs/EVALS.md`](docs/EVALS.md)); per-run error
+  analysis; optional PII redaction; a governed in-sandbox browser tool.
+- **Three clients out of the box.** The web chat UI, the Operations Center,
+  and a full terminal client (`fleet chat`) — all thin views over the same
+  governed API.
 
 ## Built for trust: governed, auditable delegation
 
@@ -429,6 +470,8 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 | [`docs/CONFIG-RELOAD.md`](docs/CONFIG-RELOAD.md) | Which settings hot-reload without a restart, and how |
 | [`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md) | Disaster recovery — backup + restore of both databases |
 | [`docs/WEBHOOK-SIGNING.md`](docs/WEBHOOK-SIGNING.md) · [`docs/TESTING.md`](docs/TESTING.md) | Webhook HMAC signing · the test suite + fake-LLM seam |
+| [`docs/BUILDING-ON-FLEET.md`](docs/BUILDING-ON-FLEET.md) | The HTTP API as an automation substrate — keys, kicking off jobs, consuming structured output |
+| [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) | The connector catalog — bundled vs third-party trust classes |
 | [`docs/adr/`](docs/adr/) | Architecture Decision Records — the *why* behind the non-negotiable invariants |
 | [`SECURITY.md`](SECURITY.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) | Reporting a vulnerability · contributor workflow + CI gates |
 

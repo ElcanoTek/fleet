@@ -20,7 +20,7 @@ func TestModelTurnLifecycle(t *testing.T) {
 
 	// Simulate sending (without the goroutine): commit the user line + stream.
 	m.lastUser = "hello"
-	m.history = append(m.history, styleUserLabel.Render("you")+"\nhello")
+	m.history = append(m.history, stylePillUser.Render("you")+"\nhello")
 	m.streaming = true
 	m.applyEvent(Event{Name: "conversation", Data: map[string]any{"id": "conv-7"}})
 	m.applyEvent(Event{Name: "tool.call", Data: map[string]any{"name": "bash"}})
@@ -72,5 +72,73 @@ func TestModelSlashCommands(t *testing.T) {
 
 	if cmd := m.runSlash("/quit"); cmd == nil {
 		t.Error("/quit should return a quit command")
+	}
+}
+
+// TestToolGlyphLifecycle pins the tool-line rendering contract: a call shows
+// the running marker, a success flips to ✓, an error to ✗ — index-aligned
+// even across multiple calls in one turn.
+func TestToolGlyphLifecycle(t *testing.T) {
+	m := newModel(Config{ServerURL: "http://x", Email: "e@x.co"})
+	m.streaming = true
+	m.applyEvent(Event{Name: "tool.call", Data: map[string]any{"name": "bash"}})
+	if len(m.toolLines) != 1 || !strings.Contains(m.toolLines[0], "bash") || !strings.Contains(m.toolLines[0], "running") {
+		t.Fatalf("call line = %q", m.toolLines)
+	}
+	m.applyEvent(Event{Name: "tool.call", Data: map[string]any{"name": "run_python"}})
+	m.applyEvent(Event{Name: "tool.result", Data: map[string]any{"is_err": true}})
+	if !strings.Contains(m.toolLines[1], "✗ run_python") || !strings.Contains(m.toolLines[1], "failed") {
+		t.Errorf("error result line = %q", m.toolLines[1])
+	}
+	if !strings.Contains(m.toolLines[0], "running") {
+		t.Errorf("first tool should still be running: %q", m.toolLines[0])
+	}
+	// An unnamed call falls back to the generic label.
+	m.applyEvent(Event{Name: "tool.call", Data: map[string]any{}})
+	if !strings.Contains(m.toolLines[2], "⏺ tool") {
+		t.Errorf("unnamed call line = %q", m.toolLines[2])
+	}
+}
+
+// TestBarLine pins the header/status row layout math: left + right lay out to
+// the full width, and a too-narrow terminal degrades to a single space gap
+// instead of a negative repeat panic.
+func TestBarLine(t *testing.T) {
+	line := barLine(20, "ab", "cd")
+	if lipglossWidth(line) != 20 {
+		t.Errorf("width = %d, want 20 (%q)", lipglossWidth(line), line)
+	}
+	if !strings.HasPrefix(line, "ab") || !strings.HasSuffix(line, "cd") {
+		t.Errorf("segments misplaced: %q", line)
+	}
+	narrow := barLine(2, "abcdef", "xyz")
+	if !strings.Contains(narrow, "abcdef xyz") {
+		t.Errorf("narrow fallback = %q", narrow)
+	}
+}
+
+// TestHelpAndRenderStates exercises the /help block and the three status-row
+// states (ready / streaming / error) through the public render path.
+func TestHelpAndRenderStates(t *testing.T) {
+	m := newModel(Config{ServerURL: "http://x", Email: "e@x.co", Model: "test/model"})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = updated.(*model)
+
+	m.runSlash("/help")
+	if joined := strings.Join(m.history, "\n"); !strings.Contains(joined, "/reasoning") {
+		t.Errorf("/help missing commands: %q", joined)
+	}
+
+	if out := m.render(); !strings.Contains(out, "test/model") {
+		t.Error("header should carry the model slug")
+	}
+	m.streaming = true
+	if out := m.render(); !strings.Contains(out, "streaming") {
+		t.Error("streaming status missing")
+	}
+	m.streaming = false
+	m.statusErr = "boom"
+	if out := m.render(); !strings.Contains(out, "boom") {
+		t.Error("error status missing")
 	}
 }

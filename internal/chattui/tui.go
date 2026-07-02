@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // altView wraps the rendered frame in an alt-screen tea.View (bubbletea v2 has no
@@ -54,7 +55,8 @@ type model struct {
 	// In-flight turn state.
 	streaming bool
 	assistant strings.Builder // raw assistant text accumulated this turn
-	toolLines []string        // "▸ tool …" one-liners this turn
+	toolLines []string        // rendered per-tool one-liners this turn
+	toolNames []string        // raw tool names, index-aligned with toolLines
 	reasoning strings.Builder // raw reasoning this turn (shown only when showReasoning)
 	cancel    context.CancelFunc
 	frame     int
@@ -66,6 +68,7 @@ type model struct {
 
 func newModel(cfg Config) *model {
 	ti := textinput.New()
+	ti.Prompt = "" // the composer box renders its own "› " prompt glyph
 	ti.Placeholder = "Message the agent  (Enter to send · /help · Ctrl+C to cancel/quit)"
 	ti.Focus()
 	ti.CharLimit = 0
@@ -91,8 +94,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		// Reserve rows: header(1) + blank(1) + status(1) + input(1) + padding(1).
-		bodyH := msg.Height - 5
+		// Reserve rows: header(1) + rule(1) + status(1) + boxed input(3) + padding(1).
+		bodyH := msg.Height - 7
 		if bodyH < 3 {
 			bodyH = 3
 		}
@@ -138,6 +141,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // (enter/ctrl+c/scroll) and must NOT also fall through to the textinput/viewport.
 func (m *model) onKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch k.String() {
+	case "esc":
+		if m.streaming && m.cancel != nil {
+			m.cancel()
+			return nil, true
+		}
+		return nil, false
 	case "ctrl+c":
 		if m.streaming && m.cancel != nil {
 			m.cancel() // abort the in-flight turn; the goroutine emits turnDoneMsg
@@ -211,8 +220,15 @@ func (m *model) runSlash(text string) tea.Cmd {
 		}
 		return m.sendTurn(m.lastUser)
 	case "/help":
-		m.history = append(m.history, styleDim.Render(
-			"commands: /new (fresh conversation) · /retry · /model <slug> · /reasoning (toggle) · /clear · /quit · PgUp/PgDn scroll · Ctrl+C cancel/quit"))
+		m.history = append(m.history, strings.Join([]string{
+			styleAccent.Render("commands"),
+			styleTool.Render("  /new       ") + styleDim.Render("start a fresh conversation"),
+			styleTool.Render("  /retry     ") + styleDim.Render("resend your last message"),
+			styleTool.Render("  /model <s> ") + styleDim.Render("switch model for the next turn"),
+			styleTool.Render("  /reasoning ") + styleDim.Render("toggle live reasoning display"),
+			styleTool.Render("  /clear     ") + styleDim.Render("clear the transcript"),
+			styleTool.Render("  /quit      ") + styleDim.Render("exit (Ctrl+D too) · Esc/Ctrl+C cancels a running turn"),
+		}, "\n"))
 		m.refresh()
 		m.vp.GotoBottom()
 		return nil
@@ -228,11 +244,12 @@ func (m *model) runSlash(text string) tea.Cmd {
 // stream in a goroutine that pushes frames back via prog.Send.
 func (m *model) sendTurn(text string) tea.Cmd {
 	m.lastUser = text
-	m.history = append(m.history, styleUserLabel.Render("you")+"\n"+text)
+	m.history = append(m.history, stylePillUser.Render("you")+"\n"+text)
 	m.streaming = true
 	m.assistant.Reset()
 	m.reasoning.Reset()
 	m.toolLines = m.toolLines[:0]
+	m.toolNames = m.toolNames[:0]
 	m.frame = 0
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -267,15 +284,21 @@ func (m *model) applyEvent(ev Event) {
 		if name == "" {
 			name = "tool"
 		}
-		m.toolLines = append(m.toolLines, styleTool.Render("▸ "+name)+styleDim.Render("  …"))
+		m.toolNames = append(m.toolNames, name)
+		m.toolLines = append(m.toolLines, styleTool.Render("⏺ "+name)+styleDim.Render(" running…"))
 	case "tool.result":
-		// Mark the most recent matching tool line as done (best-effort: just append a tick).
+		// Mark the most recent tool line as done (best-effort: calls resolve in
+		// order on this stream) with a colored outcome glyph.
 		if n := len(m.toolLines); n > 0 {
-			done := "ok"
-			if isErr, _ := ev.Data["is_err"].(bool); isErr {
-				done = "error"
+			name := "tool"
+			if len(m.toolNames) >= n {
+				name = m.toolNames[n-1]
 			}
-			m.toolLines[n-1] = strings.TrimSuffix(m.toolLines[n-1], styleDim.Render("  …")) + styleDim.Render("  "+done)
+			if isErr, _ := ev.Data["is_err"].(bool); isErr {
+				m.toolLines[n-1] = styleToolErr.Render("✗ "+name) + styleDim.Render(" failed")
+			} else {
+				m.toolLines[n-1] = styleToolOK.Render("✓ "+name) + styleDim.Render(" done")
+			}
 		}
 	}
 }
@@ -291,7 +314,7 @@ func (m *model) finishTurn(msg turnDoneMsg) {
 	}
 	// Commit the assistant's reply (glamour-rendered) + any tool lines into history.
 	var block strings.Builder
-	block.WriteString(styleAgentLabel.Render("agent"))
+	block.WriteString(stylePillAgent.Render("agent"))
 	if len(m.toolLines) > 0 {
 		block.WriteString("\n" + strings.Join(m.toolLines, "\n"))
 	}
@@ -311,6 +334,7 @@ func (m *model) finishTurn(msg turnDoneMsg) {
 		}
 	}
 	m.toolLines = m.toolLines[:0]
+	m.toolNames = m.toolNames[:0]
 }
 
 // refresh rebuilds the viewport content from history + the in-flight turn.
@@ -318,7 +342,7 @@ func (m *model) refresh() {
 	blocks := append([]string{}, m.history...)
 	if m.streaming {
 		var live strings.Builder
-		live.WriteString(styleAgentLabel.Render("agent") + " " + styleDim.Render(spinnerFrames[m.frame%len(spinnerFrames)]+" working…"))
+		live.WriteString(stylePillAgent.Render("agent") + " " + styleAccent.Render(spinnerFrames[m.frame%len(spinnerFrames)]) + styleDim.Render(" working…"))
 		if m.showReasoning {
 			if r := strings.TrimSpace(m.reasoning.String()); r != "" {
 				live.WriteString("\n" + styleDim.Render(indent(r, "  │ ")))
@@ -344,27 +368,66 @@ func (m *model) contentWidth() int {
 
 func (m *model) View() tea.View { return altView(m.render()) }
 
-// render builds the full ANSI frame (header · viewport · status · input line).
-// Split out from View so the deterministic screenshot generator (#487) can
-// capture the exact frame the alt-screen shows, without a Program or terminal.
+// render builds the full ANSI frame (header · rule · viewport · status · boxed
+// input). Split out from View so the deterministic screenshot/gif generators
+// (#487, #540) can capture the exact frame the alt-screen shows, without a
+// Program or terminal.
 func (m *model) render() string {
-	header := styleHeader.Render("⚓ fleet chat")
 	conv := "new conversation"
 	if m.convID != "" {
 		conv = "conv " + shortID(m.convID)
 	}
-	status := styleDim.Render(conv)
+	right := conv
+	if mdl := strings.TrimSpace(m.client.cfg.Model); mdl != "" {
+		right = mdl + " · " + conv
+	}
+	header := barLine(m.width, styleHeader.Render("⚓ fleet chat"), styleDim.Render(right))
+
+	status := styleDim.Render("ready")
 	if m.streaming {
-		status = styleAccent.Render(spinnerFrames[m.frame%len(spinnerFrames)] + " streaming — Ctrl+C to cancel")
+		status = styleAccent.Render(spinnerFrames[m.frame%len(spinnerFrames)]+" streaming") + styleDim.Render(" — Esc/Ctrl+C to cancel")
 	} else if m.statusErr != "" {
 		status = styleErr.Render("⚠ " + m.statusErr)
 	}
+	statusBar := barLine(m.width, status, styleDim.Render("PgUp/PgDn scroll · /help"))
+
+	box := styleInputBox
+	if m.streaming {
+		box = styleInputBoxBusy
+	}
+	inputW := m.width - 6 // box borders(2) + padding(2) + prompt glyph(2)
+	if inputW < 20 {
+		inputW = 20
+	}
+	m.input.SetWidth(inputW)
+	inputBox := box.Width(maxInt(m.width-2, 20)).Render(styleAccent.Render("› ") + m.input.View())
+
 	return strings.Join([]string{
 		header,
+		rule(m.width),
 		m.vp.View(),
-		status,
-		styleAccent.Render("› ") + m.input.View(),
+		statusBar,
+		inputBox,
 	}, "\n")
+}
+
+// barLine lays out left + right segments on one row, padding the middle to the
+// full width (falling back to a single space when the terminal is too narrow).
+func barLine(width int, left, right string) string {
+	gap := width - lipglossWidth(left) - lipglossWidth(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func lipglossWidth(s string) int { return lipgloss.Width(s) }
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // ── small helpers ──

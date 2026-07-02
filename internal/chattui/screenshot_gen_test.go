@@ -36,7 +36,7 @@ func TestGenerateTUIScreenshot(t *testing.T) {
 	// a glamour-rendered assistant reply.
 	const ask = "How many scheduled tasks failed in the last 24h?"
 	m.lastUser = ask
-	m.history = append(m.history, styleUserLabel.Render("you")+"\n"+ask)
+	m.history = append(m.history, stylePillUser.Render("you")+"\n"+ask)
 	m.streaming = true
 	m.applyEvent(Event{Name: "conversation", Data: map[string]any{"id": "a1b2c3d4e5f6"}})
 	m.applyEvent(Event{Name: "tool.call", Data: map[string]any{"name": "bash"}})
