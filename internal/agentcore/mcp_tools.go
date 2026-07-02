@@ -232,6 +232,14 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 	// what the stream sink records, and what the session log persists.
 	if resp.Content != "" {
 		resp.Content = toolRedactor().Redact(resp.Content)
+		// Optional PII pass (#450), layered after the secret scrubber. In block
+		// mode the content is withheld and the result is marked an error so the
+		// model treats it as a failed call rather than silently losing data.
+		var piiBlocked bool
+		resp.Content, piiBlocked = redactPII(name, resp.Content)
+		if piiBlocked {
+			resp.IsError = true
+		}
 	}
 	// Output ceiling (#199): cap any single tool result before it enters the
 	// transcript so one oversized output can't overflow the context window (which
@@ -370,12 +378,17 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	// Scrub secrets from MCP output before it is recorded, returned to the model,
 	// or streamed/persisted downstream.
 	resultText = toolRedactor().Redact(resultText)
+	// Optional PII pass (#450): connector results are the highest-volume vector
+	// for PII entering the model context. In block mode the result is withheld and
+	// treated as an error (isErr) so the raw value never reaches the model.
+	var piiBlocked bool
+	resultText, piiBlocked = redactPII(toolName, resultText)
 
 	// Map MCP isError to a fantasy error response so both the LLM and the log
 	// know the call failed (per MCP 2025-06-18 spec, tool-level errors arrive as
 	// a successful JSON-RPC response with isError=true). The fast.io guard above
 	// also surfaces through this path (it returns isError=true with the hint text).
-	if isErr {
+	if isErr || piiBlocked {
 		errText := resultText
 		if errText == "" {
 			errText = fmt.Sprintf("MCP tool %s returned isError=true with no text content", toolName)
