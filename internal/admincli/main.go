@@ -20,6 +20,7 @@
 //	fleet sched user add|update|set-role|rename|del|list
 //	fleet sched apikey create|list|revoke|delete
 //	fleet sched task export|import|set-model|set-credentials|set-description|tag|estimate|batch-create
+//	fleet task run <task.yaml>   (local one-shot through the governed runtime — dispatched by the fleet binary)
 //	fleet task export|import    (definition-only #238: portable JSON/YAML, name-based conflict resolution)
 //	fleet mcp account set|list|del
 //	fleet notes set|get|list|rm
@@ -152,6 +153,7 @@ Users, credentials, notes:
   fleet sched task set-description <task_id> <text>|-    (operator docs; - reads stdin, e.g. < TASK_README.md)
   fleet sched task tag <task_id> --add <tag> ... --remove <tag> ...   (organize tasks by label)
   fleet sched task estimate --model <slug> --prompt <text> [--max-iter N] [--mcp-tools N] [--max-cost USD] [--system-prompt <text>] [--json]   (pre-submission cost forecast; no DB, no model call)
+  fleet task run <task.yaml> [--log FILE] [--workspace DIR]   (local one-shot through the governed runtime)
   fleet task export [--ids uuid1,uuid2] [--format json|yaml] [--recurrence-only]   (definition-only export → stdout; #238)
   fleet task import [--from tasks.yaml] [--format json|yaml] [--dry-run] [--conflict error|skip|replace]   (definition-only import; #238)
   fleet mcp account set <server> <account> --secret KEY=-   (value via stdin)

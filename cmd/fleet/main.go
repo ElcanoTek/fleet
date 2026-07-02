@@ -74,6 +74,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/taskrun"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/version"
 	"github.com/ElcanoTek/fleet/internal/webpush"
@@ -122,6 +123,11 @@ func main() {
 		// Browser Web Push setup (#292): print a fresh VAPID key pair as env
 		// lines for the operator's env-file. Boots nothing.
 		os.Exit(runGenerateVAPIDKeys(os.Stdout))
+	case invokeTaskRun:
+		// Local one-shot harness: run a single task YAML to completion through
+		// the governed scheduled runtime (no server, no DB). The old cutlass
+		// binary, folded into the unified CLI.
+		os.Exit(taskrun.Run(argv[2:], "fleet task run"))
 	case invokeServe:
 		// Daemon: bare `fleet` (legacy) or `fleet serve`. The server is env/config
 		// driven, so any args after `serve` are ignored (no flag parsing here).
@@ -142,6 +148,7 @@ const (
 	invokeValidateConfig
 	invokeEval
 	invokeGenerateVAPIDKeys
+	invokeTaskRun
 	invokeAdmin // every operator/admin verb → internal/admincli
 )
 
@@ -168,6 +175,14 @@ func classifyInvocation(argv []string) invocation {
 		return invokeEval
 	case "generate-vapid-keys":
 		return invokeGenerateVAPIDKeys
+	case "task":
+		// `fleet task run` is the local one-shot harness (the old cutlass binary,
+		// folded in) and needs the full agent runtime, so it dispatches here;
+		// every other `task` subverb (export/import/memories) is admincli's.
+		if len(argv) > 1 && argv[1] == "run" {
+			return invokeTaskRun
+		}
+		return invokeAdmin
 	default:
 		return invokeAdmin
 	}

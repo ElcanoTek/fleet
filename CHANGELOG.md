@@ -36,6 +36,14 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- `fleet task run <task.yaml>` — the local one-shot harness (run a single task
+  to completion through the governed scheduled runtime, no server/DB) is now a
+  verb of the unified CLI instead of the separate `cutlass` binary; the logic
+  moved to `internal/taskrun` and `cmd/cutlass` remains as a warning shim for
+  one deprecation release (the fleet-admin pattern). The example task file is
+  now `docs/examples/local-task.yaml`, and the Charmbracelet acknowledgement
+  credits the full charm stack behind the TUI (Bubble Tea, Bubbles, Lip Gloss,
+  Glamour, vhs, freeze) alongside Fantasy.
 - Tool-pipeline metrics endpoint (#543): admin-only
   `GET /admin/pipeline-metrics` derives per-run tool turns, total/distinct
   tool calls, tokens, cost, and wall clock from the session logs fleet already

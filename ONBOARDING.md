@@ -184,9 +184,9 @@ real `bash` + `run_python` loop in the **real Podman sandbox** and the real tool
 stdout streams back over SSE. See [`web/e2e/live/README.md`](web/e2e/live/README.md)
 for the full env table.
 
-### Option B — one task end-to-end with a real model (cutlass)
+### Option B — one task end-to-end with a real model (`fleet task run`)
 
-`cmd/cutlass` runs a single task YAML to completion through the **same governed
+`fleet task run` executes a single task YAML to completion through the **same governed
 scheduled runtime** the production scheduler uses (`agentcore.Run`,
 `Mode=Scheduled`; tool calls still run in the sandbox, MCP credentials still
 brokered host-side). This path needs a **real** `OPENROUTER_API_KEY` in your
@@ -194,19 +194,19 @@ environment (or a `.env` file) and podman:
 
 ```sh
 export OPENROUTER_API_KEY=...                              # your real key — never commit it
-scripts/run_workflow_live.sh docs/examples/cutlass-task.yaml
+scripts/run_workflow_live.sh docs/examples/local-task.yaml
 ```
 
 The script ensures the sandbox image exists, mints a fresh isolated workspace,
 and points a stable `latest.log` symlink at the run so you can `tail -f` it. The
 example task writes and reads back a file in the sandbox workspace. See
-[`docs/examples/cutlass-task.yaml`](docs/examples/cutlass-task.yaml) for the
+[`docs/examples/local-task.yaml`](docs/examples/local-task.yaml) for the
 task schema.
 
 > **Why no real key in Option A.** The non-negotiable invariant is *no secrets in
 > the repo and the real `OPENROUTER_API_KEY` lives outside it.* Tests and the
 > live e2e use the fake-LLM seam so they stay deterministic and free; only the
-> hands-on cutlass run (Option B) talks to a real model.
+> hands-on `fleet task run` (Option B) talks to a real model.
 
 ---
 
