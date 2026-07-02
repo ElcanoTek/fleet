@@ -76,8 +76,11 @@ export const viewport: Viewport = {
   // that plagues iOS Safari is suppressed instead by forcing a 16px
   // minimum font-size on inputs/textareas/selects in globals.css.
   viewportFit: "cover",
+  // Browser-chrome tint. Meta tags can't read CSS custom properties, so these
+  // literals must mirror --color-bg for each theme in globals.css — keep them
+  // in sync when the background tokens change.
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f6f4f9" },
+    { media: "(prefers-color-scheme: light)", color: "#f4f6fb" },
     { media: "(prefers-color-scheme: dark)", color: "#1a0b1e" },
   ],
 };
