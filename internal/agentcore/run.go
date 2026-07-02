@@ -61,10 +61,11 @@ type RunConfig struct {
 	// PersonaPolicy is the per-persona tool allowlist (Gate-4, #294). nil or an
 	// empty policy = no narrowing (the persona sees every tool the earlier gates
 	// already permitted). When set, it filters the registered tool roster BEFORE
-	// the first LLM call so denied tools never appear in the model's tool list.
-	// It can only SUBTRACT from what the server/credential gates already
-	// permitted, never add. The drivers resolve it from the bundle manifest's
-	// personas: block.
+	// the first LLM call so denied tools never appear in the model's tool list,
+	// and it equally governs the MCP tools that tool disclosure (#506) defers
+	// behind the tool_search/tool_describe/tool_call bridges (#570). It can only
+	// SUBTRACT from what the server/credential gates already permitted, never
+	// add. The drivers resolve it from the bundle manifest's personas: block.
 	PersonaPolicy *PersonaToolPermissions
 	// RemediationHints configures the fast.io guard (defaults to
 	// DefaultRemediationHints, which exposes both remediation paths).
@@ -214,7 +215,11 @@ type Result struct {
 	Usage RunUsage
 }
 
-// RunUsage is the accumulated token + cost accounting for a run.
+// RunUsage is the accumulated token + cost accounting for a run. It follows the
+// LogSession token convention: PromptTokens INCLUDES cache reads, CachedTokens
+// is that cached subset (so uncached spend is PromptTokens - CachedTokens, the
+// checkCeilings math), and LastStepInputTokens is the final step's total input
+// size (fresh + cache-read — the context-window-fill signal).
 type RunUsage struct {
 	PromptTokens        int
 	LastStepInputTokens int
@@ -274,6 +279,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		includeConfirmAudit: cfg.IncludeConfirmAudit,
 		loaderTools:         cfg.LoaderTools,
 		remediationHints:    hints,
+		// Gate-4 (#294) rides into the tool build itself so the persona
+		// allowlist also governs the deferrable MCP set BEFORE the disclosure
+		// decision (#570) — the roster-level pass in buildTools below cannot see
+		// a tool that deferred behind the tool_search/tool_call bridges.
+		personaName:   cfg.PersonaName,
+		personaPolicy: cfg.PersonaPolicy,
+		observer:      deps.Observer,
 	}
 
 	mcpClient := deps.MCPClient
@@ -310,7 +322,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		// allowlist BEFORE the agent (and thus the first LLM call) sees it, so a
 		// denied tool never enters the model's tool list. Applied after
 		// buildFantasyTools — over the slice that already survived Gates 1-3 — so
-		// the persona policy can only SUBTRACT, never widen. A nil/empty policy is
+		// the persona policy can only SUBTRACT, never widen. This roster pass
+		// covers the native/loader/pre-gated tools; the deferrable MCP set is
+		// persona-filtered INSIDE buildFantasyTools before the disclosure
+		// decision (#570), because a tool hidden behind the disclosure bridges
+		// never appears in this roster — the bridges themselves survive an
+		// allow-list here (see resolvePersonaTools) precisely because everything
+		// reachable through them was already filtered. A nil/empty policy is
 		// a zero-overhead passthrough (current behavior). Re-applied on every
 		// rebuild (the mcp_load_servers dirty path) via this closure.
 		if cfg.PersonaPolicy != nil {

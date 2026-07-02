@@ -518,9 +518,11 @@ func (s *Storage) GetUserByToken(token string) (*models.User, error) {
 	return s.db.GetUserByToken(context.Background(), token)
 }
 
-// GetScheduledTasks gets scheduled tasks ready to run up to a limit.
-func (s *Storage) GetScheduledTasks(cutoff time.Time, limit int) ([]*models.Task, error) {
-	return s.db.GetScheduledTasks(context.Background(), cutoff, limit)
+// GetScheduledTasks gets scheduled tasks ready to run up to a limit, strictly
+// after the (afterScheduledFor, afterID) keyset cursor — zero values start from
+// the beginning. See db.GetScheduledTasks for why keyset paging (#566).
+func (s *Storage) GetScheduledTasks(cutoff time.Time, afterScheduledFor time.Time, afterID uuid.UUID, limit int) ([]*models.Task, error) {
+	return s.db.GetScheduledTasks(context.Background(), cutoff, afterScheduledFor, afterID, limit)
 }
 
 // CancelTaskAtomic cancels a task atomically. reason records WHO/why (#508 —
@@ -1054,6 +1056,41 @@ func (s *Storage) SetTaskErrorAnalysis(ctx context.Context, taskID uuid.UUID, ra
 // See db.GetSLAReport.
 func (s *Storage) GetSLAReport(ctx context.Context, windowDays int) (*models.SLAReport, error) {
 	return s.db.GetSLAReport(ctx, windowDays)
+}
+
+// TaskUsage aggregates the persisted per-iteration cost/token metering over
+// [from, to) grouped by user|key|project|model|day|week (#601 part 1). See
+// db.TaskUsage.
+func (s *Storage) TaskUsage(ctx context.Context, from, to time.Time, groupBy string) ([]models.UsageBucket, error) {
+	return s.db.TaskUsage(ctx, from, to, groupBy)
+}
+
+// UpsertBudget inserts or replaces a per-principal rolling budget (#601 part 2).
+// See db.UpsertBudget.
+func (s *Storage) UpsertBudget(ctx context.Context, bc models.BudgetCreate) (*models.Budget, error) {
+	return s.db.UpsertBudget(ctx, bc)
+}
+
+// ListBudgets returns every configured budget (#601 part 2). See db.ListBudgets.
+func (s *Storage) ListBudgets(ctx context.Context) ([]models.Budget, error) {
+	return s.db.ListBudgets(ctx)
+}
+
+// BudgetsFor returns the budgets matching a create's principals (#601 part 2).
+// See db.BudgetsFor.
+func (s *Storage) BudgetsFor(ctx context.Context, user, key, project string) ([]models.Budget, error) {
+	return s.db.BudgetsFor(ctx, user, key, project)
+}
+
+// DeleteBudget removes a budget by id (#601 part 2). See db.DeleteBudget.
+func (s *Storage) DeleteBudget(ctx context.Context, id uuid.UUID) (bool, error) {
+	return s.db.DeleteBudget(ctx, id)
+}
+
+// MarkBudgetSoftAlert claims the once-per-window soft alert (#601 part 2). See
+// db.MarkBudgetSoftAlert.
+func (s *Storage) MarkBudgetSoftAlert(ctx context.Context, id uuid.UUID, windowStart time.Time) (bool, error) {
+	return s.db.MarkBudgetSoftAlert(ctx, id, windowStart)
 }
 
 // ReplayDeadLetteredTask re-enqueues a dead-lettered task (#253): it resets the

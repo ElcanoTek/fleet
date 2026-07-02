@@ -65,6 +65,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
+	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
 	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
@@ -470,10 +471,6 @@ func run() error {
 		httpapi.WithStartTime(startTime),
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
-		// schedule_task (#239): let an approved interactive call create an
-		// orchestrator task in-process, reusing the SAME validated storage create
-		// path POST /tasks uses — no second governance/create path is forked.
-		httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage)),
 		// Knowledge-graph extraction (#523): the seam is always wired; whether
 		// anything fires is gated by FLEET_MEMORY_GRAPH_ENABLED (default off).
 		httpapi.WithMemoryGraphExtractor(mgr.ExtractMemoryGraph),
@@ -490,6 +487,35 @@ func run() error {
 		log.Printf("web push: enabled")
 		chatOpts = append(chatOpts, httpapi.WithPush(pushSvc))
 	}
+
+	// Task notifier (email/webhook/Web Push) — built here, before the runner
+	// pool, because the budget gate below reuses the SAME delivery pipeline for
+	// its soft-limit alerts (#601 part 2). See buildTaskNotifier.
+	taskNotifier := buildTaskNotifier(pushSvc)
+
+	// Per-principal rolling budgets (#601 part 2): ONE enforcer shared by every
+	// task-create path — POST /tasks + /tasks/batch (via h.SetBudgetGate below)
+	// and the chat schedule_task seam (threaded into taskSchedulerProvider) —
+	// so the paths cannot drift. Spend is recomputed from the part-1 usage read
+	// model (task_iterations + the chat turn_metrics seam); the Ceilings func
+	// reads the LIVE #286 hot-reload accessors so a budget can never be more
+	// permissive than the current global FLEET_MAX_COST_USD /
+	// FLEET_MAX_TOTAL_TOKENS.
+	chatUsage := chatUsageProvider(chatStore)
+	budgetEnforcer := budget.New(budget.Config{
+		Store:     schedStorage,
+		ChatUsage: budget.ChatUsage(chatUsage),
+		Notifier:  taskNotifier,
+		Ceilings:  func() (float64, int) { return cfg.LiveMaxCostUSD(), cfg.LiveMaxTotalTokens() },
+	})
+
+	// schedule_task (#239): let an approved interactive call create an
+	// orchestrator task in-process, reusing the SAME validated storage create
+	// path POST /tasks uses — no second governance/create path is forked. The
+	// seam carries the budget gate so scheduling from chat cannot bypass a
+	// budget that would refuse the same user on POST /tasks (#601 part 2).
+	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer)))
+
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 
 	// Auto-approve-in-test (#225) bypasses the human-in-the-loop approval gate.
@@ -569,6 +595,12 @@ func run() error {
 	h.SetTaskTemplateProvider(func() []clientconfig.TaskTemplate {
 		return bundle.TaskTemplates
 	})
+	// Wire the chat side of the usage report (#601 part 1) — see wireChatUsage.
+	h.SetChatUsageProvider(chatUsage)
+	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
+	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
+	// carries, so no create path can drift.
+	h.SetBudgetGate(budgetEnforcer)
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
 	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr))
 
@@ -650,10 +682,8 @@ func run() error {
 	if poolGrace <= 0 {
 		poolGrace = -1
 	}
-	// Task-completion notifier (#208): host-side outbound email/webhook on a
-	// scheduled task reaching a terminal status, plus the Web Push backend
-	// (#292) when configured. See buildTaskNotifier.
-	taskNotifier := buildTaskNotifier(pushSvc)
+	// The pool reuses the task-completion notifier (#208) built above (it now
+	// also carries the budget gate's soft-limit alerts, #601 part 2).
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{
 		Limiter:       agentLimiter,
 		DrainGrace:    poolGrace,
@@ -1119,6 +1149,19 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// then gates on PermissionAdmin (#458). The bare admin-API-key gate made it
 		// unreachable from the dashboard — the proxy can never send X-API-Key.
 		r.Get("/sla-report", h.GetSLAReport)
+		// Usage analytics (#601 part 1): cost/token roll-up by principal /
+		// project / model / time bucket over the persisted metering. Same
+		// placement rationale as /sla-report: behind AdminOrUserAuthMiddleware
+		// so the Next proxy's header-trust/bearer path resolves a principal,
+		// with the admin gate enforced in-handler on PermissionAdmin.
+		r.Get("/admin/usage", h.GetUsageReport)
+		// Per-principal rolling budgets (#601 part 2): admin CRUD over the
+		// budget rows the shared create gate enforces. Same placement rationale
+		// as /admin/usage — AdminOrUserAuthMiddleware for proxy reachability,
+		// with the admin gate enforced in-handler on PermissionAdmin.
+		r.Get("/admin/budgets", h.ListBudgets)
+		r.Post("/admin/budgets", h.UpsertBudget)
+		r.Delete("/admin/budgets/{budget_id}", h.DeleteBudget)
 		// Dataset / table agent (#514): typed tables whose rows the agent works
 		// in the background, proposing structured write-backs a human approves.
 		// Reads + review actions live here; run/pause drive the in-process
@@ -1650,8 +1693,16 @@ func emailReplierFor(n *notify.Notifier) runner.EmailReplier {
 	return n
 }
 
-func taskSchedulerProvider(schedStorage *storage.Storage) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
+func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enforcer) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
 	return func(ctx context.Context, req httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {
+		// Per-principal rolling budget (#601 part 2): the chat path runs the
+		// SAME shared gate POST /tasks and /tasks/batch run, keyed on the
+		// approving user's email, BEFORE anything is created — an exhausted
+		// budget surfaces in chat as the schedule_task failure text.
+		if err := budgetGate.CheckCreate(ctx, schedmodels.BudgetPrincipals{User: req.RequestedBy}); err != nil {
+			return nil, err
+		}
+
 		tc := schedmodels.TaskCreate{
 			Name:         req.Name,
 			Prompt:       req.Prompt,
@@ -1757,6 +1808,35 @@ func wireRemoteMCPCatalog(h *handlers.Handlers, svc *remotemcp.Service) {
 		return
 	}
 	h.SetRemoteMCPServersProvider(remoteMCPCatalogProvider(svc))
+}
+
+// chatUsageProvider adapts the chat store's turn_metrics roll-up into the
+// sched-side usage bucket shape (#601 part 1): GET /admin/usage merges the
+// sched DB's task_iterations roll-up with the chat store's, and the two live
+// in separate databases, so the orchestrator handler — and, in part 2, the
+// budget enforcer — reach the chat store through this ONE seam. Read-only
+// aggregation of already-persisted metering — no new accounting path. Kept
+// separate from run() so the adapter stays out of run()'s cyclomatic budget.
+func chatUsageProvider(chatStore *store.Store) handlers.ChatUsageProvider {
+	return func(ctx context.Context, from, to time.Time, groupBy string) ([]schedmodels.UsageBucket, error) {
+		rows, err := chatStore.UsageSummary(ctx, from, to, groupBy)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]schedmodels.UsageBucket, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, schedmodels.UsageBucket{
+				Key:              r.Key,
+				Label:            r.Label,
+				ChatCostUSD:      r.CostUSD,
+				PromptTokens:     r.PromptTokens,
+				CompletionTokens: r.CompletionTokens,
+				CachedTokens:     r.CachedTokens,
+				ChatTurns:        r.Turns,
+			})
+		}
+		return out, nil
+	}
 }
 
 // remoteMCPCatalogProvider adapts the remotemcp Service into the orchestrator's

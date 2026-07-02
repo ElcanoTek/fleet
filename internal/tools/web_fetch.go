@@ -21,6 +21,8 @@ import (
 	"charm.land/fantasy"
 	md "github.com/JohannesKaufmann/html-to-markdown"
 	"golang.org/x/net/html"
+
+	"github.com/ElcanoTek/fleet/internal/netguard"
 )
 
 const (
@@ -114,51 +116,12 @@ type WebFetchParams struct {
 	URL string `json:"url" description:"The URL to fetch content from."`
 }
 
-// ssrfBlockedNets are special-purpose ranges that net.IP's built-in
-// classifiers do NOT cover but the SSRF guard must still refuse (#574):
-//
-//   - 100.64.0.0/10  — RFC 6598 carrier-grade NAT. Some clouds serve their
-//     instance-metadata endpoint here (Alibaba/Oracle 100.100.100.x), so
-//     it is credential-bearing exactly like 169.254.169.254.
-//   - 192.0.2.0/24   — RFC 5737 TEST-NET-1 (documentation-only).
-//   - 198.18.0.0/15  — RFC 2544 benchmarking.
-//   - 240.0.0.0/4    — RFC 1112 reserved, incl. 255.255.255.255 broadcast.
-//
-// Parsed once at package init; net.IPNet.Contains handles IPv4-mapped
-// IPv6 forms (::ffff:100.100.100.200) via its internal To4 conversion.
-var ssrfBlockedNets = func() []*net.IPNet {
-	cidrs := []string{
-		"100.64.0.0/10",
-		"192.0.2.0/24",
-		"198.18.0.0/15",
-		"240.0.0.0/4",
-	}
-	nets := make([]*net.IPNet, 0, len(cidrs))
-	for _, cidr := range cidrs {
-		_, ipNet, err := net.ParseCIDR(cidr)
-		if err != nil {
-			panic("tools: bad SSRF CIDR " + cidr + ": " + err.Error()) // static list; unreachable
-		}
-		nets = append(nets, ipNet)
-	}
-	return nets
-}()
-
-// isPrivateIP reports whether ip is an address the network tools must
-// refuse to connect to: private (RFC1918 + fc00::/7), loopback,
-// link-local (incl. the 169.254.169.254 cloud-metadata endpoint), the
-// unspecified address, and the special-purpose ranges in
-// ssrfBlockedNets (CGNAT cloud-metadata, test/benchmark, reserved).
+// isPrivateIP reports whether ip is an address the network tools must refuse
+// to connect to. It delegates to the shared SSRF classifier so web_fetch and
+// download_url block exactly the same ranges as every other outbound path (see
+// internal/netguard) — one source of truth for this security invariant.
 func isPrivateIP(ip net.IP) bool {
-	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	for _, n := range ssrfBlockedNets {
-		if n.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return netguard.IsBlockedIP(ip)
 }
 
 // newSSRFGuardedDialer returns a dialer that refuses connections to

@@ -40,6 +40,27 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Tool-output ceiling on direct MCP calls (#576): MCP tools registered directly
+  (roster below the #506 tool-disclosure threshold — the common case) applied
+  redaction and PII gating but not the #199 output ceiling, so one oversized
+  connector result could enter the transcript untruncated and overflow the
+  context window. `mcpTool.Run` now caps output exactly like the wrapped
+  (deferred `tool_call`) path — identical truncation above and below the
+  threshold, error results included — and the `tool_output_limit.go` comment no
+  longer overstates `policyGuardedTool.Run` as the universal choke point.
+- Scheduler liveness (#566): `ProcessScheduledTasks` no longer live-locks when
+  a full batch of due tasks makes no forward progress — e.g. ≥1000 one-shot
+  tasks all soft-held by a declining `run_if` gate. The old loop paged with a
+  plain `LIMIT` and terminated only on a short batch, so a full batch of
+  soft-held rows (which stay scheduled + due by design) was re-fetched
+  identically forever, hanging the scheduler goroutine and with it lease
+  recovery and starvation promotion for the whole box. The due set is now
+  walked with a keyset cursor over the total order `(scheduled_for, id)` — each
+  row is handled at most once per tick, a held prefix can't mask due work
+  behind it (the `id` tiebreaker makes pages stable even when many rows share
+  one `scheduled_for`), per-tick cost is linear, and a defensive 100k-rows valve
+  bounds a pathological tick. Soft-hold semantics are unchanged: a held one-shot
+  stays scheduled and is re-evaluated next tick.
 - Web rate limiter (#561): `(*rateLimiter).wait` no longer double-unlocks its
   mutex when the context is cancelled mid-wait. Cancelling a `web_fetch` /
   `web_search` turn while it was blocked in the minimum-interval (or per-minute)
@@ -82,6 +103,36 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Usage analytics (#601 part 1): admin-only `GET /admin/usage?group_by=&from=&to=`
+  rolls the already-persisted metering (per-iteration `task_iterations` ⋈
+  `tasks`, plus the chat `turn_metrics` session log) up by user, API key,
+  project, model, or day/week time bucket over a requested window — a pure
+  read model: no new accounting path, no new tables. Rendered in the
+  Operations Center as an admin-only "Usage" tab (KPI tiles, single-hue
+  bar/column charts coherent in light + dark, full table view). Honest scope
+  (#289): native-provider runs accrue $0 unless a pricing override is
+  configured, so the endpoint and panel always show token totals alongside
+  dollars and say so. Per-principal budgets are part 2 of #601 and are not
+  included here. See `docs/USAGE-ANALYTICS.md`.
+- Per-principal rolling budgets with alerts (#601 part 2): a budget is
+  `{scope: user|key|project, principal, window: day|week|month, soft/hard
+  bounds in dollars AND tokens}` (one new sched table, migration 052),
+  enforced at task-create by ONE shared gate across every create path —
+  `POST /tasks`, `POST /tasks/batch`, and the chat `schedule_task` approval
+  seam. Spend is recomputed per check from the part-1 usage read model (no
+  second accounting path). At a soft bound exactly one notify alert fires per
+  window crossing (persisted marker — restart-safe, concurrency-safe) through
+  the existing email/webhook/Web Push pipeline; at a hard bound new task
+  creation is refused with 402 + `Retry-After` until the window rolls over.
+  Fail-safe composition with #286: effective hard bounds are clamped to the
+  LIVE global `FLEET_MAX_COST_USD` / `FLEET_MAX_TOTAL_TOKENS` — budgets only
+  narrow, never widen, and no budget configured is byte-for-byte today's
+  behavior. Admin CRUD at `GET/POST /admin/budgets` +
+  `DELETE /admin/budgets/{id}` (in `docs/openapi.yaml`, parity-tested); the
+  Operations Center Usage panel lists configured budgets read-only with live
+  window spend. Honest scope: `scope=project` is stored/reported but not yet
+  enforced (no create path carries a project); admin-key submissions and
+  in-process spawn/rerun paths are not gated. See `docs/USAGE-ANALYTICS.md`.
 - `fleet task run <task.yaml>` — the local one-shot harness (run a single task
   to completion through the governed scheduled runtime, no server/DB) is now a
   verb of the unified CLI instead of the separate `cutlass` binary; the logic

@@ -9,7 +9,6 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,6 +177,17 @@ type Handlers struct {
 	// injected from the runner pool via SetTaskStopper (mirrors
 	// SetTaskStreamProvider). nil = cancel stays a DB-only transition.
 	taskStopper func(taskID uuid.UUID, who string) bool
+
+	// chatUsage aggregates the chat store's turn_metrics for the usage report
+	// (#601) — injected by cmd/fleet via SetChatUsageProvider because the chat
+	// store is a separate database. nil → the report covers tasks only and
+	// its sources list says so. See usage.go.
+	chatUsage ChatUsageProvider
+
+	// budgetGate enforces per-principal rolling budgets at task-create (#601
+	// part 2) — injected by cmd/fleet via SetBudgetGate (*budget.Enforcer). nil
+	// → no budget enforcement, today's behavior byte-for-byte. See budgets.go.
+	budgetGate BudgetGate
 }
 
 // statsCache caches dashboard statistics.
@@ -454,77 +464,15 @@ func (h *Handlers) verifyAdminKey(r *http.Request) bool {
 
 // CreateTask handles POST /tasks
 func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
-	// Check for Admin API Key first
-	isAdmin := h.verifyAdminKey(r)
-
-	// A valid but under-scoped typed key (readonly/webhook) is a definitive 403,
-	// not a fall-through to the 401 path (#190). Legacy sk- keys are exempt.
-	if !isAdmin && h.scopedKeyCannotCreate(r) {
-		writeError(w, http.StatusForbidden, "insufficient key scope: this key type cannot create tasks")
+	// Authorization is the SHARED authorizeTaskCreator — the extracted form of
+	// the auth block this handler used to inline (admin key, scoped key with
+	// create permission, user bearer token, Elcano cookie member), also used by
+	// the batch path so the two cannot drift. It resolves the creator id, the
+	// authorizing key (for spend attribution), and the username the budget gate
+	// keys user-scope budgets on (#601 part 2).
+	creator, ok := h.authorizeTaskCreator(w, r)
+	if !ok {
 		return
-	}
-
-	var creatorID *uuid.UUID
-	// creatorKeyID is the scoped API key that authorized this task (if any), used
-	// to attribute completion cost back to the key for spending caps.
-	var creatorKeyID *string
-	// creatorKeyMaxPriority is the authorizing key's task-urgency ceiling (#230),
-	// copied by value so a later cap check can't be affected by the cached key
-	// being mutated. nil = admin/user submission or an uncapped key.
-	var creatorKeyMaxPriority *int
-
-	if !isAdmin {
-		// Check for scoped API key
-		apiKey := r.Header.Get("X-API-Key")
-		if apiKey != "" {
-			perm := models.PermissionCreateTask
-			valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil, nil)
-			if valid && key != nil {
-				isAdmin = true // Treat as authorized
-				keyID := key.KeyID
-				creatorKeyID = &keyID
-				if key.MaxPriority != nil {
-					capVal := *key.MaxPriority
-					creatorKeyMaxPriority = &capVal
-				}
-			}
-		}
-
-		// Check for a User Token (password login) or the Elcano cookie.
-		if !isAdmin {
-			var user *models.User
-
-			if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-				token := strings.TrimPrefix(authHeader, "Bearer ")
-				if u, err := h.storage.GetUserByToken(token); err == nil && u != nil {
-					user = u
-				}
-			}
-
-			// Elcano unified-auth cookie (scoped tier): verify natively, then
-			// require the email to be a provisioned user.
-			if user == nil {
-				if sess := h.elcanoSessionFromRequest(r); sess != nil {
-					u, err := h.lookupMember(r.Context(), sess.Email)
-					if err != nil && !errors.Is(err, sql.ErrNoRows) {
-						writeError(w, http.StatusInternalServerError, "Membership check failed")
-						return
-					}
-					if u == nil {
-						writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
-						return
-					}
-					user = u
-				}
-			}
-
-			if user == nil {
-				writeError(w, http.StatusUnauthorized, "Unauthorized")
-				return
-			}
-
-			creatorID = &user.ID
-		}
 	}
 
 	var tc models.TaskCreate
@@ -547,23 +495,32 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// Spending-cap pre-flight: refuse a key that has already reached its daily or
 	// monthly LLM budget. Task cost is only known after completion, so this gates
 	// on the already-accumulated spend.
-	if creatorKeyID != nil {
-		if err := h.apiKeys.CheckBudget(*creatorKeyID); err != nil {
+	if creator.creatorKey != nil {
+		if err := h.apiKeys.CheckBudget(*creator.creatorKey); err != nil {
 			w.Header().Set("Retry-After", "3600")
 			writeError(w, http.StatusTooManyRequests, err.Error())
 			return
 		}
 	}
 
+	// Per-principal rolling budget (#601 part 2): the SAME budgetCapError gate
+	// the batch and chat schedule_task paths run. At a hard bound the create is
+	// refused (402 + Retry-After at the window rollover); a soft crossing fires
+	// its once-per-window alert inside the gate.
+	if err := h.budgetCapError(r.Context(), creator); err != nil {
+		writeBudgetRefusal(w, err)
+		return
+	}
+
 	task := models.NewTask(tc)
-	task.CreatedBy = creatorID
-	task.CreatedByKeyID = creatorKeyID
+	task.CreatedBy = creator.creatorID
+	task.CreatedByKeyID = creator.creatorKey
 
 	// Per-key priority ceiling (#230): a scoped key capped at max_priority may not
 	// submit a task MORE urgent (lower integer) than that. task.Priority is the
 	// post-default value (0→Normal), so the comparison reflects what would run.
 	// Shares priorityCapError with the batch path so the two can't drift.
-	if err := priorityCapError(creatorKeyMaxPriority, task.Priority); err != nil {
+	if err := priorityCapError(creator.creatorKeyMaxPriority, task.Priority); err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}

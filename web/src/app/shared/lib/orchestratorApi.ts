@@ -7,6 +7,7 @@
 // rides along automatically and the proxy resolves it.
 
 import { getStoredToken } from "./orchestratorAuth";
+import { parseSseChunk } from "@/app/lib/sse";
 
 // MCPChoice mirrors agentcore.MCPChoice: which optional server is on + which
 // credential account backs it. Account === "" means the default/shared seat.
@@ -108,6 +109,61 @@ export type SLAReport = {
   period: string;
   window_days: number;
   tasks: SLAReportTask[];
+};
+
+// UsageReport / UsageBucket mirror models.UsageReport (#601 part 1): the
+// GET /admin/usage response. key is the grouping value (user email/username,
+// API key id, project id, model slug, or the YYYY-MM-DD bucket start for
+// day/week); the empty key collects rows without that dimension. Per-source
+// splits (task_* / chat_*) ride alongside the combined totals; cached_tokens
+// is chat-only. note carries the honest-scope pricing caveat (#289).
+export type UsageBucket = {
+  key: string;
+  label?: string;
+  cost_usd: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  task_cost_usd: number;
+  chat_cost_usd: number;
+  task_iterations: number;
+  chat_turns: number;
+};
+
+export type UsageGroupBy = "user" | "key" | "project" | "model" | "day" | "week";
+
+export type UsageReport = {
+  group_by: UsageGroupBy;
+  from: string;
+  to: string;
+  buckets: UsageBucket[];
+  totals: UsageBucket;
+  sources: string[];
+  note: string;
+};
+
+// BudgetStatus mirrors models.BudgetStatus (#601 part 2): one configured
+// per-principal rolling budget plus its live evaluation — current window
+// [start, end), spend recomputed from the persisted metering, the effective
+// hard bounds after the fail-safe clamp against the live global ceilings, and
+// whether this window's one soft alert has fired. Budgets are managed via the
+// API (POST/DELETE /admin/budgets); this panel renders them read-only.
+export type BudgetStatus = {
+  id: string;
+  scope: "user" | "key" | "project";
+  principal_id: string;
+  window: "day" | "week" | "month";
+  soft_usd?: number;
+  hard_usd?: number;
+  soft_tokens?: number;
+  hard_tokens?: number;
+  window_start: string;
+  window_end: string;
+  spend_usd: number;
+  spend_tokens: number;
+  effective_hard_usd?: number;
+  effective_hard_tokens?: number;
+  soft_alerted: boolean;
 };
 
 // CostForecast mirrors agentcore.CostForecast (#233): the pre-submission token +
@@ -277,25 +333,24 @@ export type TaskStreamFrame = {
   stopped_by?: string;
 };
 
-// createSSEParser returns a chunk-feeder that assembles SSE frames (split on
-// blank lines, `data:` JSON payloads) and invokes onFrame per parsed frame.
+// createSSEParser returns a chunk-feeder that assembles SSE frames and invokes
+// onFrame per parsed `data:` JSON payload. Frame assembly is delegated to the
+// hardened chat parser (parseSseChunk, #589) rather than reimplemented here, so
+// both SSE consumers share ONE parser: it accepts CRLF frame delimiters (a
+// proxy that normalizes line endings would otherwise leave a stream with no
+// "\n\n" — zero frames emitted, buffer growing forever) and joins multi-line
+// `data:` values with "\n" per the SSE spec instead of corrupting them by bare
+// concatenation. Heartbeat/comment frames carry no data and are dropped by
+// parseSseChunk itself.
 // Exported for unit tests; used by streamTaskActivity below.
 export function createSSEParser(onFrame: (frame: TaskStreamFrame) => void): (chunk: string) => void {
   let buffer = "";
   return (chunk: string) => {
-    buffer += chunk;
-    for (;;) {
-      const sep = buffer.indexOf("\n\n");
-      if (sep < 0) break;
-      const raw = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      let data = "";
-      for (const line of raw.split("\n")) {
-        if (line.startsWith("data:")) data += line.slice(5).trim();
-      }
-      if (!data) continue; // heartbeat / comment frame
+    const { events, remainder } = parseSseChunk(buffer + chunk);
+    buffer = remainder;
+    for (const ev of events) {
       try {
-        onFrame(JSON.parse(data) as TaskStreamFrame);
+        onFrame(JSON.parse(ev.data) as TaskStreamFrame);
       } catch {
         // tolerate a malformed frame rather than killing the stream
       }
@@ -433,6 +488,22 @@ export const orchestratorApi = {
   // rate over a window. days defaults to 7 (clamped to [1, 90] server-side).
   slaReport: (days = 7) =>
     request<SLAReport>(`/sla-report?days=${encodeURIComponent(days)}`),
+
+  // Usage analytics (#601 part 1): admin-only cost/token roll-up by
+  // principal / project / model / time bucket over [from, to). from/to are
+  // RFC 3339 or YYYY-MM-DD; both optional (default: trailing 30 days).
+  usage: (params: { groupBy?: UsageGroupBy; from?: string; to?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.groupBy) qs.set("group_by", params.groupBy);
+    if (params.from) qs.set("from", params.from);
+    if (params.to) qs.set("to", params.to);
+    const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+    return request<UsageReport>(`/admin/usage${suffix}`);
+  },
+
+  // Per-principal rolling budgets (#601 part 2): admin-only list with live
+  // current-window spend. Create/delete stay API-only for now.
+  budgets: () => request<{ budgets: BudgetStatus[] }>("/admin/budgets"),
 
   // Read-only task-template catalog for "new task from a template" (#262).
   taskTemplates: () => request<TaskTemplate[]>("/task-templates"),

@@ -72,12 +72,22 @@ func ConversationIDFromContext(ctx context.Context) string {
 //
 // When conversationID is "", returns the shared workspace root —
 // harmless for tests but should not happen in a live turn.
+//
+// A conversation id is used as a single path segment directly under the
+// workspace root, so it must be lexically local. filepath.IsLocal rejects an
+// empty id, an absolute path, a "..", or an embedded separator — none of which
+// can be a real id (they are all uuid.NewString() values) and any of which could
+// otherwise widen the resolved path outside the workspace tree. IsLocal is also
+// the barrier CodeQL's path-injection query recognizes, so a caller that later
+// os.Open(join(dir, rel))s is provably confined even though the id arrives as a
+// request path segment. A non-local id (including "") falls back to the shared
+// root rather than escaping it.
 func WorkspaceDirForConversation(conversationID string) string {
 	root := fleetEnv("WORKSPACE_ROOT")
 	if root == "" {
 		root = "workspace"
 	}
-	if conversationID == "" {
+	if !filepath.IsLocal(conversationID) {
 		return root
 	}
 	return filepath.Join(root, conversationID)

@@ -104,10 +104,13 @@ type subagentConfig struct {
 	// remaining budget under the lock BEFORE computing a new grant, so even N
 	// concurrent spawns can never collectively be granted more than the parent has
 	// left — the atomic reservation, not the tool being sequential, is what makes
-	// the parent ceiling a hard wall. Each child's reservation is released (under
-	// the lock) when it returns; its ACTUAL spend is then folded into the parent
-	// via ChargeChildUsage, so the budget the next spawn reads reflects real spend
-	// (reservation gone) rather than the conservative grant.
+	// the parent ceiling a hard wall. When a child returns, its reservation is
+	// released AND its ACTUAL spend is folded into the parent via
+	// ChargeChildUsage in ONE critical section under the same mu
+	// (settleChildBudget, #588): at every instant a concurrent
+	// reserveChildBudget observes either the conservative reservation or the
+	// real spend for that child, never a gap containing neither — a gap would
+	// let a sibling be granted as if the finished child had never spent.
 	reservedCostUSD float64
 	reservedTokens  int
 }
@@ -305,15 +308,15 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput) (fantasy.ToolR
 	// Release this child's in-flight reservation and charge its ACTUAL spend back
 	// into the parent's budget UNCONDITIONALLY (even on error / partial run / timeout
 	// / panic): the child may have spent before stopping, and that spend must count
-	// against the parent ceiling. The deferred release + charge are the bookend of
-	// the atomic grant — after them, the budget the next spawn reads reflects this
-	// child's REAL spend (its conservative reservation is gone), and the parent's own
-	// checkCeilings accounts for it too.
+	// against the parent ceiling. The deferred settle is the bookend of the atomic
+	// grant — after it, the budget the next spawn reads reflects this child's REAL
+	// spend (its conservative reservation is gone), and the parent's own
+	// checkCeilings accounts for it too. Release and charge happen in ONE a.mu
+	// critical section (settleChildBudget, #588) so a sibling reserving
+	// concurrently can never observe the reservation gone but the spend not yet
+	// charged — that gap over-granted the sibling by up to this child's spend.
 	defer func() {
-		a.releaseChildBudget(childCost, childTokens)
-		if a.runtimePolicy != nil {
-			a.runtimePolicy.ChargeChildUsage(childAgent.usageForParent())
-		}
+		a.settleChildBudget(childCost, childTokens, childAgent.usageForParent())
 	}()
 
 	// ── (1) ONE GOVERNED CORE ───────────────────────────────────────────────
@@ -379,7 +382,7 @@ func (a *Agent) releaseChildSlot() {
 // means "unlimited" and is returned only when the parent itself is unlimited on
 // that axis. On a request that exceeds the per-child limit it returns a refusal
 // (#264); on too-little-budget it returns a refusal and reserves nothing. The
-// caller must call releaseChildBudget with the SAME returned ceilings once the
+// caller must call settleChildBudget with the SAME returned ceilings once the
 // child has run.
 //
 // Per-child cap (#264): on a finite axis the grant is capped at
@@ -387,10 +390,6 @@ func (a *Agent) releaseChildSlot() {
 // available (remaining − in-flight sibling reservations). A request above the
 // per-child cap is REFUSED outright rather than silently clamped.
 func (a *Agent) reserveChildBudget(reqCost float64, reqTokens int) (costCeiling float64, tokenCeiling int, refusal string) {
-	var budget agentcore.BudgetState
-	if a.runtimePolicy != nil {
-		budget = a.runtimePolicy.Budget()
-	}
 	fraction := a.subagent.budgetFraction
 	if fraction <= 0 || fraction > 1 {
 		fraction = defaultSubagentBudgetFraction
@@ -398,6 +397,20 @@ func (a *Agent) reserveChildBudget(reqCost float64, reqTokens int) (costCeiling 
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	// The parent's spend is read INSIDE the same a.mu critical section that
+	// reads + mutates the reservation (#588): settleChildBudget releases a
+	// finished child's reservation and charges its actual spend while holding
+	// this same lock, so "remaining budget" and "in-flight reservations" are
+	// always a CONSISTENT pair here. Reading Budget() before taking a.mu (the
+	// pre-#588 ordering) allowed a sibling to see a stale remaining that
+	// reflected neither a finishing child's reservation nor its charged spend.
+	// Lock order is a.mu → orch.mu (Budget → budgetState); nothing acquires
+	// them in the reverse order.
+	var budget agentcore.BudgetState
+	if a.runtimePolicy != nil {
+		budget = a.runtimePolicy.Budget()
+	}
 
 	// Cost axis. RemainingCostUSD() == -1 means the parent is unlimited; reserve
 	// nothing and grant unlimited (0). Otherwise the per-child cap is a fraction of
@@ -442,12 +455,20 @@ func (a *Agent) reserveChildBudget(reqCost float64, reqTokens int) (costCeiling 
 	return costCeiling, tokenCeiling, ""
 }
 
-// releaseChildBudget returns an in-flight child's reservation under the parent
-// mutex once the child has finished. The child's ACTUAL spend is folded into the
-// parent separately via ChargeChildUsage, so after the release the next spawn
-// sees real spend rather than this child's conservative grant. Clamped at 0 so a
-// double release can never drive the reservation negative.
-func (a *Agent) releaseChildBudget(costCeiling float64, tokenCeiling int) {
+// settleChildBudget returns a finished child's in-flight reservation AND folds
+// the child's ACTUAL spend into the parent's budget (ChargeChildUsage) in ONE
+// a.mu critical section (#588). The atomicity is load-bearing for the hard
+// budget wall: reserveChildBudget computes a sibling's grant from (remaining
+// budget − in-flight reservations), both read under this same lock, so at every
+// instant it observes either this child's conservative reservation (settle not
+// yet run) or its real charged spend (settle complete) — never a gap containing
+// neither. Releasing under a.mu and charging later under only the
+// orchestration's lock (the pre-#588 shape) opened exactly that gap, and a
+// sibling reserving inside it was granted as if this child had never spent —
+// over-committing the parent's remaining budget by up to the child's spend.
+// Reservations are clamped at 0 so a double release can never drive them
+// negative. Lock order is a.mu → orch.mu, same as reserveChildBudget.
+func (a *Agent) settleChildBudget(costCeiling float64, tokenCeiling int, usage agentcore.RunUsage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.subagent.reservedCostUSD -= costCeiling
@@ -457,6 +478,9 @@ func (a *Agent) releaseChildBudget(costCeiling float64, tokenCeiling int) {
 	a.subagent.reservedTokens -= tokenCeiling
 	if a.subagent.reservedTokens < 0 {
 		a.subagent.reservedTokens = 0
+	}
+	if a.runtimePolicy != nil {
+		a.runtimePolicy.ChargeChildUsage(usage)
 	}
 }
 

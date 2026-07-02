@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,28 +10,94 @@ import (
 	"testing"
 )
 
-// TestSubstituteTokens covers {param} substitution in both contexts: URL
-// (percent-encoded so a value can't inject path/query structure) and body (raw,
-// because the template author controls the surrounding JSON quoting). Unknown
+// TestSubstituteTokens covers {param} substitution in each context: URL
+// (percent-encoded so a value can't inject path/query structure), JSON body
+// (JSON-string-escaped so a value can't inject fields, #600), and raw body
+// (verbatim, for non-JSON bodies where the author owns the framing). Unknown
 // tokens are left intact rather than blanked.
 func TestSubstituteTokens(t *testing.T) {
 	args := map[string]interface{}{
 		"ticket_id": "PROJ 123/x?y",
 		"count":     7,
 	}
-	if got := substituteTokens("/issue/{ticket_id}", args, true); got != "/issue/PROJ+123%2Fx%3Fy" {
+	if got := substituteTokens("/issue/{ticket_id}", args, substModeURL); got != "/issue/PROJ+123%2Fx%3Fy" {
 		t.Errorf("url substitution = %q, want percent-encoded", got)
 	}
-	if got := substituteTokens(`{"id":"{ticket_id}","n":{count}}`, args, false); got != `{"id":"PROJ 123/x?y","n":7}` {
-		t.Errorf("body substitution = %q, want raw", got)
+	// Benign values are untouched by the JSON escape; an unquoted numeric
+	// token stays a bare number.
+	if got := substituteTokens(`{"id":"{ticket_id}","n":{count}}`, args, substModeJSONBody); got != `{"id":"PROJ 123/x?y","n":7}` {
+		t.Errorf("json body substitution = %q", got)
+	}
+	if got := substituteTokens("id={ticket_id}", args, substModeRawBody); got != "id=PROJ 123/x?y" {
+		t.Errorf("raw body substitution = %q, want verbatim", got)
 	}
 	// Unknown token preserved.
-	if got := substituteTokens("/x/{unknown}", args, true); got != "/x/{unknown}" {
+	if got := substituteTokens("/x/{unknown}", args, substModeURL); got != "/x/{unknown}" {
 		t.Errorf("unknown token = %q, want left intact", got)
 	}
 	// No braces: passthrough.
-	if got := substituteTokens("/static", args, true); got != "/static" {
+	if got := substituteTokens("/static", args, substModeURL); got != "/static" {
 		t.Errorf("no-token passthrough = %q", got)
+	}
+}
+
+// TestSubstituteTokens_JSONBodyInjection is the #600 regression guard: a
+// model-steered string arg carrying JSON punctuation must not break out of the
+// template author's quoting and add fields to the outbound (credentialed)
+// request. The body must stay valid JSON with the payload contained in the
+// intended field, byte-for-byte round-trippable.
+func TestSubstituteTokens_JSONBodyInjection(t *testing.T) {
+	const payload = `x","admin":true,"y":"`
+	got := substituteTokens(`{"channel":"{channel}","text":"{text}"}`, map[string]interface{}{
+		"channel": "C123",
+		"text":    payload,
+	}, substModeJSONBody)
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("body is not valid JSON: %v\nbody: %s", err, got)
+	}
+	if len(decoded) != 2 {
+		t.Errorf("body gained fields: %v (injection!)", decoded)
+	}
+	if _, injected := decoded["admin"]; injected {
+		t.Error("\"admin\" field injected into the body")
+	}
+	if decoded["text"] != payload {
+		t.Errorf("text = %q, want the payload contained verbatim %q", decoded["text"], payload)
+	}
+
+	// A non-string arg abused in a QUOTED position must also stay contained:
+	// a map's structural quotes are escaped, never live.
+	got = substituteTokens(`{"text":"{obj}"}`, map[string]interface{}{
+		"obj": map[string]interface{}{"admin": true},
+	}, substModeJSONBody)
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("map-arg body is not valid JSON: %v\nbody: %s", err, got)
+	}
+	if _, injected := decoded["admin"]; injected {
+		t.Error("map arg injected a live \"admin\" field")
+	}
+}
+
+// TestBodyMode covers the JSON-body detection: a declared Content-Type is
+// authoritative in either direction; without one the template shape decides.
+func TestBodyMode(t *testing.T) {
+	cases := []struct {
+		name string
+		spec HTTPToolSpec
+		want substMode
+	}{
+		{"json content-type", HTTPToolSpec{Headers: map[string]string{"Content-Type": "application/json; charset=utf-8"}, BodyTemplate: "text={p}"}, substModeJSONBody},
+		{"non-json content-type opts out", HTTPToolSpec{Headers: map[string]string{"content-type": "application/x-www-form-urlencoded"}, BodyTemplate: `{"x":"{p}"}`}, substModeRawBody},
+		{"undeclared json object sniffed", HTTPToolSpec{BodyTemplate: ` {"x":"{p}"}`}, substModeJSONBody},
+		{"undeclared json array sniffed", HTTPToolSpec{BodyTemplate: `["{p}"]`}, substModeJSONBody},
+		{"undeclared non-json stays raw", HTTPToolSpec{BodyTemplate: "text={p}"}, substModeRawBody},
+	}
+	for _, tc := range cases {
+		if got := bodyMode(tc.spec); got != tc.want {
+			t.Errorf("%s: bodyMode = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -103,6 +170,45 @@ func TestExecuteHTTPTool_HappyPath(t *testing.T) {
 	}
 	if got := res.Content[0].Text; got != "AB-1" {
 		t.Errorf("jq-filtered result = %q, want AB-1", got)
+	}
+}
+
+// TestExecuteHTTPTool_JSONBodyInjection drives the #600 fix end-to-end: an
+// inline tool with a JSON body template receives a hostile arg, and the body
+// that reaches the upstream server must be valid JSON with the payload
+// contained in its intended field — no injected keys.
+func TestExecuteHTTPTool_JSONBodyInjection(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	const payload = `x","admin":true,"y":"`
+	spec := HTTPToolSpec{
+		Name:         "post_msg",
+		Method:       "POST",
+		URL:          srv.URL,
+		Headers:      map[string]string{"Content-Type": "application/json"},
+		BodyTemplate: `{"channel":"{channel}","text":"{text}"}`,
+	}
+	if _, err := executeHTTPTool(context.Background(), srv.Client(), spec, map[string]interface{}{
+		"channel": "C123",
+		"text":    payload,
+	}); err != nil {
+		t.Fatalf("executeHTTPTool: %v", err)
+	}
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(gotBody, &decoded); err != nil {
+		t.Fatalf("outbound body is not valid JSON: %v\nbody: %s", err, gotBody)
+	}
+	if _, injected := decoded["admin"]; injected {
+		t.Errorf("injected \"admin\" field reached the wire: %s", gotBody)
+	}
+	if decoded["text"] != payload {
+		t.Errorf("text = %q, want the payload contained verbatim", decoded["text"])
 	}
 }
 

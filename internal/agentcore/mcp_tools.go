@@ -67,6 +67,15 @@ type toolBuildConfig struct {
 	// BeforeToolCall + RecordToolResult themselves, so they are NOT wrapped in
 	// policyGuardedTool.
 	preGatedTools []fantasy.AgentTool
+	// personaName/personaPolicy/observer carry Gate-4 (#294) into the tool build
+	// so the persona allowlist is applied to the deferrable MCP set BEFORE the
+	// disclosure decision (#570) — the roster-level resolvePersonaTools pass in
+	// run.go cannot see a tool that deferred behind the bridges. nil
+	// personaPolicy = no narrowing. observer receives the persona_tool_blocked
+	// audit events for tools suppressed here; nil-safe.
+	personaName   string
+	personaPolicy *PersonaToolPermissions
+	observer      Observer
 }
 
 // buildFantasyTools combines native tools with discovered MCP tools into the
@@ -110,6 +119,7 @@ func buildFantasyTools(
 	mcpTools := make([]fantasy.AgentTool, 0, len(mcpServerTools))
 	mcpSkippedOptional := 0
 	mcpSkippedAllowlist := 0
+	mcpSkippedPersona := 0
 	for _, st := range mcpServerTools {
 		// Gate 1: Optional servers only pass if the run opted in. Byte-identical
 		// between modes.
@@ -127,12 +137,30 @@ func buildFantasyTools(
 		// seam every MCP call routes through, so the allowlist holds for every
 		// caller. The tool is advertised; a denied call is refused at dispatch with
 		// a governance message.
-		mcpTools = append(mcpTools, &mcpTool{
+		mt := &mcpTool{
 			serverName: st.ServerName,
 			tool:       st.Tool,
 			broker:     broker,
 			policy:     policy,
-		})
+		}
+		// Gate 4 (persona tool allowlist, #294): applied HERE — to the logical
+		// mcp_<server>_<tool> identity, before the disclosure decision below —
+		// and not only over the registered roster (run.go), because above the
+		// disclosure threshold (#506) these tools defer behind the bridge tools
+		// and never appear in that roster, so a roster-only filter would
+		// silently stop governing them (#570). Filtering before deferral keeps
+		// a denied tool out of the deferred registry entirely: it is neither
+		// registered directly nor discoverable/callable via
+		// tool_search/tool_describe/tool_call — disclosure changes visibility,
+		// not governance.
+		if cfg.personaPolicy != nil && !cfg.personaPolicy.empty() {
+			if suppressed, reason := personaBlocksTool(*cfg.personaPolicy, mt.Name()); suppressed {
+				emitPersonaToolBlocked(cfg.observer, cfg.personaName, mt.Name(), reason)
+				mcpSkippedPersona++
+				continue
+			}
+		}
+		mcpTools = append(mcpTools, mt)
 	}
 
 	confirmAudit := []fantasy.AgentTool{}
@@ -155,8 +183,8 @@ func buildFantasyTools(
 			allTools = append(allTools, &policyGuardedTool{inner: b, policy: policy})
 		}
 		allTools = append(allTools, confirmAudit...)
-		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist)",
-			len(allTools), len(nativeTools), len(cfg.loaderTools), len(bridges), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist)
+		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona)",
+			len(allTools), len(nativeTools), len(cfg.loaderTools), len(bridges), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona)
 		if len(allTools) > maxToolsPerRequest {
 			return nil, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
 		}
@@ -166,8 +194,8 @@ func buildFantasyTools(
 	allTools = append(allTools, mcpTools...)
 	allTools = append(allTools, confirmAudit...)
 
-	log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d MCP, %d MCP skipped optional, %d MCP skipped allowlist)",
-		len(allTools), len(nativeTools), len(cfg.loaderTools), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist)
+	log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d MCP, %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona)",
+		len(allTools), len(nativeTools), len(cfg.loaderTools), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona)
 
 	if len(allTools) > maxToolsPerRequest {
 		return nil, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
@@ -383,6 +411,19 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	// treated as an error (isErr) so the raw value never reaches the model.
 	var piiBlocked bool
 	resultText, piiBlocked = redactPII(toolName, resultText)
+	// Output ceiling (#199): the direct-registration path must cap oversized
+	// results exactly like policyGuardedTool.Run does, or the SAME MCP call would
+	// be truncated above the tool-disclosure threshold (where it dispatches via
+	// the wrapped tool_call) but enter the transcript untruncated below it — the
+	// context-window overflow #199 exists to prevent (#576). Applied after
+	// redaction (the cap counts the bytes that actually flow on) and before the
+	// isError mapping + record so the policy, session log, and model all see the
+	// same capped text, error results included.
+	if ceil := maxToolOutputBytes(); ceil > 0 && len(resultText) > ceil {
+		orig := len(resultText)
+		resultText, _ = applyOutputCeiling(resultText, ceil)
+		log.Printf("agentcore: truncated %s output from %d to %d bytes (FLEET_MAX_TOOL_OUTPUT_BYTES)", toolName, orig, len(resultText))
+	}
 
 	// Map MCP isError to a fantasy error response so both the LLM and the log
 	// know the call failed (per MCP 2025-06-18 spec, tool-level errors arrive as

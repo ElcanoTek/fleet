@@ -29,8 +29,9 @@ func TestIsPrivateIP(t *testing.T) {
 		{"169.254.0.1", true},
 		{"169.254.169.254", true}, // cloud metadata
 		{"0.0.0.0", true},
-		{"fc00::1", true}, // IPv6 unique-local (IsPrivate)
-		{"fe80::1", true}, // IPv6 link-local
+		{"fc00::1", true},   // IPv6 unique-local (IsPrivate)
+		{"fe80::1", true},   // IPv6 link-local
+		{"233.1.1.1", true}, // global multicast (now blocked via shared netguard)
 		// Blocked (#574): special-purpose ranges net.IP's classifiers miss.
 		// RFC 6598 CGNAT 100.64.0.0/10 — Alibaba/Oracle serve instance
 		// metadata here, so it is credential-bearing like 169.254.169.254.

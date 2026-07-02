@@ -251,6 +251,15 @@ var schemaModelRegistry = map[string]any{
 	// Self-improving memory (#516).
 	"TaskFeedback":           models.TaskFeedback{},
 	"TaskLearnedInstruction": models.TaskLearnedInstruction{},
+	// Usage analytics (#601 part 1): GET /admin/usage returns these two
+	// reusable schemas verbatim via writeJSON.
+	"UsageReport": models.UsageReport{},
+	"UsageBucket": models.UsageBucket{},
+	// Per-principal rolling budgets (#601 part 2): the /admin/budgets CRUD
+	// surface accepts/returns these models verbatim via readJSON/writeJSON.
+	"Budget":       models.Budget{},
+	"BudgetCreate": models.BudgetCreate{},
+	"BudgetStatus": models.BudgetStatus{},
 	// Pre-submission cost forecast (#233/#405). The estimate handler returns
 	// agentcore.CostForecast verbatim via writeJSON, so these three reusable
 	// schemas are backed by the exported, reflectable agentcore types.

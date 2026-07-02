@@ -50,7 +50,16 @@ type Scheduler struct {
 	// floor) up to that floor, so a sustained stream of higher-priority work can
 	// never queue a low-priority task forever.
 	starvationWindowMin int
+
+	// scheduledBatchSize is the page size ProcessScheduledTasks fetches due tasks
+	// in. Defaults to defaultScheduledBatchSize; a field only so tests can inject
+	// a small value and exercise the multi-batch / soft-hold paths cheaply.
+	scheduledBatchSize int
 }
+
+// defaultScheduledBatchSize is the number of due tasks ProcessScheduledTasks
+// promotes per DB round-trip.
+const defaultScheduledBatchSize = 1000
 
 // SetRetention configures the automatic daily run-history pruning sweep (#252).
 // Call before Start. retentionDays<=0 leaves pruning OFF (the default). hour is
@@ -89,9 +98,10 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 		loc = time.UTC
 	}
 	return &Scheduler{
-		storage:  store,
-		location: loc,
-		stop:     make(chan struct{}),
+		storage:            store,
+		location:           loc,
+		stop:               make(chan struct{}),
+		scheduledBatchSize: defaultScheduledBatchSize,
 	}
 }
 
@@ -238,10 +248,39 @@ func (s *Scheduler) RecoverExpiredLeases() {
 // the task (scheduled_for advances, skip_count increments) via handleSkip.
 func (s *Scheduler) ProcessScheduledTasks() {
 	now := time.Now().In(s.location)
-	batchSize := 1000
+	batchSize := s.scheduledBatchSize
+	if batchSize <= 0 {
+		batchSize = defaultScheduledBatchSize
+	}
+
+	// A task leaves the "scheduled + due" set only when it is promoted or its
+	// scheduled_for is advanced. Tasks that DON'T leave it — a soft-held one-shot
+	// whose run_if declined, a recurring task whose ComputeNextRun errored, a row
+	// whose promote UPDATE failed — are re-returned by every plain-LIMIT re-fetch
+	// (same `now`, same ordering), so a full batch of them used to loop forever,
+	// hanging the scheduler goroutine and with it lease recovery and starvation
+	// promotion (#566). Walk the due set with a KEYSET cursor over the total
+	// order (scheduled_for, id) instead: the cursor advances past every fetched
+	// row — held or not — so each row is handled at most once per tick, each pass
+	// fetches strictly-later rows, and termination is structural (the due set is
+	// finite and `now` is fixed). A held prefix can't mask due work behind it,
+	// and the per-tick cost stays linear in the due-set size.
+	var (
+		cursorScheduledFor time.Time
+		cursorID           uuid.UUID
+		rowsThisTick       int
+	)
 
 	for {
-		tasks, err := s.storage.GetScheduledTasks(now, batchSize)
+		// Defensive valve: bounds the per-tick work if an operator somehow
+		// accumulates an enormous due set. The next tick (30s) starts over and —
+		// promotions having emptied the front of the due set — reaches the rest.
+		if rowsThisTick >= maxScheduledRowsPerTick {
+			log.Printf("ProcessScheduledTasks: handled %d due rows this tick, deferring the rest to the next tick", rowsThisTick)
+			return
+		}
+
+		tasks, err := s.storage.GetScheduledTasks(now, cursorScheduledFor, cursorID, batchSize)
 		if err != nil {
 			log.Printf("Error getting scheduled tasks: %v", err)
 			return
@@ -249,6 +288,14 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		if len(tasks) == 0 {
 			return
 		}
+		rowsThisTick += len(tasks)
+		// Every fetched row satisfies scheduled_for IS NOT NULL (the query requires
+		// it), so the cursor always advances to the last row of the page.
+		last := tasks[len(tasks)-1]
+		if last.ScheduledFor != nil {
+			cursorScheduledFor = *last.ScheduledFor
+		}
+		cursorID = last.ID
 
 		recurringCount := 0
 		promoteIDs := make([]uuid.UUID, 0, len(tasks))
@@ -285,31 +332,34 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		promoted, err := s.storage.UpdateTasksStatusBatch(promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
 		if err != nil {
 			log.Printf("Error updating scheduled tasks batch: %v", err)
-			successCount := 0
+			// Fall back to per-task promotion so one bad row can't strand the batch.
+			// A row that still fails is already behind the cursor, so a persistent
+			// DB error can't re-loop it this tick.
 			for _, taskID := range promoteIDs {
-				n, err := s.storage.UpdateTasksStatusBatch([]uuid.UUID{taskID}, models.TaskStatusScheduled, models.TaskStatusPending)
-				if err != nil {
-					log.Printf("Error updating task %s: %v", taskID, err)
+				n, perr := s.storage.UpdateTasksStatusBatch([]uuid.UUID{taskID}, models.TaskStatusScheduled, models.TaskStatusPending)
+				if perr != nil {
+					log.Printf("Error updating task %s: %v", taskID, perr)
 					continue
 				}
 				if n > 0 {
 					log.Printf("Task %s is now pending", taskID)
 				}
-				successCount++
-			}
-			if successCount == 0 {
-				log.Printf("Failed to update any scheduled tasks in batch, aborting to prevent infinite loop")
-				break
 			}
 		} else {
 			log.Printf("Successfully promoted %d of %d scheduled tasks to pending", promoted, len(promoteIDs))
 		}
 
+		// A short page means the cursor walked off the end of the due set.
 		if len(tasks) < batchSize {
-			break
+			return
 		}
 	}
 }
+
+// maxScheduledRowsPerTick bounds how many due rows one ProcessScheduledTasks
+// tick will handle. Far above any plausible simultaneous due set; purely a
+// defensive valve for the #566 cursor walk.
+const maxScheduledRowsPerTick = 100_000
 
 // taskSkip pairs a task with the human-readable reason its pre-run gate
 // declined it (#269). The reason is recorded on the task row (last_skip_reason)

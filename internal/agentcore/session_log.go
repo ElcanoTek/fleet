@@ -46,6 +46,10 @@ func RedactSecrets(text string) string {
 //   - PromptTokens / CompletionTokens / CachedTokens / CacheCreationTokens are
 //     CUMULATIVE across every API call in the session. They are billing/display
 //     numbers; do not use them to reason about the size of the next API call.
+//     PromptTokens INCLUDES cache reads and CachedTokens is that cached subset
+//     (so CumulativeCacheHitRate ≤ 100% and "PromptTokens - CachedTokens" is
+//     the uncached spend checkCeilings/budgetState charge against ceilings) —
+//     updateUsage normalizes every provider's reporting onto this convention.
 //   - LastStepPromptTokens is OVERWRITTEN on every call with that call's input
 //     size (fresh input + cache-read input). This is the value compaction
 //     compares against the model's context window — cumulative growth must NOT
