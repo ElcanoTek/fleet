@@ -2,6 +2,8 @@ package structuredoutput
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -25,6 +27,54 @@ func TestValidateSchema(t *testing.T) {
 		if err := ValidateSchema(json.RawMessage(bad)); err == nil {
 			t.Errorf("expected %q to be rejected as a schema", bad)
 		}
+	}
+}
+
+// TestValidateSchema_RejectsExternalRef (#585): an untrusted output_schema with
+// an external $ref must be rejected by the compiler's loader — WITHOUT the host
+// opening the target. The proof is in the error: it is our "must be
+// self-contained" refusal, identical whether or not the file:// target exists
+// (no "no such file", no parse-of-content error), so no filesystem open and no
+// existence oracle.
+func TestValidateSchema_RejectsExternalRef(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "schema.json")
+	// A well-formed schema on disk: if the loader opened and consumed it, the
+	// compile would SUCCEED — the "not allowed" error proves it was never read.
+	if err := os.WriteFile(existing, []byte(`{"type":"object"}`), 0o600); err != nil {
+		t.Fatalf("write schema file: %v", err)
+	}
+	refs := map[string]string{
+		"file existing": "file://" + existing,
+		"file missing":  "file://" + filepath.Join(dir, "does-not-exist.json"),
+		"file oracle":   "file:///etc/hostname",
+		"http":          "http://169.254.169.254/latest/meta-data",
+		"https":         "https://example.com/schema.json",
+	}
+	for name, ref := range refs {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateSchema(json.RawMessage(`{"$ref":"` + ref + `"}`))
+			if err == nil {
+				t.Fatalf("schema with external $ref %q compiled; want rejection", ref)
+			}
+			if !strings.Contains(err.Error(), "must be self-contained") {
+				t.Errorf("rejection is not the loader's refusal (the ref may have been resolved): %v", err)
+			}
+			if strings.Contains(err.Error(), "no such file") {
+				t.Errorf("error leaks file existence (the host touched the filesystem): %v", err)
+			}
+		})
+	}
+
+	// Internal refs are untouched: a self-contained schema using #/definitions
+	// still compiles.
+	internal := `{
+	  "type": "object",
+	  "properties": {"person": {"$ref": "#/definitions/person"}},
+	  "definitions": {"person": {"type": "string"}}
+	}`
+	if err := ValidateSchema(json.RawMessage(internal)); err != nil {
+		t.Errorf("self-contained schema with internal $ref rejected: %v", err)
 	}
 }
 

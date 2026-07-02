@@ -46,8 +46,18 @@ func newRateLimiter(minInterval time.Duration) *rateLimiter {
 }
 
 func (rl *rateLimiter) wait(ctx context.Context, key string) error {
+	// The mutex is released before every blocking wait and re-acquired after.
+	// `locked` tracks whether we currently hold it so the deferred Unlock never
+	// fires on an already-unlocked mutex — a fatal, unrecoverable runtime error
+	// that would take down the whole process. An early return on ctx.Done()
+	// happens while unlocked, so the defer must be a no-op on that path.
 	rl.mu.Lock()
-	defer rl.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			rl.mu.Unlock()
+		}
+	}()
 
 	// Reset counts every minute
 	if time.Now().After(rl.resetTime) {
@@ -57,9 +67,16 @@ func (rl *rateLimiter) wait(ctx context.Context, key string) error {
 
 	// Check if we've exceeded the per-minute limit (max 10 requests per minute)
 	if rl.requestCounts[key] >= 10 {
+		waitTime := time.Until(rl.resetTime)
 		rl.mu.Unlock()
-		time.Sleep(time.Until(rl.resetTime))
+		locked = false
+		select {
+		case <-time.After(waitTime):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		rl.mu.Lock()
+		locked = true
 		rl.requestCounts = make(map[string]int)
 		rl.resetTime = time.Now().Add(time.Minute)
 	}
@@ -69,12 +86,14 @@ func (rl *rateLimiter) wait(ctx context.Context, key string) error {
 	if elapsed < rl.minInterval {
 		waitTime := rl.minInterval - elapsed
 		rl.mu.Unlock()
+		locked = false
 		select {
 		case <-time.After(waitTime):
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		rl.mu.Lock()
+		locked = true
 	}
 
 	rl.lastRequest = time.Now()
