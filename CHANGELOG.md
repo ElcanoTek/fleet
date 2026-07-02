@@ -15,6 +15,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Scheduler liveness (#566): `ProcessScheduledTasks` no longer live-locks when
+  a full batch of due tasks makes no forward progress — e.g. ≥1000 one-shot
+  tasks all soft-held by a declining `run_if` gate. The old loop paged with a
+  plain `LIMIT` and terminated only on a short batch, so a full batch of
+  soft-held rows (which stay scheduled + due by design) was re-fetched
+  identically forever, hanging the scheduler goroutine and with it lease
+  recovery and starvation promotion for the whole box. The due set is now
+  walked with a keyset cursor over the total order `(scheduled_for, id)` — each
+  row is handled at most once per tick, a held prefix can't mask due work
+  behind it (the `id` tiebreaker makes pages stable even when many rows share
+  one `scheduled_for`), per-tick cost is linear, and a defensive 100k-rows valve
+  bounds a pathological tick. Soft-hold semantics are unchanged: a held one-shot
+  stays scheduled and is re-evaluated next tick.
 - Web rate limiter (#561): `(*rateLimiter).wait` no longer double-unlocks its
   mutex when the context is cancelled mid-wait. Cancelling a `web_fetch` /
   `web_search` turn while it was blocked in the minimum-interval (or per-minute)

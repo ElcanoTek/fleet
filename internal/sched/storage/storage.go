@@ -518,9 +518,11 @@ func (s *Storage) GetUserByToken(token string) (*models.User, error) {
 	return s.db.GetUserByToken(context.Background(), token)
 }
 
-// GetScheduledTasks gets scheduled tasks ready to run up to a limit.
-func (s *Storage) GetScheduledTasks(cutoff time.Time, limit int) ([]*models.Task, error) {
-	return s.db.GetScheduledTasks(context.Background(), cutoff, limit)
+// GetScheduledTasks gets scheduled tasks ready to run up to a limit, strictly
+// after the (afterScheduledFor, afterID) keyset cursor — zero values start from
+// the beginning. See db.GetScheduledTasks for why keyset paging (#566).
+func (s *Storage) GetScheduledTasks(cutoff time.Time, afterScheduledFor time.Time, afterID uuid.UUID, limit int) ([]*models.Task, error) {
+	return s.db.GetScheduledTasks(context.Background(), cutoff, afterScheduledFor, afterID, limit)
 }
 
 // CancelTaskAtomic cancels a task atomically. reason records WHO/why (#508 —
