@@ -55,6 +55,10 @@
   --color-danger-border: color-mix(in srgb, #e08080 55%, transparent);
   --color-warning: #e8c97a;
   --color-warning-border: color-mix(in srgb, #e8c97a 50%, transparent);
+  /* Usage panel (#601) single-series bar hue. Brand-adjacent purple, nudged
+     up in chroma vs --color-primary and validated (dataviz skill six checks)
+     against the dark surface: L in-band, C ≥ 0.10, ≥3:1 contrast. */
+  --usage-bar: #7d7dd6;
   /* Status accent pairs for chips, badges, and notice banners (see
      shared/ui/StatusChip + NoticeBanner and web/src/app/DESIGN.md).
      "-strong" anchors borders and tinted fills (via color-mix);
@@ -160,6 +164,9 @@
   --color-danger-border: color-mix(in srgb, #b02a2a 35%, transparent);
   --color-warning: #9a6a00;
   --color-warning-border: color-mix(in srgb, #9a6a00 35%, transparent);
+  /* Usage panel bar hue for the light surface — its own validated step (same
+     hue family, darker), not an automatic flip of the dark value. */
+  --usage-bar: #6363b8;
   /* Chip/banner accent pairs: mid-tone borders, dark AA-contrast text on
      the light tinted fills — mirroring how the base status tokens above
      deepen for the light theme. */
@@ -1348,6 +1355,124 @@ tr.sla-row-fail {
 }
 .sla-spark-dot {
   fill: var(--color-text-primary);
+}
+
+/* Usage & Spend panel (#601 part 1): KPI tiles + single-hue bar/column charts
+   over the persisted metering. Marks wear --usage-bar (validated per theme);
+   all text wears text tokens. */
+.usage-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+}
+.usage-refetching {
+  opacity: 0.6;
+  transition: opacity 0.15s ease;
+}
+.usage-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0 0.5rem;
+}
+.usage-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.75rem 0.9rem;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+.usage-tile-label {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+.usage-tile-value {
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.usage-tile-sub {
+  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+}
+.usage-note {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin: 0 0 0.75rem;
+  max-width: 72ch;
+}
+/* Budgets sub-section inside the Usage panel (#601 part 2). */
+.usage-subheading {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 1.25rem 0 0.5rem;
+}
+.usage-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+.usage-bar-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) 1fr minmax(64px, auto);
+  align-items: center;
+  gap: 0.6rem;
+}
+.usage-bar-name {
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+.usage-bar-svg {
+  width: 100%;
+  height: 16px;
+  display: block;
+}
+.usage-bar-fill {
+  fill: var(--usage-bar);
+  /* 4px rounded data-end, square at the baseline. The horizontal bar SVG is
+     non-uniformly scaled, so rx would distort — round via clip-path instead. */
+}
+.usage-bar-svg .usage-bar-fill {
+  clip-path: inset(0 0 0 0 round 0 4px 4px 0);
+}
+.usage-bar-value {
+  font-size: 0.78rem;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.usage-columns-wrap {
+  margin-bottom: 1rem;
+  overflow-x: auto;
+}
+.usage-columns {
+  width: 100%;
+  min-width: 480px;
+  height: auto;
+  display: block;
+}
+.usage-grid {
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+.usage-grid-baseline {
+  stroke: var(--color-border-strong);
+}
+.usage-axis-text {
+  font-size: 10px;
+  fill: var(--color-text-muted);
+}
+.usage-num {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Upcoming runs timeline (Scheduler UX 2.0, #504): a day-grouped list of the

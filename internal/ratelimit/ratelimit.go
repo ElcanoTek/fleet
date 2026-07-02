@@ -13,7 +13,6 @@ package ratelimit
 import (
 	"math"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -188,9 +187,20 @@ func (l *Limiter) Snapshot(key string) (limit, remaining int, reset int64) {
 // key (e.g. in-flight chat turns per user). Unlike Limiter it tracks live
 // occupancy, not a time window: callers Acquire before starting work and Release
 // when it completes. Safe for concurrent use.
+//
+// Occupancy lives in a plain mutex-guarded map rather than a sync.Map of
+// atomics: eviction is what matters here. Release deletes a key the moment its
+// count hits zero, so the map is bounded by the number of keys with work
+// IN FLIGHT — not, as before #594, by every key ever seen (a slow leak on a
+// long-lived, high-user-churn process). A lock-free counter can't delete-on-zero
+// without racing a concurrent Acquire that holds the about-to-be-orphaned
+// counter; doing both transitions under one small lock makes that race
+// impossible, and Acquire/Release run once per chat turn, so contention is nil.
 type ConcurrencyLimiter struct {
-	limit  int32
-	counts sync.Map // key → *atomic.Int32
+	limit int32
+
+	mu     sync.Mutex
+	counts map[string]int32
 }
 
 // NewConcurrencyLimiter returns a limiter allowing up to limit concurrent
@@ -199,14 +209,18 @@ type ConcurrencyLimiter struct {
 func NewConcurrencyLimiter(limit int) *ConcurrencyLimiter {
 	// Clamp to a sane int32 range — limit is a small operator-set cap, never
 	// anywhere near the boundary, but bound the conversion explicitly so the
-	// overflow checker is satisfied.
-	if limit < 0 {
-		limit = 0
+	// overflow checker is satisfied. The conversion is performed inside an
+	// explicit range check (rather than a reassigning clamp) because that is
+	// the form CodeQL's go/incorrect-integer-conversion recognizes as a barrier.
+	capped := int32(0)
+	if limit > 0 {
+		if limit > math.MaxInt32 {
+			capped = math.MaxInt32
+		} else {
+			capped = int32(limit)
+		}
 	}
-	if limit > math.MaxInt32 {
-		limit = math.MaxInt32
-	}
-	return &ConcurrencyLimiter{limit: int32(limit)}
+	return &ConcurrencyLimiter{limit: capped, counts: map[string]int32{}}
 }
 
 // Acquire reserves a slot for key, returning false when key is already at the
@@ -215,36 +229,34 @@ func (c *ConcurrencyLimiter) Acquire(key string) bool {
 	if c == nil || c.limit <= 0 {
 		return true
 	}
-	v, _ := c.counts.LoadOrStore(key, new(atomic.Int32))
-	counter := v.(*atomic.Int32)
-	for {
-		cur := counter.Load()
-		if cur >= c.limit {
-			return false
-		}
-		if counter.CompareAndSwap(cur, cur+1) {
-			return true
-		}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cur := c.counts[key] // missing key reads as 0 — no entry is created by the lookup
+	if cur >= c.limit {
+		return false
 	}
+	c.counts[key] = cur + 1
+	return true
 }
 
-// Release frees a slot previously taken by Acquire. It never drops below zero.
+// Release frees a slot previously taken by Acquire. It never drops below zero,
+// and it evicts the key's entry the moment the count reaches zero so the map
+// only holds keys with in-flight work (#594).
 func (c *ConcurrencyLimiter) Release(key string) {
 	if c == nil || c.limit <= 0 {
 		return
 	}
-	if v, ok := c.counts.Load(key); ok {
-		counter := v.(*atomic.Int32)
-		for {
-			cur := counter.Load()
-			if cur <= 0 {
-				return
-			}
-			if counter.CompareAndSwap(cur, cur-1) {
-				return
-			}
-		}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cur, ok := c.counts[key]
+	if !ok {
+		return
 	}
+	if cur <= 1 {
+		delete(c.counts, key)
+		return
+	}
+	c.counts[key] = cur - 1
 }
 
 // Active reports the current occupancy for key.
@@ -252,10 +264,9 @@ func (c *ConcurrencyLimiter) Active(key string) int32 {
 	if c == nil {
 		return 0
 	}
-	if v, ok := c.counts.Load(key); ok {
-		return v.(*atomic.Int32).Load()
-	}
-	return 0
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.counts[key]
 }
 
 // Limit reports the configured per-key concurrency cap.

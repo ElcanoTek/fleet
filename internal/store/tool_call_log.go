@@ -103,7 +103,11 @@ func (s *Store) ListToolCalls(ctx context.Context, conversationID, toolFilter st
 	}
 	defer rows.Close()
 
-	out := make([]ToolCallEntry, 0, limit)
+	// Grow via append rather than pre-sizing from limit: a user-derived
+	// allocation size trips go/uncontrolled-allocation-size, and the row count is
+	// already capped by the SQL LIMIT so a capacity hint buys nothing. This
+	// mirrors GetTurnEventPage in turn_events.go.
+	var out []ToolCallEntry
 	for rows.Next() {
 		var e ToolCallEntry
 		var dur sql.NullInt64

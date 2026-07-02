@@ -155,18 +155,19 @@ func (t *httpToolTransport) httpClient() *http.Client {
 }
 
 // executeHTTPTool runs one inline HTTP tool and returns it as a ToolResult. The
-// flow: substitute {param} tokens into the URL (percent-encoded) and body (raw),
-// apply the resolved auth/static headers, execute with the bounded client, then
+// flow: substitute {param} tokens into the URL (percent-encoded) and body
+// (JSON-escaped for a JSON body, raw otherwise — see bodyMode), apply the
+// resolved auth/static headers, execute with the bounded client, then
 // render the response. A non-2xx is NOT a transport error — it is returned to the
 // model as a "status <N>: <body>" text result (isError) so the model can reason
 // about the failure (matching the issue's acceptance criteria). When response_jq
 // is set and the body is valid JSON, the jq program filters/transforms it first.
 func executeHTTPTool(ctx context.Context, client *http.Client, spec HTTPToolSpec, args map[string]interface{}) (*ToolResult, error) {
-	reqURL := substituteTokens(spec.URL, args, true)
+	reqURL := substituteTokens(spec.URL, args, substModeURL)
 
 	var body io.Reader
 	if spec.BodyTemplate != "" {
-		body = strings.NewReader(substituteTokens(spec.BodyTemplate, args, false))
+		body = strings.NewReader(substituteTokens(spec.BodyTemplate, args, bodyMode(spec)))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, spec.Method, reqURL, body)
@@ -251,18 +252,57 @@ func applyResponseJQ(program string, body []byte) (out string, ok bool, err erro
 	return strings.Join(results, "\n"), true, nil
 }
 
-// substituteTokens replaces {param} tokens in tmpl with args[param]. In URL
-// context (urlEncode=true) the value is percent-encoded (query-escaped) so a param
-// can't inject path/query structure; in body context the value is inserted raw (the
-// template author controls the surrounding JSON quoting). Non-string arg values are
-// rendered with %v.
+// substMode selects how a substituted {param} value is escaped for the context
+// it is inserted into. Every context escapes for ITS OWN structure — the model
+// controls the values, so an unescaped context is an injection surface (#600).
+type substMode int
+
+const (
+	// substModeURL percent-encodes the value so a param can't inject
+	// path/query structure into the request URL.
+	substModeURL substMode = iota
+	// substModeJSONBody JSON-string-escapes the value so a param can't break
+	// out of the template's quoting and inject fields into a JSON body (#600):
+	// `x","admin":true` becomes `x\",\"admin\":true` inside the author's
+	// quotes. Non-string values are rendered as their JSON encoding (so a
+	// number stays a bare 7 and never gains quotes the template didn't write).
+	substModeJSONBody
+	// substModeRawBody inserts the value verbatim — the pre-#600 behavior,
+	// kept for non-JSON bodies where the template author owns the framing
+	// (e.g. a form-encoded or plain-text body).
+	substModeRawBody
+)
+
+// bodyMode picks the substitution mode for spec's body template: JSON-escaped
+// when the body is JSON, raw otherwise. A declared Content-Type header is
+// authoritative; without one the template is sniffed (first non-space byte '{'
+// or '[') so the common undeclared-JSON case is safe by default. An author who
+// wants raw interpolation opts out by declaring a non-JSON Content-Type.
+func bodyMode(spec HTTPToolSpec) substMode {
+	for k, v := range spec.Headers {
+		if strings.EqualFold(k, "Content-Type") {
+			if strings.Contains(strings.ToLower(v), "json") {
+				return substModeJSONBody
+			}
+			return substModeRawBody
+		}
+	}
+	t := strings.TrimSpace(spec.BodyTemplate)
+	if strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[") {
+		return substModeJSONBody
+	}
+	return substModeRawBody
+}
+
+// substituteTokens replaces {param} tokens in tmpl with args[param], escaped
+// per mode (see substMode).
 //
 // A "{...}" run is treated as a token ONLY when its content is a valid token name
 // (ASCII letters, digits, underscore). This is what keeps a JSON body_template safe:
 // the literal braces of `{"channel":"{channel}"}` are not token names, so only the
 // real {channel} placeholder is substituted. A valid-looking token with no matching
 // arg is left intact rather than blanked, so a stray "{foo}" survives.
-func substituteTokens(tmpl string, args map[string]interface{}, urlEncode bool) string {
+func substituteTokens(tmpl string, args map[string]interface{}, mode substMode) string {
 	if !strings.Contains(tmpl, "{") {
 		return tmpl
 	}
@@ -281,11 +321,7 @@ func substituteTokens(tmpl string, args map[string]interface{}, urlEncode bool) 
 		}
 		key := tmpl[i+1 : i+end]
 		if v, present := args[key]; present && isTokenName(key) {
-			s := fmt.Sprintf("%v", v)
-			if urlEncode {
-				s = url.QueryEscape(s)
-			}
-			sb.WriteString(s)
+			sb.WriteString(renderTokenValue(v, mode))
 			i += end + 1
 			continue
 		}
@@ -296,6 +332,40 @@ func substituteTokens(tmpl string, args map[string]interface{}, urlEncode bool) 
 		i++
 	}
 	return sb.String()
+}
+
+// renderTokenValue renders one arg value for its substitution context.
+//
+// In JSON-body mode EVERY value is passed through a JSON-string escape, so no
+// model-supplied value can carry an unescaped `"` or `\` into the body: a
+// string arg escapes to exactly what the author's surrounding quotes expect; a
+// number/bool escapes to itself (their JSON encoding has nothing to escape), so
+// an unquoted `{count}` position keeps working; a map/slice arg escapes to its
+// JSON text with the structural quotes escaped — usable in a quoted position,
+// and merely INVALID (rejected downstream, never injected) in an unquoted one.
+// Fail-closed: a crafted value can at worst break the request, not extend it.
+func renderTokenValue(v interface{}, mode substMode) string {
+	if mode == substModeJSONBody {
+		s, ok := v.(string)
+		if !ok {
+			if b, err := json.Marshal(v); err == nil {
+				s = string(b)
+			} else {
+				// Unmarshalable value (cannot arrive via JSON tools/call args);
+				// escape the %v rendering rather than dropping the token.
+				s = fmt.Sprintf("%v", v)
+			}
+		}
+		// json.Marshal of a string cannot fail; strip the surrounding quotes —
+		// the template author supplies their own ("{param}").
+		b, _ := json.Marshal(s)
+		return string(b[1 : len(b)-1])
+	}
+	s := fmt.Sprintf("%v", v)
+	if mode == substModeURL {
+		s = url.QueryEscape(s)
+	}
+	return s
 }
 
 // isTokenName reports whether s is a non-empty run of ASCII letters, digits, and

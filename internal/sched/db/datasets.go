@@ -19,6 +19,14 @@ import (
 
 const datasetColumns = "id, name, goal, columns, model, persona, status, concurrency, created_at, updated_at"
 
+// maxDatasetRowsPerInsert bounds a single AddDatasetRows batch. Each row binds 4
+// placeholders, so this stays well under Postgres's 65535-parameter statement
+// limit (4 * 16000 = 64000), and bounding the count before it sizes the args
+// slice keeps the len(cells)*4 capacity from overflowing
+// (go/allocation-size-overflow). Callers cap imports far below this (5000/req),
+// so it is a defensive db-layer ceiling, not a normal-path limit.
+const maxDatasetRowsPerInsert = 16000
+
 func scanDataset(scanner interface{ Scan(...interface{}) error }) (*models.Dataset, error) {
 	var (
 		d    models.Dataset
@@ -161,6 +169,9 @@ func (db *Database) DeleteDataset(ctx context.Context, id uuid.UUID) error {
 func (db *Database) AddDatasetRows(ctx context.Context, datasetID uuid.UUID, cells []json.RawMessage) (int, error) {
 	if len(cells) == 0 {
 		return 0, nil
+	}
+	if len(cells) > maxDatasetRowsPerInsert {
+		return 0, fmt.Errorf("too many rows in one insert: %d (max %d)", len(cells), maxDatasetRowsPerInsert)
 	}
 	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {

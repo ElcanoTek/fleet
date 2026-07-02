@@ -100,6 +100,7 @@ type fakeChatStore struct {
 	recorded   int
 	finishes   int
 	created    int
+	setModels  int
 	turnEvents int
 	toolCalls  []store.ToolCallEntry
 }
@@ -207,8 +208,19 @@ func (s *fakeChatStore) SweepExpired(context.Context, time.Duration, int) (int, 
 	return 0, 0, nil
 }
 func (s *fakeChatStore) SweepOrphanWorkspaces(context.Context, string) (int, error) { return 0, nil }
-func (s *fakeChatStore) SetModel(context.Context, string, string, string) error     { return nil }
-func (s *fakeChatStore) SetRuntime(context.Context, string, string, string) error   { return nil }
+
+// SetModel records the per-turn model override (#568) so tests can assert that
+// a rejected lockdown override never reaches the store.
+func (s *fakeChatStore) SetModel(_ context.Context, _, convID, model string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setModels++
+	if c := s.convs[convID]; c != nil {
+		c.Model = model
+	}
+	return nil
+}
+func (s *fakeChatStore) SetRuntime(context.Context, string, string, string) error { return nil }
 func (s *fakeChatStore) SetOptionalMCPServers(context.Context, string, string, []string) error {
 	return nil
 }
@@ -389,4 +401,93 @@ func TestChatSecondTurnReplaysHistory(t *testing.T) {
 		t.Errorf("replayed history roles = %q…%q, want user…assistant",
 			engine.lastHistory[0].Role, engine.lastHistory[len(engine.lastHistory)-1].Role)
 	}
+}
+
+// TestPostChat_LockdownModelOverrideGuard is the #568 regression: the per-turn
+// model override in postChat's existing-conversation branch must pass the SAME
+// lockdown allow-list guard as PATCH /conversations/{id}/model and
+// conversation create. A disallowed override on a lockdown conversation is a
+// 400 that neither persists the model nor runs the turn.
+func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
+	seed := func(st *fakeChatStore, lockdown bool) {
+		st.convs["conv-1"] = &store.Conversation{
+			ID: "conv-1", UserEmail: "u@x.com", Title: "t",
+			Persona: "generic", Model: "a/b", Lockdown: lockdown,
+		}
+	}
+
+	t.Run("disallowed override on lockdown conversation rejected", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+		seed(st, true)
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "evil/unvetted-model",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model, setModels := st.convs["conv-1"].Model, st.setModels
+		st.mu.Unlock()
+		if setModels != 0 || model != "a/b" {
+			t.Errorf("rejected override reached the store: SetModel calls = %d, stored model = %q", setModels, model)
+		}
+		engine.mu.Lock()
+		turns := engine.turns
+		engine.mu.Unlock()
+		if turns != 0 {
+			t.Errorf("turn ran despite the rejected model override (%d turns)", turns)
+		}
+	})
+
+	t.Run("allow-listed override on lockdown conversation still works", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
+		seed(st, true)
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "c/d",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model := st.convs["conv-1"].Model
+		st.mu.Unlock()
+		if model != "c/d" {
+			t.Errorf("allow-listed override not persisted: stored model = %q, want c/d", model)
+		}
+	})
+
+	t.Run("non-lockdown conversation unaffected", func(t *testing.T) {
+		engine := &fakeEngine{}
+		st := newFakeChatStore()
+		srv := newDefaultChatServer(t, engine, st)
+		srv.cfg.LockdownAllowedModels = []string{"a/b"}
+		seed(st, false)
+
+		w := postChatRequest(t, srv, map[string]any{
+			"conversation_id": "conv-1",
+			"model":           "any/model-at-all",
+			"message":         "hello",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		st.mu.Lock()
+		model := st.convs["conv-1"].Model
+		st.mu.Unlock()
+		if model != "any/model-at-all" {
+			t.Errorf("non-lockdown override not persisted: stored model = %q", model)
+		}
+	})
 }

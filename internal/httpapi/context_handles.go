@@ -135,13 +135,16 @@ func expandFileHandle(workspaceRoot, relPath string) (block, notice string) {
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return "", fmt.Sprintf("@file is unavailable for this conversation: %s", relPath)
 	}
-	// Syntactic gate first (abs / ".." / NUL), so a legitimately MISSING file reads
-	// as "not found" rather than SafeWorkspaceJoin's existence-dependent symlink
-	// resolution error. After this gate a naive join stays within the workspace.
-	if filepath.IsAbs(relPath) || strings.ContainsRune(relPath, 0) || hasDotDotComponent(relPath) {
+	// Syntactic gate first, so a legitimately MISSING file reads as "not found"
+	// rather than SafeWorkspaceJoin's existence-dependent symlink resolution
+	// error. filepath.IsLocal rejects absolute paths and any ".."/root escape;
+	// it is also the barrier CodeQL's path-injection query recognizes, so the
+	// existence-probe join below is provably confined on rescan. A NUL byte is
+	// outside IsLocal's contract, so it is rejected separately.
+	if !filepath.IsLocal(relPath) || strings.ContainsRune(relPath, 0) {
 		return "", fmt.Sprintf("@file path not allowed: %s", relPath)
 	}
-	// relPath is syntactically gated (no abs / ".." / NUL) above, so this join stays
+	// relPath is syntactically gated (local, no NUL) above, so this join stays
 	// under workspaceRoot; it is only an existence probe (SafeWorkspaceJoin does the
 	// authoritative symlink-safe resolution below).
 	if info, statErr := os.Stat(filepath.Join(workspaceRoot, relPath)); statErr != nil || !info.Mode().IsRegular() {
@@ -176,17 +179,6 @@ func expandFileHandle(workspaceRoot, relPath string) (block, notice string) {
 		block += "\n_(truncated)_"
 	}
 	return block, ""
-}
-
-// hasDotDotComponent reports whether relPath contains a ".." path component
-// (mirrors SafeWorkspaceJoin's syntactic reject).
-func hasDotDotComponent(relPath string) bool {
-	for _, c := range strings.Split(filepath.ToSlash(relPath), "/") {
-		if c == ".." {
-			return true
-		}
-	}
-	return false
 }
 
 // appendContextHandleBlocks appends the expanded blocks + notices to the user

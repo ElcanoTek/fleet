@@ -572,6 +572,17 @@ func (m *Manager) RotateKey(keyID string, gracePeriodHours int) (*APIKey, string
 	oldHash := key.KeyHash
 	now := time.Now().UTC()
 	graceExpires := now.Add(time.Duration(gracePeriodHours) * time.Hour)
+	// Retire the outgoing previous hash from the lookup index BEFORE it is
+	// overwritten below (#567). Only the most recent predecessor may keep
+	// authenticating within its grace window: without this delete, a second
+	// rotation forgot the first rotated-out hash was still indexed, and
+	// ValidateKey's grace-expiry cleanup (which only checks the CURRENT
+	// PreviousKeyHash) could never evict it — so the original, possibly leaked,
+	// key kept authenticating until a process restart. Rotation must actually
+	// revoke prior key material.
+	if key.PreviousKeyHash != nil {
+		delete(m.keyHashIndex, *key.PreviousKeyHash)
+	}
 	key.PreviousKeyHash = &oldHash
 	key.PreviousKeyExpires = &graceExpires
 	key.KeyHash = keyHash

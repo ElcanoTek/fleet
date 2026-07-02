@@ -60,21 +60,28 @@ var ErrPathEscapesWorkspace = errors.New("path escapes workspace")
 // workspace at all) BEFORE calling this — SafeWorkspaceJoin only enforces the
 // filesystem containment invariant.
 func SafeWorkspaceJoin(root, relPath string) (string, error) {
-	// 1. Fast syntactic reject. A leading "/" (absolute), any ".." component, or
-	//    a NUL byte is rejected before we touch the filesystem. We check ".." as a
-	//    path component (not a substring) so a legitimate filename like
-	//    "my..report.csv" is not falsely rejected, while "../" and a bare ".."
-	//    are.
-	if relPath == "" {
-		return "", ErrUnsafePath
-	}
+	// 1. Fast syntactic reject, before we touch the filesystem. filepath.IsLocal
+	//    is the load-bearing lexical gate: it rejects an empty path, an absolute
+	//    path, and any ".."/root escape ("../x", "a/../../x") using lexical
+	//    analysis only. We lead with it — rather than the hand-rolled IsAbs +
+	//    component scan it replaces — for two reasons: it is the canonical Go
+	//    1.20+ spelling of "stays within this directory", and it is the exact
+	//    barrier CodeQL's path-injection query recognizes, so every downstream
+	//    os.Open(<the returned path>) is provably confined on a CodeQL rescan, not
+	//    merely in review. A NUL byte is outside IsLocal's contract, so it is
+	//    rejected separately.
 	if strings.ContainsRune(relPath, 0) {
 		return "", ErrUnsafePath
 	}
-	if filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "/") {
+	if !filepath.IsLocal(relPath) {
 		return "", ErrUnsafePath
 	}
-	// Normalize separators and split into components; reject any "..".
+	// Defense-in-depth: reject any ".." component outright. IsLocal already
+	// forbids a ".." that escapes root, but permits an interior ".." that
+	// resolves back inside (e.g. "a/../b"); our contract is stricter — a
+	// workspace file reference never legitimately carries "..". We check ".." as a
+	// path component (not a substring) so "my..report.csv" is not falsely
+	// rejected.
 	for _, comp := range strings.Split(filepath.ToSlash(relPath), "/") {
 		if comp == ".." {
 			return "", ErrUnsafePath

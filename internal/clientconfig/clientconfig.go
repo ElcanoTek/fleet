@@ -559,8 +559,12 @@ func (d *ServerTLSDef) toMCP() *mcp.TLSOptions {
 //     policy gate, output redaction, and isError handling — not a second path.
 //
 // URL and BodyTemplate may carry {param} tokens substituted from the model's
-// declared input at call time (URL context is percent-encoded; body context is
-// raw). InputSchema is the JSON Schema the model sees. ResponseJQ, when set, is a
+// declared input at call time. URL context is percent-encoded; body context is
+// JSON-string-escaped when the body is JSON (a Content-Type header containing
+// "json", or — with no Content-Type — a template starting with { or [) so a
+// model-supplied value cannot inject fields into the outbound request (#600),
+// and raw otherwise (declare a non-JSON Content-Type for form/plain-text
+// bodies). InputSchema is the JSON Schema the model sees. ResponseJQ, when set, is a
 // jq program applied to a JSON response body before it is returned to the model.
 // Critical opts the tool into the existing critical-tool audit gate (its bare
 // name is registered as a critical suffix — same semantics as
