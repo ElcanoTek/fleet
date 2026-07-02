@@ -1,9 +1,11 @@
 "use client";
 
 // AccountMenu — the rail footer's account control (#169). A single button shows
-// the avatar + email; opening it reveals the account menu (Settings · Theme ·
-// Sign out) built on the shared Menu surface, so it is the same component family
-// as the conversation-row kebab.
+// the avatar + email; opening it reveals the account menu (Settings · Connections
+// · Admin · Theme · Sign out) built on the shared Menu surface, so it is the same
+// component family as the conversation-row kebab. Connections (/settings/
+// connections, the per-user remote-MCP directory) and Admin (/admin, allowlist-
+// gated server-side) are plain page navigations available on both surfaces.
 //
 // Surface-specific wiring:
 //   - onSettings is optional: omitted on the chat surface (Settings lives only
@@ -123,6 +125,24 @@ export function AccountMenu({
             Settings
           </MenuItem>
         ) : null}
+        <MenuItem
+          icon={<Icon name="layers" className="size-4" />}
+          onClick={() => {
+            close();
+            window.location.assign("/settings/connections");
+          }}
+        >
+          Connections
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name="activity" className="size-4" />}
+          onClick={() => {
+            close();
+            window.location.assign("/admin");
+          }}
+        >
+          Admin
+        </MenuItem>
         <div className="flex items-center gap-2 px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-secondary)]">
           <Icon name="moon" className="size-4 shrink-0 text-[var(--color-text-muted)]" />
           <span className="min-w-0 flex-1">Theme</span>

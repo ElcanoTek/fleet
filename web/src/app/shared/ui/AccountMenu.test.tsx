@@ -89,4 +89,27 @@ describe("AccountMenu", () => {
     fireEvent.keyDown(menu, { key: "Escape" });
     expect(screen.queryByRole("menu", { name: "Account" })).toBeNull();
   });
+
+  it("navigates to Connections and Admin from the menu (both surfaces)", () => {
+    // jsdom marks location.assign non-configurable; swap the whole location
+    // object for a stub to observe navigations.
+    const original = window.location;
+    const assign = vi.fn();
+    Object.defineProperty(window, "location", {
+      value: { ...original, assign },
+      configurable: true,
+      writable: true,
+    });
+    try {
+      render(<AccountMenu email="sam@elcanotek.com" onSignOut={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Connections" }));
+      expect(assign).toHaveBeenCalledWith("/settings/connections");
+      fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Admin" }));
+      expect(assign).toHaveBeenCalledWith("/admin");
+    } finally {
+      Object.defineProperty(window, "location", { value: original, configurable: true, writable: true });
+    }
+  });
 });

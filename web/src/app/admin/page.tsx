@@ -110,8 +110,11 @@ export default function AdminPage() {
   const total = stats?.reduce((acc, u) => acc + u.total_cost_usd, 0) ?? 0;
   const totalTurns = stats?.reduce((acc, u) => acc + u.total_turns, 0) ?? 0;
 
+  // h-dvh + overflow-y-auto: own the vertical scroll — document scrolling is
+  // unreliable on iOS under the app shell's html/body rules (see
+  // settings/connections).
   return (
-    <main className="min-h-screen bg-[var(--gradient-bg-home-signature)] px-6 py-10 text-[var(--color-text-primary)]">
+    <main className="h-dvh overflow-y-auto bg-[var(--gradient-bg-home-signature)] px-6 py-10 text-[var(--color-text-primary)]">
       <div className="mx-auto w-full max-w-4xl">
         <header className="mb-6 flex items-center justify-between gap-4">
           <Link href="/" className="flex items-center gap-2.5 no-underline">
