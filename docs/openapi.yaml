@@ -1413,6 +1413,59 @@ paths:
                         recurrence: { type: string }
                         next_run: { type: string, format: date-time }
                         recurring: { type: boolean }
+  /admin/pipeline-metrics:
+    get:
+      summary: Tool-pipeline metrics derived from retained session logs (#543).
+      description: >-
+        The sensor behind data-driven optimization decisions (see #505's reopen
+        criteria): per-run tool turns / total + distinct tool calls / tokens /
+        cost / wall clock, derived from the session logs fleet already
+        persists, plus a fleet-wide aggregate (tool-turn histogram and the
+        share of runs that were long multi-tool pipelines). Admin-only.
+      security: [{ adminApiKey: [] }]
+      parameters:
+        - name: runs
+          in: query
+          required: false
+          schema: { type: integer, default: 100, maximum: 500 }
+          description: Cap on per-run rows returned (most recent first); the aggregate always covers every retained log.
+      responses:
+        "200":
+          description: Aggregate + most-recent per-run pipeline metrics.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  aggregate:
+                    type: object
+                    properties:
+                      runs: { type: integer }
+                      tool_turn_histogram:
+                        type: object
+                        additionalProperties: { type: integer }
+                      pct_runs_at_least_5_tool_turns: { type: number }
+                      avg_tool_turns: { type: number }
+                      avg_distinct_tools: { type: number }
+                      avg_prompt_tokens: { type: number }
+                      avg_completion_tokens: { type: number }
+                      avg_wall_clock_seconds: { type: number }
+                  runs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        task_id: { type: string }
+                        tool_turns: { type: integer }
+                        total_tool_calls: { type: integer }
+                        distinct_tools: { type: integer }
+                        max_calls_in_one_turn: { type: integer }
+                        prompt_tokens: { type: integer }
+                        completion_tokens: { type: integer }
+                        cost_usd: { type: number }
+                        wall_clock_seconds: { type: integer }
+                        created_at: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
   /admin/queue:
     get:
       summary: Pending task-queue stats — per-tier depth + oldest wait (#230).
