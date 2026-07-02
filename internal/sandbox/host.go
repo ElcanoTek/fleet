@@ -20,6 +20,8 @@ import (
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // hostExecutorCompiledIn reports that the host executor is present in this
@@ -248,8 +250,18 @@ func (h *hostImpl) readLocked(ctx context.Context, timeout time.Duration) ([]byt
 		err  error
 	}
 	ch := make(chan readResult, 1)
+	// Snapshot the reader under h.mu (held by the caller) BEFORE launching
+	// the goroutine: the cancel/timeout arms below call
+	// terminateBridgeLocked, which nils h.bridgeStdout, so re-reading the
+	// FIELD inside the goroutine is a data race — and in the
+	// ctx-already-cancelled ordering the goroutine can observe nil and
+	// panic (#583). Mirrors containerImpl.runPython.
+	stdout := h.bridgeStdout
 	go func() {
-		data, err := h.bridgeStdout.ReadBytes('\n')
+		defer safe.Recover("sandbox.host.bridge_read", func(any) {
+			ch <- readResult{err: fmt.Errorf("bridge reader panicked")}
+		})
+		data, err := stdout.ReadBytes('\n')
 		ch <- readResult{data: data, err: err}
 	}()
 	timer := time.NewTimer(timeout)

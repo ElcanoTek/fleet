@@ -1,7 +1,9 @@
 package ratelimit
 
 import (
+	"fmt"
 	"math"
+	"sync"
 	"testing"
 )
 
@@ -159,6 +161,92 @@ func TestConcurrencyLimiter_ReleaseNeverNegative(t *testing.T) {
 	}
 	if !c.Acquire("u") {
 		t.Fatal("acquire after spurious release should still work")
+	}
+}
+
+// entryCount reports how many keys the limiter currently tracks — test-only
+// visibility into the eviction behavior (#594).
+func (c *ConcurrencyLimiter) entryCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.counts)
+}
+
+// TestConcurrencyLimiter_EvictsReleasedKeys is the #594 regression guard: a key
+// whose last holder released must not linger in the map, or a long-lived
+// process accumulates one entry per user that ever started a chat turn.
+func TestConcurrencyLimiter_EvictsReleasedKeys(t *testing.T) {
+	c := NewConcurrencyLimiter(2)
+	for i := 0; i < 1000; i++ {
+		key := fmt.Sprintf("user%d@example.com", i)
+		if !c.Acquire(key) {
+			t.Fatalf("acquire %q failed", key)
+		}
+		c.Release(key)
+	}
+	if got := c.entryCount(); got != 0 {
+		t.Fatalf("map retains %d zero-count entries, want 0", got)
+	}
+
+	// A key with a REMAINING holder must survive its sibling's release …
+	for i := 0; i < 2; i++ {
+		if !c.Acquire("held") {
+			t.Fatalf("acquire held #%d", i+1)
+		}
+	}
+	c.Release("held")
+	if got := c.Active("held"); got != 1 {
+		t.Fatalf("Active(held) = %d, want 1 (must not evict a live holder)", got)
+	}
+	// … and be evicted only when the last holder releases.
+	c.Release("held")
+	if got := c.entryCount(); got != 0 {
+		t.Fatalf("map retains %d entries after final release, want 0", got)
+	}
+}
+
+// TestConcurrencyLimiter_ConcurrentChurn hammers acquire/release across many
+// goroutines and distinct keys under -race: the store/delete transition must
+// neither leak zero-count entries nor under-count a concurrent holder (the
+// classic race a lock-free delete-on-zero would have).
+func TestConcurrencyLimiter_ConcurrentChurn(t *testing.T) {
+	c := NewConcurrencyLimiter(2)
+
+	// One long-lived holder pins a slot on a contended key for the whole test.
+	if !c.Acquire("hot") {
+		t.Fatal("acquire hot")
+	}
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				// Churn the contended key: the second slot is fought over while
+				// the pinned holder must never be evicted or double-counted.
+				if c.Acquire("hot") {
+					c.Release("hot")
+				}
+				// And churn a per-goroutine key that must fully evict.
+				key := fmt.Sprintf("churn-%d-%d", g, i%10)
+				if c.Acquire(key) {
+					c.Release(key)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	if got := c.Active("hot"); got != 1 {
+		t.Errorf("Active(hot) = %d, want 1 (under/over-count on the store/delete race)", got)
+	}
+	if got := c.entryCount(); got != 1 {
+		t.Errorf("map holds %d entries, want 1 (only the pinned key)", got)
+	}
+	c.Release("hot")
+	if got := c.entryCount(); got != 0 {
+		t.Errorf("map holds %d entries after final release, want 0", got)
 	}
 }
 

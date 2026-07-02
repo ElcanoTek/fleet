@@ -631,8 +631,12 @@ remote_mcp_catalog:
 #     per-tool sandbox enforcement and no streaming/OAuth/multipart support in V1.
 #
 # Behavior:
-#   - {param} tokens in url (percent-encoded) and body_template (raw) are filled
-#     from the model's input at call time.
+#   - {param} tokens in url (percent-encoded) and body_template are filled from
+#     the model's input at call time. For a JSON body (Content-Type header says
+#     json, or — with no Content-Type — the template starts with { or [) values
+#     are JSON-string-escaped so a model-supplied value cannot inject fields
+#     into the request (#600); declare a non-JSON Content-Type to get raw
+#     interpolation for form/plain-text bodies.
 #   - response_jq (optional) filters/transforms a JSON response before the model
 #     sees it; it is syntax-checked at load. A non-JSON body is passed through.
 #   - 30s timeout; redirects followed. A non-2xx response is returned to the model
