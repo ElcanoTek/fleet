@@ -1500,6 +1500,28 @@ func (b *Bundle) EnvVarNames() []string {
 	return out
 }
 
+// WebhookSecretEnvNames returns the env-var names holding the bundle's webhook
+// trigger signing secrets (GitHub-style HMAC + Slack). cmd/fleet passes these
+// to config.RegisterNonReloadableSecretEnvVars so a config hot-reload pins them
+// to their boot values (#584): they are per-request AUTH secrets, read via
+// os.Getenv at verification time, and a drifted .env-file copy must be reported
+// as Skipped rather than silently rotating a live secret mid-run.
+func (b *Bundle) WebhookSecretEnvNames() []string {
+	seen := map[string]bool{}
+	var out []string
+	for i := range b.WebhookTriggers {
+		for _, name := range []string{b.WebhookTriggers[i].HMACSecretEnv, b.WebhookTriggers[i].TokenSecretEnv} {
+			name = strings.TrimSpace(name)
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // envRefs extracts the ${VAR} names referenced in a manifest value.
 func envRefs(v string) []string {
 	var out []string

@@ -199,6 +199,11 @@ func run() error {
 		return fmt.Errorf("load client config bundle: %w", err)
 	}
 	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
+	// Webhook/Slack signing secrets are per-request auth secrets (read via
+	// os.Getenv at verification time). Pin them to their boot values across
+	// config hot-reload (#584): auth secrets are non-reloadable, and a drifted
+	// .env copy must be reported as Skipped, never silently rotated mid-run.
+	config.RegisterNonReloadableSecretEnvVars(bundle.WebhookSecretEnvNames()...)
 
 	cfg, err := config.Load(os.Getenv("FLEET_ENV_FILE"))
 	if err != nil {
