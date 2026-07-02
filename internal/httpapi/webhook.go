@@ -32,9 +32,10 @@ const maxWebhookBody = 1 << 20
 const webhookTriggersPerMinutePerSlug = 10
 
 // webhookDummySecret equalizes the slug-miss path: an unknown (or malformed)
-// slug still performs one HMAC-SHA256 before the identical 401, so neither the
-// response nor its timing distinguishes a known slug with a bad signature from a
-// slug that does not exist. Per-process random via the shared webhooks package.
+// slug still performs the same signature computations as a configured trigger
+// before the identical 401, so neither the response nor its timing
+// distinguishes a known slug with a bad signature from a slug that does not
+// exist. Per-process random via the shared webhooks package.
 var webhookDummySecret = webhooks.NewDummySecret()
 
 // postWebhook handles POST /webhooks/{slug} (#268): an external system that
@@ -64,7 +65,8 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/webhooks/"), "/")
 
 	// Look up the trigger before reading the body so the work shape is the same
-	// whether or not the slug exists; the miss path below still computes one HMAC.
+	// whether or not the slug exists; the miss path below still performs the
+	// same signature computations over the body.
 	var (
 		trig  clientconfig.WebhookTriggerDef
 		found bool
@@ -79,10 +81,10 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticate. verifyWebhookSignature always performs one signature
-	// computation — against the real secret when the slug exists, else a
-	// per-process dummy — then fails closed on a miss, so the unknown-slug and
-	// bad-signature paths are timing-indistinguishable.
+	// Authenticate. verifyWebhookSignature performs the SAME signature
+	// computations on every request — against the real secret when the slug
+	// exists, else a per-process dummy — then fails closed on a miss, so the
+	// unknown-slug and bad-signature paths are timing-indistinguishable.
 	if !s.verifyWebhookSignature(r, body, trig, found) {
 		metrics.RecordWebhookTrigger("", "rejected")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -228,25 +230,39 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 // verifyWebhookSignature reports whether the request carries a valid signature
-// for the trigger. It ALWAYS performs one signature computation — against the
-// configured secret when the slug exists, else the per-process dummy — and then
-// returns found && ok, so an unknown slug fails closed with the same work and
-// timing as a known slug with a bad signature (no enumeration oracle).
+// for the trigger. EVERY request — known or unknown slug, Slack or GitHub-style
+// trigger, any signature header — performs BOTH full-body signature
+// computations (one Slack-style, one HMAC-SHA256), each against the configured
+// secret when the slug supplies it and the per-process dummy otherwise, and
+// then fails closed on a miss. Running the unconditional pair (rather than
+// mirroring only the configured verifier's shape) keeps the work independent of
+// slug existence AND of the trigger's verifier type, so a caller cannot use
+// response timing to enumerate slugs (#572: a Slack or custom-hmac_header
+// trigger used to do full-body work only on a hit, a measurable gap the
+// previous single-compute miss path did not cover). The verifiers themselves
+// compute their HMAC before any header-shape check for the same reason.
 func (s *Server) verifyWebhookSignature(r *http.Request, body []byte, trig clientconfig.WebhookTriggerDef, found bool) bool {
-	if found && trig.UsesSlack() {
-		secret := os.Getenv(trig.TokenSecretEnv)
-		return webhooks.VerifySlackSignature(body, secret,
-			r.Header.Get("X-Slack-Request-Timestamp"), r.Header.Get("X-Slack-Signature"), time.Now())
-	}
-	// GitHub-style HMAC path; also the miss path (dummy secret, one compute).
-	secret := webhookDummySecret
+	slackSecret := webhookDummySecret
+	hmacSecret := webhookDummySecret
 	header := clientconfig.DefaultHMACHeader
 	if found {
-		secret = os.Getenv(trig.HMACSecretEnv)
-		header = trig.SignatureHeader()
+		if trig.UsesSlack() {
+			slackSecret = os.Getenv(trig.TokenSecretEnv)
+		} else {
+			hmacSecret = os.Getenv(trig.HMACSecretEnv)
+			header = trig.SignatureHeader()
+		}
 	}
-	ok := webhooks.VerifyHMACSHA256(body, secret, r.Header.Get(header))
-	return found && ok
+	slackOK := webhooks.VerifySlackSignature(body, slackSecret,
+		r.Header.Get("X-Slack-Request-Timestamp"), r.Header.Get("X-Slack-Signature"), time.Now())
+	hmacOK := webhooks.VerifyHMACSHA256(body, hmacSecret, r.Header.Get(header))
+	if !found {
+		return false
+	}
+	if trig.UsesSlack() {
+		return slackOK
+	}
+	return hmacOK
 }
 
 // renderWebhookPrompt renders a trigger's prompt_template against the inbound

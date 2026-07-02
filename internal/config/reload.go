@@ -37,6 +37,12 @@ type reloadState struct {
 	serialize sync.Mutex        // serializes whole Reload calls (they edit process env)
 	bootEnv   map[string]string // original process-env winners (∩ allowlist) — preserves boot precedence on reload
 	bootVals  map[string]string // resolved boot strings of the watched non-reloadable settings
+	// bootSecrets pins the boot values (nil = unset at boot) of the registered
+	// per-request auth-secret env vars (#584). bootEnv only covers process-env
+	// winners, so a FILE-sourced webhook/Slack signing secret would otherwise be
+	// silently rotated by a reload of a drifted .env — Reload restores these and
+	// reports the drift in Skipped instead.
+	bootSecrets map[string]*string
 }
 
 // newReloadState captures the boot environment so a later Reload reproduces
@@ -45,8 +51,9 @@ type reloadState struct {
 // (after the process env is in its final, restored state).
 func newReloadState(bootEnv map[string]string) *reloadState {
 	rs := &reloadState{
-		bootEnv:  make(map[string]string, len(bootEnv)),
-		bootVals: make(map[string]string, len(nonReloadableWatched)),
+		bootEnv:     make(map[string]string, len(bootEnv)),
+		bootVals:    make(map[string]string, len(nonReloadableWatched)),
+		bootSecrets: map[string]*string{},
 	}
 	for k, v := range bootEnv {
 		rs.bootEnv[k] = v
@@ -54,6 +61,17 @@ func newReloadState(bootEnv map[string]string) *reloadState {
 	for _, w := range nonReloadableWatched {
 		if v, ok := w.lookup(); ok {
 			rs.bootVals[w.key] = v
+		}
+	}
+	// Snapshot the registered auth-secret env vars in their FINAL boot state
+	// (process env or env file, whichever won), remembering set vs unset so a
+	// reload can restore either state exactly.
+	for _, k := range nonReloadableSecretNames() {
+		if v, ok := os.LookupEnv(k); ok {
+			vc := v
+			rs.bootSecrets[k] = &vc
+		} else {
+			rs.bootSecrets[k] = nil
 		}
 	}
 	return rs
@@ -207,6 +225,8 @@ func (c *Config) Reload(envFile string) (ReloadResult, error) {
 		Errors:     []ReloadError{},
 	}
 
+	c.restoreBootSecrets(&result)
+
 	c.reload.mu.Lock()
 	c.applyReloadableLocked(&result)
 	c.reload.mu.Unlock()
@@ -227,6 +247,31 @@ func (c *Config) applyReloadableLocked(result *ReloadResult) {
 	// CUTLASS_TEMPERATURE (not via the FLEET_/CHAT_ prefix machinery), so resolve
 	// it the same way here.
 	reloadExactFloat(result, "CUTLASS_TEMPERATURE", c.LLMTemperature, 0, func(v float64) { c.LLMTemperature = v })
+}
+
+// restoreBootSecrets re-pins every registered per-request auth-secret env var
+// to its boot value after the env-file re-apply (#584). Webhook/Slack signing
+// secrets are read via os.Getenv on every verification, so a drifted .env copy
+// would otherwise rotate a live secret mid-run — inbound webhooks start
+// failing signature checks, an outage the operator never requested. Auth
+// secrets are documented non-reloadable: the boot value (set OR unset) stays
+// live and the drift is reported in Skipped (restart to rotate).
+func (c *Config) restoreBootSecrets(result *ReloadResult) {
+	for k, boot := range c.reload.bootSecrets {
+		cur, ok := os.LookupEnv(k)
+		if (boot == nil && !ok) || (boot != nil && ok && cur == *boot) {
+			continue // no drift
+		}
+		if boot == nil {
+			_ = os.Unsetenv(k)
+		} else {
+			_ = os.Setenv(k, *boot)
+		}
+		result.Skipped = append(result.Skipped, SkippedField{
+			Key:    k,
+			Reason: "per-request auth secret (webhook/Slack signing); the boot value stays live — restart to rotate",
+		})
+	}
 }
 
 // collectSkipped reports any watched non-reloadable setting whose resolved value
