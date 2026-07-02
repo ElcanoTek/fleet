@@ -3126,7 +3126,7 @@ export function ChatExperience() {
             {modelError ? (
               <div
                 role="alert"
-                className="mx-auto mb-1 w-full max-w-[52rem] rounded-[0.9rem] border border-[var(--color-danger,#dc2626)] bg-[color-mix(in_srgb,var(--color-danger,#dc2626)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger,#dc2626)] sm:mb-1.5"
+                className="mx-auto mb-1 w-full max-w-[52rem] rounded-[0.9rem] border border-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger)] sm:mb-1.5"
               >
                 {modelError.message}{" "}
                 <a

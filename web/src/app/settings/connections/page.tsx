@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import NotificationsCard from "./NotificationsCard";
+import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { StatusChip, type StatusTone } from "@/app/shared/ui/StatusChip";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -59,15 +61,15 @@ const STATUS_LABEL: Record<string, string> = {
   error: "Error",
 };
 
-function statusChipClass(status: string): string {
+function statusTone(status: string): StatusTone {
   switch (status) {
     case "connected":
-      return "border-[#4fae7e] bg-[color-mix(in_srgb,#4fae7e_18%,transparent)] text-[#7fd6a6]";
+      return "success";
     case "needs_reauth":
     case "error":
-      return "border-[#e0a060] bg-[color-mix(in_srgb,#e0a060_18%,transparent)] text-[#e0b080]";
+      return "warning";
     default:
-      return "border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]";
+      return "neutral";
   }
 }
 
@@ -306,14 +308,14 @@ export default function ConnectionsPage() {
         </p>
 
         {notice ? (
-          <div className="mb-4 rounded-[0.95rem] border border-[#4fae7e] bg-[color-mix(in_srgb,#4fae7e_15%,transparent)] px-4 py-3 text-[0.875rem] text-[#7fd6a6]">
+          <NoticeBanner tone="success" className="mb-4">
             {notice}
-          </div>
+          </NoticeBanner>
         ) : null}
         {error ? (
-          <div className="mb-4 rounded-[0.95rem] border border-[#e08080] bg-[color-mix(in_srgb,#e08080_15%,transparent)] px-4 py-3 text-[0.875rem] text-[#e08080]">
+          <NoticeBanner tone="danger" className="mb-4">
             {error}
-          </div>
+          </NoticeBanner>
         ) : null}
 
         <form
@@ -331,7 +333,7 @@ export default function ConnectionsPage() {
                 onChange={(e) => setName(e.target.value)}
                 placeholder="my-server"
                 required
-                className="rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-text-secondary)]"
+                className="rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
               />
             </label>
             <label className="grid gap-1 text-[0.75rem] text-[var(--color-text-muted)]">
@@ -342,7 +344,7 @@ export default function ConnectionsPage() {
                 placeholder="https://mcp.example.com/mcp"
                 type="url"
                 required
-                className="rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-text-secondary)]"
+                className="rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
               />
             </label>
             <button
@@ -385,17 +387,15 @@ export default function ConnectionsPage() {
                       <span className="font-medium text-[var(--color-text-primary)]">
                         {s.name}
                       </span>
-                      <span
-                        className={`rounded-full border px-2 py-0.5 text-[0.6875rem] ${statusChipClass(s.status)}`}
-                      >
+                      <StatusChip tone={statusTone(s.status)}>
                         {STATUS_LABEL[s.status] ?? s.status}
-                      </span>
+                      </StatusChip>
                     </div>
                     <p className="truncate text-[0.75rem] text-[var(--color-text-muted)]">
                       {s.url}
                     </p>
                     {s.status_detail ? (
-                      <p className="text-[0.6875rem] text-[#e0b080]">
+                      <p className="text-[0.6875rem] text-[var(--color-warning-soft)]">
                         {s.status_detail}
                       </p>
                     ) : null}
@@ -469,11 +469,9 @@ export default function ConnectionsPage() {
                             <span className="text-[0.8125rem] font-medium">
                               {b.display_name || b.name}
                             </span>
-                            <span className="rounded-full border border-[#4fae7e] bg-[color-mix(in_srgb,#4fae7e_15%,transparent)] px-2 py-0.5 text-[0.625rem] text-[#7fd6a6]">
-                              Bundled
-                            </span>
+                            <StatusChip tone="success">Bundled</StatusChip>
                             {b.beta ? (
-                              <span className="rounded-full border border-[var(--color-border-strong)] px-2 py-0.5 text-[0.625rem] text-[var(--color-text-muted)]">
+                              <span className="rounded-full border border-[var(--color-border-strong)] px-2 py-0.5 text-[0.6875rem] text-[var(--color-text-muted)]">
                                 Beta
                               </span>
                             ) : null}
@@ -501,7 +499,7 @@ export default function ConnectionsPage() {
                       value={catalogQuery}
                       onChange={(e) => setCatalogQuery(e.target.value)}
                       placeholder={`Search ${catalog.third_party.length} servers…`}
-                      className="mb-2 w-full rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-text-secondary)]"
+                      className="mb-2 w-full rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
                     />
                     <ul className="grid gap-2 sm:grid-cols-2">
                       {catalog.third_party
@@ -532,9 +530,7 @@ export default function ConnectionsPage() {
                                 <span className="text-[0.8125rem] font-medium">
                                   {tp.display_name}
                                 </span>
-                                <span className="rounded-full border border-[#e0a060] bg-[color-mix(in_srgb,#e0a060_15%,transparent)] px-2 py-0.5 text-[0.625rem] text-[#e0b080]">
-                                  Third-party
-                                </span>
+                                <StatusChip tone="warning">Third-party</StatusChip>
                               </div>
                               <p className="mt-1 line-clamp-2 flex-1 text-[0.75rem] text-[var(--color-text-muted)]">
                                 {tp.description}

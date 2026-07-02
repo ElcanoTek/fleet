@@ -121,3 +121,21 @@ prior versions are listed because none have shipped.
   same string. Builds without the ldflag (a bare `go build`) fall back to a
   `dev` sentinel and the VCS revision recovered from the Go build info.
 - This `CHANGELOG.md`, in Keep a Changelog format.
+
+### Changed
+
+- Web UI aesthetic unity (#540): one token-driven design system across
+  `/chat`, `/orchestrator`, `/admin`, `/settings`, and `/login`. Recurring
+  hardcoded status colors (the chip/banner greens, ambers, and reds) became
+  semantic theme-aware tokens (`--color-{success,warning,danger}-strong/-soft`,
+  defined for dark *and* light with AA-contrast light values), and the
+  hand-rolled status pills and notice banners were consolidated into shared
+  primitives (`web/src/app/shared/ui/StatusChip.tsx`, `NoticeBanner.tsx`).
+  Stray near-miss border radii moved onto the shared `--radius-*` scale, input
+  focus states aligned on the accent-border treatment, and a few
+  never-defined `var(--color-text)` references were fixed to
+  `--color-text-primary`. Raw hex in `.tsx` is now the exception (meta
+  theme-color + the approval-card HTML-preview inversion map only) — the
+  system, token families, and the "no raw hex; add a semantic token" rule are
+  documented in `web/src/app/DESIGN.md`. No redesign: same look, one source
+  of truth.
