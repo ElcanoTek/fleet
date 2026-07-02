@@ -178,7 +178,10 @@ tested in this repository:
 The orchestrator HTTP API is published as an OpenAPI 3.1 contract at
 [`docs/openapi.yaml`](docs/openapi.yaml); a CI test
 (`cmd/fleet/openapi_drift_test.go`) keeps its routes + auth schemes in lockstep
-with the shipped router (it does not gate body schemas).
+with the shipped router, and gates the body schemas of every named component
+schema bound to a Go model (property existence, `required` integrity,
+type-kind). Inline operation schemas, schemas without a reflectable Go type,
+and status codes remain documentary.
 
 ## Repository layout
 
