@@ -12,10 +12,10 @@ func TestPushSubscriptions_UpsertListDelete(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.UpsertPushSubscription(ctx, "u@x.com", "https://push.example/ep1", "auth1", "p256dh1"); err != nil {
+	if err := s.UpsertPushSubscription(ctx, "u@x.com", "https://push.example/ep1", "fake-auth-one", "fake-p256dh-one"); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if err := s.UpsertPushSubscription(ctx, "u@x.com", "https://push.example/ep2", "auth2", "p256dh2"); err != nil {
+	if err := s.UpsertPushSubscription(ctx, "u@x.com", "https://push.example/ep2", "fake-auth-two", "fake-p256dh-two"); err != nil {
 		t.Fatalf("upsert second: %v", err)
 	}
 
@@ -33,7 +33,7 @@ func TestPushSubscriptions_UpsertListDelete(t *testing.T) {
 	}
 
 	// Re-subscribe on the SAME endpoint: keys refresh in place, no new row.
-	if err := s.UpsertPushSubscription(ctx, "u@x.com", "https://push.example/ep1", "auth1b", "p256dh1b"); err != nil {
+	if err := s.UpsertPushSubscription(ctx, "u@x.com", "https://push.example/ep1", "fake-auth-refreshed", "fake-p256dh-refreshed"); err != nil {
 		t.Fatalf("re-upsert: %v", err)
 	}
 	subs, err = s.ListPushSubscriptions(ctx, "u@x.com")
@@ -47,7 +47,7 @@ func TestPushSubscriptions_UpsertListDelete(t *testing.T) {
 	for _, sub := range subs {
 		if sub.Endpoint == "https://push.example/ep1" {
 			found = true
-			if sub.KeysAuth != "auth1b" || sub.KeysP256dh != "p256dh1b" {
+			if sub.KeysAuth != "fake-auth-refreshed" || sub.KeysP256dh != "fake-p256dh-refreshed" {
 				t.Errorf("keys not refreshed: %+v", sub)
 			}
 		}
