@@ -34,6 +34,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/webpush"
@@ -967,7 +968,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		// seam (#239) — not an MCP send — so it gets its own one-shot path.
 		text, toolErr = s.runStagedScheduleTask(execCtx, approval)
 	default:
-		text, toolErr = runStagedTool(execCtx, s.agent, approval)
+		text, toolErr = s.runStagedTool(execCtx, approval)
 	}
 	resultText := text
 	if toolErr != nil {
@@ -1144,7 +1145,8 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 // runStagedTool executes the staged tool one-shot outside the agent
 // loop. Supports MCP tools (send_email) and the native bash tool (risky
 // shell commands gated by orchestration.checkBashSafety).
-func runStagedTool(ctx context.Context, mgr turnEngine, approval *store.Approval) (string, error) {
+func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (string, error) {
+	mgr := s.agent
 	if mgr == nil {
 		return "", errors.New("agent manager unavailable")
 	}
@@ -1152,7 +1154,7 @@ func runStagedTool(ctx context.Context, mgr turnEngine, approval *store.Approval
 	// apply (hard-blocked patterns still rejected) since runBash is the
 	// single entry point.
 	if approval.ToolName == "bash" {
-		return runStagedBash(ctx, mgr, approval)
+		return s.runStagedBash(ctx, approval)
 	}
 	// preview_email is preview-only by design: there is no send path.
 	// When the user clicks Dismiss, we just mark it resolved with a
@@ -1198,7 +1200,7 @@ func runStagedTool(ctx context.Context, mgr turnEngine, approval *store.Approval
 // the tools package rather than going through the fantasy agent loop so
 // the approval is a truly one-shot execution; no new LLM turn runs
 // here. Hard-blocked safety rules still apply inside runBash.
-func runStagedBash(ctx context.Context, mgr turnEngine, approval *store.Approval) (string, error) {
+func (s *Server) runStagedBash(ctx context.Context, approval *store.Approval) (string, error) {
 	var params tools.BashParams
 	if err := json.Unmarshal([]byte(approval.ArgsJSON), &params); err != nil {
 		return "", fmt.Errorf("parse bash args: %w", err)
@@ -1209,22 +1211,96 @@ func runStagedBash(ctx context.Context, mgr turnEngine, approval *store.Approval
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	// Pull a sandbox from the warm pool so the approval runs through
-	// the same container boundary an agent-driven bash call would.
+	// Honor the conversation's lockdown seal (#562). An approval is a
+	// deferred tool call from a specific conversation, so it must run under
+	// the same network posture the turn that staged it would have used —
+	// otherwise a prompt-injected agent could stage an exfiltrating command
+	// and have the human's Approve click silently lift the --network=none
+	// seal the operator relies on.
+	lockdown, err := s.stagedBashLockdown(ctx, approval)
+	if err != nil {
+		return "", err
+	}
+	if lockdown && !s.cfg.LockdownAvailable() {
+		// Mirror takeTurnSandbox's fail-closed check: never downgrade a
+		// lockdown conversation to a network-enabled container just because
+		// the sealed backend is misconfigured.
+		return "", fmt.Errorf("conversation is in lockdown mode but the server has no sandbox image configured")
+	}
+
+	// Pull a sandbox so the approval runs through the same container
+	// boundary an agent-driven bash call would.
 	// Production agent.New always wires a pool; a nil pool here is a
 	// programmer error and we surface it rather than silently dropping
 	// to host execution (which would let approved-but-malicious bash
 	// reach the chat-server's filesystem and credentials).
-	pool := mgr.SandboxPool()
+	pool := s.agent.SandboxPool()
 	if pool == nil {
 		return "", fmt.Errorf("approval handler: no sandbox pool wired (chat-server boot misconfigured?)")
 	}
-	sb, cleanup, err := pool.Take()
+	sb, cleanup, err := takeStagedBashSandbox(ctx, pool, lockdown)
 	if err != nil {
-		return "", fmt.Errorf("take sandbox: %w", err)
+		return "", err
 	}
 	defer cleanup()
 	return tools.RunBashForApproval(ctx, sb, params)
+}
+
+// stagedBashLockdown resolves whether an approved bash command must run
+// network-sealed: the conversation's own Lockdown flag (set at creation,
+// immutable) OR'd with the server-wide CHAT_LOCKDOWN_ONLY switch — the same
+// disjunction postChat and POST /conversations apply (server.go). The OR with
+// cfg.LockdownOnly matters for conversations created before an operator
+// flipped the global switch on. It FAILS CLOSED: if the conversation can't be
+// resolved we refuse to run rather than guess the posture open.
+func (s *Server) stagedBashLockdown(ctx context.Context, approval *store.Approval) (bool, error) {
+	if s.cfg.LockdownOnly {
+		return true, nil
+	}
+	conv, err := s.store.Get(ctx, approval.UserEmail, approval.ConversationID)
+	if err != nil {
+		return false, fmt.Errorf("resolve conversation lockdown state: %w", err)
+	}
+	if conv == nil {
+		return false, fmt.Errorf("resolve conversation lockdown state: conversation %s not found", approval.ConversationID)
+	}
+	return conv.Lockdown, nil
+}
+
+// stagedBashTaker is the subset of *sandbox.Pool the approved-bash path uses
+// to acquire its execution sandbox. It is an interface so the take-decision
+// (sealed lockdown vs. warm pool) is unit-testable without spinning a real
+// podman container — the same seam pattern as scheduledrun's sandboxTaker.
+type stagedBashTaker interface {
+	// Take returns a warm, network-ENABLED sandbox (the interactive default).
+	Take() (*sandbox.Sandbox, func(), error)
+	// TakeContainer cold-starts a fresh sandbox with egress SEALED
+	// (--network=none) — the lockdown boundary.
+	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
+}
+
+// takeStagedBashSandbox acquires the container an approved bash command runs
+// in, mirroring the interactive turn path's selection (agent.Manager.
+// takeTurnSandbox): lockdown → TakeContainer, a fresh --network=none
+// container (the hard seal); otherwise the warm pool's Take (default rootless
+// slirp4netns egress — unchanged pre-#562 behavior). The lockdown branch
+// FAILS CLOSED: any container error (including ErrContainerUnavailable on an
+// image-less pool) is surfaced, never downgraded to the network-enabled warm
+// take — running approved bash with egress on in a lockdown chat is exactly
+// the exfiltration hole #562 closed.
+func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown bool) (*sandbox.Sandbox, func(), error) {
+	if lockdown {
+		sb, cleanup, err := pool.TakeContainer(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("take lockdown sandbox: %w", err)
+		}
+		return sb, cleanup, nil
+	}
+	sb, cleanup, err := pool.Take()
+	if err != nil {
+		return nil, nil, fmt.Errorf("take sandbox: %w", err)
+	}
+	return sb, cleanup, nil
 }
 
 // runStagedScheduleTask creates the orchestrator task an approved schedule_task
