@@ -66,14 +66,13 @@ reproducible: [`docs/generating-demo-gif.md`](docs/generating-demo-gif.md).)_
   the sandbox: they are isolated by the **out-of-process MCP broker**, which
   injects them only when it runs a delegated MCP call host-side (issue #167).
 
-- **Choose your isolation posture.** By default that sandbox uses the
-  shared-kernel OCI runtime (`runc`/`crun`) — namespaces, cgroups, and seccomp.
-  For untrusted prompts or sensitive data, raise it to a **dedicated KVM microVM
-  per tool call** by setting the sandbox runtime to `kata` or `libkrun`: an
-  escape then requires a *hypervisor* CVE, not just a container break-out. fleet
-  fail-closed-preflights `/dev/kvm` and the runtime binary at boot (a missing
-  KVM aborts startup rather than silently degrading), and every other guarantee
-  — host-side credentials, network sealing, per-task limits — is unchanged. See
+- **Two isolation tiers, one config line.** The default sandbox is a rootless
+  shared-kernel container (`runc`/`crun`). Set `sandbox.runtime: kata` (or
+  `libkrun`) and every tool call instead gets a **dedicated KVM microVM with
+  its own guest kernel** — escaping now takes a hypervisor CVE, not a container
+  break-out. Everything else (host-side credentials, network sealing, per-task
+  limits) is unchanged, and fleet fail-closed-preflights `/dev/kvm` at boot so
+  the posture can never silently degrade.
   [`docs/SANDBOX-RUNTIMES.md`](docs/SANDBOX-RUNTIMES.md).
 
 - **Cost-controlled.** Each turn runs against configurable per-task cost and
