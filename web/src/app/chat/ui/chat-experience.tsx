@@ -54,6 +54,7 @@ import { ConversationSidebar } from "./ConversationSidebar";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { Composer } from "./Composer";
+import type { SkillInfo } from "./skillSlash";
 import { ChatTranscript } from "./ChatTranscript";
 import { usePerConvComposerState } from "./usePerConvComposerState";
 import { useTurnStreamState } from "./useTurnStreamState";
@@ -390,6 +391,9 @@ export function ChatExperience() {
   // extracted Composer can type its prop against it.
   const [mcpServers, setMcpServers] = useState<MCPServerInfo[]>([]);
   const [mcpPickerOpen, setMcpPickerOpen] = useState(false);
+  // Bundle skill roster for the composer "/" autocomplete (#513). Fetched
+  // once at startup — the roster is bundle-owned and static for the session.
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
   // Server-exposed capability flags. Fetched once on mount from
   // /api/server-config. Drives the lockdown affordance: when
   // lockdownAvailable is false the +button stays a plain "+"
@@ -2343,6 +2347,19 @@ export function ChatExperience() {
           // Personas are nice-to-have; the server falls back to default.
         }
 
+        // Bundle skill roster for the composer "/" autocomplete (#513).
+        // Best-effort: an older server without /skills just leaves the
+        // autocomplete empty.
+        try {
+          const sr = await fetch("/api/skills", { cache: "no-store" });
+          if (sr.ok) {
+            const sd = (await sr.json()) as { skills?: SkillInfo[] };
+            if (!cancelled) setSkills(sd.skills ?? []);
+          }
+        } catch {
+          // Optional nicety — plain "/text" messages still send fine.
+        }
+
         // Prime the Tools picker catalog so it renders for new chats too.
         // loadConversation will overwrite with per-conversation enabled
         // state once an existing conversation is opened. Called through a
@@ -3131,6 +3148,7 @@ export function ChatExperience() {
               isLoadingCatalog={isLoadingCatalog}
               loadRankedModels={loadRankedModels}
               loadCatalogModels={loadCatalogModels}
+              skills={skills}
               mcpServers={mcpServers}
               mcpPickerOpen={mcpPickerOpen}
               setMcpPickerOpen={setMcpPickerOpen}
