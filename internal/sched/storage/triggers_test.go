@@ -104,3 +104,156 @@ func TestTriggerCRUDAndSpawn(t *testing.T) {
 		t.Error("expected error after delete")
 	}
 }
+
+func seedTemplateTask(t *testing.T, store *Storage, mcp models.MCPSelection, cred models.CredentialAllowlist) *models.Task {
+	t.Helper()
+	task := &models.Task{
+		ID:                  uuid.New(),
+		Prompt:              "template",
+		Status:              models.TaskStatusScheduled,
+		Priority:            models.PriorityNormal,
+		TriggerType:         models.TriggerTypeWebhook,
+		MCPSelection:        mcp,
+		CredentialAllowlist: cred,
+	}
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	return task
+}
+
+func TestCreateTrigger_KindPolicyRoundTrip(t *testing.T) {
+	store, _ := newTestStore(t)
+	task := seedTemplateTask(t, store, nil, nil)
+	ctx := context.Background()
+
+	// Email trigger with a policy round-trips through the DB.
+	pol := &models.EmailTriggerPolicy{ApprovedSenders: []string{"corp.com"}, RequireDKIM: true, RequireSPF: true, MaxAttachments: 2, MaxAttachmentBytes: 4096}
+	if err := store.CreateTrigger(ctx, &models.TaskTrigger{ID: uuid.New(), TaskID: task.ID, Slug: "e1", Secret: "s", Kind: models.TriggerKindEmail, EmailPolicy: pol}); err != nil {
+		t.Fatalf("CreateTrigger email: %v", err)
+	}
+	got, err := store.GetTriggerBySlug(ctx, "e1")
+	if err != nil {
+		t.Fatalf("GetTriggerBySlug: %v", err)
+	}
+	if got.KindOrWebhook() != models.TriggerKindEmail {
+		t.Errorf("kind = %q, want email", got.Kind)
+	}
+	if got.EmailPolicy == nil || len(got.EmailPolicy.ApprovedSenders) != 1 || !got.EmailPolicy.RequireDKIM ||
+		!got.EmailPolicy.RequireSPF || got.EmailPolicy.MaxAttachments != 2 || got.EmailPolicy.MaxAttachmentBytes != 4096 {
+		t.Errorf("email policy lost on round trip: %+v", got.EmailPolicy)
+	}
+
+	// A webhook trigger (no kind set) defaults to webhook and has no policy.
+	if err := store.CreateTrigger(ctx, &models.TaskTrigger{ID: uuid.New(), TaskID: task.ID, Slug: "w1", Secret: "s"}); err != nil {
+		t.Fatalf("CreateTrigger webhook: %v", err)
+	}
+	wh, err := store.GetTriggerBySlug(ctx, "w1")
+	if err != nil {
+		t.Fatalf("GetTriggerBySlug webhook: %v", err)
+	}
+	if wh.KindOrWebhook() != models.TriggerKindWebhook || wh.EmailPolicy != nil {
+		t.Errorf("webhook trigger wrong: kind=%q policy=%+v", wh.Kind, wh.EmailPolicy)
+	}
+}
+
+func TestRecordTriggerEvent_Dedup(t *testing.T) {
+	store, _ := newTestStore(t)
+	task := seedTemplateTask(t, store, nil, nil)
+	ctx := context.Background()
+	trigID := uuid.New()
+	if err := store.CreateTrigger(ctx, &models.TaskTrigger{ID: trigID, TaskID: task.ID, Slug: "d1", Secret: "s", Kind: models.TriggerKindEmail, EmailPolicy: &models.EmailTriggerPolicy{}}); err != nil {
+		t.Fatalf("CreateTrigger: %v", err)
+	}
+
+	first, err := store.RecordTriggerEvent(ctx, &models.TriggerEvent{TriggerID: trigID, IdempotencyKey: "<m1>", Sender: "a@corp.com"})
+	if err != nil || !first {
+		t.Fatalf("first record: inserted=%v err=%v (want true,nil)", first, err)
+	}
+	// Same key again → NOT inserted (dedup).
+	dup, err := store.RecordTriggerEvent(ctx, &models.TriggerEvent{TriggerID: trigID, IdempotencyKey: "<m1>", Sender: "a@corp.com"})
+	if err != nil || dup {
+		t.Fatalf("duplicate record: inserted=%v err=%v (want false,nil)", dup, err)
+	}
+	// A different key → inserted.
+	other, err := store.RecordTriggerEvent(ctx, &models.TriggerEvent{TriggerID: trigID, IdempotencyKey: "<m2>", Sender: "a@corp.com"})
+	if err != nil || !other {
+		t.Fatalf("second key: inserted=%v err=%v (want true,nil)", other, err)
+	}
+}
+
+func TestTriggerEvent_RunLinkage(t *testing.T) {
+	store, _ := newTestStore(t)
+	task := seedTemplateTask(t, store, nil, nil)
+	ctx := context.Background()
+	trigID := uuid.New()
+	if err := store.CreateTrigger(ctx, &models.TaskTrigger{ID: trigID, TaskID: task.ID, Slug: "l1", Secret: "s", Kind: models.TriggerKindEmail, EmailPolicy: &models.EmailTriggerPolicy{}}); err != nil {
+		t.Fatalf("CreateTrigger: %v", err)
+	}
+	ev := &models.TriggerEvent{TriggerID: trigID, IdempotencyKey: "<link>", Sender: "a@corp.com", Subject: "hi", MessageID: "<link>"}
+	if _, err := store.RecordTriggerEvent(ctx, ev); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	runID := uuid.New()
+	if err := store.SetTriggerEventRunID(ctx, ev.ID, runID); err != nil {
+		t.Fatalf("SetTriggerEventRunID: %v", err)
+	}
+	got, err := store.GetTriggerEventByRunID(ctx, runID)
+	if err != nil {
+		t.Fatalf("GetTriggerEventByRunID: %v", err)
+	}
+	if got.RunID == nil || *got.RunID != runID || got.Sender != "a@corp.com" || got.MessageID != "<link>" {
+		t.Errorf("linked event wrong: %+v", got)
+	}
+}
+
+func TestSpawnEmailRun_ConnectorGating(t *testing.T) {
+	store, _ := newTestStore(t)
+	mcp := models.MCPSelection{{Server: "github"}}
+	cred := models.CredentialAllowlist{{Server: "github"}}
+	task := seedTemplateTask(t, store, mcp, cred)
+	trig := &models.TaskTrigger{TaskID: task.ID}
+	ctx := context.Background()
+
+	// Opt-out: NO connectors (neither MCP selection nor credential allowlist).
+	outID, err := store.SpawnEmailRun(ctx, trig, "prompt", false)
+	if err != nil {
+		t.Fatalf("SpawnEmailRun opt-out: %v", err)
+	}
+	out, _ := store.GetTask(outID)
+	if len(out.MCPSelection) != 0 || len(out.CredentialAllowlist) != 0 {
+		t.Errorf("opt-out run inherited connectors: mcp=%+v cred=%+v", out.MCPSelection, out.CredentialAllowlist)
+	}
+
+	// Opt-in: inherits BOTH.
+	inID, err := store.SpawnEmailRun(ctx, trig, "prompt", true)
+	if err != nil {
+		t.Fatalf("SpawnEmailRun opt-in: %v", err)
+	}
+	in, _ := store.GetTask(inID)
+	if len(in.MCPSelection) != 1 || len(in.CredentialAllowlist) != 1 {
+		t.Errorf("opt-in run should inherit both: mcp=%+v cred=%+v", in.MCPSelection, in.CredentialAllowlist)
+	}
+}
+
+func TestSpawnWebhookRun_PreservesConnectorBehavior(t *testing.T) {
+	store, _ := newTestStore(t)
+	mcp := models.MCPSelection{{Server: "github"}}
+	cred := models.CredentialAllowlist{{Server: "github"}}
+	task := seedTemplateTask(t, store, mcp, cred)
+	trig := &models.TaskTrigger{TaskID: task.ID}
+
+	runID, err := store.SpawnWebhookRun(context.Background(), trig, "prompt")
+	if err != nil {
+		t.Fatalf("SpawnWebhookRun: %v", err)
+	}
+	run, _ := store.GetTask(runID)
+	// #177 behavior preserved: inherits the MCP selection but NOT the credential
+	// allowlist (unchanged by #511).
+	if len(run.MCPSelection) != 1 {
+		t.Errorf("webhook run should inherit MCP selection, got %+v", run.MCPSelection)
+	}
+	if len(run.CredentialAllowlist) != 0 {
+		t.Errorf("webhook run should NOT inherit credential allowlist, got %+v", run.CredentialAllowlist)
+	}
+}

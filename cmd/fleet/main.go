@@ -623,6 +623,8 @@ func run() error {
 		// cheap-model seam, exactly like SuggestTitle). Gated on
 		// FLEET_ERROR_ANALYSIS_ENABLED; nil = off (the analyze path is a no-op).
 		ErrorAnalyzer: errorAnalyzerFor(cfg, mgr),
+		// Email reply-back (#511): nil unless SMTP is configured for sending.
+		EmailReplier: emailReplierFor(taskNotifier),
 	})
 	log.Printf("worker pool: scheduled cap=%d (shared box-wide limiter)", pool.Cap())
 
@@ -1174,6 +1176,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 	// admin API key, so external services (GitHub, Slack, CI) can fire tasks
 	// without admin credentials. Deliberately outside every auth group.
 	r.With(h.SchedRateLimitMiddleware).Post("/triggers/{slug}", h.HandleWebhookTrigger)
+	// Email triggers (#511): an email provider's inbound-parse webhook posts a
+	// normalized email to spawn a governed run. Same HMAC auth + per-slug rate
+	// limit as the webhook trigger; the email-kind security controls (approved
+	// senders, DKIM/SPF, attachments, dedup) run inside the handler.
+	r.With(h.SchedRateLimitMiddleware).Post("/triggers/email/{slug}", h.HandleEmailTrigger)
 	r.Post("/auth/login", h.Login)
 	r.Get("/auth/elcano-login", h.ElcanoLogin)
 	r.Post("/auth/logout", h.ElcanoLogout)
@@ -1547,6 +1554,17 @@ func errorAnalyzerFor(cfg *config.Config, mgr *agent.Manager) runner.ErrorAnalyz
 		return nil
 	}
 	return mgr
+}
+
+// emailReplierFor wires email reply-back (#511) only when SMTP is configured for
+// sending, so a deployment without SMTP does no per-run reply lookups. Returns a
+// nil interface (reply-back off) otherwise.
+func emailReplierFor(n *notify.Notifier) runner.EmailReplier {
+	if !n.ReplyEnabled() {
+		return nil
+	}
+	log.Printf("email trigger reply-back: enabled")
+	return n
 }
 
 func taskSchedulerProvider(schedStorage *storage.Storage) func(context.Context, httpapi.TaskScheduleRequest) (*httpapi.TaskScheduleResult, error) {

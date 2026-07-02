@@ -64,6 +64,14 @@ func (c Config) emailEnabled() bool {
 // webhookEnabled reports whether a webhook URL is configured.
 func (c Config) webhookEnabled() bool { return strings.TrimSpace(c.WebhookURL) != "" }
 
+// replyEnabled reports whether an email REPLY can be sent (#511 reply-back). A
+// reply goes to the inbound sender rather than the configured EmailTo list, so —
+// unlike emailEnabled — it needs only an SMTP host and a From address, not a
+// recipient list. Inert (no-op) when SMTP is not configured for sending.
+func (c Config) replyEnabled() bool {
+	return strings.TrimSpace(c.SMTPHost) != "" && strings.TrimSpace(c.SMTPFrom) != ""
+}
+
 // applyDefaults fills the timing/retry knobs in place. Called by New.
 func (c *Config) applyDefaults() {
 	if c.Timeout <= 0 {

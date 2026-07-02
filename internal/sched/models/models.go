@@ -659,17 +659,94 @@ func (t TriggerType) IsValid() bool {
 	}
 }
 
+// TriggerKind distinguishes what SHAPE of inbound event a trigger row accepts
+// (#511). Both kinds share the task_triggers row, the slug+HMAC credential, and
+// the one spawn path — kind only selects the endpoint + the payload contract.
+type TriggerKind string
+
+const (
+	// TriggerKindWebhook is the #177 generic JSON webhook (POST /triggers/{slug}):
+	// any signed JSON payload spawns a run. The default for existing rows.
+	TriggerKindWebhook TriggerKind = "webhook"
+	// TriggerKindEmail is an email-ingress trigger (POST /triggers/email/{slug},
+	// #511): a provider's inbound-parse webhook posts a normalized email payload,
+	// gated by the row's EmailPolicy (approved senders, DKIM/SPF, attachments).
+	TriggerKindEmail TriggerKind = "email"
+)
+
+// IsValid reports whether k is a recognized trigger kind.
+func (k TriggerKind) IsValid() bool {
+	switch k {
+	case TriggerKindWebhook, TriggerKindEmail:
+		return true
+	default:
+		return false
+	}
+}
+
+// EmailTriggerPolicy holds the email-kind security controls (#511), persisted as
+// the task_triggers.email_policy JSONB. A nil policy on an email trigger is
+// treated as the most restrictive posture (no approved senders ⇒ reject all,
+// DKIM required, no attachments) so a misconfigured trigger fails closed.
+type EmailTriggerPolicy struct {
+	// ApprovedSenders is the allowlist of permitted From values. Each entry is
+	// either a full address ("alerts@corp.com") or a bare domain ("corp.com",
+	// matching any address @corp.com). An inbound From matching NONE is rejected.
+	// An empty list rejects every sender (an email trigger MUST name at least one).
+	ApprovedSenders []string `json:"approved_senders,omitempty"`
+	// RequireDKIM rejects an inbound email whose provider-reported DKIM result is
+	// not "pass". Default true (set explicitly at create time).
+	RequireDKIM bool `json:"require_dkim"`
+	// RequireSPF rejects an inbound email whose provider-reported SPF result is
+	// not "pass". Default false — SPF commonly breaks on legitimate forwarding, so
+	// it is opt-in; DKIM is the stronger default gate.
+	RequireSPF bool `json:"require_spf"`
+	// MaxAttachments caps the number of attachments; an email exceeding it is
+	// rejected. 0 (default) means NO attachments are permitted.
+	MaxAttachments int `json:"max_attachments"`
+	// MaxAttachmentBytes caps the size of any single attachment; an email with a
+	// larger attachment is rejected. 0 (default) disallows sized attachments (any
+	// attachment with size>0 is rejected unless a positive cap is set).
+	MaxAttachmentBytes int64 `json:"max_attachment_bytes"`
+}
+
 // TaskTrigger binds a URL-safe slug + HMAC-SHA256 secret to a template task so
 // external systems can spawn runs via POST /triggers/{slug} (#177). The secret
-// is the per-trigger webhook credential — never the admin API key.
+// is the per-trigger webhook credential — never the admin API key. Kind selects
+// webhook vs email ingress (#511); EmailPolicy is set only for email kind.
 type TaskTrigger struct {
-	ID             uuid.UUID `json:"id"`
-	TaskID         uuid.UUID `json:"task_id"`
-	Slug           string    `json:"slug"`
-	Secret         string    `json:"secret"`
-	PromptTemplate string    `json:"prompt_template"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             uuid.UUID           `json:"id"`
+	TaskID         uuid.UUID           `json:"task_id"`
+	Slug           string              `json:"slug"`
+	Secret         string              `json:"secret"`
+	PromptTemplate string              `json:"prompt_template"`
+	Kind           TriggerKind         `json:"kind"`
+	EmailPolicy    *EmailTriggerPolicy `json:"email_policy,omitempty"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
+}
+
+// KindOrWebhook returns the trigger's kind, defaulting a blank/legacy value to
+// webhook (rows created before #511 have no kind on the wire).
+func (t *TaskTrigger) KindOrWebhook() TriggerKind {
+	if t.Kind == "" {
+		return TriggerKindWebhook
+	}
+	return t.Kind
+}
+
+// TriggerEvent is one ACCEPTED inbound event: the idempotency ledger row
+// (UNIQUE(trigger_id, idempotency_key)) that also ties the spawned run back to
+// its originating event and captures the reply target for reply-back (#511).
+type TriggerEvent struct {
+	ID             uuid.UUID  `json:"id"`
+	TriggerID      uuid.UUID  `json:"trigger_id"`
+	IdempotencyKey string     `json:"idempotency_key"`
+	Sender         string     `json:"sender"`
+	Subject        string     `json:"subject"`
+	MessageID      string     `json:"message_id"`
+	RunID          *uuid.UUID `json:"run_id,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 // Permission represents available permissions for API keys.
@@ -749,6 +826,13 @@ type TaskCreate struct {
 	// CarryContext (#504): recurring runs carry a bounded handoff from the prior
 	// run. Default false = fresh each run.
 	CarryContext bool `json:"carry_context,omitempty"`
+	// AllowEventTriggers (#511) is the security opt-in for event ingress: a run
+	// spawned by an EMAIL (or other event) trigger inherits this template task's
+	// write-capable MCP connectors ONLY when this is true. Default false ⇒ an
+	// event-spawned run gets native tools only, so an untrusted inbound event can
+	// never auto-escalate through a connector. (The #177 webhook path predates
+	// this gate and always inherits — unchanged.)
+	AllowEventTriggers bool `json:"allow_event_triggers,omitempty"`
 	// AllowDelegation opts THIS task into agent delegation (#264): the spawn_subagent
 	// native tool is registered so the run can fan out scoped subtasks to governed
 	// child runs (sliced budget, depth/fan-out caps, parent_task_id linkage). The
@@ -885,6 +969,10 @@ type Task struct {
 	// from the prior run (its final answer) into each run (#504). Default false
 	// = start fresh each run.
 	CarryContext bool `json:"carry_context,omitempty"`
+	// AllowEventTriggers (#511) opts an event-triggered run into inheriting this
+	// task's write-capable connectors. Default false ⇒ native tools only; see
+	// TaskCreate.AllowEventTriggers.
+	AllowEventTriggers bool `json:"allow_event_triggers,omitempty"`
 	// AllowDelegation opts this task into agent delegation (#264). Default false
 	// registers no spawn_subagent tool; see TaskCreate.AllowDelegation.
 	AllowDelegation bool `json:"allow_delegation,omitempty"`
@@ -1062,6 +1150,7 @@ func NewTask(tc TaskCreate) *Task {
 		InstructionSelfImprove:     tc.InstructionSelfImprove,
 		AllowNetwork:               tc.AllowNetwork,
 		CarryContext:               tc.CarryContext,
+		AllowEventTriggers:         tc.AllowEventTriggers,
 		AllowDelegation:            tc.AllowDelegation,
 		Persona:                    tc.Persona,
 		Description:                tc.Description,
@@ -1180,6 +1269,7 @@ func TaskToCreate(t *Task) TaskCreate {
 		Priority:               t.Priority,
 		InstructionSelfImprove: t.InstructionSelfImprove,
 		AllowNetwork:           t.AllowNetwork,
+		AllowEventTriggers:     t.AllowEventTriggers,
 		AllowDelegation:        t.AllowDelegation,
 		ScheduledFor:           t.ScheduledFor,
 		Recurrence:             t.Recurrence,
@@ -1231,6 +1321,7 @@ type TaskExportRecord struct {
 	InstructionSelfImprove     bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
 	AllowNetwork               bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
 	CarryContext               bool                `json:"carry_context,omitempty"              yaml:"carry_context,omitempty"`
+	AllowEventTriggers         bool                `json:"allow_event_triggers,omitempty"       yaml:"allow_event_triggers,omitempty"`
 	AllowDelegation            bool                `json:"allow_delegation,omitempty"           yaml:"allow_delegation,omitempty"`
 	Persona                    string              `json:"persona,omitempty"                    yaml:"persona,omitempty"`
 	Description                string              `json:"description,omitempty"                yaml:"description,omitempty"`
@@ -1341,6 +1432,7 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		InstructionSelfImprove:     rec.InstructionSelfImprove,
 		AllowNetwork:               rec.AllowNetwork,
 		CarryContext:               rec.CarryContext,
+		AllowEventTriggers:         rec.AllowEventTriggers,
 		AllowDelegation:            rec.AllowDelegation,
 		Persona:                    rec.Persona,
 		Description:                rec.Description,
@@ -1393,6 +1485,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		InstructionSelfImprove:     t.InstructionSelfImprove,
 		AllowNetwork:               t.AllowNetwork,
 		CarryContext:               t.CarryContext,
+		AllowEventTriggers:         t.AllowEventTriggers,
 		AllowDelegation:            t.AllowDelegation,
 		Persona:                    t.Persona,
 		Description:                t.Description,

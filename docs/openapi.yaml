@@ -1933,6 +1933,58 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
 
+  /triggers/email/{slug}:
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Fire an email-ingress trigger (#511).
+      description: >-
+        An email provider's inbound-parse webhook posts a normalized email
+        payload to spawn a governed run cloned from the trigger's template task.
+        Authenticated by the per-trigger HMAC-SHA256 secret over the raw body
+        (X-Hub-Signature-256 or X-Fleet-Signature-256) — NOT the admin API key.
+        An unknown slug, a webhook-kind slug, or a bad signature all return an
+        identical timing-equalized 401 (no slug/kind enumeration). After auth the
+        email-kind policy is enforced (approved senders → 403; required DKIM/SPF →
+        403; attachment count/size caps → 413) and the Message-ID is deduped (a
+        duplicate delivery returns 200 with status=duplicate and spawns no run).
+        The spawned run inherits the template's write-capable MCP connectors ONLY
+        when the template task set allow_event_triggers=true; otherwise it runs
+        with native tools only. The run is recorded against the inbound event, and
+        on success a reply is sent to the sender when SMTP is configured.
+      security: []
+      requestBody:
+        description: >-
+          A normalized inbound email: { message_id, from, to, subject, text,
+          html, spf, dkim, attachments:[{filename,size,content_type}] }.
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "202":
+          description: Accepted — a run was enqueued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: { type: string, format: uuid }
+        "200":
+          description: Duplicate delivery — already processed, no new run.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: duplicate }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+
   /auth/login:
     post:
       summary: Username/password login → user token.

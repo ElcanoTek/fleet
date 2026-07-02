@@ -48,6 +48,19 @@ func generateTriggerSecret() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+// stringSliceFlag collects a repeatable string flag (e.g. --approved-sender a
+// --approved-sender b), trimming and dropping empties.
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string { return strings.Join(*s, ",") }
+
+func (s *stringSliceFlag) Set(v string) error {
+	if t := strings.TrimSpace(v); t != "" {
+		*s = append(*s, t)
+	}
+	return nil
+}
+
 func schedTriggerCreate(argv []string) int {
 	fs := flag.NewFlagSet("sched trigger create", flag.ContinueOnError)
 	dbURL := fs.String("database-url", "", "sched Postgres DSN")
@@ -55,8 +68,20 @@ func schedTriggerCreate(argv []string) int {
 	slug := fs.String("slug", "", "URL-safe slug, [a-z0-9][a-z0-9_-]{0,127} (required)")
 	secret := fs.String("secret", "", "HMAC-SHA256 secret (hex/base64); generated if omitted")
 	templateFile := fs.String("template", "", "path to a Go text/template prompt file (optional)")
+	kind := fs.String("kind", "webhook", "trigger kind: webhook|email (#511)")
+	var approvedSenders stringSliceFlag
+	fs.Var(&approvedSenders, "approved-sender", "email kind: allowed sender addr or @domain (repeatable; ≥1 required for email)")
+	requireDKIM := fs.Bool("require-dkim", true, "email kind: reject unless provider-reported DKIM=pass")
+	requireSPF := fs.Bool("require-spf", false, "email kind: reject unless provider-reported SPF=pass")
+	maxAttachments := fs.Int("max-attachments", 0, "email kind: max attachments (0 = none allowed)")
+	maxAttachmentBytes := fs.Int64("max-attachment-bytes", 0, "email kind: max bytes per attachment (0 = no sized attachments)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
+	}
+
+	triggerKind := models.TriggerKind(strings.TrimSpace(*kind))
+	if !triggerKind.IsValid() {
+		return errf(1, "--kind must be webhook or email")
 	}
 
 	tid, err := uuid.Parse(strings.TrimSpace(*taskID))
@@ -65,6 +90,20 @@ func schedTriggerCreate(argv []string) int {
 	}
 	if !slugPattern.MatchString(*slug) {
 		return errf(1, "--slug must match [a-z0-9][a-z0-9_-]{0,127}")
+	}
+
+	var emailPolicy *models.EmailTriggerPolicy
+	if triggerKind == models.TriggerKindEmail {
+		if len(approvedSenders) == 0 {
+			return errf(1, "email trigger requires at least one --approved-sender")
+		}
+		emailPolicy = &models.EmailTriggerPolicy{
+			ApprovedSenders:    approvedSenders,
+			RequireDKIM:        *requireDKIM,
+			RequireSPF:         *requireSPF,
+			MaxAttachments:     *maxAttachments,
+			MaxAttachmentBytes: *maxAttachmentBytes,
+		}
 	}
 
 	promptTemplate := ""
@@ -102,8 +141,12 @@ func schedTriggerCreate(argv []string) int {
 	}
 	if task.TriggerType != models.TriggerTypeWebhook {
 		fmt.Fprintf(os.Stderr, "note: task %s is trigger_type=%q, not %q — it may also run on its own schedule. "+
-			"Create the task with trigger_type=webhook to make it a pure webhook template.\n",
+			"Create the task with trigger_type=webhook to make it a pure trigger template.\n",
 			tid, task.TriggerType, models.TriggerTypeWebhook)
+	}
+	if triggerKind == models.TriggerKindEmail && !task.AllowEventTriggers {
+		fmt.Fprintf(os.Stderr, "note: task %s has allow_event_triggers=false — email-spawned runs will use native tools "+
+			"only (no MCP connectors). Set allow_event_triggers=true on the task to let event runs use its connectors.\n", tid)
 	}
 
 	trig := &models.TaskTrigger{
@@ -112,13 +155,19 @@ func schedTriggerCreate(argv []string) int {
 		Slug:           *slug,
 		Secret:         sec,
 		PromptTemplate: promptTemplate,
+		Kind:           triggerKind,
+		EmailPolicy:    emailPolicy,
 	}
 	if err := st.CreateTrigger(ctx, trig); err != nil {
 		return errf(5, "create trigger: %v", err)
 	}
 
-	fmt.Printf("created trigger %s (slug=%s task=%s)\n", trig.ID, trig.Slug, trig.TaskID)
-	fmt.Printf("POST /triggers/%s\n", trig.Slug)
+	fmt.Printf("created trigger %s (slug=%s task=%s kind=%s)\n", trig.ID, trig.Slug, trig.TaskID, trig.KindOrWebhook())
+	if triggerKind == models.TriggerKindEmail {
+		fmt.Printf("POST /triggers/email/%s\n", trig.Slug)
+	} else {
+		fmt.Printf("POST /triggers/%s\n", trig.Slug)
+	}
 	if generated {
 		fmt.Printf("secret (shown once): %s\n", sec)
 	}
@@ -158,7 +207,7 @@ func schedTriggerList(argv []string) int {
 	}
 	// Secrets are deliberately NOT printed.
 	for _, t := range triggers {
-		fmt.Printf("%s\t%s\t%s\n", t.ID, t.Slug, t.TaskID)
+		fmt.Printf("%s\t%s\t%s\t%s\n", t.ID, t.KindOrWebhook(), t.Slug, t.TaskID)
 	}
 	return 0
 }

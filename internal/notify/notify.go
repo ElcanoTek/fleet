@@ -182,6 +182,12 @@ func New(cfg Config) *Notifier {
 // an SMTP host + recipients nor a webhook URL, nothing fires.
 func (n *Notifier) Enabled() bool { return n.cfg.Enabled() }
 
+// ReplyEnabled reports whether email reply-back (#511) can send: an SMTP host and
+// a From address are configured (a reply targets the inbound sender, so it needs
+// no EmailTo list). The runner wires the EmailReplier only when this is true so a
+// deployment without SMTP does no per-run reply lookups.
+func (n *Notifier) ReplyEnabled() bool { return n != nil && n.cfg.replyEnabled() }
+
 // Notify fans the event out to every configured channel that opted in to this
 // status. Channels are independent: a failure on one is logged and does not
 // prevent the other from being attempted. The error (a join of any channel
@@ -273,6 +279,54 @@ func (n *Notifier) sendEmail(ctx context.Context, ev Event) error {
 		if err != nil {
 			// smtp errors describe the dial/auth/server response, not the password.
 			return fmt.Errorf("smtp send to %s: %w", addr, err)
+		}
+		return nil
+	}
+}
+
+// ReplyToEmailEvent sends a reply to an inbound-email trigger's original sender
+// (#511 reply-back), threaded to the original message via In-Reply-To. It reuses
+// the SMTP sender's timeout+retry mechanics. A no-op (returns nil) when SMTP is
+// not configured for sending or `to` is empty, so the runner can wire it
+// unconditionally. Fired off-thread by the runner; its error is logged there and
+// NEVER affects task status. The SMTP password is never placed in the message,
+// the error, or any log line.
+func (n *Notifier) ReplyToEmailEvent(ctx context.Context, to, subject, body, inReplyTo string) error {
+	if n == nil || !n.cfg.replyEnabled() {
+		return nil
+	}
+	to = strings.TrimSpace(to)
+	if to == "" {
+		return nil
+	}
+	return n.retry(ctx, func(ctx context.Context) error {
+		return n.sendReplyEmail(ctx, to, subject, body, inReplyTo)
+	})
+}
+
+// sendReplyEmail sends one reply over SMTP to the single inbound sender. Mirrors
+// sendEmail's context-honoring goroutine pattern, but addresses the reply to the
+// event's sender (not the configured EmailTo list).
+func (n *Notifier) sendReplyEmail(ctx context.Context, to, subject, body, inReplyTo string) error {
+	c := n.cfg
+	addr := net.JoinHostPort(c.SMTPHost, c.SMTPPort)
+	msg := renderReplyEmail(c.SMTPFrom, to, subject, body, inReplyTo)
+
+	var auth smtp.Auth
+	if c.SMTPUsername != "" {
+		auth = smtp.PlainAuth("", c.SMTPUsername, c.SMTPPassword, c.SMTPHost)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- smtp.SendMail(addr, auth, c.SMTPFrom, []string{to}, msg)
+	}()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("smtp reply to %s: %w", addr, ctx.Err())
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("smtp reply to %s: %w", addr, err)
 		}
 		return nil
 	}
