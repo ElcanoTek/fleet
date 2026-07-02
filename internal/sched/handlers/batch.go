@@ -32,6 +32,11 @@ type taskCreator struct {
 	isAdmin    bool
 	creatorID  *uuid.UUID
 	creatorKey *string
+	// creatorUsername is the resolved user's username (an email on a standard
+	// deployment) — the budget gate's user-scope principal id (#601 part 2),
+	// matching the usage report's group_by=user bucket key. Empty for admin-key
+	// and scoped-key submissions.
+	creatorUsername string
 	// creatorKeyMaxPriority is the authorizing scoped key's task-urgency ceiling
 	// (#230), copied by value. nil = admin/user submission or an uncapped key.
 	creatorKeyMaxPriority *int
@@ -124,6 +129,7 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 		return taskCreator{}, false
 	}
 	creator.creatorID = &user.ID
+	creator.creatorUsername = user.Username
 	return creator, true
 }
 
@@ -172,6 +178,15 @@ func (h *Handlers) CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusTooManyRequests, err.Error())
 			return
 		}
+	}
+
+	// Per-principal rolling budget (#601 part 2): the SAME budgetCapError gate
+	// the single-task and chat schedule_task paths run, checked up front for
+	// the whole batch — the budget bounds the principal, not any one task, so
+	// an exhausted window refuses the request before any row is created.
+	if err := h.budgetCapError(r.Context(), creator); err != nil {
+		writeBudgetRefusal(w, err)
+		return
 	}
 
 	// Lineage is server-authoritative (#277), identical to the single-task path:
