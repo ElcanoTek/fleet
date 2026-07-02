@@ -125,6 +125,12 @@ type chatStore interface {
 	SupersedePendingApprovals(ctx context.Context, convID, toolName string) (int64, error)
 	CountUserMessagesAfterTimestamp(ctx context.Context, convID string, ts int64) (int64, error)
 
+	// Browser Web Push subscriptions (#292): the POST /push/subscribe upsert
+	// and the owner-scoped DELETE /push/unsubscribe. (The send path reads
+	// subscriptions through internal/webpush's own store seam, not this one.)
+	UpsertPushSubscription(ctx context.Context, userEmail, endpoint, keysAuth, keysP256dh string) error
+	DeleteUserPushSubscription(ctx context.Context, userEmail, endpoint string) error
+
 	// Health summary (#301): DB liveness + pool snapshot + chat-side LLM spend.
 	Ping(ctx context.Context) error
 	PoolStats() sql.DBStats

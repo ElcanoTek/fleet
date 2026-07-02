@@ -15,6 +15,18 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Browser push notifications via the Web Push API (#292): opt in per browser
+  under Settings → Connections and get a low-detail alert — task complete or
+  failed (`FLEET_PUSH_ON_TASK_COMPLETE`), approval needed
+  (`FLEET_PUSH_ON_APPROVAL_REQUEST`), or a paused task waiting for an answer —
+  even with the fleet tab backgrounded. Web Push rides the existing
+  `internal/notify` fan-out as a per-user backend (a new `Event.Audience`
+  routes to the task owner's subscriptions). Setup: `fleet generate-vapid-keys`
+  → set `FLEET_VAPID_PUBLIC_KEY` / `FLEET_VAPID_PRIVATE_KEY` /
+  `FLEET_VAPID_CONTACT` (private key stays host-side); unconfigured
+  deployments are byte-for-byte unchanged (`/push/*` answers 501). Payloads
+  carry only a title, state, and deep link — never message content, tool args,
+  or secrets. See `docs/PUSH-NOTIFICATIONS.md`.
 - Reusable sandbox-image publish workflow (#195):
   `.github/workflows/publish-sandbox-image.yml` (`workflow_call`) lets a client
   config repo build its bundle's sandbox image in CI with the canonical

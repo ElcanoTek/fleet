@@ -111,3 +111,31 @@ func TestNotifyTerminal_Fires(t *testing.T) {
 	pNil := &Pool{}
 	pNil.notifyTerminal(task, notify.StatusSuccess, nil, time.Second) // must not panic
 }
+
+// TestNotifyTerminal_AudienceEmptyWithoutOwner: an anonymous task (nil
+// CreatedBy) — and a store-less fixture — resolves to an empty Audience, so
+// the per-user push channel has nothing to route to while the event still
+// fires for the deployment-wide channels (#292).
+func TestNotifyTerminal_AudienceEmptyWithoutOwner(t *testing.T) {
+	fake := &fakeNotifier{}
+	p := &Pool{notifier: fake}
+	task := &models.Task{ID: uuid.New(), Prompt: "p"} // CreatedBy nil
+
+	p.notifyTerminal(task, notify.StatusSuccess, nil, time.Second)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(fake.drain()) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("notifier was not fired within deadline")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := fake.drain()[0].Audience; got != "" {
+		t.Errorf("Audience = %q, want empty for an ownerless task", got)
+	}
+
+	// ownerEmail is nil-safe on both the CreatedBy and store axes.
+	owner := uuid.New()
+	if got := p.ownerEmail(context.Background(), &models.Task{ID: uuid.New(), CreatedBy: &owner}); got != "" {
+		t.Errorf("ownerEmail without a store = %q, want empty", got)
+	}
+}
