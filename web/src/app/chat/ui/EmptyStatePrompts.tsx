@@ -36,10 +36,11 @@ export function EmptyStatePrompts({
   if (pills.length === 0) return null;
 
   // One flat grid — no section labels. With four pills this lands as a tidy
-  // 2×2 on desktop (single column on mobile) instead of two uneven groups
-  // where the lone Optimization card dangled under its own header.
+  // 2×2 on desktop (single column at ≤900px, matching the design's
+  // .suggestions breakpoint) instead of two uneven groups where the lone
+  // Optimization card dangled under its own header.
   return (
-    <div className="grid w-full max-w-[44rem] gap-2.5 sm:grid-cols-2">
+    <div className="grid w-full max-w-[44rem] gap-2.5 min-[901px]:grid-cols-2">
       {pills.map((pill) => (
         <PillCard key={pill.id} pill={pill} onPick={onPick} />
       ))}

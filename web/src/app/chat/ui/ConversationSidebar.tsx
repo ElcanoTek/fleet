@@ -16,9 +16,10 @@
 // kebab menu, and the live conversation-mgmt e2e opens the kebab to reach them.
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import type { ClientBranding } from "@/app/lib/useClientConfig";
-import { NavRail } from "@/app/shared/ui/NavRail";
+import { NavRail, type RailCollapse } from "@/app/shared/ui/NavRail";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import { labelChipStyle } from "@/app/shared/lib/labelColors";
 import { Icon } from "./Icon";
@@ -59,6 +60,49 @@ function ShareGlyph({ className, off }: { className?: string; off?: boolean }) {
   );
 }
 
+// ── Sealed-chat button + explainer tooltip ───────────────────────────────────
+// The icon-only "new sealed chat" button next to New chat explains what a
+// sealed chat is on hover AND keyboard focus, using the design's .conv-tooltip
+// surface. The tooltip portals to <body> because the rail's
+// transform/backdrop-filter would otherwise capture its fixed positioning.
+const SEALED_TOOLTIP_TEXT =
+  "Sealed chat — locked down and private. Your data and an approved model stay inside this sandbox; nothing leaves.";
+
+function SealedNewChatButton({ onClick }: { onClick: () => void }) {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const show = (e: React.SyntheticEvent<HTMLElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    // Below the button, arrow pointing back up at it (the design's conv-info
+    // tooltip placement: bottom + 7, offset so the arrow lands on the anchor).
+    setPos({ top: Math.round(r.bottom + 7), left: Math.round(r.left + r.width / 2 - 17) });
+  };
+  const hide = () => setPos(null);
+  return (
+    <button
+      type="button"
+      className="inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+      aria-label="New sealed chat — sandboxed, vetted model, nothing leaves"
+      onClick={onClick}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
+    >
+      {/* Inherits the button's text-primary (the design's .rail-lock), not
+          the accent the row indicators use. */}
+      <Icon name="lock" className="size-4" />
+      {pos && typeof document !== "undefined"
+        ? createPortal(
+            <span role="tooltip" className="conv-tooltip" style={{ top: pos.top, left: pos.left }}>
+              {SEALED_TOOLTIP_TEXT}
+            </span>,
+            document.body,
+          )
+        : null}
+    </button>
+  );
+}
+
 // ── Label chips ────────────────────────────────────────────────────────────
 function LabelChip({
   name,
@@ -76,7 +120,7 @@ function LabelChip({
         <button
           type="button"
           aria-label={`Remove ${name}`}
-          className="ml-0.5 inline-flex size-3.5 items-center justify-center rounded-full text-current opacity-70 transition hover:bg-white/20 hover:opacity-100"
+          className="hit-area ml-0.5 inline-flex size-3.5 items-center justify-center rounded-full text-current opacity-70 transition hover:bg-white/20 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           onClick={(e) => {
             e.stopPropagation();
             onRemove?.();
@@ -234,6 +278,7 @@ function ConversationKebab({
   onCopyLink,
   onUnshare,
   isShared,
+  onSelect,
   onArchive,
   onDelete,
 }: {
@@ -250,6 +295,7 @@ function ConversationKebab({
   onCopyLink: () => void;
   onUnshare: () => void;
   isShared: boolean;
+  onSelect: () => void;
   onArchive: () => void;
   onDelete: () => void;
 }) {
@@ -308,7 +354,8 @@ function ConversationKebab({
         className={[
           // Fixed, centered, padded square (~1.8rem) per the handoff .conv-kebab —
           // a rounded hover highlight around the centered icon, not hugging it.
-          "pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          // hit-area extends the clickable box to ~2rem without growing the fill.
+          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
         ].join(" ")}
         onClick={(e) => {
@@ -419,6 +466,15 @@ function ConversationKebab({
             Share
           </MenuItem>
         )}
+        <MenuItem
+          icon={<Icon name="check-square" className="size-4" />}
+          onClick={() => {
+            onSelect();
+            close();
+          }}
+        >
+          Select…
+        </MenuItem>
         <MenuSeparator />
         <MenuItem
           icon={
@@ -495,29 +551,13 @@ function ConvRow({
     <div
       className={[
         "group relative rounded-md transition",
-        active ? "bg-[var(--rail-active)]" : "hover:bg-[var(--rail-hover)]",
-        checked ? "ring-1 ring-inset ring-[var(--color-accent)]/50" : "",
+        selecting && checked
+          ? "bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)]"
+          : active
+            ? "bg-[var(--rail-active)]"
+            : "hover:bg-[var(--rail-hover)]",
       ].join(" ")}
     >
-      <button
-        type="button"
-        aria-label={checked ? `Deselect ${conversation.title}` : `Select ${conversation.title}`}
-        aria-pressed={checked}
-        className={[
-          "absolute left-0.5 top-1/2 z-10 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded border text-[0.75rem] transition sm:size-4",
-          checked
-            ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white opacity-100"
-            : "border-[var(--color-border-strong)] text-transparent opacity-0 hover:border-[var(--color-accent)] group-hover:opacity-100 group-focus-within:opacity-100",
-          selecting ? "opacity-100" : "",
-        ].join(" ")}
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleSelect();
-        }}
-      >
-        {checked ? "✓" : ""}
-      </button>
-
       {editing ? (
         <input
           // Uncontrolled: remounts each time editing starts (it only renders
@@ -525,7 +565,7 @@ function ConvRow({
           // sync effect. autoFocus + select-on-focus mirror the prior behavior.
           autoFocus
           aria-label={`Rename ${conversation.title}`}
-          className="mx-7 my-1 w-[calc(100%-3.5rem)] rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.8125rem] text-[var(--color-text-primary)] outline-none"
+          className="mx-[0.4rem] my-[0.32rem] w-[calc(100%-0.8rem)] rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.8125rem] text-[var(--color-text-primary)] outline-none"
           defaultValue={conversation.title}
           onFocus={(e) => e.currentTarget.select()}
           onBlur={(e) => onCommitRename(e.currentTarget.value)}
@@ -542,16 +582,34 @@ function ConvRow({
       ) : (
         <button
           type="button"
+          aria-pressed={selecting ? checked : undefined}
           className={[
-            "block w-full min-w-0 rounded-md py-1.5 pl-7 pr-10 text-left text-[0.8125rem] transition",
-            active
+            "block w-full min-w-0 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.8125rem] transition",
+            selecting && checked
               ? "text-[var(--color-text-primary)]"
-              : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
+              : active
+                ? "text-[var(--color-text-primary)]"
+                : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
           ].join(" ")}
-          onClick={onOpen}
+          onClick={selecting ? onToggleSelect : onOpen}
           title={conversation.title}
         >
           <span className="flex min-w-0 items-center gap-1.5">
+            {/* Leading checkbox — select mode only (the design's .conv-check:
+                a 1rem square that fills primary with a check when on). */}
+            {selecting ? (
+              <span
+                aria-hidden="true"
+                className={[
+                  "inline-flex size-4 shrink-0 items-center justify-center rounded-[0.3rem] border-[1.5px] transition",
+                  checked
+                    ? "border-[var(--color-primary)] bg-[var(--color-primary)]"
+                    : "border-[var(--color-border-strong)]",
+                ].join(" ")}
+              >
+                {checked ? <Icon name="check" className="size-[0.7rem] text-white" /> : null}
+              </span>
+            ) : null}
             {streaming ? (
               <span
                 aria-label="Working"
@@ -559,7 +617,9 @@ function ConvRow({
                 className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
               />
             ) : null}
-            {conversation.lockdown ? <Icon name="lock" className="size-3 shrink-0 text-[var(--color-accent)]" /> : null}
+            {conversation.lockdown ? (
+              <Icon name="lock" className="size-3 shrink-0 text-[var(--color-accent)]" />
+            ) : null}
             {copied ? (
               <span aria-label="Link copied" title="Link copied!">
                 <Icon name="check" className="size-3 shrink-0 text-[var(--color-accent)]" />
@@ -571,7 +631,9 @@ function ConvRow({
             ) : null}
             <span className="block truncate">{conversation.title}</span>
           </span>
-          {labels.length > 0 ? (
+          {/* Label chips hide in select mode (the design's .conv-row.selecting
+              .conv-meta) so rows read as a compact pick list. */}
+          {labels.length > 0 && !selecting ? (
             <span className="mt-1 flex flex-wrap items-center gap-1 pl-0">
               {shown.map((l) => (
                 <LabelChip key={l} name={l} />
@@ -586,12 +648,16 @@ function ConvRow({
         </button>
       )}
 
-      {!editing ? (
+      {!editing && !selecting ? (
         <div className="absolute inset-y-0 right-1 flex items-center">{kebab}</div>
       ) : null}
     </div>
   );
 }
+
+// ── Bulk bar action button (the design's .bulk-btn) ──────────────────────────
+const BULK_BTN_CLASS =
+  "relative inline-flex size-[1.9rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition enabled:hover:bg-[var(--rail-hover)] enabled:hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40";
 
 // ── Collapsible section header (Folders / Labels) ────────────────────────────
 function SectionToggle({
@@ -623,6 +689,7 @@ function SectionToggle({
 export function ConversationSidebar({
   sidebarOpen,
   setSidebarOpen,
+  collapse,
   branding,
   serverConfig,
   userEmail,
@@ -657,18 +724,22 @@ export function ConversationSidebar({
   setShowArchived,
   updateAvailable,
   setConfirmBulkDelete,
+  selectMode,
   selectedIds,
   onToggleSelection,
-  onSelectAllVisible,
-  onClearSelection,
+  onEnterSelectMode,
+  onExitSelectMode,
   onBulkDelete,
   onBulkPin,
-  onBulkUnpin,
   onBulkMoveFolder,
   onBulkAddLabel,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
+  // Shared rail collapse state (owned by ChatExperience via useRailCollapse).
+  // ≥sm the wide-only content below hides when collapsed; the <sm drawer
+  // always shows everything.
+  collapse: RailCollapse;
   branding: ClientBranding;
   serverConfig: ServerConfig;
   userEmail: string;
@@ -704,13 +775,16 @@ export function ConversationSidebar({
   setShowArchived: Dispatch<SetStateAction<boolean>>;
   updateAvailable: boolean;
   setConfirmBulkDelete: Dispatch<SetStateAction<boolean>>;
+  // Select mode (#279, redesigned): entered via a row kebab's "Select…" item —
+  // that is the only way checkboxes appear. Bulk actions live in the compact
+  // icon bar; Escape/Cancel exit.
+  selectMode: boolean;
   selectedIds: Set<string>;
   onToggleSelection: (id: string) => void;
-  onSelectAllVisible: () => void;
-  onClearSelection: () => void;
+  onEnterSelectMode: (id: string) => void;
+  onExitSelectMode: () => void;
   onBulkDelete: () => void;
   onBulkPin: () => void;
-  onBulkUnpin: () => void;
   onBulkMoveFolder: (folder: string) => void;
   onBulkAddLabel: (label: string) => void;
 }) {
@@ -745,8 +819,9 @@ export function ConversationSidebar({
   const filtering = computeIsFiltering({ folder: filterFolder, labels: filterLabels, query: sidebarQuery });
   const searching = sidebarQuery.trim().length > 0;
 
-  const selecting = selectedIds.size > 0;
+  const selecting = selectMode;
   const largeSelection = selectedIds.size > 50;
+  const railCollapsed = collapse.collapsed;
 
   const toggleLabelFilter = (name: string) =>
     setFilterLabels((ls) => (ls.includes(name) ? ls.filter((l) => l !== name) : [...ls, name]));
@@ -777,6 +852,7 @@ export function ConversationSidebar({
       onShare={() => void shareConversation(conversation).then((ok) => ok && flashCopied(conversation.id))}
       onCopyLink={() => void copyShareLink(conversation).then((ok) => ok && flashCopied(conversation.id))}
       onUnshare={() => void unshareConversation(conversation)}
+      onSelect={() => onEnterSelectMode(conversation.id)}
       onArchive={() => void toggleArchive(conversation, true)}
       onDelete={() => setPendingDeleteConversation({ id: conversation.id, title: conversation.title })}
     />
@@ -863,9 +939,10 @@ export function ConversationSidebar({
       brandName={branding.app_name}
       sidebarOpen={sidebarOpen}
       setSidebarOpen={setSidebarOpen}
+      collapse={collapse}
       account={{ email: userEmail, onSignOut }}
       footer={
-        <div className="grid gap-1 pt-1">
+        <div className={["grid gap-1 pt-1", railCollapsed ? "sm:hidden" : ""].join(" ")}>
           {updateAvailable ? (
             <button
               type="button"
@@ -891,44 +968,58 @@ export function ConversationSidebar({
         </div>
       }
     >
-      {/* New chat / sealed-chat row */}
-      <div className="flex gap-1.5">
+      {/* New chat / sealed-chat row — collapsed (≥sm) it stacks as icon-only
+          2.5rem buttons with data-tip labels, per the design's .rail-new-row. */}
+      <div
+        className={[
+          "flex gap-1.5",
+          railCollapsed ? "sm:flex-col sm:items-center sm:gap-[0.4rem]" : "",
+        ].join(" ")}
+      >
         {serverConfig.lockdownOnly ? (
           <button
             type="button"
-            className="flex flex-1 items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
+            className={[
+              "flex flex-1 items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]",
+              railCollapsed ? "sm:size-10 sm:flex-none sm:gap-0 sm:p-0" : "",
+            ].join(" ")}
             title="New chat — every chat on this server is sealed (sandboxed, vetted model only)"
             aria-label="New chat — every chat on this server is sealed (sandboxed, vetted model only)"
+            data-tip={railCollapsed ? "New chat" : undefined}
             onClick={() => clearConversation({ lockdown: true })}
           >
-            <Icon name="lock" className="size-4 text-[var(--color-accent)]" /> New chat
+            <Icon name="lock" className="size-4" />
+            <span className={railCollapsed ? "sm:hidden" : ""}>New chat</span>
           </button>
         ) : (
           <button
             type="button"
-            className="flex flex-1 items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
+            className={[
+              "flex flex-1 items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]",
+              railCollapsed ? "sm:size-10 sm:flex-none sm:gap-0 sm:p-0" : "",
+            ].join(" ")}
             title="New chat"
             aria-label="New chat"
+            data-tip={railCollapsed ? "New chat" : undefined}
             onClick={() => clearConversation()}
           >
-            <Icon name="plus" className="size-4" /> New chat
+            <Icon name="plus" className="size-4" />
+            <span className={railCollapsed ? "sm:hidden" : ""}>New chat</span>
           </button>
         )}
         {serverConfig.lockdownAvailable && !serverConfig.lockdownOnly ? (
-          <button
-            type="button"
-            className="inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
-            title="New sealed chat — sandboxed, vetted model, nothing leaves"
-            aria-label="New sealed chat — sandboxed, vetted model, nothing leaves"
-            onClick={() => clearConversation({ lockdown: true })}
-          >
-            <Icon name="lock" className="size-4 text-[var(--color-accent)]" />
-          </button>
+          <SealedNewChatButton onClick={() => clearConversation({ lockdown: true })} />
         ) : null}
       </div>
 
-      {/* Search filter */}
-      <div className="mt-2">
+      {/* Search filter — the design's .chat-search: leading magnifier icon and
+          a custom clear button (type="text" so the native search clear never
+          doubles it). */}
+      <div className={["relative mt-2 flex items-center", railCollapsed ? "sm:hidden" : ""].join(" ")}>
+        <Icon
+          name="search"
+          className="pointer-events-none absolute left-[0.65rem] size-[0.95rem] text-[var(--color-text-muted)]"
+        />
         <input
           ref={searchRef}
           type="search"
@@ -936,13 +1027,28 @@ export function ConversationSidebar({
           onChange={(e) => setSidebarQuery(e.target.value)}
           placeholder="Search chats…"
           aria-label="Search chats"
-          className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+          className="search-input-no-native-clear min-h-[2.2rem] w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-[0.4rem] pl-[2.1rem] pr-8 text-[0.85rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
         />
+        {sidebarQuery ? (
+          <button
+            type="button"
+            aria-label="Clear search"
+            className="absolute right-[0.4rem] inline-flex size-6 items-center justify-center rounded-[var(--radius-pill)] text-[var(--color-text-muted)] transition before:absolute before:left-1/2 before:top-1/2 before:size-8 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            onClick={() => setSidebarQuery("")}
+          >
+            <Icon name="close" className="size-[0.8rem]" />
+          </button>
+        ) : null}
       </div>
 
       {/* Active-filter chips */}
       {filterFolder || filterLabels.length > 0 ? (
-        <div className="mt-2 flex items-center gap-1.5">
+        <div
+          className={[
+            "mt-2 flex items-center gap-1.5 motion-safe:animate-[filter-in_var(--motion-fast)_ease_both]",
+            railCollapsed ? "sm:hidden" : "",
+          ].join(" ")}
+        >
           <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
             {filterFolder ? (
               <span className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-0.5 pl-2 pr-1 text-[0.72rem] text-[var(--color-text-primary)]">
@@ -950,7 +1056,7 @@ export function ConversationSidebar({
                 <button
                   type="button"
                   aria-label="Remove folder filter"
-                  className="inline-flex size-4 items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
+                  className="hit-area inline-flex size-4 items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                   onClick={() => setFilterFolder(null)}
                 >
                   <Icon name="close" className="size-2.5" />
@@ -966,7 +1072,7 @@ export function ConversationSidebar({
                 <button
                   type="button"
                   aria-label={`Remove label filter ${l}`}
-                  className="inline-flex size-4 items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
+                  className="hit-area inline-flex size-4 items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                   onClick={() => toggleLabelFilter(l)}
                 >
                   <Icon name="close" className="size-2.5" />
@@ -984,112 +1090,8 @@ export function ConversationSidebar({
         </div>
       ) : null}
 
-      {/* Multi-select bulk action bar (#279) — reuses the kebab's folder/label surfaces. */}
-      {selecting ? (
-        <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-2">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]">
-              {selectedIds.size} selected
-            </span>
-            <button
-              type="button"
-              className="ml-auto text-[0.6875rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
-              onClick={onSelectAllVisible}
-            >
-              Select all
-            </button>
-            <button
-              type="button"
-              className="text-[0.6875rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
-              onClick={onClearSelection}
-            >
-              Clear
-            </button>
-          </div>
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            <button
-              type="button"
-              className="rounded bg-[var(--color-danger)] px-2 py-1 text-[0.6875rem] font-medium text-white transition hover:opacity-90"
-              onClick={onBulkDelete}
-            >
-              Delete {selectedIds.size}
-            </button>
-            <button
-              type="button"
-              className="rounded border border-[var(--color-border-strong)] px-2 py-1 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
-              onClick={onBulkPin}
-            >
-              Pin
-            </button>
-            <button
-              type="button"
-              className="rounded border border-[var(--color-border-strong)] px-2 py-1 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
-              onClick={onBulkUnpin}
-            >
-              Unpin
-            </button>
-            <button
-              ref={bulkFolderRef}
-              type="button"
-              aria-haspopup="menu"
-              aria-expanded={bulkPanel === "folder"}
-              className="rounded border border-[var(--color-border-strong)] px-2 py-1 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
-              onClick={() => setBulkPanel((p) => (p === "folder" ? "none" : "folder"))}
-            >
-              Move to folder
-            </button>
-            <button
-              ref={bulkLabelsRef}
-              type="button"
-              aria-haspopup="menu"
-              aria-expanded={bulkPanel === "labels"}
-              className="rounded border border-[var(--color-border-strong)] px-2 py-1 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
-              onClick={() => setBulkPanel((p) => (p === "labels" ? "none" : "labels"))}
-            >
-              Add label
-            </button>
-          </div>
-          {largeSelection ? (
-            <p className="mt-1.5 text-[0.6875rem] text-[var(--color-danger)]">
-              Selecting {selectedIds.size} conversations — large bulk deletes are permanent.
-            </p>
-          ) : null}
-          <Menu
-            open={bulkPanel === "folder"}
-            onClose={() => setBulkPanel("none")}
-            anchorRef={bulkFolderRef}
-            placement="bottom-end"
-            label="Move selected to folder"
-          >
-            <FolderPanel
-              folders={folders}
-              onPick={(name) => {
-                onBulkMoveFolder(name);
-                setBulkPanel("none");
-              }}
-            />
-          </Menu>
-          <Menu
-            open={bulkPanel === "labels"}
-            onClose={() => setBulkPanel("none")}
-            anchorRef={bulkLabelsRef}
-            placement="bottom-end"
-            label="Add label to selected"
-          >
-            <LabelsPanel
-              current={[]}
-              suggestions={allLabelNames}
-              onAdd={(label) => {
-                onBulkAddLabel(label);
-                setBulkPanel("none");
-              }}
-            />
-          </Menu>
-        </div>
-      ) : null}
-
       {/* Conversation list */}
-      <div className="mt-2 flex-1 overflow-y-auto">
+      <div className={["mt-2 flex-1 overflow-y-auto", railCollapsed ? "sm:hidden" : ""].join(" ")}>
         {isLoadingHistory ? (
           <p className="px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)]">Loading…</p>
         ) : filtering ? (
@@ -1201,6 +1203,126 @@ export function ConversationSidebar({
           </div>
         ) : null}
       </div>
+      {/* Multi-select bulk bar (#279, the design's .bulk-bar): pinned to the
+          rail's foot below the conversation list — count + 1.9rem icon actions with data-tip-top tooltips. Move-to-folder / Add-label
+          reuse the kebab's panels (including their inline create inputs) in
+          menus that open above the bar. Actions disable at zero selected. */}
+      {selecting ? (
+        <>
+          <div
+            className={[
+              "mt-2 flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] py-[0.4rem] pl-[0.65rem] pr-[0.3rem] motion-safe:animate-pop-up",
+              railCollapsed ? "sm:hidden" : "",
+            ].join(" ")}
+          >
+            <span className="min-w-0 flex-1 text-[0.8rem] font-medium tabular-nums text-[var(--color-text-primary)]">
+              {selectedIds.size} selected
+            </span>
+            <div className="flex items-center gap-[0.15rem]">
+              <button
+                ref={bulkFolderRef}
+                type="button"
+                aria-label="Move to folder"
+                aria-haspopup="menu"
+                aria-expanded={bulkPanel === "folder"}
+                data-tip-top="Move to folder"
+                disabled={selectedIds.size === 0}
+                className={BULK_BTN_CLASS}
+                onClick={() => setBulkPanel((p) => (p === "folder" ? "none" : "folder"))}
+              >
+                <Icon name="folder" className="size-[0.95rem]" />
+              </button>
+              <button
+                type="button"
+                aria-label="Pin selected"
+                data-tip-top="Pin"
+                disabled={selectedIds.size === 0}
+                className={BULK_BTN_CLASS}
+                onClick={onBulkPin}
+              >
+                <Icon name="pin" className="size-[0.95rem]" />
+              </button>
+              <button
+                ref={bulkLabelsRef}
+                type="button"
+                aria-label="Add label"
+                aria-haspopup="menu"
+                aria-expanded={bulkPanel === "labels"}
+                data-tip-top="Add label"
+                disabled={selectedIds.size === 0}
+                className={BULK_BTN_CLASS}
+                onClick={() => setBulkPanel((p) => (p === "labels" ? "none" : "labels"))}
+              >
+                <Icon name="tag" className="size-[0.95rem]" />
+              </button>
+              <button
+                type="button"
+                aria-label="Delete selected"
+                data-tip-top="Delete"
+                disabled={selectedIds.size === 0}
+                className={[
+                  BULK_BTN_CLASS,
+                  "enabled:hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] enabled:hover:text-[var(--color-danger)]",
+                ].join(" ")}
+                onClick={onBulkDelete}
+              >
+                <Icon name="trash" className="size-[0.95rem]" />
+              </button>
+              <button
+                type="button"
+                aria-label="Exit selection"
+                data-tip-top="Cancel"
+                className={BULK_BTN_CLASS}
+                onClick={onExitSelectMode}
+              >
+                <Icon name="close" className="size-[0.95rem]" />
+              </button>
+            </div>
+            <Menu
+              open={bulkPanel === "folder"}
+              onClose={() => setBulkPanel("none")}
+              anchorRef={bulkFolderRef}
+              placement="top-end"
+              label="Move selected to folder"
+            >
+              <FolderPanel
+                folders={folders}
+                onPick={(name) => {
+                  onBulkMoveFolder(name);
+                  setBulkPanel("none");
+                }}
+              />
+            </Menu>
+            <Menu
+              open={bulkPanel === "labels"}
+              onClose={() => setBulkPanel("none")}
+              anchorRef={bulkLabelsRef}
+              placement="top-end"
+              label="Add label to selected"
+            >
+              <LabelsPanel
+                current={[]}
+                suggestions={allLabelNames}
+                onAdd={(label) => {
+                  onBulkAddLabel(label);
+                  setBulkPanel("none");
+                }}
+              />
+            </Menu>
+          </div>
+          {largeSelection ? (
+            <p
+              className={[
+                "mt-1.5 text-[0.6875rem] text-[var(--color-danger)]",
+                railCollapsed ? "sm:hidden" : "",
+              ].join(" ")}
+            >
+              Selecting {selectedIds.size} conversations — large bulk deletes are permanent.
+            </p>
+          ) : null}
+        </>
+      ) : null}
+
     </NavRail>
   );
 }

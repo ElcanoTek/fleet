@@ -7,14 +7,16 @@ import { useCallback, useEffect, useState } from "react";
 // same logic; consolidating it here keeps the shared shell's theme behavior
 // identical across every view.
 //
-// Contract (unchanged from the prior inline copies, so persisted prefs and the
-// render-blocking /scripts/theme.js bootstrap keep working):
-//   - The preference is stored under the "chat-theme-preference" localStorage
-//     key as the literal string "light" or "dark".
+// Contract (persisted prefs and the render-blocking /scripts/theme.js
+// bootstrap keep working):
+//   - An explicit preference is stored under the "chat-theme-preference"
+//     localStorage key as the literal string "light" or "dark".
+//   - "System" is the absence of a stored preference: the OS
+//     `prefers-color-scheme` is followed and tracked live via matchMedia.
+//     Choosing System removes the stored key; choosing Light/Dark persists
+//     it and stops the OS tracking. Default with nothing stored is System.
 //   - The resolved theme is applied to <html data-theme="…">, which the
 //     globals.css / brand-palette CSS variables key off.
-//   - With no stored preference, the OS `prefers-color-scheme` is followed and
-//     tracked live until the user makes an explicit choice.
 //
 // The first paint is handled before hydration by /scripts/theme.js (wired in
 // layout.tsx), so this hook's mount effect only syncs React state to the
@@ -23,6 +25,8 @@ import { useCallback, useEffect, useState } from "react";
 export const THEME_STORAGE_KEY = "chat-theme-preference";
 
 export type Theme = "light" | "dark";
+// What the user picked — "system" means "no stored preference, follow the OS".
+export type ThemePreference = Theme | "system";
 
 function readStoredTheme(): Theme | null {
   try {
@@ -33,44 +37,56 @@ function readStoredTheme(): Theme | null {
   }
 }
 
+function systemTheme(): Theme {
+  // matchMedia is absent in some non-browser runtimes (older jsdom, SSR
+  // shims). Default to dark — mirrors the catch fallback in /scripts/theme.js.
+  if (typeof window.matchMedia !== "function") return "dark";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 export type UseTheme = {
+  /** The resolved theme driving the UI — never "system". */
   theme: Theme;
+  /** The user's choice — "system" when no explicit preference is stored. */
+  themePreference: ThemePreference;
   toggleTheme: () => void;
-  /** Set an explicit theme — used by the account menu's Light/Dark segmented control. */
-  setTheme: (next: Theme) => void;
+  /** Set a preference — used by the account menu's System/Light/Dark segmented control. */
+  setTheme: (next: ThemePreference) => void;
   /** "Switch to light mode" / "Switch to dark mode" — for the toggle's label. */
   themeLabel: string;
 };
 
 export function useTheme(): UseTheme {
-  // Defaults to "dark" to match the pre-hydration default in
-  // /scripts/theme.js; the mount effect below reconciles to the real value
+  // Defaults to "dark"/"system" to match the pre-hydration default in
+  // /scripts/theme.js; the mount effect below reconciles to the real values
   // synchronously after hydration so SSR markup never mismatches.
   const [theme, setThemeState] = useState<Theme>("dark");
+  const [themePreference, setThemePreference] = useState<ThemePreference>("system");
 
   useEffect(() => {
     const root = document.documentElement;
-    // matchMedia is absent in some non-browser runtimes (older jsdom, SSR
-    // shims). Guard so the hook degrades to "stored-or-dark" instead of
-    // throwing — mirrors the catch fallback in /scripts/theme.js.
     const media =
       typeof window.matchMedia === "function"
         ? window.matchMedia("(prefers-color-scheme: dark)")
         : null;
-
-    const resolveTheme = (): Theme =>
-      readStoredTheme() ?? (media?.matches ? "dark" : "light");
 
     const applyTheme = (next: Theme) => {
       root.setAttribute("data-theme", next);
       setThemeState(next);
     };
 
-    applyTheme(resolveTheme());
+    const reconcileFromStorage = () => {
+      const stored = readStoredTheme();
+      setThemePreference(stored ?? "system");
+      applyTheme(stored ?? (media?.matches ? "dark" : "light"));
+    };
+    reconcileFromStorage();
 
     if (!media) return;
 
-    // Follow the OS theme until the user makes an explicit choice.
+    // Follow the OS theme while no explicit preference is stored. The check
+    // runs per-event, so clearing the preference (choosing System) resumes
+    // tracking without re-arming the listener.
     const handleSystemChange = () => {
       if (readStoredTheme()) return;
       applyTheme(media.matches ? "dark" : "light");
@@ -79,10 +95,22 @@ export function useTheme(): UseTheme {
     return () => media.removeEventListener("change", handleSystemChange);
   }, []);
 
-  // applyTheme writes the explicit choice through to the live attribute + the
-  // persisted preference. Shared by toggleTheme and the segmented setter so both
-  // paths persist identically.
-  const applyExplicitTheme = useCallback((next: Theme) => {
+  // setTheme writes the choice through to the live attribute and the persisted
+  // preference. "system" clears the stored key and re-resolves from the OS;
+  // the mount listener above then keeps tracking OS changes live.
+  const setTheme = useCallback((next: ThemePreference) => {
+    setThemePreference(next);
+    if (next === "system") {
+      try {
+        window.localStorage.removeItem(THEME_STORAGE_KEY);
+      } catch {
+        // Private-mode / storage-disabled: still re-resolve the live attribute.
+      }
+      const resolved = systemTheme();
+      setThemeState(resolved);
+      document.documentElement.setAttribute("data-theme", resolved);
+      return;
+    }
     setThemeState(next);
     document.documentElement.setAttribute("data-theme", next);
     try {
@@ -92,9 +120,12 @@ export function useTheme(): UseTheme {
     }
   }, []);
 
+  // The sun/moon toggle (login card, orchestrator slim header) flips to an
+  // explicit theme — same persistence path as picking Light/Dark.
   const toggleTheme = useCallback(() => {
     setThemeState((prev) => {
       const next: Theme = prev === "dark" ? "light" : "dark";
+      setThemePreference(next);
       document.documentElement.setAttribute("data-theme", next);
       try {
         window.localStorage.setItem(THEME_STORAGE_KEY, next);
@@ -107,7 +138,7 @@ export function useTheme(): UseTheme {
 
   const themeLabel = theme === "dark" ? "Switch to light mode" : "Switch to dark mode";
 
-  return { theme, toggleTheme, setTheme: applyExplicitTheme, themeLabel };
+  return { theme, themePreference, toggleTheme, setTheme, themeLabel };
 }
 
 export default useTheme;

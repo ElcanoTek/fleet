@@ -496,7 +496,7 @@ export function PendingAttachmentChip({
       <button
         type="button"
         aria-label={`Remove ${attachment.name}`}
-        className="touch-target-hit text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
+        className="hit-area touch-target-hit text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         disabled={removalDisabled}
         onClick={onRemove}
       >
