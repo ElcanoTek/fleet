@@ -42,7 +42,11 @@ func NewXLSXTool() fantasy.AgentTool {
 }
 
 func runXLSXAction(ctx context.Context, params XLSXParams) (string, error) {
-	path, err := ValidatePathForRead(resolveWorkspacePath(ctx, params.Path))
+	resolved, err := resolveWorkspacePath(ctx, params.Path)
+	if err != nil {
+		return "", err
+	}
+	path, err := ValidatePathForRead(resolved)
 	if err != nil {
 		return "", err
 	}
@@ -72,7 +76,11 @@ func runXLSXAction(ctx context.Context, params XLSXParams) (string, error) {
 	}
 	outPath := path
 	if params.OutputPath != "" {
-		outPath, err = ValidatePath(resolveWorkspacePath(ctx, params.OutputPath))
+		resolvedOut, err := resolveWorkspacePath(ctx, params.OutputPath)
+		if err != nil {
+			return "", err
+		}
+		outPath, err = ValidatePath(resolvedOut)
 		if err != nil {
 			return "", err
 		}

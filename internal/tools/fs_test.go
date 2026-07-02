@@ -149,3 +149,65 @@ func TestViewFileTool_OffsetLimit(t *testing.T) {
 		t.Errorf("Expected truncated message, got '%s'", res)
 	}
 }
+
+// TestFileToolsRejectCrossConversationTraversal pins the #575 fix at the tool
+// level: view_file / edit_file / write_file must refuse a relative path that
+// escapes the caller's conversation workspace via "..". Pre-fix,
+// "../<otherConvID>/file" resolved into a sibling conversation's workspace
+// (still under an allowed base dir) and passed ValidatePath — a cross-tenant
+// read/write, since conversations can belong to different users.
+func TestFileToolsRejectCrossConversationTraversal(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	victimConv := "conv-victim"
+	victimDir := filepath.Join(root, victimConv)
+	if err := os.MkdirAll(victimDir, 0o755); err != nil {
+		t.Fatalf("mkdir victim workspace: %v", err)
+	}
+	secret := filepath.Join(victimDir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("cross-tenant secret"), 0o600); err != nil {
+		t.Fatalf("seed secret: %v", err)
+	}
+
+	ctx := WithConversationID(context.Background(), "conv-attacker")
+	escape := "../" + victimConv + "/secret.txt"
+
+	if out, err := runViewFile(ctx, ViewFileParams{Path: escape}); err == nil {
+		t.Errorf("view_file read a sibling conversation's file: %q", out)
+	} else if !strings.Contains(err.Error(), "path validation failed") {
+		t.Errorf("view_file: want path validation error, got: %v", err)
+	}
+
+	if _, err := runEditFile(ctx, EditFileParams{Path: escape, OldText: "secret", NewText: "pwn"}); err == nil {
+		t.Error("edit_file edited a sibling conversation's file")
+	}
+
+	if _, err := runWriteFile(ctx, WriteFileParams{Path: "../" + victimConv + "/planted.txt", Content: "pwn"}); err == nil {
+		t.Error("write_file wrote into a sibling conversation's workspace")
+	}
+	if _, err := os.Stat(filepath.Join(victimDir, "planted.txt")); !os.IsNotExist(err) {
+		t.Errorf("planted.txt must not exist in the victim workspace (stat err = %v)", err)
+	}
+
+	// The victim's file is untouched.
+	got, err := os.ReadFile(secret)
+	if err != nil || string(got) != "cross-tenant secret" {
+		t.Fatalf("victim file changed: %q, %v", got, err)
+	}
+
+	// Legitimate in-workspace access keeps working: a nested relative write +
+	// read-back lands under the caller's OWN workspace.
+	if _, err := runWriteFile(ctx, WriteFileParams{Path: "sub/report.txt", Content: "mine"}); err != nil {
+		t.Fatalf("in-workspace write: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "conv-attacker", "sub", "report.txt")); err != nil {
+		t.Fatalf("in-workspace write landed wrong: %v", err)
+	}
+	out, err := runViewFile(ctx, ViewFileParams{Path: "sub/report.txt"})
+	if err != nil {
+		t.Fatalf("in-workspace read: %v", err)
+	}
+	if out != "mine" {
+		t.Errorf("in-workspace read = %q, want %q", out, "mine")
+	}
+}

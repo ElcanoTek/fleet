@@ -155,7 +155,11 @@ func runGenerateImage(ctx context.Context, client *http.Client, params GenerateI
 		if ref == "" {
 			continue
 		}
-		validRef, err := ValidatePathForRead(resolveWorkspacePath(ctx, ref))
+		resolvedRef, err := resolveWorkspacePath(ctx, ref)
+		if err != nil {
+			return nil, fmt.Errorf("reference image %q: %w", ref, err)
+		}
+		validRef, err := ValidatePathForRead(resolvedRef)
 		if err != nil {
 			return nil, fmt.Errorf("reference image %q: %w", ref, err)
 		}
@@ -240,7 +244,10 @@ func runGenerateImage(ctx context.Context, client *http.Client, params GenerateI
 		ext = ".bin" // unknown media type; bytes still preserved
 	}
 	filename := sanitizeImageFilename(params.Filename) + ext
-	resolved := resolveWorkspacePath(ctx, filename)
+	resolved, err := resolveWorkspacePath(ctx, filename)
+	if err != nil {
+		return nil, fmt.Errorf("output path validation failed: %w", err)
+	}
 	validOut, err := ValidatePath(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("output path validation failed: %w", err)
