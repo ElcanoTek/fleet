@@ -58,6 +58,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
+	"github.com/ElcanoTek/fleet/internal/piiredact"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -277,6 +278,11 @@ func run() error {
 	// bundle ships none, so cost accounting stays on the OpenRouter-returned
 	// price (the pre-#297 default). Must run before any turn starts.
 	agentcore.ConfigurePricing(toAgentcorePricing(bundle.Pricing()))
+
+	// Optional PII redaction (#450): install the process-wide redactor when
+	// FLEET_PII_REDACTION_ENABLED is set. Default off = nil redactor = the tool-
+	// output pass is a byte-for-byte no-op.
+	configurePIIRedaction(cfg)
 
 	personasDir := bundle.PersonasDir
 	protocolsDir := bundle.ProtocolsDir
@@ -1554,6 +1560,28 @@ func errorAnalyzerFor(cfg *config.Config, mgr *agent.Manager) runner.ErrorAnalyz
 		return nil
 	}
 	return mgr
+}
+
+// configurePIIRedaction installs the process-wide PII redactor (#450) when
+// FLEET_PII_REDACTION_ENABLED is set. An enabled-but-unset (or invalid) mode
+// defaults to "redact" — a misconfiguration keeps the control ON (never silently
+// off) rather than failing boot. No-op (nil redactor) when disabled.
+func configurePIIRedaction(cfg *config.Config) {
+	if !cfg.PIIRedactionEnabled {
+		return
+	}
+	mode, err := piiredact.ParseMode(cfg.PIIRedactionMode)
+	if err != nil {
+		// Deliberately do NOT echo the raw env value (tainted input → log injection).
+		log.Printf("PII redaction: invalid FLEET_PII_REDACTION_MODE, defaulting to redact")
+		mode = piiredact.ModeRedact
+	}
+	if mode == piiredact.ModeOff {
+		mode = piiredact.ModeRedact
+	}
+	agentcore.SetPIIRedactor(piiredact.New(mode))
+	//nolint:gosec // G706: mode is a validated piiredact.Mode constant (observe/redact/block), never raw input.
+	log.Printf("PII redaction: enabled (mode=%s)", mode)
 }
 
 // emailReplierFor wires email reply-back (#511) only when SMTP is configured for

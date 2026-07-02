@@ -285,6 +285,8 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_SANDBOX_IMAGE":            true,
 	"FLEET_SANDBOX_RUNTIME":          true,
 	"FLEET_DEFAULT_NETWORK_MODE":     true,
+	"FLEET_PII_REDACTION_ENABLED":    true,
+	"FLEET_PII_REDACTION_MODE":       true,
 	"FLEET_BROWSER_ENABLED":          true,
 	"FLEET_SANDBOX_MEMORY":           true,
 	"FLEET_SANDBOX_CPUS":             true,
@@ -782,6 +784,16 @@ type Config struct {
 	// sandbox image (an optional client-bundle Containerfile addition, not the
 	// default image), so it is opt-in per deployment. From FLEET_BROWSER_ENABLED.
 	BrowserEnabled bool
+	// PIIRedactionEnabled gates the OPTIONAL PII redaction pass (#450) applied to
+	// tool output before it enters the model context. FLEET_PII_REDACTION_ENABLED,
+	// default false (byte-for-byte unchanged when off). Provider-neutral; the
+	// built-in redactor is deterministic (no model server).
+	PIIRedactionEnabled bool
+	// PIIRedactionMode is the strictness when enabled: "observe" (detect+audit,
+	// pass through), "redact" (mask matches with [PII:<kind>] markers, the default
+	// when enabled), or "block" (withhold the tool result from the model).
+	// FLEET_PII_REDACTION_MODE. Validated + defaulted in cmd/fleet.
+	PIIRedactionMode string
 	// DefaultNetworkMode is the fleet-wide sandbox egress posture (#211):
 	// "" / "open" (full slirp4netns egress for networked work — the default),
 	// "allowlisted" (networked sandboxes route HTTP(S) through the host egress
@@ -1114,10 +1126,14 @@ func Load(envFile string) (*Config, error) {
 		SandboxRuntime:     getenvFleet("SANDBOX_RUNTIME"),
 		BrowserEnabled:     getenvFleetBool("BROWSER_ENABLED", false),
 		DefaultNetworkMode: strings.ToLower(strings.TrimSpace(getenvFleet("DEFAULT_NETWORK_MODE"))),
-		SandboxMemory:      getenvFleet("SANDBOX_MEMORY"),
-		SandboxCPUs:        getenvFleet("SANDBOX_CPUS"),
-		SandboxPids:        getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
-		SandboxDiskGB:      getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+
+		// PII redaction (#450) — optional, default off.
+		PIIRedactionEnabled: getenvFleetBool("PII_REDACTION_ENABLED", false),
+		PIIRedactionMode:    strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_MODE"))),
+		SandboxMemory:       getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:         getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:         getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB:       getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
 		// Per-task override ceilings (#205).
 		SandboxMemoryMaxMB:    getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
 		SandboxCPUsMax:        getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),
