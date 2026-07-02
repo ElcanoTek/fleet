@@ -13,7 +13,10 @@ import { useEffect, useState } from "react";
  *
  * Usage:
  *   <LoadingLogo size={80} />
- *   <LoadingLogo size={48} color="#5a5aaa" />
+ *   <LoadingLogo size={48} color="var(--color-accent)" />
+ *
+ * The default color rides the shared --color-primary token so the logo
+ * themes with the rest of the app; any CSS color (or var()) works.
  */
 
 let instanceCount = 0;
@@ -24,7 +27,7 @@ interface LoadingLogoProps {
   className?: string;
 }
 
-export function LoadingLogo({ size = 80, color = "#7272ab", className }: LoadingLogoProps) {
+export function LoadingLogo({ size = 80, color = "var(--color-primary)", className }: LoadingLogoProps) {
   // Stable, per-instance prefix so multiple mounted logos don't collide on
   // CSS/SVG ids. Lazy useState runs the initializer exactly once on mount —
   // unlike reading useRef().current during render (which the react-hooks

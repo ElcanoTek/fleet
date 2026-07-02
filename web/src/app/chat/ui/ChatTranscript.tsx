@@ -205,7 +205,7 @@ export function ChatTranscript({
                   {summarizeError ? (
                     <div
                       role="alert"
-                      className="rounded-[0.6rem] border border-[var(--color-danger,#dc2626)] bg-[color-mix(in_srgb,var(--color-danger,#dc2626)_10%,transparent)] px-3 py-2 text-[0.78rem] text-[var(--color-danger,#dc2626)]"
+                      className="rounded-[0.6rem] border border-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.78rem] text-[var(--color-danger)]"
                     >
                       {summarizeError}
                     </div>
@@ -879,7 +879,7 @@ function ReasoningBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(true);
 
   return (
-    <div className="rounded-[0.95rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay-soft)_68%,transparent)] px-3 py-2 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)] sm:text-[0.82rem]">
+    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay-soft)_68%,transparent)] px-3 py-2 text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)] sm:text-[0.82rem]">
       <button
         type="button"
         className="flex w-full items-center justify-between gap-3 text-left"
@@ -928,7 +928,7 @@ function SummarizeProgressCard({
   const elapsedSeconds = startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : 0;
 
   return (
-    <div className="rounded-[0.95rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay-soft)_72%,transparent)] px-4 py-3 text-[var(--color-text-primary)]">
+    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay-soft)_72%,transparent)] px-4 py-3 text-[var(--color-text-primary)]">
       <div className="flex items-center gap-3">
         <LoadingLogo size={22} />
         <div className="flex min-w-0 flex-1 flex-col">

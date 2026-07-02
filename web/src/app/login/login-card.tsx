@@ -72,7 +72,7 @@ export default function LoginCard({
         </div>
 
         {loginError ? (
-          <div className="mb-4 rounded-xl border border-[#e08080] bg-[color-mix(in_srgb,#e08080_14%,transparent)] px-3 py-2 text-[0.8125rem] text-[#e08080]">
+          <div className="mb-4 rounded-xl border border-[var(--color-danger-strong)] bg-[color-mix(in_srgb,var(--color-danger-strong)_14%,transparent)] px-3 py-2 text-[0.8125rem] text-[var(--color-danger-soft)]">
             {loginError}
           </div>
         ) : null}

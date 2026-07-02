@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import { HealthPanel } from "./HealthPanel";
 import { UsersPanel } from "./UsersPanel";
 
+import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+
 // The admin page is intentionally minimalist — a single table keyed on
 // user email. Power tools belong in real observability (Grafana, etc);
 // this is a "who's active, who's costing money, when did I last see
@@ -137,9 +139,7 @@ export default function AdminPage() {
         <HealthPanel />
 
         {error ? (
-          <div className="rounded-[0.95rem] border border-[#e08080] bg-[color-mix(in_srgb,#e08080_15%,transparent)] px-4 py-3 text-[0.875rem] text-[#e08080]">
-            {error}
-          </div>
+          <NoticeBanner tone="danger">{error}</NoticeBanner>
         ) : (
           <>
             <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">

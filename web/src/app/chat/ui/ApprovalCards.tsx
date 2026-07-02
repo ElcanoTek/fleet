@@ -292,7 +292,7 @@ export function ApprovalCard({
   return (
     <div
       data-approval-id={approval.id}
-      className={`rounded-[0.95rem] border px-3 py-2.5 text-[0.8125rem] leading-[1.5]${borderStyleClass}${bgClass}`}
+      className={`rounded-[var(--radius-lg)] border px-3 py-2.5 text-[0.8125rem] leading-[1.5]${borderStyleClass}${bgClass}`}
       style={statusStyle}
     >
       <div className="mb-2 flex items-center justify-between gap-3">
@@ -420,7 +420,7 @@ function BashApprovalCard({
 
   return (
     <div
-      className="rounded-[0.95rem] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
       style={statusStyle}
     >
       <div className="mb-2 flex items-center gap-2">
@@ -531,7 +531,7 @@ function ScheduleTaskCard({
     <div
       data-approval-id={approval.id}
       data-tool="schedule_task"
-      className="rounded-[0.95rem] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
       style={statusStyle}
     >
       <div className="mb-2 flex items-center gap-2">
@@ -720,7 +720,7 @@ function SuggestAdvancedModelCard({
     <div
       data-approval-id={approval.id}
       data-tool="suggest_advanced_model"
-      className="rounded-[0.95rem] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      className="rounded-[var(--radius-lg)] border bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
       style={statusStyle}
     >
       <div className="mb-2 flex items-center gap-2">

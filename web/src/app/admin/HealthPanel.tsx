@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 
+import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
+
 // Built-in Fleet health dashboard (#301): a single-pane system-health panel that
 // polls GET /api/admin/health-summary every 10s and renders runtime, DB, LLM
 // spend, scheduler workers/tasks, sandbox pool, and MCP catalog. Deliberately
@@ -39,7 +42,7 @@ function formatUptime(seconds: number): string {
 
 function Card({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-[0.95rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)] px-4 py-3">
+    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)] px-4 py-3">
       <div className="text-[0.7rem] uppercase tracking-wide text-[var(--color-text-muted)]">{label}</div>
       <div className="mt-1 text-[1.15rem] font-semibold text-[var(--color-text-primary)]">{value}</div>
       {hint ? <div className="mt-0.5 text-[0.7rem] text-[var(--color-text-muted)]">{hint}</div> : null}
@@ -48,10 +51,11 @@ function Card({ label, value, hint }: { label: string; value: string; hint?: str
 }
 
 function StatusPill({ ok, label }: { ok: boolean; label: string }) {
-  const tone = ok
-    ? "border-[var(--color-success-border)] bg-[color-mix(in_srgb,var(--color-success)_15%,transparent)] text-[var(--color-success)]"
-    : "border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_15%,transparent)] text-[var(--color-danger)]";
-  return <span className={`rounded-full border px-2 py-0.5 text-[0.7rem] font-medium ${tone}`}>{label}</span>;
+  return (
+    <StatusChip tone={ok ? "success" : "danger"} className="font-medium">
+      {label}
+    </StatusChip>
+  );
 }
 
 export function HealthPanel() {
@@ -86,12 +90,9 @@ export function HealthPanel() {
 
   if (err) {
     return (
-      <div
-        data-testid="health-panel-error"
-        className="mb-4 rounded-[0.95rem] border border-[#e08080] bg-[color-mix(in_srgb,#e08080_15%,transparent)] px-4 py-3 text-[0.85rem] text-[#e08080]"
-      >
+      <NoticeBanner tone="danger" data-testid="health-panel-error" className="mb-4">
         Health unavailable: {err}
-      </div>
+      </NoticeBanner>
     );
   }
   if (!data) {

@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+
 // The Users panel (#237) is the admin surface for the RBAC layer: it lists
 // every provisioned account with its role + team and lets an admin reassign
 // them. Roles gate access on the chat server (viewer = read-only, admin = full
@@ -138,9 +140,7 @@ export function UsersPanel() {
     <section className="mt-6">
       <h2 className="mb-2 text-[0.9375rem] font-semibold text-[var(--color-text-primary)]">Users &amp; roles</h2>
       {error ? (
-        <div className="rounded-[0.95rem] border border-[#e08080] bg-[color-mix(in_srgb,#e08080_15%,transparent)] px-4 py-3 text-[0.875rem] text-[#e08080]">
-          {error}
-        </div>
+        <NoticeBanner tone="danger">{error}</NoticeBanner>
       ) : (
         <div className="overflow-hidden rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)]">
           <table className="w-full text-[0.875rem]">
@@ -198,7 +198,7 @@ export function UsersPanel() {
                         <div className="flex items-center justify-end gap-2">
                           {status && status !== "saving" ? (
                             <span
-                              className={`text-[0.75rem] ${status === "saved" ? "text-[var(--color-text-muted)]" : "text-[#e08080]"}`}
+                              className={`text-[0.75rem] ${status === "saved" ? "text-[var(--color-text-muted)]" : "text-[var(--color-danger-soft)]"}`}
                             >
                               {status === "saved" ? "Saved" : status}
                             </span>
