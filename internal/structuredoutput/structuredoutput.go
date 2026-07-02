@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
@@ -33,6 +34,17 @@ func CompileSchema(raw json.RawMessage) (*jsonschema.Schema, error) {
 		return nil, fmt.Errorf("must be a JSON object: %w", err)
 	}
 	c := jsonschema.NewCompiler()
+	// output_schema is UNTRUSTED task input (POST /tasks), and the compiler's
+	// default loaders resolve external $refs — including file:// URLs — at
+	// compile time, which would let a task author make the fleet HOST process
+	// open arbitrary local files (a file-existence oracle and a blocking-open
+	// DoS that crosses the mandatory-sandbox boundary, #585). A self-contained
+	// draft-07 schema never needs an external ref, so refuse every URL load;
+	// internal "#/..." refs resolve against the AddResource'd document and
+	// never reach this loader.
+	c.LoadURL = func(url string) (io.ReadCloser, error) {
+		return nil, fmt.Errorf("external $ref %q is not allowed: output_schema must be self-contained", url)
+	}
 	if err := c.AddResource(schemaResourceURL, bytes.NewReader(raw)); err != nil {
 		return nil, fmt.Errorf("invalid schema: %w", err)
 	}

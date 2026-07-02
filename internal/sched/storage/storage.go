@@ -1306,6 +1306,11 @@ func (s *Storage) FinishDatasetRow(ctx context.Context, rowID uuid.UUID, propose
 	return s.db.FinishDatasetRow(ctx, rowID, proposed, note, errMsg, costUSD)
 }
 
+// RequeueDatasetRow returns a pause-interrupted in-flight row to pending (#586).
+func (s *Storage) RequeueDatasetRow(ctx context.Context, rowID uuid.UUID) error {
+	return s.db.RequeueDatasetRow(ctx, rowID)
+}
+
 // ApproveDatasetRows merges proposed values into cells for review-approved rows.
 func (s *Storage) ApproveDatasetRows(ctx context.Context, datasetID uuid.UUID, ids []uuid.UUID) (int, error) {
 	return s.db.ApproveDatasetRows(ctx, datasetID, ids)

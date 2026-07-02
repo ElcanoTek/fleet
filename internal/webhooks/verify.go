@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,22 +44,52 @@ func NewDummySecret() string {
 	return hex.EncodeToString(buf)
 }
 
+// fallbackSecret is the package-internal HMAC key substituted when a caller
+// passes an empty secret: verification must still fail closed, but the
+// full-body HMAC is computed anyway so a trigger whose secret env var is unset
+// costs the same work as one with a wrong signature (timing equalization,
+// #572). Per-process random, never comparable to anything an attacker sends.
+var fallbackSecret = NewDummySecret()
+
+// bodyHMACs counts full-body HMAC computations across both verifiers. It is a
+// TEST SEAM (#572): the no-enumeration guarantee ("an unknown slug and a bad
+// signature perform the same signature work over the body") is asserted
+// STRUCTURALLY by diffing this counter across request shapes, instead of a
+// flaky wall-clock timing test. One atomic add per verification is the entire
+// runtime cost.
+var bodyHMACs atomic.Uint64
+
+// BodyHMACComputations reports how many full-body HMAC computations the package
+// has performed. Tests diff it around a request to assert timing-equalization
+// structurally; it has no production callers.
+func BodyHMACComputations() uint64 { return bodyHMACs.Load() }
+
 // VerifyHMACSHA256 reports whether sigHeader is a valid HMAC-SHA256 of body
 // under secret (GitHub-style). It accepts the optional "sha256=" prefix, is
 // case-insensitive on the hex, and compares in constant time. An empty secret
 // or a malformed signature fails closed.
+//
+// Timing equalization (#572): the full-body HMAC is computed FIRST,
+// unconditionally — before the secret and signature-shape checks — so an
+// absent/malformed header or an unset secret costs the same body-proportional
+// work as a wrong signature. Only fixed-cost checks on the (already computed)
+// result differ between outcomes, keeping the caller's slug-miss path
+// indistinguishable from a bad signature.
 func VerifyHMACSHA256(body []byte, secret, sigHeader string) bool {
+	ok := true
 	if secret == "" {
-		return false
+		secret = fallbackSecret
+		ok = false
 	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	bodyHMACs.Add(1)
+	expected := hex.EncodeToString(mac.Sum(nil))
 	sig := strings.TrimPrefix(sigHeader, "sha256=")
 	if len(sig) != hex.EncodedLen(sha256.Size) {
 		return false
 	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	expected := hex.EncodeToString(mac.Sum(nil))
-	return subtle.ConstantTimeCompare([]byte(strings.ToLower(sig)), []byte(expected)) == 1
+	return subtle.ConstantTimeCompare([]byte(strings.ToLower(sig)), []byte(expected)) == 1 && ok
 }
 
 // SlackReplayWindow is the maximum age of a Slack request timestamp accepted by
@@ -76,13 +107,26 @@ const SlackReplayWindow = 5 * time.Minute
 // (X-Slack-Request-Timestamp) must parse as a unix time within SlackReplayWindow
 // of now — a stale or future timestamp is rejected to bound replay. An empty
 // secret, an unparseable timestamp, or a malformed signature fails closed.
+//
+// Timing equalization (#572): as in VerifyHMACSHA256, the full-body HMAC is
+// computed FIRST, unconditionally — an absent/garbage timestamp or an unset
+// secret costs the same body-proportional work as a wrong signature — and the
+// replay-window and parse checks then gate the (already computed) result.
 func VerifySlackSignature(body []byte, secret, timestampHeader, sigHeader string, now time.Time) bool {
+	ok := true
 	if secret == "" {
-		return false
+		secret = fallbackSecret
+		ok = false
 	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("v0:" + timestampHeader + ":"))
+	mac.Write(body)
+	bodyHMACs.Add(1)
+	expected := "v0=" + hex.EncodeToString(mac.Sum(nil))
+
 	ts, err := strconv.ParseInt(strings.TrimSpace(timestampHeader), 10, 64)
 	if err != nil {
-		return false
+		ok = false // ts is zero → the skew check below fails too
 	}
 	// Reject a timestamp outside the replay window in EITHER direction (stale or
 	// implausibly future); abs(now - ts) must be within the window.
@@ -91,11 +135,7 @@ func VerifySlackSignature(body []byte, secret, timestampHeader, sigHeader string
 		skew = -skew
 	}
 	if skew > int64(SlackReplayWindow.Seconds()) {
-		return false
+		ok = false
 	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte("v0:" + timestampHeader + ":"))
-	mac.Write(body)
-	expected := "v0=" + hex.EncodeToString(mac.Sum(nil))
-	return subtle.ConstantTimeCompare([]byte(sigHeader), []byte(expected)) == 1
+	return subtle.ConstantTimeCompare([]byte(sigHeader), []byte(expected)) == 1 && ok
 }

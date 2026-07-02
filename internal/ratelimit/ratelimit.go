@@ -65,6 +65,21 @@ func (l *Limiter) PerMinute() int {
 	return l.perMinute
 }
 
+// Keys reports how many per-key buckets the limiter currently tracks. It exists
+// for tests asserting the map is not attacker-growable: a caller keying buckets
+// on an unauthenticated, attacker-chosen string would let a flood of distinct
+// values grow the map until the sweep (up to 24h), so callers must only Allow a
+// key AFTER it has been validated — and a test can prove that by checking Keys
+// stays at zero across a burst of invalid identities.
+func (l *Limiter) Keys() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return len(l.keys)
+}
+
 // Allow records and authorizes a request for key against the limiter's
 // configured per-minute/per-day bounds. It returns false plus a Retry-After
 // duration when either window is full. A nil limiter, or one with both windows

@@ -1705,10 +1705,13 @@ func (db *Database) MarkSLABreached(ctx context.Context, taskID uuid.UUID) error
 // PauseTaskForQuestion parks a RUNNING task in paused_awaiting_input with the
 // agent's question (#510), clearing the lease so the paused task holds no
 // sandbox/container. Guarded on the caller's lease so a recovered run can't
-// pause a task it no longer owns. Returns whether it applied.
+// pause a task it no longer owns. Returns whether it applied. pending_answer
+// is nulled alongside the new question: since #582 the runner clears the Q&A
+// columns only at a terminal transition, so a resumed run that pauses AGAIN
+// would otherwise leave the prior answer dangling next to the new question.
 func (db *Database) PauseTaskForQuestion(ctx context.Context, taskID, leaseOwner uuid.UUID, question string) (bool, error) {
 	res, err := db.conn.ExecContext(ctx, `
-		UPDATE tasks SET status = 'paused_awaiting_input', pending_question = $1,
+		UPDATE tasks SET status = 'paused_awaiting_input', pending_question = $1, pending_answer = NULL,
 			lease_owner = NULL, lease_expires_at = NULL
 		WHERE id = $2 AND lease_owner = $3 AND status = 'running'`,
 		question, taskID, leaseOwner)
