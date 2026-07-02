@@ -454,6 +454,9 @@ func run() error {
 		// orchestrator task in-process, reusing the SAME validated storage create
 		// path POST /tasks uses — no second governance/create path is forked.
 		httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage)),
+		// Knowledge-graph extraction (#523): the seam is always wired; whether
+		// anything fires is gated by FLEET_MEMORY_GRAPH_ENABLED (default off).
+		httpapi.WithMemoryGraphExtractor(mgr.ExtractMemoryGraph),
 	}
 	if remoteMCPSvc != nil {
 		chatOpts = append(chatOpts, httpapi.WithRemoteMCP(remoteMCPSvc))

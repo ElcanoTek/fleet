@@ -104,7 +104,13 @@ type chatStore interface {
 
 	// Memories + memory proposals.
 	ListMemories(ctx context.Context, userEmail string) ([]store.Memory, error)
+	GetMemory(ctx context.Context, userEmail, id string) (*store.Memory, error)
 	CreateMemory(ctx context.Context, userEmail, content, source, kind string) (*store.Memory, error)
+	// Temporal knowledge graph (#523): derived entity/relation rows over the
+	// memories table, plus the two-axis as-of reads (see store.GraphQuery).
+	ReplaceRelationsForMemory(ctx context.Context, userEmail, memoryID string, g store.GraphExtraction) (int, error)
+	GraphAsOf(ctx context.Context, userEmail string, q store.GraphQuery) (*store.Graph, error)
+	ListMemoriesAsOf(ctx context.Context, userEmail string, q store.GraphQuery) ([]store.Memory, error)
 	UpdateMemory(ctx context.Context, userEmail, id string, patch store.MemoryPatch) (*store.Memory, error)
 	DeleteMemory(ctx context.Context, userEmail, id string) error
 	CreateMemoryProposal(ctx context.Context, userEmail, conversationID string, p store.MemoryProposalParams) (*store.Memory, error)
