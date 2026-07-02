@@ -178,6 +178,12 @@ type Handlers struct {
 	// injected from the runner pool via SetTaskStopper (mirrors
 	// SetTaskStreamProvider). nil = cancel stays a DB-only transition.
 	taskStopper func(taskID uuid.UUID, who string) bool
+
+	// chatUsage aggregates the chat store's turn_metrics for the usage report
+	// (#601) — injected by cmd/fleet via SetChatUsageProvider because the chat
+	// store is a separate database. nil → the report covers tasks only and
+	// its sources list says so. See usage.go.
+	chatUsage ChatUsageProvider
 }
 
 // statsCache caches dashboard statistics.

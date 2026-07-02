@@ -111,6 +111,37 @@ export type SLAReport = {
   tasks: SLAReportTask[];
 };
 
+// UsageReport / UsageBucket mirror models.UsageReport (#601 part 1): the
+// GET /admin/usage response. key is the grouping value (user email/username,
+// API key id, project id, model slug, or the YYYY-MM-DD bucket start for
+// day/week); the empty key collects rows without that dimension. Per-source
+// splits (task_* / chat_*) ride alongside the combined totals; cached_tokens
+// is chat-only. note carries the honest-scope pricing caveat (#289).
+export type UsageBucket = {
+  key: string;
+  label?: string;
+  cost_usd: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  task_cost_usd: number;
+  chat_cost_usd: number;
+  task_iterations: number;
+  chat_turns: number;
+};
+
+export type UsageGroupBy = "user" | "key" | "project" | "model" | "day" | "week";
+
+export type UsageReport = {
+  group_by: UsageGroupBy;
+  from: string;
+  to: string;
+  buckets: UsageBucket[];
+  totals: UsageBucket;
+  sources: string[];
+  note: string;
+};
+
 // CostForecast mirrors agentcore.CostForecast (#233): the pre-submission token +
 // cost forecast returned by POST /tasks/estimate. Cost fields are null when the
 // model's pricing is unknown; the token estimates are always present.
@@ -433,6 +464,18 @@ export const orchestratorApi = {
   // rate over a window. days defaults to 7 (clamped to [1, 90] server-side).
   slaReport: (days = 7) =>
     request<SLAReport>(`/sla-report?days=${encodeURIComponent(days)}`),
+
+  // Usage analytics (#601 part 1): admin-only cost/token roll-up by
+  // principal / project / model / time bucket over [from, to). from/to are
+  // RFC 3339 or YYYY-MM-DD; both optional (default: trailing 30 days).
+  usage: (params: { groupBy?: UsageGroupBy; from?: string; to?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.groupBy) qs.set("group_by", params.groupBy);
+    if (params.from) qs.set("from", params.from);
+    if (params.to) qs.set("to", params.to);
+    const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+    return request<UsageReport>(`/admin/usage${suffix}`);
+  },
 
   // Read-only task-template catalog for "new task from a template" (#262).
   taskTemplates: () => request<TaskTemplate[]>("/task-templates"),
