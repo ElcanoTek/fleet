@@ -26,6 +26,22 @@ import (
 // output redaction, the output ceiling, and audit are all applied identically —
 // a deferred tool is first-class, just not always advertised.
 
+// The three bridge tool names, as constants so the persona filter (#570) can
+// recognize the bridges as disclosure plumbing rather than capabilities.
+const (
+	toolNameToolSearch   = "tool_search"
+	toolNameToolDescribe = "tool_describe"
+	toolNameToolCall     = "tool_call"
+)
+
+// isDisclosureBridge reports whether name is one of the three disclosure bridge
+// tools. Used by resolvePersonaTools: a persona allow-list must not strand the
+// bridges (the tools reachable through them are persona-filtered before they
+// enter the deferred registry), though an explicit deny still removes them.
+func isDisclosureBridge(name string) bool {
+	return name == toolNameToolSearch || name == toolNameToolDescribe || name == toolNameToolCall
+}
+
 // disclosureThreshold returns the roster size at or below which nothing is
 // deferred (small catalogs are byte-for-byte unchanged). Above it, MCP tools
 // defer. FLEET_TOOL_DISCLOSURE_THRESHOLD overrides; default is the provider
@@ -85,7 +101,7 @@ Many tools are not listed directly (there are too many to show at once). Use
 tool_search to find the one you need, then tool_describe to see its exact
 parameters, then tool_call to invoke it. Returns matching tool NAMES with a
 short description each.`, len(r.byName))
-	return fantasy.NewAgentTool("tool_search", desc,
+	return fantasy.NewAgentTool(toolNameToolSearch, desc,
 		func(_ context.Context, p toolSearchParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			q := strings.TrimSpace(p.Query)
 			if q == "" {
@@ -113,7 +129,7 @@ type toolDescribeParams struct {
 }
 
 func (r *deferredToolRegistry) describeTool() fantasy.AgentTool {
-	return fantasy.NewAgentTool("tool_describe",
+	return fantasy.NewAgentTool(toolNameToolDescribe,
 		"Show a deferred tool's full description and JSON parameter schema (from tool_search). Call this before tool_call so you pass the right arguments.",
 		func(_ context.Context, p toolDescribeParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			name := strings.TrimSpace(p.Name)
@@ -134,7 +150,7 @@ type toolCallParams struct {
 }
 
 func (r *deferredToolRegistry) callTool() fantasy.AgentTool {
-	return fantasy.NewAgentTool("tool_call",
+	return fantasy.NewAgentTool(toolNameToolCall,
 		"Invoke a deferred tool by name with its arguments (from tool_describe). The call runs under the same policy, credential, and audit controls as any tool.",
 		func(ctx context.Context, p toolCallParams, tc fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			name := strings.TrimSpace(p.Name)
