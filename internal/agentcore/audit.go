@@ -70,8 +70,16 @@ func isEmailTool(toolName string) bool {
 	return toolName == sendEmailToolSuffix || strings.HasSuffix(toolName, "_"+sendEmailToolSuffix)
 }
 
-// maxAttemptsPerCriticalAction caps how many times a (toolName, argsHash) can be
-// invoked under a single audit envelope.
+// maxAttemptsPerCriticalAction caps how many FAILED attempts a (toolName,
+// argsHash) pair may accumulate under a single audit envelope before further
+// retries with those identical args are blocked (checkCriticalTool). It is NOT
+// an invocation cap: only unsuccessful executions count
+// (criticalToolFailureAttempts increments in recordToolResult's failure branch
+// only) and a success DELETES the pair's counter, so a critical action that
+// succeeds is not throttled by this constant. Repeated successful invocations
+// are bounded elsewhere — the audit-token consumption/commitment accounting
+// (registerCommittedActions/markCommittedExecuted) and, for email, the
+// maxSendEmailCallsPerTask cap + duplicate-payload fingerprint guard.
 const maxAttemptsPerCriticalAction = 2
 
 func matchCriticalSuffix(declared string) string {
