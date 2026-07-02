@@ -206,7 +206,15 @@ func NewConcurrencyLimiter(limit int) *ConcurrencyLimiter {
 	if limit > math.MaxInt32 {
 		limit = math.MaxInt32
 	}
-	return &ConcurrencyLimiter{limit: int32(limit)}
+	// Do the narrowing int32 conversion inside an explicit range guard rather
+	// than relying on the clamp above: go/incorrect-integer-conversion tracks the
+	// bound from the guard, not from the reassigning clamp, so the conversion is
+	// only reached when limit is provably within int32 range.
+	var capped int32
+	if limit >= 0 && limit <= math.MaxInt32 {
+		capped = int32(limit)
+	}
+	return &ConcurrencyLimiter{limit: capped}
 }
 
 // Acquire reserves a slot for key, returning false when key is already at the

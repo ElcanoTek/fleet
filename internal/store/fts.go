@@ -143,7 +143,11 @@ LIMIT $3 OFFSET $4`
 	}
 	defer rows.Close()
 
-	results := make([]SearchResult, 0, limit)
+	// Grow the result slice via append rather than pre-sizing from limit: a
+	// user-derived allocation size trips go/uncontrolled-allocation-size, and a
+	// page holds at most `limit` (<=100) rows so a capacity hint buys nothing.
+	// This mirrors GetTurnEventPage in turn_events.go.
+	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
 		if err := rows.Scan(&r.ConversationID, &r.Title, &r.MatchedAt, &r.Preview); err != nil {
