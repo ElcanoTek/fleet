@@ -152,3 +152,25 @@ func TestResolveWorkspacePathNoConvIDUnchanged(t *testing.T) {
 		t.Errorf("absolute = %q, want unchanged", got)
 	}
 }
+
+// TestWorkspaceDirForConversation_ConfinesID pins the id-side half of the
+// path-confinement invariant (the relPath side lives in SafeWorkspaceJoin): a
+// conversation id may only ever name a lexically-local segment under the
+// workspace root. A non-local id (absolute, "..", or an escape) must fall back to
+// the shared root rather than widen the resolved path, while a normal
+// uuid-shaped id joins as-is.
+func TestWorkspaceDirForConversation_ConfinesID(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+
+	for _, id := range []string{"", "..", "../evil", "/etc", "sub/../../x"} {
+		if got := WorkspaceDirForConversation(id); got != root {
+			t.Errorf("WorkspaceDirForConversation(%q) = %q; a non-local id must fall back to the shared root %q", id, got, root)
+		}
+	}
+
+	const okID = "550e8400-e29b-41d4-a716-446655440000"
+	if got, want := WorkspaceDirForConversation(okID), filepath.Join(root, okID); got != want {
+		t.Errorf("WorkspaceDirForConversation(%q) = %q; want %q", okID, got, want)
+	}
+}

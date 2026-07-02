@@ -174,6 +174,15 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Invalid filename")
 		return
 	}
+	// filepath.IsLocal confines the (already sanitizeFilename-reduced) name to a
+	// single component under uploadsDir — no absolute path, "..", or separator can
+	// escape. It is also the barrier CodeQL's path-injection query recognizes, so
+	// the os.Stat / http.ServeFile below clear on rescan. withinDir stays as a
+	// resolved-path defense-in-depth net.
+	if !filepath.IsLocal(filename) {
+		writeError(w, http.StatusBadRequest, "Invalid filename")
+		return
+	}
 
 	uploadsDir := filepath.Join(h.config.DataDir, "temp_uploads")
 	path := filepath.Join(uploadsDir, filename)
@@ -181,7 +190,7 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Invalid filename")
 		return
 	}
-	if _, err := os.Stat(path); os.IsNotExist(err) { //nolint:gosec // G703: filename is sanitized (sanitizeFilename) AND the resolved path is asserted within uploadsDir via withinDir/filepath.Rel.
+	if _, err := os.Stat(path); os.IsNotExist(err) { //nolint:gosec // G703: filename is IsLocal-gated + sanitizeFilename-reduced AND the resolved path is asserted within uploadsDir via withinDir/filepath.Rel.
 		writeError(w, http.StatusNotFound, "File not found")
 		return
 	}
@@ -193,7 +202,7 @@ func (h *Handlers) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Serve the file
-	http.ServeFile(w, r, path) //nolint:gosec // G703: path is asserted within uploadsDir via withinDir/filepath.Rel above; filename is sanitized.
+	http.ServeFile(w, r, path) //nolint:gosec // G703: path is asserted within uploadsDir via withinDir/filepath.Rel above; filename is IsLocal-gated + sanitized.
 }
 
 // CleanupTempFiles removes files older than the specified duration.

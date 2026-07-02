@@ -400,8 +400,17 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 	if !strings.HasSuffix(strings.ToLower(personaFile), ".yaml") {
 		personaFile += ".yaml"
 	}
-	personaPath := filepath.Join(m.personasDir, filepath.Base(personaFile))
-	personaContent, err := os.ReadFile(personaPath) // #nosec G304 — dir is trusted, base() strips traversal.
+	// filepath.Base strips any directory components a caller-supplied persona name
+	// might smuggle in, confining the read to personasDir (a trusted config dir).
+	// The filepath.IsLocal check makes that confinement explicit and is the
+	// barrier CodeQL's path-injection query recognizes, clearing the read below on
+	// rescan; Base always yields a single component, so a valid persona passes.
+	personaBase := filepath.Base(personaFile)
+	if !filepath.IsLocal(personaBase) {
+		return "", fmt.Errorf("invalid persona name %q", persona)
+	}
+	personaPath := filepath.Join(m.personasDir, personaBase)
+	personaContent, err := os.ReadFile(personaPath) // #nosec G304 — personaBase is Base()+IsLocal-gated; personasDir is trusted config.
 	if err != nil {
 		return "", fmt.Errorf("read persona %s: %w", persona, err)
 	}
