@@ -28,7 +28,7 @@ import (
 // cmdWorktree dispatches `fleet-admin worktree list|prune`.
 func cmdWorktree(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin worktree list|prune [--workspace DIR] [--older-than DUR]")
+		return errf(1, "usage: fleet worktree list|prune [--workspace DIR] [--older-than DUR]")
 	}
 	switch argv[0] {
 	case "list", "ls":
