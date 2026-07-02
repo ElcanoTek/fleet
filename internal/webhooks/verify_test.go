@@ -93,6 +93,45 @@ func TestVerifySlackSignature(t *testing.T) {
 	})
 }
 
+// TestVerifiersAlwaysComputeBodyHMAC (#572) asserts STRUCTURALLY — via the
+// BodyHMACComputations test seam, not wall-clock timing — that every reject
+// shape (empty secret, absent/malformed signature header, bad timestamp) still
+// performs exactly one full-body HMAC, the same work as a wrong signature. An
+// early return that skips the HMAC on any of these shapes would reopen the
+// body-size-proportional timing gap that let callers distinguish trigger
+// verifier shapes (slug enumeration).
+func TestVerifiersAlwaysComputeBodyHMAC(t *testing.T) {
+	body := []byte(`{"probe":"payload"}`)
+	now := time.Unix(1_700_000_000, 0)
+	ts := strconv.FormatInt(now.Unix(), 10)
+	goodHex := githubSig(t, "s3cr3t", body)
+
+	cases := []struct {
+		name string
+		call func() bool
+	}{
+		{"hmac: wrong signature", func() bool { return VerifyHMACSHA256(body, "other", goodHex) }},
+		{"hmac: empty header", func() bool { return VerifyHMACSHA256(body, "s3cr3t", "") }},
+		{"hmac: malformed header", func() bool { return VerifyHMACSHA256(body, "s3cr3t", "sha256=abcd") }},
+		{"hmac: empty secret", func() bool { return VerifyHMACSHA256(body, "", goodHex) }},
+		{"slack: wrong signature", func() bool { return VerifySlackSignature(body, "sec", ts, "v0=deadbeef", now) }},
+		{"slack: empty timestamp", func() bool { return VerifySlackSignature(body, "sec", "", "v0=deadbeef", now) }},
+		{"slack: stale timestamp", func() bool { return VerifySlackSignature(body, "sec", ts, "v0=deadbeef", now.Add(time.Hour)) }},
+		{"slack: empty secret", func() bool { return VerifySlackSignature(body, "", ts, "v0=deadbeef", now) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := BodyHMACComputations()
+			if tc.call() {
+				t.Fatal("reject shape unexpectedly verified")
+			}
+			if got := BodyHMACComputations() - before; got != 1 {
+				t.Errorf("performed %d body HMACs, want exactly 1 (timing equalization)", got)
+			}
+		})
+	}
+}
+
 func TestNewDummySecret(t *testing.T) {
 	a, b := NewDummySecret(), NewDummySecret()
 	if a == "" || b == "" {

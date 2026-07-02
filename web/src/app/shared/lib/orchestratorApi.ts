@@ -7,6 +7,7 @@
 // rides along automatically and the proxy resolves it.
 
 import { getStoredToken } from "./orchestratorAuth";
+import { parseSseChunk } from "@/app/lib/sse";
 
 // MCPChoice mirrors agentcore.MCPChoice: which optional server is on + which
 // credential account backs it. Account === "" means the default/shared seat.
@@ -277,25 +278,24 @@ export type TaskStreamFrame = {
   stopped_by?: string;
 };
 
-// createSSEParser returns a chunk-feeder that assembles SSE frames (split on
-// blank lines, `data:` JSON payloads) and invokes onFrame per parsed frame.
+// createSSEParser returns a chunk-feeder that assembles SSE frames and invokes
+// onFrame per parsed `data:` JSON payload. Frame assembly is delegated to the
+// hardened chat parser (parseSseChunk, #589) rather than reimplemented here, so
+// both SSE consumers share ONE parser: it accepts CRLF frame delimiters (a
+// proxy that normalizes line endings would otherwise leave a stream with no
+// "\n\n" — zero frames emitted, buffer growing forever) and joins multi-line
+// `data:` values with "\n" per the SSE spec instead of corrupting them by bare
+// concatenation. Heartbeat/comment frames carry no data and are dropped by
+// parseSseChunk itself.
 // Exported for unit tests; used by streamTaskActivity below.
 export function createSSEParser(onFrame: (frame: TaskStreamFrame) => void): (chunk: string) => void {
   let buffer = "";
   return (chunk: string) => {
-    buffer += chunk;
-    for (;;) {
-      const sep = buffer.indexOf("\n\n");
-      if (sep < 0) break;
-      const raw = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      let data = "";
-      for (const line of raw.split("\n")) {
-        if (line.startsWith("data:")) data += line.slice(5).trim();
-      }
-      if (!data) continue; // heartbeat / comment frame
+    const { events, remainder } = parseSseChunk(buffer + chunk);
+    buffer = remainder;
+    for (const ev of events) {
       try {
-        onFrame(JSON.parse(data) as TaskStreamFrame);
+        onFrame(JSON.parse(ev.data) as TaskStreamFrame);
       } catch {
         // tolerate a malformed frame rather than killing the stream
       }
