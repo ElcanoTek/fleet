@@ -993,6 +993,9 @@ func (p *Pool) notifyProgress(task *models.Task, message string) {
 			TaskID:  task.ID.String(),
 			Name:    notifyTaskName(task.Prompt),
 			Message: message,
+			// Owner email = the push audience (#292), resolved off-thread like
+			// notifyTerminal so the ask/notify path never waits on the lookup.
+			Audience: p.ownerEmail(ctx, task),
 		}
 		if p.publicURLBase != "" {
 			ev.LogURL = p.publicURLBase + "/orchestrator/tasks/" + task.ID.String()

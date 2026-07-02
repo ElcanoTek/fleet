@@ -32,3 +32,7 @@ internal/config/config_test.go:generic-api-key:1154
 # fed to Redactor.Redact to assert they are scrubbed. All fabricated fixtures.
 internal/redact/redact_test.go:generic-api-key:73
 internal/redact/redact_test.go:gitlab-pat:20
+
+# fake: fabricated Web Push subscription placeholder ("fake-p256dh-refreshed")
+# compared in TestUpsertPushSubscription's refresh assertion (#292).
+internal/store/push_subscriptions_test.go:generic-api-key:50

@@ -76,6 +76,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/version"
+	"github.com/ElcanoTek/fleet/internal/webpush"
 )
 
 // approvalExpirySweepInterval is how often the background sweep auto-denies
@@ -117,6 +118,10 @@ func main() {
 		// Eval & regression harness (#502): replay bundle goldens through the
 		// governed loop and gate on the set threshold; exits 0/1 (2 = usage).
 		os.Exit(runEvalCmd(argv[1:]))
+	case invokeGenerateVAPIDKeys:
+		// Browser Web Push setup (#292): print a fresh VAPID key pair as env
+		// lines for the operator's env-file. Boots nothing.
+		os.Exit(runGenerateVAPIDKeys(os.Stdout))
 	case invokeServe:
 		// Daemon: bare `fleet` (legacy) or `fleet serve`. The server is env/config
 		// driven, so any args after `serve` are ignored (no flag parsing here).
@@ -136,6 +141,7 @@ const (
 	invokeMCPBroker
 	invokeValidateConfig
 	invokeEval
+	invokeGenerateVAPIDKeys
 	invokeAdmin // every operator/admin verb → internal/admincli
 )
 
@@ -160,6 +166,8 @@ func classifyInvocation(argv []string) invocation {
 		return invokeValidateConfig
 	case "eval":
 		return invokeEval
+	case "generate-vapid-keys":
+		return invokeGenerateVAPIDKeys
 	default:
 		return invokeAdmin
 	}
@@ -450,6 +458,15 @@ func run() error {
 	if remoteMCPSvc != nil {
 		chatOpts = append(chatOpts, httpapi.WithRemoteMCP(remoteMCPSvc))
 	}
+	// Browser Web Push (#292): nil unless the operator generated VAPID keys
+	// (`fleet generate-vapid-keys`) and set the three FLEET_VAPID_* vars. When
+	// off, the /push/* endpoints answer 501 and no trigger fires — the default,
+	// behavior-unchanged posture. The private key stays host-side in the env.
+	pushSvc := webpush.New(webpush.Load(), chatStore)
+	if pushSvc.Enabled() {
+		log.Printf("web push: enabled")
+		chatOpts = append(chatOpts, httpapi.WithPush(pushSvc))
+	}
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 
 	// Auto-approve-in-test (#225) bypasses the human-in-the-loop approval gate.
@@ -611,14 +628,9 @@ func run() error {
 		poolGrace = -1
 	}
 	// Task-completion notifier (#208): host-side outbound email/webhook on a
-	// scheduled task reaching a terminal status. Config comes from the host
-	// env-file (FLEET_SMTP_*/FLEET_WEBHOOK_*/FLEET_NOTIFY_*); secrets stay
-	// host-side and never enter the sandbox or the log. Default OFF — with none of
-	// those vars set, taskNotifier.Enabled() is false and the fire path is a no-op.
-	taskNotifier := notify.New(notify.Load())
-	if taskNotifier.Enabled() {
-		log.Printf("task notifications: enabled")
-	}
+	// scheduled task reaching a terminal status, plus the Web Push backend
+	// (#292) when configured. See buildTaskNotifier.
+	taskNotifier := buildTaskNotifier(pushSvc)
 	pool := runner.NewPool(schedStorage, taskRunner, runner.Config{
 		Limiter:       agentLimiter,
 		DrainGrace:    poolGrace,
@@ -1587,6 +1599,25 @@ func configurePIIRedaction(cfg *config.Config) {
 // emailReplierFor wires email reply-back (#511) only when SMTP is configured for
 // sending, so a deployment without SMTP does no per-run reply lookups. Returns a
 // nil interface (reply-back off) otherwise.
+// buildTaskNotifier constructs the task-completion notifier (#208). Config
+// comes from the host env-file (FLEET_SMTP_*/FLEET_WEBHOOK_*/FLEET_NOTIFY_*);
+// secrets stay host-side and never enter the sandbox or the log. Default OFF —
+// with none of those vars set, Enabled() is false and the fire path is a
+// no-op. When Web Push is configured (#292) it is attached as a per-user
+// notify backend, so task terminal + progress/ask events fan out to the
+// owner's browsers through the SAME Notify path as email/webhook — one
+// delivery pipeline, no parallel trigger plumbing.
+func buildTaskNotifier(pushSvc *webpush.Service) *notify.Notifier {
+	n := notify.New(notify.Load())
+	if n.Enabled() {
+		log.Printf("task notifications: enabled")
+	}
+	if pushSvc.Enabled() {
+		n.SetPush(pushSvc)
+	}
+	return n
+}
+
 func emailReplierFor(n *notify.Notifier) runner.EmailReplier {
 	if !n.ReplyEnabled() {
 		return nil
