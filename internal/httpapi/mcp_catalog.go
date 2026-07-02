@@ -35,13 +35,18 @@ type mcpCatalogBundledEntry struct {
 }
 
 type mcpCatalogThirdPartyEntry struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Description string `json:"description"`
-	URL         string `json:"url"`
-	Vendor      string `json:"vendor,omitempty"`
-	DocsURL     string `json:"docs_url,omitempty"`
-	Trust       string `json:"trust"` // always "third_party"
+	Name        string   `json:"name"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	URL         string   `json:"url"`
+	Vendor      string   `json:"vendor,omitempty"`
+	DocsURL     string   `json:"docs_url,omitempty"`
+	RepoURL     string   `json:"repo_url,omitempty"`
+	Category    string   `json:"category,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Provenance  string   `json:"provenance"` // official | third_party | community (hosting-operator trust tier)
+	Auth        string   `json:"auth,omitempty"`
+	Trust       string   `json:"trust"` // always "third_party" (the CLASS, vs "bundled"; distinct from Provenance)
 }
 
 type mcpCatalogResponse struct {
@@ -95,6 +100,11 @@ func thirdPartyCatalogEntry(e clientconfig.RemoteMCPCatalogEntry) mcpCatalogThir
 		URL:         strings.TrimSpace(e.URL),
 		Vendor:      strings.TrimSpace(e.Vendor),
 		DocsURL:     strings.TrimSpace(e.DocsURL),
+		RepoURL:     strings.TrimSpace(e.RepoURL),
+		Category:    strings.TrimSpace(e.Category),
+		Tags:        e.Tags,
+		Provenance:  e.Provenance,
+		Auth:        e.Auth,
 		Trust:       "third_party",
 	}
 }
