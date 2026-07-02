@@ -46,6 +46,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	"github.com/ElcanoTek/fleet/internal/tools"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 const (
@@ -466,9 +467,17 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			defer func() {
 				cancelTask() // release the per-task context on every exit path
 				p.mu.Lock()
-				delete(p.active, task.ID)
-				delete(p.stopRequested, task.ID)
-				delete(p.pauseRequested, task.ID)
+				// Token-guarded cleanup (#581): only remove the bookkeeping
+				// entries when THIS claim still owns them. After a lease
+				// recovery + in-process re-claim, active[task.ID] belongs to
+				// the fresh claim (a new token) — an unguarded delete here
+				// would defeat stillOwns' fencing for the live run, stop its
+				// lease renewal, and orphan StopTask.
+				if cur, ok := p.active[task.ID]; ok && cur.token == token {
+					delete(p.active, task.ID)
+					delete(p.stopRequested, task.ID)
+					delete(p.pauseRequested, task.ID)
+				}
 				p.mu.Unlock()
 				release() // release AFTER cleanup
 			}()
@@ -550,13 +559,10 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		log.Printf("runner: failed to report running for task %s: %v", task.ID, err)
 	}
 	// Resumed-after-ask (#510): the run injects the pending Q&A from the
-	// in-memory task struct; clear the DB columns now (under our lease) so a
-	// later run doesn't re-inject a stale answer. Best-effort.
-	if task.PendingQuestion != "" || task.PendingAnswer != "" {
-		if err := p.store.ClearPendingQA(context.Background(), task.ID, p.leaseOwner); err != nil {
-			log.Printf("runner: failed to clear pending Q&A for task %s: %v", task.ID, err)
-		}
-	}
+	// in-memory task struct. The DB columns are cleared at the TERMINAL
+	// transition (clearPendingQA), not here — clearing at run start lost the
+	// human's answer when the resumed run failed retryably, because the retry
+	// is a fresh claim that re-reads pending_answer (#582).
 
 	// Install the workspace-path reporter (#287): the scheduled runner invokes it
 	// once it has resolved this run's effective workspace directory (a per-run
@@ -692,13 +698,20 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	switch {
 	case interrupted:
 		msg := "Task interrupted: server shutdown (grace period expired)"
+		p.clearPendingQA(task)
+		landed := true
 		if _, err := p.reportStatus(task.ID, models.TaskStatusError, msg); err != nil {
+			landed = false
 			log.Printf("runner: failed to report interrupt for task %s: %v", task.ID, err)
 		}
 		p.submitLog(task, session, msg)
 		log.Printf("runner: task %s interrupted after %v", task.ID, time.Since(start).Round(time.Second))
-		// Terminal failure: fire the outbound notification off-thread (#208).
-		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+		// Terminal failure: fire the outbound notification off-thread (#208) —
+		// only when the terminal write actually landed (#580), so a lease lost
+		// out from under us never produces a notification the DB contradicts.
+		if landed {
+			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+		}
 	case runErr != nil && task.RetryPolicy.ShouldRetryClass(classifyFailure(runErr)) && task.AttemptCount < task.MaxRetries:
 		// Retryable failure class with retries left: re-queue the SAME task for
 		// another whole-task attempt after a backoff, instead of failing terminally.
@@ -712,12 +725,22 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		when := time.Now().UTC().Add(backoff)
 		msg := fmt.Sprintf("Task attempt %d failed (%s); retrying in %s: %v",
 			task.AttemptCount+1, class, backoff.Round(time.Second), runErr)
+		// The pending Q&A (#582) is deliberately NOT cleared on a successful
+		// requeue: the retried claim re-reads pending_answer so the human's
+		// answer is injected into every attempt of the resumed run.
 		if _, err := p.store.RequeueTaskForRetryWithContext(context.Background(), task.ID, p.leaseOwner, when, msg); err != nil {
 			// Could not re-queue (e.g. lease lost): fall back to a terminal error so
 			// the task never silently strands as running.
 			log.Printf("runner: failed to re-queue task %s for retry: %v; marking error", task.ID, err)
+			p.clearPendingQA(task)
 			if _, rerr := p.reportStatus(task.ID, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
 				log.Printf("runner: failed to report error for task %s: %v", task.ID, rerr)
+			} else {
+				// The fallback DID land a terminal error: fire the failure
+				// notification (#208) and the post-failure diagnosis (#317)
+				// exactly like the other terminal-failure branches (#580).
+				p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+				p.maybeAnalyzeFailure(task, session, runErr)
 			}
 		} else {
 			log.Printf("runner: task %s attempt %d failed (transient); re-queued for retry at %s",
@@ -730,22 +753,28 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		// queue (#253) instead of bare error, so the exhausted task is reviewable and
 		// replayable rather than indistinguishable from a one-off per-attempt error.
 		reason := fmt.Sprintf("retry budget exhausted after %d attempt(s): %v", task.AttemptCount+1, runErr)
-		p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", start)
-		// Terminal failure (quarantined): fire the outbound notification (#208) and
-		// the post-failure LLM diagnosis (#317), both off-thread.
-		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
-		p.maybeAnalyzeFailure(task, session, runErr)
+		p.clearPendingQA(task)
+		if p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", start) {
+			// Terminal failure (quarantined): fire the outbound notification (#208)
+			// and the post-failure LLM diagnosis (#317), both off-thread — only
+			// when a terminal state actually landed (#580).
+			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+			p.maybeAnalyzeFailure(task, session, runErr)
+		}
 	case runErr != nil:
 		// Non-retryable (deterministic) failure: there is no point retrying, so route
 		// straight to the dead-letter queue (#253). This replaces the prior bare-error
 		// terminal write — a deterministic config/validation failure now quarantines
 		// for review rather than silently erroring.
 		reason := "non-retryable failure: " + runErr.Error()
-		p.sendToDeadLetter(task, session, runErr, reason, "non_retryable", start)
-		// Terminal failure (quarantined): fire the outbound notification (#208) and
-		// the post-failure LLM diagnosis (#317), both off-thread.
-		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
-		p.maybeAnalyzeFailure(task, session, runErr)
+		p.clearPendingQA(task)
+		if p.sendToDeadLetter(task, session, runErr, reason, "non_retryable", start) {
+			// Terminal failure (quarantined): fire the outbound notification (#208)
+			// and the post-failure LLM diagnosis (#317), both off-thread — only
+			// when a terminal state actually landed (#580).
+			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+			p.maybeAnalyzeFailure(task, session, runErr)
+		}
 	default:
 		// Structured-output mode (#244): if the task declared an output_schema,
 		// validate the agent's final answer against it and persist the validated
@@ -759,16 +788,26 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		// Persist the published-artifact manifest (#204) under the held lease,
 		// before the terminal success clears it. No-op when nothing was published.
 		p.recordArtifacts(task.ID, artifactColl.Marshal())
+		p.clearPendingQA(task)
+		landed := true
 		if _, err := p.reportStatus(task.ID, models.TaskStatusSuccess, "Task completed successfully"); err != nil {
-			log.Printf("runner: failed to report success for task %s: %v", task.ID, err)
+			landed = false
+			log.Printf("runner: failed to report success for task %s: %v; suppressing success side effects", task.ID, err)
 		}
 		p.submitLog(task, session, "")
 		log.Printf("runner: task %s completed in %v", task.ID, time.Since(start).Round(time.Second))
-		// Terminal success: fire the outbound notification off-thread (#208).
-		p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
-		// If this run answered an inbound email (#511), reply to the sender with
-		// the result. Off-thread, no-op unless the run came from an email trigger.
-		p.maybeReplyToEmailEvent(task, session)
+		// Terminal success side effects fire ONLY when the terminal write landed
+		// (#580): if the lease was lost (operator cancel racing the finish, or a
+		// recovery re-queue), the DB does not record this run as a success — a
+		// "success" notification or an external email reply would be spurious,
+		// and the re-queued run's own reply would make it a duplicate.
+		if landed {
+			// Terminal success: fire the outbound notification off-thread (#208).
+			p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
+			// If this run answered an inbound email (#511), reply to the sender with
+			// the result. Off-thread, no-op unless the run came from an email trigger.
+			p.maybeReplyToEmailEvent(task, session)
+		}
 	}
 }
 
@@ -834,21 +873,43 @@ func retryBackoff(attempt int, policy *models.RetryPolicy) time.Duration {
 // DLQ metric labeled by the bounded reason class. If the storage transition fails
 // (e.g. the lease was recovered out from under us), it falls back to a plain
 // terminal error so the task never strands as running — preserving the
-// invariant that every finished run lands in SOME terminal state.
-func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, runErr error, reason, reasonClass string, start time.Time) {
+// invariant that every finished run lands in SOME terminal state. It reports
+// whether a terminal state actually landed (dead-lettered, or the fallback
+// error) so the caller can gate the failure notification + diagnosis on it
+// (#580): when even the fallback is rejected the DB no longer records this
+// run's outcome and no external side effect may fire.
+func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, runErr error, reason, reasonClass string, start time.Time) bool {
 	attempts := task.AttemptCount + 1
 	if _, err := p.store.DeadLetterTaskWithContext(context.Background(), task.ID, p.leaseOwner, reason, attempts); err != nil {
 		log.Printf("runner: failed to dead-letter task %s: %v; falling back to error status", task.ID, err)
+		landed := true
 		if _, rerr := p.reportStatus(task.ID, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
+			landed = false
 			log.Printf("runner: failed to report fallback error for task %s: %v", task.ID, rerr)
 		}
 		p.submitLog(task, session, reason)
-		return
+		return landed
 	}
 	p.submitLog(task, session, reason)
 	metrics.RecordDeadLetterQueued(reasonClass)
 	log.Printf("runner: task %s dead-lettered (%s) after %v and %d attempt(s): %v",
 		task.ID, reasonClass, time.Since(start).Round(time.Second), attempts, runErr)
+	return true
+}
+
+// clearPendingQA nulls a resumed task's pending question/answer columns (#510)
+// under our lease. It is called immediately BEFORE each terminal transition —
+// never at run start — so a retryable failure re-queues the task with the
+// human's answer intact and every retried attempt of the resumed run still
+// injects it (#582). No-op when the task carried no pending Q&A; best-effort
+// otherwise (a failure is logged and never affects the terminal write).
+func (p *Pool) clearPendingQA(task *models.Task) {
+	if task.PendingQuestion == "" && task.PendingAnswer == "" {
+		return
+	}
+	if err := p.store.ClearPendingQA(context.Background(), task.ID, p.leaseOwner); err != nil {
+		log.Printf("runner: failed to clear pending Q&A for task %s: %v", task.ID, err)
+	}
 }
 
 // reportStatus writes a status update for the synthetic worker using a
@@ -1068,10 +1129,9 @@ func (p *Pool) priorRunHandoff(taskID uuid.UUID) string {
 			break
 		}
 	}
-	if len(last) > carryContextMaxChars {
-		last = last[:carryContextMaxChars] + "…[truncated]"
-	}
-	return last
+	// Rune-boundary clamp (#595): a byte slice here could split a multi-byte
+	// rune and inject invalid UTF-8 into the next run's "## Previous Run".
+	return truncate.Clamp(last, carryContextMaxChars, "…[truncated]")
 }
 
 // carryContextMaxChars bounds the prior-run handoff so context-carry stays
