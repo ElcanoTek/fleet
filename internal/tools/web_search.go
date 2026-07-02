@@ -64,7 +64,10 @@ func (rl *rateLimiter) wait(ctx context.Context, key string) error {
 		rl.resetTime = time.Now().Add(time.Minute)
 	}
 
-	// Wait for minimum interval between requests
+	// Wait for minimum interval between requests. The mutex is released while
+	// blocked and re-acquired on BOTH select outcomes so the deferred Unlock
+	// above always releases a held mutex — returning while unlocked would make
+	// it a fatal double-unlock that kills the whole process (issue #561).
 	elapsed := time.Since(rl.lastRequest)
 	if elapsed < rl.minInterval {
 		waitTime := rl.minInterval - elapsed
@@ -72,6 +75,7 @@ func (rl *rateLimiter) wait(ctx context.Context, key string) error {
 		select {
 		case <-time.After(waitTime):
 		case <-ctx.Done():
+			rl.mu.Lock()
 			return ctx.Err()
 		}
 		rl.mu.Lock()

@@ -1,7 +1,10 @@
 package tools
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -49,5 +52,45 @@ func TestHasClass(t *testing.T) {
 				t.Errorf("hasClass() = %v, want %v (attr: %q, target: %q)", got, tt.want, tt.classAttr, tt.target)
 			}
 		})
+	}
+}
+
+// TestRateLimiterWaitCancelDuringIntervalWait is the regression test for
+// issue #561: cancelling the context while a call is blocked in the
+// min-interval wait used to return with the mutex already unlocked, so the
+// deferred Unlock fired a fatal "sync: unlock of unlocked mutex" that killed
+// the whole process. The cancelled call must return ctx.Err(), and the
+// limiter must remain usable afterwards.
+func TestRateLimiterWaitCancelDuringIntervalWait(t *testing.T) {
+	rl := newRateLimiter(10 * time.Second)
+
+	// First call: lastRequest is zero, so it records a request and returns
+	// immediately. The second call then owes the full min interval.
+	if err := rl.wait(context.Background(), "search"); err != nil {
+		t.Fatalf("first wait: unexpected error: %v", err)
+	}
+
+	// Second call blocks in the interval select; cancel it mid-wait.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- rl.wait(ctx, "search") }()
+	time.Sleep(50 * time.Millisecond) // let the goroutine reach the select
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled wait: got %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled wait did not return")
+	}
+
+	// The mutex must still be held exactly once per critical section: a
+	// fresh cancelled call must be able to lock, block, and bail out again.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+	if err := rl.wait(ctx2, "search"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("second cancelled wait: got %v, want context.Canceled", err)
 	}
 }
