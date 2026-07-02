@@ -31,11 +31,31 @@ func TestIsPrivateIP(t *testing.T) {
 		{"0.0.0.0", true},
 		{"fc00::1", true}, // IPv6 unique-local (IsPrivate)
 		{"fe80::1", true}, // IPv6 link-local
+		// Blocked (#574): special-purpose ranges net.IP's classifiers miss.
+		// RFC 6598 CGNAT 100.64.0.0/10 — Alibaba/Oracle serve instance
+		// metadata here, so it is credential-bearing like 169.254.169.254.
+		{"100.64.0.0", true},
+		{"100.100.100.200", true}, // Alibaba/Oracle cloud metadata
+		{"100.127.255.255", true},
+		{"::ffff:100.100.100.200", true}, // IPv4-mapped IPv6 form
+		// RFC 5737 TEST-NET-1, RFC 2544 benchmarking, RFC 1112 reserved.
+		{"192.0.2.1", true},
+		{"198.18.0.1", true},
+		{"198.19.255.255", true},
+		{"240.0.0.1", true},
+		{"255.255.255.255", true},
 		// Allowed: ordinary public addresses.
 		{"8.8.8.8", false},
 		{"1.1.1.1", false},
 		{"93.184.216.34", false}, // example.com
 		{"2606:2800:220:1:248:1893:25c8:1946", false},
+		// Allowed: public neighbors bracketing the newly-blocked ranges —
+		// pins that the CIDRs are exactly right, not over-broad.
+		{"100.63.255.255", false}, // just below 100.64.0.0/10
+		{"100.128.0.0", false},    // just above 100.64.0.0/10
+		{"192.0.3.1", false},      // just above 192.0.2.0/24
+		{"198.17.255.255", false}, // just below 198.18.0.0/15
+		{"198.20.0.1", false},     // just above 198.18.0.0/15
 	}
 	for _, c := range cases {
 		ip := net.ParseIP(c.ip)
