@@ -24,6 +24,16 @@ func TestRedactor_CanonicalPatterns(t *testing.T) {
 		{"marker json", `{"api_key":"supersecretvalue123"}`, "supersecretvalue123", "api_key"},
 		{"secret colon", "secret: hunter2hunter2", "hunter2hunter2", ""},
 		{"password", `password="p@ssw0rd-longvalue"`, "p@ssw0rd-longvalue", ""},
+		// Keyword as an interior token of a longer key name (#569): the marker
+		// rule must match aws_secret_access_key-style names, not just names that
+		// END at the keyword.
+		{"aws secret ini form", "aws_secret_access_key = wJalrXUtnFEMI/K7MDENGbPxRfiCY", "wJalrXUtnFEMI/K7MDENGbPxRfiCY", "aws_secret_access_key"},
+		{"aws secret json form", `{"aws_secret_access_key":"wJalrXUtnFEMIsupersecret"}`, "wJalrXUtnFEMIsupersecret", "aws_secret_access_key"},
+		{"secret access key colon", "secret_access_key: AKIAIOSFODNN7supersecret", "AKIAIOSFODNN7supersecret", "secret_access_key"},
+		{"refresh token", "gcp_refresh_token=1//0eXaMpLeReFrEsH", "1//0eXaMpLeReFrEsH", "gcp_refresh_token"},
+		// HTTP Basic auth (#569): the base64 credential decodes to plaintext
+		// user:password, so it must be scrubbed like a Bearer token.
+		{"basic auth", "Authorization: Basic dXNlcjpzdXBlcnNlY3JldA==", "dXNlcjpzdXBlcnNlY3JldA==", "Authorization"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -84,9 +94,18 @@ func TestRedactor_RegisterEnvLiterals(t *testing.T) {
 
 func TestRedactor_LeavesProseAlone(t *testing.T) {
 	r := NewRedactor(nil)
-	in := "The quick brown fox jumped over 12 lazy dogs at 9am. some_value: short."
-	if got := r.Redact(in); got != in {
-		t.Errorf("normal prose was altered:\n in:  %q\n got: %q", in, got)
+	cases := []string{
+		"The quick brown fox jumped over 12 lazy dogs at 9am. some_value: short.",
+		// Guards against the interior-keyword extension (#569) over-matching:
+		// prose words that merely EMBED a keyword (secretary, tokenizer) have no
+		// _/- boundary after it, so they must not trigger the marker rule.
+		"the secretary scheduled tokenizer = byte-pair-encoding for review",
+		"passwords must be rotated quarterly per the security policy",
+	}
+	for _, in := range cases {
+		if got := r.Redact(in); got != in {
+			t.Errorf("normal prose was altered:\n in:  %q\n got: %q", in, got)
+		}
 	}
 }
 
