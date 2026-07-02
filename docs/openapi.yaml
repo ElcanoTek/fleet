@@ -374,6 +374,78 @@ components:
         task_iterations: { type: integer }
         chat_turns: { type: integer }
       required: [key, cost_usd, prompt_tokens, completion_tokens, cached_tokens, task_cost_usd, chat_cost_usd, task_iterations, chat_turns]
+    BudgetCreate:
+      type: object
+      description: >-
+        POST /admin/budgets body (#601 part 2): create or replace the rolling
+        budget for one (scope, principal_id, window). scope=user is keyed by
+        the sched username (an email on a standard deployment), scope=key by
+        the scoped API key id, scope=project by the chat project id (recorded
+        and reported, but not yet enforced at create — tasks carry no project).
+        Bounds are optional individually but at least one must be set, soft
+        must not exceed hard per measure, and budgets bound TOKENS as well as
+        dollars because dollar coverage depends on pricing configuration
+        (#289). An upsert resets the once-per-window soft-alert marker.
+      properties:
+        scope: { type: string, enum: [user, key, project] }
+        principal_id: { type: string }
+        window: { type: string, enum: [day, week, month], description: "UTC calendar window (weeks start Monday 00:00 UTC)." }
+        soft_usd: { type: number, description: "Dollar spend that fires the once-per-window notify alert." }
+        hard_usd: { type: number, description: "Dollar spend at which new task creation is refused (402)." }
+        soft_tokens: { type: integer, description: "Token (prompt+completion) spend that fires the alert." }
+        hard_tokens: { type: integer, description: "Token spend at which new task creation is refused (402)." }
+      required: [scope, principal_id, window]
+    Budget:
+      type: object
+      description: >-
+        One persisted per-principal rolling budget (#601 part 2). Holds only
+        configuration plus the soft-alert dedup marker — spend is recomputed
+        from the persisted metering (the part-1 usage read model) at each
+        check, never accumulated here.
+      properties:
+        id: { type: string, format: uuid }
+        scope: { type: string, enum: [user, key, project] }
+        principal_id: { type: string }
+        window: { type: string, enum: [day, week, month] }
+        soft_usd: { type: number }
+        hard_usd: { type: number }
+        soft_tokens: { type: integer }
+        hard_tokens: { type: integer }
+        soft_alert_window_start: { type: string, format: date-time, description: "UTC start of the window the one soft alert fired for (dedup marker)." }
+        soft_alert_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, scope, principal_id, window, created_at, updated_at]
+    BudgetStatus:
+      type: object
+      description: >-
+        One GET /admin/budgets row (#601 part 2): the configured budget plus
+        its live evaluation — current window [start, end), spend recomputed
+        from the persisted metering, the EFFECTIVE hard bounds after the
+        fail-safe clamp against the live global ceilings (#286; a budget can
+        only narrow FLEET_MAX_COST_USD / FLEET_MAX_TOTAL_TOKENS, never exceed
+        them), and whether this window's soft alert has fired.
+      properties:
+        id: { type: string, format: uuid }
+        scope: { type: string, enum: [user, key, project] }
+        principal_id: { type: string }
+        window: { type: string, enum: [day, week, month] }
+        soft_usd: { type: number }
+        hard_usd: { type: number }
+        soft_tokens: { type: integer }
+        hard_tokens: { type: integer }
+        soft_alert_window_start: { type: string, format: date-time }
+        soft_alert_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        spend_usd: { type: number }
+        spend_tokens: { type: integer }
+        effective_hard_usd: { type: number }
+        effective_hard_tokens: { type: integer }
+        soft_alerted: { type: boolean }
+      required: [id, scope, principal_id, window, created_at, updated_at, window_start, window_end, spend_usd, spend_tokens, soft_alerted]
 
   responses:
     Error:
@@ -1698,6 +1770,77 @@ paths:
               schema: { $ref: "#/components/schemas/UsageReport" }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+
+  /admin/budgets:
+    get:
+      summary: List per-principal rolling budgets with their live window spend (#601 part 2).
+      description: >-
+        Every configured budget plus its current-window evaluation — spend
+        recomputed from the persisted metering (the part-1 usage read model),
+        the effective hard bounds after the fail-safe clamp against the live
+        global ceilings (#286), and whether this window's soft alert fired.
+        Admin-only; like /admin/usage the gate is enforced in-handler on the
+        admin permission so both the admin API key and an admin-role dashboard
+        session are accepted (#458).
+      security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: The configured budgets with live evaluation.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  budgets:
+                    type: array
+                    items: { $ref: "#/components/schemas/BudgetStatus" }
+                required: [budgets]
+        "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+    post:
+      summary: Create or replace a per-principal rolling budget (#601 part 2).
+      description: >-
+        Upserts on (scope, principal_id, window) — one budget per principal per
+        window kind — and resets the once-per-window soft-alert marker so an
+        edited budget re-arms its alert. Enforcement applies at every
+        task-create path (POST /tasks, POST /tasks/batch, chat schedule_task):
+        at a soft bound one notify alert fires per window crossing; at a hard
+        bound new task creation is refused with 402 until the window rolls
+        over. Budgets only narrow the live global FLEET_MAX_COST_USD /
+        FLEET_MAX_TOTAL_TOKENS ceilings, never exceed them. Admin-only
+        (in-handler admin gate, #458).
+      security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BudgetCreate" }
+      responses:
+        "200":
+          description: The persisted budget.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Budget" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+
+  /admin/budgets/{budget_id}:
+    delete:
+      summary: Delete a per-principal rolling budget (#601 part 2).
+      security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: budget_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "500": { $ref: "#/components/responses/Error" }
 
   /logs/{task_id}:

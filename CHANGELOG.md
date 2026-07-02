@@ -81,6 +81,25 @@ prior versions are listed because none have shipped.
   configured, so the endpoint and panel always show token totals alongside
   dollars and say so. Per-principal budgets are part 2 of #601 and are not
   included here. See `docs/USAGE-ANALYTICS.md`.
+- Per-principal rolling budgets with alerts (#601 part 2): a budget is
+  `{scope: user|key|project, principal, window: day|week|month, soft/hard
+  bounds in dollars AND tokens}` (one new sched table, migration 052),
+  enforced at task-create by ONE shared gate across every create path —
+  `POST /tasks`, `POST /tasks/batch`, and the chat `schedule_task` approval
+  seam. Spend is recomputed per check from the part-1 usage read model (no
+  second accounting path). At a soft bound exactly one notify alert fires per
+  window crossing (persisted marker — restart-safe, concurrency-safe) through
+  the existing email/webhook/Web Push pipeline; at a hard bound new task
+  creation is refused with 402 + `Retry-After` until the window rolls over.
+  Fail-safe composition with #286: effective hard bounds are clamped to the
+  LIVE global `FLEET_MAX_COST_USD` / `FLEET_MAX_TOTAL_TOKENS` — budgets only
+  narrow, never widen, and no budget configured is byte-for-byte today's
+  behavior. Admin CRUD at `GET/POST /admin/budgets` +
+  `DELETE /admin/budgets/{id}` (in `docs/openapi.yaml`, parity-tested); the
+  Operations Center Usage panel lists configured budgets read-only with live
+  window spend. Honest scope: `scope=project` is stored/reported but not yet
+  enforced (no create path carries a project); admin-key submissions and
+  in-process spawn/rerun paths are not gated. See `docs/USAGE-ANALYTICS.md`.
 - `fleet task run <task.yaml>` — the local one-shot harness (run a single task
   to completion through the governed scheduled runtime, no server/DB) is now a
   verb of the unified CLI instead of the separate `cutlass` binary; the logic

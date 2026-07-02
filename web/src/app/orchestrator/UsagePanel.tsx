@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import {
   orchestratorApi,
+  type BudgetStatus,
   type UsageBucket,
   type UsageGroupBy,
   type UsageReport,
@@ -176,8 +177,111 @@ export function UsagePanel() {
           </p>
         </div>
       )}
+      <BudgetsSection />
     </div>
   );
+}
+
+// BudgetsSection — the read-only view of the per-principal rolling budgets
+// (#601 part 2) that gate task creation over this same metering: configured
+// bounds (dollars AND tokens — dollar coverage depends on pricing config), the
+// live current-window spend, and whether this window's one soft alert fired.
+// Budgets are managed via the API (POST/DELETE /admin/budgets); rendering them
+// beside the usage report keeps the spend numbers and the limits that act on
+// them in one place. Hidden entirely when none are configured.
+function BudgetsSection() {
+  const { data, error } = useCancellableFetch(
+    useCallback(() => orchestratorApi.budgets(), []),
+    [],
+  );
+  if (error) {
+    return <div className="table-error">Failed to load budgets: {error}</div>;
+  }
+  const budgets = data?.budgets ?? [];
+  if (budgets.length === 0) {
+    return (
+      <p className="usage-note" data-testid="budgets-empty">
+        No budgets configured. Per-principal rolling budgets (soft alert / hard refusal per
+        day, week, or month) are managed via <code>POST /admin/budgets</code>.
+      </p>
+    );
+  }
+  return (
+    <div data-testid="budgets-section">
+      <h3 className="usage-subheading">Budgets</h3>
+      <div className="table-wrapper">
+        <table data-testid="budgets-table">
+          <thead>
+            <tr>
+              <th scope="col">Scope</th>
+              <th scope="col">Principal</th>
+              <th scope="col">Window</th>
+              <th scope="col">Spend</th>
+              <th scope="col">Soft / hard (USD)</th>
+              <th scope="col">Soft / hard (tokens)</th>
+              <th scope="col">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {budgets.map((b) => (
+              <tr key={b.id} data-testid="budget-row">
+                <td>{b.scope}</td>
+                <td className="prompt-cell" title={b.principal_id}>
+                  {b.principal_id}
+                </td>
+                <td>{b.window}</td>
+                <td>
+                  {fmtUSD(b.spend_usd)} · {compact.format(b.spend_tokens)} tok
+                </td>
+                <td>{budgetBound(b.soft_usd, b.hard_usd, b.effective_hard_usd, fmtUSD)}</td>
+                <td>
+                  {budgetBound(b.soft_tokens, b.hard_tokens, b.effective_hard_tokens, (v) =>
+                    compact.format(v),
+                  )}
+                </td>
+                <td>{budgetStateLabel(b)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="usage-note">
+        A soft bound fires one alert per window; a hard bound refuses new task creation until
+        the window rolls over. Hard bounds never exceed the live global ceilings. Dollar bounds
+        cover only priced runs (see the note above) — token bounds are complete regardless.
+      </p>
+    </div>
+  );
+}
+
+// budgetBound renders "soft / hard" with unset bounds as an em dash, and shows
+// the effective (globally-clamped) hard value when it differs from the row's.
+function budgetBound(
+  soft: number | undefined,
+  hard: number | undefined,
+  effectiveHard: number | undefined,
+  fmt: (v: number) => string,
+): string {
+  const softStr = soft === undefined ? "—" : fmt(soft);
+  let hardStr = hard === undefined ? "—" : fmt(hard);
+  if (hard !== undefined && effectiveHard !== undefined && effectiveHard < hard) {
+    hardStr = `${fmt(effectiveHard)} (clamped from ${fmt(hard)})`;
+  }
+  return `${softStr} / ${hardStr}`;
+}
+
+// budgetStateLabel summarizes where the window stands: exhausted (a hard bound
+// reached), alerted (this window's soft alert fired), or ok.
+function budgetStateLabel(b: BudgetStatus): string {
+  const hardUSD = b.effective_hard_usd ?? b.hard_usd;
+  const hardTok = b.effective_hard_tokens ?? b.hard_tokens;
+  if (
+    (hardUSD !== undefined && b.spend_usd >= hardUSD) ||
+    (hardTok !== undefined && b.spend_tokens >= hardTok)
+  ) {
+    return "exhausted";
+  }
+  return b.soft_alerted ? "alerted" : "ok";
 }
 
 // UsageTotals — the KPI row: combined spend (with the per-source split as the
