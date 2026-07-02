@@ -112,12 +112,17 @@ function positionMenu(menu: HTMLElement, anchor: DOMRect, placement: MenuPlaceme
     menu.style.bottom = `${Math.round(vh - anchor.top + 6)}px`;
   } else if (placement === "top-start") {
     // Collapsed-rail account menu (the design's `.rail.collapsed .account-menu`):
-    // opens above a narrow anchor at a fixed 15rem width, nudged 0.3rem in from
-    // the anchor's left edge instead of stretching to it.
+    // opens above a narrow anchor, nudged 0.3rem in from the anchor's left edge
+    // instead of stretching to it. 15rem is the design's base width; the menu
+    // may grow to its content (the Theme segmented control is wider than the
+    // design's) so nothing clips, capped and clamped fully on-screen.
     menu.style.right = "auto";
     menu.style.top = "auto";
-    menu.style.left = `${Math.round(Math.max(VIEWPORT_MARGIN, anchor.left + 5))}px`;
-    menu.style.width = "15rem";
+    menu.style.minWidth = "15rem";
+    menu.style.maxWidth = "20rem";
+    menu.style.width = "max-content";
+    const mw = menu.offsetWidth; // re-measure with the sizing mode applied
+    menu.style.left = `${Math.round(clamp(anchor.left + 5, vw - mw - VIEWPORT_MARGIN))}px`;
     menu.style.bottom = `${Math.round(vh - anchor.top + 6)}px`;
   } else if (placement === "top-end") {
     // Bulk-bar popovers (the design's .bulk-folder-menu): open ABOVE the bar,

@@ -192,13 +192,24 @@ test("the rail collapses to an icon strip, persists, and repositions the account
   await expect.poll(async () => (await rail.boundingBox())?.width ?? 0).toBeLessThan(80);
   await expect(page.getByRole("searchbox", { name: "Search chats" })).toBeHidden();
 
-  // The account menu still opens — avatar-only anchor, fixed 15rem menu.
+  // The account menu still opens — avatar-only anchor; the menu takes the
+  // design's 15rem base width, growing to its content (the Theme segmented
+  // control) so nothing clips, and lands fully on-screen.
   await page.getByTestId("account-menu-button").click();
   const menu = page.getByRole("menu", { name: "Account" });
   await expect(menu).toBeVisible();
   const menuBox = await menu.boundingBox();
   expect(menuBox).not.toBeNull();
-  if (menuBox) expect(Math.abs(menuBox.width - 240)).toBeLessThan(2);
+  if (menuBox) {
+    expect(menuBox.width).toBeGreaterThanOrEqual(239);
+    expect(menuBox.width).toBeLessThanOrEqual(321);
+    expect(menuBox.x).toBeGreaterThanOrEqual(0);
+  }
+  // No content overflows the menu box (the collapsed-menu clipping bug).
+  const themeBox = await page.getByRole("group", { name: "Theme" }).boundingBox();
+  if (menuBox && themeBox) {
+    expect(themeBox.x + themeBox.width).toBeLessThanOrEqual(menuBox.x + menuBox.width + 1);
+  }
   await page.keyboard.press("Escape");
 
   // The preference persists across reload.
@@ -259,22 +270,26 @@ test("Select… enters select mode with checkboxes + the bulk icon bar; Escape e
   await expect(bar.getByRole("button", { name: "Conversation options for Loose Recent" })).toBeAttached();
 });
 
-test("the sealed row's lock explains itself on hover and keyboard focus", async ({ page }) => {
+test("the sealed new-chat button explains itself on hover and keyboard focus", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
+  // Re-stub server-config (the most recent route wins) to expose the sealed
+  // affordance the explainer tooltip lives on.
+  await page.route("**/api/server-config", (r: Route) =>
+    r.fulfill({ json: { lockdown_available: true, lockdown_only: false, lockdown_allowed_models: [] } }),
+  );
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
-  const bar = page.locator("aside").first();
-  const lock = bar.getByRole("img", { name: "Sealed chat" });
-  await expect(lock).toBeVisible();
+  const sealedButton = page.getByRole("button", { name: /New sealed chat/ });
+  await expect(sealedButton).toBeVisible();
 
-  await lock.hover();
+  await sealedButton.hover();
   await expect(page.getByRole("tooltip")).toContainText(/sealed chat/i);
-  await page.mouse.move(0, 0);
+  await page.mouse.move(600, 400);
   await expect(page.getByRole("tooltip")).toHaveCount(0);
 
-  await lock.focus();
+  await sealedButton.focus();
   await expect(page.getByRole("tooltip")).toBeVisible();
 });
 

@@ -60,40 +60,35 @@ function ShareGlyph({ className, off }: { className?: string; off?: boolean }) {
   );
 }
 
-// ── Sealed-chat lock indicator + explainer tooltip ───────────────────────────
-// The lock on a sealed (lockdown) conversation row explains what a sealed chat
-// is on hover AND keyboard focus, using the design's .conv-tooltip surface.
-// The tooltip portals to <body> because the rail's transform/backdrop-filter
-// would otherwise capture its fixed positioning. The focusable span sits
-// inside the row button — nested interactive content, accepted deliberately so
-// the indicator itself is keyboard-reachable; it is purely descriptive, and
-// activating it still just opens the row.
+// ── Sealed-chat button + explainer tooltip ───────────────────────────────────
+// The icon-only "new sealed chat" button next to New chat explains what a
+// sealed chat is on hover AND keyboard focus, using the design's .conv-tooltip
+// surface. The tooltip portals to <body> because the rail's
+// transform/backdrop-filter would otherwise capture its fixed positioning.
 const SEALED_TOOLTIP_TEXT =
   "Sealed chat — locked down and private. Your data and an approved model stay inside this sandbox; nothing leaves.";
 
-function SealedLockIndicator({ interactive }: { interactive: boolean }) {
+function SealedNewChatButton({ onClick }: { onClick: () => void }) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const icon = <Icon name="lock" className="size-3 shrink-0 text-[var(--color-accent)]" />;
-  if (!interactive) return icon;
   const show = (e: React.SyntheticEvent<HTMLElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
-    // Below the icon, arrow pointing back up at it (the design's conv-info
-    // tooltip placement: bottom + 7, centered minus the arrow inset).
+    // Below the button, arrow pointing back up at it (the design's conv-info
+    // tooltip placement: bottom + 7, offset so the arrow lands on the anchor).
     setPos({ top: Math.round(r.bottom + 7), left: Math.round(r.left + r.width / 2 - 17) });
   };
   const hide = () => setPos(null);
   return (
-    <span
-      tabIndex={0}
-      role="img"
-      aria-label="Sealed chat"
-      className="inline-flex shrink-0 rounded-sm outline-none focus-visible:shadow-[var(--focus-ring)]"
+    <button
+      type="button"
+      className="inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+      aria-label="New sealed chat — sandboxed, vetted model, nothing leaves"
+      onClick={onClick}
       onMouseEnter={show}
       onMouseLeave={hide}
       onFocus={show}
       onBlur={hide}
     >
-      {icon}
+      <Icon name="lock" className="size-4 text-[var(--color-accent)]" />
       {pos && typeof document !== "undefined"
         ? createPortal(
             <span role="tooltip" className="conv-tooltip" style={{ top: pos.top, left: pos.left }}>
@@ -102,7 +97,7 @@ function SealedLockIndicator({ interactive }: { interactive: boolean }) {
             document.body,
           )
         : null}
-    </span>
+    </button>
   );
 }
 
@@ -620,7 +615,9 @@ function ConvRow({
                 className="inline-block size-1.5 shrink-0 animate-pulse rounded-full bg-[var(--color-accent)]"
               />
             ) : null}
-            {conversation.lockdown ? <SealedLockIndicator interactive={!selecting} /> : null}
+            {conversation.lockdown ? (
+              <Icon name="lock" className="size-3 shrink-0 text-[var(--color-accent)]" />
+            ) : null}
             {copied ? (
               <span aria-label="Link copied" title="Link copied!">
                 <Icon name="check" className="size-3 shrink-0 text-[var(--color-accent)]" />
@@ -1009,15 +1006,7 @@ export function ConversationSidebar({
           </button>
         )}
         {serverConfig.lockdownAvailable && !serverConfig.lockdownOnly ? (
-          <button
-            type="button"
-            className="inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
-            aria-label="New sealed chat — sandboxed, vetted model, nothing leaves"
-            data-tip="Sealed chat — nothing leaves this sandbox"
-            onClick={() => clearConversation({ lockdown: true })}
-          >
-            <Icon name="lock" className="size-4 text-[var(--color-accent)]" />
-          </button>
+          <SealedNewChatButton onClick={() => clearConversation({ lockdown: true })} />
         ) : null}
       </div>
 
@@ -1099,8 +1088,121 @@ export function ConversationSidebar({
         </div>
       ) : null}
 
-      {/* Multi-select bulk bar (#279, the design's .bulk-bar): count + 1.9rem
-          icon actions with data-tip-top tooltips. Move-to-folder / Add-label
+      {/* Conversation list */}
+      <div className={["mt-2 flex-1 overflow-y-auto", railCollapsed ? "sm:hidden" : ""].join(" ")}>
+        {isLoadingHistory ? (
+          <p className="px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)]">Loading…</p>
+        ) : filtering ? (
+          <>
+            {filteredConversations.length === 0 ? (
+              <p className="px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)]">
+                {searching ? `No chats match “${sidebarQuery.trim()}”.` : "Nothing matches this filter."}
+              </p>
+            ) : (
+              filteredConversations.map(renderRow)
+            )}
+            <div className="mt-3 border-t border-[var(--color-border)] pt-2 opacity-70 transition focus-within:opacity-100 hover:opacity-100">
+              <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">Refine</p>
+              {foldersSection}
+              {labelsSection}
+            </div>
+          </>
+        ) : (
+          <>
+            {pinned.length > 0 ? (
+              <div className="mb-1">
+                <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-secondary)]">
+                  <Icon name="pin" className="size-3.5 shrink-0 text-[var(--color-accent)]" />
+                  Pinned
+                </div>
+                {pinned.map(renderRow)}
+              </div>
+            ) : null}
+            {foldersSection}
+            {labelsSection}
+            <div className="mb-1">
+              <div className="px-2 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-secondary)]">Recent</div>
+              {recent.length === 0 ? (
+                <p className="px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)]">No saved chats yet.</p>
+              ) : (
+                recent.map(renderRow)
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Archived (collapsible) */}
+        {archivedConversations.length > 0 ? (
+          <div className="mt-3 border-t border-[var(--color-border)] pt-2">
+            <button
+              type="button"
+              aria-expanded={showArchived}
+              aria-label={`Archived conversations (${archivedConversations.length})`}
+              className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
+              onClick={() => setShowArchived((v) => !v)}
+            >
+              <Icon name={showArchived ? "chevron-down" : "chevron-right"} className="size-3 shrink-0" />
+              Archived ({archivedConversations.length})
+            </button>
+            {showArchived
+              ? archivedConversations.map((conversation) => (
+                  <div
+                    key={conversation.id}
+                    className={[
+                      "group relative rounded-md transition",
+                      activeConversationId === conversation.id ? "bg-[var(--rail-active)]" : "hover:bg-[var(--rail-hover)]",
+                    ].join(" ")}
+                  >
+                    <button
+                      type="button"
+                      className="block w-full min-w-0 rounded-md py-1.5 pl-3 pr-20 text-left text-[0.8125rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
+                      onClick={() => void loadConversation(conversation.id)}
+                    >
+                      <span className="block truncate italic">{conversation.title}</span>
+                    </button>
+                    <div className="absolute inset-y-0 right-1 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+                      <button
+                        type="button"
+                        aria-label={`Unarchive ${conversation.title}`}
+                        title="Unarchive"
+                        className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                        onClick={() => void toggleArchive(conversation, false)}
+                      >
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 24 24"
+                          className="size-3.5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.8}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <rect x="3" y="4" width="18" height="4" rx="1" />
+                          <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+                          <path d="M12 18v-6" />
+                          <path d="M9.5 14.5 12 12l2.5 2.5" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete ${conversation.title}`}
+                        className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                        onClick={() =>
+                          setPendingDeleteConversation({ id: conversation.id, title: conversation.title })
+                        }
+                      >
+                        <Icon name="trash" className="size-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              : null}
+          </div>
+        ) : null}
+      </div>
+      {/* Multi-select bulk bar (#279, the design's .bulk-bar): pinned to the
+          rail's foot below the conversation list — count + 1.9rem icon actions with data-tip-top tooltips. Move-to-folder / Add-label
           reuse the kebab's panels (including their inline create inputs) in
           menus that open above the bar. Actions disable at zero selected. */}
       {selecting ? (
@@ -1219,119 +1321,6 @@ export function ConversationSidebar({
         </>
       ) : null}
 
-      {/* Conversation list */}
-      <div className={["mt-2 flex-1 overflow-y-auto", railCollapsed ? "sm:hidden" : ""].join(" ")}>
-        {isLoadingHistory ? (
-          <p className="px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)]">Loading…</p>
-        ) : filtering ? (
-          <>
-            {filteredConversations.length === 0 ? (
-              <p className="px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)]">
-                {searching ? `No chats match “${sidebarQuery.trim()}”.` : "Nothing matches this filter."}
-              </p>
-            ) : (
-              filteredConversations.map(renderRow)
-            )}
-            <div className="mt-3 border-t border-[var(--color-border)] pt-2 opacity-70 transition focus-within:opacity-100 hover:opacity-100">
-              <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">Refine</p>
-              {foldersSection}
-              {labelsSection}
-            </div>
-          </>
-        ) : (
-          <>
-            {pinned.length > 0 ? (
-              <div className="mb-1">
-                <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-secondary)]">
-                  <Icon name="pin" className="size-3.5 shrink-0 text-[var(--color-accent)]" />
-                  Pinned
-                </div>
-                {pinned.map(renderRow)}
-              </div>
-            ) : null}
-            {foldersSection}
-            {labelsSection}
-            <div className="mb-1">
-              <div className="px-2 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-secondary)]">Recent</div>
-              {recent.length === 0 ? (
-                <p className="px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)]">No saved chats yet.</p>
-              ) : (
-                recent.map(renderRow)
-              )}
-            </div>
-          </>
-        )}
-
-        {/* Archived (collapsible) */}
-        {archivedConversations.length > 0 ? (
-          <div className="mt-3 border-t border-[var(--color-border)] pt-2">
-            <button
-              type="button"
-              aria-expanded={showArchived}
-              aria-label={`Archived conversations (${archivedConversations.length})`}
-              className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
-              onClick={() => setShowArchived((v) => !v)}
-            >
-              <Icon name={showArchived ? "chevron-down" : "chevron-right"} className="size-3 shrink-0" />
-              Archived ({archivedConversations.length})
-            </button>
-            {showArchived
-              ? archivedConversations.map((conversation) => (
-                  <div
-                    key={conversation.id}
-                    className={[
-                      "group relative rounded-md transition",
-                      activeConversationId === conversation.id ? "bg-[var(--rail-active)]" : "hover:bg-[var(--rail-hover)]",
-                    ].join(" ")}
-                  >
-                    <button
-                      type="button"
-                      className="block w-full min-w-0 rounded-md py-1.5 pl-3 pr-20 text-left text-[0.8125rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
-                      onClick={() => void loadConversation(conversation.id)}
-                    >
-                      <span className="block truncate italic">{conversation.title}</span>
-                    </button>
-                    <div className="absolute inset-y-0 right-1 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-                      <button
-                        type="button"
-                        aria-label={`Unarchive ${conversation.title}`}
-                        title="Unarchive"
-                        className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
-                        onClick={() => void toggleArchive(conversation, false)}
-                      >
-                        <svg
-                          aria-hidden="true"
-                          viewBox="0 0 24 24"
-                          className="size-3.5"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth={1.8}
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <rect x="3" y="4" width="18" height="4" rx="1" />
-                          <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
-                          <path d="M12 18v-6" />
-                          <path d="M9.5 14.5 12 12l2.5 2.5" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Delete ${conversation.title}`}
-                        className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
-                        onClick={() =>
-                          setPendingDeleteConversation({ id: conversation.id, title: conversation.title })
-                        }
-                      >
-                        <Icon name="trash" className="size-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              : null}
-          </div>
-        ) : null}
-      </div>
     </NavRail>
   );
 }
