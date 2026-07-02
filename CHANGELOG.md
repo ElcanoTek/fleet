@@ -15,6 +15,13 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Web rate limiter (#561): `(*rateLimiter).wait` no longer double-unlocks its
+  mutex when the context is cancelled mid-wait. Cancelling a `web_fetch` /
+  `web_search` turn while it was blocked in the minimum-interval (or per-minute)
+  wait triggered `fatal error: sync: unlock of unlocked mutex`, which `recover()`
+  cannot catch and which crashed the whole `fleet` process — killing every
+  user's in-flight session. Both waits are now context-aware and release the
+  lock exactly once on every path.
 - Structured output extraction (#244 hardening): a final answer carrying
   SEVERAL top-level JSON values (a narrated intermediate plus the restated
   final object — observed in a live run) now validates to the last conforming
