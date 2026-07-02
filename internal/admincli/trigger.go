@@ -23,7 +23,7 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
 // cmdSchedTrigger dispatches `fleet-admin sched trigger create|list|delete|rotate`.
 func cmdSchedTrigger(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched trigger create|list|delete|rotate")
+		return errf(1, "usage: fleet sched trigger create|list|delete|rotate")
 	}
 	switch argv[0] {
 	case "create":

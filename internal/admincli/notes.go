@@ -21,7 +21,7 @@ import (
 // Exit codes: 0 ok · 1 usage · 2 not-found · 3 conflict · 5 operational.
 func cmdNotes(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin notes set|get|list|rm | notes proposal publish|reject")
+		return errf(1, "usage: fleet notes set|get|list|rm | notes proposal publish|reject")
 	}
 	switch argv[0] {
 	case "set":
@@ -197,7 +197,7 @@ func notesRm(argv []string) int {
 
 func notesProposal(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin notes proposal publish|reject <id>")
+		return errf(1, "usage: fleet notes proposal publish|reject <id>")
 	}
 	sub := argv[0]
 	rest := argv[1:]
