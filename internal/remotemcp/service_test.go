@@ -20,6 +20,8 @@ type fakeStore struct {
 	tokens  map[string]store.RemoteMCPTokens
 	flows   map[string]*store.OAuthFlowState
 	nextID  int
+	// shares: server id -> grantees ('*' or emails), mirroring the real table.
+	shares map[string][]string
 }
 
 func newFakeStore() *fakeStore {
@@ -117,6 +119,93 @@ func (f *fakeStore) EnsureFreshToken(ctx context.Context, srv *store.RemoteMCPSe
 	}
 	f.tokens[srv.ID] = res.Tokens
 	return res.Tokens.AccessToken, nil
+}
+
+func (f *fakeStore) ShareRemoteMCPServer(_ context.Context, owner, id, grantee string) error {
+	srv, ok := f.servers[id]
+	if !ok || srv.UserEmail != owner {
+		return store.ErrRemoteMCPNotFound
+	}
+	if f.shares == nil {
+		f.shares = map[string][]string{}
+	}
+	f.shares[id] = append(f.shares[id], grantee)
+	return nil
+}
+
+func (f *fakeStore) UnshareRemoteMCPServer(_ context.Context, owner, id, grantee string) error {
+	srv, ok := f.servers[id]
+	if !ok || srv.UserEmail != owner {
+		return store.ErrRemoteMCPNotFound
+	}
+	out := f.shares[id][:0]
+	found := false
+	for _, g := range f.shares[id] {
+		if g == grantee {
+			found = true
+			continue
+		}
+		out = append(out, g)
+	}
+	if !found {
+		return store.ErrRemoteMCPNotFound
+	}
+	f.shares[id] = out
+	return nil
+}
+
+func (f *fakeStore) ListRemoteMCPSharesByOwner(_ context.Context, owner string) (map[string][]string, error) {
+	out := map[string][]string{}
+	for id, gs := range f.shares {
+		if srv, ok := f.servers[id]; ok && srv.UserEmail == owner {
+			out[id] = append([]string{}, gs...)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) sharedWith(email string) []*store.RemoteMCPServer {
+	var out []*store.RemoteMCPServer
+	for id, gs := range f.shares {
+		srv, ok := f.servers[id]
+		if !ok || srv.UserEmail == email {
+			continue
+		}
+		for _, g := range gs {
+			if g == email || g == store.GranteeEveryone {
+				out = append(out, srv)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (f *fakeStore) ListRemoteMCPServersSharedWith(_ context.Context, email string) ([]store.RemoteMCPServer, error) {
+	shared := f.sharedWith(email)
+	out := make([]store.RemoteMCPServer, 0, len(shared))
+	for _, srv := range shared {
+		out = append(out, *srv)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetRemoteMCPServerForUse(_ context.Context, email, id string) (*store.RemoteMCPServer, error) {
+	srv, ok := f.servers[id]
+	if !ok {
+		return nil, store.ErrRemoteMCPNotFound
+	}
+	if srv.UserEmail == email {
+		cp := *srv
+		return &cp, nil
+	}
+	for _, s2 := range f.sharedWith(email) {
+		if s2.ID == id {
+			cp := *s2
+			return &cp, nil
+		}
+	}
+	return nil, store.ErrRemoteMCPNotFound
 }
 
 func (f *fakeStore) BeginOAuthFlow(_ context.Context, state, serverID, email, verifier string, _ time.Duration) error {
@@ -301,5 +390,66 @@ func TestServiceAcquireTokenNeedsReauth(t *testing.T) {
 	server, _ = svc.store.GetRemoteMCPServer(ctx, "u@x.com", server.ID)
 	if server.Status != store.RemoteMCPStatusNeedsReauth {
 		t.Errorf("status = %q, want needs_reauth", server.Status)
+	}
+}
+
+// Sharing (#443 follow-up): shared servers resolve for the grantee's runs with
+// owner attribution, an own-name collision wins over a shared server, and the
+// token minted for a shared server is the OWNER's.
+func TestResolverIncludesSharedServers(t *testing.T) {
+	fs := newFakeStore()
+	srv := oauthTestServer(t, "rotate")
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	// Owner connects a server, then shares it with mate.
+	owned, _ := svc.AddServer(ctx, AddServerInput{Email: "owner@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	authURL, _ := svc.Authorize(ctx, "owner@x.com", owned.ID)
+	_ = authURL
+	var state string
+	for k := range fs.flows {
+		state = k
+	}
+	if _, err := svc.Complete(ctx, "owner@x.com", state, "c"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if err := svc.ShareServer(ctx, "owner@x.com", owned.ID, "mate@x.com"); err != nil {
+		t.Fatalf("share: %v", err)
+	}
+
+	conns, err := svc.ConnectedServersForUser(ctx, "mate@x.com")
+	if err != nil {
+		t.Fatalf("connected for mate: %v", err)
+	}
+	if len(conns) != 1 || conns[0].Name != "acme" || conns[0].Owner != "owner@x.com" {
+		t.Fatalf("mate should see the shared server with owner attribution, got %+v", conns)
+	}
+
+	// The grantee can mint a token — it is the owner's token, brokered host-side.
+	bearer, err := svc.AcquireTokenByID(ctx, "mate@x.com", owned.ID)
+	if err != nil {
+		t.Fatalf("acquire via share: %v", err)
+	}
+	if bearer == "" {
+		t.Fatal("empty bearer")
+	}
+	// An ungranted user cannot.
+	if _, err := svc.AcquireTokenByID(ctx, "other@x.com", owned.ID); err == nil {
+		t.Error("ungranted user acquired a token")
+	}
+
+	// Name collision: mate's OWN server named acme wins; the shared one is skipped.
+	mates, _ := svc.AddServer(ctx, AddServerInput{Email: "mate@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	authURL, _ = svc.Authorize(ctx, "mate@x.com", mates.ID)
+	_ = authURL
+	for k := range fs.flows {
+		state = k
+	}
+	if _, err := svc.Complete(ctx, "mate@x.com", state, "c"); err != nil {
+		t.Fatalf("Complete mate: %v", err)
+	}
+	conns, _ = svc.ConnectedServersForUser(ctx, "mate@x.com")
+	if len(conns) != 1 || conns[0].ID != mates.ID || conns[0].Owner != "" {
+		t.Fatalf("own server must win the name collision, got %+v", conns)
 	}
 }

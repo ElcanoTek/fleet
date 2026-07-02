@@ -15,6 +15,16 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Remote MCP connection sharing: the owner of a connected hosted MCP server
+  can share it with named users or with everyone on the box (`remote_mcp_shares`,
+  migration 031). Grantees' chats and scheduled tasks mount the server's tools;
+  tool calls authenticate with the OWNER's OAuth token host-side (the token
+  never leaves the host and the grantee never sees it), shared runs are logged
+  with owner attribution, and revoking a grant (or deleting the server) takes
+  effect on the next turn. New API: `shares` + `shared_with_me` on
+  `GET /remote-mcp-servers`, `POST/DELETE /remote-mcp-servers/{id}/shares[/…]`;
+  the connections page gains a Share panel per owned server and a "Shared with
+  you" section. See `docs/CONNECTION-SHARING.md`.
 - Built-in MCP connector directory: fleet now embeds a curated directory of
   ~290 vendor-hosted MCP servers (`internal/clientconfig/builtin_remote_catalog.yaml`)
   spanning 19 categories, inherited by every client bundle by default — the

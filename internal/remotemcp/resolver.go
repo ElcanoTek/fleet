@@ -2,6 +2,7 @@ package remotemcp
 
 import (
 	"context"
+	"log"
 	"net/http"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -14,25 +15,50 @@ import (
 // types. The dependency points remotemcp → agent (agent declares the interface),
 // which avoids the store → agent → remotemcp cycle.
 
-// ConnectedServersForUser returns the user's servers that are ready to use.
+// ConnectedServersForUser returns the servers the user may USE that are ready:
+// their own connections plus ones other users shared with them (directly or
+// via the everyone wildcard). On a name collision the user's own server wins —
+// the registration name is the broker routing key, so two same-named servers
+// cannot coexist in one run; the shadowed shared server is skipped with a log
+// line rather than silently.
 func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]agent.RemoteMCPConn, error) {
 	servers, err := s.store.ListRemoteMCPServers(ctx, email)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]agent.RemoteMCPConn, 0, len(servers))
+	shared, err := s.store.ListRemoteMCPServersSharedWith(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agent.RemoteMCPConn, 0, len(servers)+len(shared))
+	names := map[string]bool{}
 	for _, srv := range servers {
 		if srv.Status != store.RemoteMCPStatusConnected {
 			continue
 		}
+		names[srv.Name] = true
 		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL})
+	}
+	for _, srv := range shared {
+		if srv.Status != store.RemoteMCPStatusConnected {
+			continue
+		}
+		if names[srv.Name] {
+			log.Printf("remotemcp: shared server %q (owner %s) shadowed by %s's own server of the same name; skipping", srv.Name, srv.UserEmail, email)
+			continue
+		}
+		names[srv.Name] = true
+		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL, Owner: srv.UserEmail})
 	}
 	return out, nil
 }
 
-// AcquireTokenByID mints a fresh bearer for one of the user's servers.
+// AcquireTokenByID mints a fresh bearer for a server the user may use — their
+// own or one shared with them. The returned row keeps the OWNER's email, so
+// the refresh path opens and reseals secrets under the owner's AAD; the
+// grantee never handles the credential.
 func (s *Service) AcquireTokenByID(ctx context.Context, email, serverID string) (string, error) {
-	server, err := s.store.GetRemoteMCPServer(ctx, email, serverID)
+	server, err := s.store.GetRemoteMCPServerForUse(ctx, email, serverID)
 	if err != nil {
 		return "", err
 	}

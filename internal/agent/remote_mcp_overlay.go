@@ -31,6 +31,10 @@ type RemoteMCPConn struct {
 	ID   string
 	Name string // registration name (also the broker routing key + mcp_<name>_* prefix)
 	URL  string
+	// Owner is the connection owner's email when this server was SHARED with
+	// the running user (empty for the user's own servers). Used for audit
+	// attribution: tool calls authenticate with the owner's token host-side.
+	Owner string
 }
 
 // RemoteMCPResolver supplies a user's connected remote servers and mints fresh
@@ -118,6 +122,11 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		if shadowed[conn.Name] {
 			log.Printf("remote-mcp: skipping remote server %q — name collides with a built-in server", conn.Name)
 			continue
+		}
+		if conn.Owner != "" {
+			// Attribution for shared connections: the run belongs to email, but
+			// tool calls authenticate with the OWNER's token host-side.
+			log.Printf("remote-mcp: run for %s uses shared server %q owned by %s", email, conn.Name, conn.Owner)
 		}
 		bearer, terr := resolver.AcquireTokenByID(ctx, email, conn.ID)
 		if terr != nil {
