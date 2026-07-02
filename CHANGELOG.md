@@ -70,6 +70,17 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Usage analytics (#601 part 1): admin-only `GET /admin/usage?group_by=&from=&to=`
+  rolls the already-persisted metering (per-iteration `task_iterations` ⋈
+  `tasks`, plus the chat `turn_metrics` session log) up by user, API key,
+  project, model, or day/week time bucket over a requested window — a pure
+  read model: no new accounting path, no new tables. Rendered in the
+  Operations Center as an admin-only "Usage" tab (KPI tiles, single-hue
+  bar/column charts coherent in light + dark, full table view). Honest scope
+  (#289): native-provider runs accrue $0 unless a pricing override is
+  configured, so the endpoint and panel always show token totals alongside
+  dollars and say so. Per-principal budgets are part 2 of #601 and are not
+  included here. See `docs/USAGE-ANALYTICS.md`.
 - `fleet task run <task.yaml>` — the local one-shot harness (run a single task
   to completion through the governed scheduled runtime, no server/DB) is now a
   verb of the unified CLI instead of the separate `cutlass` binary; the logic

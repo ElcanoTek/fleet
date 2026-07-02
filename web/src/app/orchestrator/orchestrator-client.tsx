@@ -19,6 +19,7 @@ import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
 import { SettingsModal } from "./SettingsModal";
 import { SLAReportPanel } from "./SLAReportPanel";
+import { UsagePanel } from "./UsagePanel";
 import { DatasetsPanel } from "./DatasetsPanel";
 import { UpcomingPanel } from "./UpcomingPanel";
 
@@ -66,7 +67,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   // Top-level dashboard tab (#274): "tasks" is the legacy Recent Tasks view;
   // "sla" swaps in the SLA report panel. Defaults to tasks so the existing
   // dashboard shape is unchanged on load.
-  const [tab, setTab] = useState<"tasks" | "upcoming" | "sla" | "datasets">("tasks");
+  const [tab, setTab] = useState<"tasks" | "upcoming" | "sla" | "datasets" | "usage">("tasks");
 
   // #458 symptom 2: the SLA tab + panel are admin-only. role may be absent (an
   // admin-API-key principal carries no role) — treat absent as non-admin for
@@ -210,6 +211,19 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                     SLA
                   </button>
                 ) : null}
+                {/* Usage/spend analytics (#601) is admin-only like SLA: the
+                    report is global across all principals. */}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === "usage"}
+                    className={`tab-btn${tab === "usage" ? " tab-btn-active" : ""}`}
+                    onClick={() => setTab("usage")}
+                  >
+                    Usage
+                  </button>
+                ) : null}
               </div>
 
               {tab === "datasets" ? (
@@ -218,6 +232,8 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                 <UpcomingPanel />
               ) : tab === "sla" && isAdmin ? (
                 <SLAReportPanel />
+              ) : tab === "usage" && isAdmin ? (
+                <UsagePanel />
               ) : (
                 <TasksTable
                   tasks={dashboard.tasks}
