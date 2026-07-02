@@ -276,8 +276,12 @@ export default function ConnectionsPage() {
       .finally(() => setBusy(false));
   };
 
+  // h-dvh + overflow-y-auto: the page owns its vertical scroll. The app
+  // shell's html/body rules (h-full, overscroll-behavior: none) break
+  // document-level scrolling on iOS, so relying on body scroll left this
+  // page unscrollable on mobile.
   return (
-    <main className="min-h-screen bg-[var(--gradient-bg-home-signature)] px-6 py-10 text-[var(--color-text-primary)]">
+    <main className="h-dvh overflow-y-auto bg-[var(--gradient-bg-home-signature)] px-6 py-10 text-[var(--color-text-primary)]">
       <div className="mx-auto w-full max-w-3xl">
         <header className="mb-6 flex items-center justify-between gap-4">
           <Link href="/" className="flex items-center gap-2.5 no-underline">
