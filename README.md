@@ -6,10 +6,10 @@
 **A general-purpose agent fleet you run yourself — any model, in a
 sandbox, on a budget, connected to your data.**
 
-One open-source process on your own box: a governed agent runtime, a hardened
-execution sandbox, a scheduler, and three clients — web chat, an Operations
-Center, a terminal TUI. Every tool call is sandboxed, every turn is metered,
-and credentials never leave the host.
+fleet is how a whole department adopts AI agents without losing sleep: every
+tool call sandboxed, every turn metered against a budget, every credential held
+server-side, and every working setup versioned so it runs again tomorrow — for
+the next person, on a schedule. MIT-licensed, on your infrastructure.
 
 ## See it in action
 
