@@ -308,6 +308,12 @@ else
     mkdir -p "$STATE_DIR"
     printf '%s\n' "$cf_now" > "$STAMP_FILE"
     ok "sandbox image rebuilt; recorded hash ${cf_now:0:12}"
+    # Each rebuild strands the previous image's layers as dangling cruft
+    # (~1.3 GB per rebuild); prune them so regular updates can't fill the
+    # disk. Dangling-only: any still-tagged image is untouched. Best-effort.
+    if podman image prune -f >/dev/null 2>&1; then
+      ok "pruned dangling image layers left by the rebuild (fleet cleanup does more)."
+    fi
   else
     warn "sandbox image build failed — run scripts/build-sandbox-image.sh manually before restarting."
   fi

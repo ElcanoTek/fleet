@@ -29,7 +29,7 @@ import (
 // `sched` verbs (user, apikey, task, trigger).
 func cmdSchedDLQ(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched dlq list|replay ...")
+		return errf(1, "usage: fleet sched dlq list|replay ...")
 	}
 	switch argv[0] {
 	case "list", "ls":
@@ -112,7 +112,7 @@ func schedDLQReplay(argv []string) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return errf(1, "usage: fleet-admin sched dlq replay <task_id>")
+		return errf(1, "usage: fleet sched dlq replay <task_id>")
 	}
 	taskID, err := uuid.Parse(strings.TrimSpace(rest[0]))
 	if err != nil {

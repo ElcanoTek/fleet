@@ -275,7 +275,7 @@ func cmdRestore(argv []string) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return errf(1, "usage: fleet-admin restore --db=chat|sched <dump-file>")
+		return errf(1, "usage: fleet restore --db=chat|sched <dump-file>")
 	}
 	inPath := rest[0]
 	if _, err := os.Stat(inPath); err != nil {

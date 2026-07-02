@@ -19,7 +19,7 @@ import (
 // cmdSched dispatches `fleet-admin sched user|apikey|task|trigger ...`.
 func cmdSched(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched user|apikey|task|trigger|dlq ...")
+		return errf(1, "usage: fleet sched user|apikey|task|trigger|dlq ...")
 	}
 	switch argv[0] {
 	case "user":
@@ -61,7 +61,7 @@ func validRole(role string) bool {
 
 func cmdSchedUser(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched user add|update|set-role|rename|del|list")
+		return errf(1, "usage: fleet sched user add|update|set-role|rename|del|list")
 	}
 	sub := argv[0]
 	rest := argv[1:]
@@ -286,7 +286,7 @@ func schedUserList(argv []string) int {
 
 func cmdSchedAPIKey(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched apikey create|list|revoke|rotate|delete")
+		return errf(1, "usage: fleet sched apikey create|list|revoke|rotate|delete")
 	}
 	sub := argv[0]
 	rest := argv[1:]

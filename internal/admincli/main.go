@@ -59,6 +59,8 @@ func Run(argv []string) int {
 		return cmdBootstrap(argv[1:])
 	case "update":
 		return cmdUpdate(argv[1:])
+	case "cleanup":
+		return cmdCleanup(argv[1:])
 	case "status", "doctor":
 		return cmdStatus(argv[1:])
 	case "diagnose":
@@ -116,6 +118,7 @@ Operator lifecycle (bootstrap → update → status):
   fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
   fleet update    [--check] [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--yes] [--dry-run]
                                                              (--check: read-only "N commits behind upstream", mutates nothing)
+  fleet cleanup   [--dry-run] [--deep]                 (reclaim build cruft: dangling podman layers + Go caches)
   fleet status    [--service <name>] [--no-sandbox]    (a.k.a. doctor; non-zero exit if unhealthy)
   fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
                                                              (redacted support bundle: status + config names + DB versions + sandbox image → .tar.gz)

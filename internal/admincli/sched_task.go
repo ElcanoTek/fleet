@@ -34,7 +34,7 @@ type taskExportEnvelope struct {
 // cmdSchedTask dispatches `fleet-admin sched task export|import|set-model|set-credentials|set-description`.
 func cmdSchedTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin sched task export|import|set-model|set-credentials|set-description|tag|estimate|batch-create")
+		return errf(1, "usage: fleet sched task export|import|set-model|set-credentials|set-description|tag|estimate|batch-create")
 	}
 	switch argv[0] {
 	case "export":
@@ -147,7 +147,7 @@ func schedTaskTag(argv []string) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return errf(1, "usage: fleet-admin sched task tag <task_id> --add <tag> ... --remove <tag> ...")
+		return errf(1, "usage: fleet sched task tag <task_id> --add <tag> ... --remove <tag> ...")
 	}
 	taskID, err := uuid.Parse(strings.TrimSpace(rest[0]))
 	if err != nil {
@@ -190,7 +190,7 @@ func schedTaskSetDescription(argv []string) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 2 {
-		return errf(1, "usage: fleet-admin sched task set-description <task_id> <text>|-   (- reads from stdin)")
+		return errf(1, "usage: fleet sched task set-description <task_id> <text>|-   (- reads from stdin)")
 	}
 	taskID, err := uuid.Parse(strings.TrimSpace(rest[0]))
 	if err != nil {
@@ -250,7 +250,7 @@ func schedTaskSetCredentials(argv []string) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return errf(1, "usage: fleet-admin sched task set-credentials <task_id> --allow server[:account] ... | --clear")
+		return errf(1, "usage: fleet sched task set-credentials <task_id> --allow server[:account] ... | --clear")
 	}
 	taskID, err := uuid.Parse(strings.TrimSpace(rest[0]))
 	if err != nil {
