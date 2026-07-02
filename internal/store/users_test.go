@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCreateUserAndVerify(t *testing.T) {
@@ -225,6 +226,95 @@ func TestDeleteUserCascadesConversations(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Errorf("expected conversations deleted, still got %d (id=%s)", len(rows), conv.ID)
+	}
+}
+
+// TestDeleteUser_PurgesRemoteMCPCredentialsAndProjects proves the #563
+// contract: deleting an account also purges its remote MCP servers (and, via
+// the migration-022 cascades, the encrypted OAuth tokens + in-flight
+// authorization flows) and disposes of its owned projects, so re-provisioning
+// the same address can never inherit the previous holder's credentials or
+// workspaces.
+func TestDeleteUser_PurgesRemoteMCPCredentialsAndProjects(t *testing.T) {
+	s := newTestStoreWithCipher(t)
+	ctx := context.Background()
+	const alice, bob = "alice@x.com", "bob@x.com"
+	for _, email := range []string{alice, bob} {
+		if _, err := s.CreateUser(ctx, email, "password123"); err != nil {
+			t.Fatalf("CreateUser(%s): %v", email, err)
+		}
+	}
+
+	// Alice connects a remote MCP: server row + encrypted OAuth tokens + an
+	// in-flight authorization flow.
+	srv, err := s.CreateRemoteMCPServer(ctx, sampleServerInput(alice))
+	if err != nil {
+		t.Fatalf("CreateRemoteMCPServer: %v", err)
+	}
+	if err := s.StoreOAuthTokens(ctx, srv, RemoteMCPTokens{
+		AccessToken: "at-1", RefreshToken: "rt-1", ExpiresAt: time.Now().Add(time.Hour).Unix(),
+	}); err != nil {
+		t.Fatalf("StoreOAuthTokens: %v", err)
+	}
+	if err := s.BeginOAuthFlow(ctx, "state-1", srv.ID, alice, "verifier", time.Hour); err != nil {
+		t.Fatalf("BeginOAuthFlow: %v", err)
+	}
+
+	// Alice owns a project with a shared memory; bob has a conversation in it.
+	proj, err := s.CreateProject(ctx, &Project{OwnerEmail: alice, Name: "Quant"})
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if _, err := s.CreateProjectMemory(ctx, proj.ID, alice, "shared fact", "note"); err != nil {
+		t.Fatalf("CreateProjectMemory: %v", err)
+	}
+	bobConv, err := s.CreateProjectConversation(ctx, bob, "bob's", "victoria", "", false, proj.ID, nil)
+	if err != nil {
+		t.Fatalf("CreateProjectConversation: %v", err)
+	}
+
+	if err := s.DeleteUser(ctx, alice); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+
+	// Zero surviving credential rows: the server delete cascades the oauth +
+	// flow children, so nothing decryptable outlives the account.
+	for _, q := range []string{
+		`SELECT COUNT(*) FROM remote_mcp_servers WHERE user_email = 'alice@x.com'`,
+		`SELECT COUNT(*) FROM remote_mcp_oauth`,
+		`SELECT COUNT(*) FROM remote_mcp_oauth_flow`,
+		`SELECT COUNT(*) FROM projects WHERE owner_email = 'alice@x.com'`,
+		`SELECT COUNT(*) FROM memories WHERE project_id IS NOT NULL`,
+	} {
+		var n int
+		if err := s.db.QueryRowContext(ctx, q).Scan(&n); err != nil {
+			t.Fatalf("count (%s): %v", q, err)
+		}
+		if n != 0 {
+			t.Errorf("%s = %d, want 0", q, n)
+		}
+	}
+
+	// Bob's conversation survives, detached from the deleted project (the
+	// history belongs to its user — DeleteProject semantics).
+	got, err := s.Get(ctx, bob, bobConv.ID)
+	if err != nil || got == nil {
+		t.Fatalf("Get(bob conv): %v (conv=%v)", err, got)
+	}
+	if got.ProjectID != "" {
+		t.Errorf("bob's conversation still references the deleted project: %q", got.ProjectID)
+	}
+
+	// A re-provisioned same-address account inherits NOTHING.
+	if _, err := s.CreateUser(ctx, alice, "different-pw-456"); err != nil {
+		t.Fatalf("re-provision: %v", err)
+	}
+	servers, err := s.ListRemoteMCPServers(ctx, alice)
+	if err != nil {
+		t.Fatalf("ListRemoteMCPServers: %v", err)
+	}
+	if len(servers) != 0 {
+		t.Errorf("re-provisioned account inherited %d remote MCP servers", len(servers))
 	}
 }
 

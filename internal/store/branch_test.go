@@ -116,7 +116,9 @@ func TestBranchConversation_RoundTrip(t *testing.T) {
 }
 
 // TestBranchConversation_Errors: a branch point that names no message in the
-// parent is ErrBranchPointNotFound; a parent not owned by the caller is not found.
+// parent — below OR above its id range (#578) — is ErrBranchPointNotFound; a
+// parent not owned by the caller is not found. A failed attempt never leaves a
+// branch conversation behind.
 func TestBranchConversation_Errors(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -124,16 +126,89 @@ func TestBranchConversation_Errors(t *testing.T) {
 	parent := seedBranchConv(t, s, owner)
 	ids := messageIDs(t, s, parent.ID)
 
-	// A branch point id BELOW the parent's lowest message matches no message in
-	// the parent (an id above the max would just copy everything — a valid
-	// "branch at the latest message" — so it is NOT an error).
+	// A branch point id BELOW the parent's lowest message names no message in
+	// the parent.
 	if _, err := s.BranchConversation(ctx, owner, parent.ID, ids[0]-1, "x"); !errors.Is(err, ErrBranchPointNotFound) {
-		t.Errorf("bad branch point: want ErrBranchPointNotFound, got %v", err)
+		t.Errorf("below-range branch point: want ErrBranchPointNotFound, got %v", err)
+	}
+
+	// An id ABOVE the parent's highest message names no message either (#578):
+	// before the existence check this silently copied the ENTIRE conversation,
+	// because id <= $2 matched every row.
+	if _, err := s.BranchConversation(ctx, owner, parent.ID, ids[len(ids)-1]+1, "x"); !errors.Is(err, ErrBranchPointNotFound) {
+		t.Errorf("above-range branch point: want ErrBranchPointNotFound, got %v", err)
+	}
+
+	// An id belonging to ANOTHER conversation (here another user's — the worst
+	// case) is rejected too: messages.id is a global BIGSERIAL, so a foreign id
+	// is numerically plausible (and, seeded second, above the parent's max).
+	other := seedBranchConv(t, s, "bob@example.com")
+	otherIDs := messageIDs(t, s, other.ID)
+	if _, err := s.BranchConversation(ctx, owner, parent.ID, otherIDs[len(otherIDs)-1], "x"); !errors.Is(err, ErrBranchPointNotFound) {
+		t.Errorf("foreign branch point: want ErrBranchPointNotFound, got %v", err)
 	}
 
 	// A different user cannot branch alice's conversation.
 	if _, err := s.BranchConversation(ctx, "mallory@example.com", parent.ID, 1, "x"); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("foreign parent: want sql.ErrNoRows, got %v", err)
+	}
+
+	// None of the rejected attempts created a conversation.
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM conversations WHERE user_email = $1`, owner).Scan(&n); err != nil {
+		t.Fatalf("count conversations: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("conversation count = %d, want 1 (the seeded parent only)", n)
+	}
+}
+
+// TestBranchConversation_AtomicOnCopyFailure pins the #597 all-or-nothing
+// contract: the conversation INSERT and the message copy happen in ONE
+// transaction, so when the copy fails nothing is committed — no empty branch
+// shell in the sidebar, with or without a compensating delete.
+func TestBranchConversation_AtomicOnCopyFailure(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const owner = "alice@example.com"
+	parent := seedBranchConv(t, s, owner)
+	ids := messageIDs(t, s, parent.ID)
+
+	// Force the copy step to fail: after seeding, reject every further INSERT
+	// into messages. The branch's conversation INSERT itself succeeds, so a
+	// non-atomic implementation would leave that row behind.
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE OR REPLACE FUNCTION fleet_test_fail_message_insert() RETURNS trigger AS $$
+		BEGIN
+			RAISE EXCEPTION 'forced copy failure (test)';
+		END $$ LANGUAGE plpgsql`); err != nil {
+		t.Fatalf("create trigger function: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TRIGGER fleet_test_fail_message_insert BEFORE INSERT ON messages
+		FOR EACH ROW EXECUTE FUNCTION fleet_test_fail_message_insert()`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		// The shared test database persists across tests — the trigger must not.
+		cctx := context.Background()
+		_, _ = s.db.ExecContext(cctx, `DROP TRIGGER IF EXISTS fleet_test_fail_message_insert ON messages`)
+		_, _ = s.db.ExecContext(cctx, `DROP FUNCTION IF EXISTS fleet_test_fail_message_insert()`)
+	})
+
+	if _, err := s.BranchConversation(ctx, owner, parent.ID, ids[1], "torn"); err == nil {
+		t.Fatal("expected the forced copy failure to surface")
+	}
+
+	// All-or-nothing: no partial branch row was committed.
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM conversations WHERE user_email = $1`, owner).Scan(&n); err != nil {
+		t.Fatalf("count conversations: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("conversation count = %d, want 1 (only the parent — no torn branch)", n)
 	}
 }
 
