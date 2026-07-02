@@ -10,9 +10,11 @@ fleet is an open-source platform for running AI agents — both one-shot schedul
 tasks and interactive real-time chat — on infrastructure you control. One
 `fleet` process boots a unified agent runtime, an execution sandbox, a
 scheduler, and a worker pool, and serves both a chat UI and an orchestrator UI.
-Every tool call an agent makes runs inside a rootless-Podman sandbox; every turn
-is metered against a cost ceiling; and the tools and data an agent can reach are
-brokered host-side so credentials never enter the sandbox.
+Every tool call an agent makes runs inside a rootless-Podman sandbox — with an
+optional hypervisor tier that runs each call in a dedicated KVM microVM (Kata
+Containers or libkrun); every turn is metered against a cost ceiling; and the
+tools and data an agent can reach are brokered host-side so credentials never
+enter the sandbox.
 
 If your team keeps reaching for the same agent recipes — the same prompts, the
 same connected tools, the same guardrails — fleet is the place to standardize
@@ -513,6 +515,11 @@ standards. Our thanks to the teams and communities behind them:
 - **[Podman](https://github.com/containers/podman)** — rootless, daemonless
   containers. Every agent tool call (`bash`, `run_python`, MCP) executes inside a
   rootless-Podman sandbox; there is no trusted fast path that skips it.
+- **[Kata Containers](https://katacontainers.io)** and
+  **[libkrun](https://github.com/containers/libkrun)** — the OCI runtimes behind
+  fleet's optional hypervisor-isolation tier (#217): set `sandbox.runtime` and
+  every tool call runs in a dedicated KVM microVM with its own guest kernel,
+  plugging into the same Podman invocation unchanged.
 - **[Fedora](https://fedoraproject.org)** — `fedora-minimal`
   (`registry.fedoraproject.org/fedora-minimal`) is the slim base image for the
   default sandbox: a small attack surface and current security patches on every
