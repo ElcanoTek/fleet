@@ -27,6 +27,12 @@ prior versions are listed because none have shipped.
   bubbletea's RequestBackgroundColor handshake and always hands glamour an
   explicit style. Also: typed letters no longer scroll the transcript (the
   viewport's default h/j/k/l keymap was receiving composer keystrokes).
+- API keys minted by the CLI (`fleet sched apikey create`) now authenticate
+  against an already-running server without a restart: on a lookup miss the
+  key manager stats `api_keys.json` and reloads newly-appended keys (existing
+  in-memory keys — and their runtime rate/budget state — are never clobbered,
+  and a just-revoked key can't be resurrected). Found by exercising the
+  documented mint-and-use flow live.
 
 ### Added
 
