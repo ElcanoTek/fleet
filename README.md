@@ -126,11 +126,11 @@ yourself are already in the box, tested, and governed by the same core:
 
 ## Built for trust: governed, auditable delegation
 
-The hard part of agent adoption isn't technical anymore — the real barriers
-are human: *does it work, can I trust it, and am I willing to hand over
-control?* fleet is built to earn all three yeses: your agents run on their
-own — you can see everything they do, they can't outspend their budgets, and
-the few calls that should be yours still are.
+AI agents are here, and they work. What most people aren't ready for is
+letting one email their boss, touch their files, or spend their money. Getting
+there takes three honest yeses — *do I believe it can do the job? can I trust
+it to act on my behalf? am I comfortable handing over control?* — and this is
+how fleet earns each one.
 
 **Can it do the job — reproducibly?** The whole agent setup — prompts,
 personas, playbooks, skills, connectors, model defaults — is a **versioned
