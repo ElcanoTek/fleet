@@ -40,6 +40,14 @@ prior versions are listed because none have shipped.
   manager with "what was true on…" / "what did fleet know on…" time-travel
   inputs. Deterministic auto-conflict rules stay deferred per the issue's
   triage; conflict handling remains human-confirmed supersession.
+- `fleet chat` TUI polish + an animated README demo (#540): speaker pills,
+  ✓/✗ tool-outcome glyphs, a full-width header bar (model · conversation), a
+  rounded composer box that dims while streaming, a right-aligned hint bar, a
+  formatted `/help`, and Esc-to-cancel. The README now embeds a deterministic
+  demo GIF recorded with charm's vhs against a canned mock server (no model,
+  no keys) — `docs/generating-demo-gif.md` documents the pipeline. Also new:
+  `docs/BUILDING-ON-FLEET.md` (the HTTP API as an automation substrate) and a
+  README "Batteries included" tour.
 - Reusable sandbox-image publish workflow (#195):
   `.github/workflows/publish-sandbox-image.yml` (`workflow_call`) lets a client
   config repo build its bundle's sandbox image in CI with the canonical

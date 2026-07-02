@@ -20,7 +20,7 @@ func TestModelTurnLifecycle(t *testing.T) {
 
 	// Simulate sending (without the goroutine): commit the user line + stream.
 	m.lastUser = "hello"
-	m.history = append(m.history, styleUserLabel.Render("you")+"\nhello")
+	m.history = append(m.history, stylePillUser.Render("you")+"\nhello")
 	m.streaming = true
 	m.applyEvent(Event{Name: "conversation", Data: map[string]any{"id": "conv-7"}})
 	m.applyEvent(Event{Name: "tool.call", Data: map[string]any{"name": "bash"}})
