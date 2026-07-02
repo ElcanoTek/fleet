@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# run_workflow_live.sh — run a SINGLE task YAML to completion locally via cutlass,
+# run_workflow_live.sh — run a SINGLE task YAML to completion locally via `fleet task run`,
 # fleet's one-shot harness, with a live-tailable log and an isolated workspace.
 #
-# This is operator convenience around `go run ./cmd/cutlass`: it ensures the
+# This is operator convenience around `fleet task run`: it ensures the
 # client-bundle sandbox image exists (so agent tool calls run in the real
 # rootless-Podman container, not host-mode), mints a fresh per-run workspace so
 # the run never collides with the server's shared workspace/, and points a stable
@@ -51,8 +51,8 @@ LOG_PATH="$RUN_DIR/session.json"
 ln -sfn "$RUN_DIR" "$RUNS_DIR/latest"
 ln -sfn "$LOG_PATH" "$RUNS_DIR/latest.json"
 
-echo "cutlass: workspace=$RUN_DIR" >&2
-echo "cutlass: tail the log with:  tail -f $RUNS_DIR/latest.json" >&2
+echo "task run: workspace=$RUN_DIR" >&2
+echo "task run: tail the log with:  tail -f $RUNS_DIR/latest.json" >&2
 
 cd "$REPO_ROOT"
-exec go run ./cmd/cutlass --workspace "$RUN_DIR" --log "$LOG_PATH" "$TASK_YAML"
+exec go run ./cmd/fleet task run --workspace "$RUN_DIR" --log "$LOG_PATH" "$TASK_YAML"

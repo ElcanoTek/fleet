@@ -1,4 +1,4 @@
-package main
+package taskrun
 
 import (
 	"encoding/json"
@@ -68,7 +68,7 @@ func repoConfigDir(t *testing.T) string {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	// thisFile = <root>/cmd/cutlass/main_test.go
+	// thisFile = <root>/internal/taskrun/taskrun_test.go
 	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
 	return filepath.Join(root, "config", "default")
 }
@@ -110,17 +110,17 @@ func writeTaskFile(t *testing.T, prompt string) string {
 	return path
 }
 
-// TestCutlassOneShot_FakeLLM runs a full task to completion through the governed
+// TestOneShot_FakeLLM runs a full task to completion through the governed
 // scheduled runtime with no provider (fake LLM), no DB, and no HTTP server —
 // proving the issue's acceptance: a single task YAML runs locally and writes a
 // parseable session log in an isolated workspace.
-func TestCutlassOneShot_FakeLLM(t *testing.T) {
-	startFakeLLM(t, "cutlass one-shot ok")
+func TestOneShot_FakeLLM(t *testing.T) {
+	startFakeLLM(t, "task run one-shot ok")
 	taskFile := writeTaskFile(t, `"say hello"`)
 	logPath := filepath.Join(t.TempDir(), "session.json")
 	wsDir := filepath.Join(t.TempDir(), "ws")
 
-	if err := run([]string{"--log", logPath, "--workspace", wsDir, taskFile}); err != nil {
+	if err := run([]string{"--log", logPath, "--workspace", wsDir, taskFile}, "taskrun-test"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -143,9 +143,9 @@ func TestCutlassOneShot_FakeLLM(t *testing.T) {
 	}
 }
 
-// TestCutlassFreshWorkspacePerRun proves two runs without --workspace get
+// TestFreshWorkspacePerRun proves two runs without --workspace get
 // distinct, isolated workspace dirs minted under the configured workspace root.
-func TestCutlassFreshWorkspacePerRun(t *testing.T) {
+func TestFreshWorkspacePerRun(t *testing.T) {
 	startFakeLLM(t, "ok")
 	base := t.TempDir()
 	t.Setenv("FLEET_WORKSPACE_ROOT", base)
@@ -153,7 +153,7 @@ func TestCutlassFreshWorkspacePerRun(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		taskFile := writeTaskFile(t, `"hello"`)
 		logPath := filepath.Join(t.TempDir(), "session.json")
-		if err := run([]string{"--log", logPath, taskFile}); err != nil {
+		if err := run([]string{"--log", logPath, taskFile}, "taskrun-test"); err != nil {
 			t.Fatalf("run %d: %v", i, err)
 		}
 	}
@@ -164,7 +164,7 @@ func TestCutlassFreshWorkspacePerRun(t *testing.T) {
 	}
 	runs := 0
 	for _, e := range entries {
-		if e.IsDir() && len(e.Name()) >= len("cutlass-run-") && e.Name()[:len("cutlass-run-")] == "cutlass-run-" {
+		if e.IsDir() && len(e.Name()) >= len("task-run-") && e.Name()[:len("task-run-")] == "task-run-" {
 			runs++
 		}
 	}

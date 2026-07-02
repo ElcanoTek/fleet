@@ -188,7 +188,7 @@ with the shipped router (it does not gate body schemas).
 cmd/
   fleet/          the one unified binary — server (`fleet serve`: chat HTTP/SSE + orchestrator HTTP + scheduler + worker pool) AND operator CLI (every other verb)
   fleet-admin/    transitional deprecation shim — forwards to `fleet`; removed after one release
-  cutlass/        optional local one-shot debug entrypoint (not the production scheduled path)
+  cutlass/        DEPRECATED shim → `fleet task run` (removed after one release)
   sandbox-probe/  deploy-time sandbox smoke test
 internal/
   agentcore/      the one unified run loop + shared agent primitives (cost ceilings, policy)
@@ -262,19 +262,20 @@ For the full build/test workflow (including the Postgres-backed Go suites, the
 web app, and the Playwright e2e suites), see
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-### Running one task locally (cutlass)
+### Running one task locally (`fleet task run`)
 
-`cmd/cutlass` runs a **single task YAML** to completion locally — no server, no
-database — through the **same governed runtime** the production scheduler uses
-(sandbox and credential brokering included). A debug entrypoint, not a second
-execution path.
+`fleet task run` executes a **single task YAML** to completion locally — no
+server, no database — through the **same governed runtime** the production
+scheduler uses (sandbox and credential brokering included). A debug
+entrypoint, not a second execution path. _(Formerly the separate `cutlass`
+binary; that name still forwards for one deprecation release.)_
 
 ```
-scripts/run_workflow_live.sh docs/examples/cutlass-task.yaml   # builds the sandbox image, isolates a workspace, tails a log
-go run ./cmd/cutlass --log out.json path/to/task.yaml          # or invoke it directly
+fleet task run --log out.json path/to/task.yaml               # run one task through the governed runtime
+scripts/run_workflow_live.sh docs/examples/local-task.yaml    # or: build the sandbox image, isolate a workspace, tail a log
 ```
 
-See [`docs/examples/cutlass-task.yaml`](docs/examples/cutlass-task.yaml) for the
+See [`docs/examples/local-task.yaml`](docs/examples/local-task.yaml) for the
 task schema (a thin mirror of the scheduled-task create shape).
 
 ## Deploy
@@ -362,22 +363,34 @@ standards. Our thanks to the teams and communities behind them:
   rootless-Podman sandbox; there is no trusted fast path that skips it.
 - **[Kata Containers](https://katacontainers.io)** and
   **[libkrun](https://github.com/containers/libkrun)** — the OCI runtimes behind
-  fleet's optional hypervisor-isolation tier (#217): set `sandbox.runtime` and
+  fleet's optional hypervisor-isolation tier: set `sandbox.runtime` and
   every tool call runs in a dedicated KVM microVM with its own guest kernel,
   plugging into the same Podman invocation unchanged.
-- **[Fedora](https://fedoraproject.org)** — `fedora-minimal`
-  (`registry.fedoraproject.org/fedora-minimal`) is the slim base image for the
-  default sandbox: a small attack surface and current security patches on every
-  on-box rebuild, with RPM-sourced Python rather than runtime `pip`.
+- **[Fedora](https://fedoraproject.org)** — `fedora-minimal` is the base image
+  for the default sandbox, and we think it's the safest base in the game for
+  this job: a deliberately small image (less surface to attack), backed by one
+  of the fastest CVE-response pipelines in any distribution, with the entire
+  Python data stack installed as **signed Fedora RPMs** instead of `pip` at
+  runtime — one audited supply chain, not a thousand PyPI tarballs. fleet
+  deliberately tracks the rolling tag so every on-box rebuild picks up the
+  current patches, and per-PR + weekly Grype scans keep the claim honest.
 - **[Model Context Protocol](https://modelcontextprotocol.io)** and its SDKs —
   the open standard fleet speaks (stdio + HTTP) to reach tools and data through a
   credential-brokered MCP catalog.
 - **[Agent Skills](https://github.com/anthropics/skills)** — the open skill
   format fleet loads from the client-config bundle (`SKILL.md` + bundled scripts,
   with progressive disclosure).
-- **[Fantasy](https://github.com/charmbracelet/fantasy)** by
-  [Charmbracelet](https://github.com/charmbracelet) — the Go framework underneath
-  fleet's multi-provider, multi-model agent run loop.
+- **[Charmbracelet](https://github.com/charmbracelet)** — fleet leans on the
+  charm stack end to end: **[Fantasy](https://github.com/charmbracelet/fantasy)**
+  is the Go framework underneath the multi-provider agent run loop, and the
+  `fleet chat` terminal client is built on
+  **[Bubble Tea](https://github.com/charmbracelet/bubbletea)**,
+  **[Bubbles](https://github.com/charmbracelet/bubbles)**,
+  **[Lip Gloss](https://github.com/charmbracelet/lipgloss)**, and
+  **[Glamour](https://github.com/charmbracelet/glamour)** — with
+  **[vhs](https://github.com/charmbracelet/vhs)** recording the README's TUI
+  demo and **[freeze](https://github.com/charmbracelet/freeze)** rendering its
+  static screenshots.
 - **[OpenRouter](https://openrouter.ai)** — unified, provider-agnostic model
   routing that backs fleet's "any model, the right one per task" design.
 
