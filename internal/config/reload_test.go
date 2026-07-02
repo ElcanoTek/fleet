@@ -1,11 +1,16 @@
 package config
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/webhooks"
 )
 
 func writeEnv(t *testing.T, path, body string) {
@@ -13,6 +18,15 @@ func writeEnv(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write env file: %v", err)
 	}
+}
+
+// hmacSHA256Hex signs body under secret, GitHub-style ("sha256=<hex>"), for the
+// #584 assertion that webhook verification still uses the boot secret.
+func hmacSHA256Hex(t *testing.T, secret string, body []byte) string {
+	t.Helper()
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 // TestReload_AppliesChangedReloadable: a reloadable value edited in the env file
@@ -182,6 +196,118 @@ func TestReload_DiscreteDBChangeReportedSkipped(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("discrete DB_HOST change not reported in Skipped: %+v", res.Skipped)
+	}
+}
+
+// TestReload_FileSourcedAuthSecretNotRotated (#584): a webhook signing secret
+// sourced from the .env FILE (so not a process-env winner covered by the
+// bootEnv restore) must follow the non-reloadable contract — a drifted file
+// copy is restored to the boot value and reported in Skipped, never silently
+// applied. Webhook verification reads the secret via os.Getenv per request, so
+// the assertion that matters is that verification still passes under the BOOT
+// secret after the reload.
+func TestReload_FileSourcedAuthSecretNotRotated(t *testing.T) {
+	isolateEnv(t)
+	const secretEnv = "FLEET_TEST_WEBHOOK_HMAC_SECRET_584"
+	// t.Setenv records the pre-test state for restore; the test itself starts
+	// from unset, exactly like a fresh process before the env file loads.
+	t.Setenv(secretEnv, "placeholder")
+	_ = os.Unsetenv(secretEnv)
+	// As cmd/fleet does from the bundle manifest at startup, before Load.
+	RegisterAllowedEnvVars(secretEnv)
+	RegisterNonReloadableSecretEnvVars(secretEnv)
+
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	writeEnv(t, envPath, secretEnv+"=boot-secret\nFLEET_MAX_COST_USD=10\n")
+	cfg, err := Load(envPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := os.Getenv(secretEnv); got != "boot-secret" {
+		t.Fatalf("boot: secret = %q, want boot-secret", got)
+	}
+
+	// Operator bumps a reloadable knob; the file's secret copy has drifted.
+	writeEnv(t, envPath, secretEnv+"=drifted-secret\nFLEET_MAX_COST_USD=22\n")
+	res, err := cfg.Reload(envPath)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if cfg.LiveMaxCostUSD() != 22 {
+		t.Errorf("reloadable knob not applied alongside the pinned secret: %v, want 22", cfg.LiveMaxCostUSD())
+	}
+	if got := os.Getenv(secretEnv); got != "boot-secret" {
+		t.Errorf("live secret silently rotated to %q, want boot-secret", got)
+	}
+	found := false
+	for _, s := range res.Skipped {
+		if s.Key == secretEnv {
+			found = true
+			if s.Reason == "" {
+				t.Errorf("skipped %s has no reason", secretEnv)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("drifted %s not reported in Skipped: %+v", secretEnv, res.Skipped)
+	}
+	// The per-request verification path (os.Getenv, as webhook.go reads it)
+	// still authenticates a caller signing under the BOOT secret.
+	body := []byte(`{"event":"push"}`)
+	mac := hmacSHA256Hex(t, "boot-secret", body)
+	if !webhooks.VerifyHMACSHA256(body, os.Getenv(secretEnv), mac) {
+		t.Error("webhook verification no longer accepts the boot secret after reload")
+	}
+
+	// A reload with the file back at the boot value reports nothing.
+	writeEnv(t, envPath, secretEnv+"=boot-secret\nFLEET_MAX_COST_USD=22\n")
+	res, err = cfg.Reload(envPath)
+	if err != nil {
+		t.Fatalf("second Reload: %v", err)
+	}
+	for _, s := range res.Skipped {
+		if s.Key == secretEnv {
+			t.Errorf("undrifted secret reported in Skipped: %+v", res.Skipped)
+		}
+	}
+}
+
+// TestReload_AuthSecretUnsetAtBootStaysUnset (#584): a registered auth secret
+// that was UNSET at boot must not be introduced by a later env-file edit — the
+// non-reloadable contract covers set↔unset transitions in both directions.
+func TestReload_AuthSecretUnsetAtBootStaysUnset(t *testing.T) {
+	isolateEnv(t)
+	const secretEnv = "FLEET_TEST_SLACK_SIGNING_SECRET_584"
+	t.Setenv(secretEnv, "placeholder")
+	_ = os.Unsetenv(secretEnv)
+	RegisterAllowedEnvVars(secretEnv)
+	RegisterNonReloadableSecretEnvVars(secretEnv)
+
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	writeEnv(t, envPath, "FLEET_MAX_COST_USD=10\n")
+	cfg, err := Load(envPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	writeEnv(t, envPath, secretEnv+"=late-secret\nFLEET_MAX_COST_USD=10\n")
+	res, err := cfg.Reload(envPath)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if v, ok := os.LookupEnv(secretEnv); ok {
+		t.Errorf("secret introduced on reload (= %q), want unset until restart", v)
+	}
+	found := false
+	for _, s := range res.Skipped {
+		if s.Key == secretEnv {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("late-added %s not reported in Skipped: %+v", secretEnv, res.Skipped)
 	}
 }
 
