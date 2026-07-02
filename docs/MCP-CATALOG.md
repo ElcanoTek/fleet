@@ -72,6 +72,14 @@ Settings → Connections gains a collapsible "Connector catalog" panel:
   content) go to the vendor under the vendor's terms. "Add" prefills the
   existing add-server flow; entries whose URL is already added show "Added".
 
+### Tenant-scoped entries
+
+A few vendors host their MCP servers **per org/store/workspace** — the endpoint
+contains a `{placeholder}` (Databricks, Google Cloud/Workspace, Salesforce,
+Shopify Storefront in the shipped list). These are listed for discoverability,
+but they can't be one-click added: the UI shows "Needs your URL" and the user
+pastes their own tenant endpoint into the manual add form.
+
 ## Curation guidance for bundle authors
 
 - List only **official, vendor-operated** endpoints, verified against the

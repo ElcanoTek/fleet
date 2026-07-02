@@ -72,77 +72,548 @@ mcp_servers: []
 # Operators should verify each against the linked vendor docs before shipping a
 # bundle, and trim the list to what their users should see.
 remote_mcp_catalog:
-  - name: github
-    display_name: GitHub
+  - name: airtable
+    display_name: Airtable
     description: >-
-      Read and manage GitHub repositories, issues, and pull requests through
-      GitHub's hosted MCP server.
-    url: "https://api.githubcopilot.com/mcp/"
-    vendor: GitHub, Inc.
-    docs_url: "https://docs.github.com/en/copilot/customizing-copilot/using-model-context-protocol/using-the-github-mcp-server"
-  - name: notion
-    display_name: Notion
+      Query Airtable bases, create and update records, analyze data, and create
+      new bases, respecting your existing Airtable permissions.
+    url: "https://mcp.airtable.com/mcp"
+    vendor: Formagrid Inc. (Airtable)
+    docs_url: "https://support.airtable.com/docs/using-the-airtable-mcp-server"
+  - name: apify
+    display_name: Apify
     description: >-
-      Search and update Notion pages and databases through Notion's hosted MCP
-      server.
-    url: "https://mcp.notion.com/mcp"
-    vendor: Notion Labs, Inc.
-    docs_url: "https://developers.notion.com/docs/mcp"
-  - name: linear
-    display_name: Linear
+      Discover and run Actors from the Apify Store for web scraping and
+      automation, access run results, and search Apify docs.
+    url: "https://mcp.apify.com"
+    vendor: Apify Technologies s.r.o.
+    docs_url: "https://docs.apify.com/platform/integrations/mcp"
+  - name: apollo-io
+    display_name: Apollo.io
     description: >-
-      Create and track Linear issues and projects through Linear's hosted MCP
-      server.
-    url: "https://mcp.linear.app/sse"
-    vendor: Linear
-    docs_url: "https://linear.app/docs/mcp"
-  - name: sentry
-    display_name: Sentry
-    description: >-
-      Query Sentry issues, events, and performance data through Sentry's hosted
-      MCP server.
-    url: "https://mcp.sentry.dev/mcp"
-    vendor: Functional Software, Inc. (Sentry)
-    docs_url: "https://docs.sentry.io/product/sentry-mcp/"
-  - name: atlassian
-    display_name: Atlassian (Jira + Confluence)
-    description: >-
-      Work with Jira issues and Confluence pages through Atlassian's hosted MCP
-      server.
-    url: "https://mcp.atlassian.com/v1/sse"
-    vendor: Atlassian
-    docs_url: "https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/"
+      Sales intelligence: search prospects and companies, enrich records,
+      manage contacts, sequences, and tasks.
+    url: "https://mcp.apollo.io/mcp"
+    vendor: ZenLeads Inc. (Apollo.io)
+    docs_url: "https://docs.apollo.io/docs/apollo-mcp"
   - name: asana
     display_name: Asana
     description: >-
-      Manage Asana tasks and projects through Asana's hosted MCP server.
-    url: "https://mcp.asana.com/sse"
+      Work with the Asana Work Graph — find tasks, create work, list project
+      sections, and read status updates.
+    url: "https://mcp.asana.com/v2/mcp"
     vendor: Asana, Inc.
     docs_url: "https://developers.asana.com/docs/using-asanas-mcp-server"
-  - name: stripe
-    display_name: Stripe
+  - name: atlassian
+    display_name: Atlassian (Rovo)
     description: >-
-      Query Stripe payments data and documentation through Stripe's hosted MCP
-      server.
-    url: "https://mcp.stripe.com"
-    vendor: Stripe, Inc.
-    docs_url: "https://docs.stripe.com/mcp"
-  - name: hugging-face
-    display_name: Hugging Face
+      Search, summarize, create, and update work in Jira, Confluence, Jira
+      Service Management, Bitbucket, and Compass with your existing permissions.
+    url: "https://mcp.atlassian.com/v1/mcp"
+    vendor: Atlassian Pty Ltd
+    docs_url: "https://support.atlassian.com/atlassian-rovo-mcp-server/docs/getting-started-with-the-atlassian-remote-mcp-server/"
+  - name: aws-knowledge
+    display_name: AWS Knowledge
     description: >-
-      Search Hugging Face models, datasets, and Spaces through Hugging Face's
-      hosted MCP server.
-    url: "https://huggingface.co/mcp"
-    vendor: Hugging Face, Inc.
-    docs_url: "https://huggingface.co/docs/hub/mcp"
+      Up-to-date AWS documentation, API references, What's New posts,
+      Well-Architected guidance, and regional availability data. Free, no AWS
+      account required.
+    url: "https://knowledge-mcp.global.api.aws"
+    vendor: Amazon Web Services, Inc.
+    docs_url: "https://awslabs.github.io/mcp/servers/aws-knowledge-mcp-server"
+  - name: box
+    display_name: Box
+    description: >-
+      OAuth-authorized access to enterprise content in Box — search, Box AI,
+      and file/folder operations. Requires admin enablement in the Box Admin
+      Console.
+    url: "https://mcp.box.com"
+    vendor: Box, Inc.
+    docs_url: "https://developer.box.com/guides/box-mcp"
+  - name: browserbase
+    display_name: Browserbase
+    description: >-
+      Cloud browser automation via Stagehand — navigate, act, extract, and take
+      screenshots in a hosted browser session.
+    url: "https://mcp.browserbase.com/mcp"
+    vendor: Browserbase, Inc.
+    docs_url: "https://docs.browserbase.com/integrations/mcp/setup"
+  - name: canva
+    display_name: Canva
+    description: >-
+      Design generation and editing, asset and brand management, library
+      search, export (PDF/PNG/PPTX/MP4), and commenting.
+    url: "https://mcp.canva.com/mcp"
+    vendor: Canva Pty Ltd
+    docs_url: "https://www.canva.dev/docs/mcp/"
+  - name: clickup
+    display_name: ClickUp
+    description: >-
+      Natural-language access to ClickUp Workspace data — tasks, lists,
+      folders, and docs.
+    url: "https://mcp.clickup.com/mcp"
+    vendor: Mango Technologies, Inc. (ClickUp)
+    docs_url: "https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server"
+  - name: close
+    display_name: Close CRM
+    description: >-
+      CRM operations on leads, contacts, opportunities, and activities, with
+      tiered permission scopes for safe vs destructive writes.
+    url: "https://mcp.close.com/mcp"
+    vendor: Elastic Inc. (Close)
+    docs_url: "https://developer.close.com/mcp"
+  - name: cloudflare
+    display_name: Cloudflare
+    description: >-
+      Cloudflare's main hosted MCP server covering 2,500+ API endpoints; one of
+      a family of Cloudflare-hosted servers at <service>.mcp.cloudflare.com.
+    url: "https://mcp.cloudflare.com/mcp"
+    vendor: Cloudflare, Inc.
+    docs_url: "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/"
   - name: cloudflare-docs
     display_name: Cloudflare Docs
     description: >-
-      Search Cloudflare product documentation through Cloudflare's hosted
-      docs MCP server.
-    url: "https://docs.mcp.cloudflare.com/sse"
+      Answers questions against up-to-date Cloudflare documentation. No
+      authentication required.
+    url: "https://docs.mcp.cloudflare.com/mcp"
     vendor: Cloudflare, Inc.
     docs_url: "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/"
+  - name: confluent
+    display_name: Confluent Cloud
+    description: >-
+      Read-only, org-wide Confluent Cloud operations (environments, clusters,
+      connectors, metrics); regional servers additionally inspect topics,
+      schemas, and messages.
+    url: "https://api.confluent.cloud/mcp/v1"
+    vendor: Confluent, Inc.
+    docs_url: "https://docs.confluent.io/cloud/current/ai/ai-tools/managed-mcp-server.html"
+  - name: context7
+    display_name: Context7
+    description: >-
+      Up-to-date, version-specific library documentation and code examples for
+      coding agents. Works without an API key at lower rate limits.
+    url: "https://mcp.context7.com/mcp"
+    vendor: Upstash, Inc.
+    docs_url: "https://github.com/upstash/context7"
+  - name: databricks
+    display_name: Databricks (managed, per-workspace)
+    description: >-
+      Databricks-managed MCP servers hosted inside each customer workspace —
+      Genie spaces, vector search, Databricks SQL, and Unity Catalog functions
+      with UC-enforced permissions. Replace the placeholder with your workspace
+      hostname.
+    url: "https://{workspace-hostname}/api/2.0/mcp/"
+    vendor: Databricks, Inc.
+    docs_url: "https://docs.databricks.com/aws/en/generative-ai/mcp/managed-mcp"
+  - name: datadog
+    display_name: Datadog
+    description: >-
+      Observability data for AI agents — APM, logs, metrics, monitors,
+      dashboards, security signals, and incident context (US1 host shown;
+      region-specific hosts exist).
+    url: "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp"
+    vendor: Datadog, Inc.
+    docs_url: "https://docs.datadoghq.com/bits_ai/mcp_server/"
+  - name: deepwiki
+    display_name: DeepWiki
+    description: >-
+      Query DeepWiki's AI-generated documentation of public GitHub repos —
+      list topics, read docs, ask questions. Free, no authentication.
+    url: "https://mcp.deepwiki.com/mcp"
+    vendor: Cognition AI, Inc.
+    docs_url: "https://docs.devin.ai/work-with-devin/deepwiki-mcp"
+  - name: digitalocean
+    display_name: DigitalOcean
+    description: >-
+      Manage DigitalOcean via a family of per-product servers at
+      <service>.mcp.digitalocean.com (App Platform endpoint shown; droplets,
+      databases, DOKS, Spaces, docs, and more).
+    url: "https://apps.mcp.digitalocean.com/mcp"
+    vendor: DigitalOcean, LLC
+    docs_url: "https://docs.digitalocean.com/reference/mcp/configure-mcp/"
+  - name: dropbox
+    display_name: Dropbox
+    description: >-
+      Browse, search, extract content from, share, and manage files and
+      folders in Dropbox (open beta).
+    url: "https://mcp.dropbox.com/mcp"
+    vendor: Dropbox, Inc.
+    docs_url: "https://help.dropbox.com/integrations/connect-dropbox-mcp-server"
+  - name: exa
+    display_name: Exa
+    description: >-
+      Web search and retrieval — web_search_exa and web_fetch_exa by default,
+      plus optional advanced search and multi-step research tools.
+    url: "https://mcp.exa.ai/mcp"
+    vendor: Exa Labs, Inc.
+    docs_url: "https://exa.ai/docs/reference/exa-mcp"
+  - name: figma
+    display_name: Figma
+    description: >-
+      Design context (variables, components, layout) for codegen plus
+      write-to-canvas — create and update frames, components, and FigJam
+      boards.
+    url: "https://mcp.figma.com/mcp"
+    vendor: Figma, Inc.
+    docs_url: "https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/"
+  - name: firecrawl
+    display_name: Firecrawl
+    description: >-
+      Web scraping, crawling, search, mapping, and extraction. The keyless
+      endpoint is rate-limited per IP; authenticate with a Bearer header for
+      real use.
+    url: "https://mcp.firecrawl.dev/v2/mcp"
+    vendor: Firecrawl, Inc.
+    docs_url: "https://docs.firecrawl.dev/mcp-server"
+  - name: fireflies
+    display_name: Fireflies.ai
+    description: >-
+      Meeting data — transcripts, metadata, speaker information, and AI
+      summaries.
+    url: "https://api.fireflies.ai/mcp"
+    vendor: Fireflies.ai Corp.
+    docs_url: "https://docs.fireflies.ai/getting-started/mcp-configuration"
+  - name: github
+    display_name: GitHub
+    description: >-
+      Repositories, issues, pull requests, CI/CD workflow runs, and security
+      alerts. The trailing slash is part of the documented URL.
+    url: "https://api.githubcopilot.com/mcp/"
+    vendor: GitHub, Inc.
+    docs_url: "https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server"
+  - name: globalping
+    display_name: Globalping
+    description: >-
+      Run real network measurements (ping, traceroute, DNS, MTR, HTTP) from
+      thousands of probes worldwide. Works unauthenticated at lower rate
+      limits.
+    url: "https://mcp.globalping.dev/mcp"
+    vendor: Volentio JSD Limited (jsDelivr)
+    docs_url: "https://github.com/jsdelivr/globalping-mcp-server"
+  - name: google-cloud
+    display_name: Google Cloud & Workspace (per-product)
+    description: >-
+      Google-managed remote MCP servers (50+ across GA and Preview) for Cloud
+      products and Workspace apps — e.g. bigquery.googleapis.com/mcp and
+      gmailmcp.googleapis.com/mcp/v1. Replace the placeholder with the
+      product's service host.
+    url: "https://{service}.googleapis.com/mcp"
+    vendor: Google LLC
+    docs_url: "https://docs.cloud.google.com/mcp/supported-products"
+  - name: heroku
+    display_name: Heroku
+    description: >-
+      App lifecycle management — list, create, and update apps, teams, Private
+      Spaces, and add-ons.
+    url: "https://mcp.heroku.com/mcp"
+    vendor: Salesforce, Inc. (Heroku)
+    docs_url: "https://devcenter.heroku.com/articles/heroku-remote-mcp-server"
+  - name: hubspot
+    display_name: HubSpot
+    description: >-
+      Access HubSpot CRM data — contacts, companies, deals, and tickets —
+      using your OAuth credentials.
+    url: "https://mcp.hubspot.com"
+    vendor: HubSpot, Inc.
+    docs_url: "https://developers.hubspot.com/mcp"
+  - name: hugging-face
+    display_name: Hugging Face
+    description: >-
+      Semantic search over Hub models, datasets, Spaces, papers, and docs,
+      plus user-selected Gradio Spaces exposed as callable tools.
+    url: "https://huggingface.co/mcp"
+    vendor: Hugging Face, Inc.
+    docs_url: "https://huggingface.co/docs/hub/en/hf-mcp-server"
+  - name: intercom
+    display_name: Intercom
+    description: >-
+      Search and fetch conversations, contacts, companies, and Help Center
+      articles (including creating and updating articles). US-hosted
+      workspaces only.
+    url: "https://mcp.intercom.com/mcp"
+    vendor: Intercom, Inc.
+    docs_url: "https://developers.intercom.com/docs/guides/mcp"
+  - name: linear
+    display_name: Linear
+    description: >-
+      Find, create, and update Linear issues, projects, and comments.
+    url: "https://mcp.linear.app/mcp"
+    vendor: Linear Orbit, Inc.
+    docs_url: "https://linear.app/docs/mcp"
+  - name: make
+    display_name: Make
+    description: >-
+      Expose your Make scenarios as MCP tools — run scenarios and view or
+      modify scenarios and related entities.
+    url: "https://mcp.make.com"
+    vendor: Make (Celonis s.r.o.)
+    docs_url: "https://developers.make.com/mcp-server"
+  - name: microsoft-learn
+    display_name: Microsoft Learn
+    description: >-
+      Semantic search over official Microsoft and Azure documentation, full
+      articles as markdown, and code samples. Free, no authentication.
+    url: "https://learn.microsoft.com/api/mcp"
+    vendor: Microsoft Corporation
+    docs_url: "https://learn.microsoft.com/en-us/training/support/mcp"
+  - name: miro
+    display_name: Miro
+    description: >-
+      Search and summarize board content, create boards and structured layouts
+      (frames, sticky notes, shapes, cards, tables), generate diagrams, and
+      manage comments.
+    url: "https://mcp.miro.com/"
+    vendor: RealtimeBoard, Inc. (Miro)
+    docs_url: "https://developers.miro.com/docs/miro-mcp"
+  - name: monday
+    display_name: monday.com
+    description: >-
+      Read boards, items, and users; create and modify items, boards, groups,
+      columns, and forms; query the full monday.com GraphQL API.
+    url: "https://mcp.monday.com/mcp"
+    vendor: monday.com Ltd.
+    docs_url: "https://github.com/mondaycom/mcp"
+  - name: neon
+    display_name: Neon
+    description: >-
+      Manage Neon Postgres projects — create and manage branches, inspect and
+      modify schemas, run SQL, and configure data access.
+    url: "https://mcp.neon.tech/mcp"
+    vendor: Neon Inc. (a Databricks company)
+    docs_url: "https://neon.com/docs/ai/neon-mcp-server"
+  - name: netlify
+    display_name: Netlify
+    description: >-
+      Deploy and build sites; manage functions, blobs, database, forms,
+      redirects, caching, and the AI Gateway.
+    url: "https://netlify-mcp.netlify.app/mcp"
+    vendor: Netlify, Inc.
+    docs_url: "https://docs.netlify.com/welcome/build-with-ai/netlify-mcp-server/"
+  - name: new-relic
+    display_name: New Relic
+    description: >-
+      Observability data — entities, metrics, incidents, and NRQL queries —
+      governed by New Relic RBAC (US endpoint shown; EU exists).
+    url: "https://mcp.newrelic.com/mcp/"
+    vendor: New Relic, Inc.
+    docs_url: "https://docs.newrelic.com/docs/agentic-ai/mcp/setup/"
+  - name: notion
+    display_name: Notion
+    description: >-
+      Search, read, create, and update Notion pages and databases per your
+      permissions, with Markdown-optimized, token-efficient tools.
+    url: "https://mcp.notion.com/mcp"
+    vendor: Notion Labs, Inc.
+    docs_url: "https://developers.notion.com/docs/get-started-with-mcp"
+  - name: openrouter
+    display_name: OpenRouter
+    description: >-
+      Live model catalog, model details and endpoints, account credits, daily
+      rankings, benchmarks, docs search, and billable test messages.
+    url: "https://mcp.openrouter.ai/mcp"
+    vendor: OpenRouter, Inc.
+    docs_url: "https://openrouter.ai/docs/mcp-server"
+  - name: paypal
+    display_name: PayPal
+    description: >-
+      Merchant operations via natural language — create invoices, manage
+      payments and transactions, and reporting (sandbox endpoint also
+      available).
+    url: "https://mcp.paypal.com/http"
+    vendor: PayPal, Inc.
+    docs_url: "https://docs.paypal.ai/developer/tools/ai/mcp-quickstart/"
+  - name: pipedream
+    display_name: Pipedream
+    description: >-
+      Tools for 2,800+ integrated apps with fully managed OAuth and credential
+      storage (app/user targeting via request headers).
+    url: "https://remote.mcp.pipedream.net/v3"
+    vendor: Pipedream, Inc.
+    docs_url: "https://pipedream.com/docs/connect/mcp/developers"
+  - name: plaid
+    display_name: Plaid
+    description: >-
+      Production diagnostics and analytics — debug Items, review Link
+      conversion analytics, check usage metrics. Requires an approved
+      Production Plaid account.
+    url: "https://api.dashboard.plaid.com/mcp/"
+    vendor: Plaid Inc.
+    docs_url: "https://plaid.com/docs/resources/mcp/"
+  - name: postman
+    display_name: Postman
+    description: >-
+      Manage Postman workspaces, collections, specs, mocks, and monitors with
+      100+ tools (minimal/code variants and an EU host exist).
+    url: "https://mcp.postman.com/mcp"
+    vendor: Postman, Inc.
+    docs_url: "https://learning.postman.com/docs/reference/postman-api/postman-mcp-server/postman-mcp-remote-server"
+  - name: prisma
+    display_name: Prisma Postgres
+    description: >-
+      Manage Prisma Postgres databases — create, back up, restore, run SQL,
+      introspect schemas, and search Prisma docs.
+    url: "https://mcp.prisma.io/mcp"
+    vendor: Prisma Data, Inc.
+    docs_url: "https://www.prisma.io/docs/postgres/integrations/mcp-server"
+  - name: railway
+    display_name: Railway
+    description: >-
+      Manage Railway projects, services, and deployments; OAuth chooses which
+      workspaces and projects the client may access.
+    url: "https://mcp.railway.com"
+    vendor: Railway Corp.
+    docs_url: "https://docs.railway.com/ai/mcp-server"
+  - name: render
+    display_name: Render
+    description: >-
+      Manage Render infrastructure — create services and datastores, view
+      metrics, logs, and deploys, and query databases.
+    url: "https://mcp.render.com/mcp"
+    vendor: Render Services, Inc.
+    docs_url: "https://render.com/docs/mcp-server"
+  - name: salesforce
+    display_name: Salesforce (hosted, per-org)
+    description: >-
+      Fully managed MCP servers exposing org data and logic — SObject CRUD,
+      Flows, invocable Apex, Data 360, Tableau Next. Endpoint is per-org; copy
+      it from Setup → API Catalog → MCP Servers.
+    url: "https://api.salesforce.com/platform/mcp/v1/{environment}/platform/{server}"
+    vendor: Salesforce, Inc.
+    docs_url: "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/references/reference/servers-reference.html"
+  - name: semgrep
+    display_name: Semgrep
+    description: >-
+      Scan code for security vulnerabilities with Semgrep's static-analysis
+      engine (part of Semgrep Guardian).
+    url: "https://mcp.semgrep.ai/mcp"
+    vendor: Semgrep, Inc.
+    docs_url: "https://github.com/semgrep/mcp"
+  - name: sentry
+    display_name: Sentry
+    description: >-
+      Query projects, issues, and errors in your Sentry org and invoke Seer
+      for root-cause analysis and fixes.
+    url: "https://mcp.sentry.dev/mcp"
+    vendor: Functional Software, Inc. (Sentry)
+    docs_url: "https://mcp.sentry.dev/"
+  - name: shopify-storefront
+    display_name: Shopify Storefront (per-store)
+    description: >-
+      Every store's own domain exposes cart tools, policy and FAQ search, and
+      catalog search for browse-and-buy flows. Replace the placeholder with
+      the store domain; no auth for public data.
+    url: "https://{store}.myshopify.com/api/mcp"
+    vendor: Shopify Inc.
+    docs_url: "https://shopify.dev/docs/apps/build/storefront-mcp/servers/storefront"
+  - name: slack
+    display_name: Slack
+    description: >-
+      Search messages and files, retrieve and send messages, manage canvases,
+      and look up users. Workspace admins must approve MCP client
+      integrations.
+    url: "https://mcp.slack.com/mcp"
+    vendor: Slack Technologies, LLC (Salesforce)
+    docs_url: "https://docs.slack.dev/ai/slack-mcp-server/"
+  - name: square
+    display_name: Square
+    description: >-
+      Bridge to the full Square API platform — customers, orders, catalog, and
+      payments — with granular permissions.
+    url: "https://mcp.squareup.com/sse"
+    vendor: Block, Inc.
+    docs_url: "https://developer.squareup.com/docs/mcp"
+  - name: stripe
+    display_name: Stripe
+    description: >-
+      Call the Stripe API — customers, payments, refunds, invoices,
+      subscriptions, payment links — and search Stripe's docs and knowledge
+      base.
+    url: "https://mcp.stripe.com"
+    vendor: Stripe, Inc.
+    docs_url: "https://docs.stripe.com/mcp"
+  - name: supabase
+    display_name: Supabase
+    description: >-
+      Connect to Supabase projects — database queries and SQL, logs, Edge
+      Functions, project administration, and docs search; supports read-only
+      mode and project scoping.
+    url: "https://mcp.supabase.com/mcp"
+    vendor: Supabase Inc.
+    docs_url: "https://supabase.com/docs/guides/getting-started/mcp"
+  - name: tavily
+    display_name: Tavily
+    description: >-
+      Real-time web search and scraping — tavily-search, extract, map, and
+      crawl tools.
+    url: "https://mcp.tavily.com/mcp/"
+    vendor: Tavily Inc.
+    docs_url: "https://docs.tavily.com/documentation/mcp"
+  - name: todoist
+    display_name: Todoist
+    description: >-
+      Read, create, and update Todoist tasks and projects — rename,
+      reschedule, and move tasks on your behalf.
+    url: "https://ai.todoist.net/mcp"
+    vendor: Doist Inc.
+    docs_url: "https://www.todoist.com/help/articles/use-chatgpt-with-todoist-mcp-WEeLx9d8h"
+  - name: twilio
+    display_name: Twilio
+    description: >-
+      Search-then-retrieve access to Twilio's full public OpenAPI surface
+      (~1,800 endpoints across 30+ products). Docs and spec retrieval only —
+      it does not execute API calls.
+    url: "https://mcp.twilio.com/docs"
+    vendor: Twilio Inc.
+    docs_url: "https://www.twilio.com/docs/ai/mcp"
+  - name: vercel
+    display_name: Vercel
+    description: >-
+      Search Vercel documentation and manage teams, projects, deployments, and
+      deployment logs. Only reviewed and approved AI clients may connect.
+    url: "https://mcp.vercel.com"
+    vendor: Vercel Inc.
+    docs_url: "https://vercel.com/docs/mcp/vercel-mcp"
+  - name: webflow
+    display_name: Webflow
+    description: >-
+      Designer and canvas operations (elements, styles, variables), CMS
+      collections, custom code, assets, and site data.
+    url: "https://mcp.webflow.com/mcp"
+    vendor: Webflow, Inc.
+    docs_url: "https://developers.webflow.com/mcp/reference/getting-started"
+  - name: wix
+    display_name: Wix
+    description: >-
+      Search Wix documentation (REST/SDK/Headless), write code for the Wix
+      platform, and make API calls against Wix sites.
+    url: "https://mcp.wix.com/mcp"
+    vendor: Wix.com Ltd.
+    docs_url: "https://dev.wix.com/docs/sdk/articles/use-the-wix-mcp/about-the-wix-mcp"
+  - name: x
+    display_name: X (Twitter)
+    description: >-
+      200+ X API endpoints — post search and lookup, user lookups, bookmarks,
+      trends, news, and article drafting (read-focused; no Write API posting).
+    url: "https://api.x.com/mcp"
+    vendor: X Corp.
+    docs_url: "https://docs.x.com/tools/mcp"
+  - name: x-docs
+    display_name: X Docs
+    description: >-
+      Search and retrieve X API documentation pages. Open access, no
+      credentials required.
+    url: "https://docs.x.com/mcp"
+    vendor: X Corp.
+    docs_url: "https://docs.x.com/tools/mcp"
+  - name: zapier
+    display_name: Zapier
+    description: >-
+      40,000+ actions across 9,000+ apps via natural language. The endpoint is
+      per-user — generate your personalized URL or token in the Zapier MCP
+      dashboard.
+    url: "https://mcp.zapier.com/api/v1/connect"
+    vendor: Zapier Inc.
+    docs_url: "https://help.zapier.com/hc/en-us/articles/36265392843917-Use-Zapier-MCP-with-your-client"
 
 # Inline HTTP tools (issue #261). A lightweight alternative to an MCP server for
 # simple "call this REST endpoint" tools: declare name + method + URL + an input
