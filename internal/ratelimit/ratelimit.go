@@ -209,14 +209,18 @@ type ConcurrencyLimiter struct {
 func NewConcurrencyLimiter(limit int) *ConcurrencyLimiter {
 	// Clamp to a sane int32 range — limit is a small operator-set cap, never
 	// anywhere near the boundary, but bound the conversion explicitly so the
-	// overflow checker is satisfied.
-	if limit < 0 {
-		limit = 0
+	// overflow checker is satisfied. The conversion is performed inside an
+	// explicit range check (rather than a reassigning clamp) because that is
+	// the form CodeQL's go/incorrect-integer-conversion recognizes as a barrier.
+	capped := int32(0)
+	if limit > 0 {
+		if limit > math.MaxInt32 {
+			capped = math.MaxInt32
+		} else {
+			capped = int32(limit)
+		}
 	}
-	if limit > math.MaxInt32 {
-		limit = math.MaxInt32
-	}
-	return &ConcurrencyLimiter{limit: int32(limit), counts: map[string]int32{}}
+	return &ConcurrencyLimiter{limit: capped, counts: map[string]int32{}}
 }
 
 // Acquire reserves a slot for key, returning false when key is already at the
