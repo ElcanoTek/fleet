@@ -36,7 +36,16 @@ type RemoteServer = {
   updated_at: number;
 };
 
-type ListResponse = { servers: RemoteServer[] };
+// A server another user shared with you: usable in your chats and scheduled
+// tasks (tool calls authenticate with the OWNER's login, host-side).
+type SharedServer = RemoteServer & { owner: string };
+
+type ListResponse = {
+  servers: RemoteServer[];
+  // Grants on YOUR servers, keyed by server id ("*" = everyone on this box).
+  shares?: Record<string, string[]>;
+  shared_with_me?: SharedServer[];
+};
 
 // The trust-labeled MCP directory (#538, expanded into a categorized,
 // searchable connector directory). Bundled entries are the operator's
@@ -64,7 +73,7 @@ function statusTone(status: string): StatusTone {
   }
 }
 
-async function fetchServers(): Promise<RemoteServer[] | null> {
+async function fetchServers(): Promise<ListResponse | null> {
   const res = await fetch("/api/remote-mcp-servers", { cache: "no-store" });
   if (res.status === 401) {
     window.location.href = "/login";
@@ -78,8 +87,12 @@ async function fetchServers(): Promise<RemoteServer[] | null> {
   if (!res.ok) {
     throw new Error(`Failed to load connections: ${res.status}`);
   }
-  const data = (await res.json()) as ListResponse;
-  return data.servers ?? [];
+  return (await res.json()) as ListResponse;
+}
+
+// granteeLabel renders the everyone wildcard readably.
+function granteeLabel(g: string): string {
+  return g === "*" ? "Everyone on this box" : g;
 }
 
 function errMessage(err: unknown): string {
@@ -117,6 +130,11 @@ async function fetchCatalog(): Promise<CatalogResponse | null> {
 export default function ConnectionsPage() {
   const [initialBanner] = useState(readCallbackBanner);
   const [servers, setServers] = useState<RemoteServer[] | null>(null);
+  const [shares, setShares] = useState<Record<string, string[]>>({});
+  const [sharedWithMe, setSharedWithMe] = useState<SharedServer[]>([]);
+  // Which of your servers has its share panel open, and the pending grantee.
+  const [shareOpenFor, setShareOpenFor] = useState<string | null>(null);
+  const [shareGrantee, setShareGrantee] = useState("");
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
   // The directory is the page's main discovery surface — open by default,
   // collapsible for users who only manage existing connections.
@@ -135,9 +153,11 @@ export default function ConnectionsPage() {
 
   const apply = (isStale: () => boolean) => {
     fetchServers()
-      .then((list) => {
-        if (isStale() || list === null) return;
-        setServers(list);
+      .then((data) => {
+        if (isStale() || data === null) return;
+        setServers(data.servers ?? []);
+        setShares(data.shares ?? {});
+        setSharedWithMe(data.shared_with_me ?? []);
       })
       .catch((e: unknown) => {
         if (isStale()) return;
@@ -254,6 +274,47 @@ export default function ConnectionsPage() {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
         setNotice(`${entry.display_name} added. Click Connect to sign in.`);
+        refresh();
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
+  // Share a connection with another user on the box (grantee email) or with
+  // everyone ("*"). Tool calls made through a shared connection authenticate
+  // with the owner's login host-side; the grantee never sees the credential.
+  const share = (id: string, grantee: string) => {
+    const g = grantee.trim();
+    if (!g) return;
+    setError(null);
+    setBusy(true);
+    fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}/shares`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grantee: g }),
+    })
+      .then(async (res) => {
+        if (!res.ok && res.status !== 204) {
+          throw new Error((await res.text()) || `Share failed: ${res.status}`);
+        }
+        setShareGrantee("");
+        refresh();
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
+  const unshare = (id: string, grantee: string) => {
+    setError(null);
+    setBusy(true);
+    fetch(
+      `/api/remote-mcp-servers/${encodeURIComponent(id)}/shares/${encodeURIComponent(grantee)}`,
+      { method: "DELETE" },
+    )
+      .then(async (res) => {
+        if (!res.ok && res.status !== 204) {
+          throw new Error((await res.text()) || `Unshare failed: ${res.status}`);
+        }
         refresh();
       })
       .catch((err: unknown) => setError(errMessage(err)))
@@ -425,6 +486,17 @@ export default function ConnectionsPage() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => {
+                        setShareGrantee("");
+                        setShareOpenFor((cur) => (cur === s.id ? null : s.id));
+                      }}
+                      disabled={busy}
+                      className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+                    >
+                      Share{(shares[s.id]?.length ?? 0) > 0 ? ` (${shares[s.id].length})` : ""}
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => disconnect(s.id, s.name)}
                       disabled={busy}
                       className="rounded-full border border-[var(--color-border-subtle)] px-3 py-1 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
@@ -432,6 +504,74 @@ export default function ConnectionsPage() {
                       Remove
                     </button>
                   </div>
+                  {shareOpenFor === s.id ? (
+                    <div className="mt-1 w-full rounded-[0.75rem] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
+                      <p className="mb-2 text-[0.75rem] text-[var(--color-text-muted)]">
+                        People you share with can use this connection in their
+                        chats and scheduled tasks. Their tool calls run under{" "}
+                        <strong className="text-[var(--color-text-secondary)]">
+                          your
+                        </strong>{" "}
+                        login, brokered server-side — they never see the
+                        credential, and removing a share revokes access
+                        immediately.
+                      </p>
+                      {(shares[s.id] ?? []).length > 0 ? (
+                        <ul className="mb-2 flex flex-wrap gap-1.5">
+                          {(shares[s.id] ?? []).map((g) => (
+                            <li
+                              key={g}
+                              className="flex items-center gap-1.5 rounded-full border border-[var(--color-border-strong)] px-2.5 py-0.5 text-[0.75rem]"
+                            >
+                              {granteeLabel(g)}
+                              <button
+                                type="button"
+                                onClick={() => unshare(s.id, g)}
+                                disabled={busy}
+                                aria-label={`Stop sharing with ${granteeLabel(g)}`}
+                                className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                              >
+                                ×
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          value={shareGrantee}
+                          onChange={(e) => setShareGrantee(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              share(s.id, shareGrantee);
+                            }
+                          }}
+                          placeholder="teammate@example.com"
+                          type="email"
+                          className="min-w-0 flex-1 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => share(s.id, shareGrantee)}
+                          disabled={busy || !shareGrantee.trim()}
+                          className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+                        >
+                          Share
+                        </button>
+                        {(shares[s.id] ?? []).includes("*") ? null : (
+                          <button
+                            type="button"
+                            onClick={() => share(s.id, "*")}
+                            disabled={busy}
+                            className="rounded-full border border-[var(--color-border-subtle)] px-3 py-1 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+                          >
+                            Share with everyone
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -441,6 +581,46 @@ export default function ConnectionsPage() {
             </p>
           )}
         </div>
+
+        {sharedWithMe.length > 0 ? (
+          <div className="mt-6 overflow-hidden rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)]">
+            <div className="border-b border-[var(--color-border)] px-4 py-2">
+              <span className="text-[0.75rem] uppercase tracking-wide text-[var(--color-text-muted)]">
+                Shared with you
+              </span>
+            </div>
+            <p className="px-4 pt-3 text-[0.75rem] text-[var(--color-text-muted)]">
+              Connections other users shared with you. Their tools are
+              available in your chats and scheduled tasks; calls run under the
+              owner&apos;s login, brokered server-side.
+            </p>
+            <ul>
+              {sharedWithMe.map((s) => (
+                <li
+                  key={s.id}
+                  className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-subtle)] px-4 py-3 last:border-none"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-[var(--color-text-primary)]">
+                        {s.name}
+                      </span>
+                      <StatusChip tone={statusTone(s.status)}>
+                        {STATUS_LABEL[s.status] ?? s.status}
+                      </StatusChip>
+                    </div>
+                    <p className="truncate text-[0.75rem] text-[var(--color-text-muted)]">
+                      {s.url}
+                    </p>
+                  </div>
+                  <span className="text-[0.75rem] text-[var(--color-text-secondary)]">
+                    shared by {s.owner}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         {catalog &&
         (catalog.third_party.length > 0 || catalog.bundled.length > 0) ? (

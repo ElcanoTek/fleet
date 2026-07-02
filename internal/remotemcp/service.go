@@ -52,6 +52,12 @@ type tokenStore interface {
 	EnsureFreshToken(ctx context.Context, server *store.RemoteMCPServer, marginSeconds int64, refreshFn store.RefreshFunc) (string, error)
 	BeginOAuthFlow(ctx context.Context, state, serverID, userEmail, codeVerifier string, ttl time.Duration) error
 	ConsumeOAuthFlow(ctx context.Context, state string) (*store.OAuthFlowState, error)
+	// Sharing (#443 follow-up).
+	ShareRemoteMCPServer(ctx context.Context, ownerEmail, serverID, grantee string) error
+	UnshareRemoteMCPServer(ctx context.Context, ownerEmail, serverID, grantee string) error
+	ListRemoteMCPSharesByOwner(ctx context.Context, ownerEmail string) (map[string][]string, error)
+	ListRemoteMCPServersSharedWith(ctx context.Context, email string) ([]store.RemoteMCPServer, error)
+	GetRemoteMCPServerForUse(ctx context.Context, email, id string) (*store.RemoteMCPServer, error)
 }
 
 // Config is the deployment configuration for the feature.
@@ -267,6 +273,32 @@ func (s *Service) Complete(ctx context.Context, email, state, code string) (*sto
 // ListServers returns a user's servers (no secrets).
 func (s *Service) ListServers(ctx context.Context, email string) ([]store.RemoteMCPServer, error) {
 	return s.store.ListRemoteMCPServers(ctx, email)
+}
+
+// Sharing (#443 follow-up) — thin store passthroughs so the HTTP layer keeps a
+// single service seam. Ownership checks live in the store; the token never
+// leaves the host regardless of who a server is shared with.
+
+// ShareServer grants grantee (an email, or store.GranteeEveryone) use of the
+// owner's server.
+func (s *Service) ShareServer(ctx context.Context, ownerEmail, serverID, grantee string) error {
+	return s.store.ShareRemoteMCPServer(ctx, ownerEmail, serverID, grantee)
+}
+
+// UnshareServer revokes a grant.
+func (s *Service) UnshareServer(ctx context.Context, ownerEmail, serverID, grantee string) error {
+	return s.store.UnshareRemoteMCPServer(ctx, ownerEmail, serverID, grantee)
+}
+
+// SharesByOwner returns every grant on the owner's servers, keyed by server id.
+func (s *Service) SharesByOwner(ctx context.Context, ownerEmail string) (map[string][]string, error) {
+	return s.store.ListRemoteMCPSharesByOwner(ctx, ownerEmail)
+}
+
+// SharedWithMe returns servers other users shared with email; each row's
+// UserEmail is the owner (attribution).
+func (s *Service) SharedWithMe(ctx context.Context, email string) ([]store.RemoteMCPServer, error) {
+	return s.store.ListRemoteMCPServersSharedWith(ctx, email)
 }
 
 // Disconnect best-effort revokes the refresh token at the authorization server,
