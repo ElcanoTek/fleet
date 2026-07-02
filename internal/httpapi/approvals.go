@@ -730,14 +730,21 @@ func expandCidImagesToDataURLs(html string, args map[string]any, convID string) 
 		if err != nil {
 			continue
 		}
-		if resolvedAbs != wsDir && !strings.HasPrefix(resolvedAbs, wsDir+string(filepath.Separator)) {
+		// Confine the symlink-resolved path to the workspace dir. filepath.Rel +
+		// filepath.IsLocal is the containment check CodeQL's path-injection query
+		// recognizes: Rel's nil-error result sanitizes resolvedAbs, and IsLocal
+		// rejects a "../" escape that Rel would otherwise return with a nil error.
+		// This keeps a hostile agent from getting /etc/passwd inlined into the
+		// preview card and clears the os.Stat / os.ReadFile below on rescan.
+		rel, relErr := filepath.Rel(wsDir, resolvedAbs)
+		if relErr != nil || !filepath.IsLocal(rel) {
 			continue
 		}
 		info, err := os.Stat(resolvedAbs)
 		if err != nil || info.IsDir() || info.Size() > maxAttachmentBytes {
 			continue
 		}
-		data, err := os.ReadFile(resolvedAbs) //nolint:gosec // path was validated above to live under wsDir
+		data, err := os.ReadFile(resolvedAbs) //nolint:gosec // resolvedAbs confined to wsDir by filepath.Rel + filepath.IsLocal above
 		if err != nil {
 			continue
 		}
