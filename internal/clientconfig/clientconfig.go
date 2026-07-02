@@ -127,6 +127,17 @@ type Bundle struct {
 	// WebhookTriggerDef.
 	WebhookTriggers []WebhookTriggerDef
 
+	// RemoteMCPCatalog is the manifest's curated directory of THIRD-PARTY hosted
+	// MCP servers (the remote_mcp_catalog: section, #538), in manifest order.
+	// Unlike MCPCatalog entries (bundle-author-defined, run in the sandbox,
+	// credentials brokered host-side), these are pointers to services hosted and
+	// operated by an external vendor: connecting one sends conversation-derived
+	// tool traffic to that vendor under its own terms. The catalog is
+	// informational — nothing connects until a user explicitly adds the server
+	// through the per-user remote-MCP OAuth flow (#443). Empty in a bundle that
+	// curates nothing.
+	RemoteMCPCatalog []RemoteMCPCatalogEntry
+
 	// Providers is the manifest's LLM-provider routing table (the providers:
 	// section, #289), in precedence order. Empty in the generic bundle, which
 	// keeps the historical single-OpenRouter behavior. cmd/fleet translates each
@@ -641,23 +652,46 @@ type ProviderDef struct {
 	Models    []string `yaml:"models"`      // slugs this provider serves; empty = catch-all
 }
 
+// RemoteMCPCatalogEntry is one curated third-party hosted MCP server from the
+// manifest's remote_mcp_catalog: section (#538). It is a DIRECTORY LISTING, not
+// a connection: fleet never talks to the URL until a user explicitly adds it
+// via the per-user remote-MCP flow (#443), which is where OAuth happens.
+//
+// TRUST — an entry here is deliberately weaker than an mcp_servers entry. A
+// bundled (mcp_servers) connector is bundle-author-defined code that runs
+// inside the mandatory sandbox with credentials brokered host-side. A catalog
+// entry names a service HOSTED BY A THIRD PARTY: tool calls and their
+// arguments (which can contain conversation content) travel to that vendor,
+// governed by the vendor's own terms. The UI must label the two classes
+// distinctly so a user knows what they are opting into; the bundle author
+// curates the list but does not control the remote service.
+type RemoteMCPCatalogEntry struct {
+	Name        string `yaml:"name"`         // stable identifier; unique within the manifest
+	DisplayName string `yaml:"display_name"` // human-readable label ("GitHub")
+	Description string `yaml:"description"`  // what the server does, one or two sentences
+	URL         string `yaml:"url"`          // the hosted MCP endpoint (https required)
+	Vendor      string `yaml:"vendor"`       // who operates the service ("GitHub, Inc.")
+	DocsURL     string `yaml:"docs_url"`     // vendor's documentation for the server (optional)
+}
+
 // manifest is the on-disk YAML shape. Sandbox is a pointer so an absent block
 // (a minimal/legacy bundle that never opted into the sandbox-as-config contract)
 // is distinguishable from a present-but-empty one: only a DECLARED sandbox block
 // enforces the Containerfile-exists invariant.
 type manifest struct {
-	Branding        Branding            `yaml:"branding"`
-	Models          Models              `yaml:"models"`
-	MCPServers      []ServerDef         `yaml:"mcp_servers"`
-	HTTPTools       []HTTPToolDef       `yaml:"http_tools"`
-	WebhookTriggers []WebhookTriggerDef `yaml:"webhook_triggers"`
-	Providers       []ProviderDef       `yaml:"providers"`
-	EmptyState      EmptyState          `yaml:"empty_state"`
-	TaskTemplates   []TaskTemplate      `yaml:"task_templates"`
-	AgentPolicy     AgentPolicy         `yaml:"agent_policy"`
-	Personas        []PersonaDef        `yaml:"personas"`
-	Pricing         PricingConfig       `yaml:"pricing"`
-	Sandbox         *sandboxManifest    `yaml:"sandbox"`
+	Branding        Branding                `yaml:"branding"`
+	Models          Models                  `yaml:"models"`
+	MCPServers      []ServerDef             `yaml:"mcp_servers"`
+	HTTPTools       []HTTPToolDef           `yaml:"http_tools"`
+	WebhookTriggers []WebhookTriggerDef     `yaml:"webhook_triggers"`
+	RemoteMCPs      []RemoteMCPCatalogEntry `yaml:"remote_mcp_catalog"`
+	Providers       []ProviderDef           `yaml:"providers"`
+	EmptyState      EmptyState              `yaml:"empty_state"`
+	TaskTemplates   []TaskTemplate          `yaml:"task_templates"`
+	AgentPolicy     AgentPolicy             `yaml:"agent_policy"`
+	Personas        []PersonaDef            `yaml:"personas"`
+	Pricing         PricingConfig           `yaml:"pricing"`
+	Sandbox         *sandboxManifest        `yaml:"sandbox"`
 }
 
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
@@ -722,6 +756,7 @@ func Load(dir string) (*Bundle, error) {
 		MCPCatalog:        m.MCPServers,
 		HTTPTools:         m.HTTPTools,
 		WebhookTriggers:   m.WebhookTriggers,
+		RemoteMCPCatalog:  m.RemoteMCPs,
 		Providers:         m.Providers,
 		AgentPolicyConfig: m.AgentPolicy,
 		Personas:          m.Personas,
@@ -892,6 +927,9 @@ func (b *Bundle) validate() error {
 	if err := b.validateWebhookTriggers(); err != nil {
 		return err
 	}
+	if err := b.validateRemoteMCPCatalog(); err != nil {
+		return err
+	}
 	if err := b.validateProviders(); err != nil {
 		return err
 	}
@@ -938,6 +976,47 @@ func (b *Bundle) validateWebhookTriggers() error {
 		}
 		if hasHMAC && hasToken {
 			return fmt.Errorf("webhook_triggers[%q]: set only one of hmac_secret_env or token_secret_env", slug)
+		}
+	}
+	return nil
+}
+
+// validateRemoteMCPCatalog fails the load on a malformed remote_mcp_catalog[]
+// entry (#538): a blank/duplicate name, a missing display_name/description
+// (the UI renders these — a blank card is a curation bug), a non-https URL
+// (the endpoint receives conversation-derived tool traffic; plaintext is never
+// acceptable), or a name colliding with a bundled mcp_servers entry (the two
+// classes render side by side and must stay distinguishable). Fail-loud at
+// startup, like the rest of validate.
+func (b *Bundle) validateRemoteMCPCatalog() error {
+	seen := map[string]bool{}
+	for i := range b.RemoteMCPCatalog {
+		e := &b.RemoteMCPCatalog[i]
+		name := strings.TrimSpace(e.Name)
+		if name == "" {
+			return fmt.Errorf("remote_mcp_catalog[%d]: name is required", i)
+		}
+		if seen[name] {
+			return fmt.Errorf("remote_mcp_catalog: duplicate name %q", name)
+		}
+		seen[name] = true
+		for _, s := range b.MCPCatalog {
+			if s.Name == name {
+				return fmt.Errorf("remote_mcp_catalog[%q]: name collides with bundled mcp_servers entry %q", name, name)
+			}
+		}
+		if strings.TrimSpace(e.DisplayName) == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: display_name is required", name)
+		}
+		if strings.TrimSpace(e.Description) == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: description is required", name)
+		}
+		u := strings.TrimSpace(e.URL)
+		if u == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url is required", name)
+		}
+		if !strings.HasPrefix(u, "https://") {
+			return fmt.Errorf("remote_mcp_catalog[%q]: url must be https:// (got %q)", name, e.URL)
 		}
 	}
 	return nil

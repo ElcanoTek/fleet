@@ -57,6 +57,93 @@ branding:
 # mcp_servers[] here (see /root/elcano-config/manifest.yaml for a full example).
 mcp_servers: []
 
+# Curated directory of THIRD-PARTY hosted MCP servers (#538). This is a
+# LISTING, not a connection: fleet never contacts these URLs until a user
+# explicitly connects one through Settings → Connections (per-user remote MCP
+# OAuth, #443 — requires FLEET_MCP_OAUTH_ENCRYPTION_KEY + FLEET_PUBLIC_BASE_URL).
+#
+# TRUST — these are NOT like mcp_servers entries. A bundled connector runs in
+# the sandbox on this box with credentials brokered host-side. Each server
+# below is hosted and operated by the named vendor: once connected, tool calls
+# (whose arguments can include conversation content) travel to that vendor and
+# are governed by the vendor's terms. The UI labels the two classes distinctly.
+#
+# The endpoints below are the vendors' officially announced hosted MCP URLs.
+# Operators should verify each against the linked vendor docs before shipping a
+# bundle, and trim the list to what their users should see.
+remote_mcp_catalog:
+  - name: github
+    display_name: GitHub
+    description: >-
+      Read and manage GitHub repositories, issues, and pull requests through
+      GitHub's hosted MCP server.
+    url: "https://api.githubcopilot.com/mcp/"
+    vendor: GitHub, Inc.
+    docs_url: "https://docs.github.com/en/copilot/customizing-copilot/using-model-context-protocol/using-the-github-mcp-server"
+  - name: notion
+    display_name: Notion
+    description: >-
+      Search and update Notion pages and databases through Notion's hosted MCP
+      server.
+    url: "https://mcp.notion.com/mcp"
+    vendor: Notion Labs, Inc.
+    docs_url: "https://developers.notion.com/docs/mcp"
+  - name: linear
+    display_name: Linear
+    description: >-
+      Create and track Linear issues and projects through Linear's hosted MCP
+      server.
+    url: "https://mcp.linear.app/sse"
+    vendor: Linear
+    docs_url: "https://linear.app/docs/mcp"
+  - name: sentry
+    display_name: Sentry
+    description: >-
+      Query Sentry issues, events, and performance data through Sentry's hosted
+      MCP server.
+    url: "https://mcp.sentry.dev/mcp"
+    vendor: Functional Software, Inc. (Sentry)
+    docs_url: "https://docs.sentry.io/product/sentry-mcp/"
+  - name: atlassian
+    display_name: Atlassian (Jira + Confluence)
+    description: >-
+      Work with Jira issues and Confluence pages through Atlassian's hosted MCP
+      server.
+    url: "https://mcp.atlassian.com/v1/sse"
+    vendor: Atlassian
+    docs_url: "https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/"
+  - name: asana
+    display_name: Asana
+    description: >-
+      Manage Asana tasks and projects through Asana's hosted MCP server.
+    url: "https://mcp.asana.com/sse"
+    vendor: Asana, Inc.
+    docs_url: "https://developers.asana.com/docs/using-asanas-mcp-server"
+  - name: stripe
+    display_name: Stripe
+    description: >-
+      Query Stripe payments data and documentation through Stripe's hosted MCP
+      server.
+    url: "https://mcp.stripe.com"
+    vendor: Stripe, Inc.
+    docs_url: "https://docs.stripe.com/mcp"
+  - name: hugging-face
+    display_name: Hugging Face
+    description: >-
+      Search Hugging Face models, datasets, and Spaces through Hugging Face's
+      hosted MCP server.
+    url: "https://huggingface.co/mcp"
+    vendor: Hugging Face, Inc.
+    docs_url: "https://huggingface.co/docs/hub/mcp"
+  - name: cloudflare-docs
+    display_name: Cloudflare Docs
+    description: >-
+      Search Cloudflare product documentation through Cloudflare's hosted
+      docs MCP server.
+    url: "https://docs.mcp.cloudflare.com/sse"
+    vendor: Cloudflare, Inc.
+    docs_url: "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/"
+
 # Inline HTTP tools (issue #261). A lightweight alternative to an MCP server for
 # simple "call this REST endpoint" tools: declare name + method + URL + an input
 # JSON Schema inline, no subprocess required. Each entry is registered as a native

@@ -594,6 +594,9 @@ func (s *Server) Routes() http.Handler {
 	// before the response reaches the browser.
 	mux.Handle("/api/v1/models", auth(member(http.HandlerFunc(s.handleModels))))
 	mux.Handle("/mcp-servers", auth(member(http.HandlerFunc(s.listMCPServerCatalog))))
+	// Trust-labeled MCP directory (#538): bundled connectors vs curated
+	// third-party hosted servers, for the settings catalog UI.
+	mux.Handle("/mcp-catalog", auth(member(http.HandlerFunc(s.mcpCatalog))))
 	// Per-user remote (hosted) MCP servers + OAuth (#443). The /oauth/mcp/callback
 	// completion is POSTed here by the browser-facing Next.js callback route.
 	mux.Handle("/remote-mcp-servers", auth(member(mutate(http.HandlerFunc(s.remoteMCPServers)))))
