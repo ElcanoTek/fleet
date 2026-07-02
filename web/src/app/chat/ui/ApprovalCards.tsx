@@ -942,7 +942,7 @@ function EmailPreview({
              LLM HTML still can't execute JS. */
           sandbox="allow-same-origin"
           srcDoc={html}
-          className="rounded-[0.4rem] border border-black/10 bg-white transition-[width] duration-200"
+          className="rounded-[0.4rem] border border-black/10 bg-white transition-[width] duration-base"
           style={{ width: `${viewportPx}px`, maxWidth: "100%", height: "28rem" }}
         />
       </div>

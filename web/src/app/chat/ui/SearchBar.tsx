@@ -109,7 +109,7 @@ export function SearchBar({
         onClick={onClose}
       />
       <div
-        className="relative z-10 flex w-full max-w-[34rem] flex-col overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] shadow-[var(--composer-shadow)] backdrop-blur-sm"
+        className="motion-safe:animate-pop-up-base relative z-10 flex w-full max-w-[34rem] flex-col overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] shadow-[var(--composer-shadow)] backdrop-blur-sm"
         role="dialog"
         aria-label="Search conversations"
         onKeyDown={(e) => {

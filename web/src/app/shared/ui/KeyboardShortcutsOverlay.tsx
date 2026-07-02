@@ -109,7 +109,7 @@ export function KeyboardShortcutsOverlay({
         onClick={onClose}
       />
       <div
-        className="relative z-10 flex max-h-[80vh] w-full max-w-[34rem] flex-col overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] shadow-[var(--composer-shadow)] backdrop-blur-sm"
+        className="motion-safe:animate-pop-up-base relative z-10 flex max-h-[80vh] w-full max-w-[34rem] flex-col overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] shadow-[var(--composer-shadow)] backdrop-blur-sm"
         role="dialog"
         aria-label="Keyboard shortcuts"
         aria-modal="true"
@@ -122,7 +122,7 @@ export function KeyboardShortcutsOverlay({
             type="button"
             aria-label="Close keyboard shortcuts"
             data-testid="shortcuts-close"
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+            className="hit-area inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             onClick={onClose}
           >
             <span aria-hidden="true">×</span>

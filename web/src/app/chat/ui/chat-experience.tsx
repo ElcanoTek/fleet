@@ -52,6 +52,7 @@ import {
   type PendingAttachment,
 } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
+import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { Composer } from "./Composer";
@@ -193,12 +194,13 @@ const MEMORY_KINDS = ["fact", "preference", "identity", "constraint", "context"]
 // minimumThinkingMs / streamIdleTimeoutMs moved into ./useTurnStream alongside
 // the turn loop that is their only consumer.
 
-// Composer textarea height cap (~8 lines at the composer's font/leading).
-// This is the single source of truth: the textarea's Tailwind classes
-// intentionally omit any `max-h-*` so this JS clamp is the only one that
-// fires. `overflow-y-auto` on the element lets it scroll internally once
-// capped. See the autosize `useEffect` near `promptRef`.
-const MAX_COMPOSER_HEIGHT_PX = 200;
+// Composer textarea height cap (~8 lines at the composer's font/leading;
+// the design's autosize clamp). This is the single source of truth: the
+// textarea's Tailwind classes intentionally omit any `max-h-*` so this JS
+// clamp is the only one that fires. `overflow-y-auto` on the element lets
+// it scroll internally once capped. See the autosize `useEffect` near
+// `promptRef`.
+const MAX_COMPOSER_HEIGHT_PX = 180;
 
 // shortcutHelpGroups is the single source of truth for the "?" help overlay
 // (#306). It documents only the shortcuts the shell actually wires through
@@ -247,6 +249,10 @@ export function ChatExperience() {
   // empty new-chat view). The hook is instantiated below, once
   // currentConvKey is in scope. See ./usePerConvComposerState.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Desktop rail collapse (icon strip) + the ≤900px auto-collapse/overlay
+  // behavior. Owned here so the sidebar content and the select-mode exit
+  // below share one source of truth.
+  const railCollapse = useRailCollapse();
   // searchOpen gates the Cmd/Ctrl+K full-text search palette (#308).
   const [searchOpen, setSearchOpen] = useState(false);
   // shortcutsOpen gates the "?" keyboard-shortcut help overlay (#306).
@@ -354,6 +360,11 @@ export function ChatExperience() {
   // conversation rows in the sidebar. bulkDeleteConfirm opens the 3-second
   // countdown confirm modal for a targeted bulk delete of the selection.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Select mode (#279, redesigned per the unified-shell handoff): entered only
+  // via a row kebab's "Select…" item; rows then show leading checkboxes and the
+  // bulk bar appears. Escape, Cancel, collapsing the rail, or completing a bulk
+  // action all exit.
+  const [selectMode, setSelectMode] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [personas, setPersonas] = useState<string[]>([]);
@@ -1288,7 +1299,11 @@ export function ChatExperience() {
     if (typeof navigator === "undefined") return "Ctrl+K";
     return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? "⌘K" : "Ctrl+K";
   }, []);
-  const promptPlaceholder = `Message ${branding.app_name} AI...`;
+  // Sealed chats get the design's sandbox placeholder; everything else the
+  // branded default the e2e specs match (/message .* ai/i).
+  const promptPlaceholder = isLockdown
+    ? "Message your sealed sandbox…"
+    : `Message ${branding.app_name} AI...`;
 
   // patchAssistantMessage updates a specific message inside a specific
   // conversation's slot. The convId is required because stream events
@@ -1470,10 +1485,10 @@ export function ChatExperience() {
 
   // ── Multi-select bulk operations (#279) ─────────────────────────────────
   //
-  // Selection is a Set<string> of conversation IDs checked in the sidebar.
-  // The bulk action bar appears once ≥1 is selected; Escape clears it and
-  // Delete/Backspace opens the confirmation modal (the 3-second countdown is
-  // enforced inside the modal component).
+  // Select mode is explicit (the design's selectMode): a row kebab's "Select…"
+  // enters it with that row selected, rows show leading checkboxes, and the
+  // bulk bar appears. Escape exits; Delete/Backspace opens the bulk-delete
+  // confirm (3-second countdown enforced inside the modal component).
 
   const toggleConversationSelection = (id: string) => {
     setSelectedIds((prev) => {
@@ -1484,18 +1499,29 @@ export function ChatExperience() {
     });
   };
 
-  const selectAllVisible = () => {
-    setSelectedIds((prev) => {
-      // Toggling: if every visible conversation is already selected, clear;
-      // otherwise select all visible.
-      const all = filteredConversations.map((c) => c.id);
-      const allSelected = all.length > 0 && all.every((id) => prev.has(id));
-      if (allSelected) return new Set();
-      return new Set(all);
-    });
+  const enterSelectMode = (id: string) => {
+    setSelectMode(true);
+    setSelectedIds(new Set([id]));
   };
 
-  const clearSelection = () => setSelectedIds(new Set());
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  // Collapsing the rail exits select mode (the design's setCollapsed
+  // behavior) — the icon strip has no rows to act on, and a hidden selection
+  // would leave the Delete/Backspace bulk shortcut armed invisibly.
+  // Render-time adjustment (not an effect) per the React "adjusting state
+  // when a prop changes" pattern.
+  const [prevRailCollapsed, setPrevRailCollapsed] = useState(railCollapse.collapsed);
+  if (railCollapse.collapsed !== prevRailCollapsed) {
+    setPrevRailCollapsed(railCollapse.collapsed);
+    if (railCollapse.collapsed) {
+      setSelectMode(false);
+      setSelectedIds(new Set());
+    }
+  }
 
   // bulkDeleteConversations issues a targeted DELETE /conversations with the
   // selected IDs. On success it drops them from local state (and the archived
@@ -1514,6 +1540,7 @@ export function ChatExperience() {
     const remaining = conversations.filter((c) => !removed.has(c.id));
     setConversations(remaining);
     setArchivedConversations((current) => current.filter((c) => !removed.has(c.id)));
+    setSelectMode(false);
     setSelectedIds(new Set());
     if (activeConversationId && removed.has(activeConversationId)) {
       const next = remaining[0];
@@ -2048,20 +2075,22 @@ export function ChatExperience() {
     setSidebarOpen(false);
   }, []);
 
-  // Multi-select keyboard support (#279): Escape clears the selection; Delete
-  // / Backspace (when not typing in an input) opens the bulk-delete confirm
-  // modal. The 3-second countdown is enforced inside the modal. Skipped when a
-  // transient overlay (search / shortcuts / pending single-delete) is open so
-  // the keystroke is handled by that surface instead.
+  // Multi-select keyboard support (#279): Escape exits select mode (clearing
+  // the selection); Delete / Backspace (when not typing in an input) opens the
+  // bulk-delete confirm modal. The 3-second countdown is enforced inside the
+  // modal. Skipped when a transient overlay (search / shortcuts / pending
+  // single-delete) is open so the keystroke is handled by that surface instead.
   useEffect(() => {
-    if (selectedIds.size === 0) return;
+    if (!selectMode) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        setSelectMode(false);
         setSelectedIds(new Set());
         return;
       }
       if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedIds.size === 0) return;
         const target = e.target as HTMLElement | null;
         const tag = target?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
@@ -2072,7 +2101,7 @@ export function ChatExperience() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedIds.size, searchOpen, shortcutsOpen, pendingDeleteConversation]);
+  }, [selectMode, selectedIds.size, searchOpen, shortcutsOpen, pendingDeleteConversation]);
 
   const shortcuts = useMemo<KeyboardShortcut[]>(
     () => [
@@ -2477,10 +2506,13 @@ export function ChatExperience() {
       {/* grid-cols-[minmax(0,1fr)] on mobile: without it the single implicit
           column auto-sizes to max-content of the main column, which can
           exceed the viewport when main's own overflow:hidden lets its grid
-          track grow. Explicit minmax(0, 1fr) clamps it. lg: swaps in the
-          two-column sidebar+main layout for desktop. */}
-      <div className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] lg:grid-cols-[18rem_minmax(0,1fr)]">
+          track grow. Explicit minmax(0, 1fr) clamps it. sm: swaps in the
+          two-column rail+main layout; the rail column is `auto` so it tracks
+          the aside's own width (300px expanded / 4.25rem collapsed strip)
+          continuously through the collapse transition. */}
+      <div className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] sm:grid-cols-[auto_minmax(0,1fr)]">
         <ConversationSidebar
+          collapse={railCollapse}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
           branding={branding}
@@ -2517,20 +2549,27 @@ export function ChatExperience() {
           setShowArchived={setShowArchived}
           updateAvailable={updateAvailable}
           setConfirmBulkDelete={setConfirmBulkDelete}
+          selectMode={selectMode}
           selectedIds={selectedIds}
           onToggleSelection={toggleConversationSelection}
-          onSelectAllVisible={selectAllVisible}
-          onClearSelection={clearSelection}
+          onEnterSelectMode={enterSelectMode}
+          onExitSelectMode={exitSelectMode}
           onBulkDelete={() => setBulkDeleteConfirm(true)}
-          onBulkPin={() => void bulkPatchConversations({ pinned: true })}
-          onBulkUnpin={() => void bulkPatchConversations({ pinned: false })}
+          onBulkPin={() => {
+            // Completing a bulk action exits select mode (the design's
+            // behavior); bulkPatch snapshots the selection synchronously.
+            void bulkPatchConversations({ pinned: true });
+            exitSelectMode();
+          }}
           onBulkMoveFolder={(folder) => {
             if (folder === "") return;
             void bulkPatchConversations({ folder, pinned: true });
+            exitSelectMode();
           }}
           onBulkAddLabel={(label) => {
             if (label === "") return;
             void bulkPatchConversations({ labels: [label] });
+            exitSelectMode();
           }}
         />
 
@@ -2559,7 +2598,7 @@ export function ChatExperience() {
               type="button"
               onClick={() => setConfirmBulkDelete(false)}
             />
-            <div className="relative z-10 w-full max-w-[26rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
+            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[26rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
               <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
                 Delete all unpinned chats?
               </h2>
@@ -2622,7 +2661,7 @@ export function ChatExperience() {
               type="button"
               onClick={() => setMemoryManagerOpen(false)}
             />
-            <div className="relative z-10 flex max-h-[88vh] w-full max-w-[34rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
+            <div className="motion-safe:animate-pop-up-base relative z-10 flex max-h-[88vh] w-full max-w-[34rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Memories</h2>
@@ -2829,7 +2868,7 @@ export function ChatExperience() {
               type="button"
               onClick={() => setConfirmSummarize(false)}
             />
-            <div className="relative z-10 w-full max-w-[26rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
+            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[26rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
               <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
                 Compact this conversation?
               </h2>
@@ -2871,7 +2910,7 @@ export function ChatExperience() {
               onClick={() => setPendingDeleteConversation(null)}
             />
 
-            <div className="relative z-10 w-full max-w-[25rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
+            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[25rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
               <div className="mb-4 grid gap-2">
                 <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Delete chat?</h2>
                 <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
@@ -2964,7 +3003,7 @@ export function ChatExperience() {
                     <Icon
                       name="sparkles"
                       className={[
-                        "absolute inset-0 size-4 transition duration-200",
+                        "absolute inset-0 size-4 transition duration-base",
                         showStats
                           ? "rotate-12 scale-[0.86] opacity-0"
                           : "rotate-0 scale-100 opacity-100",
@@ -2973,7 +3012,7 @@ export function ChatExperience() {
                     <Icon
                       name="info"
                       className={[
-                        "absolute inset-0 size-4 transition duration-200",
+                        "absolute inset-0 size-4 transition duration-base",
                         showStats
                           ? "rotate-0 scale-100 opacity-100"
                           : "-rotate-12 scale-[0.86] opacity-0",
@@ -3095,7 +3134,7 @@ export function ChatExperience() {
             loadCatalogModels={loadCatalogModels}
           />
 
-          <section className="relative z-10 pb-[calc(env(safe-area-inset-bottom,0px)+0.35rem)] sm:pb-4">
+          <section className="motion-safe:animate-pop-up-base relative z-10 pb-[calc(env(safe-area-inset-bottom,0px)+0.35rem)] sm:pb-4">
             {showJumpToLatest ? (
               // Anchored to the composer section's TOP edge, not the
               // viewport bottom, so it always sits just above the form
@@ -3118,7 +3157,7 @@ export function ChatExperience() {
               </div>
             ) : null}
             <div className="pointer-events-none absolute inset-x-0 -top-16 h-16 bg-[var(--sticky-fade)]" />
-            <div className="mx-auto mb-1 w-full max-w-[52rem] px-1 sm:mb-1.5 sm:px-0">
+            <div className="mx-auto mb-1 w-full max-w-[53rem] px-1 sm:mb-1.5 sm:px-0">
               {showStats ? (
                 <ConversationTotalsChip messages={messages} usage={contextUsage} />
               ) : null}
@@ -3126,7 +3165,7 @@ export function ChatExperience() {
             {modelError ? (
               <div
                 role="alert"
-                className="mx-auto mb-1 w-full max-w-[52rem] rounded-[0.9rem] border border-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger)] sm:mb-1.5"
+                className="mx-auto mb-1 w-full max-w-[53rem] rounded-[0.9rem] border border-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger)] sm:mb-1.5"
               >
                 {modelError.message}{" "}
                 <a
@@ -3146,6 +3185,7 @@ export function ChatExperience() {
               promptPlaceholder={promptPlaceholder}
               promptRef={promptRef}
               submitPrompt={submitPrompt}
+              sealed={isLockdown}
               isStreaming={isStreaming}
               isUploadingAttachments={isUploadingAttachments}
               isDraggingOver={isDraggingOver}

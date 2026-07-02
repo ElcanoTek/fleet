@@ -10,8 +10,9 @@
 //     in the Operations Center account menu), present in the orchestrator.
 //   - onSignOut is supplied per surface (chat posts a logout form; the
 //     orchestrator calls its session.logout()).
-//   - Theme is driven by the shared useTheme hook via a Light/Dark segmented
-//     control, replacing the standalone header ThemeToggle on both surfaces.
+//   - Theme is driven by the shared useTheme hook via a System/Light/Dark
+//     segmented control (System follows the OS preference live), replacing
+//     the standalone header ThemeToggle on both surfaces.
 
 import { useRef, useState } from "react";
 import { useTheme } from "@/app/shared/hooks/useTheme";
@@ -37,15 +38,30 @@ export function AccountMenu({
   email,
   onSignOut,
   onSettings,
+  railCollapsed = false,
 }: {
   email: string;
   onSignOut: () => void;
   onSettings?: () => void;
+  // Collapsed-rail mode (≥sm): the button shrinks to an avatar-only 2.5rem
+  // square and the menu opens at a fixed 15rem instead of stretching to the
+  // (now tiny) anchor. The <sm drawer always shows the full button.
+  railCollapsed?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
-  const { theme, setTheme } = useTheme();
+  const { themePreference, setTheme } = useTheme();
   const close = () => setOpen(false);
+
+  // Collapsing the rail dismisses the menu (the design's setCollapsed
+  // behavior) — the strip has no room for an anchored stretch menu.
+  // Render-time adjustment (not an effect) per the React "adjusting state
+  // when a prop changes" pattern.
+  const [prevCollapsed, setPrevCollapsed] = useState(railCollapsed);
+  if (railCollapsed !== prevCollapsed) {
+    setPrevCollapsed(railCollapsed);
+    if (railCollapsed) setOpen(false);
+  }
 
   return (
     <div className="relative border-t border-[var(--color-border)] pt-2">
@@ -61,14 +77,34 @@ export function AccountMenu({
           "flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-2 text-left transition",
           "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
           open ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]" : "",
+          railCollapsed ? "sm:mx-auto sm:size-10 sm:justify-center sm:gap-0 sm:p-0" : "",
         ].join(" ")}
       >
         <Avatar email={email} />
-        <span className="min-w-0 flex-1 truncate text-[0.8125rem]">{email || "Loading…"}</span>
-        <Icon name="selector" className="size-4 shrink-0 text-[var(--color-text-muted)]" />
+        <span
+          className={[
+            "min-w-0 flex-1 truncate text-[0.8125rem]",
+            railCollapsed ? "sm:hidden" : "",
+          ].join(" ")}
+        >
+          {email || "Loading…"}
+        </span>
+        <Icon
+          name="selector"
+          className={[
+            "size-4 shrink-0 text-[var(--color-text-muted)]",
+            railCollapsed ? "sm:hidden" : "",
+          ].join(" ")}
+        />
       </button>
 
-      <Menu open={open} onClose={close} anchorRef={anchorRef} placement="top-stretch" label="Account">
+      <Menu
+        open={open}
+        onClose={close}
+        anchorRef={anchorRef}
+        placement={railCollapsed ? "top-start" : "top-stretch"}
+        label="Account"
+      >
         <div className="flex items-center gap-2.5 px-2 py-1.5">
           <Avatar email={email} />
           <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-medium text-[var(--color-text-primary)]">
@@ -95,15 +131,15 @@ export function AccountMenu({
             aria-label="Theme"
             className="inline-flex overflow-hidden rounded-[var(--radius-pill)] border border-[var(--color-border)]"
           >
-            {(["light", "dark"] as const).map((value) => (
+            {(["system", "light", "dark"] as const).map((value) => (
               <button
                 key={value}
                 type="button"
-                aria-pressed={theme === value}
+                aria-pressed={themePreference === value}
                 onClick={() => setTheme(value)}
                 className={[
-                  "px-2.5 py-0.5 text-[0.72rem] font-medium capitalize transition focus-visible:outline-none",
-                  theme === value
+                  "px-[0.6rem] py-[0.18rem] text-[0.72rem] font-medium capitalize transition focus-visible:outline-none",
+                  themePreference === value
                     ? "bg-[var(--color-primary)] text-white"
                     : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]",
                 ].join(" ")}

@@ -9,7 +9,7 @@ import { useClientConfig } from "@/app/lib/useClientConfig";
 import { ToastProvider } from "@/app/shared/ui/Toast";
 import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 import { NavToChat } from "@/app/shared/ui/CrossViewNav";
-import { NavRail } from "@/app/shared/ui/NavRail";
+import { NavRail, useRailCollapse } from "@/app/shared/ui/NavRail";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { Icon } from "@/app/shared/ui/Icon";
 import { OrchestratorLogin } from "./OrchestratorLogin";
@@ -64,6 +64,8 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   const [logTask, setLogTask] = useState<Task | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
+  const railCollapse = useRailCollapse();
   // Top-level dashboard tab (#274): "tasks" is the legacy Recent Tasks view;
   // "sla" swaps in the SLA report panel. Defaults to tasks so the existing
   // dashboard shape is unchanged on load.
@@ -137,7 +139,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   // Signed in — the unified two-column shell: rail + main dashboard.
   return (
     <div
-      className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] overflow-hidden bg-[var(--gradient-bg-ops-console)] text-[var(--color-text-primary)] lg:grid-cols-[18rem_minmax(0,1fr)]"
+      className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] overflow-hidden bg-[var(--gradient-bg-ops-console)] text-[var(--color-text-primary)] sm:grid-cols-[auto_minmax(0,1fr)]"
     >
       <NavRail
         activeView="orchestrator"
@@ -145,20 +147,28 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
         opsCount={dashboard.stats?.running_tasks}
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
+        collapse={railCollapse}
         account={{
           email: session.username ?? "",
           onSignOut: () => void session.logout(),
           onSettings: () => setSettingsOpen(true),
         }}
       >
-        <button
-          type="button"
-          data-testid="new-task-btn"
-          className="flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
-          onClick={() => setTaskModalOpen(true)}
-        >
-          <Icon name="plus" className="size-4" /> New task
-        </button>
+        <div className={railCollapse.collapsed ? "sm:flex sm:justify-center" : ""}>
+          <button
+            type="button"
+            data-testid="new-task-btn"
+            className={[
+              "flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]",
+              railCollapse.collapsed ? "sm:size-10 sm:w-10 sm:gap-0 sm:p-0" : "",
+            ].join(" ")}
+            data-tip={railCollapse.collapsed ? "New task" : undefined}
+            onClick={() => setTaskModalOpen(true)}
+          >
+            <Icon name="plus" className="size-4" />
+            <span className={railCollapse.collapsed ? "sm:hidden" : ""}>New task</span>
+          </button>
+        </div>
       </NavRail>
 
       <main className="flex min-h-0 flex-col overflow-hidden">
