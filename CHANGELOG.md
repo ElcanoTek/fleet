@@ -27,6 +27,19 @@ prior versions are listed because none have shipped.
   deployments are byte-for-byte unchanged (`/push/*` answers 501). Payloads
   carry only a title, state, and deep link — never message content, tool args,
   or secrets. See `docs/PUSH-NOTIFICATIONS.md`.
+- Temporal knowledge-graph memory (#523, stage 3 of #515): derived
+  entity/relation tables over the memories table (chat migration 030) with
+  provenance links back to each source memory and NO time columns of their
+  own — all temporal semantics derive through the memories join (ADR-0029).
+  As-of queries over both bi-temporal axes (`GET /memories/graph` and
+  `GET /memories` with `as_of_valid=`/`as_of_learned=`), LLM extraction of
+  entities + triples when a memory becomes active (gated by
+  `FLEET_MEMORY_GRAPH_ENABLED`, default OFF; model via
+  `FLEET_MEMORY_GRAPH_MODEL`; async + best-effort, plus a manual
+  `POST /memories/{id}/extract-graph`), and a "Graph" tab in the memory
+  manager with "what was true on…" / "what did fleet know on…" time-travel
+  inputs. Deterministic auto-conflict rules stay deferred per the issue's
+  triage; conflict handling remains human-confirmed supersession.
 - Reusable sandbox-image publish workflow (#195):
   `.github/workflows/publish-sandbox-image.yml` (`workflow_call`) lets a client
   config repo build its bundle's sandbox image in CI with the canonical

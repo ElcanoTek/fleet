@@ -155,6 +155,8 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_AUTO_TITLE":                     true,
 	"FLEET_MEMORY_MODEL":                   true,
 	"FLEET_MEMORY_AUTOINDEX_ENABLED":       true,
+	"FLEET_MEMORY_GRAPH_MODEL":             true,
+	"FLEET_MEMORY_GRAPH_ENABLED":           true,
 	"FLEET_RECURRING_TASK_MODEL":           true,
 	"FLEET_APPROVAL_TIMEOUT_SECONDS":       true,
 	"FLEET_AUTO_APPROVE_IN_TEST":           true,
@@ -592,6 +594,18 @@ type Config struct {
 	// PROPOSALS the user reviews — nothing is written live without consent.
 	// FLEET_MEMORY_AUTOINDEX_ENABLED.
 	MemoryAutoIndexEnabled bool
+	// MemoryGraphModel is the fast/cheap model the knowledge-graph extractor
+	// (#523) uses to mine an ACTIVE memory for entities + relations.
+	// FLEET_MEMORY_GRAPH_MODEL, defaulting to MemoryModel (then MetadataModel,
+	// then TitleModel) so deployments need zero new config.
+	MemoryGraphModel string
+	// MemoryGraphEnabled gates the temporal knowledge-graph layer's EXTRACTION
+	// (#523). Default FALSE (opt-in): when off, no extraction goroutine or model
+	// call ever fires and behavior is byte-for-byte unchanged. When on, a memory
+	// becoming ACTIVE (manual create / accepted proposal) is mined async +
+	// best-effort into derived entity/relation rows; the manual re-extract
+	// endpoint also requires it. FLEET_MEMORY_GRAPH_ENABLED.
+	MemoryGraphEnabled bool
 
 	// ApprovalTimeoutSeconds is the global default-deny window (in seconds) for
 	// critical-tool approval cards on the web path (#225). FLEET_APPROVAL_TIMEOUT_SECONDS,
@@ -1075,6 +1089,8 @@ func Load(envFile string) (*Config, error) {
 		MemoryModel:            getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		RecurringTaskModel:     getenvFleetDefault("RECURRING_TASK_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		MemoryAutoIndexEnabled: getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
+		MemoryGraphModel:       getenvFleetDefault("MEMORY_GRAPH_MODEL", getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)))),
+		MemoryGraphEnabled:     getenvFleetBool("MEMORY_GRAPH_ENABLED", false),
 		ApprovalTimeoutSeconds: getenvFleetInt("APPROVAL_TIMEOUT_SECONDS", 300),
 		AutoApproveInTest:      getenvFleetBool("AUTO_APPROVE_IN_TEST", false),
 		MaxConcurrentAgents:    getenvFleetInt("MAX_CONCURRENT_AGENTS", 8),

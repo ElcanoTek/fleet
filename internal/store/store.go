@@ -250,7 +250,7 @@ func (s *Store) Close() error {
 // after a truncate is still a no-op on the second run.
 func (s *Store) TruncateAllForTest(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, memories, users, panic_events, remote_mcp_servers, push_subscriptions RESTART IDENTITY CASCADE`)
+		`TRUNCATE TABLE conversations, memories, memory_entities, users, panic_events, remote_mcp_servers, push_subscriptions RESTART IDENTITY CASCADE`)
 	return err
 }
 

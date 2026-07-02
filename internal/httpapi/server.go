@@ -130,6 +130,12 @@ type Server struct {
 	version     string
 	workerStats func(context.Context) (*WorkerStats, error)
 
+	// memoryGraphExtractor mines a memory for knowledge-graph triples (#523).
+	// Injected via WithMemoryGraphExtractor so httpapi depends on the seam, not
+	// on wiring; nil OR cfg.MemoryGraphEnabled=false disables extraction and
+	// leaves every memory path byte-for-byte unchanged.
+	memoryGraphExtractor MemoryGraphExtractor
+
 	// scheduleTask creates a scheduled task in the orchestrator on behalf of an
 	// approved interactive schedule_task call (#239). Injected so httpapi stays
 	// sched-agnostic — main.go translates TaskScheduleRequest to the sched model
@@ -599,6 +605,10 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/projects", auth(member(mutate(http.HandlerFunc(s.projects)))))
 	mux.Handle("/projects/", auth(member(mutate(http.HandlerFunc(s.projectByID)))))
 	mux.Handle("/memories", auth(member(mutate(http.HandlerFunc(s.memories)))))
+	// Knowledge graph (#523): the exact pattern outranks the /memories/ prefix
+	// in ServeMux matching, so "graph" is never mistaken for a memory id.
+	// Read-only, hence no mutate wrapper (like /folders and /search).
+	mux.Handle("/memories/graph", auth(member(http.HandlerFunc(s.memoryGraph))))
 	mux.Handle("/memories/", auth(member(mutate(http.HandlerFunc(s.memoryByID)))))
 	mux.Handle("/personas", auth(member(http.HandlerFunc(s.listPersonas))))
 	// Bundle skill roster (#513 phase 1): name + description per skill, for the
@@ -762,6 +772,22 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 	user := userFromCtx(r.Context())
 	switch r.Method {
 	case http.MethodGet:
+		// As-of time travel (#523): with either as_of param the list answers
+		// "what was true / what did fleet know at that instant" instead of
+		// "everything, retired rows trailing" (see store.GraphQuery).
+		if r.URL.Query().Get("as_of_valid") != "" || r.URL.Query().Get("as_of_learned") != "" {
+			q, ok := s.parseAsOfQuery(w, r)
+			if !ok {
+				return
+			}
+			memories, err := s.store.ListMemoriesAsOf(r.Context(), user, q)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]any{"memories": memories})
+			return
+		}
 		memories, err := s.store.ListMemories(r.Context(), user)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -779,6 +805,9 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// A manually created memory is ACTIVE immediately → derive its graph
+		// fragment (async, best-effort, gated; #523).
+		s.maybeExtractMemoryGraph(memory)
 		writeJSON(w, memory)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -804,10 +833,17 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// Acceptance made the memory ACTIVE → derive its graph fragment
+		// (async, best-effort, gated; #523).
+		s.maybeExtractMemoryGraph(memory)
 		// The envelope (vs the bare memory) carries the #515 stage-2 outcome:
 		// what happened to the older fact this proposal claimed to replace
 		// ("retired", or the guard that kept it — pinned/changed/missing/…).
 		writeJSON(w, map[string]any{"memory": memory, "supersede": supersede})
+		return
+	}
+	if sub == "extract-graph" && r.Method == http.MethodPost {
+		s.handleMemoryExtractGraph(w, r, user, id)
 		return
 	}
 	switch r.Method {

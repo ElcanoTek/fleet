@@ -46,6 +46,7 @@ import {
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { Icon } from "./Icon";
 import { ProjectsModal } from "./ProjectsModal";
+import { MemoryGraphView } from "./MemoryGraphView";
 import {
   ConversationTotalsChip,
   type PendingAttachment,
@@ -436,6 +437,9 @@ export function ChatExperience() {
   const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
   const [memories, setMemories] = useState<UserMemory[]>([]);
   const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
+  // Memory-manager tab (#523): the flat record list (default) or the derived
+  // knowledge-graph view.
+  const [memoryView, setMemoryView] = useState<"list" | "graph">("list");
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState("");
   const [memoryKindDraft, setMemoryKindDraft] = useState<string>("fact");
@@ -1189,6 +1193,7 @@ export function ChatExperience() {
 
   const openMemoryManager = () => {
     setMemoryManagerOpen(true);
+    setMemoryView("list");
     setMemoryDraft("");
     setMemoryKindDraft("fact");
     setEditingMemoryId(null);
@@ -2635,6 +2640,29 @@ export function ChatExperience() {
                 </button>
               </div>
 
+              {/* Knowledge-graph tab (#523): a compact derived view over the
+                  same records; the record list stays the default. */}
+              <div className="flex items-center gap-1">
+                {(["list", "graph"] as const).map((view) => (
+                  <button
+                    key={view}
+                    type="button"
+                    className={`rounded-full border px-3 py-1 text-[0.75rem] transition ${
+                      memoryView === view
+                        ? "border-[var(--color-text-primary)] text-[var(--color-text-primary)]"
+                        : "border-[var(--color-border-strong)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                    }`}
+                    onClick={() => setMemoryView(view)}
+                  >
+                    {view === "list" ? "Memories" : "Graph"}
+                  </button>
+                ))}
+              </div>
+
+              {memoryView === "graph" ? (
+                <MemoryGraphView />
+              ) : (
+                <>
               <div className="grid gap-2">
                 <textarea
                   className="min-h-24 w-full resize-y rounded-[0.9rem] border border-[var(--color-border-strong)] bg-transparent px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
@@ -2787,6 +2815,8 @@ export function ChatExperience() {
                   </div>
                 )}
               </div>
+                </>
+              )}
             </div>
           </div>
         ) : null}
