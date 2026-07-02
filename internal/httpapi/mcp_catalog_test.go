@@ -24,6 +24,11 @@ func TestMCPCatalogTrustLabeledClasses(t *testing.T) {
 					URL:         "https://api.githubcopilot.com/mcp/",
 					Vendor:      "GitHub, Inc.",
 					DocsURL:     "https://docs.github.com/mcp",
+					RepoURL:     "https://github.com/github/github-mcp-server",
+					Category:    "development",
+					Tags:        []string{"git", "issues"},
+					Provenance:  "official",
+					Auth:        "oauth",
 				},
 			},
 		},
@@ -57,6 +62,12 @@ func TestMCPCatalogTrustLabeledClasses(t *testing.T) {
 	}
 	if tp.Name != "github" || tp.URL != "https://api.githubcopilot.com/mcp/" || tp.Vendor != "GitHub, Inc." {
 		t.Errorf("entry wrong: %+v", tp)
+	}
+	// The directory metadata (#-catalog expansion) threads through so the UI
+	// can group, search, and badge without a second endpoint.
+	if tp.Category != "development" || tp.Provenance != "official" || tp.Auth != "oauth" ||
+		tp.RepoURL != "https://github.com/github/github-mcp-server" || len(tp.Tags) != 2 {
+		t.Errorf("directory metadata missing: %+v", tp)
 	}
 }
 
