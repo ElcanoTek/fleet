@@ -23,6 +23,33 @@ type RemoteServer = {
 
 type ListResponse = { servers: RemoteServer[] };
 
+// The trust-labeled MCP directory (#538). Bundled entries are the operator's
+// sandboxed connectors (informational here — they're toggled per conversation
+// in the Tools picker); third-party entries are vendor-hosted servers the user
+// can one-click add to the connect flow below.
+type CatalogThirdParty = {
+  name: string;
+  display_name: string;
+  description: string;
+  url: string;
+  vendor?: string;
+  docs_url?: string;
+};
+
+type CatalogBundled = {
+  name: string;
+  display_name?: string;
+  description: string;
+  tool_count: number;
+  beta?: boolean;
+};
+
+type CatalogResponse = {
+  bundled: CatalogBundled[];
+  third_party: CatalogThirdParty[];
+  remote_mcp_enabled: boolean;
+};
+
 const STATUS_LABEL: Record<string, string> = {
   login_required: "Login required",
   connected: "Connected",
@@ -72,17 +99,32 @@ function readCallbackBanner(): { notice: string | null; error: string | null } {
   const params = new URLSearchParams(window.location.search);
   if (params.get("connected")) {
     const n = params.get("connected");
-    return { notice: n && n !== "1" ? `Connected ${n}.` : "Connected.", error: null };
+    return {
+      notice: n && n !== "1" ? `Connected ${n}.` : "Connected.",
+      error: null,
+    };
   }
   if (params.get("error")) {
-    return { notice: null, error: `Authorization failed: ${params.get("error")}` };
+    return {
+      notice: null,
+      error: `Authorization failed: ${params.get("error")}`,
+    };
   }
   return { notice: null, error: null };
+}
+
+async function fetchCatalog(): Promise<CatalogResponse | null> {
+  const res = await fetch("/api/mcp-catalog", { cache: "no-store" });
+  if (!res.ok) return null; // the directory is optional decoration — never block the page
+  return (await res.json()) as CatalogResponse;
 }
 
 export default function ConnectionsPage() {
   const [initialBanner] = useState(readCallbackBanner);
   const [servers, setServers] = useState<RemoteServer[] | null>(null);
+  const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogQuery, setCatalogQuery] = useState("");
   const [error, setError] = useState<string | null>(initialBanner.error);
   const [notice, setNotice] = useState<string | null>(initialBanner.notice);
   const [loading, setLoading] = useState(true);
@@ -115,6 +157,12 @@ export default function ConnectionsPage() {
   useEffect(() => {
     let stale = false;
     apply(() => stale);
+    // The directory loads independently; a failure just hides the section.
+    fetchCatalog()
+      .then((c) => {
+        if (!stale) setCatalog(c);
+      })
+      .catch(() => {});
     // Strip the one-shot ?connected / ?error params from the URL (the banner was
     // already derived from them during render). replaceState is not setState, so
     // this stays clear of react-hooks/set-state-in-effect.
@@ -153,13 +201,18 @@ export default function ConnectionsPage() {
   const connect = (id: string) => {
     setError(null);
     setBusy(true);
-    fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}/authorize`, { method: "POST" })
+    fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}/authorize`, {
+      method: "POST",
+    })
       .then(async (res) => {
         if (!res.ok) {
-          throw new Error((await res.text()) || `Authorize failed: ${res.status}`);
+          throw new Error(
+            (await res.text()) || `Authorize failed: ${res.status}`,
+          );
         }
         const data = (await res.json()) as { redirect_url?: string };
-        if (!data.redirect_url) throw new Error("No authorization URL returned.");
+        if (!data.redirect_url)
+          throw new Error("No authorization URL returned.");
         // Full-page navigation to the authorization server. It redirects back to
         // /api/oauth/mcp/callback, which returns here with ?connected / ?error.
         window.location.href = data.redirect_url;
@@ -170,16 +223,47 @@ export default function ConnectionsPage() {
       });
   };
 
+  // One-click add from the third-party directory: same POST as the manual
+  // form, prefilled from the curated entry. The server lands in
+  // "login_required"; the user then clicks Connect like any manual add.
+  const addFromCatalog = (entry: CatalogThirdParty) => {
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    fetch("/api/remote-mcp-servers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: entry.name, url: entry.url }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error((await res.text()) || `Add failed: ${res.status}`);
+        }
+        setNotice(`${entry.display_name} added. Click Connect to sign in.`);
+        refresh();
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
   const disconnect = (id: string, label: string) => {
-    if (!window.confirm(`Disconnect "${label}"? Its stored tokens are revoked and removed.`)) {
+    if (
+      !window.confirm(
+        `Disconnect "${label}"? Its stored tokens are revoked and removed.`,
+      )
+    ) {
       return;
     }
     setError(null);
     setBusy(true);
-    fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}`, { method: "DELETE" })
+    fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error((await res.text()) || `Disconnect failed: ${res.status}`);
+          throw new Error(
+            (await res.text()) || `Disconnect failed: ${res.status}`,
+          );
         }
         setNotice("Disconnected.");
         refresh();
@@ -193,8 +277,16 @@ export default function ConnectionsPage() {
       <div className="mx-auto w-full max-w-3xl">
         <header className="mb-6 flex items-center justify-between gap-4">
           <Link href="/" className="flex items-center gap-2.5 no-underline">
-            <Image src="/logos/elcano-mark-primary.svg" alt="Elcano" width={28} height={28} priority />
-            <span className="font-heading text-[0.9375rem] font-semibold">Connections</span>
+            <Image
+              src="/logos/elcano-mark-primary.svg"
+              alt="Elcano"
+              width={28}
+              height={28}
+              priority
+            />
+            <span className="font-heading text-[0.9375rem] font-semibold">
+              Connections
+            </span>
           </Link>
           <Link
             href="/"
@@ -205,9 +297,10 @@ export default function ConnectionsPage() {
         </header>
 
         <p className="mb-5 text-[0.875rem] text-[var(--color-text-secondary)]">
-          Connect remote (hosted) MCP servers and sign in to each with your own account. Connected
-          servers&apos; tools become available to you in chat and your scheduled tasks. Credentials are
-          stored encrypted on the server and never shared with other users.
+          Connect remote (hosted) MCP servers and sign in to each with your own
+          account. Connected servers&apos; tools become available to you in chat
+          and your scheduled tasks. Credentials are stored encrypted on the
+          server and never shared with other users.
         </p>
 
         {notice ? (
@@ -225,7 +318,9 @@ export default function ConnectionsPage() {
           onSubmit={addServer}
           className="mb-6 rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)] p-4"
         >
-          <h2 className="mb-3 text-[0.9rem] font-semibold">Add a remote MCP server</h2>
+          <h2 className="mb-3 text-[0.9rem] font-semibold">
+            Add a remote MCP server
+          </h2>
           <div className="grid gap-3 sm:grid-cols-[1fr_2fr_auto] sm:items-end">
             <label className="grid gap-1 text-[0.75rem] text-[var(--color-text-muted)]">
               Name
@@ -273,7 +368,9 @@ export default function ConnectionsPage() {
             </button>
           </div>
           {loading ? (
-            <p className="px-4 py-5 text-center text-[0.875rem] text-[var(--color-text-muted)]">Loading…</p>
+            <p className="px-4 py-5 text-center text-[0.875rem] text-[var(--color-text-muted)]">
+              Loading…
+            </p>
           ) : servers && servers.length > 0 ? (
             <ul>
               {servers.map((s) => (
@@ -283,16 +380,22 @@ export default function ConnectionsPage() {
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-[var(--color-text-primary)]">{s.name}</span>
+                      <span className="font-medium text-[var(--color-text-primary)]">
+                        {s.name}
+                      </span>
                       <span
                         className={`rounded-full border px-2 py-0.5 text-[0.6875rem] ${statusChipClass(s.status)}`}
                       >
                         {STATUS_LABEL[s.status] ?? s.status}
                       </span>
                     </div>
-                    <p className="truncate text-[0.75rem] text-[var(--color-text-muted)]">{s.url}</p>
+                    <p className="truncate text-[0.75rem] text-[var(--color-text-muted)]">
+                      {s.url}
+                    </p>
                     {s.status_detail ? (
-                      <p className="text-[0.6875rem] text-[#e0b080]">{s.status_detail}</p>
+                      <p className="text-[0.6875rem] text-[#e0b080]">
+                        {s.status_detail}
+                      </p>
                     ) : null}
                   </div>
                   <div className="flex items-center gap-2">
@@ -322,6 +425,173 @@ export default function ConnectionsPage() {
             </p>
           )}
         </div>
+
+        {catalog &&
+        (catalog.third_party.length > 0 || catalog.bundled.length > 0) ? (
+          <div className="mt-6 overflow-hidden rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)]">
+            <button
+              type="button"
+              onClick={() => setCatalogOpen((v) => !v)}
+              className="flex w-full items-center justify-between px-4 py-3 text-left"
+            >
+              <span className="text-[0.75rem] uppercase tracking-wide text-[var(--color-text-muted)]">
+                Connector catalog
+              </span>
+              <span className="text-[0.75rem] text-[var(--color-text-secondary)]">
+                {catalogOpen
+                  ? "Hide"
+                  : `Browse ${catalog.third_party.length + catalog.bundled.length}`}
+              </span>
+            </button>
+            {catalogOpen ? (
+              <div className="border-t border-[var(--color-border)]">
+                {catalog.bundled.length > 0 ? (
+                  <section className="border-b border-[var(--color-border-subtle)] px-4 py-3">
+                    <h3 className="mb-1 text-[0.8125rem] font-semibold">
+                      Bundled by your workspace
+                    </h3>
+                    <p className="mb-2 text-[0.75rem] text-[var(--color-text-muted)]">
+                      Reviewed and shipped by your operator. These run inside
+                      the sandbox on this deployment with credentials held
+                      server-side — nothing leaves the box except the
+                      connector&apos;s own API calls. Toggle them per
+                      conversation in the Tools picker.
+                    </p>
+                    <ul className="grid gap-2 sm:grid-cols-2">
+                      {catalog.bundled.map((b) => (
+                        <li
+                          key={b.name}
+                          className="rounded-[0.75rem] border border-[var(--color-border-subtle)] px-3 py-2"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-[0.8125rem] font-medium">
+                              {b.display_name || b.name}
+                            </span>
+                            <span className="rounded-full border border-[#4fae7e] bg-[color-mix(in_srgb,#4fae7e_15%,transparent)] px-2 py-0.5 text-[0.625rem] text-[#7fd6a6]">
+                              Bundled
+                            </span>
+                            {b.beta ? (
+                              <span className="rounded-full border border-[var(--color-border-strong)] px-2 py-0.5 text-[0.625rem] text-[var(--color-text-muted)]">
+                                Beta
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="mt-1 line-clamp-2 text-[0.75rem] text-[var(--color-text-muted)]">
+                            {b.description}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ) : null}
+                {catalog.third_party.length > 0 ? (
+                  <section className="px-4 py-3">
+                    <h3 className="mb-1 text-[0.8125rem] font-semibold">
+                      Third-party hosted
+                    </h3>
+                    <p className="mb-2 text-[0.75rem] text-[var(--color-text-muted)]">
+                      Official servers run by the named vendor, not by your
+                      workspace. Connecting one signs you in with that vendor
+                      and sends tool calls — which can include parts of your
+                      conversation — to their service under their terms.
+                    </p>
+                    <input
+                      value={catalogQuery}
+                      onChange={(e) => setCatalogQuery(e.target.value)}
+                      placeholder={`Search ${catalog.third_party.length} servers…`}
+                      className="mb-2 w-full rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-text-secondary)]"
+                    />
+                    <ul className="grid gap-2 sm:grid-cols-2">
+                      {catalog.third_party
+                        .filter((tp) => {
+                          const q = catalogQuery.trim().toLowerCase();
+                          if (!q) return true;
+                          return (
+                            tp.display_name.toLowerCase().includes(q) ||
+                            tp.name.includes(q) ||
+                            tp.description.toLowerCase().includes(q) ||
+                            (tp.vendor ?? "").toLowerCase().includes(q)
+                          );
+                        })
+                        .map((tp) => {
+                          const already = (servers ?? []).some(
+                            (s) => s.url === tp.url,
+                          );
+                          // A {placeholder} URL is tenant-scoped (per org/store/
+                          // workspace): it can't be one-click added — the user
+                          // fills their own host into the manual form above.
+                          const needsTenant = tp.url.includes("{");
+                          return (
+                            <li
+                              key={tp.name}
+                              className="flex flex-col rounded-[0.75rem] border border-[var(--color-border-subtle)] px-3 py-2"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-[0.8125rem] font-medium">
+                                  {tp.display_name}
+                                </span>
+                                <span className="rounded-full border border-[#e0a060] bg-[color-mix(in_srgb,#e0a060_15%,transparent)] px-2 py-0.5 text-[0.625rem] text-[#e0b080]">
+                                  Third-party
+                                </span>
+                              </div>
+                              <p className="mt-1 line-clamp-2 flex-1 text-[0.75rem] text-[var(--color-text-muted)]">
+                                {tp.description}
+                              </p>
+                              <div className="mt-2 flex items-center justify-between gap-2">
+                                <span className="truncate text-[0.6875rem] text-[var(--color-text-muted)]">
+                                  {tp.vendor || tp.url}
+                                  {tp.docs_url ? (
+                                    <>
+                                      {" · "}
+                                      <a
+                                        href={tp.docs_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="underline-offset-2 hover:underline"
+                                      >
+                                        docs
+                                      </a>
+                                    </>
+                                  ) : null}
+                                </span>
+                                {catalog.remote_mcp_enabled ? (
+                                  needsTenant ? (
+                                    <span
+                                      className="whitespace-nowrap text-[0.6875rem] text-[var(--color-text-muted)]"
+                                      title="This vendor's endpoint is per-organization — copy your own URL from their docs into the form above."
+                                    >
+                                      Needs your URL
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => addFromCatalog(tp)}
+                                      disabled={busy || already}
+                                      className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.6875rem] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+                                    >
+                                      {already ? "Added" : "Add"}
+                                    </button>
+                                  )
+                                ) : null}
+                              </div>
+                            </li>
+                          );
+                        })}
+                    </ul>
+                    {!catalog.remote_mcp_enabled ? (
+                      <p className="mt-2 text-[0.6875rem] text-[var(--color-text-muted)]">
+                        Connecting third-party servers requires the operator to
+                        configure remote MCP OAuth
+                        (FLEET_MCP_OAUTH_ENCRYPTION_KEY and
+                        FLEET_PUBLIC_BASE_URL).
+                      </p>
+                    ) : null}
+                  </section>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </main>
   );

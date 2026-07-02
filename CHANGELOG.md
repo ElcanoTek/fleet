@@ -22,6 +22,14 @@ prior versions are listed because none have shipped.
   to GHCR, and auto-open a PR pinning `sandbox.image` in its manifest — so
   deploys `podman pull` a prebuilt image instead of rebuilding ~1.3 GB on-box.
   Core CI still builds the sandbox locally (the 24ce69f decoupling stands).
+- Trust-labeled MCP connector catalog (#538): a bundle can curate a directory
+  of official third-party hosted MCP servers (`remote_mcp_catalog:` in
+  `manifest.yaml`, validated at load), served alongside the bundled
+  Optional-server catalog by the new `GET /mcp-catalog` and rendered on
+  Settings → Connections with explicit "Bundled" vs "Third-party" trust badges
+  and one-click add into the per-user remote-MCP OAuth flow (#443). The generic
+  bundle ships a starter directory of official vendor endpoints. See
+  `docs/MCP-CATALOG.md`.
 - `fleet chat` — a terminal UI for chatting with the fleet agent (Bubble Tea /
   Lipgloss, glamour-rendered Markdown, streaming replies, tool-call + reasoning
   display, `/new` `/retry` `/model` `/reasoning` `/clear` `/quit`, Ctrl+C to
