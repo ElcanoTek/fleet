@@ -279,33 +279,34 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_PUBLIC_URL":            true,
 
 	// ── sandbox ──
-	"CHAT_SANDBOX_IMAGE":             true,
-	"CHAT_SANDBOX_RUNTIME":           true,
-	"CHAT_WORKSPACE_ROOT":            true,
-	"FLEET_SANDBOX_IMAGE":            true,
-	"FLEET_SANDBOX_RUNTIME":          true,
-	"FLEET_DEFAULT_NETWORK_MODE":     true,
-	"FLEET_PII_REDACTION_ENABLED":    true,
-	"FLEET_PII_REDACTION_MODE":       true,
-	"FLEET_CONTEXT_HANDLES_ENABLED":  true,
-	"FLEET_BROWSER_ENABLED":          true,
-	"FLEET_SANDBOX_MEMORY":           true,
-	"FLEET_SANDBOX_CPUS":             true,
-	"FLEET_SANDBOX_PIDS":             true,
-	"FLEET_SANDBOX_KATA_OVERHEAD_MB": true,
-	"FLEET_SANDBOX_DISK_GB":          true,
-	"FLEET_SANDBOX_MEMORY_MAX_MB":    true,
-	"FLEET_SANDBOX_CPUS_MAX":         true,
-	"FLEET_SANDBOX_PIDS_MAX":         true,
-	"FLEET_SANDBOX_WARM_SIZE":        true,
-	"FLEET_SANDBOX_WARM_TTL":         true,
-	"FLEET_PYTHON_REPL_MODE":         true,
-	"FLEET_PYTHON_CELL_TIMEOUT":      true,
-	"FLEET_PYTHON_REPL_IDLE_TTL":     true,
-	"FLEET_PYTHON_REPL_MAX":          true,
-	"FLEET_WORKSPACE_ROOT":           true,
-	"CHAT_LOCKDOWN_ONLY":             true,
-	"CHAT_LOCKDOWN_ALLOWED_MODELS":   true,
+	"CHAT_SANDBOX_IMAGE":                      true,
+	"CHAT_SANDBOX_RUNTIME":                    true,
+	"CHAT_WORKSPACE_ROOT":                     true,
+	"FLEET_SANDBOX_IMAGE":                     true,
+	"FLEET_SANDBOX_RUNTIME":                   true,
+	"FLEET_DEFAULT_NETWORK_MODE":              true,
+	"FLEET_PII_REDACTION_ENABLED":             true,
+	"FLEET_PII_REDACTION_MODE":                true,
+	"FLEET_CONTEXT_HANDLES_ENABLED":           true,
+	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED": true,
+	"FLEET_BROWSER_ENABLED":                   true,
+	"FLEET_SANDBOX_MEMORY":                    true,
+	"FLEET_SANDBOX_CPUS":                      true,
+	"FLEET_SANDBOX_PIDS":                      true,
+	"FLEET_SANDBOX_KATA_OVERHEAD_MB":          true,
+	"FLEET_SANDBOX_DISK_GB":                   true,
+	"FLEET_SANDBOX_MEMORY_MAX_MB":             true,
+	"FLEET_SANDBOX_CPUS_MAX":                  true,
+	"FLEET_SANDBOX_PIDS_MAX":                  true,
+	"FLEET_SANDBOX_WARM_SIZE":                 true,
+	"FLEET_SANDBOX_WARM_TTL":                  true,
+	"FLEET_PYTHON_REPL_MODE":                  true,
+	"FLEET_PYTHON_CELL_TIMEOUT":               true,
+	"FLEET_PYTHON_REPL_IDLE_TTL":              true,
+	"FLEET_PYTHON_REPL_MAX":                   true,
+	"FLEET_WORKSPACE_ROOT":                    true,
+	"CHAT_LOCKDOWN_ONLY":                      true,
+	"CHAT_LOCKDOWN_ALLOWED_MODELS":            true,
 
 	// ── test harness ──
 	"CHAT_MOCK_MODE":  true,
@@ -801,6 +802,12 @@ type Config struct {
 	// server expands into the turn context. FLEET_CONTEXT_HANDLES_ENABLED, default
 	// false — @url makes the server fetch a user-supplied URL, so it is opt-in.
 	ContextHandlesEnabled bool
+	// ConnectorRecommendationsEnabled gates connector auto-recommendation (#512):
+	// when a chat message matches an Optional MCP connector the user has NOT
+	// enabled, a note is added to the turn so the agent can suggest connecting it
+	// (via the existing /settings/connections OAuth flow — never auto-connecting).
+	// FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED, default false.
+	ConnectorRecommendationsEnabled bool
 	// DefaultNetworkMode is the fleet-wide sandbox egress posture (#211):
 	// "" / "open" (full slirp4netns egress for networked work — the default),
 	// "allowlisted" (networked sandboxes route HTTP(S) through the host egress
@@ -1140,10 +1147,13 @@ func Load(envFile string) (*Config, error) {
 
 		// Composer context handles (#517) — optional, default off.
 		ContextHandlesEnabled: getenvFleetBool("CONTEXT_HANDLES_ENABLED", false),
-		SandboxMemory:         getenvFleet("SANDBOX_MEMORY"),
-		SandboxCPUs:           getenvFleet("SANDBOX_CPUS"),
-		SandboxPids:           getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
-		SandboxDiskGB:         getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+
+		// Connector auto-recommendation (#512) — optional, default off.
+		ConnectorRecommendationsEnabled: getenvFleetBool("CONNECTOR_RECOMMENDATIONS_ENABLED", false),
+		SandboxMemory:                   getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:                     getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:                     getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB:                   getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
 		// Per-task override ceilings (#205).
 		SandboxMemoryMaxMB:    getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
 		SandboxCPUsMax:        getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),

@@ -1998,6 +1998,10 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// `@file:"path"` in the user's message into the turn context. A no-op when
 	// disabled; failures degrade to notices so the turn always proceeds.
 	userMessage = s.applyContextHandles(turnCtx, userMessage, req.Message, conv.ID)
+	// Connector auto-recommendation (#512, opt-in): if the message is relevant to
+	// an Optional connector the user hasn't enabled, note it so the agent can
+	// suggest connecting it via /settings/connections (never auto-connecting).
+	userMessage = s.applyConnectorRecommendations(userMessage, req.Message, req.EnabledOptional)
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The
