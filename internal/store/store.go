@@ -324,10 +324,27 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 		return nil, sql.ErrNoRows
 	}
 
+	// The branch point must name an actual message OF THE PARENT (#578).
+	// Without this check an id above the parent's max — e.g. a stale or
+	// foreign messages.id, which the global BIGSERIAL makes easy — would slip
+	// through the id <= $2 copy below and silently duplicate the whole
+	// conversation instead of honoring the documented "no such message → 400"
+	// contract. Ids below the parent's range already fail via the empty copy.
+	var exists bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id = $1 AND id = $2)`,
+		parentConvID, branchPointMessageID,
+	).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrBranchPointNotFound
+	}
+
 	// Load the parent's messages up to (and including) the branch point. The
-	// conversation_id predicate guarantees only the PARENT's messages are copied,
-	// so a branch-point id belonging to another conversation matches nothing and
-	// is rejected below.
+	// conversation_id predicate guarantees only the PARENT's messages are
+	// copied (the existence check above already rejected any id that isn't
+	// the parent's).
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT role, type, content FROM messages
 		 WHERE conversation_id = $1 AND id <= $2 ORDER BY id ASC`,
@@ -356,23 +373,29 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 		return nil, ErrBranchPointNotFound
 	}
 
+	// Create the conversation row and copy the messages in ONE transaction
+	// (#597): all-or-nothing, matching the store's atomicity convention, so a
+	// crash or copy failure can never leave an empty branch shell visible in
+	// the sidebar. appendHistoryTx also writes the FTS index rows + bumps
+	// updated_at, so the branch is searchable like any other conversation.
 	id := uuid.NewString()
 	now := time.Now().Unix()
-	if _, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO conversations (id, user_email, title, persona, model, pinned, lockdown, parent_conversation_id, branch_point_message_id, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $9, $10)`,
 		id, userEmail, title, parent.Persona, parent.Model, parent.Lockdown, parentConvID, branchPointMessageID, now, now,
 	); err != nil {
 		return nil, err
 	}
-
-	// Copy the parent's messages into the branch. AppendHistory also writes the
-	// FTS index rows + bumps updated_at, so the branch is searchable like any
-	// other conversation. On failure, delete the conversation row we just created
-	// so a failed branch is not left visible (a hard delete, or a tombstone hidden
-	// from all reads under FLEET_CONVERSATION_SOFT_DELETE).
-	if err := s.AppendHistory(ctx, id, entries); err != nil {
-		_ = s.Delete(ctx, userEmail, id)
+	if err := s.appendHistoryTx(ctx, tx, id, entries); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 
@@ -395,7 +418,8 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 // lowercased, each name known to the running server). Stored as JSONB
 // so we can round-trip via database/sql without pgtype plumbing.
 //
-// Empty list is a legal state — clears any prior opt-ins.
+// Empty list is a legal state — clears any prior opt-ins. Soft-deleted
+// conversations are not mutable (deleted_at IS NULL, #596).
 func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error {
 	if servers == nil {
 		servers = []string{}
@@ -406,7 +430,7 @@ func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID str
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET optional_mcp_servers_enabled = $1, updated_at = $2
-		 WHERE id = $3 AND user_email = $4`,
+		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
 		payload, time.Now().Unix(), convID, userEmail,
 	)
 	if err != nil {
@@ -484,9 +508,11 @@ func scanOptionalMCPServers(raw []byte) []string {
 
 // SetModel updates the per-chat OpenRouter slug. Empty model clears the
 // stored value; the frontend will supply its DEFAULT_MODEL on the next turn.
+// deleted_at IS NULL matches SetShareToken: a soft-deleted conversation is
+// not mutable (#596) — the guard is applied uniformly across the setters.
 func (s *Store) SetModel(ctx context.Context, userEmail, convID, model string) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET model = $1, updated_at = $2 WHERE id = $3 AND user_email = $4`,
+		`UPDATE conversations SET model = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
 		model, time.Now().Unix(), convID, userEmail,
 	)
 	if err != nil {
@@ -504,10 +530,11 @@ func (s *Store) SetModel(ctx context.Context, userEmail, convID, model string) e
 // UpdateTitle sets the title from the AUTO-titler (#302). It is guarded by
 // title_locked = FALSE so a user's manual rename is never overwritten; when the
 // title is locked it makes no change and returns ErrTitleLocked, which the
-// caller treats as a benign skip.
+// caller treats as a benign skip. A soft-deleted conversation is likewise
+// skipped (deleted_at IS NULL, #596).
 func (s *Store) UpdateTitle(ctx context.Context, userEmail, convID, title string) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET title = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND title_locked = FALSE`,
+		`UPDATE conversations SET title = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND title_locked = FALSE AND deleted_at IS NULL`,
 		title, time.Now().Unix(), convID, userEmail,
 	)
 	if err != nil {
@@ -522,10 +549,11 @@ func (s *Store) UpdateTitle(ctx context.Context, userEmail, convID, title string
 
 // RenameTitle applies a MANUAL rename (#302): it sets the title and locks it
 // (title_locked = TRUE) in one statement, unconditionally — a manual rename
-// always wins and pins the name against the auto-titler thereafter.
+// always wins and pins the name against the auto-titler thereafter. A
+// soft-deleted conversation is not mutable (deleted_at IS NULL, #596).
 func (s *Store) RenameTitle(ctx context.Context, userEmail, convID, title string) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET title = $1, title_locked = TRUE, updated_at = $2 WHERE id = $3 AND user_email = $4`,
+		`UPDATE conversations SET title = $1, title_locked = TRUE, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
 		title, time.Now().Unix(), convID, userEmail,
 	)
 	if err != nil {
@@ -537,10 +565,11 @@ func (s *Store) RenameTitle(ctx context.Context, userEmail, convID, title string
 	return nil
 }
 
-// SetPinned toggles the pin state for a conversation.
+// SetPinned toggles the pin state for a conversation. A soft-deleted
+// conversation is not mutable (deleted_at IS NULL, #596).
 func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET pinned = $1, updated_at = $2 WHERE id = $3 AND user_email = $4`,
+		`UPDATE conversations SET pinned = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
 		pinned, time.Now().Unix(), convID, userEmail,
 	)
 	if err != nil {
@@ -557,6 +586,7 @@ func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned 
 // archived_at = now; archived=false clears it (NULL). Archiving also clears the
 // pin: "pinned" means keep-prominent, which is the opposite of filing away, so
 // the two states are mutually exclusive (the issue's pinned-interaction rule).
+// A soft-deleted conversation is not mutable (deleted_at IS NULL, #596).
 func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archived bool) error {
 	now := time.Now().Unix()
 	var archivedAt any // NULL when unarchiving
@@ -565,7 +595,7 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 		archivedAt = now
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3 WHERE id = $4 AND user_email = $5`,
+		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
 		archivedAt, pinned, now, convID, userEmail,
 	)
 	if err != nil {
@@ -594,14 +624,15 @@ func nullableSeconds(v sql.NullInt64) *int {
 // override (#225). seconds == nil clears it back to the global default; a
 // non-nil pointer stores that many seconds. Callers validate the range at the
 // HTTP layer; the store only persists. Scoped by user_email so a caller can
-// only touch their own conversations.
+// only touch their own conversations. A soft-deleted conversation is not
+// mutable (deleted_at IS NULL, #596).
 func (s *Store) SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error {
 	var arg any // NULL when clearing
 	if seconds != nil {
 		arg = *seconds
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET approval_timeout_seconds = $1, updated_at = $2 WHERE id = $3 AND user_email = $4`,
+		`UPDATE conversations SET approval_timeout_seconds = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
 		arg, time.Now().Unix(), convID, userEmail,
 	)
 	if err != nil {
@@ -1180,7 +1211,16 @@ func (s *Store) AppendHistory(ctx context.Context, convID string, entries []agen
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := s.appendHistoryTx(ctx, tx, convID, entries); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
+// appendHistoryTx is AppendHistory's body against a caller-owned transaction,
+// so a multi-statement op (BranchConversation's row + copy, #597) can make the
+// message write part of its own atomic unit. The caller commits or rolls back.
+func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, entries []agent.HistoryEntry) error {
 	now := time.Now().Unix()
 
 	var b strings.Builder
@@ -1232,7 +1272,7 @@ func (s *Store) AppendHistory(ctx context.Context, convID string, entries []agen
 		`UPDATE conversations SET updated_at = $1 WHERE id = $2`, now, convID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // ReplaceSummary deletes any prior `summary` messages on the conversation
@@ -1670,7 +1710,10 @@ type AdminRow struct {
 
 // AdminStats aggregates per-user metrics for the /admin page. One query
 // per section keeps the code simple; 10-20 users at chat scale means the
-// whole thing returns in milliseconds.
+// whole thing returns in milliseconds. deleted_at IS NULL matches every
+// other conversation read (#579): under soft-delete a tombstoned row must
+// not inflate the counts or masquerade as recent activity (Delete bumps
+// updated_at, so an unfiltered MAX would surface the deletion itself).
 func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT
@@ -1679,6 +1722,7 @@ func (s *Store) AdminStats(ctx context.Context) ([]AdminRow, error) {
 		    SUM(CASE WHEN c.pinned THEN 1 ELSE 0 END)    AS pinned_count,
 		    MAX(c.updated_at)                            AS last_activity
 		 FROM conversations c
+		 WHERE c.deleted_at IS NULL
 		 GROUP BY c.user_email`,
 	)
 	if err != nil {
