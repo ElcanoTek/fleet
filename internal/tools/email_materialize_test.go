@@ -44,9 +44,17 @@ func TestMaterializeContentFileInlinesWorkspaceFile(t *testing.T) {
 	}
 }
 
-func TestMaterializeContentFileAbsolutePath(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "email.html")
+func TestMaterializeContentFileAbsolutePathInsideWorkspace(t *testing.T) {
+	// An absolute path is fine as long as it lives INSIDE the conversation
+	// workspace — agents often echo back the absolute path a previous tool
+	// returned. Absolute paths outside it are rejected (see the traversal test).
+	root := t.TempDir()
+	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	convID := "conv-abs"
+	if err := os.MkdirAll(filepath.Join(root, convID), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(root, convID, "email.html")
 	body := "<p>absolute</p>"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -57,7 +65,7 @@ func TestMaterializeContentFileAbsolutePath(t *testing.T) {
 		"subject":      "s",
 		"content_file": path,
 	})
-	out, err := MaterializeContentFile("conv-abs", string(raw))
+	out, err := MaterializeContentFile(convID, string(raw))
 	if err != nil {
 		t.Fatalf("materialize: %v", err)
 	}
@@ -65,6 +73,78 @@ func TestMaterializeContentFileAbsolutePath(t *testing.T) {
 	_ = json.Unmarshal([]byte(out), &got)
 	if content, _ := got["content"].(string); content != body {
 		t.Errorf("content mismatch: want %q, got %q", body, content)
+	}
+}
+
+// TestMaterializeContentFileRejectsEscapes pins the #573 fix: content_file is
+// model-controlled and its bytes become an OUTBOUND email body, so it must not
+// be able to name anything outside the conversation workspace — neither via an
+// absolute path (/proc/self/environ holds the process env, i.e. host secrets)
+// nor via a '..'-escaping relative path.
+func TestMaterializeContentFileRejectsEscapes(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	convID := "conv-escape"
+	if err := os.MkdirAll(filepath.Join(root, convID), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A sibling conversation's secret, reachable pre-fix via "../other/…".
+	if err := os.MkdirAll(filepath.Join(root, "other-conv"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "other-conv", "secret.html"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for _, file := range []string{
+		"/proc/self/environ",               // absolute: the fleet process env = host secrets
+		"/etc/passwd",                      // absolute, outside the workspace
+		"../other-conv/secret.html",        // relative '..' escape into a sibling conversation
+		"../../../../etc/passwd",           // relative '..' escape off the workspace root
+		"sub/../../other-conv/secret.html", // '..' hidden mid-path
+	} {
+		raw, _ := json.Marshal(map[string]any{"subject": "s", "content_file": file})
+		out, err := MaterializeContentFile(convID, string(raw))
+		if err == nil {
+			t.Errorf("content_file %q: want rejection, got success: %s", file, out)
+		}
+	}
+}
+
+// TestMaterializeContentFileNoEnvOrTildeExpansion proves $VAR and ~/ in a
+// model-supplied content_file are treated as LITERAL filename bytes, never
+// expanded through the fleet process environment (pre-#573 the path went
+// through os.ExpandEnv + UserHomeDir).
+func TestMaterializeContentFileNoEnvOrTildeExpansion(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	convID := "conv-noexpand"
+	if err := os.MkdirAll(filepath.Join(root, convID), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A file literally named "$SECRET_DIR.html" in the workspace: with the old
+	// os.ExpandEnv behavior (and SECRET_DIR set) the lookup would miss it.
+	t.Setenv("SECRET_DIR", "/etc")
+	body := "<p>literal</p>"
+	if err := os.WriteFile(filepath.Join(root, convID, "$SECRET_DIR.html"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	raw := `{"subject":"s","content_file":"$SECRET_DIR.html"}`
+	out, err := MaterializeContentFile(convID, raw)
+	if err != nil {
+		t.Fatalf("materialize literal $VAR filename: %v", err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal([]byte(out), &got)
+	if got["content"].(string) != body {
+		t.Errorf("content should be the literal file's bytes, got: %v", got["content"])
+	}
+
+	// "~/..." must not resolve to the real home dir — it stays a literal
+	// relative path inside the workspace, which here does not exist.
+	raw = `{"subject":"s","content_file":"~/.aws/credentials"}`
+	if out, err := MaterializeContentFile(convID, raw); err == nil {
+		t.Errorf("~/ path: want rejection (no home expansion), got success: %s", out)
 	}
 }
 
