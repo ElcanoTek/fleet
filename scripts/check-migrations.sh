@@ -7,12 +7,16 @@
 # guide (docs/MIGRATIONS.md) calls out and points at the safe alternative.
 #
 # Flagged in a forward (.up.sql or chat NNN_name.sql) migration:
-#   1. ADD COLUMN ... NOT NULL  without a DEFAULT  — rewrites the whole table
+#   1. ADD [COLUMN] ... NOT NULL  without a DEFAULT — rewrites the whole table
 #      under an ACCESS EXCLUSIVE lock and rejects existing rows. Checked per
 #      comma-separated column clause, so a mixed `ADD a NOT NULL DEFAULT 0,
-#      ADD b NOT NULL` still flags column b.
-#   2. DROP COLUMN                                 — destructive + breaks an
-#      older binary still reading the column mid-deploy.
+#      ADD b NOT NULL` still flags column b. The COLUMN keyword is optional in
+#      Postgres, so the keyword-less form is caught too (#593); ADD CONSTRAINT /
+#      PRIMARY KEY / UNIQUE / FOREIGN KEY / CHECK / EXCLUDE are exempt.
+#   2. DROP [COLUMN] in an ALTER TABLE              — destructive + breaks an
+#      older binary still reading the column mid-deploy. Keyword-less `DROP c`
+#      is caught too (#593); DROP CONSTRAINT / DEFAULT / NOT NULL / IDENTITY /
+#      EXPRESSION are exempt.
 #   3. ALTER TYPE ... RENAME VALUE                 — an in-flight/older binary
 #      reading the old enum label breaks.
 #
@@ -148,13 +152,26 @@ for f in "${files[@]}"; do
   # can't mask a NOT-NULL-without-default sibling column.
   clauses="$(printf '%s' "$stmts" | tr ',' '\n')"
 
-  # 1. ADD COLUMN ... NOT NULL without DEFAULT (per column clause).
-  if printf '%s\n' "$clauses" | grep -iE 'ADD[[:space:]]+COLUMN' | grep -iE 'NOT[[:space:]]+NULL' | grep -viqE 'DEFAULT'; then
-    emit "ADD COLUMN ... NOT NULL without DEFAULT (rewrites the table under an exclusive lock; add the column nullable, backfill, then set NOT NULL)"
+  # 1. ADD [COLUMN] ... NOT NULL without DEFAULT (per column clause). Postgres
+  #    makes the COLUMN keyword optional (#593), so match ANY ADD clause and
+  #    exclude the ADD <table-constraint> forms (CONSTRAINT / PRIMARY KEY /
+  #    UNIQUE / FOREIGN KEY / CHECK / EXCLUDE), which are not column adds.
+  if printf '%s\n' "$clauses" \
+      | grep -iE '(^|[[:space:]])ADD[[:space:]]' \
+      | grep -ivE '(^|[[:space:]])ADD[[:space:]]+(CONSTRAINT|PRIMARY|UNIQUE|FOREIGN|CHECK|EXCLUDE)([[:space:]]|\(|$)' \
+      | grep -iE 'NOT[[:space:]]+NULL' | grep -viqE 'DEFAULT'; then
+    emit "ADD [COLUMN] ... NOT NULL without DEFAULT (rewrites the table under an exclusive lock; add the column nullable, backfill, then set NOT NULL)"
   fi
-  # 2. DROP COLUMN.
-  if printf '%s\n' "$stmts" | grep -iqE 'DROP[[:space:]]+COLUMN'; then
-    emit "DROP COLUMN (destructive + breaks an older binary mid-deploy; stop reading the column first, drop it in a later migration)"
+  # 2. DROP [COLUMN] in an ALTER TABLE. The COLUMN keyword is optional (#593):
+  #    extract each `DROP <word>` from ALTER TABLE statements and flag any whose
+  #    following word is NOT one of the safe non-column DROP actions
+  #    (DROP CONSTRAINT / DROP DEFAULT / DROP NOT NULL / DROP IDENTITY /
+  #    DROP EXPRESSION). `DROP COLUMN x`, `DROP x`, and `DROP IF EXISTS x` all
+  #    leave a non-safe word after DROP, so all three forms flag.
+  if printf '%s\n' "$stmts" | grep -iE 'ALTER[[:space:]]+TABLE' \
+      | grep -ioE 'DROP[[:space:]]+["[:alnum:]_]+' \
+      | grep -ivqE '^DROP[[:space:]]+(CONSTRAINT|DEFAULT|NOT|IDENTITY|EXPRESSION)$'; then
+    emit "DROP [COLUMN] (destructive + breaks an older binary mid-deploy; stop reading the column first, drop it in a later migration)"
   fi
   # 3. ALTER TYPE ... RENAME VALUE.
   if printf '%s\n' "$stmts" | grep -iE 'ALTER[[:space:]]+TYPE' | grep -iqE 'RENAME[[:space:]]+VALUE'; then

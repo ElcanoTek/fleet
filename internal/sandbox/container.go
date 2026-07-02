@@ -746,8 +746,23 @@ func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (Pytho
 		err  error
 	}
 	ch := make(chan readResult, 1)
+	// Snapshot the reader under c.mu (held for this whole body) BEFORE
+	// launching the goroutine: the cancel/timeout arms below call
+	// terminateBridgeLocked, which nils c.bridgeStdout, so re-reading the
+	// FIELD inside the goroutine is a data race — and in the
+	// ctx-already-cancelled ordering the goroutine can observe nil and
+	// panic (#583). The goroutine owns this snapshot; a fresh bridge gets
+	// a fresh reader via ensureBridge.
+	stdout := c.bridgeStdout
 	go func() {
-		data, err := c.bridgeStdout.ReadBytes('\n')
+		// Belt-and-braces: a panic in a bare goroutine would kill the whole
+		// single-host process. Surface it as a read error instead (ch is
+		// buffered, and the normal send cannot have happened if ReadBytes
+		// panicked, so this send never blocks).
+		defer safe.Recover("sandbox.container.bridge_read", func(any) {
+			ch <- readResult{err: fmt.Errorf("bridge reader panicked")}
+		})
+		data, err := stdout.ReadBytes('\n')
 		ch <- readResult{data: data, err: err}
 	}()
 	timer := time.NewTimer(timeout)
