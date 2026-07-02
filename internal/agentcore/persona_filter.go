@@ -19,7 +19,13 @@ import (
 // Enforcement is at tool-REGISTRATION (run.go applies resolvePersonaTools to the
 // slice before it is handed to fantasy.WithTools), not at call time: a tool the
 // model never sees in its tool list cannot be hallucinated into a call. This is
-// the same security-meaningful enforcement point Gate-2 uses.
+// the same security-meaningful enforcement point Gate-2 uses. One wrinkle: once
+// BM25 tool disclosure (#506) defers the MCP tools behind the bridge tools, the
+// registered roster no longer CONTAINS them — so the same policy is also applied
+// to the deferrable MCP set inside buildFantasyTools, before the disclosure
+// decision (#570). A denied tool therefore never enters the deferred registry
+// and can be neither discovered via tool_search nor dispatched via tool_call:
+// disclosure changes visibility, not governance.
 //
 // Credentials are unaffected — they stay host-side, brokered out-of-process; the
 // filter only decides which tool SCHEMAS are advertised to the model.
@@ -62,17 +68,20 @@ func resolvePersonaTools(persona string, policy PersonaToolPermissions, all []fa
 	blocked := 0
 	for _, t := range all {
 		name := t.Info().Name
-		// Deny wins over allow on any conflict: check it first.
-		if matchesAnyPattern(name, policy.Deny) {
-			emitPersonaToolBlocked(obs, persona, name, "deny")
-			blocked++
-			continue
+		suppressed, reason := personaBlocksTool(policy, name)
+		// The disclosure bridges (#506) are exempt from allow-list default-deny —
+		// but NOT from an explicit deny — because they are plumbing, not
+		// capability: every tool reachable through them was already
+		// persona-filtered before it entered the deferred registry (#570), so
+		// keeping the bridges cannot widen the surface, while dropping them
+		// would strand an allow-list persona's own permitted MCP tools whenever
+		// the roster defers (the bridges only exist when at least one
+		// persona-permitted MCP tool deferred).
+		if suppressed && reason == "not_in_allow" && isDisclosureBridge(name) {
+			suppressed = false
 		}
-		// A non-empty allow list is default-deny: a tool that matches nothing is
-		// dropped. An empty allow list (deny-only policy) admits everything the
-		// deny list did not catch.
-		if len(policy.Allow) > 0 && !matchesAnyPattern(name, policy.Allow) {
-			emitPersonaToolBlocked(obs, persona, name, "not_in_allow")
+		if suppressed {
+			emitPersonaToolBlocked(obs, persona, name, reason)
 			blocked++
 			continue
 		}
@@ -80,6 +89,25 @@ func resolvePersonaTools(persona string, policy PersonaToolPermissions, all []fa
 	}
 	log.Printf("persona %q tool policy: %d of %d tools offered (%d blocked)", persona, len(out), len(all), blocked)
 	return out
+}
+
+// personaBlocksTool is the single Gate-4 decision: it reports whether the
+// policy suppresses toolName, and the audit reason ("deny" | "not_in_allow").
+// Extracted so the SAME semantics apply at both enforcement points — the
+// registered roster (resolvePersonaTools, above) and the deferrable MCP set
+// inside buildFantasyTools (#570) — and the two can never drift.
+func personaBlocksTool(policy PersonaToolPermissions, toolName string) (bool, string) {
+	// Deny wins over allow on any conflict: check it first.
+	if matchesAnyPattern(toolName, policy.Deny) {
+		return true, "deny"
+	}
+	// A non-empty allow list is default-deny: a tool that matches nothing is
+	// dropped. An empty allow list (deny-only policy) admits everything the
+	// deny list did not catch.
+	if len(policy.Allow) > 0 && !matchesAnyPattern(toolName, policy.Allow) {
+		return true, "not_in_allow"
+	}
+	return false, ""
 }
 
 // emitPersonaToolBlocked records a single suppressed-tool audit event. nil-safe.

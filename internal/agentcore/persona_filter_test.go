@@ -178,6 +178,40 @@ func TestResolvePersonaTools_DenyWinsOverAllow(t *testing.T) {
 	}
 }
 
+// TestResolvePersonaTools_BridgesSurviveAllowList (#570): the disclosure
+// bridges are plumbing, not capability — everything reachable through them was
+// persona-filtered before entering the deferred registry — so an allow-list
+// persona must NOT strand them (dropping the bridges would cut off the
+// persona's own permitted MCP tools whenever the roster defers).
+func TestResolvePersonaTools_BridgesSurviveAllowList(t *testing.T) {
+	all := []fantasy.AgentTool{
+		namedTool("bash"),
+		namedTool("mcp_email_send"), // not allowed → dropped as usual
+		namedTool("tool_search"),
+		namedTool("tool_describe"),
+		namedTool("tool_call"),
+	}
+	policy := PersonaToolPermissions{Allow: []string{"bash"}}
+	got := toolNames(resolvePersonaTools("p", policy, all, &recordingObserver{}))
+	want := []string{"bash", "tool_search", "tool_describe", "tool_call"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("allow-list must keep the disclosure bridges: got %v, want %v", got, want)
+	}
+}
+
+// TestResolvePersonaTools_ExplicitDenyDropsBridge: the bridge exemption covers
+// only the allow-list default-deny — an operator who explicitly denies a bridge
+// (e.g. to switch off tool_call entirely for a persona) is still honored.
+func TestResolvePersonaTools_ExplicitDenyDropsBridge(t *testing.T) {
+	all := []fantasy.AgentTool{namedTool("bash"), namedTool("tool_search"), namedTool("tool_call")}
+	policy := PersonaToolPermissions{Deny: []string{"tool_call"}}
+	got := toolNames(resolvePersonaTools("p", policy, all, &recordingObserver{}))
+	want := []string{"bash", "tool_search"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("explicit deny of a bridge must hold: got %v, want %v", got, want)
+	}
+}
+
 // TestResolvePersonaTools_CannotWidenBeyondInput is the security-critical
 // property: the filter can only SUBTRACT from the slice it is handed (which the
 // caller has already run through the server + credential gates). A tool the

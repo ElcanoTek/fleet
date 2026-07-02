@@ -1342,6 +1342,9 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 		MaxIterations: p.MaxIterations,
 		AllowNetwork:  p.AllowNetwork,
 		Tags:          p.Tags,
+		// The approving user is the budget principal for this create (#601
+		// part 2) — the seam refuses when their rolling budget is exhausted.
+		RequestedBy: approval.UserEmail,
 	}
 	if t, ok := p.RunAtTime(); ok {
 		req.RunAt = &t

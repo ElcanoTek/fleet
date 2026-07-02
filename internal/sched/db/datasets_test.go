@@ -255,3 +255,25 @@ func TestFinishDatasetRow_ClampedMultibyteTextLands(t *testing.T) {
 		t.Fatal("clamped note/error must round-trip unchanged")
 	}
 }
+
+// TestAddDatasetRowsRejectsOversizedBatch verifies the defensive count bound is
+// enforced before the args slice is sized (go/allocation-size-overflow) — and
+// before any DB access, so the check holds without a live database.
+func TestAddDatasetRowsRejectsOversizedBatch(t *testing.T) {
+	cells := make([]json.RawMessage, maxDatasetRowsPerInsert+1)
+	for i := range cells {
+		cells[i] = json.RawMessage(`{}`)
+	}
+	// nil conn is never dereferenced: the bound check returns before BeginTx.
+	db := &Database{}
+	n, err := db.AddDatasetRows(context.Background(), uuid.New(), cells)
+	if err == nil {
+		t.Fatal("oversized batch must be rejected")
+	}
+	if n != 0 {
+		t.Fatalf("rejected batch must report 0 rows, got %d", n)
+	}
+	if !strings.Contains(err.Error(), "too many rows") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

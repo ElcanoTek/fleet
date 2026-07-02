@@ -1,8 +1,23 @@
 package ratelimit
 
 import (
+	"math"
 	"testing"
 )
+
+func TestNewConcurrencyLimiter_ClampsRange(t *testing.T) {
+	// A value past int32 saturates to MaxInt32 (the guarded narrowing conversion
+	// must not overflow); a negative value floors to 0 (disabled).
+	if got := NewConcurrencyLimiter(math.MaxInt32 + 1).Limit(); got != math.MaxInt32 {
+		t.Fatalf("over-range limit = %d, want %d", got, int32(math.MaxInt32))
+	}
+	if got := NewConcurrencyLimiter(-5).Limit(); got != 0 {
+		t.Fatalf("negative limit = %d, want 0", got)
+	}
+	if got := NewConcurrencyLimiter(7).Limit(); got != 7 {
+		t.Fatalf("in-range limit = %d, want 7", got)
+	}
+}
 
 func TestLimiter_AllowsUpToLimit(t *testing.T) {
 	l := New(3, 0)
