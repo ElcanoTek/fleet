@@ -427,9 +427,14 @@ func (e *engine) streamRoundWithResilience(
 	streamBlipRetryUsed := false
 	var lastErr error
 
+	// Runaway-compaction backstop (#598): when the last maxConsecutiveCompactions
+	// rounds EACH needed a force-compaction (with no compaction-free round in
+	// between — see the conditional reset below), the history is re-overflowing
+	// every round no matter how much is summarized away, so burning another paid
+	// round on it is pointless. Surface the terminal error instead.
 	if e != nil && e.consecutiveCompactions >= maxConsecutiveCompactions {
 		return streamRoundOutcome{}, fmt.Errorf(
-			"%w: %d consecutive steps required compaction (model=%s, context_window=%d tokens). "+
+			"%w: %d consecutive rounds required compaction (model=%s, context_window=%d tokens). "+
 				"Split this task into smaller pieces, move heavy context into a file the agent can "+
 				"view_file on demand, or switch to a model with a larger context window",
 			ErrContextBudgetExhausted, e.consecutiveCompactions, activeModel.Model(),
@@ -457,12 +462,19 @@ func (e *engine) streamRoundWithResilience(
 			if e != nil {
 				e.healthRegistry.RecordSuccess(activeModel.Model())
 			}
-			// A clean stream round is the "clean step in between" the
-			// consecutive-compaction contract is written against: reset the
-			// counter so the cap (maxConsecutiveCompactions) only trips on
-			// compactions in consecutive FAILING rounds, not well-spaced
-			// compactions that each recovered cleanly over a long run.
-			if e != nil {
+			// A round that completed WITHOUT needing a force-compaction is the
+			// "compaction-free round" the consecutive-compaction contract counts
+			// against: reset the counter so the cap (maxConsecutiveCompactions)
+			// only trips on force-compactions in CONSECUTIVE rounds, not
+			// well-spaced compactions that each bought many clean rounds over a
+			// long run. A round that recovered VIA a force-compaction keeps its
+			// increment even though its stream ultimately succeeded — the
+			// compaction is what made the stream succeed, so it must still count
+			// toward the runaway cap. (Resetting on ANY clean stream, the
+			// pre-#598 behavior, made the cap unreachable: every successful round
+			// return passed through this reset first, and every error return
+			// halted the whole run, so the >= cap gate above always saw 0.)
+			if e != nil && !forceCompactedThisRound {
 				e.consecutiveCompactions = 0
 			}
 			return streamRoundOutcome{

@@ -168,6 +168,115 @@ func TestDisclosureSearchDescribeCall(t *testing.T) {
 	}
 }
 
+func findTool(ts []fantasy.AgentTool, name string) fantasy.AgentTool {
+	for _, t := range ts {
+		if t.Info().Name == name {
+			return t
+		}
+	}
+	return nil
+}
+
+// TestDisclosure_PersonaDenyGovernsDeferredTools is the #570 regression: with
+// tool disclosure active (roster > threshold), a persona deny must keep the
+// tool out of the deferred registry entirely — not directly registered, absent
+// from tool_search/tool_describe, and rejected by tool_call BEFORE the broker
+// is reached. Gate-4 must govern the deferred set exactly as it governs the
+// registered roster: disclosure changes visibility, not governance.
+func TestDisclosure_PersonaDenyGovernsDeferredTools(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
+	const denied = "mcp_srv_stripe_refund_charge_2"
+	broker := &fakeBroker{}
+	obs := &recordingObserver{}
+	policy := PersonaToolPermissions{Deny: []string{"mcp:srv/stripe_refund_charge_2"}}
+	got, err := buildFantasyTools(discNative(3), discMCPTools(20), broker, nil, nil, nil, nil,
+		toolBuildConfig{personaName: "p", personaPolicy: &policy, observer: obs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := toolNamesOf(got)
+	if !names["tool_search"] || !names["tool_call"] {
+		t.Fatalf("disclosure should be active (bridges registered), got %v", names)
+	}
+	if names[denied] {
+		t.Fatalf("persona-denied tool %s was directly registered", denied)
+	}
+	// tool_search must not disclose the denied tool.
+	sresp, _ := findTool(got, "tool_search").Run(context.Background(), fantasy.ToolCall{Input: `{"query":"refund a stripe payment","limit":50}`})
+	if sresp.IsError {
+		t.Fatalf("search: %+v", sresp)
+	}
+	if strings.Contains(sresp.Content, denied+":") {
+		t.Fatalf("persona-denied tool leaked into tool_search results:\n%s", sresp.Content)
+	}
+	// A sibling stripe tool (not denied) proves the search itself works.
+	if !strings.Contains(sresp.Content, "mcp_srv_stripe_refund_charge_5") {
+		t.Fatalf("permitted sibling tool missing from search results:\n%s", sresp.Content)
+	}
+	// tool_describe must not reveal its schema.
+	dresp, _ := findTool(got, "tool_describe").Run(context.Background(), fantasy.ToolCall{Input: `{"name":"` + denied + `"}`})
+	if !dresp.IsError {
+		t.Fatalf("tool_describe revealed a persona-denied tool: %+v", dresp)
+	}
+	// tool_call must reject it without ever reaching the broker.
+	cresp, _ := findTool(got, "tool_call").Run(context.Background(), fantasy.ToolCall{ID: "tc-1", Input: `{"name":"` + denied + `","arguments":{}}`})
+	if !cresp.IsError {
+		t.Fatalf("tool_call dispatched a persona-denied tool: %+v", cresp)
+	}
+	if broker.lastTool != "" {
+		t.Fatalf("broker was reached for a persona-denied tool: %s/%s", broker.lastServer, broker.lastTool)
+	}
+	// The suppression is audited like any Gate-4 block.
+	blocked := obs.blocked()
+	if len(blocked) != 1 || blocked[0]["tool"] != denied || blocked[0]["reason"] != "deny" {
+		t.Fatalf("expected one persona_tool_blocked audit event for %s, got %v", denied, blocked)
+	}
+}
+
+// TestDisclosure_PersonaDenyAllMCPSkipsBridges: when the persona denies the
+// entire deferrable set, no registry remains and therefore no bridges register —
+// the roster degrades to the direct path with zero MCP surface, rather than
+// advertising bridges over an empty index.
+func TestDisclosure_PersonaDenyAllMCPSkipsBridges(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
+	policy := PersonaToolPermissions{Deny: []string{"mcp:srv/*"}}
+	got, err := buildFantasyTools(discNative(4), discMCPTools(20), &fakeBroker{}, nil, nil, nil, nil,
+		toolBuildConfig{personaName: "p", personaPolicy: &policy, observer: &recordingObserver{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := toolNamesOf(got)
+	if names["tool_search"] || names["tool_describe"] || names["tool_call"] {
+		t.Fatalf("bridges must not register when the persona denied every deferrable tool: %v", names)
+	}
+	if len(got) != 4 { // just the native core
+		t.Fatalf("want 4 native tools, got %d: %v", len(got), names)
+	}
+}
+
+// TestDisclosure_PersonaFilterBelowThresholdUnchanged: below the threshold the
+// persona filter applies to the directly-registered MCP tools exactly as
+// before #570 — denied tool absent, siblings present, no bridges.
+func TestDisclosure_PersonaFilterBelowThresholdUnchanged(t *testing.T) {
+	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "128")
+	policy := PersonaToolPermissions{Deny: []string{"mcp:srv/stripe_refund_charge_2"}}
+	got, err := buildFantasyTools(discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil,
+		toolBuildConfig{personaName: "p", personaPolicy: &policy, observer: &recordingObserver{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := toolNamesOf(got)
+	if names["tool_search"] || names["tool_call"] {
+		t.Fatal("bridges must NOT register below threshold")
+	}
+	if names["mcp_srv_stripe_refund_charge_2"] {
+		t.Fatal("persona-denied tool registered directly below threshold")
+	}
+	if len(got) != 6 { // 2 native + 5 mcp - 1 denied
+		t.Fatalf("want 6 tools, got %d: %v", len(got), names)
+	}
+}
+
 // mcpToolsFrom builds the *mcpTool wrappers a real buildFantasyTools would
 // defer, so the registry test dispatches through the genuine broker path.
 func mcpToolsFrom(sts []mcp.ServerTool, broker MCPBroker) []fantasy.AgentTool {
