@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 func TestSplitAttachmentsByKind(t *testing.T) {
@@ -44,6 +46,44 @@ func TestToAgentImageAttachments(t *testing.T) {
 	}
 	if out[1].MediaType != "image/jpeg" {
 		t.Errorf("[1] media = %q (extension fallback)", out[1].MediaType)
+	}
+}
+
+// TestValidateAttachments_ConfinesToUploadsRoot pins that validateAttachments
+// only accepts regular files that live under <EmailAttachmentDir>/uploads: an
+// absolute path or a ".." escape pointing outside the uploads root is dropped, so
+// a hostile client can't smuggle a host file (e.g. a secret) into a turn's
+// attachment set. This is the confinement the filepath.Rel + filepath.IsLocal
+// gate enforces.
+func TestValidateAttachments_ConfinesToUploadsRoot(t *testing.T) {
+	base := t.TempDir()
+	uploads := filepath.Join(base, "uploads", "tok")
+	if err := os.MkdirAll(uploads, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	good := filepath.Join(uploads, "chart.png")
+	if err := os.WriteFile(good, []byte("img"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A secret OUTSIDE the uploads root that a traversal / absolute path targets.
+	secret := filepath.Join(base, "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOP SECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{cfg: &config.Config{EmailAttachmentDir: base}}
+
+	got := s.validateAttachments([]chatAttachment{
+		{Name: "chart.png", Path: good},                                            // legit, under uploads root
+		{Name: "escape", Path: secret},                                             // absolute, outside uploads root
+		{Name: "traverse", Path: filepath.Join(uploads, "..", "..", "secret.txt")}, // ".." escape
+	})
+
+	if len(got) != 1 {
+		t.Fatalf("want exactly 1 accepted attachment (the confined file), got %d: %#v", len(got), got)
+	}
+	if filepath.Clean(got[0].Path) != filepath.Clean(good) {
+		t.Errorf("accepted path = %q; want the confined file %q", got[0].Path, good)
 	}
 }
 
