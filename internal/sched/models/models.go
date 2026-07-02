@@ -1269,14 +1269,22 @@ func TaskToCreate(t *Task) TaskCreate {
 		Priority:               t.Priority,
 		InstructionSelfImprove: t.InstructionSelfImprove,
 		AllowNetwork:           t.AllowNetwork,
-		AllowEventTriggers:     t.AllowEventTriggers,
-		AllowDelegation:        t.AllowDelegation,
-		ScheduledFor:           t.ScheduledFor,
-		Recurrence:             t.Recurrence,
-		Timezone:               t.Timezone,
-		Files:                  t.Files,
-		MaxRetries:             &maxRetries,
-		TriggerType:            t.TriggerType,
+		// CarryContext (#504) is part of the recipe so a recurrence/clone keeps the
+		// prior-run handoff opt-in — without it a recurring carry_context task lost
+		// the very feature after occurrence #1 (issue #565).
+		CarryContext:       t.CarryContext,
+		AllowEventTriggers: t.AllowEventTriggers,
+		AllowDelegation:    t.AllowDelegation,
+		// Persona (#221) is part of the recipe so a recurrence/clone runs under the
+		// same per-task persona override rather than falling back to the global
+		// default on occurrence #2+ (issue #565).
+		Persona:      t.Persona,
+		ScheduledFor: t.ScheduledFor,
+		Recurrence:   t.Recurrence,
+		Timezone:     t.Timezone,
+		Files:        t.Files,
+		MaxRetries:   &maxRetries,
+		TriggerType:  t.TriggerType,
 		// Capability flags are part of the create-recipe so a re-run/clone keeps
 		// the same governance posture (#277). CreatedByTaskID is per-spawn lineage,
 		// like SourceTaskID, and is intentionally NOT carried.
