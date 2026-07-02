@@ -182,6 +182,25 @@ func (s *Store) ListMemories(ctx context.Context, userEmail string) ([]Memory, e
 	return out, rows.Err()
 }
 
+// GetMemory returns one memory by id, scoped to the user (personal AND
+// project rows — the id is the authority; callers needing project gating do
+// it at the HTTP layer).
+func (s *Store) GetMemory(ctx context.Context, userEmail, id string) (*Memory, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+memoryColumns+`
+		 FROM memories WHERE id = $1 AND user_email = $2`,
+		id, normalizeEmail(userEmail),
+	)
+	m, err := scanMemory(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, errors.New("memory not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // MemoryPatch is a partial update: nil fields are untouched. ValidFrom /
 // ValidTo use 0 to CLEAR the bound (0 is not a meaningful epoch for a fact's
 // validity). Retired true sets retired_at=now (manual retirement, no
