@@ -36,6 +36,13 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Tool-pipeline metrics endpoint (#543): admin-only
+  `GET /admin/pipeline-metrics` derives per-run tool turns, total/distinct
+  tool calls, tokens, cost, and wall clock from the session logs fleet already
+  persists (no new columns — works retroactively on every retained run), plus
+  a fleet-wide aggregate with a tool-turn histogram and the share of runs that
+  were long multi-tool pipelines. This is the sensor behind #505's reopen
+  criteria: optimization decisions become a threshold check, not a vibe.
 - Demo GIFs for every surface (#540): the README now opens with three
   recordings telling one story — plan in chat (a REAL model + sandbox take),
   automate in the Operations Center (real scheduler), ride along in the TUI
