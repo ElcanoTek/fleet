@@ -17,15 +17,40 @@ var (
 	cTool   = lipgloss.Color("#FFC857") // amber — tool calls
 	cErr    = lipgloss.Color("#FF5C72") // red — errors
 	cDim    = lipgloss.Color("#6C7086") // muted — reasoning / hints
+	cInk    = lipgloss.Color("#16161E") // near-black — text on colored pills
 
-	styleUserLabel  = lipgloss.NewStyle().Foreground(cUser).Bold(true)
-	styleAgentLabel = lipgloss.NewStyle().Foreground(cAgent).Bold(true)
-	styleTool       = lipgloss.NewStyle().Foreground(cTool)
-	styleErr        = lipgloss.NewStyle().Foreground(cErr).Bold(true)
-	styleDim        = lipgloss.NewStyle().Foreground(cDim)
-	styleAccent     = lipgloss.NewStyle().Foreground(cAccent).Bold(true)
-	styleHeader     = lipgloss.NewStyle().Foreground(cAccent).Bold(true)
+	styleTool   = lipgloss.NewStyle().Foreground(cTool)
+	styleErr    = lipgloss.NewStyle().Foreground(cErr).Bold(true)
+	styleDim    = lipgloss.NewStyle().Foreground(cDim)
+	styleAccent = lipgloss.NewStyle().Foreground(cAccent).Bold(true)
+	styleHeader = lipgloss.NewStyle().Foreground(cAccent).Bold(true)
+
+	// Speaker pills: high-contrast chips so turns scan at a glance even in a
+	// long transcript. Ink-on-color mirrors the web app's badge treatment.
+	stylePillUser  = lipgloss.NewStyle().Background(cUser).Foreground(cInk).Bold(true).Padding(0, 1)
+	stylePillAgent = lipgloss.NewStyle().Background(cAgent).Foreground(cInk).Bold(true).Padding(0, 1)
+
+	// Tool-call outcome glyphs (replacing the old "…"/"ok"/"error" words).
+	styleToolOK  = lipgloss.NewStyle().Foreground(cAgent)
+	styleToolErr = lipgloss.NewStyle().Foreground(cErr)
+
+	// The composer: a rounded, accent-bordered box that dims while a turn is
+	// streaming (input is queued behind the running turn, and the border color
+	// says so without words).
+	styleInputBox     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cAccent).Padding(0, 1)
+	styleInputBoxBusy = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(cDim).Padding(0, 1)
+
+	// Thin rule under the header, over the status row.
+	styleRule = lipgloss.NewStyle().Foreground(lipgloss.Color("#2A2A37"))
 )
+
+// rule renders a full-width horizontal hairline.
+func rule(width int) string {
+	if width < 1 {
+		width = 1
+	}
+	return styleRule.Render(strings.Repeat("─", width))
+}
 
 // markdownRenderer lazily builds (and caches per width) a glamour renderer. glamour
 // turns the agent's reply into an ANSI string we drop straight into the viewport;
