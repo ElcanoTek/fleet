@@ -22,6 +22,7 @@ func TestClassifyInvocation(t *testing.T) {
 		{"-v", []string{"-v"}, invokeVersion},
 		{"mcp-broker", []string{"mcp-broker"}, invokeMCPBroker},
 		{"validate-config", []string{"validate-config", "--strict"}, invokeValidateConfig},
+		{"generate-vapid-keys", []string{"generate-vapid-keys"}, invokeGenerateVAPIDKeys},
 		{"update → admin", []string{"update"}, invokeAdmin},
 		{"status → admin", []string{"status"}, invokeAdmin},
 		{"chat → admin (TUI + chat-user admin)", []string{"chat"}, invokeAdmin},

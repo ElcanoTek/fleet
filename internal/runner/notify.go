@@ -3,7 +3,10 @@ package runner
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -42,12 +45,33 @@ func (p *Pool) notifyTerminal(task *models.Task, status notify.Status, session *
 		// its own per-attempt timeout + bounded retry within this budget.
 		ctx, cancel := context.WithTimeout(context.Background(), notifyFanoutBudget)
 		defer cancel()
+		// Resolve the owner email HERE, off-thread, so the terminal path never
+		// waits on the users lookup. Empty = no push audience (#292); the
+		// deployment-wide email/webhook channels ignore the field.
+		ev.Audience = p.ownerEmail(ctx, task)
 		// safe.Recover is not used here: notify.Notify does no panicky work, and a
 		// panic in a detached notify goroutine must not be silently swallowed in a
 		// way that hides a bug. Keep it simple — the runner's own recover guards the
 		// task goroutine, not this one.
 		_ = p.notifier.Notify(ctx, ev)
 	}()
+}
+
+// ownerEmail resolves the task creator's email — the per-user push audience
+// (#292). The sched username IS the chat email for the elcano-auth tier, the
+// same assumption cmd/fleet's ownerEmailResolver rests on. Best-effort: an
+// anonymous task (nil CreatedBy), a store-less unit fixture, or a lookup
+// failure yields "" and the event simply carries no push audience.
+func (p *Pool) ownerEmail(ctx context.Context, task *models.Task) string {
+	if task.CreatedBy == nil || p.store == nil {
+		return ""
+	}
+	m, err := p.store.GetUsersByIDsWithContext(ctx, []uuid.UUID{*task.CreatedBy})
+	if err != nil {
+		log.Printf("runner: notify owner lookup for task %s failed: %v", task.ID, err)
+		return ""
+	}
+	return m[*task.CreatedBy]
 }
 
 // notifyFanoutBudget caps the lifetime of one detached notify goroutine. Generous

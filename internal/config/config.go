@@ -278,6 +278,18 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_WEBHOOK_SECRET":        true,
 	"FLEET_PUBLIC_URL":            true,
 
+	// ── browser Web Push notifications (#292) ──
+	// OFF unless all three FLEET_VAPID_* vars are set (generate them with
+	// `fleet generate-vapid-keys`). The private key is a SECRET held host-side
+	// and never logged or shipped into the sandbox; the public key is served
+	// to browsers. The two flags gate the triggers and default ON when the
+	// keys are configured. FLEET_PUBLIC_URL (above) is reused for deep links.
+	"FLEET_VAPID_PUBLIC_KEY":         true,
+	"FLEET_VAPID_PRIVATE_KEY":        true,
+	"FLEET_VAPID_CONTACT":            true,
+	"FLEET_PUSH_ON_TASK_COMPLETE":    true,
+	"FLEET_PUSH_ON_APPROVAL_REQUEST": true,
+
 	// ── sandbox ──
 	"CHAT_SANDBOX_IMAGE":                      true,
 	"CHAT_SANDBOX_RUNTIME":                    true,

@@ -35,6 +35,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/version"
+	"github.com/ElcanoTek/fleet/internal/webpush"
 )
 
 // Server wires the agent Manager + store + shared-secret auth into an
@@ -93,6 +94,11 @@ type Server struct {
 	// nil when the feature is unconfigured (no encryption key / public base URL),
 	// in which case the endpoints return a clear "not configured" error.
 	remoteMCP *remotemcp.Service
+
+	// push is the browser Web Push sender (#292). nil when the feature is
+	// unconfigured (no VAPID keys), in which case the /push/* endpoints return
+	// 501 and the approval-staged push trigger is a no-op.
+	push *webpush.Service
 
 	// sessionApprovals holds per-conversation batch pre-approvals (#300): in-memory,
 	// session-scoped policies consulted by approvalStager.Stage before staging a card.
@@ -297,6 +303,12 @@ func WithClientConfig(b *clientconfig.Bundle) Option {
 // (or pass nil) to leave the feature off.
 func WithRemoteMCP(svc *remotemcp.Service) Option {
 	return func(s *Server) { s.remoteMCP = svc }
+}
+
+// WithPush injects the browser Web Push sender (#292). Omit it (or pass nil)
+// to leave the feature off: the /push/* endpoints then answer 501.
+func WithPush(svc *webpush.Service) Option {
+	return func(s *Server) { s.push = svc }
 }
 
 func WithStartTime(t time.Time) Option {
@@ -605,6 +617,12 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/remote-mcp-servers", auth(member(mutate(http.HandlerFunc(s.remoteMCPServers)))))
 	mux.Handle("/remote-mcp-servers/", auth(member(mutate(http.HandlerFunc(s.remoteMCPServerByID)))))
 	mux.Handle("/oauth/mcp/callback", auth(member(mutate(http.HandlerFunc(s.remoteMCPOAuthCallback)))))
+	// Browser Web Push (#292): subscribe/unsubscribe manage only the caller's
+	// own rows; the VAPID public key is a non-secret read. All three answer 501
+	// until the operator configures VAPID keys (fleet generate-vapid-keys).
+	mux.Handle("/push/subscribe", auth(member(mutate(http.HandlerFunc(s.pushSubscribe)))))
+	mux.Handle("/push/unsubscribe", auth(member(mutate(http.HandlerFunc(s.pushUnsubscribe)))))
+	mux.Handle("/push/vapid-public-key", auth(member(http.HandlerFunc(s.pushVAPIDPublicKey))))
 	mux.Handle("/server-config", auth(member(http.HandlerFunc(s.serverConfig))))
 	mux.Handle("/client-config", auth(member(http.HandlerFunc(s.clientConfigHandler))))
 	// /theme.css themes the shell (incl. the pre-auth login page) from the
@@ -2142,6 +2160,7 @@ func (s *Server) runTurnAsync(
 			globalTimeoutSeconds: s.cfg.ApprovalTimeoutSeconds,
 			convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
 			autoApproveInTest:    s.cfg.AutoApproveInTest,
+			push:                 s.push,
 		},
 		MemoryProposer: &memoryProposer{
 			ctx:            turnCtx,

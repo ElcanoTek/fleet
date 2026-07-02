@@ -36,6 +36,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
+	"github.com/ElcanoTek/fleet/internal/webpush"
 )
 
 // mcpToolCaller is the subset of *mcp.Client needed for pre-validation.
@@ -67,6 +68,11 @@ type approvalStager struct {
 	// waiting for a human (FLEET_AUTO_APPROVE_IN_TEST). A CI/test escape hatch,
 	// off by default; see config.Config.AutoApproveInTest.
 	autoApproveInTest bool
+	// push, when configured, sends the conversation owner a low-detail
+	// "approval needed" browser notification the moment a card is staged
+	// (#292), so a backgrounded tab still learns the turn is blocked on them.
+	// nil = feature off.
+	push *webpush.Service
 }
 
 // maxApprovalTimeoutSeconds bounds a per-conversation approval-timeout override
@@ -214,7 +220,30 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		// and transitions the card to a timed-out state at this instant.
 		"expires_at": approval.ExpiresAt,
 	})
+	a.firePushNotification(toolName)
 	return approval.ID, nil
+}
+
+// firePushNotification sends the "approval needed" Web Push (#292) to the
+// conversation owner, fire-and-forget: a detached, time-bounded goroutine so
+// the turn is never blocked on a push relay, with the error only logged. The
+// payload is low-detail by design — the TOOL NAME only, never the staged
+// arguments. No-op when push is unconfigured or the approval trigger flag
+// (FLEET_PUSH_ON_APPROVAL_REQUEST) is off.
+func (a *approvalStager) firePushNotification(toolName string) {
+	if !a.push.ApprovalPushEnabled() { // nil-safe
+		return
+	}
+	push, email, convID := a.push, a.userEmail, a.conversationID
+	go func() {
+		// Independent of the turn context on purpose: the staged card outlives
+		// the turn, so the notification should too.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := push.NotifyApprovalRequired(ctx, email, toolName); err != nil {
+			log.Printf("push: approval notification (tool=%s conv=%s): %v", toolName, convID, err)
+		}
+	}()
 }
 
 // validateEmailHasContent rejects a preview_email / send_email call

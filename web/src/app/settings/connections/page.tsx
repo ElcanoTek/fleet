@@ -4,6 +4,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import NotificationsCard from "./NotificationsCard";
+
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
 // discovery + dynamic client registration + PKCE). Connected servers' tools
@@ -592,6 +594,9 @@ export default function ConnectionsPage() {
             ) : null}
           </div>
         ) : null}
+
+        {/* Browser Web Push opt-in (#292) — per-browser, low-detail alerts. */}
+        <NotificationsCard />
       </div>
     </main>
   );

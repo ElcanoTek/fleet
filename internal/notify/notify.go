@@ -139,6 +139,11 @@ type Event struct {
 	// the notify/ask text. Empty for terminal events. Rendered into the email
 	// body; the default webhook template omits it (additive, no template churn).
 	Message string
+	// Audience is the task owner's email (#292): the per-USER routing key the
+	// browser Web Push backend fans out to, resolved by the runner from the
+	// task's CreatedBy. Empty = no known owner, so the push channel skips the
+	// event. The deployment-wide email/webhook channels ignore it entirely.
+	Audience string
 }
 
 // shouldFire reports whether this status is one the config asked to be notified
@@ -161,9 +166,25 @@ func (c Config) shouldFire(s Status) bool {
 type Notifier struct {
 	cfg    Config
 	client *http.Client
+	// push is the optional per-user browser Web Push backend (#292), wired by
+	// cmd/fleet via SetPush when VAPID keys are configured. nil = the channel
+	// doesn't exist. Held as an interface so this package stays free of store
+	// and webpush imports; internal/webpush.Service is the one implementation.
+	push PushSender
 	// logf is the package logger seam, overridable in tests to capture output and
 	// assert no secret is ever written. Defaults to the stdlib logger.
 	logf func(format string, args ...any)
+}
+
+// PushSender is the optional per-user push backend a Notifier fans out to in
+// addition to email/webhook (#292): Web Push today, other per-user channels
+// later. Implementations decide their own routing (Event.Audience) and
+// per-event gating (e.g. FLEET_PUSH_ON_TASK_COMPLETE) and MUST render only
+// low-detail content — see internal/webpush for the contract.
+type PushSender interface {
+	// SendEvent delivers ev to the event's Audience. It must be safe for
+	// concurrent use and must never log or transmit a secret.
+	SendEvent(ctx context.Context, ev Event) error
 }
 
 // New builds a Notifier from cfg. When cfg configures nothing (Enabled() is
@@ -188,6 +209,16 @@ func (n *Notifier) Enabled() bool { return n.cfg.Enabled() }
 // deployment without SMTP does no per-run reply lookups.
 func (n *Notifier) ReplyEnabled() bool { return n != nil && n.cfg.replyEnabled() }
 
+// SetPush wires the optional per-user push backend (#292). Call once at
+// startup, before the Notifier is shared across goroutines; passing nil (or
+// never calling) leaves the channel off. Kept a setter rather than a Config
+// field so Config stays a plain env-loaded value struct.
+func (n *Notifier) SetPush(p PushSender) {
+	if n != nil {
+		n.push = p
+	}
+}
+
 // Notify fans the event out to every configured channel that opted in to this
 // status. Channels are independent: a failure on one is logged and does not
 // prevent the other from being attempted. The error (a join of any channel
@@ -199,7 +230,10 @@ func (n *Notifier) ReplyEnabled() bool { return n != nil && n.cfg.replyEnabled()
 // additionally bounded by cfg.Timeout. A nil/closed Notifier or a disabled
 // config returns nil immediately.
 func (n *Notifier) Notify(ctx context.Context, ev Event) error {
-	if n == nil || !n.cfg.Enabled() || !n.cfg.shouldFire(ev.Status) {
+	// The push backend counts as a configured channel (#292): a deployment with
+	// only VAPID keys set (no SMTP/webhook) must still fan out. The On-list
+	// status filter applies to every channel alike.
+	if n == nil || (!n.cfg.Enabled() && n.push == nil) || !n.cfg.shouldFire(ev.Status) {
 		return nil
 	}
 	var errs []error
@@ -217,6 +251,16 @@ func (n *Notifier) Notify(ctx context.Context, ev Event) error {
 			errs = append(errs, fmt.Errorf("webhook: %w", err))
 		} else {
 			n.logf("notify: webhook for task %s sent", ev.TaskID)
+		}
+	}
+	// Browser Web Push (#292): per-user, so it needs an Audience to route to.
+	// No retry wrapper here — the backend does its own per-subscription
+	// fan-out, bounds each relay round-trip, and treats send failures as
+	// best-effort (a push has no value minutes late).
+	if n.push != nil && strings.TrimSpace(ev.Audience) != "" {
+		if err := n.push.SendEvent(ctx, ev); err != nil {
+			n.logf("notify: push for task %s failed: %v", ev.TaskID, err)
+			errs = append(errs, fmt.Errorf("push: %w", err))
 		}
 	}
 	return joinErrs(errs)
