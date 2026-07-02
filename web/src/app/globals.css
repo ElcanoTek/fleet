@@ -1384,6 +1384,65 @@ tr.sla-row-fail {
   color: #d9a441;
 }
 
+/* Live progress checklist (#518): the agent's task_tracker plan, rendered as a
+   todo→done list in the Operations Center live view. The --live variant is the
+   sticky top panel that updates as the plan changes; the plain variant is an
+   inline history entry. */
+.live-checklist-panel {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin-bottom: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-raised, rgba(255, 255, 255, 0.04));
+}
+.checklist-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.checklist-summary-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+.checklist-summary-count {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.checklist-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+.checklist-item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+}
+.checklist-glyph {
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text-muted);
+}
+.checklist-item--in_progress .checklist-glyph {
+  color: #d9a441;
+}
+.checklist-item--done .checklist-glyph {
+  color: #6cc07a;
+}
+.checklist-item--done .checklist-title {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+}
+
 /* Filters + pagination — the Recent Tasks filter/search row matches the design
    handoff's .tasks-filter-bar exactly. The input/select sizing is scoped to the
    bar so the shared .filter-input used elsewhere (e.g. the task modal) keeps its

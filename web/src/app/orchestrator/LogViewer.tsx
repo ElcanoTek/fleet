@@ -8,6 +8,7 @@ import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { stripAnsiCodes } from "@/app/shared/lib/format";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { resolveTaskWorkspaceHref } from "@/app/chat/ui/workspaceHref";
+import { Checklist, parseTaskTrackerOutput, type ChecklistState } from "./Checklist";
 
 // LogViewer — the task log modal. React port of moc modals.js openLogModal().
 // moc rendered logs with marked + DOMPurify + highlight.js; per the migration
@@ -60,6 +61,9 @@ type ActivityEntry = {
   name?: string;
   text: string;
   isError?: boolean;
+  // checklist is set for a task_tracker tool_result whose JSON parsed into a
+  // plan (#518); the entry then renders as a checklist instead of raw text.
+  checklist?: ChecklistState;
 };
 
 const clampText = (s: string, max = 600) => (s.length > max ? s.slice(0, max) + "…" : s);
@@ -71,6 +75,9 @@ const clampText = (s: string, max = 600) => (s.length > max ? s.slice(0, max) + 
 // attribution recorded server-side).
 function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => void; canStop: boolean }) {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
+  // checklist holds the LATEST task_tracker plan (#518) for the live progress
+  // panel; it updates each time the agent revises its plan mid-run.
+  const [checklist, setChecklist] = useState<ChecklistState | null>(null);
   const [runStatus, setRunStatus] = useState<string>("running");
   const [stoppedBy, setStoppedBy] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -95,7 +102,17 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
       } else if (frame.type === "tool_call") {
         entry = { key, kind: "tool_call", name: frame.name, text: clampText(frame.input ?? "") };
       } else if (frame.type === "tool_result") {
-        entry = { key, kind: "tool_result", name: frame.name, text: clampText(frame.output ?? ""), isError: !!frame.error };
+        // A task_tracker result carries the structured plan as JSON; parse it
+        // (raw, before clamping) into a checklist for the live progress panel and
+        // a readable history entry, falling back to raw text if it doesn't parse.
+        const parsedChecklist =
+          frame.name === "task_tracker" ? parseTaskTrackerOutput(frame.output ?? "") : null;
+        if (parsedChecklist) {
+          setChecklist(parsedChecklist);
+          entry = { key, kind: "tool_result", name: frame.name, text: "", checklist: parsedChecklist };
+        } else {
+          entry = { key, kind: "tool_result", name: frame.name, text: clampText(frame.output ?? ""), isError: !!frame.error };
+        }
       }
       if (entry) {
         setEntries((prev) => [...prev, entry]);
@@ -158,6 +175,11 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
         </div>
         <div className="modal-body" data-testid="live-activity-body">
           {streamError ? <div className="table-error">Live stream error: {streamError}</div> : null}
+          {checklist ? (
+            <div className="live-checklist-panel">
+              <Checklist state={checklist} live />
+            </div>
+          ) : null}
           {entries.length === 0 && !streamError ? (
             <div className="loading">
               <p>Waiting for activity…</p>
@@ -170,7 +192,11 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
                     {e.kind === "tool_call" ? `▶ ${e.name ?? "tool"}` : e.kind === "tool_result" ? `${e.isError ? "✗" : "✓"} ${e.name ?? "result"}` : "assistant"}
                   </div>
                   <div className="log-message-content">
-                    <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: e.kind === "message" ? "inherit" : undefined }}>{e.text}</pre>
+                    {e.checklist ? (
+                      <Checklist state={e.checklist} />
+                    ) : (
+                      <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: e.kind === "message" ? "inherit" : undefined }}>{e.text}</pre>
+                    )}
                   </div>
                 </div>
               ))}
