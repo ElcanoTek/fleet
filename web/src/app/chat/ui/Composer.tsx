@@ -617,21 +617,21 @@ export function Composer({
                           // the click target never moves out from under
                           // the cursor. Open reveals the persona name and
                           // the dropdown marks the active one.
-                          className={`composer-pill-text group relative inline-flex h-7 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border-strong)] bg-transparent text-[0.72rem] text-[var(--color-text-secondary)] transition-[width] duration-base hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
+                          className={`composer-pill-text group relative inline-flex h-7 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border-strong)] bg-transparent text-[0.72rem] text-[var(--color-text-secondary)] transition-[width] duration-200 hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
                             personaPickerOpen ? "w-24 sm:w-44" : "w-7"
                           }`}
                           onClick={() => setPersonaPickerOpen((open) => !open)}
                         >
                           <span
                             aria-hidden="true"
-                            className={`absolute inset-0 grid place-items-center transition-opacity duration-base ${
+                            className={`absolute inset-0 grid place-items-center transition-opacity duration-200 ${
                               personaPickerOpen ? "opacity-0" : "opacity-100"
                             }`}
                           >
                             <Icon name="persona" className="size-3.5" />
                           </span>
                           <span
-                            className={`truncate px-2.5 transition-opacity duration-base ${
+                            className={`truncate px-2.5 transition-opacity duration-200 ${
                               personaPickerOpen ? "opacity-100" : "opacity-0"
                             }`}
                           >
@@ -642,7 +642,7 @@ export function Composer({
                           <div
                             role="listbox"
                             aria-label="Persona"
-                            className="motion-safe:animate-pop-up absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-40 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:w-44"
+                            className="absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-40 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:w-44"
                           >
                             <div className="max-h-72 overflow-y-auto py-1">
                               {personaOptions.map((p) => {
@@ -701,7 +701,7 @@ export function Composer({
                         once the picker is open (click/focus). No hover/focus
                         width expansion, so the control isn't a moving target. */}
                     <div
-                      className={`group relative h-7 shrink-0 overflow-hidden rounded-full border bg-transparent transition-[width] duration-base ${
+                      className={`group relative h-7 shrink-0 overflow-hidden rounded-full border bg-transparent transition-[width] duration-200 ${
                         modelError
                           ? "border-[var(--color-danger)]"
                           : "border-[var(--color-border-strong)] hover:border-[var(--color-accent)]"
@@ -715,7 +715,7 @@ export function Composer({
                     >
                       <span
                         aria-hidden="true"
-                        className={`pointer-events-none absolute inset-0 grid place-items-center transition-opacity duration-base ${
+                        className={`pointer-events-none absolute inset-0 grid place-items-center transition-opacity duration-200 ${
                           modelError ? "text-[var(--color-danger)]" : "text-[var(--color-text-secondary)]"
                         } ${
                           modelPickerOpen ? "opacity-0" : "opacity-100"
@@ -740,7 +740,7 @@ export function Composer({
                         // honor text-overflow:ellipsis on <input> in that
                         // state) — when the user taps to edit, native
                         // input scroll takes over and the ellipsis lifts.
-                        className={`relative h-full w-full truncate bg-transparent px-2.5 text-center text-[0.72rem] outline-none transition-opacity duration-base disabled:opacity-60 ${
+                        className={`relative h-full w-full truncate bg-transparent px-2.5 text-center text-[0.72rem] outline-none transition-opacity duration-200 disabled:opacity-60 ${
                           modelError
                             ? "text-[var(--color-danger)]"
                             : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
@@ -786,7 +786,7 @@ export function Composer({
                       // popover leftward and got clipped by `main`'s
                       // overflow-hidden (and visually covered by the
                       // sidebar overlay at sm-to-lg widths).
-                      <div className="motion-safe:animate-pop-up fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.35rem)] sm:left-0 sm:w-64">
+                      <div className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.35rem)] sm:left-0 sm:w-64">
                         <div className="max-h-72 overflow-y-auto py-1">
                           {isLoadingRankedModels || (isLoadingCatalog && modelSearchQuery.trim() !== "") ? (
                             <div className="px-3 py-2 text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
@@ -896,7 +896,7 @@ export function Composer({
                       {mcpPickerOpen && !isStreaming ? (
                         // Same fixed/absolute split as the model picker
                         // above — see the comment there for context.
-                        <div className="motion-safe:animate-pop-up fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.35rem)] sm:left-0 sm:w-72">
+                        <div className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.35rem)] sm:left-0 sm:w-72">
                           <div className="max-h-80 overflow-y-auto py-1">
                             {isLoadingMcpServers ? (
                               <div className="px-3 py-2 text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
@@ -956,7 +956,7 @@ export function Composer({
                         <div
                           role="status"
                           aria-live="polite"
-                          className="motion-safe:animate-pop-up pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 text-[0.7rem] text-[var(--color-text-primary)] shadow-[var(--shadow-md)]"
+                          className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 text-[0.7rem] text-[var(--color-text-primary)] shadow-[var(--shadow-md)]"
                         >
                           Token limit hit — you should compact
                         </div>

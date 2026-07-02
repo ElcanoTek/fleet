@@ -230,7 +230,7 @@ export function ContextRing({
             strokeLinecap="round"
             strokeDasharray={`${dashFilled} ${dashEmpty}`}
             transform="rotate(-90 14 14)"
-            style={{ transition: "stroke-dasharray var(--transition-base), stroke var(--transition-base)" }}
+            style={{ transition: "stroke-dasharray 240ms ease, stroke 240ms ease" }}
           />
         ) : null}
       </svg>
