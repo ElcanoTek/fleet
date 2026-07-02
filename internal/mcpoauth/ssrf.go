@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/netguard"
 )
 
 // SSRF defense for user-supplied remote-MCP URLs.
@@ -34,38 +36,12 @@ var errBlockedAddress = errors.New("connection to a private, loopback, or link-l
 // client (a redirect must never carry the bearer to a new origin).
 var errRedirectBlocked = errors.New("redirects are disabled for remote MCP connections")
 
-// cgnatRange is RFC 6598 carrier-grade NAT space (100.64.0.0/10), commonly used
-// for internal infrastructure, which net.IP.IsPrivate does not cover.
-var cgnatRange = func() *net.IPNet {
-	_, n, _ := net.ParseCIDR("100.64.0.0/10")
-	return n
-}()
-
 // isBlockedIP reports whether ip is in a range we must never connect to for a
-// user-supplied URL. IPv4-in-IPv6 is normalized first so a mapped address can't
-// slip past the v4 checks.
+// user-supplied URL. It delegates to the shared SSRF classifier (see
+// internal/netguard) so the remote-MCP control plane blocks exactly the same
+// ranges as every other outbound path — one source of truth for this invariant.
 func isBlockedIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if v4 := ip.To4(); v4 != nil {
-		ip = v4
-	}
-	switch {
-	case ip.IsLoopback(): // 127.0.0.0/8, ::1
-		return true
-	case ip.IsPrivate(): // RFC 1918 + ULA fc00::/7
-		return true
-	case ip.IsLinkLocalUnicast(): // 169.254.0.0/16 (incl. metadata 169.254.169.254), fe80::/10
-		return true
-	case ip.IsLinkLocalMulticast(), ip.IsInterfaceLocalMulticast(), ip.IsMulticast():
-		return true
-	case ip.IsUnspecified(): // 0.0.0.0, ::
-		return true
-	case cgnatRange.Contains(ip): // 100.64.0.0/10
-		return true
-	}
-	return false
+	return netguard.IsBlockedIP(ip)
 }
 
 // safeDialContext returns a DialContext that resolves the host, rejects any
