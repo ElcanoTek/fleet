@@ -150,6 +150,59 @@ func newSSRFGuardedDialer() *net.Dialer {
 }
 
 // NewWebFetchTool creates a fantasy.AgentTool for fetching web content.
+// FetchURLForContext fetches url host-side for the `@url` composer context handle
+// (#517), reusing the SAME SSRF-guarded dialer, 5 MiB cap, UTF-8 check, and
+// HTML→markdown / JSON-pretty conversion as the web_fetch tool. The guarded
+// dialer refuses private / loopback / link-local targets on EVERY dial (so a
+// redirect to an internal address is blocked too); a non-200 or oversized
+// response is an error. Returned text is cleaned for prompt inclusion. It is a
+// standalone function (not the tool) so the chat server can expand a handle
+// without constructing a tool, while the single SSRF/extraction implementation
+// stays here (one source of truth).
+func FetchURLForContext(ctx context.Context, url string) (string, error) {
+	client := &http.Client{
+		Timeout:   DefaultTimeout,
+		Transport: &http.Transport{DialContext: newSSRFGuardedDialer().DialContext},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("User-Agent", BrowserUserAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch URL: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseSize))
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+	content := string(body)
+	if !utf8.ValidString(content) {
+		return "", errors.New("response content is not valid UTF-8")
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	switch {
+	case strings.Contains(contentType, "text/html"):
+		if markdown, convErr := convertHTMLToMarkdown(removeNoisyElements(content)); convErr == nil {
+			content = cleanupMarkdown(markdown)
+		}
+	case strings.Contains(contentType, "application/json"), strings.Contains(contentType, "text/json"):
+		if formatted, fmtErr := formatJSON(content); fmtErr == nil {
+			content = formatted
+		}
+	}
+	return content, nil
+}
+
 func NewWebFetchTool() fantasy.AgentTool {
 	dialer := newSSRFGuardedDialer()
 

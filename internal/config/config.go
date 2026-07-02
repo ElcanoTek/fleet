@@ -287,6 +287,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_DEFAULT_NETWORK_MODE":     true,
 	"FLEET_PII_REDACTION_ENABLED":    true,
 	"FLEET_PII_REDACTION_MODE":       true,
+	"FLEET_CONTEXT_HANDLES_ENABLED":  true,
 	"FLEET_BROWSER_ENABLED":          true,
 	"FLEET_SANDBOX_MEMORY":           true,
 	"FLEET_SANDBOX_CPUS":             true,
@@ -794,6 +795,12 @@ type Config struct {
 	// when enabled), or "block" (withhold the tool result from the model).
 	// FLEET_PII_REDACTION_MODE. Validated + defaulted in cmd/fleet.
 	PIIRedactionMode string
+	// ContextHandlesEnabled gates inline composer context handles (#517): a chat
+	// message may contain `@url:<url>` (host-side SSRF-guarded fetch) and
+	// `@file:"path"` (read from the conversation workspace, path-gated) that the
+	// server expands into the turn context. FLEET_CONTEXT_HANDLES_ENABLED, default
+	// false — @url makes the server fetch a user-supplied URL, so it is opt-in.
+	ContextHandlesEnabled bool
 	// DefaultNetworkMode is the fleet-wide sandbox egress posture (#211):
 	// "" / "open" (full slirp4netns egress for networked work — the default),
 	// "allowlisted" (networked sandboxes route HTTP(S) through the host egress
@@ -1130,10 +1137,13 @@ func Load(envFile string) (*Config, error) {
 		// PII redaction (#450) — optional, default off.
 		PIIRedactionEnabled: getenvFleetBool("PII_REDACTION_ENABLED", false),
 		PIIRedactionMode:    strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_MODE"))),
-		SandboxMemory:       getenvFleet("SANDBOX_MEMORY"),
-		SandboxCPUs:         getenvFleet("SANDBOX_CPUS"),
-		SandboxPids:         getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
-		SandboxDiskGB:       getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
+
+		// Composer context handles (#517) — optional, default off.
+		ContextHandlesEnabled: getenvFleetBool("CONTEXT_HANDLES_ENABLED", false),
+		SandboxMemory:         getenvFleet("SANDBOX_MEMORY"),
+		SandboxCPUs:           getenvFleet("SANDBOX_CPUS"),
+		SandboxPids:           getEnvOrDefaultInt("FLEET_SANDBOX_PIDS", 0),
+		SandboxDiskGB:         getEnvOrDefaultInt("FLEET_SANDBOX_DISK_GB", 0),
 		// Per-task override ceilings (#205).
 		SandboxMemoryMaxMB:    getenvFleetInt("SANDBOX_MEMORY_MAX_MB", 8192),
 		SandboxCPUsMax:        getenvFleetFloat("SANDBOX_CPUS_MAX", 16.0),

@@ -1994,6 +1994,10 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// a report downloaded on turn 1 gets forgotten by turn 4 even though
 	// it's still on disk. Empty workspaces (first turn) skip the block.
 	userMessage = appendWorkspaceInventoryBlock(userMessage, tools.WorkspaceDirForConversation(conv.ID))
+	// Composer context handles (#517, opt-in): expand any `@url:<url>` /
+	// `@file:"path"` in the user's message into the turn context. A no-op when
+	// disabled; failures degrade to notices so the turn always proceeds.
+	userMessage = s.applyContextHandles(turnCtx, userMessage, req.Message, conv.ID)
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The
