@@ -45,3 +45,26 @@ func reportWorkspacePath(ctx context.Context, path string) {
 		r(ctx, path)
 	}
 }
+
+// ── recurring-task context carry (#504) ─────────────────────────────────────
+
+type priorRunContextKey struct{}
+
+// WithPriorRunContext carries a bounded handoff from a recurring task's prior
+// run (its final answer, clamped) for injection at run-start. Empty leaves the
+// context untouched. Set by the runner pool only when the task opted into
+// carry_context; nil/empty = a fresh run (unchanged).
+func WithPriorRunContext(ctx context.Context, text string) context.Context {
+	if text == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, priorRunContextKey{}, text)
+}
+
+// PriorRunContextFromContext returns the installed prior-run handoff, or "".
+func PriorRunContextFromContext(ctx context.Context) string {
+	if s, ok := ctx.Value(priorRunContextKey{}).(string); ok {
+		return s
+	}
+	return ""
+}

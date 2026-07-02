@@ -578,6 +578,7 @@ type TaskEdit struct {
 	Priority               int
 	InstructionSelfImprove bool
 	AllowNetwork           bool
+	CarryContext           bool
 	AllowDelegation        bool
 	// Persona replaces the task's per-task persona override (#221), assigned
 	// unconditionally from the full edit payload (empty = use the global persona).
@@ -669,6 +670,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.Priority = edit.Priority
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
 	task.AllowNetwork = edit.AllowNetwork
+	task.CarryContext = edit.CarryContext
 	task.AllowDelegation = edit.AllowDelegation
 	task.Persona = edit.Persona
 	task.ScheduledFor = edit.ScheduledFor

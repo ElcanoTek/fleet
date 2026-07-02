@@ -40,6 +40,7 @@ export type Task = {
   mcp_selection?: MCPChoice[];
   instruction_self_improve?: boolean;
   allow_network?: boolean;
+  carry_context?: boolean;
   persona?: string;
   tags?: string[];
   retry_policy?: RetryPolicy;
@@ -77,6 +78,7 @@ export type TaskCreate = {
   mcp_selection?: MCPChoice[];
   instruction_self_improve?: boolean;
   allow_network?: boolean;
+  carry_context?: boolean;
   persona?: string;
   scheduled_for?: string;
   recurrence?: string;
@@ -141,6 +143,7 @@ export type TaskTemplateTask = {
   timezone?: string;
   priority?: number;
   allow_network?: boolean;
+  carry_context?: boolean;
   instruction_self_improve?: boolean;
   persona?: string;
   description?: string;
@@ -314,6 +317,17 @@ export type TaskLearnedInstruction = {
   activated_by?: string;
 };
 
+
+// Scheduler UX 2.0 (#504): a projected upcoming run.
+export type UpcomingRun = {
+  task_id: string;
+  name?: string;
+  prompt: string;
+  recurrence?: string;
+  next_run: string;
+  recurring: boolean;
+};
+
 class OrchestratorError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -361,6 +375,7 @@ export const orchestratorApi = {
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  upcomingRuns: (limit = 50) => request<{ upcoming: UpcomingRun[] }>(`/tasks/upcoming?limit=${limit}`),
   // #516 self-improving memory: feedback + versioned learned instructions.
   submitFeedback: (taskId: string, rating: "up" | "down", critique?: string) =>
     request<unknown>(`/tasks/${encodeURIComponent(taskId)}/feedback`, {

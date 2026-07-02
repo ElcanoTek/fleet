@@ -63,6 +63,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
   const [maxIterCustom, setMaxIterCustom] = useState("");
   const [captainsLog, setCaptainsLog] = useState(false);
   const [allowNetwork, setAllowNetwork] = useState(false);
+  const [carryContext, setCarryContext] = useState(false);
   // Pre-run shell gate (#269): empty = no gate (legacy unconditional promotion).
   // runIfError holds the server-side validation message (empty string = none).
   const [runIfCommand, setRunIfCommand] = useState("");
@@ -132,6 +133,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
     setModel(t.model ?? DEFAULT_PRIMARY_MODEL);
     setFallbackModel(t.fallback_model ?? DEFAULT_FALLBACK_MODEL);
     setAllowNetwork(Boolean(t.allow_network));
+    setCarryContext(Boolean(t.carry_context));
     setCaptainsLog(Boolean(t.instruction_self_improve));
     setExpectedDuration(
       typeof t.expected_duration_minutes === "number" && t.expected_duration_minutes > 0
@@ -151,7 +153,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
       setMaxIterSelect("");
       setMaxIterCustom("");
     }
-    if (t.recurrence || t.persona || t.allow_network || t.instruction_self_improve) {
+    if (t.recurrence || t.persona || t.allow_network || t.carry_context || t.instruction_self_improve) {
       setAdvancedOpen(true);
     }
   };
@@ -200,6 +202,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
     if (maxIterations) taskData.max_iterations = Number.parseInt(maxIterations, 10);
     if (captainsLog) taskData.instruction_self_improve = true;
     if (allowNetwork) taskData.allow_network = true;
+    if (carryContext) taskData.carry_context = true;
     if (mcpSelection.length > 0) taskData.mcp_selection = mcpSelection;
     if (scheduledFor) {
       try {
@@ -643,6 +646,19 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                       </label>
                       <div className="advanced-setting-meta">
                         Allow network egress — let this task&apos;s sandbox reach the internet (off = sealed, <code>--network=none</code>).
+                      </div>
+                    </div>
+                    <div className="advanced-switch-row">
+                      <label className="toggle-switch">
+                        <input
+                          type="checkbox"
+                          checked={carryContext}
+                          onChange={(e) => setCarryContext(e.target.checked)}
+                        />
+                        <span className="toggle-slider" />
+                      </label>
+                      <div className="advanced-setting-meta">
+                        Carry context across runs — a recurring task&apos;s next run starts with a bounded summary of the previous run&apos;s output (off = each run starts fresh). Only affects recurring tasks.
                       </div>
                     </div>
                     <div className="advanced-switch-row">

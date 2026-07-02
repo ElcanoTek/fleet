@@ -1381,6 +1381,38 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /tasks/upcoming:
+    get:
+      summary: Upcoming scheduled runs — calendar/timeline feed (#504).
+      description: >-
+        Projects future executions from the existing scheduler data: up to a few
+        cron occurrences per recurring task (in the task's timezone) plus each
+        one-shot's scheduled_for, sorted by time. A computed view (no run-records
+        table).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Upcoming runs, soonest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upcoming:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        task_id: { type: string }
+                        name: { type: string }
+                        prompt: { type: string }
+                        recurrence: { type: string }
+                        next_run: { type: string, format: date-time }
+                        recurring: { type: boolean }
   /admin/queue:
     get:
       summary: Pending task-queue stats — per-tier depth + oldest wait (#230).
