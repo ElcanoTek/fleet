@@ -11,9 +11,11 @@ import (
 // response content before it enters the transcript. A bash `cat huge.json`, an
 // MCP database dump, or a long test run can otherwise inject hundreds of KB in
 // one step and overflow the context window — at which point the reactive
-// compaction in engine.go drops the WRONG (middle) messages. Truncating here, at
-// the universal choke point (policyGuardedTool.Run), fixes the common case
-// before it ever reaches the model.
+// compaction in engine.go drops the WRONG (middle) messages. The cap is applied
+// at BOTH result choke points — policyGuardedTool.Run (native/wrapped tools,
+// including deferred MCP dispatched via tool_call) and mcpTool.Run (the
+// direct-registration MCP path, #576) — so an MCP result is truncated
+// identically whether or not the roster crossed the tool-disclosure threshold.
 
 const defaultMaxToolOutputBytes = 64 * 1024 // 64 KB ≈ 16K tokens
 

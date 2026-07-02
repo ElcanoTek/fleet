@@ -411,6 +411,19 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	// treated as an error (isErr) so the raw value never reaches the model.
 	var piiBlocked bool
 	resultText, piiBlocked = redactPII(toolName, resultText)
+	// Output ceiling (#199): the direct-registration path must cap oversized
+	// results exactly like policyGuardedTool.Run does, or the SAME MCP call would
+	// be truncated above the tool-disclosure threshold (where it dispatches via
+	// the wrapped tool_call) but enter the transcript untruncated below it — the
+	// context-window overflow #199 exists to prevent (#576). Applied after
+	// redaction (the cap counts the bytes that actually flow on) and before the
+	// isError mapping + record so the policy, session log, and model all see the
+	// same capped text, error results included.
+	if ceil := maxToolOutputBytes(); ceil > 0 && len(resultText) > ceil {
+		orig := len(resultText)
+		resultText, _ = applyOutputCeiling(resultText, ceil)
+		log.Printf("agentcore: truncated %s output from %d to %d bytes (FLEET_MAX_TOOL_OUTPUT_BYTES)", toolName, orig, len(resultText))
+	}
 
 	// Map MCP isError to a fantasy error response so both the LLM and the log
 	// know the call failed (per MCP 2025-06-18 spec, tool-level errors arrive as

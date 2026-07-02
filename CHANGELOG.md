@@ -15,6 +15,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Tool-output ceiling on direct MCP calls (#576): MCP tools registered directly
+  (roster below the #506 tool-disclosure threshold — the common case) applied
+  redaction and PII gating but not the #199 output ceiling, so one oversized
+  connector result could enter the transcript untruncated and overflow the
+  context window. `mcpTool.Run` now caps output exactly like the wrapped
+  (deferred `tool_call`) path — identical truncation above and below the
+  threshold, error results included — and the `tool_output_limit.go` comment no
+  longer overstates `policyGuardedTool.Run` as the universal choke point.
 - Scheduler liveness (#566): `ProcessScheduledTasks` no longer live-locks when
   a full batch of due tasks makes no forward progress — e.g. ≥1000 one-shot
   tasks all soft-held by a declining `run_if` gate. The old loop paged with a
