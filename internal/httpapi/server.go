@@ -157,6 +157,13 @@ type TaskScheduleRequest struct {
 	MaxIterations int
 	AllowNetwork  bool
 	Tags          []string
+	// RequestedBy is the approving chat user's email — the principal the
+	// per-user rolling budget gate (#601 part 2) checks before the task is
+	// created, so scheduling from chat cannot bypass a budget that would refuse
+	// the same user on POST /tasks. Identity only; the created task's
+	// provenance still comes from the source-chat tag (the seam does not
+	// resolve chat emails to sched users).
+	RequestedBy string
 }
 
 // TaskScheduleResult is what the scheduler seam returns after creating a task.

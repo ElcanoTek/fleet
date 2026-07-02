@@ -1405,6 +1405,13 @@ tr.sla-row-fail {
   margin: 0 0 0.75rem;
   max-width: 72ch;
 }
+/* Budgets sub-section inside the Usage panel (#601 part 2). */
+.usage-subheading {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 1.25rem 0 0.5rem;
+}
 .usage-bars {
   display: flex;
   flex-direction: column;
