@@ -117,6 +117,19 @@ export DATABASE_URL="postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslm
 export FLEET_CLIENT_CONFIG_DIR="$(pwd)/config/default"
 ```
 
+> **Parallel checkouts / agent worktrees:** the suites MIGRATE and TRUNCATE
+> their databases, so two workstreams sharing the default pair corrupt each
+> other — a checkout on an older migration set refuses to run against a DB a
+> newer branch migrated ("database is at schema version N+1 … refusing to
+> downgrade"), and concurrent truncates race. Give each workstream its own
+> pair with [`scripts/test-db-setup.sh`](../scripts/test-db-setup.sh):
+>
+> ```sh
+> eval "$(scripts/test-db-setup.sh | tail -3)"   # suffix defaults to the branch name
+> make test
+> scripts/test-db-setup.sh --drop "$(git rev-parse --abbrev-ref HEAD)"   # when done
+> ```
+
 Adjust user/password/host to your local Postgres. To create the two databases
 (mirroring CI's "Create test databases" step) against a server where role
 `fleet` exists:
