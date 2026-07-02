@@ -1056,6 +1056,13 @@ func (s *Storage) GetSLAReport(ctx context.Context, windowDays int) (*models.SLA
 	return s.db.GetSLAReport(ctx, windowDays)
 }
 
+// TaskUsage aggregates the persisted per-iteration cost/token metering over
+// [from, to) grouped by user|key|project|model|day|week (#601 part 1). See
+// db.TaskUsage.
+func (s *Storage) TaskUsage(ctx context.Context, from, to time.Time, groupBy string) ([]models.UsageBucket, error) {
+	return s.db.TaskUsage(ctx, from, to, groupBy)
+}
+
 // ReplayDeadLetteredTask re-enqueues a dead-lettered task (#253): it resets the
 // SAME row to a fresh pending slate — AttemptCount=0, the DLQ columns cleared,
 // status=pending, scheduled_for/started_at/completed_at/error cleared — so the

@@ -564,6 +564,8 @@ func run() error {
 	h.SetTaskTemplateProvider(func() []clientconfig.TaskTemplate {
 		return bundle.TaskTemplates
 	})
+	// Wire the chat side of the usage report (#601 part 1) — see wireChatUsage.
+	wireChatUsage(h, chatStore)
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
 	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr))
 
@@ -1114,6 +1116,12 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// then gates on PermissionAdmin (#458). The bare admin-API-key gate made it
 		// unreachable from the dashboard — the proxy can never send X-API-Key.
 		r.Get("/sla-report", h.GetSLAReport)
+		// Usage analytics (#601 part 1): cost/token roll-up by principal /
+		// project / model / time bucket over the persisted metering. Same
+		// placement rationale as /sla-report: behind AdminOrUserAuthMiddleware
+		// so the Next proxy's header-trust/bearer path resolves a principal,
+		// with the admin gate enforced in-handler on PermissionAdmin.
+		r.Get("/admin/usage", h.GetUsageReport)
 		// Dataset / table agent (#514): typed tables whose rows the agent works
 		// in the background, proposing structured write-backs a human approves.
 		// Reads + review actions live here; run/pause drive the in-process
@@ -1752,6 +1760,34 @@ func wireRemoteMCPCatalog(h *handlers.Handlers, svc *remotemcp.Service) {
 		return
 	}
 	h.SetRemoteMCPServersProvider(remoteMCPCatalogProvider(svc))
+}
+
+// wireChatUsage wires the chat side of the usage report (#601 part 1):
+// GET /admin/usage merges the sched DB's task_iterations roll-up with the chat
+// store's turn_metrics roll-up, and the two live in separate databases, so the
+// orchestrator handler reaches the chat store through this seam. Read-only
+// aggregation of already-persisted metering — no new accounting path. Kept
+// separate from run() so the adapter stays out of run()'s cyclomatic budget.
+func wireChatUsage(h *handlers.Handlers, chatStore *store.Store) {
+	h.SetChatUsageProvider(func(ctx context.Context, from, to time.Time, groupBy string) ([]schedmodels.UsageBucket, error) {
+		rows, err := chatStore.UsageSummary(ctx, from, to, groupBy)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]schedmodels.UsageBucket, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, schedmodels.UsageBucket{
+				Key:              r.Key,
+				Label:            r.Label,
+				ChatCostUSD:      r.CostUSD,
+				PromptTokens:     r.PromptTokens,
+				CompletionTokens: r.CompletionTokens,
+				CachedTokens:     r.CachedTokens,
+				ChatTurns:        r.Turns,
+			})
+		}
+		return out, nil
+	})
 }
 
 // remoteMCPCatalogProvider adapts the remotemcp Service into the orchestrator's
