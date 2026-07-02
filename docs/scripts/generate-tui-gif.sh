@@ -21,5 +21,20 @@ if [ "$(id -u)" = "0" ]; then
 fi
 
 go build -o fleet ./cmd/fleet
-vhs docs/scripts/demo.tape
+
+# The vhs → ttyd → headless-Chromium pipeline occasionally freezes its
+# rendering mid-take under load (the app itself is fine — verified against a
+# raw pty). The tape also emits a .txt of the FINAL screen, so a good take is
+# verifiable: the closing frame must show the scheduled-brief confirmation.
+# Retry up to 3 times; fail loudly rather than shipping a frozen take.
+for attempt in 1 2 3; do
+    vhs docs/scripts/demo.tape
+    if grep -q "meridian-daily-brief" docs/screenshots/tui/demo.txt; then
+        echo "take $attempt: good (final frame shows the scheduled brief)"
+        break
+    fi
+    echo "take $attempt: rendering froze mid-take — retrying" >&2
+    [ "$attempt" = 3 ] && { echo "generate-tui-gif: all takes froze" >&2; exit 1; }
+done
+rm -f docs/screenshots/tui/demo.txt
 ls -la docs/screenshots/tui/demo.gif

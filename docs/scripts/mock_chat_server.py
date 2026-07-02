@@ -6,10 +6,12 @@ POST /chat (SSE) — and streams a scripted, realistic-looking exchange with
 human-readable pacing. No model is invoked, no credentials are read, nothing
 is billed: the demo is free and fully reproducible.
 
-Turn script (keyed off how many turns this process has served):
-  1. a data question → two tool calls (bash, run_python) then a markdown
-     answer streamed in word-sized deltas,
-  2. a follow-up → a short streamed answer, no tools.
+Turn script (keyed off how many turns this process has served) — one
+aspirational arc, matched to the web demo recordings: plan a customer
+kickoff, then automate the follow-through:
+  1. kickoff planning → two tool calls (run_python, bash) then a markdown
+     answer (timeline + revenue) streamed in word-sized deltas,
+  2. "schedule the daily brief" → a short confirmation, no tools.
 
 Usage: python3 mock_chat_server.py <port>   (generate_tui_gif.py starts it)
 """
@@ -19,20 +21,23 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-ANSWER_1 = """**3** scheduled tasks failed in the last 24h:
+ANSWER_1 = """Meridian kickoff, planned. First-year revenue at $18.5k/mo with
+the 12% multi-region uplift comes to **$248,640**.
 
-| task | failure |
-| --- | --- |
-| `nightly-etl` | upstream API returned 503 |
-| `weekly-digest` | SMTP timeout |
-| `catalog-sync` | schema drift on `products` |
+| week | milestone | owner |
+| --- | --- | --- |
+| 1 | Access + data onboarding | Priya |
+| 2–3 | Pilot workspace live | Marcus |
+| 4 | First automation in production | Priya |
+| 5 | Team training + playbooks | Dana |
+| 6 | Exec review → full rollout | you |
 
-The `nightly-etl` failure is transient — I'd retry it first. Want me to
-re-queue all three?"""
+Ready to draft the kickoff deck outline, or shall I set up the daily
+progress brief first?"""
 
-ANSWER_2 = """Done — re-queued `nightly-etl` with a 5-minute backoff. It's
-scheduled to run next at **09:05 UTC**. I'll leave the other two for your
-review since their failures look non-transient."""
+ANSWER_2 = """Scheduled ✓ **meridian-daily-brief** — every weekday at 07:00.
+Each run pulls overnight updates, checks the timeline for slippage, and has
+a one-page brief waiting before standup. First run: tomorrow morning."""
 
 
 def sse(handler, event, data):
@@ -74,10 +79,10 @@ class Handler(BaseHTTPRequestHandler):
         sse(self, "turn.started", {})
 
         if Handler.turns_served == 1:
-            sse(self, "tool.call", {"name": "bash"})
+            sse(self, "tool.call", {"name": "run_python"})
             time.sleep(1.1)
             sse(self, "tool.result", {"is_err": False})
-            sse(self, "tool.call", {"name": "run_python"})
+            sse(self, "tool.call", {"name": "bash"})
             time.sleep(1.3)
             sse(self, "tool.result", {"is_err": False})
             time.sleep(0.4)

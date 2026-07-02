@@ -68,7 +68,11 @@ type model struct {
 
 func newModel(cfg Config) *model {
 	ti := textinput.New()
-	ti.Prompt = "" // the composer box renders its own "› " prompt glyph
+	ti.Prompt = "› "
+	st := ti.Styles()
+	st.Focused.Prompt = styleAccent
+	st.Blurred.Prompt = styleAccent
+	ti.SetStyles(st)
 	ti.Placeholder = "Message the agent  (Enter to send · /help · Ctrl+C to cancel/quit)"
 	ti.Focus()
 	ti.CharLimit = 0
@@ -86,12 +90,26 @@ func newModel(cfg Config) *model {
 	return m
 }
 
-func (m *model) Init() tea.Cmd { return textinput.Blink }
+// Init requests the terminal background color THROUGH bubbletea (which owns
+// stdin and parses the OSC 11 reply correctly). glamour must never auto-query
+// the terminal itself mid-session: its raw query races bubbletea's input
+// parser, and the stray reply bytes end up typed into the composer — or wedge
+// input entirely. (Observed live; the demo recordings caught it.)
+func (m *model) Init() tea.Cmd { return tea.Batch(textinput.Blink, tea.RequestBackgroundColor) }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		// Resolve glamour's style from the terminal's actual background —
+		// via bubbletea's handshake, never glamour's own mid-session query.
+		if msg.IsDark() {
+			m.md.forceStyle = "dark"
+		} else {
+			m.md.forceStyle = "light"
+		}
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		// Reserve rows: header(1) + rule(1) + status(1) + boxed input(3) + padding(1).
@@ -128,12 +146,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Forward to the sub-components (input cursor, viewport scroll).
+	// Forward to the sub-components. Keys go ONLY to the textinput: the
+	// viewport's default keymap binds plain letters (h/j/k/l, u/d, …) to
+	// scrolling, so forwarding typed keys there silently pans the transcript
+	// under the user's message (observed as a horizontally-clipped viewport in
+	// the demo recording). Scrolling is explicit: PgUp/PgDn in onKey, and
+	// non-key events (mouse wheel) still reach the viewport below.
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	cmds = append(cmds, cmd)
-	m.vp, cmd = m.vp.Update(msg)
-	cmds = append(cmds, cmd)
+	if _, isKey := msg.(tea.KeyPressMsg); !isKey {
+		m.vp, cmd = m.vp.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 	return m, tea.Batch(cmds...)
 }
 
@@ -400,7 +425,7 @@ func (m *model) render() string {
 		inputW = 20
 	}
 	m.input.SetWidth(inputW)
-	inputBox := box.Width(maxInt(m.width-2, 20)).Render(styleAccent.Render("› ") + m.input.View())
+	inputBox := box.Width(maxInt(m.width-2, 20)).Render(m.input.View())
 
 	return strings.Join([]string{
 		header,
