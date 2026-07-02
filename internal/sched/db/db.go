@@ -1319,17 +1319,29 @@ func (db *Database) GetAllTasks(ctx context.Context) ([]*models.Task, error) {
 	return db.rowsToTasks(rows)
 }
 
-// GetScheduledTasks gets scheduled tasks that are due to run up to a limit.
-func (db *Database) GetScheduledTasks(ctx context.Context, cutoff time.Time, limit int) ([]*models.Task, error) {
+// GetScheduledTasks gets scheduled tasks that are due to run up to a limit,
+// strictly after the (afterScheduledFor, afterID) keyset cursor in the total
+// order (scheduled_for ASC, id ASC). Pass the zero time.Time / uuid.Nil to
+// start from the beginning.
+//
+// Keyset pagination (not plain LIMIT) is what lets the scheduler page past
+// soft-held rows that stay in the due set (#566): a row whose run_if gate
+// declines keeps its scheduled_for, so with LIMIT-only paging a full page of
+// held rows re-fetched identically forever. The tiebreaking `id` column
+// matters: scheduled_for alone is not a total order, so a LIMIT prefix over it
+// is not stable across queries and rows tied at the boundary could be masked
+// indefinitely within one pass sequence.
+func (db *Database) GetScheduledTasks(ctx context.Context, cutoff time.Time, afterScheduledFor time.Time, afterID uuid.UUID, limit int) ([]*models.Task, error) {
 	rows, err := db.conn.QueryContext(ctx, `
 		SELECT `+taskColumns+` FROM tasks
 		WHERE status = $1
 		AND scheduled_for IS NOT NULL
 		AND scheduled_for <= $2
 		AND trigger_type = 'cron'
-		ORDER BY scheduled_for ASC
-		LIMIT $3`,
-		string(models.TaskStatusScheduled), cutoff, limit)
+		AND (scheduled_for, id) > ($3, $4)
+		ORDER BY scheduled_for ASC, id ASC
+		LIMIT $5`,
+		string(models.TaskStatusScheduled), cutoff, afterScheduledFor, afterID, limit)
 	if err != nil {
 		return nil, err
 	}
