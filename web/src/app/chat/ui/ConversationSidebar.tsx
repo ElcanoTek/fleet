@@ -88,7 +88,9 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
       onFocus={show}
       onBlur={hide}
     >
-      <Icon name="lock" className="size-4 text-[var(--color-accent)]" />
+      {/* Inherits the button's text-primary (the design's .rail-lock), not
+          the accent the row indicators use. */}
+      <Icon name="lock" className="size-4" />
       {pos && typeof document !== "undefined"
         ? createPortal(
             <span role="tooltip" className="conv-tooltip" style={{ top: pos.top, left: pos.left }}>
@@ -986,7 +988,7 @@ export function ConversationSidebar({
             data-tip={railCollapsed ? "New chat" : undefined}
             onClick={() => clearConversation({ lockdown: true })}
           >
-            <Icon name="lock" className="size-4 text-[var(--color-accent)]" />
+            <Icon name="lock" className="size-4" />
             <span className={railCollapsed ? "sm:hidden" : ""}>New chat</span>
           </button>
         ) : (
