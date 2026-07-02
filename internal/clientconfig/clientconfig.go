@@ -670,12 +670,38 @@ type ProviderDef struct {
 // distinctly so a user knows what they are opting into; the bundle author
 // curates the list but does not control the remote service.
 type RemoteMCPCatalogEntry struct {
-	Name        string `yaml:"name"`         // stable identifier; unique within the manifest
-	DisplayName string `yaml:"display_name"` // human-readable label ("GitHub")
-	Description string `yaml:"description"`  // what the server does, one or two sentences
-	URL         string `yaml:"url"`          // the hosted MCP endpoint (https required)
-	Vendor      string `yaml:"vendor"`       // who operates the service ("GitHub, Inc.")
-	DocsURL     string `yaml:"docs_url"`     // vendor's documentation for the server (optional)
+	Name        string   `yaml:"name"`         // stable identifier; unique within the manifest
+	DisplayName string   `yaml:"display_name"` // human-readable label ("GitHub")
+	Description string   `yaml:"description"`  // what the server does, one or two sentences
+	URL         string   `yaml:"url"`          // the hosted MCP endpoint (https required)
+	Vendor      string   `yaml:"vendor"`       // who operates the service ("GitHub, Inc.")
+	DocsURL     string   `yaml:"docs_url"`     // vendor's documentation for the server (optional)
+	RepoURL     string   `yaml:"repo_url"`     // source repository, so users can vet the server (optional)
+	Category    string   `yaml:"category"`     // directory grouping slug ("development", "crm-sales", …); free-form kebab-case
+	Tags        []string `yaml:"tags"`         // lowercase search keywords beyond name/description
+	// Provenance is the trust tier of the HOSTING OPERATOR:
+	//   official    — the endpoint is operated by the service's own vendor
+	//                 (GitHub hosting GitHub's server).
+	//   third_party — an identifiable company hosts access to OTHER vendors'
+	//                 services (aggregators/integrators): that operator, not the
+	//                 underlying vendor, sees the traffic and often holds the
+	//                 delegated tokens.
+	//   community   — an identifiable maintainer who is neither the service's
+	//                 vendor nor a platform company hosts the endpoint.
+	// Absent defaults to official — a legacy shim for pre-existing bundle
+	// manifests, whose entries were all vendor-official; fleet's built-in
+	// catalog requires it explicitly (CI-enforced). The UI badges the tiers
+	// distinctly and gates non-official adds behind an operator-named consent
+	// step.
+	Provenance string `yaml:"provenance"`
+	// Auth is a UI hint for what connecting takes: "oauth" (sign in with the
+	// vendor), "api_key" (bring a key/token), "open" (no credentials needed),
+	// or "tenant" (the URL carries a {placeholder} — per org/workspace/store,
+	// so the user supplies their own endpoint). Optional; blank renders no hint.
+	Auth string `yaml:"auth"`
+	// Builtin marks an entry inherited from fleet's embedded directory rather
+	// than authored by this bundle's manifest. Never parsed from YAML.
+	Builtin bool `yaml:"-"`
 }
 
 // manifest is the on-disk YAML shape. Sandbox is a pointer so an absent block
@@ -689,13 +715,28 @@ type manifest struct {
 	HTTPTools       []HTTPToolDef           `yaml:"http_tools"`
 	WebhookTriggers []WebhookTriggerDef     `yaml:"webhook_triggers"`
 	RemoteMCPs      []RemoteMCPCatalogEntry `yaml:"remote_mcp_catalog"`
-	Providers       []ProviderDef           `yaml:"providers"`
-	EmptyState      EmptyState              `yaml:"empty_state"`
-	TaskTemplates   []TaskTemplate          `yaml:"task_templates"`
-	AgentPolicy     AgentPolicy             `yaml:"agent_policy"`
-	Personas        []PersonaDef            `yaml:"personas"`
-	Pricing         PricingConfig           `yaml:"pricing"`
-	Sandbox         *sandboxManifest        `yaml:"sandbox"`
+	// RemoteMCPBuiltin toggles inheriting fleet's embedded hosted-server
+	// directory (default TRUE — it is a listing only; nothing connects until a
+	// user explicitly adds a server and completes OAuth). A bundle sets false
+	// to curate from scratch. Pointer so absent ≠ explicit false.
+	RemoteMCPBuiltin *bool `yaml:"remote_mcp_catalog_builtin"`
+	// RemoteMCPCommunity additionally inherits the built-in entries whose
+	// provenance is community (endpoints hosted by identifiable maintainers who
+	// are not the service's vendor). Default FALSE: the silently-inherited
+	// surface stays vendor-official + labeled aggregators; an operator opts a
+	// bundle into the community tier deliberately.
+	RemoteMCPCommunity bool `yaml:"remote_mcp_catalog_community"`
+	// RemoteMCPHidden tombstones specific built-in entries by name so a bundle
+	// can drop individual listings (or an operator can kill a compromised one
+	// in a config-only change) without opting out of the whole directory.
+	RemoteMCPHidden []string         `yaml:"remote_mcp_catalog_hidden"`
+	Providers       []ProviderDef    `yaml:"providers"`
+	EmptyState      EmptyState       `yaml:"empty_state"`
+	TaskTemplates   []TaskTemplate   `yaml:"task_templates"`
+	AgentPolicy     AgentPolicy      `yaml:"agent_policy"`
+	Personas        []PersonaDef     `yaml:"personas"`
+	Pricing         PricingConfig    `yaml:"pricing"`
+	Sandbox         *sandboxManifest `yaml:"sandbox"`
 }
 
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
@@ -778,6 +819,14 @@ func Load(dir string) (*Bundle, error) {
 	if err := b.validate(); err != nil {
 		return nil, err
 	}
+	// Inherit fleet's embedded hosted-server directory (after validate: bundle
+	// entries are held to the manifest rules above; built-in entries are
+	// CI-validated where they are authored, in builtin_remote_catalog.yaml).
+	merged, err := mergeBuiltinRemoteCatalog(b.RemoteMCPCatalog, b.MCPCatalog, m.RemoteMCPBuiltin, m.RemoteMCPCommunity, m.RemoteMCPHidden)
+	if err != nil {
+		return nil, err
+	}
+	b.RemoteMCPCatalog = merged
 	// Warn (don't fail) on stdio script-path args that don't resolve under the
 	// bundle — a misspelled/missing `mcp/foo.py` would otherwise only surface as
 	// a silent connector launch failure at runtime.
@@ -1021,6 +1070,56 @@ func (b *Bundle) validateRemoteMCPCatalog() error {
 		}
 		if !strings.HasPrefix(u, "https://") {
 			return fmt.Errorf("remote_mcp_catalog[%q]: url must be https:// (got %q)", name, e.URL)
+		}
+		if err := validateRemoteMCPEntryMeta(e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// remoteMCPProvenances is the closed set of hosting-operator trust tiers a
+// catalog entry may declare; see RemoteMCPCatalogEntry.Provenance.
+var remoteMCPProvenances = map[string]bool{"official": true, "third_party": true, "community": true}
+
+// remoteMCPAuths is the closed set of connection-hint values; see
+// RemoteMCPCatalogEntry.Auth.
+var remoteMCPAuths = map[string]bool{"oauth": true, "api_key": true, "open": true, "tenant": true}
+
+// remoteMCPCategoryShape bounds a category slug to lowercase kebab-case so the
+// UI's grouping/filter keys stay uniform. The set is open (a bundle may invent
+// its own grouping) but the shape is not — "CRM Sales" vs "crm-sales" silently
+// splitting one group into two is exactly the typo class validate exists for.
+var remoteMCPCategoryShape = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+
+// validateRemoteMCPEntryMeta fails the load on malformed directory metadata
+// (category/tags/provenance/auth/repo_url). Absent provenance normalizes to
+// "official" — a legacy shim for pre-existing bundle manifests, whose entries
+// were all vendor-official; the built-in catalog's own test requires it
+// explicitly so a new entry can never inherit trust by omission.
+func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
+	name := strings.TrimSpace(e.Name)
+	if e.Provenance == "" {
+		e.Provenance = "official"
+	}
+	if !remoteMCPProvenances[e.Provenance] {
+		return fmt.Errorf("remote_mcp_catalog[%q]: unknown provenance %q (want official|third_party|community)", name, e.Provenance)
+	}
+	if e.Auth != "" && !remoteMCPAuths[e.Auth] {
+		return fmt.Errorf("remote_mcp_catalog[%q]: unknown auth %q (want oauth|api_key|open|tenant)", name, e.Auth)
+	}
+	if e.Category != "" && !remoteMCPCategoryShape.MatchString(e.Category) {
+		return fmt.Errorf("remote_mcp_catalog[%q]: category %q must be lowercase kebab-case", name, e.Category)
+	}
+	if r := strings.TrimSpace(e.RepoURL); r != "" && !strings.HasPrefix(r, "https://") {
+		return fmt.Errorf("remote_mcp_catalog[%q]: repo_url must be https:// (got %q)", name, e.RepoURL)
+	}
+	for _, tag := range e.Tags {
+		if strings.TrimSpace(tag) == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: empty tag", name)
+		}
+		if tag != strings.ToLower(tag) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: tag %q must be lowercase", name, tag)
 		}
 	}
 	return nil
