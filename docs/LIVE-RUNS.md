@@ -22,6 +22,15 @@ for both interactive chat and scheduled tasks (#508).
   the activity chronologically, auto-following. Finished tasks keep the
   existing persisted-log view; the stream replay's terminal frame now reports
   the task's REAL outcome (previously hardcoded `succeeded`).
+- **Live progress checklist (#518)**: when the agent maintains a plan via the
+  `task_tracker` tool, the live view renders it as a todo→done checklist — a
+  sticky top "Progress" panel showing the latest snapshot plus readable inline
+  history entries — updating each time the plan changes. It reuses the existing
+  `tool_result` frames (no new event): `parseTaskTrackerOutput`
+  (`web/src/app/orchestrator/Checklist.tsx`) parses the STRUCTURED task_tracker
+  JSON (never scrapes prose), mirroring the chat client, which already rendered
+  the same checklist live. The plan is persisted in the run log by virtue of
+  being a normal tool result.
 - **Stop with attribution**: `DELETE /tasks/{id}` now (1) flips the row to
   `cancelled` with `"stopped by <principal>"` recorded on the terminal result,
   and (2) interrupts the live run in-process: the governed loop halts at its
