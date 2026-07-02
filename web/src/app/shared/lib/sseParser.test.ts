@@ -39,4 +39,33 @@ describe("createSSEParser", () => {
     expect(frames).toHaveLength(1);
     expect(frames[0].status).toBe("succeeded");
   });
+
+  // #589: parity with the hardened chat parser (parseSseChunk). A proxy that
+  // normalizes line endings to CRLF must not stall the stream, and a
+  // multi-line `data:` payload must be reassembled per the SSE spec (joined
+  // with "\n") rather than corrupted by bare concatenation.
+  it("handles CRLF frame delimiters and CRLF line endings", () => {
+    const { frames, feed } = collect();
+    feed('event: tool_call\r\ndata: {"type":"tool_call","name":"bash","input":"ls"}\r\n\r\n');
+    feed('data: {"type":"status","status":"succeeded"}\r\n\r\n');
+    expect(frames).toHaveLength(2);
+    expect(frames[0]).toMatchObject({ type: "tool_call", name: "bash" });
+    expect(frames[1]).toMatchObject({ type: "status", status: "succeeded" });
+  });
+
+  it("handles a CRLF delimiter split across chunk boundaries", () => {
+    const { frames, feed } = collect();
+    feed('data: {"type":"agent_message","content":"hello"}\r\n\r');
+    expect(frames).toHaveLength(0); // mid-delimiter — stays buffered, nothing lost
+    feed("\n");
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ type: "agent_message", content: "hello" });
+  });
+
+  it("reassembles multi-line data with newline separators", () => {
+    const { frames, feed } = collect();
+    feed('data: {\ndata:   "type": "agent_message",\ndata:   "content": "hello"\ndata: }\n\n');
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ type: "agent_message", content: "hello" });
+  });
 });

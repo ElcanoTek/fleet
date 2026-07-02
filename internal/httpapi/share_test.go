@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,44 @@ func TestSharedConversation_PerTokenRateLimit(t *testing.T) {
 	}
 	if pub := do(t, h, http.MethodGet, "/shared/rl-token", nil, ""); pub.Code != http.StatusTooManyRequests {
 		t.Errorf("over-limit request: got %d, want 429", pub.Code)
+	}
+}
+
+// TestSharedConversation_InvalidTokensCreateNoBuckets (#571): the limiter must
+// only ever track tokens that resolved in the store — a burst of distinct
+// invalid tokens (an unauthenticated attacker streaming random values through
+// the account-less /shared page) must not grow the key map, or the limiter
+// itself becomes a memory-DoS lever. A resolved token still gets its bucket.
+func TestSharedConversation_InvalidTokensCreateNoBuckets(t *testing.T) {
+	s := serverFixture(t)
+	s.shareRL = ratelimit.New(3, 0)
+	st := s.concreteStore(t)
+	ctx := context.Background()
+	h := s.Routes()
+
+	for i := 0; i < 50; i++ {
+		tok := "invalid-token-" + strconv.Itoa(i)
+		if pub := do(t, h, http.MethodGet, "/shared/"+tok, nil, ""); pub.Code != http.StatusNotFound {
+			t.Fatalf("invalid token %d: got %d, want 404", i, pub.Code)
+		}
+	}
+	if n := s.shareRL.Keys(); n != 0 {
+		t.Errorf("limiter tracks %d buckets after invalid-token burst, want 0 (unresolved tokens must not create buckets)", n)
+	}
+
+	// Legitimate shared-link access is unaffected — and is what creates buckets.
+	conv, err := st.CreateConversation(ctx, "alice@x.com", "real chat", "victoria", "m", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if err := st.SetShareToken(ctx, "alice@x.com", conv.ID, "real-token", nil); err != nil {
+		t.Fatalf("SetShareToken: %v", err)
+	}
+	if pub := do(t, h, http.MethodGet, "/shared/real-token", nil, ""); pub.Code != http.StatusOK {
+		t.Fatalf("valid token: got %d, want 200", pub.Code)
+	}
+	if n := s.shareRL.Keys(); n != 1 {
+		t.Errorf("limiter tracks %d buckets after one valid read, want 1", n)
 	}
 }
 

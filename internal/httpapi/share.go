@@ -26,7 +26,11 @@ import (
 // sharedReadsPerMinutePerToken bounds GET /shared/{token} per share token —
 // generous for real viewers of a popular link, a hard ceiling against scraping
 // or DDoS amplification of a single share. Keyed by token (not IP) because the
-// endpoint sits behind the Next proxy.
+// endpoint sits behind the Next proxy — but a bucket is only created AFTER the
+// token resolves in the store (#571), mirroring the webhook path's
+// create-bucket-after-auth pattern, so an unauthenticated flood of random
+// tokens cannot grow the limiter map (memory DoS) and the map stays bounded by
+// the number of real share links.
 const sharedReadsPerMinutePerToken = 120
 
 // shareTokenBytes is the entropy of a share token before base64url encoding.
@@ -133,8 +137,9 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 
 // handleSharedConversation serves the public read-only snapshot for a share
 // token. Token-gated (shared secret) but identity-less; the token in the path
-// is the authorization. Per-token rate-limited; returns 404 for an unknown,
-// revoked, or expired token (indistinguishable, so a probe can't tell which).
+// is the authorization. Per-token rate-limited AFTER the token resolves;
+// returns 404 for an unknown, revoked, or expired token (indistinguishable, so
+// a probe can't tell which).
 func (s *Server) handleSharedConversation(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -145,10 +150,12 @@ func (s *Server) handleSharedConversation(w http.ResponseWriter, r *http.Request
 		http.Error(w, "missing token", http.StatusBadRequest)
 		return
 	}
-	if ok, _ := s.shareRL.Allow(token); !ok {
-		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
+	// Resolve the token BEFORE consulting the rate limiter (#571): a bucket
+	// keyed on an unvalidated, attacker-chosen string is a memory lever (every
+	// distinct random token would persist a bucket for up to a day) and
+	// throttles nothing, since each fresh token starts a fresh window. Token
+	// entropy (256-bit) remains the confidentiality guarantee; the per-token
+	// limit below throttles scraping of a link that actually exists.
 	conv, err := s.store.GetConversationByShareToken(r.Context(), token, time.Now().Unix())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -156,6 +163,10 @@ func (s *Server) handleSharedConversation(w http.ResponseWriter, r *http.Request
 	}
 	if conv == nil {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if ok, _ := s.shareRL.Allow(token); !ok {
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 	writeJSON(w, conv)

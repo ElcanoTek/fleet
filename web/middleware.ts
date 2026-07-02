@@ -38,9 +38,47 @@ const publicApiPaths = new Set([
   "/api/orchestrator/auth/elcano-login",
 ]);
 
-function decorate(res: NextResponse): NextResponse {
+// contentSecurityPolicy builds the CSP for a response (#590). Two tiers:
+//
+//   - Baseline (every route): 'self' everywhere, plus only what the app
+//     actually needs — Next.js injects inline scripts (hydration/RSC payload)
+//     and inline styles, workspace/file previews use data:/blob: URLs, and
+//     assistant markdown + the email preview may legitimately show public
+//     https images. Dev mode additionally needs 'unsafe-eval' (react-refresh)
+//     and the HMR websocket.
+//
+//   - /shared/* (the public, account-less share view, #226): the same policy
+//     MINUS external https images. Assistant-authored HTML renders there in a
+//     sandbox="" iframe — sandbox blocks scripts but NOT sub-resource loads,
+//     so an <img src="//attacker/…"> or CSS @import would beacon every
+//     anonymous viewer of the link. A srcdoc iframe inherits this page's CSP,
+//     so pinning img-src/style-src/font-src/connect-src to 'self' (+ data:)
+//     closes the exfil channel while same-origin workspace images, inline
+//     styles, and all markdown text still render.
+function contentSecurityPolicy(pathname: string): string {
+  const dev = process.env.NODE_ENV === "development";
+  const shared = pathname.startsWith("/shared/");
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ""}`,
+    "style-src 'self' 'unsafe-inline'",
+    `img-src 'self' data: blob:${shared ? "" : " https:"}`,
+    "font-src 'self' data:",
+    `connect-src 'self'${dev ? " ws: wss:" : ""}`,
+    "media-src 'self' data: blob:",
+    "frame-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "worker-src 'self' blob:",
+  ].join("; ");
+}
+
+function decorate(res: NextResponse, pathname: string): NextResponse {
   res.headers.set(BUILD_ID_HEADER, currentBuildId());
   res.headers.set("Cache-Control", "no-store, must-revalidate");
+  res.headers.set("Content-Security-Policy", contentSecurityPolicy(pathname));
   res.headers.set("X-Frame-Options", "DENY");
   res.headers.set("X-Content-Type-Options", "nosniff");
   res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
@@ -77,7 +115,7 @@ export async function middleware(request: NextRequest) {
   // publicPaths, do NOT bounce a logged-in viewer to /chat, since opening a
   // share link while signed in is legitimate.
   if (pathname.startsWith("/shared/")) {
-    return decorate(NextResponse.next());
+    return decorate(NextResponse.next(), pathname);
   }
 
   // Accept either session cookie (elcano_session HMAC or elcano_auth Ed25519).
@@ -85,13 +123,13 @@ export async function middleware(request: NextRequest) {
 
   if (publicPaths.has(pathname)) {
     if (session) {
-      return decorate(NextResponse.redirect(getRedirectUrl(request, "/chat")));
+      return decorate(NextResponse.redirect(getRedirectUrl(request, "/chat")), pathname);
     }
-    return decorate(NextResponse.next());
+    return decorate(NextResponse.next(), pathname);
   }
 
   if (publicApiPaths.has(pathname)) {
-    return decorate(NextResponse.next());
+    return decorate(NextResponse.next(), pathname);
   }
 
   // A cookie session OR a moc Bearer admits the request. For Bearer-only
@@ -99,13 +137,13 @@ export async function middleware(request: NextRequest) {
   // the real authorization.
   if (!session && !hasBearer(request)) {
     if (pathname.startsWith("/api/")) {
-      return decorate(NextResponse.json({ error: "Unauthorized" }, { status: 401 }));
+      return decorate(NextResponse.json({ error: "Unauthorized" }, { status: 401 }), pathname);
     }
 
-    return decorate(NextResponse.redirect(getRedirectUrl(request, "/login")));
+    return decorate(NextResponse.redirect(getRedirectUrl(request, "/login")), pathname);
   }
 
-  return decorate(NextResponse.next());
+  return decorate(NextResponse.next(), pathname);
 }
 
 export const config = {

@@ -234,3 +234,20 @@ func TestConcurrencyLimiter_ConcurrentChurn(t *testing.T) {
 		t.Errorf("map holds %d entries after final release, want 0", got)
 	}
 }
+
+func TestLimiter_KeysCountsBuckets(t *testing.T) {
+	l := New(5, 0)
+	if got := l.Keys(); got != 0 {
+		t.Fatalf("fresh limiter Keys = %d, want 0", got)
+	}
+	l.Allow("a")
+	l.Allow("a")
+	l.Allow("b")
+	if got := l.Keys(); got != 2 {
+		t.Errorf("Keys = %d, want 2 (one bucket per distinct key)", got)
+	}
+	var nilL *Limiter
+	if got := nilL.Keys(); got != 0 {
+		t.Errorf("nil limiter Keys = %d, want 0", got)
+	}
+}

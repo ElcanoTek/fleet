@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/webhooks"
 )
 
 const (
@@ -173,6 +175,62 @@ func TestWebhookUnknownSlugRejected(t *testing.T) {
 	defer st.mu.Unlock()
 	if st.created != 0 {
 		t.Errorf("unknown slug created %d conversations, want 0", st.created)
+	}
+}
+
+// TestWebhookSignatureWorkEqualized (#572) asserts STRUCTURALLY — via the
+// webhooks BodyHMACComputations test seam, not wall-clock timing — that every
+// rejected request performs the same signature work over the body, regardless
+// of slug existence, trigger verifier type (Slack vs HMAC), or which signature
+// headers the caller chose to send/omit. The attack this pins down: a
+// Slack-shaped probe (valid timestamp, garbage signature, NO default HMAC
+// header) used to do a full-body HMAC only when the slug named a real Slack
+// trigger, so response timing grew with body size on hits but not misses —
+// leaking slug existence. Same asymmetry for a custom-hmac_header trigger.
+func TestWebhookSignatureWorkEqualized(t *testing.T) {
+	srv := newWebhookServer(t, &fakeEngine{}, newFakeChatStore())
+	// Add a GitHub-style trigger with a NON-default signature header — the other
+	// verifier shape whose miss path used to skip the HMAC entirely.
+	srv.clientConfig.WebhookTriggers = append(srv.clientConfig.WebhookTriggers, clientconfig.WebhookTriggerDef{
+		Slug:          "gh-custom",
+		HMACSecretEnv: webhookSecretEnv,
+		HMACHeader:    "X-Custom-Signature-256",
+		NotifyUser:    webhookOwner,
+	})
+
+	body := []byte(`{"probe":true}`)
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	// Slack-shaped probe: plausible timestamp, garbage signature, and the
+	// default X-Hub-Signature-256 deliberately omitted.
+	slackShaped := map[string]string{
+		"X-Slack-Request-Timestamp": ts,
+		"X-Slack-Signature":         "v0=" + strings.Repeat("ab", 32),
+	}
+	cases := []struct {
+		name    string
+		slug    string
+		headers map[string]string
+	}{
+		{"slack-shaped, existing slack slug", "slack", slackShaped},
+		{"slack-shaped, unknown slug", "no-such-slug", slackShaped},
+		{"custom-header trigger, header omitted", "gh-custom", nil},
+		{"default hmac trigger, header omitted", "gh", nil},
+		{"no signature headers, unknown slug", "also-missing", nil},
+	}
+	counts := make([]uint64, len(cases))
+	for i, tc := range cases {
+		before := webhooks.BodyHMACComputations()
+		if w := postWebhook(t, srv, tc.slug, body, tc.headers); w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: status %d, want 401", tc.name, w.Code)
+		}
+		counts[i] = webhooks.BodyHMACComputations() - before
+	}
+	// Every shape performs exactly 2 full-body computations (one Slack-style +
+	// one HMAC-SHA256, unconditionally) — equal work, no oracle.
+	for i, n := range counts {
+		if n != 2 {
+			t.Errorf("%s: performed %d body HMACs, want 2 (constant work across hit/miss and verifier shapes)", cases[i].name, n)
+		}
 	}
 }
 
