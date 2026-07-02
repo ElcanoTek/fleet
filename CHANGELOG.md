@@ -15,6 +15,60 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Runner terminal side effects gated on the DB write (#580): the success
+  notification and email reply fired even when the terminal DB write failed,
+  producing spurious "success" and duplicate emails on retry; all terminal
+  side effects now wait for the write to land.
+- Stale-lease fencing on runner cleanup (#581): the worker cleanup deleted the
+  active-map entry by task ID without a token guard, letting a stale goroutine
+  clobber a fresh re-claim; the delete is now token-guarded.
+- Resumed task keeps the human's answer (#582): a paused-awaiting-human task
+  that failed transiently and retried lost the answer because `ClearPendingQA`
+  ran before the run; it now clears only at the terminal transition, so the
+  answer survives a retry.
+- Paused dataset rows resume instead of failing (#586): pausing a running
+  dataset marked in-flight rows permanently `failed` and resume never retried
+  them; interrupted rows are now requeued to `pending` with the attempt refunded.
+- Rune-safe truncation (#595): byte-boundary truncation emitted invalid UTF-8
+  (a dataset row could stick in `running`; prompt/log corruption). A shared
+  `internal/truncate.Clamp` cuts on rune boundaries and is used by datasets,
+  the prior-run handoff, and evals.
+- Sub-agent budget over-grant (#588): a release-before-charge lock ordering let
+  concurrent sub-agent spawns over-reserve against the parent budget; the
+  reservation and charge now settle atomically under one lock.
+- Cached-token accounting (#587): context-pressure and child-budget math
+  double-counted cached tokens on OpenRouter, so the token ceiling could fire
+  late and cache hit-rate could exceed 100%; all usage accumulators are
+  normalized onto one include-cached convention.
+- Runaway-compaction cap made reachable (#598): `maxConsecutiveCompactions`
+  (and `ErrContextBudgetExhausted`) was dead code; the counter now resets only
+  on a round that completes without force-compaction, so a genuine
+  compaction storm is refused.
+- BranchConversation range check + atomicity (#578, #597): an out-of-range
+  `branch_point_message_id` silently copied the entire conversation (now errors),
+  and the INSERT + history copy now run in one transaction instead of two
+  statements.
+- AdminStats excludes soft-deleted conversations (#579), and the conversation
+  mutators (`SetModel`, `SetPinned`, title/rename, archive, optional-MCP,
+  approval-timeout) now exclude soft-deleted rows (#596), matching the guarded
+  `SetShareToken`/`SetThinkingConfig`.
+- bridgeStdout data race (#583): the container/host `runPython` reader goroutine
+  raced bridge teardown on context cancellation; the reader now snapshots the
+  bridge handle under the mutex.
+- ConcurrencyLimiter eviction (#594): the per-key map never evicted released
+  keys (a slow unbounded leak on a long-lived process); a key is now removed the
+  moment its in-flight count hits zero.
+- Migration DDL linter (#593): the linter missed the COLUMN-less forms of
+  `ADD ... NOT NULL` / `DROP ...` it claims to reject; both spellings are now
+  caught, and the script gained its first test harness.
+- Orchestrator live SSE parser (#589): the orchestrator parser diverged from the
+  hardened chat parser (CRLF broke it, multi-line `data:` corrupted); it now
+  reuses `parseSseChunk`, so both consumers share one hardened parser.
+- OpenAPI + docs honesty (#591, #592, #599): the OpenAPI spec now matches what
+  the handlers emit (`GET /api/me` body, `POST /users` 201), the README no
+  longer claims the OpenAPI CI test skips body-schema gating (it doesn't), and
+  the critical-action cap comment now describes its real failed-attempt-count
+  semantics.
 - Tool-output ceiling on direct MCP calls (#576): MCP tools registered directly
   (roster below the #506 tool-disclosure threshold — the common case) applied
   redaction and PII gating but not the #199 output ceiling, so one oversized
@@ -240,3 +294,82 @@ prior versions are listed because none have shipped.
   system, token families, and the "no raw hex; add a semantic token" rule are
   documented in `web/src/app/DESIGN.md`. No redesign: same look, one source
   of truth.
+
+### Security
+
+This release closes a batch of security findings raised against the run loop,
+the scheduler, the HTTP surface, and the native tools. Every fix is a strict
+tightening — no previously-sealed posture was widened, and each restores or
+reinforces a documented invariant.
+
+- Lockdown network seal on approved bash (#562, P0): approved-bash execution
+  ran in a network-enabled warm-pool container, silently dropping the
+  `--network=none` hard seal for lockdown conversations. Staged bash now takes
+  the sealed container whenever the conversation is locked down or
+  `CHAT_LOCKDOWN_ONLY=true`, fail-closed, mirroring the turn path.
+- Lockdown model allowlist bypass (#568, P1): the per-turn model override on the
+  existing-conversation chat path skipped the lockdown allowlist gate the
+  create/PATCH paths enforce; overrides are now checked and rejected before the
+  turn runs.
+- Persona tool-allowlist (Gate-4) bypass (#570, P1): once BM25 tool disclosure
+  deferred MCP tools behind bridges, the persona allowlist stopped governing
+  them. Persona policy is now applied to each logical MCP tool before the
+  disclosure decision, so denied tools never enter the deferred registry.
+- Secret scrubber gaps (#569, P1): the redactor missed
+  `aws_secret_access_key`-style names and `Authorization: Basic` headers,
+  leaking credentials into the model context and logs; both are now scrubbed.
+- API-key rotation stale hash (#567, P1): a second rotation left the first
+  rotated-out key hash valid indefinitely; the outgoing predecessor is now
+  revoked so only the current key and the most recent predecessor (within grace)
+  authenticate.
+- DeleteUser credential inheritance (#563, P1): deleting a user orphaned their
+  `remote_mcp_servers` rows and encrypted OAuth tokens, so re-using the email
+  inherited them; deletion now purges them (and owned projects) in-transaction.
+- download_url workspace escape (#564, P1): a relative `output_dir` containing
+  `..` escaped the workspace to arbitrary host-side writes; traversal segments
+  are now rejected before the path is joined.
+- Cross-conversation workspace traversal (#575): file tools accepted `..` to
+  reach other conversations' workspaces; per-conversation confinement is now
+  enforced across the view/edit/write and upload paths.
+- Email content_file arbitrary read (#573): outbound email could materialize
+  arbitrary host files via absolute paths and `$VAR`/`~` expansion; content is
+  now confined to the conversation workspace with no shell expansion.
+- SSRF classifier gaps (#574): `web_fetch`/`web_search` did not block CGNAT
+  `100.64.0.0/10` (Alibaba/Oracle cloud-metadata) or several reserved ranges.
+  The private/reserved-IP classifier is now a single shared `internal/netguard`
+  implementation (previously duplicated and drifted) covering CGNAT, the RFC
+  test/benchmark/reserved nets, and multicast, applied at dial time.
+- output_schema external `$ref` file read (#585): an untrusted `output_schema`
+  with a `file://` (or `http(s)://`) `$ref` made the host open arbitrary files
+  during schema compile; external ref resolution is now refused.
+- Personal memory API scope escape (#577): personal `UpdateMemory`/`DeleteMemory`
+  omitted `project_id IS NULL`, letting project-scoped memory be mutated via the
+  personal API; the guard is now applied.
+- Webhook signature timing oracle (#572): Slack and custom-HMAC-header trigger
+  verification returned early on shape mismatches, leaking a slug-enumeration
+  timing side channel; verification now performs the same body-HMAC work on
+  every path and fails closed.
+- Shared-link limiter DoS (#571): `/shared/{token}` created an unbounded rate
+  bucket per unvalidated token; the token is now resolved before a bucket is
+  created, bounding the map and making the abuse gate effective.
+- Config-reload secret rotation (#584): reload silently rotated file-sourced
+  webhook/Slack HMAC secrets, bypassing the non-reloadable contract; such
+  secrets are now held at their boot value and reported under `Skipped`.
+- HTTP-tool JSON body injection (#600): inline HTTP-tool JSON body templates
+  interpolated model args raw, allowing JSON injection into the outbound
+  request; values substituted into JSON bodies are now JSON-escaped (fail-closed).
+- Content-Security-Policy for the public share iframe (#590): responses now
+  carry a CSP (strictest on `/shared/*`) so assistant-authored HTML in the
+  sandboxed preview iframe can no longer beacon out to attacker hosts.
+- Sandbox image CVEs (#620): the sandbox image pins patched `pypdf`, `tornado`,
+  `pip`, `idna`, and `pygments` over the lagging Fedora RPMs (removing the RPM
+  copies so a single unambiguous version remains), clearing 41 Grype findings
+  (verified 41 → 0 with the CI-pinned scanner).
+- Static-analysis hardening: enabled CodeQL code scanning, secret scanning +
+  push protection, Dependabot security updates, and private vulnerability
+  reporting. Addressed the resulting CodeQL findings — path-injection sinks
+  routed through recognized confinement barriers, unbounded allocations bounded,
+  and a narrowing integer conversion guarded; findings that were provably safe
+  (dial-time-guarded SSRF, high-entropy-token SHA-256 with constant-time
+  compare, HTTP-boundary-confined image paths) were dismissed with written
+  justification.
