@@ -169,7 +169,9 @@ export default function NotificationsCard() {
         ) : null}
       </div>
       {state === "enabled" ? (
-        <p className="mt-2 text-[0.75rem] text-[#7fd6a6]">Notifications are on in this browser.</p>
+        <p className="mt-2 text-[0.75rem] text-[var(--color-success-soft)]">
+          Notifications are on in this browser.
+        </p>
       ) : null}
       {state === "unsupported" ? (
         <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
@@ -178,7 +180,7 @@ export default function NotificationsCard() {
         </p>
       ) : null}
       {state === "denied" ? (
-        <p className="mt-2 text-[0.75rem] text-[#e0b080]">
+        <p className="mt-2 text-[0.75rem] text-[var(--color-warning-soft)]">
           Notifications are blocked for this site. Allow them in your browser&apos;s site settings,
           then reload this page.
         </p>
@@ -192,7 +194,9 @@ export default function NotificationsCard() {
           and set FLEET_VAPID_PUBLIC_KEY, FLEET_VAPID_PRIVATE_KEY, and FLEET_VAPID_CONTACT.
         </p>
       ) : null}
-      {error ? <p className="mt-2 text-[0.75rem] text-[#e08080]">{error}</p> : null}
+      {error ? (
+        <p className="mt-2 text-[0.75rem] text-[var(--color-danger-soft)]">{error}</p>
+      ) : null}
     </div>
   );
 }

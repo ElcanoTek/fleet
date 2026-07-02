@@ -404,9 +404,9 @@ export function ConversationTotalsChip({
   // the bar reads as a single chip with one variable bit.
   const contextColor =
     usage?.severity === "danger"
-      ? "var(--color-danger,#dc2626)"
+      ? "var(--color-danger)"
       : usage?.severity === "warn"
-        ? "var(--color-warning,#d97706)"
+        ? "var(--color-warning)"
         : "var(--color-text-muted)";
 
   return (
@@ -472,7 +472,7 @@ export function PendingAttachmentChip({
       className={[
         "inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[0.72rem]",
         attachment.status === "error"
-          ? "border-[var(--color-danger,#dc2626)] text-[var(--color-danger,#dc2626)]"
+          ? "border-[var(--color-danger)] text-[var(--color-danger)]"
           : "border-[var(--color-border-strong)] text-[var(--color-text-secondary)]",
         attachment.status === "uploading" ? "opacity-60" : "",
       ].join(" ")}
