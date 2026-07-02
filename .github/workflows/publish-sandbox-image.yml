@@ -1,0 +1,174 @@
+name: Publish sandbox image (reusable)
+
+# Per-client sandbox image publisher (#195). This is the REGISTRY-PUBLISH
+# opt-in path: a client config repo (zeta-config, …) calls this reusable
+# workflow to build its bundle's sandbox image, push it to GHCR, and open a PR
+# setting `sandbox.image` in its manifest — after which fleet deployments
+# `podman pull` the prebuilt image (clientconfig.Sandbox().ResolvedImageRef())
+# instead of spending 5–15 minutes rebuilding ~1.3 GB on-box at deploy time.
+#
+# Deliberately NOT wired into fleet core CI: commit 24ce69f removed the
+# core-CI dependency on a vendor-published registry image, and that stays
+# removed — core CI builds the sandbox locally. The only triggers here are
+# workflow_call (client repos) and a manual workflow_dispatch for ad-hoc
+# publishes of the generic bundle.
+#
+# Caller contract (in a client config repo):
+#
+#   name: Publish sandbox image
+#   on:
+#     push:
+#       branches: [main]
+#       paths: ["sandbox/**"]
+#     workflow_dispatch:
+#   permissions:
+#     contents: write        # manifest-update PR branch
+#     packages: write        # GHCR push
+#     pull-requests: write   # open the manifest-update PR
+#   jobs:
+#     publish:
+#       uses: ElcanoTek/fleet/.github/workflows/publish-sandbox-image.yml@main
+#       with:
+#         image_name: ghcr.io/${{ github.repository_owner }}/fleet-sandbox-<client>
+#
+# The image is tagged twice: an immutable {git-sha} tag (what the manifest PR
+# pins — safe to deploy) and a mutable :latest for convenience.
+
+on:
+  workflow_call:
+    inputs:
+      bundle_dir:
+        description: >-
+          Client bundle directory relative to the caller repo root (the dir
+          holding manifest.yaml). Client config repos are the bundle, so the
+          default is the repo root.
+        type: string
+        required: false
+        default: "."
+      image_name:
+        description: "Full image name WITHOUT tag (e.g. ghcr.io/acme/fleet-sandbox-acme)"
+        type: string
+        required: true
+      update_manifest:
+        description: "Open a PR pinning sandbox.image to the pushed {sha} tag"
+        type: boolean
+        required: false
+        default: true
+      fleet_ref:
+        description: "fleet ref to take scripts/build-sandbox-image.sh from"
+        type: string
+        required: false
+        default: "main"
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: "Full image name WITHOUT tag (e.g. ghcr.io/elcanotek/fleet-sandbox)"
+        type: string
+        required: true
+      bundle_dir:
+        description: "Bundle dir relative to repo root"
+        type: string
+        required: false
+        default: "config/default"
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  publish:
+    name: Build + push ${{ inputs.image_name }}
+    runs-on: ubuntu-latest
+    env:
+      BUNDLE_DIR: ${{ inputs.bundle_dir || 'config/default' }}
+      IMAGE: ${{ inputs.image_name }}
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+
+      # The build script lives in fleet core; a client-config caller doesn't
+      # have it. Checking it out into a subdir keeps ONE canonical builder
+      # (same manifest parsing, same flags) instead of a drifting copy per repo.
+      - name: Checkout fleet (build script)
+        uses: actions/checkout@v4
+        with:
+          repository: ElcanoTek/fleet
+          ref: ${{ inputs.fleet_ref || 'main' }}
+          path: .fleet-core
+          sparse-checkout: |
+            scripts/build-sandbox-image.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Ensure podman
+        run: |
+          command -v podman >/dev/null 2>&1 \
+            || (sudo apt-get update -qq && sudo apt-get install -y -qq podman)
+          podman --version
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | podman login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Build sandbox image (:${{ github.sha }})
+        run: |
+          FLEET_CLIENT_CONFIG_DIR="$GITHUB_WORKSPACE/$BUNDLE_DIR" \
+          IMAGE_NAME="$IMAGE" \
+            bash .fleet-core/scripts/build-sandbox-image.sh "${{ github.sha }}"
+
+      - name: Tag :latest and push both tags
+        run: |
+          podman tag "$IMAGE:${{ github.sha }}" "$IMAGE:latest"
+          podman push "$IMAGE:${{ github.sha }}"
+          podman push "$IMAGE:latest"
+          echo "Published:"
+          echo "  $IMAGE:${{ github.sha }}   (immutable — what the manifest pins)"
+          echo "  $IMAGE:latest"
+
+      - name: Update manifest sandbox.image
+        if: ${{ inputs.update_manifest != false }}
+        run: |
+          manifest="$BUNDLE_DIR/manifest.yaml"
+          image_ref="$IMAGE:${{ github.sha }}"
+          # Rewrite the image: line under the sandbox: block only (same block
+          # scoping as build-sandbox-image.sh's reader, but writing).
+          python3 - "$manifest" "$image_ref" <<'PY'
+          import re, sys
+
+          path, ref = sys.argv[1], sys.argv[2]
+          lines, in_sandbox, rewrote = [], False, False
+          with open(path, encoding="utf-8") as f:
+              for line in f:
+                  if re.match(r"^sandbox:\s*$", line):
+                      in_sandbox = True
+                  elif re.match(r"^\S", line):
+                      in_sandbox = False
+                  if in_sandbox and re.match(r"^\s+image:", line):
+                      line = re.sub(r"(^\s+image:\s*).*", rf'\g<1>"{ref}"', line)
+                      rewrote = True
+                  lines.append(line)
+          if not rewrote:
+              sys.exit(f"{path}: no image: line under the sandbox: block")
+          with open(path, "w", encoding="utf-8") as f:
+              f.writelines(lines)
+          PY
+          git diff -- "$manifest"
+
+      - name: Open PR with manifest update
+        if: ${{ inputs.update_manifest != false }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(sandbox): pin sandbox.image → ${{ github.sha }}"
+          branch: bot/sandbox-image-${{ github.sha }}
+          delete-branch: true
+          title: "chore(sandbox): pin sandbox image → ${{ github.sha }}"
+          body: |
+            Automated sandbox image publish (fleet #195 reusable workflow).
+
+            **Image**: `${{ inputs.image_name }}:${{ github.sha }}`
+            **Workflow run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Merging pins `sandbox.image` so fleet deployments `podman pull` this
+            prebuilt image instead of building on-box. The `${{ github.sha }}` tag is
+            immutable; `:latest` was also pushed for convenience.
