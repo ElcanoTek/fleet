@@ -273,6 +273,19 @@ func resolveDownloadDir(ctx context.Context, requested string) (string, error) {
 	}
 
 	if !filepath.IsAbs(trimmed) {
+		// Reject any ".." component BEFORE joining (#564): filepath.Join
+		// collapses ".." away, so a relative output_dir with enough ".."
+		// segments would otherwise escape the workspace anchor (and the
+		// process cwd on the no-convID branch) and become a host-side
+		// arbitrary write. With ".." gone, the join below cannot leave
+		// its anchor directory.
+		if containsDotDotComponent(trimmed) {
+			return "", &PathSecurityError{
+				Path:    trimmed,
+				Reason:  "output_dir must not contain '..' components",
+				BaseDir: WorkspaceDirForConversation(ConversationIDFromContext(ctx)),
+			}
+		}
 		// Relative path: anchor to the per-conversation workspace so
 		// `output_dir="subdir"` lands under workspace/<conv>/subdir
 		// rather than the chat-server's cwd.

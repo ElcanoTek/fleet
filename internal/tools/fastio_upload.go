@@ -100,7 +100,11 @@ func runFastIOUpload(ctx context.Context, caller MCPCaller, params FastIOUploadF
 		return "", fmt.Errorf("workspace_id is required — call `mcp_fast_io_workspace action=list` once per conversation and reuse the 19-digit numeric id")
 	}
 
-	absPath, err := ValidatePathForRead(resolveWorkspacePath(ctx, pathArg))
+	resolved, err := resolveWorkspacePath(ctx, pathArg)
+	if err != nil {
+		return "", fmt.Errorf("path: %w", err)
+	}
+	absPath, err := ValidatePathForRead(resolved)
 	if err != nil {
 		return "", fmt.Errorf("path: %w", err)
 	}
