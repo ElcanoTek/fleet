@@ -13,6 +13,14 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- Structured output extraction (#244 hardening): a final answer carrying
+  SEVERAL top-level JSON values (a narrated intermediate plus the restated
+  final object — observed in a live run) now validates to the last conforming
+  value instead of failing outright; extraction scans complete JSON values
+  with a decoder, so braces inside strings can't derail it.
+
 ### Added
 
 - Browser push notifications via the Web Push API (#292): opt in per browser

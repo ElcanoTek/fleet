@@ -1,0 +1,13 @@
+Self-audit evidence
+
+- Tried to open protocols/self-audit.md: NOT FOUND in sandbox.
+- Computation: sum_{i=1..12} i^2 computed by Python loop.
+- Cross-check: formula n(n+1)(2n+1)/6.
+- Both methods returned 650; match=True.
+
+run_python stdout:
+ n 12
+ terms [(1, 1), (2, 4), (3, 9), (4, 16), (5, 25), (6, 36), (7, 49), (8, 64), (9, 81), (10, 100), (11, 121), (12, 144)]
+ sum_of_squares 650
+ formula 650
+ match True

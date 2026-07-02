@@ -67,63 +67,75 @@ func PromptAugmentation(schema json.RawMessage) string {
 		"JSON Schema:\n" + string(indented)
 }
 
-// ValidateOutput parses finalText as a single JSON value and validates it against
-// schema, returning the compact JSON on success. It tolerates a model that
-// wrapped its answer in a ```json fence or surrounded it with prose by extracting
-// the outermost JSON object/array before parsing. On any failure it returns an
-// error describing what went wrong (not valid JSON / schema violation) so the
-// driver can decide whether to retry.
+// ValidateOutput finds the JSON value in finalText that conforms to schema and
+// returns it as compact JSON. It tolerates a model that wrapped its answer in a
+// ```json fence, surrounded it with prose, or emitted SEVERAL JSON values (a
+// narrated intermediate plus a restated final answer — observed live): every
+// complete top-level JSON value in the text is a candidate, and the LAST one
+// that validates wins, since a model restating its answer states it last. On
+// failure the error says what went wrong (no JSON at all / none conforming) so
+// the driver can decide whether to retry.
 func ValidateOutput(finalText string, schema json.RawMessage) (json.RawMessage, error) {
 	sch, err := CompileSchema(schema)
 	if err != nil {
 		return nil, err
 	}
-	candidate := extractJSON(finalText)
-	var v any
-	if err := json.Unmarshal([]byte(candidate), &v); err != nil {
-		return nil, fmt.Errorf("final response is not valid JSON: %w", err)
+	candidates := extractJSONCandidates(finalText)
+	parsedAny := false
+	var lastValidationErr error
+	for i := len(candidates) - 1; i >= 0; i-- {
+		var v any
+		if err := json.Unmarshal([]byte(candidates[i]), &v); err != nil {
+			continue
+		}
+		parsedAny = true
+		if err := sch.Validate(v); err != nil {
+			lastValidationErr = err
+			continue
+		}
+		// Re-marshal so what we persist is compact, canonical JSON regardless
+		// of the model's whitespace/fencing.
+		out, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("re-marshal validated output: %w", err)
+		}
+		return out, nil
 	}
-	if err := sch.Validate(v); err != nil {
-		return nil, fmt.Errorf("final response does not conform to output_schema: %w", err)
+	if !parsedAny {
+		return nil, fmt.Errorf("final response is not valid JSON: no parseable JSON value found")
 	}
-	// Re-marshal so what we persist is compact, canonical JSON regardless of the
-	// model's whitespace/fencing.
-	out, err := json.Marshal(v)
-	if err != nil {
-		return nil, fmt.Errorf("re-marshal validated output: %w", err)
-	}
-	return out, nil
+	return nil, fmt.Errorf("final response does not conform to output_schema: %w", lastValidationErr)
 }
 
-// extractJSON best-effort-isolates the JSON value in a model response: it strips a
-// leading/trailing ```json fence and, failing a direct parse, falls back to the
-// substring between the first opening and last closing brace/bracket. Returns the
-// trimmed input unchanged when no JSON delimiters are present (the caller then
-// surfaces a clean "not valid JSON" error).
-func extractJSON(s string) string {
+// extractJSONCandidates isolates every complete top-level JSON value in a model
+// response, in order of appearance. Fences are treated as plain surrounding
+// text (the scanner skips to the next JSON delimiter anyway). A whole-string
+// valid JSON short-circuits to a single candidate. Scanning uses json.Decoder
+// from each opening delimiter so nested braces inside strings can't confuse
+// extraction the way the old first-{/last-} span did.
+func extractJSONCandidates(s string) []string {
 	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
-		// Drop the opening fence line (```json / ```), then a trailing fence.
-		if i := strings.IndexByte(s, '\n'); i >= 0 {
-			s = s[i+1:]
-		}
-		s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "```"))
+	if s == "" {
+		return nil
 	}
 	if json.Valid([]byte(s)) {
-		return s
+		return []string{s}
 	}
-	// Fall back to the outermost object/array span.
-	start := strings.IndexAny(s, "{[")
-	if start < 0 {
-		return s
+	var out []string
+	for i := 0; i < len(s); {
+		j := strings.IndexAny(s[i:], "{[")
+		if j < 0 {
+			break
+		}
+		start := i + j
+		dec := json.NewDecoder(strings.NewReader(s[start:]))
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			i = start + 1 // not a value here — advance past this delimiter
+			continue
+		}
+		out = append(out, string(raw))
+		i = start + int(dec.InputOffset())
 	}
-	open := s[start]
-	closeByte := byte('}')
-	if open == '[' {
-		closeByte = ']'
-	}
-	if end := strings.LastIndexByte(s, closeByte); end > start {
-		return s[start : end+1]
-	}
-	return s
+	return out
 }
