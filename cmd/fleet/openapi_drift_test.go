@@ -206,8 +206,10 @@ func securitySchemeNames(op any) []string {
 // WHAT IT DOES NOT CHECK (out of static reach; honestly out of scope here):
 //   - Inline (anonymous) request/response schemas declared directly on an
 //     operation rather than via $ref — they have no single Go type to bind to
-//     (e.g. POST /tasks/model, the /mcp-servers envelope, GET /api/me which
-//     returns an ad-hoc map[string]any). These are NOT in the registry.
+//     (e.g. POST /tasks/model, the /mcp-servers envelope). These are NOT in
+//     the registry. Named schemas whose handler emits an ad-hoc
+//     map[string]any (e.g. CurrentUserResponse for GET /api/me) likewise have
+//     no reflectable type and live in schemaExcluded.
 //   - Whether a handler ACTUALLY populates a field at runtime (only the static
 //     json-tag surface is visible); behavioural correctness, status codes, and
 //     value-level validation remain documentary, exactly as before.
@@ -277,6 +279,11 @@ var schemaExcluded = map[string]string{
 	// A documentary placeholder (LogSession is described prose-only, with no
 	// properties) — there is nothing to cross-check.
 	"LogSession": "documentary-only schema (no properties declared)",
+	// GET /api/me (handlers.GetCurrentUser) writes an ad-hoc
+	// map[string]interface{} — {authenticated, username?, role?} — with no
+	// exported Go struct to reflect over; kept in sync by hand (and covered
+	// behaviourally by TestGetCurrentUser in internal/sched/handlers).
+	"CurrentUserResponse": "handler emits an ad-hoc map (handlers.GetCurrentUser)",
 }
 
 // TestOpenAPISchemaDrift is the body-schema half of the drift gate. See the

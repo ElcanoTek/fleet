@@ -38,6 +38,10 @@ func IsEmailToolName(toolName string) bool {
 // unchanged rawInput if the args don't parse or don't name a file. When
 // content_file is set, it always takes precedence over any inline content —
 // matching the tool descriptions and the MCP sendgrid server's behavior.
+//
+// The path is contained to the conversation workspace (#573): no $VAR or ~
+// expansion, absolute paths outside the workspace are rejected, and the final
+// resolution goes through SafeWorkspaceJoin (".." + symlink-escape reject).
 func MaterializeContentFile(convID, rawInput string) (string, error) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
@@ -53,14 +57,32 @@ func MaterializeContentFile(convID, rawInput string) (string, error) {
 	// for both preview_email and send_email document this contract, and the MCP
 	// sendgrid server enforces the same rule. Always read the file when
 	// content_file is set, replacing any inline content the agent may have provided.
-	path := os.ExpandEnv(file)
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			path = filepath.Join(home, path[2:])
-		}
+	//
+	// content_file is model-controlled (steerable via prompt injection), and its
+	// bytes become an OUTBOUND email body — so containment here is what stops an
+	// agent inlining host secrets (/proc/self/environ, ~/.aws/credentials) into
+	// mail (#573). Three rules, mirroring SafeWorkspaceJoin:
+	//   1. No $VAR / ~ expansion — an attacker-supplied path must resolve
+	//      literally, never through the fleet process environment.
+	//   2. An absolute path must already live under the conversation workspace;
+	//      anything else is rejected outright.
+	//   3. The (now relative) path goes through SafeWorkspaceJoin, which rejects
+	//      ".." components and symlink escapes.
+	workspace, err := filepath.Abs(WorkspaceDirForConversation(convID))
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace for content_file %q: %w", file, err)
 	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(WorkspaceDirForConversation(convID), path)
+	rel := file
+	if filepath.IsAbs(file) {
+		r, err := filepath.Rel(workspace, filepath.Clean(file))
+		if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("content_file %q is outside the conversation workspace %s", file, workspace)
+		}
+		rel = r
+	}
+	path, err := SafeWorkspaceJoin(workspace, rel)
+	if err != nil {
+		return "", fmt.Errorf("read content_file %q: %w", file, err)
 	}
 
 	info, err := os.Stat(path)
@@ -70,7 +92,7 @@ func MaterializeContentFile(convID, rawInput string) (string, error) {
 	if info.Size() > MaxInlinedContentBytes {
 		return "", fmt.Errorf("content_file %q is %d bytes, exceeds %d-byte inline cap", file, info.Size(), MaxInlinedContentBytes)
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path resolved within per-conversation workspace by caller
+	data, err := os.ReadFile(path) //nolint:gosec // path validated by SafeWorkspaceJoin to live under the conversation workspace
 	if err != nil {
 		return "", fmt.Errorf("read content_file %q: %w", file, err)
 	}
@@ -93,8 +115,12 @@ func MaterializeContentFile(convID, rawInput string) (string, error) {
 // attachment file not found." Doing this at staging time means the staged args
 // row carries absolute paths, and the replay after approval works.
 //
-// Symmetric with MaterializeContentFile: same convID, same workspace resolution,
-// same `~/` and `$VAR` expansion. Skips entries that are already absolute,
+// Near-symmetric with MaterializeContentFile: same convID, same workspace
+// anchoring for relative paths (plus the historical `~/` and `$VAR` expansion) —
+// but unlike content_file (whose bytes this process reads and inlines, so it is
+// containment-gated per #573), attachment paths are only REWRITTEN here; the
+// sendgrid MCP subprocess is what opens them at send time, and files need not
+// exist at staging time. Skips entries that are already absolute,
 // unparseable args, missing arrays, or non-string path fields. Files don't need
 // to exist at staging time — preview_email stages before the file is necessarily
 // on disk in some flows; the real MCP call is the one that needs the file.

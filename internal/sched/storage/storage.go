@@ -518,9 +518,11 @@ func (s *Storage) GetUserByToken(token string) (*models.User, error) {
 	return s.db.GetUserByToken(context.Background(), token)
 }
 
-// GetScheduledTasks gets scheduled tasks ready to run up to a limit.
-func (s *Storage) GetScheduledTasks(cutoff time.Time, limit int) ([]*models.Task, error) {
-	return s.db.GetScheduledTasks(context.Background(), cutoff, limit)
+// GetScheduledTasks gets scheduled tasks ready to run up to a limit, strictly
+// after the (afterScheduledFor, afterID) keyset cursor — zero values start from
+// the beginning. See db.GetScheduledTasks for why keyset paging (#566).
+func (s *Storage) GetScheduledTasks(cutoff time.Time, afterScheduledFor time.Time, afterID uuid.UUID, limit int) ([]*models.Task, error) {
+	return s.db.GetScheduledTasks(context.Background(), cutoff, afterScheduledFor, afterID, limit)
 }
 
 // CancelTaskAtomic cancels a task atomically. reason records WHO/why (#508 —
@@ -1140,31 +1142,25 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	now := time.Now().In(loc)
 	nextTime := schedule.Next(now).UTC()
 
-	newTask := models.NewTask(models.TaskCreate{
-		Prompt:              task.Prompt,
-		Model:               task.Model,
-		FallbackModel:       task.FallbackModel,
-		MaxIterations:       task.MaxIterations,
-		MCPSelection:        task.MCPSelection,
-		CredentialAllowlist: task.CredentialAllowlist,
-		LoopConfig:          task.LoopConfig,
-		WorktreeConfig:      task.WorktreeConfig,
-		RetryPolicy:         task.RetryPolicy,
-		Persona:             task.Persona,
-		Description:         task.Description,
-		Priority:            task.Priority,
-		ScheduledFor:        &nextTime,
-		Recurrence:          task.Recurrence,
-		Timezone:            task.Timezone,
-		Files:               task.Files,
-		Tags:                task.Tags,
-		RunIf:               task.RunIf,
-		// Carry the Captain's Log opt-in forward (#285/#322) so a recurring
-		// self-improving task keeps its persistent-memory capability on every
-		// occurrence rather than silently losing it (the new occurrence must have
-		// the flag set for its run to register remember/recall + inject memory).
-		InstructionSelfImprove: task.InstructionSelfImprove,
-	})
+	// Build the next occurrence from the FULL definition of the completing task
+	// via TaskToCreate — the single canonical Task→TaskCreate clone (also used by
+	// re-run/clone #270). A hand-maintained TaskCreate literal here was the
+	// structural cause of #565: every new per-task definition field (allow_network,
+	// carry_context, output_schema, sandbox_limits, delegation/task-creation/
+	// event-trigger capability bits, SLA config, …) had to be remembered here too,
+	// and any that was forgotten silently reset to its zero value on occurrence #2+.
+	// Delegating to TaskToCreate means a field is carried the moment it joins the
+	// clone recipe, and TestTaskToCreateCarriesEveryDefinitionField guards against
+	// a field being added to TaskCreate without joining that recipe.
+	tc := models.TaskToCreate(task)
+	// Recurring occurrences are unnamed: Name is the import/export identity key
+	// with a partial unique index on non-empty names, so carrying the completing
+	// occurrence's name would collide with the row still in the table and abort
+	// the recurrence. (The pre-#565 literal already dropped Name; preserve that.)
+	tc.Name = ""
+	// Point the clone at the next fire time (TaskToCreate carried the old one).
+	tc.ScheduledFor = &nextTime
+	newTask := models.NewTask(tc)
 	newTask.CreatedBy = task.CreatedBy
 	// Carry the originating API key forward so recurring task cost keeps counting
 	// against the key's spending caps.
@@ -1315,6 +1311,11 @@ func (s *Storage) ClaimNextDatasetRow(ctx context.Context, datasetID uuid.UUID) 
 // FinishDatasetRow records one row run's outcome.
 func (s *Storage) FinishDatasetRow(ctx context.Context, rowID uuid.UUID, proposed json.RawMessage, note, errMsg string, costUSD float64) error {
 	return s.db.FinishDatasetRow(ctx, rowID, proposed, note, errMsg, costUSD)
+}
+
+// RequeueDatasetRow returns a pause-interrupted in-flight row to pending (#586).
+func (s *Storage) RequeueDatasetRow(ctx context.Context, rowID uuid.UUID) error {
+	return s.db.RequeueDatasetRow(ctx, rowID)
 }
 
 // ApproveDatasetRows merges proposed values into cells for review-approved rows.

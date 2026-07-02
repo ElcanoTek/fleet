@@ -354,3 +354,31 @@ func TestDetectFastIOContentType(t *testing.T) {
 		}
 	}
 }
+
+// TestFastIOUploadFile_RejectsCrossConversationTraversal pins the #575 fix on
+// the exfil side: fastio_upload_file must refuse a relative path that escapes
+// the caller's conversation workspace via ".." — pre-fix it could read (and
+// upload) a sibling conversation's file. The MCP caller must never be reached.
+func TestFastIOUploadFile_RejectsCrossConversationTraversal(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	if err := os.MkdirAll(filepath.Join(root, "conv-other"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "conv-other", "secret.csv"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	ctx := WithConversationID(context.Background(), "conv-attacker")
+
+	fake := &fakeMCPCaller{response: okResult("{}")}
+	_, err := runFastIOUpload(ctx, fake, FastIOUploadFileParams{
+		Path:        "../conv-other/secret.csv",
+		WorkspaceID: "1234567890123456789",
+	})
+	if err == nil {
+		t.Fatal("expected rejection of '..' path escaping the conversation workspace")
+	}
+	if len(fake.calls) != 0 {
+		t.Errorf("MCP caller must not be reached for a rejected path; got %d call(s)", len(fake.calls))
+	}
+}

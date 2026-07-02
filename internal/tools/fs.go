@@ -37,7 +37,11 @@ func runWriteFile(ctx context.Context, params WriteFileParams) (string, error) {
 	if params.Path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	validPath, err := ValidatePath(resolveWorkspacePath(ctx, params.Path))
+	resolved, err := resolveWorkspacePath(ctx, params.Path)
+	if err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
+	validPath, err := ValidatePath(resolved)
 	if err != nil {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
@@ -81,7 +85,11 @@ func runEditFile(ctx context.Context, params EditFileParams) (string, error) {
 	if params.OldText == "" {
 		return "", fmt.Errorf("old_text is required")
 	}
-	validPath, err := ValidatePathForRead(resolveWorkspacePath(ctx, params.Path))
+	resolved, err := resolveWorkspacePath(ctx, params.Path)
+	if err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
+	validPath, err := ValidatePathForRead(resolved)
 	if err != nil {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
@@ -134,7 +142,11 @@ func runViewFile(ctx context.Context, params ViewFileParams) (string, error) {
 	if params.Path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	validPath, err := ValidatePathForRead(resolveWorkspacePath(ctx, params.Path))
+	resolved, err := resolveWorkspacePath(ctx, params.Path)
+	if err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
+	validPath, err := ValidatePathForRead(resolved)
 	if err != nil {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}

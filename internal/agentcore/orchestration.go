@@ -465,8 +465,28 @@ func (o *orchestrationState) updateUsage(modelSlug string, usage fantasy.Usage, 
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	o.PromptTokens += int(usage.InputTokens)
-	o.LastStepInputTokens = int(usage.InputTokens)
+	// Cache-token convention (#587): fantasy normalizes EVERY provider to one
+	// convention before usage reaches this seam — InputTokens is the UNCACHED
+	// (fresh) prompt input and CacheReadTokens is the cache-read subset. That
+	// holds for OpenRouter (which reports prompt_tokens INCLUDING cached;
+	// fantasy's openrouter hooks subtract the cached subset) and for the native
+	// Anthropic provider (whose input_tokens already exclude cache reads) alike.
+	//
+	// The counters here follow the LogSession contract instead: PromptTokens is
+	// the TOTAL prompt-side input including cache reads (the billing/display
+	// number CumulativeCacheHitRate divides by, and the one checkCeilings /
+	// budgetState subtract CachedTokens from to get uncached spend) — so the
+	// cache reads are added back in ONCE, here, at the single accounting seam.
+	// Accumulating bare InputTokens (the pre-#587 behavior) made those
+	// subtraction sites double-discount the cache: the token ceiling and the
+	// sub-agent budget slices under-counted uncached spend by the cached amount
+	// of every step, so a run with a hot cache prefix was governed by a ceiling
+	// that fired late (or a child budget sliced too generously).
+	totalPrompt := int(usage.InputTokens + usage.CacheReadTokens)
+	o.PromptTokens += totalPrompt
+	// The per-STEP input size is the context-pressure / window signal, so it too
+	// counts cache reads — a cached token still occupies the context window.
+	o.LastStepInputTokens = totalPrompt
 	o.CompletionTokens += int(usage.OutputTokens)
 	o.CachedTokens += int(usage.CacheReadTokens)
 	o.CacheCreationTokens += int(usage.CacheCreationTokens)
@@ -476,11 +496,16 @@ func (o *orchestrationState) updateUsage(modelSlug string, usage fantasy.Usage, 
 
 	if o.logSession != nil {
 		o.logSession.mu.Lock()
-		o.logSession.PromptTokens += int(usage.InputTokens)
+		o.logSession.PromptTokens += totalPrompt
 		o.logSession.CompletionTokens += int(usage.OutputTokens)
 		o.logSession.CachedTokens += int(usage.CacheReadTokens)
 		o.logSession.CacheCreationTokens += int(usage.CacheCreationTokens)
-		o.logSession.LastStepPromptTokens = int(usage.InputTokens + usage.CacheReadTokens)
+		// The compaction trigger compares this against the model's context
+		// window: it is the true size of this call's prompt (fresh + cache-read),
+		// NOT fresh + cached added onto an already-inclusive total — fantasy's
+		// InputTokens excludes cache reads (above), so this sum counts each
+		// prompt token exactly once.
+		o.logSession.LastStepPromptTokens = totalPrompt
 		o.logSession.Cost += cost
 		o.logSession.mu.Unlock()
 	}

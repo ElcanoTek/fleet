@@ -272,6 +272,17 @@ components:
         id: { type: string, format: uuid }
         username: { type: string }
         role: { type: string }
+    CurrentUserResponse:
+      type: object
+      description: >-
+        The GET /api/me probe body. `username` and `role` are present only when
+        the credential resolves to a user record (bearer token or Elcano
+        cookie); an API-key credential yields just `authenticated: true`.
+      properties:
+        authenticated: { type: boolean }
+        username: { type: string }
+        role: { type: string }
+      required: [authenticated]
     LoginRequest:
       type: object
       properties:
@@ -1715,7 +1726,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/UserCreate" }
       responses:
-        "200":
+        "201":
           description: Created
           content:
             application/json:
@@ -1729,7 +1740,7 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/UserResponse" }
+              schema: { $ref: "#/components/schemas/CurrentUserResponse" }
   /stats:
     get:
       summary: Dashboard stats.
