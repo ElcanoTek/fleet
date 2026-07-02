@@ -126,11 +126,9 @@ yourself are already in the box, tested, and governed by the same core:
 
 ## Built for trust: governed, auditable delegation
 
-The hard part of agent adoption isn't technical anymore.
-[Wharton's adoption research](https://knowledge.wharton.upenn.edu/special-report/wharton-blueprint-ai-agent-adoption/)
-finds the real barriers are psychological: *does it work, can I trust it, and
-am I willing to hand over control?* fleet answers each with a mechanism, not a
-promise.
+The hard part of agent adoption isn't technical anymore — the real barriers
+are psychological: *does it work, can I trust it, and am I willing to hand
+over control?* fleet answers each with a mechanism, not a promise.
 
 **Can it do the job — reproducibly?** The whole agent setup — prompts,
 personas, playbooks, skills, connectors, model defaults — is a **versioned
