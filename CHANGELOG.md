@@ -20,8 +20,23 @@ prior versions are listed because none have shipped.
   final object — observed in a live run) now validates to the last conforming
   value instead of failing outright; extraction scans complete JSON values
   with a decoder, so braces inside strings can't derail it.
+- `fleet chat` no longer races the terminal on its first markdown render:
+  glamour's auto-style raw-queried the terminal (OSC 11) mid-session while
+  bubbletea owned stdin, so the reply could wedge input or be typed into the
+  composer as garbage on real terminals. The TUI now resolves dark/light via
+  bubbletea's RequestBackgroundColor handshake and always hands glamour an
+  explicit style. Also: typed letters no longer scroll the transcript (the
+  viewport's default h/j/k/l keymap was receiving composer keystrokes).
 
 ### Added
+
+- Demo GIFs for every surface (#540): the README now opens with three
+  recordings telling one story — plan in chat (a REAL model + sandbox take),
+  automate in the Operations Center (real scheduler), ride along in the TUI
+  (deterministic mock). Recording + conversion pipelines are scripted
+  (`docs/scripts/record-web-demos.mjs`, `generate-web-gifs.sh`,
+  `generate-tui-gif.sh` with a verified-take retry loop) and documented in
+  `docs/generating-demo-gif.md`.
 
 - Browser push notifications via the Web Push API (#292): opt in per browser
   under Settings → Connections and get a low-detail alert — task complete or
