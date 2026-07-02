@@ -30,7 +30,7 @@ func parseTaskID(raw string) (uuid.UUID, bool) {
 // Exit codes: 0 ok · 1 usage · 2 not-found · 5 operational.
 func taskMemories(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet-admin task memories list|clear|delete <task_id> [key]")
+		return errf(1, "usage: fleet task memories list|clear|delete <task_id> [key]")
 	}
 	switch argv[0] {
 	case "list", "ls":

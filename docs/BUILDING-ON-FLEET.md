@@ -19,7 +19,7 @@ Typed keys (#190) carry their access class in the token itself —
 `fleet_webhook_…` can only fire its named triggers:
 
 ```sh
-fleet sched apikey create --name ci-bot --type task
+fleet sched apikey create ci-bot --type task
 # → prints fleet_task_<base58> exactly once — store it in your caller's secrets
 ```
 

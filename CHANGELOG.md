@@ -27,6 +27,12 @@ prior versions are listed because none have shipped.
   bubbletea's RequestBackgroundColor handshake and always hands glamour an
   explicit style. Also: typed letters no longer scroll the transcript (the
   viewport's default h/j/k/l keymap was receiving composer keystrokes).
+- API keys minted by the CLI (`fleet sched apikey create`) now authenticate
+  against an already-running server without a restart: on a lookup miss the
+  key manager stats `api_keys.json` and reloads newly-appended keys (existing
+  in-memory keys — and their runtime rate/budget state — are never clobbered,
+  and a just-revoked key can't be resurrected). Found by exercising the
+  documented mint-and-use flow live.
 
 ### Added
 
@@ -45,6 +51,14 @@ prior versions are listed because none have shipped.
   `generate-tui-gif.sh` with a verified-take retry loop) and documented in
   `docs/generating-demo-gif.md`.
 
+- `fleet cleanup [--dry-run] [--deep]` — reclaim host-side build/deploy cruft:
+  dangling podman image layers (each sandbox rebuild strands ~1.3 GB) and the
+  Go build/test caches; `--deep` additionally prunes unused named images,
+  stopped containers, and networks. Never touches databases, workspaces, or
+  the client bundle. `scripts/update.sh` now prunes dangling layers
+  automatically after a successful sandbox rebuild, so routine updates can't
+  fill the disk. CLI usage strings now name the unified `fleet` binary
+  instead of the deprecated `fleet-admin`.
 - Browser push notifications via the Web Push API (#292): opt in per browser
   under Settings → Connections and get a low-detail alert — task complete or
   failed (`FLEET_PUSH_ON_TASK_COMPLETE`), approval needed
