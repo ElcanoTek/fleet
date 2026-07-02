@@ -1135,31 +1135,25 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	now := time.Now().In(loc)
 	nextTime := schedule.Next(now).UTC()
 
-	newTask := models.NewTask(models.TaskCreate{
-		Prompt:              task.Prompt,
-		Model:               task.Model,
-		FallbackModel:       task.FallbackModel,
-		MaxIterations:       task.MaxIterations,
-		MCPSelection:        task.MCPSelection,
-		CredentialAllowlist: task.CredentialAllowlist,
-		LoopConfig:          task.LoopConfig,
-		WorktreeConfig:      task.WorktreeConfig,
-		RetryPolicy:         task.RetryPolicy,
-		Persona:             task.Persona,
-		Description:         task.Description,
-		Priority:            task.Priority,
-		ScheduledFor:        &nextTime,
-		Recurrence:          task.Recurrence,
-		Timezone:            task.Timezone,
-		Files:               task.Files,
-		Tags:                task.Tags,
-		RunIf:               task.RunIf,
-		// Carry the Captain's Log opt-in forward (#285/#322) so a recurring
-		// self-improving task keeps its persistent-memory capability on every
-		// occurrence rather than silently losing it (the new occurrence must have
-		// the flag set for its run to register remember/recall + inject memory).
-		InstructionSelfImprove: task.InstructionSelfImprove,
-	})
+	// Build the next occurrence from the FULL definition of the completing task
+	// via TaskToCreate — the single canonical Task→TaskCreate clone (also used by
+	// re-run/clone #270). A hand-maintained TaskCreate literal here was the
+	// structural cause of #565: every new per-task definition field (allow_network,
+	// carry_context, output_schema, sandbox_limits, delegation/task-creation/
+	// event-trigger capability bits, SLA config, …) had to be remembered here too,
+	// and any that was forgotten silently reset to its zero value on occurrence #2+.
+	// Delegating to TaskToCreate means a field is carried the moment it joins the
+	// clone recipe, and TestTaskToCreateCarriesEveryDefinitionField guards against
+	// a field being added to TaskCreate without joining that recipe.
+	tc := models.TaskToCreate(task)
+	// Recurring occurrences are unnamed: Name is the import/export identity key
+	// with a partial unique index on non-empty names, so carrying the completing
+	// occurrence's name would collide with the row still in the table and abort
+	// the recurrence. (The pre-#565 literal already dropped Name; preserve that.)
+	tc.Name = ""
+	// Point the clone at the next fire time (TaskToCreate carried the old one).
+	tc.ScheduledFor = &nextTime
+	newTask := models.NewTask(tc)
 	newTask.CreatedBy = task.CreatedBy
 	// Carry the originating API key forward so recurring task cost keeps counting
 	// against the key's spending caps.

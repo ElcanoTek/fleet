@@ -164,9 +164,17 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 // If no conversation id is in ctx (tests, direct invocations) the
 // path is returned unchanged so filepath.Abs falls back to process
 // cwd, preserving legacy behavior.
-func resolveWorkspacePath(ctx context.Context, path string) string {
+//
+// The per-conversation workspace is an isolation boundary — conversations
+// can belong to different users. A relative path with ".." components is
+// therefore rejected outright (#575): filepath.Join collapses ".." before
+// the downstream ValidatePath check runs, and ValidatePath only contains
+// to AllowedBaseDirs (cwd/temp), NOT to workspace/<convID>/ — so without
+// this reject, `../<otherConvID>/file` resolves into a sibling
+// conversation's workspace and passes validation.
+func resolveWorkspacePath(ctx context.Context, path string) (string, error) {
 	if path == "" || filepath.IsAbs(path) {
-		return path
+		return path, nil
 	}
 	convID := ConversationIDFromContext(ctx)
 	if convID == "" {
@@ -176,13 +184,20 @@ func resolveWorkspacePath(ctx context.Context, path string) string {
 		// agent's bash/run_python calls do. Otherwise preserve legacy behavior
 		// (return unchanged → resolved against the process cwd).
 		if forced := ForcedWorkingDirFromContext(ctx); forced != "" {
-			return filepath.Join(forced, path)
+			return filepath.Join(forced, path), nil
 		}
-		return path
+		return path, nil
+	}
+	if containsDotDotComponent(path) {
+		return "", &PathSecurityError{
+			Path:    path,
+			Reason:  "path must not contain '..' components (per-conversation workspace isolation)",
+			BaseDir: WorkspaceDirForConversation(convID),
+		}
 	}
 	dir, err := EnsureWorkspaceDir(convID)
 	if err != nil {
 		dir = WorkspaceDirForConversation(convID)
 	}
-	return filepath.Join(dir, path)
+	return filepath.Join(dir, path), nil
 }
