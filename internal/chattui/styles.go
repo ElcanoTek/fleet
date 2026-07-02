@@ -60,10 +60,12 @@ type markdownRenderer struct {
 	width int
 	r     *glamour.TermRenderer
 
-	// forceStyle overrides glamour's terminal auto-detection. Empty = auto (the
-	// production default: dark/light/notty by the real terminal). The screenshot
-	// generator (#487) sets "dark" so the captured frame shows glamour's styled
-	// output instead of the no-TTY plain fallback that a piped `go test` gets.
+	// forceStyle picks the glamour style. The TUI resolves it from the
+	// terminal background via bubbletea's OSC 11 handshake (BackgroundColorMsg)
+	// and DEFAULTS to "dark" until that reply lands — glamour's own auto-style
+	// would raw-query the terminal mid-session and race bubbletea's input
+	// parser (stray reply bytes typed into the composer / wedged input). The
+	// screenshot generator (#487) sets "dark" explicitly.
 	forceStyle string
 }
 
@@ -77,10 +79,11 @@ func (m *markdownRenderer) render(md string, width int) string {
 	}
 	m.mu.Lock()
 	if m.r == nil || m.width != width {
-		styleOpt := glamour.WithAutoStyle()
-		if m.forceStyle != "" {
-			styleOpt = glamour.WithStandardStyle(m.forceStyle)
+		style := m.forceStyle
+		if style == "" {
+			style = "dark" // never let glamour query the terminal itself
 		}
+		styleOpt := glamour.WithStandardStyle(style)
 		r, err := glamour.NewTermRenderer(styleOpt, glamour.WithWordWrap(width))
 		if err != nil {
 			m.mu.Unlock()
