@@ -197,6 +197,17 @@ each piece yourself):
    `fedora-minimal:latest` so on-box rebuilds pick up current patches — pin a
    digest there if you need byte-for-byte reproducible builds.
 
+   To automate that publish path (#195), fleet ships a **reusable GitHub Actions
+   workflow** — `.github/workflows/publish-sandbox-image.yml` (`workflow_call`).
+   A client config repo adds a small caller workflow (the contract is documented
+   at the top of the reusable file) that fires on `sandbox/**` changes: it
+   builds the bundle's image with the same `scripts/build-sandbox-image.sh`,
+   pushes an immutable `{git-sha}` tag plus `:latest` to GHCR with the caller's
+   `GITHUB_TOKEN`, and opens a PR in the client repo pinning
+   `sandbox.image` to the sha tag. Fleet core CI deliberately does NOT publish
+   the generic bundle's image (the coupling removed in 24ce69f stays removed);
+   a manual `workflow_dispatch` exists for ad-hoc publishes.
+
 3. **systemd** — run the single binary under `deploy/fleet.service` (it
    `EnvironmentFile`s the 0600 env file, `Restart=always`, drains the worker
    pool on `SIGTERM`). Check out the client config bundle and point
