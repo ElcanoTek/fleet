@@ -54,11 +54,22 @@ func canonicalPatterns() []pattern {
 		{regexp.MustCompile(`AKIA[A-Z0-9]{16}`), placeholder},             // AWS access key ID
 		// HTTP Authorization: Bearer <token> (e.g. in captured curl/wget output).
 		{regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)([A-Za-z0-9\-._~+/]+=*)`), "${1}" + placeholder},
+		// HTTP Authorization: Basic <base64(user:pass)>. A dedicated pattern
+		// because the scheme word ("Basic", 5 chars) sits where the generic
+		// marker rule expects the 8+-char value, so Basic credentials — which
+		// decode to the plaintext user:password — used to pass through.
+		{regexp.MustCompile(`(?i)(authorization:\s*basic\s+)([A-Za-z0-9+/\-._~]+=*)`), "${1}" + placeholder},
 		// Marker = value, including the JSON-quoted form {"api_key":"..."}: the
 		// separator class includes : = whitespace and quotes so the value after a
 		// recognized marker is scrubbed even with no spaces. Value is 8+ chars up
 		// to the next delimiter. This closes the markerless-JSON gap.
-		{regexp.MustCompile(`(?i)((?:api[_-]?key|secret|token|password|passwd|authorization)["']?\s*[:=]["'\s]*(?:bearer\s+)?)([^\s"',}{]{8,})`), "${1}" + placeholder},
+		//
+		// The keyword may also be an interior token of a longer key name
+		// (aws_secret_access_key, secret_access_key, gcp_refresh_token, …): after
+		// the keyword, `_`/`-`-led name characters are allowed before the
+		// separator. Requiring that boundary keeps prose words that merely embed
+		// a keyword (secretary, tokenizer) from matching.
+		{regexp.MustCompile(`(?i)((?:api[_-]?key|secret|token|password|passwd|authorization)(?:[_-][A-Za-z0-9_-]*)?["']?\s*[:=]["'\s]*(?:(?:bearer|basic)\s+)?)([^\s"',}{]{8,})`), "${1}" + placeholder},
 	}
 }
 

@@ -15,6 +15,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Scheduler liveness (#566): `ProcessScheduledTasks` no longer live-locks when
+  a full batch of due tasks makes no forward progress — e.g. ≥1000 one-shot
+  tasks all soft-held by a declining `run_if` gate. The old loop paged with a
+  plain `LIMIT` and terminated only on a short batch, so a full batch of
+  soft-held rows (which stay scheduled + due by design) was re-fetched
+  identically forever, hanging the scheduler goroutine and with it lease
+  recovery and starvation promotion for the whole box. The due set is now
+  walked with a keyset cursor over the total order `(scheduled_for, id)` — each
+  row is handled at most once per tick, a held prefix can't mask due work
+  behind it (the `id` tiebreaker makes pages stable even when many rows share
+  one `scheduled_for`), per-tick cost is linear, and a defensive 100k-rows valve
+  bounds a pathological tick. Soft-hold semantics are unchanged: a held one-shot
+  stays scheduled and is re-evaluated next tick.
 - Web rate limiter (#561): `(*rateLimiter).wait` no longer double-unlocks its
   mutex when the context is cancelled mid-wait. Cancelling a `web_fetch` /
   `web_search` turn while it was blocked in the minimum-interval (or per-minute)
@@ -57,6 +70,17 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Usage analytics (#601 part 1): admin-only `GET /admin/usage?group_by=&from=&to=`
+  rolls the already-persisted metering (per-iteration `task_iterations` ⋈
+  `tasks`, plus the chat `turn_metrics` session log) up by user, API key,
+  project, model, or day/week time bucket over a requested window — a pure
+  read model: no new accounting path, no new tables. Rendered in the
+  Operations Center as an admin-only "Usage" tab (KPI tiles, single-hue
+  bar/column charts coherent in light + dark, full table view). Honest scope
+  (#289): native-provider runs accrue $0 unless a pricing override is
+  configured, so the endpoint and panel always show token totals alongside
+  dollars and say so. Per-principal budgets are part 2 of #601 and are not
+  included here. See `docs/USAGE-ANALYTICS.md`.
 - `fleet task run <task.yaml>` — the local one-shot harness (run a single task
   to completion through the governed scheduled runtime, no server/DB) is now a
   verb of the unified CLI instead of the separate `cutlass` binary; the logic

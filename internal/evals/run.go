@@ -9,6 +9,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/scorers"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // The replay engine. Each golden runs through agent.Manager.RunTurn — the SAME
@@ -232,9 +233,8 @@ func deterministicResult(kind string, pass bool, label string) ScorerResult {
 	return ScorerResult{Kind: kind, Pass: pass, Label: label, Score: score}
 }
 
+// clamp bounds free text on a rune boundary (#595) — the shared helper never
+// splits a multi-byte rune, so clamped material stays valid UTF-8.
 func clamp(s string, maxChars int) string {
-	if len(s) <= maxChars {
-		return s
-	}
-	return s[:maxChars] + "\n…[truncated]"
+	return truncate.Clamp(s, maxChars, "\n…[truncated]")
 }

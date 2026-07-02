@@ -3,11 +3,14 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 func testDataset() *models.Dataset {
@@ -177,5 +180,78 @@ func TestDatasetReviewResetAndSweep(t *testing.T) {
 	got, _ := db.GetDataset(ctx, d.ID)
 	if got.Status != models.DatasetStatusPaused || got.RowCounts[models.DatasetRowRunning] != 0 {
 		t.Fatalf("sweep: status=%s counts=%v", got.Status, got.RowCounts)
+	}
+}
+
+// TestRequeueDatasetRow pins the #586 pause contract at the DB layer: a
+// running row returns to pending with the claim's attempt refunded, is
+// re-claimable, and a non-running row is rejected (reset/approve win).
+func TestRequeueDatasetRow(t *testing.T) {
+	db, d := setupDatasetFixture(t)
+	ctx := context.Background()
+
+	r1, err := db.ClaimNextDatasetRow(ctx, d.ID)
+	if err != nil || r1 == nil || r1.Attempts != 1 {
+		t.Fatalf("claim: %+v %v", r1, err)
+	}
+	if err := db.RequeueDatasetRow(ctx, r1.ID); err != nil {
+		t.Fatalf("requeue: %v", err)
+	}
+	pending, err := db.ListDatasetRows(ctx, d.ID, models.DatasetRowPending, 0, 0)
+	if err != nil || len(pending) != 3 {
+		t.Fatalf("pending after requeue: %d %v", len(pending), err)
+	}
+	for _, r := range pending {
+		if r.ID == r1.ID && r.Attempts != 0 {
+			t.Fatalf("requeued row attempts = %d, want 0 (refunded)", r.Attempts)
+		}
+	}
+	// The requeued row is claimable again (lowest row_index first).
+	again, err := db.ClaimNextDatasetRow(ctx, d.ID)
+	if err != nil || again == nil || again.ID != r1.ID || again.Attempts != 1 {
+		t.Fatalf("reclaim: %+v %v", again, err)
+	}
+	// A row that already reached an outcome must not be requeued.
+	if err := db.FinishDatasetRow(ctx, again.ID, json.RawMessage(`{"summary":"fine"}`), "", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RequeueDatasetRow(ctx, again.ID); err == nil {
+		t.Fatal("requeue of a non-running row must be rejected")
+	}
+}
+
+// TestFinishDatasetRow_ClampedMultibyteTextLands pins the #595 datasets fix:
+// note/error text clamped mid-multibyte-rune used to reach Postgres as invalid
+// UTF-8, the TEXT write was rejected, and the row stranded 'running'. The
+// rune-boundary clamp keeps the write valid so the outcome always lands.
+func TestFinishDatasetRow_ClampedMultibyteTextLands(t *testing.T) {
+	db, d := setupDatasetFixture(t)
+	ctx := context.Background()
+
+	r1, err := db.ClaimNextDatasetRow(ctx, d.ID)
+	if err != nil || r1 == nil {
+		t.Fatalf("claim: %+v %v", r1, err)
+	}
+	// 3-byte runes with a budget that is not a multiple of 3: the naive byte
+	// slice at the budget is invalid UTF-8 (the pre-fix behavior).
+	const budget = 8000
+	long := strings.Repeat("世", budget/3+2)
+	if utf8.ValidString(long[:budget]) {
+		t.Fatal("test bug: naive byte slice is valid UTF-8 — not exercising the regression")
+	}
+	note := truncate.Clamp(long, budget, "…[truncated]")
+	errMsg := truncate.Clamp(long, 500, "…[truncated]")
+	if !utf8.ValidString(note) || !utf8.ValidString(errMsg) {
+		t.Fatal("clamped text must be valid UTF-8")
+	}
+	if err := db.FinishDatasetRow(ctx, r1.ID, nil, note, errMsg, 0); err != nil {
+		t.Fatalf("FinishDatasetRow with clamped multibyte text must land: %v", err)
+	}
+	failed, err := db.ListDatasetRows(ctx, d.ID, models.DatasetRowFailed, 0, 0)
+	if err != nil || len(failed) != 1 || failed[0].ID != r1.ID {
+		t.Fatalf("failed rows: %d %v", len(failed), err)
+	}
+	if failed[0].ResultNote != note || failed[0].Error != errMsg {
+		t.Fatal("clamped note/error must round-trip unchanged")
 	}
 }

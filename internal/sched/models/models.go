@@ -1800,6 +1800,50 @@ type SLAReport struct {
 	Tasks      []SLAReportTask `json:"tasks"`
 }
 
+// UsageBucket is one aggregated row of the usage report (#601 part 1): the
+// cost/token roll-up for a single group_by key over the requested window.
+// Key is the grouping value (a user email/username, an API key id, a project
+// id, a model slug, or a YYYY-MM-DD bucket start for day/week grouping); the
+// empty key collects rows without that dimension (e.g. tasks have no project,
+// chat turns have no API key). Label is a human-friendly name when one exists
+// (today: the project name for group_by=project).
+//
+// The per-source splits (Task*/Chat*) are kept alongside the combined totals
+// on purpose: the two sources meter different surfaces (scheduled-task
+// iterations vs interactive chat turns) with different dimensional coverage,
+// so an honest UI can show where each number came from. CachedTokens is
+// chat-only — task_iterations does not persist a cached-token count.
+type UsageBucket struct {
+	Key              string  `json:"key"`
+	Label            string  `json:"label,omitempty"`
+	CostUSD          float64 `json:"cost_usd"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	CachedTokens     int64   `json:"cached_tokens"`
+	TaskCostUSD      float64 `json:"task_cost_usd"`
+	ChatCostUSD      float64 `json:"chat_cost_usd"`
+	TaskIterations   int64   `json:"task_iterations"`
+	ChatTurns        int64   `json:"chat_turns"`
+}
+
+// UsageReport is the GET /admin/usage response (#601 part 1): cost + token
+// totals over [From, To) grouped by GroupBy (user|key|project|model|day|week),
+// sourced from the already-persisted metering (task_iterations ⋈ tasks, and
+// the chat turn_metrics log) — never a parallel accounting path. Sources lists
+// which meters contributed ("tasks" always; "chat" only when the chat store is
+// wired). Note carries the honest-scope caveat that dollar figures depend on
+// pricing config (#289): native-provider runs accrue $0 unless a pricing
+// override is set, so token totals are the coverage-independent signal.
+type UsageReport struct {
+	GroupBy string        `json:"group_by"`
+	From    time.Time     `json:"from"`
+	To      time.Time     `json:"to"`
+	Buckets []UsageBucket `json:"buckets"`
+	Totals  UsageBucket   `json:"totals"`
+	Sources []string      `json:"sources"`
+	Note    string        `json:"note"`
+}
+
 // EvalRun is one eval & regression harness invocation (#502): the set-level
 // aggregate persisted to eval_runs after `fleet eval run <set>` replays a
 // set's goldens through the governed loop. Results holds the marshaled
