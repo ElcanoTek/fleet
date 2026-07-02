@@ -5,9 +5,13 @@
 // it owns no turn/send state machine of its own. Every value, setter, ref,
 // and callback it needs is threaded in as a prop from ChatExperience, which
 // keeps owning the per-conversation composer state, the upload pipeline, and
-// the streaming turn loop. The JSX below is the former inline <form> block,
-// moved verbatim so the live specs (send flow, Enter-vs-Shift+Enter,
-// attachments, model/persona/MCP pickers, Stop) keep driving identical DOM.
+// the streaming turn loop. The container follows the unified-shell design's
+// .composer (53rem, --composer-surface, --radius-xl, the focus-fading
+// keyboard hint below the bar, the sealed strip); the toolbar keeps the
+// pre-polish control set and layout. The behavioral contracts the specs
+// drive — placeholder format, aria-labels, textarea-first, send flow,
+// Enter-vs-Shift+Enter, attachments, model/persona/MCP pickers, Stop — are
+// unchanged.
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useState } from "react";
 import { PENDING_CONV_KEY } from "./workspaceHref";
@@ -81,6 +85,11 @@ export type ComposerProps = {
   promptPlaceholder: string;
   promptRef: RefObject<HTMLTextAreaElement | null>;
   submitPrompt: (submittedPrompt: string) => void | Promise<void>;
+
+  // Sealed (lockdown) view: accent-mixed border + the explainer strip along
+  // the composer's top edge. True for an active lockdown conversation, a
+  // pending "new sealed chat", and lockdown-only servers.
+  sealed: boolean;
 
   // Turn / upload gating
   isStreaming: boolean;
@@ -159,6 +168,7 @@ export function Composer({
   promptPlaceholder,
   promptRef,
   submitPrompt,
+  sealed,
   isStreaming,
   isUploadingAttachments,
   isDraggingOver,
@@ -210,16 +220,15 @@ export function Composer({
   isPendingKey,
 }: ComposerProps) {
   // Multi-line composer UX (issue #315):
-  // - `hasEverSentMessage` hides the "Enter to send · Shift+Enter for new
-  //   line" hint after the first send in this session. It's state (not a
-  //   ref) so the hint re-renders away on the first send. The hint
-  //   reappears on a fresh page load, which is fine — by then the user
-  //   has internalized it anyway.
+  // - `isComposerFocused` drives the keyboard-hint line under the composer:
+  //   it fades in while the textarea has focus and out on blur (the design's
+  //   .composer-hint), so the hint is present exactly while the keys it
+  //   documents are live.
   // - `sendOnEnter` is the localStorage-backed send-key preference. Read
   //   once at mount; the toggle pill next to Send flips it and persists.
   // - `showCodeNudge` is the transient "Format as code" banner fired when
   //   a paste looks like source. Auto-dismisses after CODE_NUDGE_TIMEOUT_MS.
-  const [hasEverSentMessage, setHasEverSentMessage] = useState(false);
+  const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [showCodeNudge, setShowCodeNudge] = useState(false);
   // Skill "/" autocomplete (#513). The popover is fully derived from the
   // draft: it opens while the draft is a bare "/<token>" with matching bundle
@@ -268,12 +277,18 @@ export function Composer({
   }, [showCodeNudge]);
 
   return (
+    <>
             <form
-              className={`relative mx-auto w-full max-w-[52rem] rounded-[1.2rem] border bg-[var(--composer-surface)] px-3 pt-3 pb-2.5 shadow-[var(--composer-shadow)] sm:rounded-[1.75rem] sm:px-4 sm:pt-4 sm:pb-3 transition-colors ${isDraggingOver ? "border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/30" : "border-[var(--color-border)]"}`}
+              className={`relative mx-auto w-full max-w-[53rem] rounded-[var(--radius-xl)] border bg-[var(--composer-surface)] px-4 pt-[0.85rem] pb-[0.65rem] shadow-[var(--shadow-md)] transition-colors ${
+                isDraggingOver
+                  ? "border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/30"
+                  : sealed
+                    ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border))]"
+                    : "border-[var(--color-border)]"
+              }`}
               suppressHydrationWarning
               onSubmit={(event) => {
                 event.preventDefault();
-                setHasEverSentMessage(true);
                 void submitPrompt(prompt);
               }}
               onDragEnter={(event) => {
@@ -294,10 +309,20 @@ export function Composer({
               }}
             >
               {isDraggingOver && (
-                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[1.2rem] sm:rounded-[1.75rem] bg-[var(--color-accent)]/10">
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[var(--radius-xl)] bg-[var(--color-accent)]/10">
                   <span className="text-[0.8rem] font-medium text-[var(--color-accent)]">Drop to attach</span>
                 </div>
               )}
+              {/* Sealed strip along the composer's top edge (the design's
+                  .composer-sealed-strip): negative margins cancel the form
+                  padding so the strip runs edge-to-edge, with its top corners
+                  following the container radius. */}
+              {sealed ? (
+                <div className="-mx-4 -mt-[0.85rem] mb-[0.65rem] flex items-center gap-[0.45rem] rounded-t-[calc(var(--radius-xl)-1px)] border-b border-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-4 py-[0.45rem] text-[0.75rem] text-[var(--color-text-secondary)]">
+                  <Icon name="lock" className="size-[0.8rem] shrink-0 text-[var(--color-accent)]" />
+                  <span>Sealed — your data and an approved model stay in this sandbox. Nothing leaves.</span>
+                </div>
+              ) : null}
               {/* Skill "/" autocomplete popover (#513). Anchored above the
                   composer like the persona/model dropdowns and reusing their
                   visual language. Rows complete to "/name " (via keyboard
@@ -308,7 +333,7 @@ export function Composer({
                 <div
                   role="listbox"
                   aria-label="Skills"
-                  className="absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-full max-w-[24rem] overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
+                  className="motion-safe:animate-pop-up absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-full max-w-[24rem] overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
                 >
                   <div className="max-h-72 overflow-y-auto py-1">
                     {skillMatches.map((skill, i) => {
@@ -358,11 +383,13 @@ export function Composer({
               <textarea
                 id="promptInput"
                 ref={promptRef}
-                className="min-h-[2.6rem] w-full resize-none overflow-y-auto bg-transparent px-0 pt-0 pb-2 text-[16px] leading-[1.45] text-[var(--color-text-primary)] outline-none transition-[height] duration-100 placeholder:text-[var(--color-text-muted)] sm:min-h-[3rem] sm:pb-3 sm:text-[var(--font-size-body)]"
+                className="min-h-[3.4rem] w-full resize-none overflow-y-auto bg-transparent px-[0.1rem] pt-[0.1rem] pb-[0.55rem] text-[16px] leading-[1.5] text-[var(--color-text-primary)] outline-none transition-[height] duration-fast placeholder:text-[var(--color-text-muted)] sm:text-[0.9rem]"
                 placeholder={promptPlaceholder}
                 rows={1}
                 suppressHydrationWarning
                 value={prompt}
+                onFocus={() => setIsComposerFocused(true)}
+                onBlur={() => setIsComposerFocused(false)}
                 onChange={(event) => {
                   const value = event.target.value;
                   setPrompt(value);
@@ -421,7 +448,6 @@ export function Composer({
                     : modifierSend;
                   if (shouldSend) {
                     event.preventDefault();
-                    setHasEverSentMessage(true);
                     void submitPrompt(prompt);
                   }
                 }}
@@ -452,19 +478,6 @@ export function Composer({
                   }
                 }}
               />
-
-              {/* Hint text — visible until the first send in this session.
-                  It flips off on the first submitPrompt call (via the
-                  `hasEverSentMessage` state) and stays hidden for the
-                  session. The wording adapts to the send-key preference so
-                  the Ctrl+Enter mode is self-documenting. */}
-              {!hasEverSentMessage ? (
-                <p className="mt-1 select-none text-[0.7rem] text-[var(--color-text-muted)]">
-                  {sendOnEnter
-                    ? "Enter to send · Shift+Enter for new line"
-                    : "Ctrl+Enter to send · Enter for new line"}
-                </p>
-              ) : null}
 
               {/* Code-paste nudge — surfaced when a paste looks like source
                   (see `looksLikeCode`). Auto-dismisses after
@@ -1024,5 +1037,29 @@ export function Composer({
                 </div>
               </div>
             </form>
+            {/* Keyboard hint (the design's .composer-hint): fades in while
+                the textarea is focused and out on blur, riding the fast
+                motion token. Wording adapts to the send-key preference so
+                Ctrl+Enter mode is self-documenting. aria-hidden — it
+                duplicates what the keys already do. */}
+            <p
+              aria-hidden="true"
+              className={`mx-auto mt-2 h-4 select-none text-center text-[0.7rem] text-[var(--color-text-muted)] transition-opacity duration-fast ${
+                isComposerFocused ? "opacity-100" : "opacity-0"
+              }`}
+            >
+              {sendOnEnter ? (
+                <>
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Shift+Enter</b> for a new line ·{" "}
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Enter</b> to send
+                </>
+              ) : (
+                <>
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Enter</b> for a new line ·{" "}
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Ctrl+Enter</b> to send
+                </>
+              )}
+            </p>
+    </>
   );
 }

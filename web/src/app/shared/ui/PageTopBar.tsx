@@ -29,7 +29,7 @@ export function PageTopBar({ title, onMenu, actions }: PageTopBarProps) {
       <div className="flex min-h-11 min-w-0 items-center gap-3 sm:min-h-8">
         <button
           aria-label="Open sidebar"
-          className="inline-flex size-9 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] lg:hidden"
+          className="inline-flex size-9 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:hidden"
           type="button"
           onClick={onMenu}
         >

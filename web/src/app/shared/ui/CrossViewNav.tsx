@@ -18,10 +18,14 @@ export function NavToOrchestrator({
   className,
   children = "Operations Center →",
   ariaCurrent,
+  dataTip,
 }: {
   className?: string;
   children?: React.ReactNode;
   ariaCurrent?: "page";
+  // CSS tooltip text (globals.css [data-tip]) — the collapsed rail labels its
+  // icon-only nav items this way.
+  dataTip?: string;
 }) {
   return (
     <Link
@@ -29,6 +33,7 @@ export function NavToOrchestrator({
       data-testid={NAV_TO_ORCHESTRATOR_TESTID}
       className={className}
       aria-current={ariaCurrent}
+      data-tip={dataTip}
     >
       {children}
     </Link>
@@ -39,13 +44,21 @@ export function NavToChat({
   className,
   children = "Go to Chat",
   ariaCurrent,
+  dataTip,
 }: {
   className?: string;
   children?: React.ReactNode;
   ariaCurrent?: "page";
+  dataTip?: string;
 }) {
   return (
-    <Link href="/chat" data-testid={NAV_TO_CHAT_TESTID} className={className} aria-current={ariaCurrent}>
+    <Link
+      href="/chat"
+      data-testid={NAV_TO_CHAT_TESTID}
+      className={className}
+      aria-current={ariaCurrent}
+      data-tip={dataTip}
+    >
       {children}
     </Link>
   );

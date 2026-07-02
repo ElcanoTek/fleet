@@ -137,7 +137,7 @@ export function ChatTranscript({
             // future renderer regresses, this caps the visible bleed.
             className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto pr-0 sm:pr-1"
           >
-            <div className="mx-auto grid min-h-full w-full min-w-0 max-w-[52rem] content-start gap-3 pb-4 sm:gap-4 sm:pb-6">
+            <div className="mx-auto grid min-h-full w-full min-w-0 max-w-[53rem] content-start gap-3 pb-4 sm:gap-4 sm:pb-6">
               {isLoadingHistory ? (
                 <div className="flex min-h-full items-center justify-center pb-8 text-[0.875rem] text-[var(--color-text-muted)]">
                   Loading conversation...
@@ -372,7 +372,7 @@ export function ChatTranscript({
                               {(message.state === "thinking" || crossfadingMessageIds.includes(message.id)) && !message.content ? (
                                 <div
                                   className={[
-                                    "flex min-w-0 items-center gap-2 text-[0.875rem] text-[var(--color-text-muted)] transition-opacity duration-200 ease-out",
+                                    "flex min-w-0 items-center gap-2 text-[0.875rem] text-[var(--color-text-muted)] transition-opacity duration-base",
                                     message.state === "thinking"
                                       ? "opacity-100"
                                       : "pointer-events-none opacity-0",

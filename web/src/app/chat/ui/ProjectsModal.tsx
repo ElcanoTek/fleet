@@ -178,7 +178,7 @@ export function ProjectsModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <button aria-label="Close projects" className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]" type="button" onClick={onClose} />
-      <div className="relative z-10 flex max-h-[88vh] w-full max-w-[40rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
+      <div className="motion-safe:animate-pop-up-base relative z-10 flex max-h-[88vh] w-full max-w-[40rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Projects</h2>
