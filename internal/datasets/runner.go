@@ -13,6 +13,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // TurnRunner is the slice of *agent.Manager one row run needs — the SAME
@@ -28,6 +29,7 @@ type Store interface {
 	GetDataset(ctx context.Context, id uuid.UUID) (*models.Dataset, error)
 	ClaimNextDatasetRow(ctx context.Context, datasetID uuid.UUID) (*models.DatasetRow, error)
 	FinishDatasetRow(ctx context.Context, rowID uuid.UUID, proposed json.RawMessage, note, errMsg string, costUSD float64) error
+	RequeueDatasetRow(ctx context.Context, rowID uuid.UUID) error
 	UpdateDatasetStatus(ctx context.Context, id uuid.UUID, from []string, to string) (bool, error)
 }
 
@@ -196,6 +198,18 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 	}, noopSink{})
 	wctx := context.WithoutCancel(ctx)
 	if err != nil {
+		// Pause/Shutdown cancelled the run context mid-row (#586): a control
+		// action, not a row outcome. Return the row to pending so a resume
+		// re-claims it — writing 'failed' here would strand it (only pending
+		// rows are claimed) behind a misleading "context canceled" error. A
+		// genuine turn failure racing the cancel is requeued too; if it is
+		// persistent the re-run records it as failed properly.
+		if ctx.Err() != nil {
+			if rerr := r.store.RequeueDatasetRow(wctx, row.ID); rerr != nil {
+				log.Printf("dataset %s row %d: requeue after pause: %v", d.ID, row.RowIndex, rerr)
+			}
+			return
+		}
 		if ferr := r.store.FinishDatasetRow(wctx, row.ID, nil, "", clamp(err.Error(), maxNoteChars), 0); ferr != nil {
 			log.Printf("dataset %s row %d: record failure: %v", d.ID, row.RowIndex, ferr)
 		}
@@ -217,9 +231,10 @@ func (r *Runner) runRow(ctx context.Context, d *models.Dataset, row *models.Data
 	}
 }
 
+// clamp bounds free text destined for a TEXT column on a rune boundary (#595):
+// a raw byte slice could split a multi-byte rune, and Postgres rejects invalid
+// UTF-8 outright — the failed FinishDatasetRow write then left the row stuck
+// 'running'.
 func clamp(s string, maxChars int) string {
-	if len(s) <= maxChars {
-		return s
-	}
-	return s[:maxChars] + "…[truncated]"
+	return truncate.Clamp(s, maxChars, "…[truncated]")
 }
