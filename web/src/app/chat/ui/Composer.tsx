@@ -5,9 +5,12 @@
 // it owns no turn/send state machine of its own. Every value, setter, ref,
 // and callback it needs is threaded in as a prop from ChatExperience, which
 // keeps owning the per-conversation composer state, the upload pipeline, and
-// the streaming turn loop. The JSX below is the former inline <form> block,
-// moved verbatim so the live specs (send flow, Enter-vs-Shift+Enter,
-// attachments, model/persona/MCP pickers, Stop) keep driving identical DOM.
+// the streaming turn loop. The layout follows the unified-shell design's
+// .composer (53rem, --composer-surface, toolbar of pill/circle controls,
+// focus-fading keyboard hint, sealed strip); the behavioral contracts the
+// specs drive — placeholder format, aria-labels, textarea-first, send flow,
+// Enter-vs-Shift+Enter, attachments, model/persona/MCP pickers, Stop — are
+// unchanged.
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useState } from "react";
 import { PENDING_CONV_KEY } from "./workspaceHref";
@@ -81,6 +84,11 @@ export type ComposerProps = {
   promptPlaceholder: string;
   promptRef: RefObject<HTMLTextAreaElement | null>;
   submitPrompt: (submittedPrompt: string) => void | Promise<void>;
+
+  // Sealed (lockdown) view: accent-mixed border + the explainer strip along
+  // the composer's top edge. True for an active lockdown conversation, a
+  // pending "new sealed chat", and lockdown-only servers.
+  sealed: boolean;
 
   // Turn / upload gating
   isStreaming: boolean;
@@ -159,6 +167,7 @@ export function Composer({
   promptPlaceholder,
   promptRef,
   submitPrompt,
+  sealed,
   isStreaming,
   isUploadingAttachments,
   isDraggingOver,
@@ -210,16 +219,15 @@ export function Composer({
   isPendingKey,
 }: ComposerProps) {
   // Multi-line composer UX (issue #315):
-  // - `hasEverSentMessage` hides the "Enter to send · Shift+Enter for new
-  //   line" hint after the first send in this session. It's state (not a
-  //   ref) so the hint re-renders away on the first send. The hint
-  //   reappears on a fresh page load, which is fine — by then the user
-  //   has internalized it anyway.
+  // - `isComposerFocused` drives the keyboard-hint line under the composer:
+  //   it fades in while the textarea has focus and out on blur (the design's
+  //   .composer-hint), so the hint is present exactly while the keys it
+  //   documents are live.
   // - `sendOnEnter` is the localStorage-backed send-key preference. Read
   //   once at mount; the toggle pill next to Send flips it and persists.
   // - `showCodeNudge` is the transient "Format as code" banner fired when
   //   a paste looks like source. Auto-dismisses after CODE_NUDGE_TIMEOUT_MS.
-  const [hasEverSentMessage, setHasEverSentMessage] = useState(false);
+  const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [showCodeNudge, setShowCodeNudge] = useState(false);
   // Skill "/" autocomplete (#513). The popover is fully derived from the
   // draft: it opens while the draft is a bare "/<token>" with matching bundle
@@ -268,12 +276,18 @@ export function Composer({
   }, [showCodeNudge]);
 
   return (
+    <>
             <form
-              className={`relative mx-auto w-full max-w-[52rem] rounded-[1.2rem] border bg-[var(--composer-surface)] px-3 pt-3 pb-2.5 shadow-[var(--composer-shadow)] sm:rounded-[1.75rem] sm:px-4 sm:pt-4 sm:pb-3 transition-colors ${isDraggingOver ? "border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/30" : "border-[var(--color-border)]"}`}
+              className={`relative mx-auto w-full max-w-[53rem] rounded-[var(--radius-xl)] border bg-[var(--composer-surface)] px-4 pt-[0.85rem] pb-[0.65rem] shadow-[var(--shadow-md)] transition-colors ${
+                isDraggingOver
+                  ? "border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/30"
+                  : sealed
+                    ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border))]"
+                    : "border-[var(--color-border)]"
+              }`}
               suppressHydrationWarning
               onSubmit={(event) => {
                 event.preventDefault();
-                setHasEverSentMessage(true);
                 void submitPrompt(prompt);
               }}
               onDragEnter={(event) => {
@@ -294,10 +308,20 @@ export function Composer({
               }}
             >
               {isDraggingOver && (
-                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[1.2rem] sm:rounded-[1.75rem] bg-[var(--color-accent)]/10">
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[var(--radius-xl)] bg-[var(--color-accent)]/10">
                   <span className="text-[0.8rem] font-medium text-[var(--color-accent)]">Drop to attach</span>
                 </div>
               )}
+              {/* Sealed strip along the composer's top edge (the design's
+                  .composer-sealed-strip): negative margins cancel the form
+                  padding so the strip runs edge-to-edge, with its top corners
+                  following the container radius. */}
+              {sealed ? (
+                <div className="-mx-4 -mt-[0.85rem] mb-[0.65rem] flex items-center gap-[0.45rem] rounded-t-[calc(var(--radius-xl)-1px)] border-b border-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-4 py-[0.45rem] text-[0.75rem] text-[var(--color-text-secondary)]">
+                  <Icon name="lock" className="size-[0.8rem] shrink-0 text-[var(--color-accent)]" />
+                  <span>Sealed — your data and an approved model stay in this sandbox. Nothing leaves.</span>
+                </div>
+              ) : null}
               {/* Skill "/" autocomplete popover (#513). Anchored above the
                   composer like the persona/model dropdowns and reusing their
                   visual language. Rows complete to "/name " (via keyboard
@@ -308,7 +332,7 @@ export function Composer({
                 <div
                   role="listbox"
                   aria-label="Skills"
-                  className="absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-full max-w-[24rem] overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
+                  className="motion-safe:animate-pop-up absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-full max-w-[24rem] overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
                 >
                   <div className="max-h-72 overflow-y-auto py-1">
                     {skillMatches.map((skill, i) => {
@@ -358,11 +382,13 @@ export function Composer({
               <textarea
                 id="promptInput"
                 ref={promptRef}
-                className="min-h-[2.6rem] w-full resize-none overflow-y-auto bg-transparent px-0 pt-0 pb-2 text-[16px] leading-[1.45] text-[var(--color-text-primary)] outline-none transition-[height] duration-100 placeholder:text-[var(--color-text-muted)] sm:min-h-[3rem] sm:pb-3 sm:text-[var(--font-size-body)]"
+                className="min-h-[3.4rem] w-full resize-none overflow-y-auto bg-transparent px-[0.1rem] pt-[0.1rem] pb-[0.55rem] text-[16px] leading-[1.5] text-[var(--color-text-primary)] outline-none transition-[height] duration-fast placeholder:text-[var(--color-text-muted)] sm:text-[0.9rem]"
                 placeholder={promptPlaceholder}
                 rows={1}
                 suppressHydrationWarning
                 value={prompt}
+                onFocus={() => setIsComposerFocused(true)}
+                onBlur={() => setIsComposerFocused(false)}
                 onChange={(event) => {
                   const value = event.target.value;
                   setPrompt(value);
@@ -421,7 +447,6 @@ export function Composer({
                     : modifierSend;
                   if (shouldSend) {
                     event.preventDefault();
-                    setHasEverSentMessage(true);
                     void submitPrompt(prompt);
                   }
                 }}
@@ -452,19 +477,6 @@ export function Composer({
                   }
                 }}
               />
-
-              {/* Hint text — visible until the first send in this session.
-                  It flips off on the first submitPrompt call (via the
-                  `hasEverSentMessage` state) and stays hidden for the
-                  session. The wording adapts to the send-key preference so
-                  the Ctrl+Enter mode is self-documenting. */}
-              {!hasEverSentMessage ? (
-                <p className="mt-1 select-none text-[0.7rem] text-[var(--color-text-muted)]">
-                  {sendOnEnter
-                    ? "Enter to send · Shift+Enter for new line"
-                    : "Ctrl+Enter to send · Enter for new line"}
-                </p>
-              ) : null}
 
               {/* Code-paste nudge — surfaced when a paste looks like source
                   (see `looksLikeCode`). Auto-dismisses after
@@ -562,154 +574,36 @@ export function Composer({
                 }}
               />
 
-              <div className="flex items-end justify-between gap-2">
-                <div className="flex min-w-0 flex-wrap items-center gap-2 overflow-visible">
-                  <button
-                    type="button"
-                    aria-label="Attach files"
-                    title="Attach files"
-                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-[var(--color-border-strong)] text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
-                    disabled={isStreaming || isUploadingAttachments}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Icon name="paperclip" className="size-3.5" />
-                  </button>
-                  {(() => {
-                    // Persona is locked server-side once a conversation has any
-                    // turns, so once the chat is underway the picker is read-only
-                    // noise. Hide it entirely after the first turn (and during
-                    // the very first stream) to keep the composer toolbar tidy.
-                    const personaLocked =
-                      isStreaming || (activeConversationId !== null && messages.length > 0);
-                    if (personaLocked) return null;
-                    const personaOptions = personas.length > 0 ? personas : [selectedPersona];
-                    const formatPersona = (p: string) =>
-                      p.charAt(0).toUpperCase() + p.slice(1);
-                    return (
-                      <div
-                        ref={personaPickerRef}
-                        className="relative inline-flex min-w-0 items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]"
-                      >
-                        <button
-                          type="button"
-                          aria-haspopup="listbox"
-                          aria-expanded={personaPickerOpen}
-                          title={`Persona — ${formatPersona(selectedPersona)}`}
-                          // Collapsed default = circle the same size as
-                          // the paperclip / wrench buttons (h-7 w-7) so
-                          // the composer toolbar reads as a row of
-                          // matching controls instead of two long pills
-                          // hogging space. It stays that size until you
-                          // click it open — no hover/focus expansion, so
-                          // the click target never moves out from under
-                          // the cursor. Open reveals the persona name and
-                          // the dropdown marks the active one.
-                          className={`composer-pill-text group relative inline-flex h-7 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border-strong)] bg-transparent text-[0.72rem] text-[var(--color-text-secondary)] transition-[width] duration-200 hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
-                            personaPickerOpen ? "w-24 sm:w-44" : "w-7"
-                          }`}
-                          onClick={() => setPersonaPickerOpen((open) => !open)}
-                        >
-                          <span
-                            aria-hidden="true"
-                            className={`absolute inset-0 grid place-items-center transition-opacity duration-200 ${
-                              personaPickerOpen ? "opacity-0" : "opacity-100"
-                            }`}
-                          >
-                            <Icon name="persona" className="size-3.5" />
-                          </span>
-                          <span
-                            className={`truncate px-2.5 transition-opacity duration-200 ${
-                              personaPickerOpen ? "opacity-100" : "opacity-0"
-                            }`}
-                          >
-                            {formatPersona(selectedPersona)}
-                          </span>
-                        </button>
-                        {personaPickerOpen ? (
-                          <div
-                            role="listbox"
-                            aria-label="Persona"
-                            className="absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-40 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:w-44"
-                          >
-                            <div className="max-h-72 overflow-y-auto py-1">
-                              {personaOptions.map((p) => {
-                                const selected = p === selectedPersona;
-                                return (
-                                  <button
-                                    key={p}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={selected}
-                                    className={[
-                                      "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[0.74rem] transition hover:bg-[var(--color-overlay-soft)]",
-                                      selected
-                                        ? "bg-[var(--color-overlay-soft)] font-semibold text-[var(--color-accent)]"
-                                        : "text-[var(--color-text-primary)]",
-                                    ].join(" ")}
-                                    onMouseDown={(event) => event.preventDefault()}
-                                    onClick={() => {
-                                      setSelectedPersona(p);
-                                      setPersonaPickerOpen(false);
-                                    }}
-                                  >
-                                    <span className="truncate">{formatPersona(p)}</span>
-                                    {selected ? (
-                                      <span
-                                        aria-hidden="true"
-                                        className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
-                                      />
-                                    ) : null}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })()}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-[0.35rem] overflow-visible">
                   {/* No leading "Persona" / "Model" word labels — the
                       pill values themselves convey what each control is,
-                      and dropping the labels keeps the persona dropdown's
-                      `left-0` anchored to the button (with the label, on
-                      desktop it offset the dropdown to the left of the
-                      pill). Encourages exploration: the pills look
-                      clickable on their own. */}
+                      and the pills look clickable on their own. */}
                   {/* Wrapper is a <div>, not a <label>: with <label> a click
                       anywhere inside (e.g. on a model option) bubbles up and
                       triggers the implicit "focus my <input>" behavior, which
                       re-runs the input's onFocus handler and re-opens the
                       picker we just closed. <div> drops that behavior; the
                       input is still focusable directly. */}
-                  <div ref={modelPickerRef} className="relative inline-flex min-w-0 items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
-                    {/* Same collapsed-circle treatment as the persona
-                        button — a centered icon stands in for the model in
-                        the collapsed state, and the live input fades in only
-                        once the picker is open (click/focus). No hover/focus
-                        width expansion, so the control isn't a moving target. */}
+                  <div ref={modelPickerRef} className="relative inline-flex min-w-0 items-center">
+                    {/* The design's .model-chip pill: model icon, the
+                        editable slug input as the chip text, and a selector
+                        caret. Clicking anywhere on the pill focuses the
+                        input, which opens the picker. */}
                     <div
-                      className={`group relative h-7 shrink-0 overflow-hidden rounded-full border bg-transparent transition-[width] duration-200 ${
+                      className={`inline-flex cursor-text items-center gap-[0.4rem] rounded-[var(--radius-pill)] border py-[0.3rem] pl-[0.6rem] pr-[0.5rem] transition ${
                         modelError
                           ? "border-[var(--color-danger)]"
-                          : "border-[var(--color-border-strong)] hover:border-[var(--color-accent)]"
-                      } ${
-                        isStreaming
-                          ? "w-7 cursor-not-allowed opacity-40"
-                          : modelPickerOpen
-                            ? "w-24 sm:w-44"
-                            : "w-7"
-                      }`}
+                          : "border-[var(--color-border)] hover:border-[var(--color-border-strong)]"
+                      } ${isStreaming ? "cursor-not-allowed opacity-40" : ""}`}
+                      onClick={() => {
+                        if (!isStreaming) modelInputRef.current?.focus();
+                      }}
                     >
-                      <span
-                        aria-hidden="true"
-                        className={`pointer-events-none absolute inset-0 grid place-items-center transition-opacity duration-200 ${
-                          modelError ? "text-[var(--color-danger)]" : "text-[var(--color-text-secondary)]"
-                        } ${
-                          modelPickerOpen ? "opacity-0" : "opacity-100"
-                        }`}
-                      >
-                        <Icon name="model" className="size-3.5" />
-                      </span>
+                      <Icon
+                        name="model"
+                        className={`size-[0.85rem] shrink-0 ${modelError ? "text-[var(--color-danger)]" : "text-[var(--color-accent)]"}`}
+                      />
                       <input
                         ref={modelInputRef}
                         type="text"
@@ -718,23 +612,15 @@ export function Composer({
                         autoCorrect="off"
                         placeholder="default"
                         aria-label="Model"
-                        // text-center matches the persona button next to
-                        // it (which is flex-centered). Without it the
-                        // input sits left-aligned and the two pills read
-                        // as different controls even when same-sized.
-                        // truncate on the input ellipses long model slugs
-                        // when the field isn't focused (modern browsers
-                        // honor text-overflow:ellipsis on <input> in that
-                        // state) — when the user taps to edit, native
-                        // input scroll takes over and the ellipsis lifts.
-                        className={`relative h-full w-full truncate bg-transparent px-2.5 text-center text-[0.72rem] outline-none transition-opacity duration-200 disabled:opacity-60 ${
+                        // truncate ellipses long model slugs when the field
+                        // is not focused (browsers honor text-overflow on
+                        // <input> then); focusing hands over to native input
+                        // scroll. composer-pill-text keeps the chip text 16px
+                        // on touch devices (iOS zoom guard).
+                        className={`composer-pill-text w-[5.5rem] truncate bg-transparent text-[0.78rem] font-medium outline-none disabled:opacity-60 sm:w-[7.5rem] ${
                           modelError
                             ? "text-[var(--color-danger)]"
-                            : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                        } ${
-                          modelPickerOpen
-                            ? "opacity-100"
-                            : "opacity-0 focus:opacity-100"
+                            : "text-[var(--color-text-secondary)]"
                         }`}
                         value={labelForModel(selectedModel)}
                         disabled={isStreaming}
@@ -762,6 +648,7 @@ export function Composer({
                           if (event.key === "Escape") setModelPickerOpen(false);
                         }}
                       />
+                      <Icon name="selector" className="size-[0.8rem] shrink-0 text-[var(--color-text-muted)]" />
                     </div>
                     {modelPickerOpen && !isStreaming ? (
                       // Mobile pins the popover to the viewport so the
@@ -773,7 +660,7 @@ export function Composer({
                       // popover leftward and got clipped by `main`'s
                       // overflow-hidden (and visually covered by the
                       // sidebar overlay at sm-to-lg widths).
-                      <div className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.35rem)] sm:left-0 sm:w-64">
+                      <div className="motion-safe:animate-pop-up fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.35rem)] sm:left-0 sm:w-64">
                         <div className="max-h-72 overflow-y-auto py-1">
                           {isLoadingRankedModels || (isLoadingCatalog && modelSearchQuery.trim() !== "") ? (
                             <div className="px-3 py-2 text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
@@ -849,6 +736,94 @@ export function Composer({
                       </div>
                     ) : null}
                   </div>
+                  {(() => {
+                    // Persona is locked server-side once a conversation has any
+                    // turns, so once the chat is underway the picker is read-only
+                    // noise. Hide it entirely after the first turn (and during
+                    // the very first stream) to keep the composer toolbar tidy.
+                    const personaLocked =
+                      isStreaming || (activeConversationId !== null && messages.length > 0);
+                    if (personaLocked) return null;
+                    const personaOptions = personas.length > 0 ? personas : [selectedPersona];
+                    const formatPersona = (p: string) =>
+                      p.charAt(0).toUpperCase() + p.slice(1);
+                    return (
+                      <div
+                        ref={personaPickerRef}
+                        className="relative inline-flex min-w-0 items-center"
+                      >
+                        <button
+                          type="button"
+                          aria-haspopup="listbox"
+                          aria-expanded={personaPickerOpen}
+                          title={`Persona — ${formatPersona(selectedPersona)}`}
+                          // The design's chip treatment: icon + name +
+                          // selector caret in a static pill — no
+                          // collapse/expand, so the click target never
+                          // moves out from under the cursor.
+                          className="composer-pill-text inline-flex min-w-0 shrink-0 items-center gap-[0.4rem] rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-transparent py-[0.3rem] pl-[0.6rem] pr-[0.5rem] text-[0.78rem] font-medium text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                          onClick={() => setPersonaPickerOpen((open) => !open)}
+                        >
+                          <Icon name="persona" className="size-[0.85rem] shrink-0 text-[var(--color-accent)]" />
+                          <span className="max-w-[6rem] truncate">{formatPersona(selectedPersona)}</span>
+                          <Icon name="selector" className="size-[0.8rem] shrink-0 text-[var(--color-text-muted)]" />
+                        </button>
+                        {personaPickerOpen ? (
+                          <div
+                            role="listbox"
+                            aria-label="Persona"
+                            className="motion-safe:animate-pop-up absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-40 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:w-44"
+                          >
+                            <div className="max-h-72 overflow-y-auto py-1">
+                              {personaOptions.map((p) => {
+                                const selected = p === selectedPersona;
+                                return (
+                                  <button
+                                    key={p}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={selected}
+                                    className={[
+                                      "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[0.74rem] transition hover:bg-[var(--color-overlay-soft)]",
+                                      selected
+                                        ? "bg-[var(--color-overlay-soft)] font-semibold text-[var(--color-accent)]"
+                                        : "text-[var(--color-text-primary)]",
+                                    ].join(" ")}
+                                    onMouseDown={(event) => event.preventDefault()}
+                                    onClick={() => {
+                                      setSelectedPersona(p);
+                                      setPersonaPickerOpen(false);
+                                    }}
+                                  >
+                                    <span className="truncate">{formatPersona(p)}</span>
+                                    {selected ? (
+                                      <span
+                                        aria-hidden="true"
+                                        className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
+                                      />
+                                    ) : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                <div className="flex items-center gap-[0.35rem]">
+                  <button
+                    type="button"
+                    aria-label="Attach files"
+                    title="Attach files"
+                    className="inline-flex size-[1.95rem] shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40"
+                    disabled={isStreaming || isUploadingAttachments}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Icon name="paperclip" className="size-[1.05rem]" />
+                  </button>
                   {mcpServers.length > 0 ? (
                     <div ref={mcpPickerRef} className="relative inline-flex">
                       {(() => {
@@ -859,7 +834,7 @@ export function Composer({
                             aria-label="Optional tools"
                             disabled={isStreaming}
                             title="Optional tools for this conversation"
-                            className={`inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-full border border-[var(--color-border-strong)] text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${enabledCount > 0 ? "pl-2 pr-1.5" : "w-7"}`}
+                            className={`inline-flex h-[1.95rem] shrink-0 items-center justify-center gap-1 rounded-full border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${enabledCount > 0 ? "pl-2 pr-1.5" : "w-[1.95rem]"}`}
                             onClick={() => {
                               const next = !mcpPickerOpen;
                               setMcpPickerOpen(next);
@@ -871,7 +846,7 @@ export function Composer({
                               }
                             }}
                           >
-                            <Icon name="wrench" className="size-3.5" />
+                            <Icon name="wrench" className="size-[1.05rem]" />
                             {enabledCount > 0 ? (
                               <span className="inline-flex min-w-[1rem] items-center justify-center rounded-full bg-[var(--color-accent)] px-1 text-[0.6rem] font-medium leading-4 text-[var(--color-surface-1)] tabular-nums">
                                 {enabledCount}
@@ -883,7 +858,7 @@ export function Composer({
                       {mcpPickerOpen && !isStreaming ? (
                         // Same fixed/absolute split as the model picker
                         // above — see the comment there for context.
-                        <div className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.35rem)] sm:left-0 sm:w-72">
+                        <div className="motion-safe:animate-pop-up fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.35rem)] sm:right-0 sm:w-72">
                           <div className="max-h-80 overflow-y-auto py-1">
                             {isLoadingMcpServers ? (
                               <div className="px-3 py-2 text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
@@ -943,7 +918,7 @@ export function Composer({
                         <div
                           role="status"
                           aria-live="polite"
-                          className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 text-[0.7rem] text-[var(--color-text-primary)] shadow-[var(--shadow-md)]"
+                          className="motion-safe:animate-pop-up pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 text-[0.7rem] text-[var(--color-text-primary)] shadow-[var(--shadow-md)]"
                         >
                           Token limit hit — you should compact
                         </div>
@@ -956,9 +931,30 @@ export function Composer({
                       />
                     </div>
                   ) : null}
-                </div>
-
-                <div className="flex items-center gap-2">
+                  {/* Send-key preference toggle (issue #315): flips between
+                      "Send on Enter" (default) and "Send on Ctrl/Cmd+Enter";
+                      the active mode is the title/aria-label. Sits next to
+                      Send so the toggle is in the same glance as the key it
+                      configures. */}
+                  <button
+                    type="button"
+                    aria-label={
+                      sendOnEnter
+                        ? "Send on Enter (click to switch to Ctrl+Enter)"
+                        : "Send on Ctrl+Enter (click to switch to Enter)"
+                    }
+                    title={
+                      sendOnEnter
+                        ? "Send on Enter — click to use Ctrl+Enter"
+                        : "Send on Ctrl+Enter — click to use Enter"
+                    }
+                    aria-pressed={sendOnEnter}
+                    className="inline-flex size-[1.95rem] shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                    onClick={() => setSendOnEnter((v) => !v)}
+                  >
+                    <span aria-hidden="true" className="leading-none">⏎</span>
+                    <span className="sr-only">{sendOnEnter ? "Enter" : "Ctrl+Enter"}</span>
+                  </button>
                   {isStreaming ? (
                     <button
                       className="text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
@@ -986,43 +982,59 @@ export function Composer({
                       Stop
                     </button>
                   ) : null}
-                  {/* Send-key preference toggle (issue #315). A small ⚙ pill
-                      cycles between "Send on Enter" (default) and "Send on
-                      Ctrl/Cmd+Enter". The active mode is shown as the pill's
-                      title/aria-label so it's discoverable on hover and
-                      screen-reader friendly; clicking flips + persists it.
-                      Sits right next to Send so the toggle is in the same
-                      glance as the key it configures. */}
-                  <button
-                    type="button"
-                    aria-label={
-                      sendOnEnter
-                        ? "Send on Enter (click to switch to Ctrl+Enter)"
-                        : "Send on Ctrl+Enter (click to switch to Enter)"
-                    }
-                    title={
-                      sendOnEnter
-                        ? "Send on Enter — click to use Ctrl+Enter"
-                        : "Send on Ctrl+Enter — click to use Enter"
-                    }
-                    aria-pressed={sendOnEnter}
-                    className="inline-flex h-7 shrink-0 items-center justify-center rounded-full border border-[var(--color-border-strong)] px-2 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                    onClick={() => setSendOnEnter((v) => !v)}
-                  >
-                    <span aria-hidden="true" className="leading-none">⏎</span>
-                    <span className="sr-only">{sendOnEnter ? "Enter" : "Ctrl+Enter"}</span>
-                  </button>
-                  <button
-                    aria-label="Send message"
-                    className="inline-flex min-w-[3rem] items-center justify-center rounded-full bg-[var(--color-text-primary)] px-3 py-2 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-30 sm:min-w-[3.25rem]"
-                    type="submit"
-                    disabled={!prompt.trim() || isStreaming || isUploadingAttachments}
-                    title={isUploadingAttachments ? "Uploading attachments…" : "Send message"}
-                  >
-                    {isUploadingAttachments ? "…" : "Send"}
-                  </button>
+                  {(() => {
+                    // The design's .send-btn: a 2.1rem circle that lights up
+                    // with the shared action gradient once there is something
+                    // to send. Disabled styling is a distinct muted fill (not
+                    // opacity) per the design.
+                    const ready =
+                      prompt.trim().length > 0 && !isStreaming && !isUploadingAttachments;
+                    return (
+                      <button
+                        aria-label="Send message"
+                        type="submit"
+                        disabled={!ready}
+                        title={isUploadingAttachments ? "Uploading attachments…" : "Send message"}
+                        className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-full transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
+                          ready
+                            ? "bg-[image:var(--gradient-action-primary)] text-white hover:-translate-y-px"
+                            : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
+                        }`}
+                      >
+                        {isUploadingAttachments ? (
+                          <span aria-hidden="true" className="text-[0.75rem] leading-none">…</span>
+                        ) : (
+                          <Icon name="arrow-up" className="size-4" />
+                        )}
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
             </form>
+            {/* Keyboard hint (the design's .composer-hint): fades in while
+                the textarea is focused and out on blur, riding the fast
+                motion token. Wording adapts to the send-key preference so
+                Ctrl+Enter mode is self-documenting. aria-hidden — it
+                duplicates what the keys already do. */}
+            <p
+              aria-hidden="true"
+              className={`mx-auto mt-2 h-4 select-none text-center text-[0.7rem] text-[var(--color-text-muted)] transition-opacity duration-fast ${
+                isComposerFocused ? "opacity-100" : "opacity-0"
+              }`}
+            >
+              {sendOnEnter ? (
+                <>
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Shift+Enter</b> for a new line ·{" "}
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Enter</b> to send
+                </>
+              ) : (
+                <>
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Enter</b> for a new line ·{" "}
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Ctrl+Enter</b> to send
+                </>
+              )}
+            </p>
+    </>
   );
 }

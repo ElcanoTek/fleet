@@ -43,7 +43,7 @@ export function BulkDeleteConfirmModal({
         type="button"
         onClick={onCancel}
       />
-      <div className="relative z-10 w-full max-w-[26rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
+      <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[26rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
         <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
           Delete {count} conversation{count === 1 ? "" : "s"}?
         </h2>

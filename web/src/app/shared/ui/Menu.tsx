@@ -41,7 +41,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-export type MenuPlacement = "bottom-end" | "top-stretch";
+export type MenuPlacement = "bottom-end" | "top-stretch" | "top-start" | "top-end";
 
 const VIEWPORT_MARGIN = 8;
 
@@ -110,6 +110,23 @@ function positionMenu(menu: HTMLElement, anchor: DOMRect, placement: MenuPlaceme
     menu.style.left = `${Math.round(anchor.left)}px`;
     menu.style.width = `${Math.round(anchor.width)}px`;
     menu.style.bottom = `${Math.round(vh - anchor.top + 6)}px`;
+  } else if (placement === "top-start") {
+    // Collapsed-rail account menu (the design's `.rail.collapsed .account-menu`):
+    // opens above a narrow anchor at a fixed 15rem width, nudged 0.3rem in from
+    // the anchor's left edge instead of stretching to it.
+    menu.style.right = "auto";
+    menu.style.top = "auto";
+    menu.style.left = `${Math.round(Math.max(VIEWPORT_MARGIN, anchor.left + 5))}px`;
+    menu.style.width = "15rem";
+    menu.style.bottom = `${Math.round(vh - anchor.top + 6)}px`;
+  } else if (placement === "top-end") {
+    // Bulk-bar popovers (the design's .bulk-folder-menu): open ABOVE the bar,
+    // right edges aligned to the anchor, clamped fully on-screen.
+    const left = clamp(anchor.right - w, vw - w - VIEWPORT_MARGIN);
+    menu.style.right = "auto";
+    menu.style.top = "auto";
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.bottom = `${Math.round(vh - anchor.top + 6)}px`;
   } else {
     // bottom-end: right edges aligned to the anchor, but clamped fully on-screen
     // (a rail kebab sits near the left edge, so a right-aligned menu would
@@ -150,7 +167,7 @@ function positionFlyout(flyout: HTMLElement, anchor: DOMRect) {
 }
 
 const SURFACE_CLASS =
-  "grid min-w-[9rem] gap-0.5 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-1.5 shadow-[var(--shadow-md)] outline-none motion-safe:animate-[menu-in_140ms_ease]";
+  "grid min-w-[9rem] gap-0.5 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-1.5 shadow-[var(--shadow-md)] outline-none motion-safe:animate-pop-up";
 
 export function Menu({
   open,

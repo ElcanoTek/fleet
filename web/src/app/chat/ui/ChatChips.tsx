@@ -155,8 +155,8 @@ export function ContextRing({
 }) {
   // SVG ring math. r=8 keeps the ring at roughly the same visual
   // weight as the surrounding icon buttons (paperclip, wrench) — a
-  // small affordance inside the h-7 (28px) button rather than filling
-  // it edge-to-edge. Two strokes on the same circle: a muted "rail"
+  // small affordance inside the 1.95rem tool-btn circle rather than
+  // filling it edge-to-edge. Two strokes on the same circle: a muted "rail"
   // full circle plus a colored progress arc whose length =
   // circumference * fraction. Stroke ends rounded so low fills don't
   // read as a sharp splinter.
@@ -199,7 +199,7 @@ export function ContextRing({
       title={titleText}
       disabled={disabled}
       onClick={onClick}
-      className="group inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--color-text-secondary)] transition hover:opacity-80 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40"
+      className="group inline-flex size-[1.95rem] shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40"
     >
       <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
         {/* Rail — full muted circle. Always rendered, even before  */}
@@ -230,7 +230,7 @@ export function ContextRing({
             strokeLinecap="round"
             strokeDasharray={`${dashFilled} ${dashEmpty}`}
             transform="rotate(-90 14 14)"
-            style={{ transition: "stroke-dasharray 240ms ease, stroke 240ms ease" }}
+            style={{ transition: "stroke-dasharray var(--transition-base), stroke var(--transition-base)" }}
           />
         ) : null}
       </svg>
@@ -496,7 +496,7 @@ export function PendingAttachmentChip({
       <button
         type="button"
         aria-label={`Remove ${attachment.name}`}
-        className="touch-target-hit text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
+        className="hit-area touch-target-hit text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         disabled={removalDisabled}
         onClick={onRemove}
       >

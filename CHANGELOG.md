@@ -13,6 +13,30 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- Web UI polish — rail, composer, motion, responsive (design-handoff parity):
+  the rail collapses to a 4.25rem icon strip (toggle in the brand row,
+  preference persisted to `localStorage["rail-collapsed"]`, avatar-only
+  account menu, collapse closes menus and exits select mode); at ≤900px it
+  auto-collapses and expands as an overlay drawer with a scrim, while the
+  <640px hamburger drawer is unchanged. Multi-select is redesigned per the
+  handoff: a row kebab's "Select…" is the only way into select mode
+  (checkboxes are no longer hover-revealed), with a compact icon bulk bar
+  (move-to-folder / pin / add-label / delete / cancel, tooltips, disabled at
+  zero selected, popovers with inline folder/label creation, Esc exits). The
+  composer matches the design's geometry (53rem column, `--radius-xl`,
+  model/persona chips, circular tool buttons, gradient icon send, a
+  focus-fading keyboard hint) and gains a sealed variant (accent border +
+  explainer strip + sandbox placeholder) on lockdown conversations. The
+  sealed rail row's lock explains itself on hover and keyboard focus. The
+  account-menu theme segment is now System | Light | Dark — System follows
+  the OS live and clears the stored preference. All transitions/animations
+  ride the shared `--motion-fast`/`--motion-base` tokens, every popover and
+  modal enters with one fade+rise, reduced-motion handling is consolidated
+  into the single global block, and small controls (kebab, chip removers,
+  search clear, modal close) get ~2rem hit areas with no visual change.
+
 ### Fixed
 
 - Web rate limiter (#561): `(*rateLimiter).wait` no longer double-unlocks its

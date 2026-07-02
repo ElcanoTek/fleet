@@ -125,8 +125,18 @@
   --shadow-sm: 0 10px 24px rgba(0, 0, 0, 0.28);
   --shadow-md: 0 12px 24px rgba(0, 0, 0, 0.34);
   --shadow-lg: 0 22px 54px rgba(0, 0, 0, 0.52);
-  --transition-fast: 140ms ease;
-  --transition-base: 200ms ease;
+  /* Motion tokens: every interaction transition and overlay entrance rides
+     these two durations — fast for hovers/popovers/tooltips, base for modals
+     and larger surface changes. --motion-* are the bare <time> components
+     (the animation shorthand and Tailwind utilities need a duration with no
+     easing baked in); --transition-* keep the duration+easing pair consumed
+     by transition shorthands. Ambient loops (thinking dots, shimmer, cursor
+     blink, stat pulse, loading logo) are loading indicators, not
+     transitions, and intentionally keep their own timings. */
+  --motion-fast: 140ms;
+  --motion-base: 200ms;
+  --transition-fast: var(--motion-fast) ease;
+  --transition-base: var(--motion-base) ease;
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
 }
 
@@ -220,11 +230,43 @@
   --font-sans: var(--font-body);
   --font-mono: var(--font-code);
   --font-heading: var(--font-heading);
+  /* Tailwind's bare `transition*` utilities default to 150ms; retarget them
+     onto the shared motion tokens so utility-styled components and the
+     plain-CSS rules above animate at one speed. */
+  --default-transition-duration: var(--motion-fast);
+  --default-transition-timing-function: ease;
+  /* Shared overlay entrance (fade + 4px rise): animate-pop-up for
+     popovers/menus/tooltips, animate-pop-up-base for modals. */
+  --animate-pop-up: pop-up var(--motion-fast) ease both;
+  --animate-pop-up-base: pop-up var(--motion-base) ease both;
 }
 
-/* Shared rail popover (Menu.tsx) entrance — a short rise+fade. Only applied
-   under motion-safe, so prefers-reduced-motion users get no animation. */
-@keyframes menu-in {
+/* Tokenized duration utilities for components that need an explicit
+   transition-duration (Tailwind's numeric duration-* classes would re-embed
+   one-off literals). Compose with variants like any utility. */
+@utility duration-fast {
+  transition-duration: var(--motion-fast);
+}
+@utility duration-base {
+  transition-duration: var(--motion-base);
+}
+
+/* Shared overlay entrance — a short fade + rise used by every popover, menu,
+   tooltip, and modal (fast for popovers, base for modals; see the animate-*
+   theme keys above). filter-in is its downward twin for the rail's
+   active-filter bar. Both are gated by the global reduced-motion block. */
+@keyframes pop-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes filter-in {
   from {
     opacity: 0;
     transform: translateY(-4px);
@@ -268,6 +310,114 @@
   height: 0.55rem;
   border-radius: 999rem;
   background: var(--chip);
+}
+
+/* ── Tooltips ────────────────────────────────────────────────────────────
+   Pure-CSS labels shown on hover AND keyboard focus after a short delay.
+   data-tip places the label to the right of the control (collapsed-rail
+   icons); data-tip-top centers it above (bulk bar, composer tools). No JS,
+   so any element can carry one; set the attribute conditionally to disable. */
+[data-tip],
+[data-tip-top] {
+  position: relative;
+}
+[data-tip]::after,
+[data-tip-top]::after {
+  position: absolute;
+  z-index: 500;
+  width: max-content;
+  max-width: 13rem;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text-primary);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.35;
+  padding: 0.3rem 0.55rem;
+  border-radius: 0.45rem;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+}
+[data-tip]::after {
+  content: attr(data-tip);
+  left: calc(100% + 0.5rem);
+  top: 50%;
+  transform: translateY(-50%);
+}
+[data-tip-top]::after {
+  content: attr(data-tip-top);
+  left: 50%;
+  bottom: calc(100% + 0.45rem);
+  transform: translateX(-50%);
+}
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after,
+[data-tip-top]:hover::after,
+[data-tip-top]:focus-visible::after {
+  opacity: 1;
+  transition-delay: 350ms;
+}
+
+/* The rail search stays type="search" (its searchbox role keeps the composer
+   as the page's first textbox — a contract the e2e suite drives), but the
+   native WebKit clear affordance yields to the design's custom clear button. */
+.search-input-no-native-clear::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
+/* ── Enlarged hit areas ──────────────────────────────────────────────────
+   .hit-area extends a small control's clickable box to ~2rem square via an
+   invisible ::before (the design's .conv-kebab/.conv-info pattern) without
+   changing its visual size — padding + negative margin would also enlarge
+   the hover fill on these controls, which must stay pixel-identical. */
+.hit-area {
+  position: relative;
+}
+.hit-area::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2rem;
+  height: 2rem;
+  transform: translate(-50%, -50%);
+}
+
+/* Explainer tooltip surface (sealed-chat lock, the Recent-section info note).
+   Positioned inline by the opener in fixed viewport coords — the rail's
+   backdrop-filter/transform would capture position:fixed, so openers portal
+   it or anchor it outside those containers — with an arrow pointing back at
+   the anchor. */
+.conv-tooltip {
+  position: fixed;
+  z-index: 400;
+  width: 14rem;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  animation: pop-up var(--motion-fast) ease both;
+}
+.conv-tooltip::before {
+  content: "";
+  position: absolute;
+  top: -0.34rem;
+  left: 0.75rem;
+  width: 0.6rem;
+  height: 0.6rem;
+  background: var(--color-surface-2);
+  border-left: 1px solid var(--color-border-strong);
+  border-top: 1px solid var(--color-border-strong);
+  transform: rotate(45deg);
 }
 
 * {
@@ -446,11 +596,11 @@ button {
 }
 
 .message-enter-user {
-  animation: message-in-user 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: message-in-user var(--motion-base) cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .message-enter-assistant {
-  animation: message-in-assistant 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: message-in-assistant var(--motion-base) cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* ── Suggestion card enter ──────────────────────────────────── */
@@ -466,7 +616,7 @@ button {
 }
 
 .suggestion-enter {
-  animation: suggestion-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: suggestion-in var(--motion-base) cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* ── Assistant markdown ──────────────────────────────────────── */
@@ -637,7 +787,7 @@ button {
   color: var(--color-text-muted);
   padding: 0.15rem 0.45rem;
   border-radius: 0.4rem;
-  transition: color 120ms ease, background 120ms ease;
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
 .assistant-markdown-pre-copy:hover {
@@ -878,7 +1028,12 @@ button {
   }
 }
 
-/* ── Reduced motion ─────────────────────────────────────────── */
+/* ── Reduced motion ─────────────────────────────────────────────────────
+   The single global reduce block: zeroed durations kill every transition
+   and entrance animation app-wide, the explicit animation:none list stops
+   infinite loops from still firing 0ms animation events, and the transform
+   resets neutralize hover lifts. Add to this block rather than scattering
+   per-component @media patches. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -892,8 +1047,13 @@ button {
   .message-cursor,
   .message-enter-user,
   .message-enter-assistant,
-  .suggestion-enter {
+  .suggestion-enter,
+  .stat-card.live .stat-dot {
     animation: none;
+  }
+
+  .stat-card:hover {
+    transform: none;
   }
 }
 
@@ -955,7 +1115,7 @@ button {
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 0.15s ease, opacity 0.15s ease;
+  transition: background-color var(--transition-fast), opacity var(--transition-fast);
   background: transparent;
   color: var(--color-text-primary);
 }
@@ -1140,14 +1300,6 @@ button {
 @media (max-width: 720px) {
   .stats-bar {
     grid-template-columns: repeat(2, 1fr);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .stat-card:hover {
-    transform: none;
-  }
-  .stat-card.live .stat-dot {
-    animation: none;
   }
 }
 
@@ -1583,6 +1735,12 @@ tr.sla-row-fail {
 .modal-overlay.is-open {
   display: flex;
 }
+/* Every modal enters with the shared fade+rise (pop-up at the base duration);
+   popovers/menus use the fast variant. The global reduced-motion block zeroes
+   the animation. */
+.modal-overlay.is-open .modal {
+  animation: pop-up var(--motion-base) ease both;
+}
 .modal {
   width: 100%;
   max-width: 640px;
@@ -1607,11 +1765,25 @@ tr.sla-row-fail {
   color: var(--color-text-primary);
 }
 .modal-close {
+  /* A sized, centered box (~2rem effective target) — the bare × glyph alone
+     was a <20px target. The negative margins keep the glyph's optical
+     position in the header unchanged. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin: -0.5rem -0.6rem -0.5rem 0;
+  border-radius: var(--radius-md);
   background: transparent;
   border: none;
   color: var(--color-text-muted);
   font-size: 1.25rem;
   cursor: pointer;
+}
+.modal-close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 .modal-body {
   padding: 1.25rem;
@@ -1929,6 +2101,22 @@ tr.sla-row-fail {
   border: none;
   color: var(--color-text-muted);
   cursor: pointer;
+  /* Enlarged hit area (see .hit-area): the glyph is ~13px on its own. */
+  position: relative;
+}
+.chip-delete::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2rem;
+  height: 2rem;
+  transform: translate(-50%, -50%);
+}
+.chip-delete:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 0.25rem;
 }
 .custom-email-row {
   display: flex;
@@ -2040,6 +2228,7 @@ tr.sla-row-fail {
   border: 1px solid var(--color-border);
   border-radius: 0.5rem;
   background: var(--color-surface-2, #2f2741);
+  animation: pop-up var(--motion-fast) ease both;
 }
 .model-picker-item {
   display: block;
@@ -2136,6 +2325,7 @@ tr.sla-row-fail {
   color: var(--color-text-primary);
   cursor: pointer;
   font-size: 0.875rem;
+  animation: pop-up var(--motion-fast) ease both;
 }
 .toast--success {
   border-color: var(--color-success, #7bdca0);

@@ -4,17 +4,22 @@ import { loginViaCookie } from "./_session";
 import { mockChatBoot } from "./_mocks";
 
 // Mocked e2e for the unified navigation rail (#169) + conversation organization
-// (#258/#279): the rail shows the Chat/Operations Center nav with the active
-// surface marked, derives Folders/Labels sections from the conversation list,
-// filters by folder, exposes the per-row kebab, and the chat account menu
-// carries Theme + Sign out but NOT Settings (Settings lives only in the
-// Operations Center account menu). All /api/* calls are intercepted.
+// (#258/#279) + the collapsible rail / select mode (UI polish): the rail shows
+// the Chat/Operations Center nav with the active surface marked, derives
+// Folders/Labels sections from the conversation list, filters by folder,
+// exposes the per-row kebab (whose "Select…" is the only way into select
+// mode), collapses to a 4.25rem icon strip with a persisted preference,
+// auto-collapses at ≤900px with an overlay+scrim expansion, explains the
+// sealed-row lock on hover/focus, and the chat account menu carries Theme +
+// Sign out but NOT Settings (Settings lives only in the Operations Center
+// account menu). All /api/* calls are intercepted.
 
 const CONVERSATIONS = [
   { id: "c1", title: "Acme Renewal", persona: "default", model: "", pinned: true, updated_at: 40, folder: "Clients", labels: ["client", "urgent"] },
   { id: "c2", title: "Omnicom Pacing", persona: "default", model: "", pinned: true, updated_at: 30, folder: "Clients", labels: ["client"] },
   { id: "c3", title: "Schema Notes", persona: "default", model: "", pinned: false, updated_at: 20, labels: ["research"] },
   { id: "c4", title: "Loose Recent", persona: "default", model: "", pinned: false, updated_at: 10 },
+  { id: "c5", title: "Sealed Deal", persona: "default", model: "", pinned: false, updated_at: 5, lockdown: true },
 ];
 
 async function mockConversations(page: Page) {
@@ -103,6 +108,7 @@ test("the per-row kebab exposes pin / rename / folder / labels / archive / delet
   await expect(menu.getByRole("menuitem", { name: "Labels", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Download as JSON", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Share", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Select…", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Archive", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Delete", exact: true })).toBeVisible();
   // Exactly two dividers (after Labels, after Share).
@@ -170,4 +176,126 @@ test("the kebab folder/labels flyout opens beside the menu, both visible (#169 a
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu", { name: "Labels" })).toHaveCount(0);
   await expect(menu).toBeVisible();
+});
+
+test("the rail collapses to an icon strip, persists, and repositions the account menu", async ({ page }) => {
+  await mockChatBoot(page);
+  await mockConversations(page);
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+
+  const rail = page.locator("aside").first();
+  await expect(page.getByRole("searchbox", { name: "Search chats" })).toBeVisible();
+
+  // Collapse: a 4.25rem (68px) icon strip; wide-only content hides.
+  await page.getByRole("button", { name: "Collapse sidebar" }).click();
+  await expect.poll(async () => (await rail.boundingBox())?.width ?? 0).toBeLessThan(80);
+  await expect(page.getByRole("searchbox", { name: "Search chats" })).toBeHidden();
+
+  // The account menu still opens — avatar-only anchor, fixed 15rem menu.
+  await page.getByTestId("account-menu-button").click();
+  const menu = page.getByRole("menu", { name: "Account" });
+  await expect(menu).toBeVisible();
+  const menuBox = await menu.boundingBox();
+  expect(menuBox).not.toBeNull();
+  if (menuBox) expect(Math.abs(menuBox.width - 240)).toBeLessThan(2);
+  await page.keyboard.press("Escape");
+
+  // The preference persists across reload.
+  await page.reload();
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  await expect.poll(async () => (await page.locator("aside").first().boundingBox())?.width ?? 0).toBeLessThan(80);
+
+  // Expand restores the full rail.
+  await page.getByRole("button", { name: "Expand sidebar" }).click();
+  await expect(page.getByRole("searchbox", { name: "Search chats" })).toBeVisible();
+});
+
+test("Select… enters select mode with checkboxes + the bulk icon bar; Escape exits", async ({ page }) => {
+  await mockChatBoot(page);
+  await mockConversations(page);
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+
+  const bar = page.locator("aside").first();
+  await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
+  await page
+    .getByRole("menu", { name: "Options for Loose Recent" })
+    .getByRole("menuitem", { name: "Select…", exact: true })
+    .click();
+
+  // The bulk bar appears with the seed row selected; actions are enabled.
+  await expect(bar.getByText("1 selected")).toBeVisible();
+  const deleteBtn = bar.getByRole("button", { name: "Delete selected" });
+  await expect(deleteBtn).toBeEnabled();
+
+  // Row clicks toggle selection instead of opening the conversation.
+  await bar.getByRole("button", { name: /Schema Notes/ }).click();
+  await expect(bar.getByText("2 selected")).toBeVisible();
+
+  // Deselecting everything disables the actions (Cancel stays live).
+  await bar.getByRole("button", { name: /Schema Notes/ }).click();
+  await bar.getByRole("button", { name: /Loose Recent/ }).click();
+  await expect(bar.getByText("0 selected")).toBeVisible();
+  await expect(deleteBtn).toBeDisabled();
+  await expect(bar.getByRole("button", { name: "Exit selection" })).toBeEnabled();
+
+  // Move-to-folder opens ABOVE the bar and offers inline folder creation.
+  await bar.getByRole("button", { name: /Loose Recent/ }).click();
+  await bar.getByRole("button", { name: "Move to folder" }).click();
+  const folderMenu = page.getByRole("menu", { name: "Move selected to folder" });
+  await expect(folderMenu).toBeVisible();
+  await expect(folderMenu.getByRole("menuitem", { name: /New folder/ })).toBeVisible();
+  const anchorBox = await bar.getByRole("button", { name: "Move to folder" }).boundingBox();
+  const popBox = await folderMenu.boundingBox();
+  expect(anchorBox && popBox).toBeTruthy();
+  if (anchorBox && popBox) expect(popBox.y + popBox.height).toBeLessThanOrEqual(anchorBox.y + 1);
+
+  // Escape closes the popover; a second Escape exits select mode entirely.
+  await page.keyboard.press("Escape");
+  await expect(folderMenu).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(bar.getByText(/selected/)).toHaveCount(0);
+  await expect(bar.getByRole("button", { name: "Conversation options for Loose Recent" })).toBeAttached();
+});
+
+test("the sealed row's lock explains itself on hover and keyboard focus", async ({ page }) => {
+  await mockChatBoot(page);
+  await mockConversations(page);
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+
+  const bar = page.locator("aside").first();
+  const lock = bar.getByRole("img", { name: "Sealed chat" });
+  await expect(lock).toBeVisible();
+
+  await lock.hover();
+  await expect(page.getByRole("tooltip")).toContainText(/sealed chat/i);
+  await page.mouse.move(0, 0);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+
+  await lock.focus();
+  await expect(page.getByRole("tooltip")).toBeVisible();
+});
+
+test("at ≤900px the rail auto-collapses and expands as an overlay with a scrim", async ({ page }) => {
+  await page.setViewportSize({ width: 840, height: 800 });
+  await mockChatBoot(page);
+  await mockConversations(page);
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+
+  // Auto-collapsed to the icon strip (the stored preference is untouched).
+  const rail = page.locator("aside").first();
+  await expect.poll(async () => (await rail.boundingBox())?.width ?? 0).toBeLessThan(80);
+
+  // Expanding opens the rail as an overlay (full 300px) above a scrim.
+  await page.getByRole("button", { name: "Expand sidebar" }).click();
+  await expect.poll(async () => (await rail.boundingBox())?.width ?? 0).toBeGreaterThan(290);
+  const scrim = page.locator('button[aria-label="Close navigation"]').last();
+  await expect(scrim).toBeVisible();
+
+  // Clicking the scrim dismisses the overlay back to the strip.
+  await scrim.click({ position: { x: 700, y: 400 } });
+  await expect.poll(async () => (await rail.boundingBox())?.width ?? 0).toBeLessThan(80);
 });

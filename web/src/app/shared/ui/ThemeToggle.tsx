@@ -32,7 +32,7 @@ export function ThemeToggle({ className }: { className?: string }) {
         <Icon
           name="sun"
           className={[
-            "absolute inset-0 size-4 transition duration-200",
+            "absolute inset-0 size-4 transition duration-base",
             theme === "light"
               ? "rotate-0 scale-100 opacity-100"
               : "-rotate-12 scale-[0.86] opacity-0",
@@ -41,7 +41,7 @@ export function ThemeToggle({ className }: { className?: string }) {
         <Icon
           name="moon"
           className={[
-            "absolute inset-0 size-4 transition duration-200",
+            "absolute inset-0 size-4 transition duration-base",
             theme === "dark"
               ? "rotate-0 scale-100 opacity-100"
               : "rotate-12 scale-[0.86] opacity-0",
