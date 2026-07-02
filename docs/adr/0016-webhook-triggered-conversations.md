@@ -63,10 +63,15 @@ credential) and never enters the sandbox, the model context, or the logs.
 ### No slug enumeration
 
 An unknown slug and a bad signature return an **identical, timing-equalized
-`401`** (never a `404` — that would be an enumeration oracle). The miss path
-still performs one HMAC-SHA256 against a per-process random dummy secret before
-failing closed, so response timing does not distinguish a configured slug with a
-bad signature from a slug that does not exist. This mirrors the orchestrator
+`401`** (never a `404` — that would be an enumeration oracle). Every request —
+hit or miss, Slack or HMAC trigger, whatever signature headers the caller sends
+or omits — performs **both** full-body signature computations (one Slack-style,
+one HMAC-SHA256), against the configured secret when the slug supplies it and a
+per-process random dummy otherwise, and the verifiers compute their HMAC before
+any header-shape check (#572: equalizing only the default-header GitHub shape
+left a body-size-proportional timing gap for Slack and custom-header triggers).
+Response timing therefore does not distinguish a configured slug with a bad
+signature from a slug that does not exist. This mirrors the orchestrator
 trigger's shipped behavior.
 
 ### The payload is untrusted model input

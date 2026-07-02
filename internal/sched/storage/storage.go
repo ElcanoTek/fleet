@@ -518,9 +518,11 @@ func (s *Storage) GetUserByToken(token string) (*models.User, error) {
 	return s.db.GetUserByToken(context.Background(), token)
 }
 
-// GetScheduledTasks gets scheduled tasks ready to run up to a limit.
-func (s *Storage) GetScheduledTasks(cutoff time.Time, limit int) ([]*models.Task, error) {
-	return s.db.GetScheduledTasks(context.Background(), cutoff, limit)
+// GetScheduledTasks gets scheduled tasks ready to run up to a limit, strictly
+// after the (afterScheduledFor, afterID) keyset cursor — zero values start from
+// the beginning. See db.GetScheduledTasks for why keyset paging (#566).
+func (s *Storage) GetScheduledTasks(cutoff time.Time, afterScheduledFor time.Time, afterID uuid.UUID, limit int) ([]*models.Task, error) {
+	return s.db.GetScheduledTasks(context.Background(), cutoff, afterScheduledFor, afterID, limit)
 }
 
 // CancelTaskAtomic cancels a task atomically. reason records WHO/why (#508 —
@@ -1056,6 +1058,13 @@ func (s *Storage) GetSLAReport(ctx context.Context, windowDays int) (*models.SLA
 	return s.db.GetSLAReport(ctx, windowDays)
 }
 
+// TaskUsage aggregates the persisted per-iteration cost/token metering over
+// [from, to) grouped by user|key|project|model|day|week (#601 part 1). See
+// db.TaskUsage.
+func (s *Storage) TaskUsage(ctx context.Context, from, to time.Time, groupBy string) ([]models.UsageBucket, error) {
+	return s.db.TaskUsage(ctx, from, to, groupBy)
+}
+
 // ReplayDeadLetteredTask re-enqueues a dead-lettered task (#253): it resets the
 // SAME row to a fresh pending slate — AttemptCount=0, the DLQ columns cleared,
 // status=pending, scheduled_for/started_at/completed_at/error cleared — so the
@@ -1302,6 +1311,11 @@ func (s *Storage) ClaimNextDatasetRow(ctx context.Context, datasetID uuid.UUID) 
 // FinishDatasetRow records one row run's outcome.
 func (s *Storage) FinishDatasetRow(ctx context.Context, rowID uuid.UUID, proposed json.RawMessage, note, errMsg string, costUSD float64) error {
 	return s.db.FinishDatasetRow(ctx, rowID, proposed, note, errMsg, costUSD)
+}
+
+// RequeueDatasetRow returns a pause-interrupted in-flight row to pending (#586).
+func (s *Storage) RequeueDatasetRow(ctx context.Context, rowID uuid.UUID) error {
+	return s.db.RequeueDatasetRow(ctx, rowID)
 }
 
 // ApproveDatasetRows merges proposed values into cells for review-approved rows.

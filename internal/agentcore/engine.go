@@ -59,8 +59,15 @@ type engine struct {
 	// force-compaction. When nil a deterministic placeholder is used.
 	compactionSummarizer func(ctx context.Context, droppable []fantasy.Message) fantasy.Message
 
-	// consecutiveCompactions tracks how many force-compactions fired in a row;
-	// the resilience pre-flight surfaces ErrContextBudgetExhausted past the cap.
+	// consecutiveCompactions counts CONSECUTIVE ROUNDS that needed a
+	// force-compaction. It increments (at most once per round) when
+	// forceCompactMessageHistory actually compacts, is reset only by a round
+	// that completes WITHOUT a force-compaction (or by a proactive compaction,
+	// which is a clean pressure relief, not a recovery), and so survives a
+	// round that recovered VIA compaction. The resilience pre-flight surfaces
+	// ErrContextBudgetExhausted once the cap is reached — the runaway case
+	// where the history re-overflows every round no matter how much is
+	// summarized away.
 	consecutiveCompactions int
 
 	// envPrefix selects the env-var family (resilience config, kill-switches).
@@ -77,13 +84,15 @@ type engine struct {
 	usageReporter func(RunUsage)
 }
 
-// ErrContextBudgetExhausted is returned when compaction has fired on
-// maxConsecutiveCompactions steps in a row without a clean step in between.
+// ErrContextBudgetExhausted is returned when a force-compaction has fired on
+// maxConsecutiveCompactions rounds in a row without a compaction-free round in
+// between.
 var ErrContextBudgetExhausted = errors.New("context budget exhausted after repeated compaction")
 
 const (
-	// maxConsecutiveCompactions caps consecutive force-compactions before the
-	// resilience loop surfaces a terminal error.
+	// maxConsecutiveCompactions caps how many CONSECUTIVE rounds may each need
+	// a force-compaction before the resilience pre-flight surfaces
+	// ErrContextBudgetExhausted instead of starting another round.
 	maxConsecutiveCompactions = 3
 	// compactionKeepTail is how many trailing messages to preserve verbatim.
 	compactionKeepTail = 20

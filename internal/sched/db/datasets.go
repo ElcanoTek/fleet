@@ -274,6 +274,26 @@ func (db *Database) FinishDatasetRow(ctx context.Context, rowID uuid.UUID, propo
 	return nil
 }
 
+// RequeueDatasetRow returns an in-flight row to 'pending' after a pause or
+// shutdown cancelled its run mid-row (#586). Pause is a control action, not a
+// row outcome: the row must stay re-claimable on resume instead of being
+// marked failed with a misleading "context canceled" error. The attempt the
+// claim charged is refunded so routine pauses never burn the row's attempt
+// budget. Guarded on status='running' (mirroring FinishDatasetRow) so a
+// concurrent reset/approve is never clobbered.
+func (db *Database) RequeueDatasetRow(ctx context.Context, rowID uuid.UUID) error {
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE dataset_rows SET status = 'pending', attempts = GREATEST(attempts - 1, 0), updated_at = now()
+		WHERE id = $1 AND status = 'running'`, rowID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("dataset row %s no longer running (reset or approved mid-run)", rowID)
+	}
+	return nil
+}
+
 // ApproveDatasetRows merges each proposed object into cells for the given
 // rows (every row when ids is empty), sets status 'approved', and clears
 // proposed. JSONB || merges top-level keys — exactly the output-column
