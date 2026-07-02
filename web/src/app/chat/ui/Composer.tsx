@@ -507,7 +507,7 @@ export function Composer({
                     />
                   ))}
                   {attachmentError ? (
-                    <span className="text-[0.7rem] text-[var(--color-danger,#dc2626)]">
+                    <span className="text-[0.7rem] text-[var(--color-danger)]">
                       {attachmentError}
                     </span>
                   ) : null}
@@ -690,7 +690,7 @@ export function Composer({
                     <div
                       className={`group relative h-7 shrink-0 overflow-hidden rounded-full border bg-transparent transition-[width] duration-200 ${
                         modelError
-                          ? "border-[var(--color-danger,#dc2626)]"
+                          ? "border-[var(--color-danger)]"
                           : "border-[var(--color-border-strong)] hover:border-[var(--color-accent)]"
                       } ${
                         isStreaming
@@ -703,7 +703,7 @@ export function Composer({
                       <span
                         aria-hidden="true"
                         className={`pointer-events-none absolute inset-0 grid place-items-center transition-opacity duration-200 ${
-                          modelError ? "text-[var(--color-danger,#dc2626)]" : "text-[var(--color-text-secondary)]"
+                          modelError ? "text-[var(--color-danger)]" : "text-[var(--color-text-secondary)]"
                         } ${
                           modelPickerOpen ? "opacity-0" : "opacity-100"
                         }`}
@@ -729,7 +729,7 @@ export function Composer({
                         // input scroll takes over and the ellipsis lifts.
                         className={`relative h-full w-full truncate bg-transparent px-2.5 text-center text-[0.72rem] outline-none transition-opacity duration-200 disabled:opacity-60 ${
                           modelError
-                            ? "text-[var(--color-danger,#dc2626)]"
+                            ? "text-[var(--color-danger)]"
                             : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                         } ${
                           modelPickerOpen
