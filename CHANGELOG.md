@@ -15,6 +15,13 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Reusable sandbox-image publish workflow (#195):
+  `.github/workflows/publish-sandbox-image.yml` (`workflow_call`) lets a client
+  config repo build its bundle's sandbox image in CI with the canonical
+  `scripts/build-sandbox-image.sh`, push immutable `{git-sha}` + `:latest` tags
+  to GHCR, and auto-open a PR pinning `sandbox.image` in its manifest — so
+  deploys `podman pull` a prebuilt image instead of rebuilding ~1.3 GB on-box.
+  Core CI still builds the sandbox locally (the 24ce69f decoupling stands).
 - `fleet chat` — a terminal UI for chatting with the fleet agent (Bubble Tea /
   Lipgloss, glamour-rendered Markdown, streaming replies, tool-call + reasoning
   display, `/new` `/retry` `/model` `/reasoning` `/clear` `/quit`, Ctrl+C to
