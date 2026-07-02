@@ -569,6 +569,10 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	runCtx = tools.WithNotifyHandler(runCtx, func(message string) {
 		p.notifyProgress(task, message)
 	})
+	// Recurring context carry (#504): for a carry_context recurring task, install
+	// a bounded handoff from the prior run so scheduledrun injects a
+	// "## Previous Run" section (extracted to keep executeTask under gocyclo).
+	runCtx = p.withPriorRunContext(runCtx, task)
 
 	session, runErr := p.runner.Run(runCtx, task)
 
@@ -942,8 +946,6 @@ func (p *Pool) submitLog(task *models.Task, session *models.LogSession, failureR
 	}
 }
 
-// stillOwns reports whether the pool still holds task with the given claim token
-// (the active-map entry hasn't been replaced by a re-claim after recovery).
 // activeCancel returns the per-task cancel func for an in-flight task (#510
 // ask uses it to end its own run). Caller holds p.mu.
 func (p *Pool) activeCancel(taskID uuid.UUID) context.CancelFunc {
@@ -977,6 +979,50 @@ func (p *Pool) notifyProgress(task *models.Task, message string) {
 	}()
 }
 
+// withPriorRunContext installs the recurring context-carry handoff (#504) on the
+// run context when the task opted in AND is recurring: the prior run's bounded
+// final answer, injected by scheduledrun as a "## Previous Run" section. A
+// no-op (returns ctx unchanged) for one-shot / non-carry tasks or a first run
+// with no prior log. Extracted from executeTask to keep it under gocyclo.
+func (p *Pool) withPriorRunContext(ctx context.Context, task *models.Task) context.Context {
+	if !task.CarryContext || strings.TrimSpace(task.Recurrence) == "" {
+		return ctx
+	}
+	prior := p.priorRunHandoff(task.ID)
+	if prior == "" {
+		return ctx
+	}
+	return scheduledrun.WithPriorRunContext(ctx, prior)
+}
+
+// priorRunHandoff returns a bounded handoff from a task's PRIOR run — its final
+// assistant message clamped to carryContextMaxChars — for recurring
+// context-carry (#504). Empty when there is no prior run or no answer.
+// Deterministic + cheap: it reads the already-persisted last session, no LLM.
+func (p *Pool) priorRunHandoff(taskID uuid.UUID) string {
+	session, err := p.store.GetLog(taskID)
+	if err != nil || session == nil {
+		return ""
+	}
+	var last string
+	for i := len(session.Messages) - 1; i >= 0; i-- {
+		if session.Messages[i].Role == "assistant" && strings.TrimSpace(session.Messages[i].Content) != "" {
+			last = strings.TrimSpace(session.Messages[i].Content)
+			break
+		}
+	}
+	if len(last) > carryContextMaxChars {
+		last = last[:carryContextMaxChars] + "…[truncated]"
+	}
+	return last
+}
+
+// carryContextMaxChars bounds the prior-run handoff so context-carry stays
+// cheap and deterministic (no whole-transcript replay).
+const carryContextMaxChars = 2000
+
+// stillOwns reports whether the pool still holds task with the given claim token
+// (the active-map entry hasn't been replaced by a re-claim after recovery).
 func (p *Pool) stillOwns(taskID, token uuid.UUID) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

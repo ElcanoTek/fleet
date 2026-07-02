@@ -886,3 +886,36 @@ func TestUpdateTasksModelBatch(t *testing.T) {
 		t.Errorf("unfiltered update should set model+fallback on every scheduled task; got model=%v fb=%v", got.Model, got.FallbackModel)
 	}
 }
+
+// TestCarryContextRoundTrip pins #504's carry_context threading through the
+// full insert/scan path (the fragile 58-column seam).
+func TestCarryContextRoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	on := &models.Task{ID: uuid.New(), Prompt: "daily digest", Recurrence: "0 9 * * *", CarryContext: true, Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC()}
+	off := &models.Task{ID: uuid.New(), Prompt: "one-off", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC()}
+	for _, tk := range []*models.Task{on, off} {
+		if err := db.AddTask(ctx, tk); err != nil {
+			t.Fatalf("AddTask: %v", err)
+		}
+	}
+	gotOn, _ := db.GetTask(ctx, on.ID)
+	gotOff, _ := db.GetTask(ctx, off.ID)
+	if !gotOn.CarryContext {
+		t.Fatal("carry_context=true did not round-trip")
+	}
+	if gotOff.CarryContext {
+		t.Fatal("carry_context should default false")
+	}
+	// Batch insert path preserves it too.
+	b := &models.Task{ID: uuid.New(), Prompt: "batch", Recurrence: "0 * * * *", CarryContext: true, Status: models.TaskStatusScheduled, CreatedAt: time.Now().UTC()}
+	if err := db.AddTaskBatch(ctx, []*models.Task{b}); err != nil {
+		t.Fatalf("AddTaskBatch: %v", err)
+	}
+	gotB, _ := db.GetTask(ctx, b.ID)
+	if !gotB.CarryContext {
+		t.Fatal("carry_context lost through the batch insert")
+	}
+}

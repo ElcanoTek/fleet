@@ -635,6 +635,17 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 			"The human answered: " + strings.TrimSpace(task.PendingAnswer) + "\n"
 	}
 
+	// Recurring context carry (#504): when the task opted into carry_context, the
+	// runner installs a BOUNDED handoff from the prior run (its final answer,
+	// clamped) — inject it as a "## Previous Run" section so this run continues
+	// from where the last one left off. Deterministic + cheap: no whole-transcript
+	// replay, no extra LLM call.
+	if prior := PriorRunContextFromContext(ctx); prior != "" {
+		taskSystemPrompt += "\n\n## Previous Run\n\n" +
+			"This recurring task carries context across runs. The previous run's final output was:\n\n" +
+			prior + "\n\nContinue from there; do not repeat work already done unless the schedule implies a fresh pass.\n"
+	}
+
 	// Structured-output mode (#244): when the task declares an output_schema, tell
 	// the agent its final answer must be JSON conforming to that schema. The
 	// runner Pool validates the produced output against the same schema after the

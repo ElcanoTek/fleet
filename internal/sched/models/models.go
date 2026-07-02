@@ -746,6 +746,9 @@ type TaskCreate struct {
 	// --network=none, matching the interactive lockdown path; egress is an
 	// explicit opt-in for the tasks that genuinely need it.
 	AllowNetwork bool `json:"allow_network,omitempty"`
+	// CarryContext (#504): recurring runs carry a bounded handoff from the prior
+	// run. Default false = fresh each run.
+	CarryContext bool `json:"carry_context,omitempty"`
 	// AllowDelegation opts THIS task into agent delegation (#264): the spawn_subagent
 	// native tool is registered so the run can fan out scoped subtasks to governed
 	// child runs (sliced budget, depth/fan-out caps, parent_task_id linkage). The
@@ -878,6 +881,10 @@ type Task struct {
 	// AllowNetwork controls whether this task's execution sandbox keeps outbound
 	// egress. Default false seals it (--network=none); see TaskCreate.AllowNetwork.
 	AllowNetwork bool `json:"allow_network,omitempty"`
+	// CarryContext, when true on a RECURRING task, injects a bounded handoff
+	// from the prior run (its final answer) into each run (#504). Default false
+	// = start fresh each run.
+	CarryContext bool `json:"carry_context,omitempty"`
 	// AllowDelegation opts this task into agent delegation (#264). Default false
 	// registers no spawn_subagent tool; see TaskCreate.AllowDelegation.
 	AllowDelegation bool `json:"allow_delegation,omitempty"`
@@ -1054,6 +1061,7 @@ func NewTask(tc TaskCreate) *Task {
 		EffectivePriority:          priority,
 		InstructionSelfImprove:     tc.InstructionSelfImprove,
 		AllowNetwork:               tc.AllowNetwork,
+		CarryContext:               tc.CarryContext,
 		AllowDelegation:            tc.AllowDelegation,
 		Persona:                    tc.Persona,
 		Description:                tc.Description,
@@ -1222,6 +1230,7 @@ type TaskExportRecord struct {
 	Priority                   int                 `json:"priority,omitempty"                   yaml:"priority,omitempty"`
 	InstructionSelfImprove     bool                `json:"instruction_self_improve,omitempty"  yaml:"instruction_self_improve,omitempty"`
 	AllowNetwork               bool                `json:"allow_network,omitempty"              yaml:"allow_network,omitempty"`
+	CarryContext               bool                `json:"carry_context,omitempty"              yaml:"carry_context,omitempty"`
 	AllowDelegation            bool                `json:"allow_delegation,omitempty"           yaml:"allow_delegation,omitempty"`
 	Persona                    string              `json:"persona,omitempty"                    yaml:"persona,omitempty"`
 	Description                string              `json:"description,omitempty"                yaml:"description,omitempty"`
@@ -1331,6 +1340,7 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		Priority:                   rec.Priority,
 		InstructionSelfImprove:     rec.InstructionSelfImprove,
 		AllowNetwork:               rec.AllowNetwork,
+		CarryContext:               rec.CarryContext,
 		AllowDelegation:            rec.AllowDelegation,
 		Persona:                    rec.Persona,
 		Description:                rec.Description,
@@ -1382,6 +1392,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		Priority:                   t.Priority,
 		InstructionSelfImprove:     t.InstructionSelfImprove,
 		AllowNetwork:               t.AllowNetwork,
+		CarryContext:               t.CarryContext,
 		AllowDelegation:            t.AllowDelegation,
 		Persona:                    t.Persona,
 		Description:                t.Description,

@@ -1630,6 +1630,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		Priority:               tc.Priority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
+		CarryContext:           tc.CarryContext,
 		AllowDelegation:        tc.AllowDelegation,
 		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,

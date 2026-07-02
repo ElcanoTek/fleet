@@ -1328,6 +1328,62 @@ tr.sla-row-fail {
   fill: var(--color-text);
 }
 
+/* Upcoming runs timeline (Scheduler UX 2.0, #504): a day-grouped list of the
+   next scheduled executions. Each row is time · task · schedule-kind. */
+.upcoming-day-group {
+  margin-bottom: 1.1rem;
+}
+.upcoming-day-header {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  margin: 0.6rem 0 0.35rem;
+}
+.upcoming-run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.upcoming-run-row {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  background: var(--color-surface-raised, rgba(255, 255, 255, 0.03));
+}
+.upcoming-run-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+.upcoming-run-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+.upcoming-run-kind {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.upcoming-run-kind-recurring {
+  background: rgba(123, 174, 220, 0.16);
+  color: #7baedc;
+}
+.upcoming-run-kind-oneshot {
+  background: rgba(217, 164, 65, 0.16);
+  color: #d9a441;
+}
+
 /* Filters + pagination — the Recent Tasks filter/search row matches the design
    handoff's .tasks-filter-bar exactly. The input/select sizing is scoped to the
    bar so the shared .filter-input used elsewhere (e.g. the task modal) keeps its

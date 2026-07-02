@@ -374,7 +374,7 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -425,8 +425,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
 			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
-			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57)
+			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
@@ -482,7 +482,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			sandbox_limits = EXCLUDED.sandbox_limits,
 			allow_delegation = EXCLUDED.allow_delegation,
 			output_schema = EXCLUDED.output_schema,
-			output_json = EXCLUDED.output_json`,
+			output_json = EXCLUDED.output_json,
+			carry_context = EXCLUDED.carry_context`,
 		// effective_priority is deliberately OMITTED from the upsert: it is set
 		// once on INSERT and thereafter mutated ONLY by the anti-starvation sweep
 		// (#230). UpdateTask delegates here, so including it would let a status
@@ -547,6 +548,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.AllowDelegation,
 		marshalRawJSON(task.OutputSchema),
 		marshalRawJSON(task.OutputJSON),
+		task.CarryContext,
 	)
 	return err
 }
@@ -651,7 +653,8 @@ const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
 			sandbox_limits = EXCLUDED.sandbox_limits,
 			allow_delegation = EXCLUDED.allow_delegation,
 			output_schema = EXCLUDED.output_schema,
-			output_json = EXCLUDED.output_json`
+			output_json = EXCLUDED.output_json,
+			carry_context = EXCLUDED.carry_context`
 
 // taskInsertColumns is the ordered column list for the tasks INSERT, kept in
 // sync with AddTask / AddTaskBatch / AddTaskTx. Extracted as a constant so the
@@ -665,7 +668,7 @@ const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iteratio
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
-			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json`
+			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context`
 
 // taskInsertArgs returns the 57 positional INSERT values for a task, in the
 // exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
@@ -732,13 +735,14 @@ func taskInsertArgs(t *models.Task) []any {
 		t.AllowDelegation,
 		marshalRawJSON(t.OutputSchema),
 		marshalRawJSON(t.OutputJSON),
+		t.CarryContext,
 	}
 }
 
 // taskInsertColumnsCount is the number of columns in taskInsertColumns. Kept as
 // a named const so the multi-row placeholder builder is self-documenting and
 // a future schema migration that adds a column forces a single touch point.
-const taskInsertColumnsCount = 57
+const taskInsertColumnsCount = 58
 
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an
@@ -1116,6 +1120,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		outputJSON             sql.NullString
 		pendingQuestion        sql.NullString
 		pendingAnswer          sql.NullString
+		carryContext           bool
 		errorAnalysis          sql.NullString
 		artifacts              sql.NullString
 	)
@@ -1132,7 +1137,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
 		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis, &artifacts,
-		&pendingQuestion, &pendingAnswer,
+		&pendingQuestion, &pendingAnswer, &carryContext,
 	)
 	if err != nil {
 		return nil, err
@@ -1185,6 +1190,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	if pendingAnswer.Valid {
 		task.PendingAnswer = pendingAnswer.String
 	}
+	task.CarryContext = carryContext
 	task.Artifacts = unmarshalRawJSON(artifacts)
 	task.RetryPolicy = unmarshalRetryPolicy(retryPolicy)
 	task.Persona = persona.String

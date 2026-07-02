@@ -1091,6 +1091,9 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Post("/datasets/{datasetID}/rerun", h.RerunDatasetRows)
 		r.Get("/datasets/{datasetID}/export", h.ExportDataset)
 		r.Get("/tasks", h.ListTasks)
+		// Scheduler UX 2.0 (#504): upcoming-runs timeline (computed from cron +
+		// scheduled_for). Static segment, registered with the other task reads.
+		r.Get("/tasks/upcoming", h.GetUpcomingRuns)
 		// /tasks/tags is registered before /tasks/{task_id} so the static segment
 		// wins over the wildcard (#212 tag catalogue). /tasks/export and
 		// /tasks/import are likewise static segments that must precede the
