@@ -589,6 +589,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/memories", auth(member(mutate(http.HandlerFunc(s.memories)))))
 	mux.Handle("/memories/", auth(member(mutate(http.HandlerFunc(s.memoryByID)))))
 	mux.Handle("/personas", auth(member(http.HandlerFunc(s.listPersonas))))
+	// Bundle skill roster (#513 phase 1): name + description per skill, for the
+	// composer "/" autocomplete. Read-only over the operator-owned bundle.
+	mux.Handle("/skills", auth(member(http.HandlerFunc(s.listSkills))))
 	// Dynamic model discovery (#251): the model catalog, routed through the
 	// backend so the API key stays server-side and the allow-list is applied
 	// before the response reaches the browser.
@@ -2001,6 +2004,12 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// `@file:"path"` in the user's message into the turn context. A no-op when
 	// disabled; failures degrade to notices so the turn always proceeds.
 	userMessage = s.applyContextHandles(turnCtx, userMessage, req.Message, conv.ID)
+	// Explicit skill invocation (#513 phase 1): a message whose first line starts
+	// with "/<skill-name>" (exact match against the bundle roster) gets a block
+	// appended telling the agent to read that skill's SKILL.md now. Because the
+	// block lands on the persisted user message, the transcript records which
+	// skill was invoked. Unknown "/tokens" are ignored — no block, no error.
+	userMessage = s.applySkillInvocation(userMessage, req.Message)
 	// Connector auto-recommendation (#512, opt-in): if the message is relevant to
 	// an Optional connector the user hasn't enabled, note it so the agent can
 	// suggest connecting it via /settings/connections (never auto-connecting).

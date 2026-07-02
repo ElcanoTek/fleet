@@ -30,6 +30,17 @@ prior versions are listed because none have shipped.
   and one-click add into the per-user remote-MCP OAuth flow (#443). The generic
   bundle ships a starter directory of official vendor endpoints. See
   `docs/MCP-CATALOG.md`.
+- Skills, phase 1 of first-class skills (#513): `GET /skills` returns the
+  client bundle's Agent Skill roster (name + description per skill), and a chat
+  message starting with `/<skill-name>` (exact, case-sensitive match — unknown
+  `/tokens` like paths are silently ignored) explicitly invokes that skill by
+  appending an instruction block to the persisted user message, so the
+  transcript records which skill was loaded. The web composer gains a `/`
+  autocomplete popover over the roster (prefix filter, ↑/↓ + Enter/Tab to
+  complete, Esc to dismiss) backed by a new `/api/skills` proxy. In-app
+  authoring, save-from-run (DB-staged proposals with approval + operator export
+  to a bundle), and project scoping are deferred to phases 2/3 — see
+  `docs/SKILLS.md`.
 - `fleet chat` — a terminal UI for chatting with the fleet agent (Bubble Tea /
   Lipgloss, glamour-rendered Markdown, streaming replies, tool-call + reasoning
   display, `/new` `/retry` `/model` `/reasoning` `/clear` `/quit`, Ctrl+C to

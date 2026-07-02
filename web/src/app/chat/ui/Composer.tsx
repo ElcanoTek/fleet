@@ -31,6 +31,7 @@ import type { ContextUsage } from "@/app/lib/contextUsage";
 import type { NudgeDecision } from "@/app/lib/spreadsheetNudge";
 import type { Message } from "./history";
 import type { MCPServerInfo, RankedModel } from "./chat-experience";
+import { completeSkill, filterSkills, skillSlashQuery, type SkillInfo } from "./skillSlash";
 
 // isNewlyReleased was a module-level helper in chat-experience; its only
 // caller was the composer's model-picker rows, so it moves here verbatim
@@ -125,6 +126,10 @@ export type ComposerProps = {
   loadRankedModels: () => void | Promise<void>;
   loadCatalogModels: () => void | Promise<void>;
 
+  // Bundle skill roster for the "/" autocomplete (#513). Fetched once by
+  // ChatExperience; empty when the bundle ships no skills (popover never opens).
+  skills: SkillInfo[];
+
   // MCP (optional tools) picker
   mcpServers: MCPServerInfo[];
   mcpPickerOpen: boolean;
@@ -186,6 +191,7 @@ export function Composer({
   isLoadingCatalog,
   loadRankedModels,
   loadCatalogModels,
+  skills,
   mcpServers,
   mcpPickerOpen,
   setMcpPickerOpen,
@@ -215,6 +221,23 @@ export function Composer({
   //   a paste looks like source. Auto-dismisses after CODE_NUDGE_TIMEOUT_MS.
   const [hasEverSentMessage, setHasEverSentMessage] = useState(false);
   const [showCodeNudge, setShowCodeNudge] = useState(false);
+  // Skill "/" autocomplete (#513). The popover is fully derived from the
+  // draft: it opens while the draft is a bare "/<token>" with matching bundle
+  // skills, and closes the moment whitespace follows the token (the user is
+  // typing arguments) or the leading "/" goes away. `skillIndex` is the
+  // keyboard-highlighted row (reset by the textarea onChange on every edit —
+  // arrow keys don't fire onChange, so navigation survives); it is clamped at
+  // render so a shrinking match list can't strand the highlight.
+  // `skillPopoverDismissed` is the Esc latch; onChange re-arms it whenever an
+  // edit leaves the slash context, so a later "/" reopens the popover. Both
+  // resets live in event handlers, not effects.
+  const [skillIndex, setSkillIndex] = useState(0);
+  const [skillPopoverDismissed, setSkillPopoverDismissed] = useState(false);
+  const skillQuery = skillSlashQuery(prompt);
+  const skillMatches = skillQuery === null ? [] : filterSkills(skills, skillQuery);
+  const skillHighlight = Math.min(skillIndex, Math.max(skillMatches.length - 1, 0));
+  const skillPopoverOpen =
+    skillMatches.length > 0 && !skillPopoverDismissed && !isStreaming;
   const [sendOnEnter, setSendOnEnter] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     try {
@@ -275,6 +298,60 @@ export function Composer({
                   <span className="text-[0.8rem] font-medium text-[var(--color-accent)]">Drop to attach</span>
                 </div>
               )}
+              {/* Skill "/" autocomplete popover (#513). Anchored above the
+                  composer like the persona/model dropdowns and reusing their
+                  visual language. Rows complete to "/name " (via keyboard
+                  Enter/Tab or click); the appended space keeps the caret
+                  ready for arguments and closes the popover (whitespace ends
+                  the slash context — see skillSlashQuery). */}
+              {skillPopoverOpen ? (
+                <div
+                  role="listbox"
+                  aria-label="Skills"
+                  className="absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-full max-w-[24rem] overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl"
+                >
+                  <div className="max-h-72 overflow-y-auto py-1">
+                    {skillMatches.map((skill, i) => {
+                      const highlighted = i === skillHighlight;
+                      return (
+                        <button
+                          key={skill.name}
+                          type="button"
+                          role="option"
+                          aria-selected={highlighted}
+                          className={`flex w-full flex-col gap-0.5 px-3 py-2 text-left text-[0.74rem] transition hover:bg-[var(--color-overlay-soft)] ${
+                            highlighted
+                              ? "bg-[var(--color-overlay-soft)]"
+                              : ""
+                          }`}
+                          // preventDefault on mousedown keeps the textarea
+                          // focused, matching the persona/model pickers.
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => setPrompt(completeSkill(skill.name))}
+                        >
+                          <span
+                            className={`font-medium ${
+                              highlighted
+                                ? "text-[var(--color-accent)]"
+                                : "text-[var(--color-text-primary)]"
+                            }`}
+                          >
+                            /{skill.name}
+                          </span>
+                          {skill.description ? (
+                            <span className="line-clamp-2 text-[0.7rem] leading-snug text-[var(--color-text-muted)]">
+                              {skill.description}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="border-t border-[var(--color-border)] px-3 py-1.5 text-[0.65rem] text-[var(--color-text-muted)]">
+                    ↑↓ to navigate · Enter/Tab to insert · Esc to dismiss
+                  </div>
+                </div>
+              ) : null}
               <label className="sr-only" htmlFor="promptInput">
                 Message
               </label>
@@ -286,8 +363,43 @@ export function Composer({
                 rows={1}
                 suppressHydrationWarning
                 value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setPrompt(value);
+                  // Every edit resets the skill-popover highlight to the top
+                  // row; an edit that leaves the slash context re-arms the Esc
+                  // latch so the next "/" reopens the popover.
+                  setSkillIndex(0);
+                  if (skillSlashQuery(value) === null) setSkillPopoverDismissed(false);
+                }}
                 onKeyDown={(event) => {
+                  // Skill "/" autocomplete steals its navigation keys while
+                  // open — most importantly Enter, which completes the
+                  // highlighted skill instead of sending, so accepting a
+                  // suggestion can never fire a half-typed message.
+                  if (skillPopoverOpen) {
+                    if (event.key === "ArrowDown") {
+                      event.preventDefault();
+                      setSkillIndex((skillHighlight + 1) % skillMatches.length);
+                      return;
+                    }
+                    if (event.key === "ArrowUp") {
+                      event.preventDefault();
+                      setSkillIndex((skillHighlight - 1 + skillMatches.length) % skillMatches.length);
+                      return;
+                    }
+                    if (event.key === "Enter" || event.key === "Tab") {
+                      event.preventDefault();
+                      const pick = skillMatches[skillHighlight];
+                      if (pick) setPrompt(completeSkill(pick.name));
+                      return;
+                    }
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setSkillPopoverDismissed(true);
+                      return;
+                    }
+                  }
                   // Enter sends according to the user's send-key preference:
                   //   - "enter" (default): bare Enter sends, Shift+Enter is
                   //     a natural newline (textarea default).
