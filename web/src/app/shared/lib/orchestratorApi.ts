@@ -142,6 +142,30 @@ export type UsageReport = {
   note: string;
 };
 
+// BudgetStatus mirrors models.BudgetStatus (#601 part 2): one configured
+// per-principal rolling budget plus its live evaluation — current window
+// [start, end), spend recomputed from the persisted metering, the effective
+// hard bounds after the fail-safe clamp against the live global ceilings, and
+// whether this window's one soft alert has fired. Budgets are managed via the
+// API (POST/DELETE /admin/budgets); this panel renders them read-only.
+export type BudgetStatus = {
+  id: string;
+  scope: "user" | "key" | "project";
+  principal_id: string;
+  window: "day" | "week" | "month";
+  soft_usd?: number;
+  hard_usd?: number;
+  soft_tokens?: number;
+  hard_tokens?: number;
+  window_start: string;
+  window_end: string;
+  spend_usd: number;
+  spend_tokens: number;
+  effective_hard_usd?: number;
+  effective_hard_tokens?: number;
+  soft_alerted: boolean;
+};
+
 // CostForecast mirrors agentcore.CostForecast (#233): the pre-submission token +
 // cost forecast returned by POST /tasks/estimate. Cost fields are null when the
 // model's pricing is unknown; the token estimates are always present.
@@ -476,6 +500,10 @@ export const orchestratorApi = {
     const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
     return request<UsageReport>(`/admin/usage${suffix}`);
   },
+
+  // Per-principal rolling budgets (#601 part 2): admin-only list with live
+  // current-window spend. Create/delete stay API-only for now.
+  budgets: () => request<{ budgets: BudgetStatus[] }>("/admin/budgets"),
 
   // Read-only task-template catalog for "new task from a template" (#262).
   taskTemplates: () => request<TaskTemplate[]>("/task-templates"),

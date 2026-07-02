@@ -1065,6 +1065,34 @@ func (s *Storage) TaskUsage(ctx context.Context, from, to time.Time, groupBy str
 	return s.db.TaskUsage(ctx, from, to, groupBy)
 }
 
+// UpsertBudget inserts or replaces a per-principal rolling budget (#601 part 2).
+// See db.UpsertBudget.
+func (s *Storage) UpsertBudget(ctx context.Context, bc models.BudgetCreate) (*models.Budget, error) {
+	return s.db.UpsertBudget(ctx, bc)
+}
+
+// ListBudgets returns every configured budget (#601 part 2). See db.ListBudgets.
+func (s *Storage) ListBudgets(ctx context.Context) ([]models.Budget, error) {
+	return s.db.ListBudgets(ctx)
+}
+
+// BudgetsFor returns the budgets matching a create's principals (#601 part 2).
+// See db.BudgetsFor.
+func (s *Storage) BudgetsFor(ctx context.Context, user, key, project string) ([]models.Budget, error) {
+	return s.db.BudgetsFor(ctx, user, key, project)
+}
+
+// DeleteBudget removes a budget by id (#601 part 2). See db.DeleteBudget.
+func (s *Storage) DeleteBudget(ctx context.Context, id uuid.UUID) (bool, error) {
+	return s.db.DeleteBudget(ctx, id)
+}
+
+// MarkBudgetSoftAlert claims the once-per-window soft alert (#601 part 2). See
+// db.MarkBudgetSoftAlert.
+func (s *Storage) MarkBudgetSoftAlert(ctx context.Context, id uuid.UUID, windowStart time.Time) (bool, error) {
+	return s.db.MarkBudgetSoftAlert(ctx, id, windowStart)
+}
+
 // ReplayDeadLetteredTask re-enqueues a dead-lettered task (#253): it resets the
 // SAME row to a fresh pending slate — AttemptCount=0, the DLQ columns cleared,
 // status=pending, scheduled_for/started_at/completed_at/error cleared — so the
