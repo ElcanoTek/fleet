@@ -128,8 +128,9 @@ yourself are already in the box, tested, and governed by the same core:
 
 The hard part of agent adoption isn't technical anymore — the real barriers
 are human: *does it work, can I trust it, and am I willing to hand over
-control?* fleet is built to let you answer yes to all three — and check for
-yourself.
+control?* fleet is built to earn all three yeses: you can see everything it
+does, it can't outspend its budget, and nothing important happens without your
+say-so.
 
 **Can it do the job — reproducibly?** The whole agent setup — prompts,
 personas, playbooks, skills, connectors, model defaults — is a **versioned
