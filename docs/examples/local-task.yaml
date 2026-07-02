@@ -1,8 +1,8 @@
-# Example cutlass task YAML — the input to `cmd/cutlass` (fleet's local one-shot
+# Example local task YAML — the input to `fleet task run` (fleet's local one-shot
 # harness) and `scripts/run_workflow_live.sh`. It is a thin mirror of the
 # scheduled-task create shape. Only `prompt` is required.
 #
-#   scripts/run_workflow_live.sh docs/examples/cutlass-task.yaml
+#   scripts/run_workflow_live.sh docs/examples/local-task.yaml
 #
 # The task runs to completion through the SAME governed scheduled runtime the
 # production scheduler uses (agentcore.Run, Mode=Scheduled): tool calls execute in
