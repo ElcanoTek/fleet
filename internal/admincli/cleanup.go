@@ -1,10 +1,12 @@
 package admincli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // cmdCleanup reclaims host-side BUILD/DEPLOY cruft — never user data. The
@@ -84,7 +86,10 @@ func cmdCleanup(argv []string) int {
 // runLoud runs a cleanup step with output passed through; a step failing is
 // reported but never aborts the sweep (each step is independent).
 func runLoud(name string, args ...string) {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	//nolint:gosec // G204: name is always a fixed literal ("podman"/"go") from the call sites above; args are fixed flags — no operator or model input reaches argv.
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -95,7 +100,9 @@ func runLoud(name string, args ...string) {
 // diskLine returns a one-line root-filesystem usage report, or "" when df is
 // unavailable (the sweep still works; the report is a convenience).
 func diskLine(label string) string {
-	out, err := exec.Command("df", "-h", "/").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "df", "-h", "/").Output()
 	if err != nil {
 		return ""
 	}
