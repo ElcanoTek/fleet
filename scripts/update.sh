@@ -17,6 +17,7 @@
 # Flags / env (flags win over env):
 #   --src <dir>            fleet source checkout   (env SRC_DIR, default this repo)
 #   --client-config <dir>  client bundle checkout  (env FLEET_CLIENT_CONFIG_DIR,
+#                          else the dir bootstrap persisted under the state dir,
 #                          default ./config/default — the in-repo generic bundle,
 #                          which has no separate checkout to pull, so its pull is
 #                          skipped)
@@ -43,7 +44,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
-CLIENT_DIR="${FLEET_CLIENT_CONFIG_DIR:-$REPO_ROOT/config/default}"
+# Client bundle dir: env/flag wins; else the dir bootstrap persisted under the
+# state dir (resolved after arg parsing, alongside the pin); else the in-repo
+# generic bundle. Without the state-file fallback, an interactive `fleet
+# update` on a box whose FLEET_CLIENT_CONFIG_DIR lives only in the 0600
+# systemd env file (which this script deliberately does NOT source) would
+# silently update against the generic bundle instead of the client checkout.
+CLIENT_DIR="${FLEET_CLIENT_CONFIG_DIR:-}"
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 # Where the running unit's binaries live. Resolved (in order): --install-dir /
 # $FLEET_INSTALL_DIR, else the dir of the unit's ExecStart, else /opt/fleet. The
@@ -80,7 +87,7 @@ while [[ $# -gt 0 ]]; do
     --no-pull)        NO_PULL=1 ;;
     --yes|-y)         ASSUME_YES=1 ;;
     --dry-run)        DRY_RUN=1 ;;
-    -h|--help)        sed -n '2,39p' "$0"; exit 0 ;;
+    -h|--help)        sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -93,6 +100,14 @@ if [[ -z "$CLIENT_CONFIG_PIN" ]]; then
   _pin_file="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}/client-config.pin"
   [[ -f "$_pin_file" ]] && CLIENT_CONFIG_PIN="$(tr -d '[:space:]' < "$_pin_file")"
 fi
+
+# Fall back to the bootstrap-persisted client bundle dir (state file) when none
+# was passed via env or --client-config, then to the in-repo generic bundle.
+if [[ -z "$CLIENT_DIR" ]]; then
+  _dir_file="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}/client-config.dir"
+  [[ -f "$_dir_file" ]] && CLIENT_DIR="$(tr -d '[:space:]' < "$_dir_file")"
+fi
+CLIENT_DIR="${CLIENT_DIR:-$REPO_ROOT/config/default}"
 
 if [[ -t 1 && "${TERM:-}" != "dumb" ]]; then
   c_reset=$'\033[0m'; c_dim=$'\033[2m'; c_red=$'\033[0;31m'
