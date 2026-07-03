@@ -15,6 +15,14 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Skills builder (docs/SKILLS.md phase 2): Settings → Skills gains a "Your
+  skills" section — create, edit, enable/disable, and delete personal skills
+  (name + description + markdown instructions). User skills are DB-owned
+  (`user_skills`, migration 033), strictly per-user, materialized into the
+  conversation workspace before each chat turn (`user-skills/<name>/SKILL.md`)
+  and listed in the prompt roster; `/name` invocation matches them after
+  bundle/built-in names. Chat-only for now; scheduled tasks and agent-drafted
+  proposals are deferred (honest scope in docs/SKILLS.md).
 - Built-in Agent Skills pack + skills library: fleet embeds five
   generally-useful skills (data-profiler, web-research-brief,
   code-review-checklist, release-notes, executive-report) that every bundle

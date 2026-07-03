@@ -22,7 +22,7 @@ func TestBuildSystemPrompt_AgentNotesInjection(t *testing.T) {
 		{Slug: "xandr-limits", Title: "Xandr Limits", Body: "Max 5 deals/min."},
 	}
 
-	withBoth, err := m.buildSystemPrompt("victoria", "c", []string{"Prefers concise answers."}, "", notes, nil)
+	withBoth, err := m.buildSystemPrompt("victoria", "c", []string{"Prefers concise answers."}, "", notes, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestBuildSystemPrompt_AgentNotesInjection(t *testing.T) {
 		}
 	}
 
-	notesOnly, err := m.buildSystemPrompt("victoria", "c", nil, "", notes, nil)
+	notesOnly, err := m.buildSystemPrompt("victoria", "c", nil, "", notes, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt notes-only: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestBuildSystemPrompt_AgentNotesInjection(t *testing.T) {
 		t.Error("notes-only prompt must contain the Agent Notes section")
 	}
 
-	none, err := m.buildSystemPrompt("victoria", "c", nil, "", nil, nil)
+	none, err := m.buildSystemPrompt("victoria", "c", nil, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt none: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestBuildSystemPrompt_SkillsRoster(t *testing.T) {
 	m := fixtureManager(t)
 
 	// No skills yet → no Skills section.
-	none, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil)
+	none, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt (no skills): %v", err)
 	}
@@ -125,7 +125,7 @@ func TestBuildSystemPrompt_SkillsRoster(t *testing.T) {
 		t.Fatalf("mkdir broken-skill: %v", err)
 	}
 
-	with, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil)
+	with, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt (with skills): %v", err)
 	}
@@ -166,7 +166,7 @@ func TestListPersonas_AlphaSorted(t *testing.T) {
 func TestBuildSystemPrompt_Layering(t *testing.T) {
 	m := fixtureManager(t)
 
-	prompt, err := m.buildSystemPrompt("victoria", "test-conv", []string{"User prefers concise answers."}, "", nil, nil)
+	prompt, err := m.buildSystemPrompt("victoria", "test-conv", []string{"User prefers concise answers."}, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 	writeFile(t, filepath.Join(m.protocolsDir, "fastio-mcp.md"), "# Fast.io Protocol\n")
 
 	// Fast.io OFF — empty tool roster, no fast.io entries.
-	off, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil)
+	off, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt off: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 	// Fast.io ON — pretend the fast_io MCP server is wired up by
 	// inserting a fast-io-prefixed tool into the frozen roster.
 	m.mcpToolRoster = []string{"mcp_fast_io_storage", "mcp_fast_io_workspace"}
-	on, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil)
+	on, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt on: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestBuildSystemPrompt_FastIOGated(t *testing.T) {
 func TestBuildSystemPrompt_UnknownPersona(t *testing.T) {
 	m := fixtureManager(t)
 
-	_, err := m.buildSystemPrompt("nope-does-not-exist", "test-conv", nil, "", nil, nil)
+	_, err := m.buildSystemPrompt("nope-does-not-exist", "test-conv", nil, "", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for unknown persona")
 	}
@@ -256,7 +256,7 @@ func TestBuildSystemPrompt_PathTraversalRejected(t *testing.T) {
 	// Load code uses filepath.Base to strip any traversal, so feeding
 	// "../../../etc/passwd" should attempt to read ".persona.yaml"
 	// (base=etc, ext=passwd) which doesn't exist → error, not a breach.
-	_, err := m.buildSystemPrompt("../../../etc/passwd", "test-conv", nil, "", nil, nil)
+	_, err := m.buildSystemPrompt("../../../etc/passwd", "test-conv", nil, "", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error (file not found after path-sanitize)")
 	}
@@ -314,7 +314,7 @@ func TestRuntimeDateContextStableWithinUTCDay(t *testing.T) {
 // nothing.
 func TestBuildSystemPrompt_ProjectInstructions(t *testing.T) {
 	m := fixtureManager(t)
-	with, err := m.buildSystemPrompt("victoria", "c", []string{"personal fact"}, "Always cite sources.", nil, nil)
+	with, err := m.buildSystemPrompt("victoria", "c", []string{"personal fact"}, "Always cite sources.", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestBuildSystemPrompt_ProjectInstructions(t *testing.T) {
 	if mem < 0 || pi > mem {
 		t.Fatal("project instructions must precede user memories")
 	}
-	without, err := m.buildSystemPrompt("victoria", "c", nil, "", nil, nil)
+	without, err := m.buildSystemPrompt("victoria", "c", nil, "", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
