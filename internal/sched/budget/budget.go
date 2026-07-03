@@ -117,6 +117,11 @@ type ExceededError struct {
 	LimitTokens *int64
 	// WindowEnd is when the window rolls over and new work is accepted again.
 	WindowEnd time.Time
+	// RetryAfter is the wait until WindowEnd measured with the ENFORCER's
+	// clock, so the wire header agrees with the window math even under an
+	// injected test clock (#630 — a real-clock time.Until(WindowEnd) in the
+	// handler went permanently negative once the hardcoded test date passed).
+	RetryAfter time.Duration
 }
 
 func (e *ExceededError) Error() string {
@@ -275,7 +280,7 @@ func (e *Enforcer) CheckCreate(ctx context.Context, p models.BudgetPrincipals) e
 		}
 		e.maybeSoftAlert(ctx, b, ws, spendUSD, spendTokens)
 		hardUSD, hardTokens := e.effectiveHard(b)
-		exceeded := &ExceededError{Budget: b, SpendUSD: spendUSD, SpendTokens: spendTokens, WindowEnd: we}
+		exceeded := &ExceededError{Budget: b, SpendUSD: spendUSD, SpendTokens: spendTokens, WindowEnd: we, RetryAfter: we.Sub(now)}
 		if hardUSD != nil && spendUSD >= *hardUSD {
 			exceeded.LimitUSD = hardUSD
 		}
