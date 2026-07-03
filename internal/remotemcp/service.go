@@ -58,6 +58,8 @@ type tokenStore interface {
 	ListRemoteMCPSharesByOwner(ctx context.Context, ownerEmail string) (map[string][]string, error)
 	ListRemoteMCPServersSharedWith(ctx context.Context, email string) ([]store.RemoteMCPServer, error)
 	GetRemoteMCPServerForUse(ctx context.Context, email, id string) (*store.RemoteMCPServer, error)
+	// Per-user connector availability prefs (unified connector UX).
+	ListConnectorPrefs(ctx context.Context, userEmail string) (map[string]store.ConnectorPref, error)
 }
 
 // Config is the deployment configuration for the feature.

@@ -25,13 +25,15 @@ import (
 // server, so the UI can render one-click Connect vs. a disabled hint.
 
 type mcpCatalogBundledEntry struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name,omitempty"`
-	Description string `json:"description"`
-	ToolCount   int    `json:"tool_count"`
-	Beta        bool   `json:"beta,omitempty"`
-	Optional    bool   `json:"optional"`
-	Trust       string `json:"trust"` // always "bundled"
+	Name             string   `json:"name"`
+	DisplayName      string   `json:"display_name,omitempty"`
+	Description      string   `json:"description"`
+	ToolCount        int      `json:"tool_count"`
+	Beta             bool     `json:"beta,omitempty"`
+	Optional         bool     `json:"optional"`
+	Accounts         []string `json:"accounts,omitempty"` // credential-account seat names (never values)
+	EnabledByDefault bool     `json:"enabled_by_default"`
+	Trust            string   `json:"trust"` // always "bundled"
 }
 
 type mcpCatalogThirdPartyEntry struct {
@@ -72,13 +74,15 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 	if s.agent != nil {
 		for _, info := range s.agent.MCPServerCatalog() {
 			resp.Bundled = append(resp.Bundled, mcpCatalogBundledEntry{
-				Name:        info.Name,
-				DisplayName: info.DisplayName,
-				Description: info.Description,
-				ToolCount:   info.ToolCount,
-				Beta:        info.Beta,
-				Optional:    true,
-				Trust:       "bundled",
+				Name:             info.Name,
+				DisplayName:      info.DisplayName,
+				Description:      info.Description,
+				ToolCount:        info.ToolCount,
+				Beta:             info.Beta,
+				Optional:         true,
+				Accounts:         info.Accounts,
+				EnabledByDefault: info.EnabledByDefault,
+				Trust:            "bundled",
 			})
 		}
 	}
