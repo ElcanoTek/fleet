@@ -114,7 +114,48 @@ Workspace/Built-in provenance badges and a full SKILL.md read view backed by
 `GET /skills/{name}` (names resolve against the loaded roster, never raw
 paths).
 
-## Deferred (phases 2/3)
+## User-authored skills (the builder — phase 2, shipped)
+
+Settings → Skills gains a **"Your skills"** builder: create, edit,
+enable/disable, and delete personal skills (name + one-line description +
+markdown instructions). They are DB-owned (`user_skills`, migration 033),
+strictly per-user, and reach runs by **workspace materialization**: before a
+chat turn, the caller's ACTIVE skills are written into the conversation
+workspace (`user-skills/<name>/SKILL.md`, regenerated from the DB fields and
+cleaned up when a skill is renamed/disabled/deleted) and listed in a "Your
+user's skills" prompt roster section. `/name` invocation matches them after
+bundle/built-in names.
+
+**Scheduled tasks load them too**: the runner resolves the task owner
+(`task.CreatedBy` → chat email, the same resolution the remote-MCP overlay
+uses) and inlines the owner's ACTIVE skills into the run's system prompt
+(full bodies, under a 24KB total budget with LOUD truncation — headless runs
+have no per-conversation workspace to materialize files into, and per-user
+files in the shared workspace root would be readable by other users' runs).
+
+Remaining scope notes:
+
+- No bundled scripts on user skills (SKILL.md only); anything executable a
+  user skill describes still runs under the ordinary sandbox + tool policy.
+- Graduation to the whole deployment stays an operator action: copy the
+  SKILL.md into the bundle's `skills/` dir (the read view makes the content
+  copyable).
+
+## Agent-drafted proposals (phase 3, shipped)
+
+The `propose_skill` native tool ("save from run") is registered in BOTH modes
+under the same lockstep rule as `propose_note`: the tool exists iff a
+`SkillProposer` is wired, and the call is intercepted at the policy boundary
+(`checkSkillProposal`) — the tool body never executes; the staging IS the
+effect. A proposal lands as a `proposed` builder skill for the OWNER
+(interactive: the turn's user; scheduled: the task owner), completely inert —
+never materialized, never invocable, never inlined — until the owner approves
+it on the Skills page ("Proposed by agent" badge → Approve, or Delete to
+reject). Nothing can move a skill back to `proposed`; only the agent path
+creates that state. Same trust posture as memory/note proposals: the agent
+suggests, the human decides.
+
+## Original phase plan (phases 2/3 above are now shipped; kept for history)
 
 Per the maintainer's phasing comment on #513:
 

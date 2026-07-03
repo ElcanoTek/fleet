@@ -751,6 +751,27 @@ export default function ConnectionsPage() {
                       {catalog.bundled.map((b) => {
                         const pref = prefFor(prefs, "bundled", b.name);
                         const on = effectiveEnabled(prefs, "bundled", b.name);
+                        if (b.optional === false) {
+                          // Always-on: operator-wired into every turn; shown
+                          // locked so nothing is invisibly enabled.
+                          return (
+                            <li
+                              key={b.name}
+                              className="rounded-[0.75rem] border border-[var(--color-border-subtle)] px-3 py-2 opacity-80"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="min-w-0 truncate text-[0.8125rem] font-medium">
+                                  {b.display_name || b.name}
+                                </span>
+                                <StatusChip tone="neutral">Always on</StatusChip>
+                              </div>
+                              <p className="mt-1 line-clamp-2 text-[0.75rem] text-[var(--color-text-muted)]">
+                                {b.description ||
+                                  "Enabled by your operator in every conversation."}
+                              </p>
+                            </li>
+                          );
+                        }
                         return (
                           <li
                             key={b.name}

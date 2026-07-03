@@ -56,6 +56,13 @@ type TurnInput struct {
 	// MCP servers (e.g. gamma). nil/empty means "no optional servers".
 	OptionalMCPServersEnabled []string
 
+	// UserSkills is the caller's user-authored skill roster for this turn
+	// (docs/SKILLS.md phase 2): the HTTP layer materializes each ACTIVE skill
+	// into the conversation workspace (user-skills/<name>/SKILL.md) before the
+	// run and passes the Level-1 metadata here for the prompt roster. Only the
+	// author's own runs ever see them.
+	UserSkills []UserSkillPromptEntry
+
 	// MCPAccountDefaults maps an opted-in server name to the credential-account
 	// seat the user chose as their default on the connections page (unified
 	// connector UX). Absent/empty entries use the server's default seat. The
@@ -82,6 +89,12 @@ type TurnInput struct {
 	// MemoryProposer, when set, intercepts propose_memory tool calls and creates
 	// pending memory proposals for user confirmation.
 	MemoryProposer MemoryProposer
+
+	// SkillProposer, when set, intercepts propose_skill tool calls and stages
+	// an agent-drafted personal skill for THIS turn's user to review in the
+	// builder (docs/SKILLS.md phase 3). Per-turn like MemoryProposer so the
+	// proposal is attributed to the right owner.
+	SkillProposer agentcore.SkillProposer
 
 	// Lockdown is set when the conversation row has lockdown=true. Forces a
 	// per-turn container sandbox and constrains the resolved model slug to the
@@ -691,7 +704,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		}
 	}
 
-	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled)
+	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills)
 	if err != nil {
 		return nil, fmt.Errorf("compose system prompt: %w", err)
 	}
@@ -806,6 +819,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		ApprovalStager:  in.ApprovalStager,
 		MemoryProposer:  in.MemoryProposer,
 		NoteProposer:    m.noteProposer,
+		SkillProposer:   in.SkillProposer,
 		HealthRegistry:  m.health,
 		ThinkingConfig:  in.ThinkingConfig,
 	}

@@ -66,6 +66,7 @@ type Agent struct {
 	sb            *sandbox.Sandbox
 	notesProvider agentcore.NotesProvider
 	noteProposer  agentcore.NoteProposer
+	skillProposer agentcore.SkillProposer
 
 	// ── agent self-improvement (#285), gated by the per-task Captain's Log opt-in
 	// (instruction_self_improve). The DRIVER (scheduledrun) leaves these nil unless
@@ -142,6 +143,13 @@ type Options struct {
 	// NoteProposer stages agent-proposed note edits (propose_note). Nil leaves
 	// the tool reporting "not wired".
 	NoteProposer agentcore.NoteProposer
+
+	// SkillProposer stages agent-drafted personal skills (propose_skill) for
+	// the TASK OWNER's review (docs/SKILLS.md phase 3). The runner binds it
+	// per run to the owner resolved from task.CreatedBy; nil (owner
+	// unresolvable, or a runner without the seam) leaves the tool
+	// unregistered and the interceptor answering "unavailable".
+	SkillProposer agentcore.SkillProposer
 
 	// ── agent self-improvement (#285) — set by the driver ONLY when the task
 	// opted into Captain's Log (instruction_self_improve); nil otherwise. ──
@@ -258,6 +266,7 @@ func NewAgent(opts Options) *Agent {
 		logFile:             opts.LogFile,
 		notesProvider:       opts.NotesProvider,
 		noteProposer:        opts.NoteProposer,
+		skillProposer:       opts.SkillProposer,
 		taskMemory:          opts.TaskMemory,
 		learnedInstruction:  opts.LearnedInstruction,
 		taskID:              opts.TaskID,
@@ -508,6 +517,9 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if a.noteProposer != nil {
 		inner.SetNoteProposer(a.noteProposer)
 	}
+	if a.skillProposer != nil {
+		inner.SetSkillProposer(a.skillProposer)
+	}
 	// Capture the live policy so the spawn_subagent tool can read THIS run's
 	// remaining budget and charge child spend back against it (#175). It is the
 	// SAME ScheduledPolicy agentcore drives, so the budget the tool reads is the
@@ -522,6 +534,10 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	nativeTools := a.nativeTools
 	if a.noteProposer != nil {
 		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeNoteTool())
+	}
+	// propose_skill under the same lockstep rule (docs/SKILLS.md phase 3).
+	if a.skillProposer != nil {
+		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeSkillTool())
 	}
 
 	// Captain's Log persistent memory (#198, #285): the remember/recall tools are

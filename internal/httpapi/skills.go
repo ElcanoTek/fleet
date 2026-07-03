@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -155,7 +156,15 @@ func matchSkillInvocation(message string, skills []clientconfig.Skill) (block, m
 // appends) starts with "/<skill-name>" for a bundle skill. A method so
 // postChat stays a single statement, mirroring applyContextHandles /
 // applyConnectorRecommendations.
-func (s *Server) applySkillInvocation(userMessage, rawMessage string) string {
+func (s *Server) applySkillInvocation(ctx context.Context, user, userMessage, rawMessage string) string {
 	block, _ := matchSkillInvocation(rawMessage, s.bundleSkills())
+	if block == "" && s.store != nil {
+		// Bundle/built-in names win; otherwise try the caller's own skills
+		// (docs/SKILLS.md phase 2). Best-effort — a store error just means no
+		// invocation block.
+		if userSkills, err := s.store.ListUserSkills(ctx, user); err == nil {
+			block = matchUserSkillInvocation(rawMessage, userSkills)
+		}
+	}
 	return userMessage + block
 }

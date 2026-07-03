@@ -138,6 +138,14 @@ type NoteProposer interface {
 	Propose(slug, title, body, reason string) (proposalID string, err error)
 }
 
+// SkillProposer stages an agent-drafted personal Agent Skill for its OWNER's
+// review (docs/SKILLS.md phase 3 — "save from run"). Wired in BOTH modes like
+// NoteProposer; the staged skill is inert until the user approves it in the
+// Skills builder.
+type SkillProposer interface {
+	Propose(name, description, body, reason string) (proposalID string, err error)
+}
+
 // Executor runs sandboxed code. The real per-turn / per-exec-burst container
 // backend is P3's sandbox.Pool; here the interface is defined and a test double
 // lives in the _test files. Both modes use the SAME Executor behind this seam.

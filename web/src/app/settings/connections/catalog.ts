@@ -33,6 +33,9 @@ export type CatalogBundled = {
   // connector; the availability UI offers them as the user's default seat.
   accounts?: string[];
   enabled_by_default?: boolean;
+  // false = an always-on connector: wired into every turn by the operator,
+  // rendered as a visible-but-locked row (no per-user toggle).
+  optional?: boolean;
 };
 
 // A user's explicit availability choice for one connector (absence = operator
