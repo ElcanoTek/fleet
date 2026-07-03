@@ -126,7 +126,7 @@ export function AccountMenu({
           </MenuItem>
         ) : null}
         <MenuItem
-          icon={<Icon name="layers" className="size-4" />}
+          icon={<Icon name="plug" className="size-4" />}
           onClick={() => {
             close();
             window.location.assign("/settings/connections");
@@ -135,7 +135,7 @@ export function AccountMenu({
           Connections
         </MenuItem>
         <MenuItem
-          icon={<Icon name="sparkles" className="size-4" />}
+          icon={<Icon name="puzzle" className="size-4" />}
           onClick={() => {
             close();
             window.location.assign("/settings/skills");
@@ -144,7 +144,7 @@ export function AccountMenu({
           Skills
         </MenuItem>
         <MenuItem
-          icon={<Icon name="activity" className="size-4" />}
+          icon={<Icon name="shield" className="size-4" />}
           onClick={() => {
             close();
             window.location.assign("/admin");
