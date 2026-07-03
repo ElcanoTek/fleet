@@ -75,9 +75,13 @@ func (s *Server) handleAdminLLMProviders(w http.ResponseWriter, r *http.Request)
 }
 
 // handleAdminLLMProviderItem serves /admin/llm-providers/{id}: PUT updates,
-// DELETE removes.
+// DELETE removes, POST {id}/test probes the live endpoint.
 func (s *Server) handleAdminLLMProviderItem(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/admin/llm-providers/")
+	if rest, ok := strings.CutSuffix(id, "/test"); ok {
+		s.handleAdminLLMProviderTest(w, r, rest)
+		return
+	}
 	if id == "" || strings.Contains(id, "/") {
 		http.Error(w, "provider id required", http.StatusBadRequest)
 		return
@@ -132,6 +136,36 @@ func (s *Server) handleAdminLLMProviderItem(w http.ResponseWriter, r *http.Reque
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleAdminLLMProviderTest serves POST /admin/llm-providers/{id}/test — the
+// test-connection probe: one cheap host-side call against the provider's real
+// endpoint (key check + model-catalog cross-check where the type supports it).
+// Works on disabled rows so an admin can verify before enabling. The response
+// carries a key-free summary only; the decrypted key lives in the request
+// header of the outbound probe and nowhere else.
+func (s *Server) handleAdminLLMProviderTest(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "provider id required", http.StatusBadRequest)
+		return
+	}
+	cfg, err := s.store.GetLLMProviderConfig(r.Context(), id)
+	if err != nil {
+		httpErrorForLLMProvider(w, err)
+		return
+	}
+	result := agentcore.ProbeProvider(r.Context(), agentcore.ProviderConfig{
+		Name:    cfg.Name,
+		Type:    agentcore.ProviderType(cfg.Type),
+		APIKey:  cfg.APIKey,
+		BaseURL: cfg.BaseURL,
+		Models:  cfg.Models,
+	})
+	writeJSON(w, result)
 }
 
 // applyLLMProviderChange rebuilds the resolver routing table after a persisted

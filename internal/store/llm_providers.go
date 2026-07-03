@@ -200,6 +200,42 @@ func (s *Store) LLMProviderConfigs(ctx context.Context) ([]LLMProviderConfig, er
 	return out, rows.Err()
 }
 
+// GetLLMProviderConfig returns ONE row with its decrypted key — the
+// test-connection probe's read. Unlike LLMProviderConfigs it includes disabled
+// rows (testing before enabling is the point). Same rule as the list variant:
+// host-side use only, never expose the result over HTTP.
+func (s *Store) GetLLMProviderConfig(ctx context.Context, id string) (*LLMProviderConfig, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, provider_type, base_url, api_key_sealed, models, enabled, created_at, updated_at
+		FROM llm_providers WHERE id=$1`, id)
+	var c LLMProviderConfig
+	var sealed []byte
+	var modelsJSON []byte
+	err := row.Scan(&c.ID, &c.Name, &c.Type, &c.BaseURL, &sealed,
+		&modelsJSON, &c.Enabled, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrLLMProviderNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(modelsJSON, &c.Models); err != nil {
+		return nil, fmt.Errorf("decode models for provider %s: %w", c.ID, err)
+	}
+	if len(sealed) > 0 {
+		if s.tokenCipher == nil {
+			return nil, secretbox.ErrNoCipher
+		}
+		pt, err := s.tokenCipher.Open(sealed, secretbox.AAD(aadPurposeLLMKey, c.ID))
+		if err != nil {
+			return nil, fmt.Errorf("decrypt api key for provider %q: %w", c.Name, err)
+		}
+		c.APIKey = string(pt)
+	}
+	c.HasAPIKey = c.APIKey != ""
+	return &c, nil
+}
+
 // CreateLLMProvider inserts a provider. A non-nil, non-empty APIKey is sealed
 // under the store cipher; creating a keyed provider without a cipher configured
 // fails closed.
