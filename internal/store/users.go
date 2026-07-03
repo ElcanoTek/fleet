@@ -284,6 +284,10 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM remote_mcp_servers WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete remote mcp servers: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM user_connector_prefs WHERE user_email = $1`, email); err != nil {
+		return fmt.Errorf("delete connector prefs: %w", err)
+	}
 	// Owned projects: mirror DeleteProject — detach every member's
 	// conversations (the history belongs to its user), delete the shared
 	// project memories (they are project state), then the projects.

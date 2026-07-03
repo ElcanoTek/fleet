@@ -22,6 +22,8 @@ type fakeStore struct {
 	nextID  int
 	// shares: server id -> grantees ('*' or emails), mirroring the real table.
 	shares map[string][]string
+	// prefs: email -> connector-pref map, mirroring user_connector_prefs.
+	prefs map[string]map[string]store.ConnectorPref
 }
 
 func newFakeStore() *fakeStore {
@@ -206,6 +208,10 @@ func (f *fakeStore) GetRemoteMCPServerForUse(_ context.Context, email, id string
 		}
 	}
 	return nil, store.ErrRemoteMCPNotFound
+}
+
+func (f *fakeStore) ListConnectorPrefs(_ context.Context, email string) (map[string]store.ConnectorPref, error) {
+	return f.prefs[strings.ToLower(email)], nil
 }
 
 func (f *fakeStore) BeginOAuthFlow(_ context.Context, state, serverID, email, verifier string, _ time.Duration) error {

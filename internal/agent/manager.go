@@ -56,6 +56,14 @@ type TurnInput struct {
 	// MCP servers (e.g. gamma). nil/empty means "no optional servers".
 	OptionalMCPServersEnabled []string
 
+	// MCPAccountDefaults maps an opted-in server name to the credential-account
+	// seat the user chose as their default on the connections page (unified
+	// connector UX). Absent/empty entries use the server's default seat. The
+	// HTTP layer validates a seat against the catalog before passing it, so a
+	// stale pref (seat's env vars removed) degrades to the default seat instead
+	// of failing the turn.
+	MCPAccountDefaults map[string]string
+
 	// Memories are user-scoped long-term facts injected into the system prompt.
 	// Project-scoped shared memories (#509) ride the same slice, prefixed
 	// "[project] " by the HTTP layer.
@@ -730,7 +738,10 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	selection := make(agentcore.MCPSelection, 0, len(in.OptionalMCPServersEnabled))
 	for _, name := range in.OptionalMCPServersEnabled {
 		if n := strings.TrimSpace(name); n != "" {
-			selection = append(selection, agentcore.MCPChoice{Server: n})
+			// The user's default seat (connections page) rides along; a chat
+			// turn is supervised, so the per-user default is the right seat —
+			// scheduled tasks pin their own {server, account} explicitly.
+			selection = append(selection, agentcore.MCPChoice{Server: n, Account: in.MCPAccountDefaults[n]})
 		}
 	}
 
