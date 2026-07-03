@@ -19,10 +19,14 @@ import (
 // Graduating a good skill to the whole deployment stays an operator action
 // (copy it into the bundle's skills/ dir).
 
-// User-skill statuses.
+// User-skill statuses. A PROPOSED skill was drafted by the agent
+// (propose_skill) and is inert until its owner approves it in the builder —
+// same trust posture as memory/note proposals: the agent suggests, the human
+// decides.
 const (
 	UserSkillStatusActive   = "active"
 	UserSkillStatusDisabled = "disabled"
+	UserSkillStatusProposed = "proposed"
 )
 
 // userSkillNameShape mirrors the bundle skill-name contract
@@ -73,6 +77,17 @@ func validateUserSkill(name, description, body string) error {
 
 // CreateUserSkill inserts a new active skill.
 func (s *Store) CreateUserSkill(ctx context.Context, userEmail, name, description, body string) (*UserSkill, error) {
+	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusActive)
+}
+
+// CreateUserSkillProposal stages an agent-drafted skill for the owner's
+// review: it is stored but inert (never materialized, never invocable) until
+// approved in the builder.
+func (s *Store) CreateUserSkillProposal(ctx context.Context, userEmail, name, description, body string) (*UserSkill, error) {
+	return s.createUserSkill(ctx, userEmail, name, description, body, UserSkillStatusProposed)
+}
+
+func (s *Store) createUserSkill(ctx context.Context, userEmail, name, description, body, status string) (*UserSkill, error) {
 	email := normalizeEmail(userEmail)
 	name = strings.TrimSpace(name)
 	if err := validateUserSkill(name, description, body); err != nil {
@@ -82,7 +97,7 @@ func (s *Store) CreateUserSkill(ctx context.Context, userEmail, name, descriptio
 	sk := &UserSkill{
 		ID: uuid.NewString(), UserEmail: email, Name: name,
 		Description: strings.TrimSpace(description), Body: body,
-		Status: UserSkillStatusActive, CreatedAt: now, UpdatedAt: now,
+		Status: status, CreatedAt: now, UpdatedAt: now,
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO user_skills (id, user_email, name, description, body, status, created_at, updated_at)
@@ -103,6 +118,9 @@ func (s *Store) UpdateUserSkill(ctx context.Context, userEmail, id, name, descri
 	if err := validateUserSkill(name, description, body); err != nil {
 		return nil, err
 	}
+	// Owners may set active/disabled (approving a proposal = setting it
+	// active); nothing can move a skill BACK to proposed — that state is
+	// created only by the agent's propose_skill path.
 	if status != UserSkillStatusActive && status != UserSkillStatusDisabled {
 		return nil, fmt.Errorf("%w: unknown status %q", ErrUserSkillInvalid, status)
 	}
@@ -158,6 +176,22 @@ func (s *Store) ListUserSkills(ctx context.Context, userEmail string) ([]UserSki
 		out = append(out, sk)
 	}
 	return out, rows.Err()
+}
+
+// ListActiveUserSkills returns only the user's ACTIVE skills (the set that
+// participates in runs), name order.
+func (s *Store) ListActiveUserSkills(ctx context.Context, userEmail string) ([]UserSkill, error) {
+	all, err := s.ListUserSkills(ctx, userEmail)
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0]
+	for _, sk := range all {
+		if sk.Status == UserSkillStatusActive {
+			out = append(out, sk)
+		}
+	}
+	return out, nil
 }
 
 // DeleteUserSkill removes an owned skill.

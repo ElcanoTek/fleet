@@ -1150,6 +1150,30 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 	return nil
 }
 
+// AlwaysOnServer is the read-only view of a non-Optional enabled connector for
+// the availability UI: these run in every turn with no opt-in decision, so the
+// connections page renders them as visible-but-locked rows (an invisible
+// always-on connector is a security-review smell — users should see what is
+// implicitly wired into every conversation).
+type AlwaysOnServer struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// AlwaysOnServers returns the bundle's enabled, non-Optional connectors.
+func (b *Bundle) AlwaysOnServers() []AlwaysOnServer {
+	var out []AlwaysOnServer
+	for i := range b.MCPCatalog {
+		sd := &b.MCPCatalog[i]
+		if sd.Optional || !sd.enabled() {
+			continue
+		}
+		out = append(out, AlwaysOnServer{Name: sd.Name, DisplayName: sd.DisplayName, Description: sd.Description})
+	}
+	return out
+}
+
 // providerTypes is the set of LLM provider backends the resolver can build (#289).
 var providerTypes = map[string]bool{"openrouter": true, "anthropic": true, "openai": true, "ollama": true}
 

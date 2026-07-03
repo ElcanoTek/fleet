@@ -667,6 +667,12 @@ func run() error {
 		// off, leaving scheduled runs unchanged.
 		RemoteMCP:  remoteMCPResolver,
 		OwnerEmail: ownerEmailResolver(schedStorage),
+		// The owner's builder skills + propose_skill staging (docs/SKILLS.md):
+		// scheduled runs inline the owner's ACTIVE skills into the prompt and
+		// stage agent-drafted proposals against the same chat-store rows the
+		// Skills page reviews.
+		UserSkills:       userSkillDocsProvider(chatStore),
+		SkillProposerFor: skillProposerFactory(chatStore),
 	})
 	// Wire the cost-forecast's system-prompt resolver (#233) from the SAME runner
 	// that assembles the prompt at dispatch, so POST /tasks/estimate counts the
@@ -1884,6 +1890,44 @@ func remoteMCPCatalogProvider(svc *remotemcp.Service) func(context.Context, stri
 // its remote-MCP OAuth tokens are keyed by (#443). The orchestrator username IS
 // that email for the elcano-auth tier. Returns "" (no error) when the user can't
 // be found, so a task created by a since-deleted user simply gets no overlay.
+// userSkillDocsProvider adapts the chat store's active builder skills into the
+// runner's inline-prompt shape.
+func userSkillDocsProvider(chatStore *store.Store) func(ctx context.Context, email string) ([]scheduledrun.UserSkillDoc, error) {
+	return func(ctx context.Context, email string) ([]scheduledrun.UserSkillDoc, error) {
+		skills, err := chatStore.ListActiveUserSkills(ctx, email)
+		if err != nil {
+			return nil, err
+		}
+		docs := make([]scheduledrun.UserSkillDoc, 0, len(skills))
+		for _, sk := range skills {
+			docs = append(docs, scheduledrun.UserSkillDoc{Name: sk.Name, Description: sk.Description, Body: sk.Body})
+		}
+		return docs, nil
+	}
+}
+
+// skillProposerFactory binds propose_skill staging to a resolved task owner.
+func skillProposerFactory(chatStore *store.Store) func(ownerEmail string) agentcore.SkillProposer {
+	return func(ownerEmail string) agentcore.SkillProposer {
+		return scheduledSkillProposer{store: chatStore, owner: ownerEmail}
+	}
+}
+
+// scheduledSkillProposer stages a propose_skill call from a scheduled run as a
+// PROPOSED builder skill for the task owner (docs/SKILLS.md phase 3).
+type scheduledSkillProposer struct {
+	store *store.Store
+	owner string
+}
+
+func (p scheduledSkillProposer) Propose(name, description, body, _ string) (string, error) {
+	sk, err := p.store.CreateUserSkillProposal(context.Background(), p.owner, name, description, body)
+	if err != nil {
+		return "", err
+	}
+	return sk.ID, nil
+}
+
 func ownerEmailResolver(s *storage.Storage) func(context.Context, uuid.UUID) (string, error) {
 	return func(ctx context.Context, id uuid.UUID) (string, error) {
 		m, err := s.GetUsersByIDsWithContext(ctx, []uuid.UUID{id})

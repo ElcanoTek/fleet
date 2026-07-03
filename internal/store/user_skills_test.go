@@ -83,3 +83,39 @@ func TestUserSkills(t *testing.T) {
 		t.Errorf("delete left rows: %+v", list)
 	}
 }
+
+// Agent proposals stage inert and activate only on the owner's approval.
+func TestUserSkillProposalFlow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const me = "proposer@elcano.com"
+
+	prop, err := s.CreateUserSkillProposal(ctx, me, "weekly-pacing", "compile the weekly pacing report the way this user likes it", "1. Pull numbers.\n2. Format.")
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	t.Cleanup(func() { _ = s.DeleteUserSkill(context.Background(), me, prop.ID) })
+	if prop.Status != UserSkillStatusProposed {
+		t.Fatalf("status = %q, want proposed", prop.Status)
+	}
+	// Inert while proposed.
+	active, err := s.ListActiveUserSkills(ctx, me)
+	if err != nil || len(active) != 0 {
+		t.Fatalf("proposed skill leaked into the active set: %v %+v", err, active)
+	}
+	// Approve = owner sets it active through the ordinary update path.
+	up, err := s.UpdateUserSkill(ctx, me, prop.ID, prop.Name, prop.Description, prop.Body, UserSkillStatusActive)
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if up.Status != UserSkillStatusActive {
+		t.Errorf("status = %q", up.Status)
+	}
+	if active, _ := s.ListActiveUserSkills(ctx, me); len(active) != 1 {
+		t.Errorf("approved skill missing from active set: %+v", active)
+	}
+	// Nothing can move it BACK to proposed.
+	if _, err := s.UpdateUserSkill(ctx, me, prop.ID, prop.Name, prop.Description, prop.Body, UserSkillStatusProposed); !errors.Is(err, ErrUserSkillInvalid) {
+		t.Errorf("re-proposing should be invalid, got %v", err)
+	}
+}

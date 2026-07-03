@@ -27,7 +27,7 @@ type UserSkill = {
   name: string;
   description: string;
   body: string;
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "proposed";
 };
 
 const EMPTY_DRAFT = { id: "", name: "", description: "", body: "" };
@@ -295,8 +295,20 @@ export default function SkillsPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{sk.name}</span>
-                      <StatusChip tone={sk.status === "active" ? "success" : "neutral"}>
-                        {sk.status === "active" ? "Active" : "Disabled"}
+                      <StatusChip
+                        tone={
+                          sk.status === "active"
+                            ? "success"
+                            : sk.status === "proposed"
+                              ? "warning"
+                              : "neutral"
+                        }
+                      >
+                        {sk.status === "active"
+                          ? "Active"
+                          : sk.status === "proposed"
+                            ? "Proposed by agent"
+                            : "Disabled"}
                       </StatusChip>
                     </div>
                     <p className="mt-0.5 text-[0.8125rem] text-[var(--color-text-muted)]">
@@ -304,6 +316,34 @@ export default function SkillsPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
+                    {sk.status === "proposed" ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          fetch(`/api/user-skills/${encodeURIComponent(sk.id)}`, {
+                            method: "PUT",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              name: sk.name,
+                              description: sk.description,
+                              body: sk.body,
+                              status: "active",
+                            }),
+                          })
+                            .then(async (res) => {
+                              if (!res.ok) throw new Error((await res.text()) || "Approve failed.");
+                              return reloadMine();
+                            })
+                            .catch((e: unknown) =>
+                              setError(e instanceof Error ? e.message : "Approve failed."),
+                            )
+                        }
+                        disabled={busy}
+                        className="rounded-full border border-[var(--color-success-strong)] px-3 py-1 text-[0.75rem] text-[var(--color-success-soft)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+                      >
+                        Approve
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => setDraft({ id: sk.id, name: sk.name, description: sk.description, body: sk.body })}
@@ -312,14 +352,16 @@ export default function SkillsPage() {
                     >
                       Edit
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => toggleMine(sk)}
-                      disabled={busy}
-                      className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
-                    >
-                      {sk.status === "active" ? "Disable" : "Enable"}
-                    </button>
+                    {sk.status !== "proposed" ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleMine(sk)}
+                        disabled={busy}
+                        className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+                      >
+                        {sk.status === "active" ? "Disable" : "Enable"}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => deleteMine(sk)}
