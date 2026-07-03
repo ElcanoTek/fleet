@@ -56,6 +56,13 @@ type TurnInput struct {
 	// MCP servers (e.g. gamma). nil/empty means "no optional servers".
 	OptionalMCPServersEnabled []string
 
+	// UserSkills is the caller's user-authored skill roster for this turn
+	// (docs/SKILLS.md phase 2): the HTTP layer materializes each ACTIVE skill
+	// into the conversation workspace (user-skills/<name>/SKILL.md) before the
+	// run and passes the Level-1 metadata here for the prompt roster. Only the
+	// author's own runs ever see them.
+	UserSkills []UserSkillPromptEntry
+
 	// MCPAccountDefaults maps an opted-in server name to the credential-account
 	// seat the user chose as their default on the connections page (unified
 	// connector UX). Absent/empty entries use the server's default seat. The
@@ -691,7 +698,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		}
 	}
 
-	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled)
+	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills)
 	if err != nil {
 		return nil, fmt.Errorf("compose system prompt: %w", err)
 	}

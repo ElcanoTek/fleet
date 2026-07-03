@@ -91,7 +91,7 @@ func TestApplySkillInvocation(t *testing.T) {
 
 	// The block is appended to the (already server-augmented) user message, but
 	// matching runs against the RAW message the user typed.
-	got := s.applySkillInvocation("augmented message", "/deploy staging")
+	got := s.applySkillInvocation(context.Background(), "u@x.com", "augmented message", "/deploy staging")
 	if !strings.HasPrefix(got, "augmented message") {
 		t.Fatalf("original message dropped: %q", got)
 	}
@@ -100,13 +100,13 @@ func TestApplySkillInvocation(t *testing.T) {
 	}
 
 	// Unknown token → the message passes through untouched.
-	if got := s.applySkillInvocation("msg", "/etc/hosts looks wrong"); got != "msg" {
+	if got := s.applySkillInvocation(context.Background(), "u@x.com", "msg", "/etc/hosts looks wrong"); got != "msg" {
 		t.Errorf("unknown token must be a no-op, got %q", got)
 	}
 
 	// No bundle wired (mock/test boots) → nil-safe no-op.
 	bare := &Server{}
-	if got := bare.applySkillInvocation("msg", "/deploy"); got != "msg" {
+	if got := bare.applySkillInvocation(context.Background(), "u@x.com", "msg", "/deploy"); got != "msg" {
 		t.Errorf("nil clientConfig must be a no-op, got %q", got)
 	}
 }

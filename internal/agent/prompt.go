@@ -368,7 +368,16 @@ func (m *Manager) ListPersonas() ([]string, error) {
 //     referenced by name.
 //  5. The per-conversation workspace path, so the agent can hand it to
 //     MCP tools whose cwd is not per-conversation.
-func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, projectInstructions string, notes []agentcore.Note, enabledOptionalMCPServers []string) (string, error) {
+//
+// UserSkillPromptEntry is one user-authored skill in the prompt roster (the
+// files live in the conversation workspace, materialized by the HTTP layer).
+type UserSkillPromptEntry struct {
+	Name        string
+	Description string
+	Path        string // workspace-relative, e.g. "user-skills/<name>/SKILL.md"
+}
+
+func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, projectInstructions string, notes []agentcore.Note, enabledOptionalMCPServers []string, userSkills []UserSkillPromptEntry) (string, error) {
 	var sb strings.Builder
 
 	fastIOOn := m.fastIOEnabledForTurn(enabledOptionalMCPServers)
@@ -542,6 +551,18 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 		sb.WriteString("## Skills\n")
 		sb.WriteString("Skills are packaged, on-demand capabilities. Only each skill's name and description are listed here; when a task matches one, read its `SKILL.md` for the full instructions — it may bundle scripts you run via `bash`/`run_python` and reference files you read on demand. Do NOT read a skill's files unless the task calls for it.\n\n")
 		for _, sk := range skills {
+			fmt.Fprintf(&sb, "- **%s** (`%s`): %s\n", sk.Name, sk.Path, sk.Description)
+		}
+		sb.WriteString("\n")
+	}
+
+	// 5c. the user's own skills (docs/SKILLS.md phase 2) — same progressive
+	// disclosure, but the files live in the conversation workspace (writable,
+	// per-user) rather than the read-only bundle mount.
+	if len(userSkills) > 0 {
+		sb.WriteString("## Your user's skills\n")
+		sb.WriteString("Skills this user authored for their own runs. Same rules as Skills above: read the SKILL.md only when the task matches.\n\n")
+		for _, sk := range userSkills {
 			fmt.Fprintf(&sb, "- **%s** (`%s`): %s\n", sk.Name, sk.Path, sk.Description)
 		}
 		sb.WriteString("\n")

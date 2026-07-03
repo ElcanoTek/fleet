@@ -114,6 +114,28 @@ Workspace/Built-in provenance badges and a full SKILL.md read view backed by
 `GET /skills/{name}` (names resolve against the loaded roster, never raw
 paths).
 
+## User-authored skills (the builder — phase 2, shipped)
+
+Settings → Skills gains a **"Your skills"** builder: create, edit,
+enable/disable, and delete personal skills (name + one-line description +
+markdown instructions). They are DB-owned (`user_skills`, migration 033),
+strictly per-user, and reach runs by **workspace materialization**: before a
+chat turn, the caller's ACTIVE skills are written into the conversation
+workspace (`user-skills/<name>/SKILL.md`, regenerated from the DB fields and
+cleaned up when a skill is renamed/disabled/deleted) and listed in a "Your
+user's skills" prompt roster section. `/name` invocation matches them after
+bundle/built-in names.
+
+Honest scope:
+
+- **Chat only for now** — scheduled tasks do not load user skills yet.
+- No bundled scripts on user skills (SKILL.md only); anything executable a
+  user skill describes still runs under the ordinary sandbox + tool policy.
+- Graduation to the whole deployment stays an operator action: copy the
+  SKILL.md into the bundle's `skills/` dir (the read view makes the content
+  copyable). Agent-drafted skill PROPOSALS (save-from-run, review/approve)
+  remain phase 3.
+
 ## Deferred (phases 2/3)
 
 Per the maintainer's phasing comment on #513:

@@ -118,6 +118,12 @@ func (s *fakeChatStore) ListConnectorPrefs(_ context.Context, _ string) (map[str
 	return nil, nil
 }
 
+// User skills (docs/SKILLS.md phase 2): the fake has none — the turn path
+// lists them on every run.
+func (s *fakeChatStore) ListUserSkills(_ context.Context, _ string) ([]store.UserSkill, error) {
+	return nil, nil
+}
+
 func (s *fakeChatStore) CreateConversation(_ context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
