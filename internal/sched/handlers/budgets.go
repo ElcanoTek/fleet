@@ -69,9 +69,14 @@ func (h *Handlers) budgetCapError(ctx context.Context, creator taskCreator) erro
 func writeBudgetRefusal(w http.ResponseWriter, err error) {
 	var exceeded *budget.ExceededError
 	if errors.As(err, &exceeded) {
-		if wait := time.Until(exceeded.WindowEnd); wait > 0 {
-			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())+1))
+		// Use the enforcer-computed wait (its clock), clamped to ≥1s — RFC 9110
+		// allows any non-negative delta and dropping the header entirely reads
+		// as "retry immediately", which is never right for an exhausted window.
+		wait := exceeded.RetryAfter
+		if wait < time.Second {
+			wait = time.Second
 		}
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())))
 		writeError(w, http.StatusPaymentRequired, exceeded.Error())
 		return
 	}
