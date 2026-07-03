@@ -251,4 +251,55 @@
     <path d="M9 11l3 3 8-8"/>
     <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
   </symbol>
+
+  <!-- plug: Connections (the per-user remote-MCP / connector directory). A power
+       plug reads as "connect an integration" — distinct from `layers` (stacking)
+       it replaces and from every other rail/account glyph. Lucide-derived
+       (https://lucide.dev/icons/plug, ISC), stroke nudged to 1.9. -->
+  <symbol id="plug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 22v-5"/>
+    <path d="M9 8V2"/>
+    <path d="M15 8V2"/>
+    <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>
+  </symbol>
+
+  <!-- puzzle: Skills (user-authored Agent Skills). A puzzle piece reads as
+       "modular capability you snap in," a better fit than `sparkles` (which now
+       belongs solely to the details toggle's polished-output crossfade).
+       Lucide-derived (https://lucide.dev/icons/puzzle, ISC), stroke 1.9. -->
+  <symbol id="puzzle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/>
+  </symbol>
+
+  <!-- shield: Admin (allowlist-gated privileged surface). A shield reads as
+       "protected / privileged area," a clearer signal than `activity` (a pulse
+       line that read as monitoring). Classic shield outline, stroke 1.9. -->
+  <symbol id="shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+  </symbol>
+
+  <!-- briefcase: Projects. A workcase reads as "a body of work," distinct from
+       `grid` (now solely the Operations Center dashboard) it replaces and from
+       `folder` (chat-conversation folders). Lucide-derived
+       (https://lucide.dev/icons/briefcase, ISC), stroke 1.9. -->
+  <symbol id="briefcase" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+    <rect width="20" height="14" x="2" y="6" rx="2"/>
+  </symbol>
+
+  <!-- keyboard: the chat header's "Keyboard shortcuts" button. Replaces a bare
+       `info` glyph that collided with the details toggle's info state; a keyboard
+       is the literal affordance. Lucide-derived
+       (https://lucide.dev/icons/keyboard, ISC), stroke 1.9. -->
+  <symbol id="keyboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <rect width="20" height="16" x="2" y="4" rx="2"/>
+    <path d="M6 8h.001"/>
+    <path d="M10 8h.001"/>
+    <path d="M14 8h.001"/>
+    <path d="M18 8h.001"/>
+    <path d="M8 12h.001"/>
+    <path d="M12 12h.001"/>
+    <path d="M16 12h.001"/>
+    <path d="M7 16h10"/>
+  </symbol>
 </svg>

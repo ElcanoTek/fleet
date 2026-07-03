@@ -324,7 +324,7 @@ export function SummaryBanner({
     <div className="rounded-[0.85rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] p-3 sm:p-4">
       <div className="flex items-center justify-between gap-2 pb-2">
         <span className="inline-flex items-center gap-1.5 text-[0.72rem] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">
-          <Icon name="info" className="size-3.5" aria-hidden="true" />
+          <Icon name="summarize" className="size-3.5" aria-hidden="true" />
           Conversation summary
         </span>
         <span className="flex items-center gap-1">

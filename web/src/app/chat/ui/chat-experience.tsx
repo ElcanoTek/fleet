@@ -2968,7 +2968,7 @@ export function ChatExperience() {
                   type="button"
                   onClick={() => setShortcutsOpen(true)}
                 >
-                  <Icon name="info" className="size-5" />
+                  <Icon name="keyboard" className="size-5" />
                 </button>
                 <button
                   aria-label="Projects"
@@ -2977,7 +2977,7 @@ export function ChatExperience() {
                   type="button"
                   onClick={() => setProjectsOpen(true)}
                 >
-                  <Icon name="grid" className="size-5" />
+                  <Icon name="briefcase" className="size-5" />
                 </button>
                 <button
                   aria-label="Manage memories"
