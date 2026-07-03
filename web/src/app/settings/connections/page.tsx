@@ -9,12 +9,15 @@ import {
   authHint,
   categoriesOf,
   consentRequired,
+  effectiveEnabled,
   filterCatalog,
   groupByCategory,
   needsTenantURL,
+  prefFor,
   provenanceBadge,
   type CatalogResponse,
   type CatalogThirdParty,
+  type ConnectorPref,
 } from "./catalog";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { StatusChip, type StatusTone } from "@/app/shared/ui/StatusChip";
@@ -135,6 +138,9 @@ export default function ConnectionsPage() {
   // Which of your servers has its share panel open, and the pending grantee.
   const [shareOpenFor, setShareOpenFor] = useState<string | null>(null);
   const [shareGrantee, setShareGrantee] = useState("");
+  // Explicit per-user availability choices (unified connector UX); absence of
+  // an entry means the operator default.
+  const [prefs, setPrefs] = useState<ConnectorPref[]>([]);
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
   // The directory is the page's main discovery surface — open by default,
   // collapsible for users who only manage existing connections.
@@ -182,6 +188,12 @@ export default function ConnectionsPage() {
     fetchCatalog()
       .then((c) => {
         if (!stale) setCatalog(c);
+      })
+      .catch(() => {});
+    fetch("/api/connector-prefs", { cache: "no-store" })
+      .then(async (res) => (res.ok ? ((await res.json()) as { prefs: ConnectorPref[] }) : null))
+      .then((data) => {
+        if (!stale && data) setPrefs(data.prefs ?? []);
       })
       .catch(() => {});
     // Strip the one-shot ?connected / ?error params from the URL (the banner was
@@ -275,6 +287,47 @@ export default function ConnectionsPage() {
         }
         setNotice(`${entry.display_name} added. Click Connect to sign in.`);
         refresh();
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
+  // Availability layer: write (or revert) an explicit per-user choice. Off =
+  // the connector disappears from your chat pickers and runs; for bundled
+  // connectors the seat is the credential account your chats use by default.
+  const setConnectorPref = (pref: ConnectorPref) => {
+    setError(null);
+    setBusy(true);
+    fetch("/api/connector-prefs", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(pref),
+    })
+      .then(async (res) => {
+        if (!res.ok && res.status !== 204) {
+          throw new Error((await res.text()) || `Save failed: ${res.status}`);
+        }
+        setPrefs((cur) => [
+          ...cur.filter((p) => !(p.kind === pref.kind && p.connector_id === pref.connector_id)),
+          pref,
+        ]);
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
+  const resetConnectorPref = (kind: "bundled" | "remote", id: string) => {
+    setError(null);
+    setBusy(true);
+    fetch(
+      `/api/connector-prefs?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    )
+      .then(async (res) => {
+        if (!res.ok && res.status !== 204) {
+          throw new Error((await res.text()) || `Reset failed: ${res.status}`);
+        }
+        setPrefs((cur) => cur.filter((p) => !(p.kind === kind && p.connector_id === id)));
       })
       .catch((err: unknown) => setError(errMessage(err)))
       .finally(() => setBusy(false));
@@ -486,6 +539,25 @@ export default function ConnectionsPage() {
                     </button>
                     <button
                       type="button"
+                      onClick={() =>
+                        setConnectorPref({
+                          kind: "remote",
+                          connector_id: s.id,
+                          enabled: !effectiveEnabled(prefs, "remote", s.id),
+                        })
+                      }
+                      disabled={busy}
+                      className={`rounded-full border px-3 py-1 text-[0.75rem] transition disabled:opacity-50 ${
+                        effectiveEnabled(prefs, "remote", s.id)
+                          ? "border-[var(--color-success-strong)] text-[var(--color-success-soft)]"
+                          : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:bg-[var(--color-overlay-soft)]"
+                      }`}
+                      title="Off hides this connection from your own chats and tasks; people you share with are unaffected."
+                    >
+                      {effectiveEnabled(prefs, "remote", s.id) ? "On" : "Off"}
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => {
                         setShareGrantee("");
                         setShareOpenFor((cur) => (cur === s.id ? null : s.id));
@@ -613,8 +685,27 @@ export default function ConnectionsPage() {
                       {s.url}
                     </p>
                   </div>
-                  <span className="text-[0.75rem] text-[var(--color-text-secondary)]">
+                  <span className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-secondary)]">
                     shared by {s.owner}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setConnectorPref({
+                          kind: "remote",
+                          connector_id: s.id,
+                          enabled: !effectiveEnabled(prefs, "remote", s.id),
+                        })
+                      }
+                      disabled={busy}
+                      className={`rounded-full border px-3 py-1 text-[0.75rem] transition disabled:opacity-50 ${
+                        effectiveEnabled(prefs, "remote", s.id)
+                          ? "border-[var(--color-success-strong)] text-[var(--color-success-soft)]"
+                          : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:bg-[var(--color-overlay-soft)]"
+                      }`}
+                      title="Off hides this shared connection from your chats and tasks — only for you; the owner and other users are unaffected."
+                    >
+                      {effectiveEnabled(prefs, "remote", s.id) ? "On for me" : "Off for me"}
+                    </button>
                   </span>
                 </li>
               ))}
@@ -650,31 +741,95 @@ export default function ConnectionsPage() {
                       Reviewed and shipped by your operator. These run inside
                       the sandbox on this deployment with credentials held
                       server-side — nothing leaves the box except the
-                      connector&apos;s own API calls. Toggle them per
-                      conversation in the Tools picker.
+                      connector&apos;s own API calls. Turning one off here
+                      hides it from your chats; pick a default credential
+                      account and each conversation can still narrow the set
+                      in the Tools picker. Scheduled tasks pin their own
+                      selection and are unaffected.
                     </p>
                     <ul className="grid gap-2 sm:grid-cols-2">
-                      {catalog.bundled.map((b) => (
-                        <li
-                          key={b.name}
-                          className="rounded-[0.75rem] border border-[var(--color-border-subtle)] px-3 py-2"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-[0.8125rem] font-medium">
-                              {b.display_name || b.name}
-                            </span>
-                            <StatusChip tone="success">Bundled</StatusChip>
-                            {b.beta ? (
-                              <span className="rounded-full border border-[var(--color-border-strong)] px-2 py-0.5 text-[0.6875rem] text-[var(--color-text-muted)]">
-                                Beta
+                      {catalog.bundled.map((b) => {
+                        const pref = prefFor(prefs, "bundled", b.name);
+                        const on = effectiveEnabled(prefs, "bundled", b.name);
+                        return (
+                          <li
+                            key={b.name}
+                            className="rounded-[0.75rem] border border-[var(--color-border-subtle)] px-3 py-2"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="min-w-0 truncate text-[0.8125rem] font-medium">
+                                {b.display_name || b.name}
                               </span>
-                            ) : null}
-                          </div>
-                          <p className="mt-1 line-clamp-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                            {b.description}
-                          </p>
-                        </li>
-                      ))}
+                              <StatusChip tone="success">Bundled</StatusChip>
+                              {b.beta ? (
+                                <span className="rounded-full border border-[var(--color-border-strong)] px-2 py-0.5 text-[0.6875rem] text-[var(--color-text-muted)]">
+                                  Beta
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-[0.75rem] text-[var(--color-text-muted)]">
+                              {b.description}
+                            </p>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setConnectorPref({
+                                    kind: "bundled",
+                                    connector_id: b.name,
+                                    enabled: !on,
+                                    default_account: on ? "" : pref?.default_account,
+                                  })
+                                }
+                                disabled={busy}
+                                className={`rounded-full border px-3 py-1 text-[0.6875rem] transition disabled:opacity-50 ${
+                                  on
+                                    ? "border-[var(--color-success-strong)] text-[var(--color-success-soft)]"
+                                    : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:bg-[var(--color-overlay-soft)]"
+                                }`}
+                                title="Off hides this connector from your chat pickers and runs; scheduled tasks keep their own pinned selection."
+                              >
+                                {on ? "Enabled for me" : "Disabled for you"}
+                              </button>
+                              {on && (b.accounts?.length ?? 0) > 0 ? (
+                                <label className="flex items-center gap-1.5 text-[0.6875rem] text-[var(--color-text-muted)]">
+                                  Account
+                                  <select
+                                    value={pref?.default_account ?? ""}
+                                    onChange={(e) =>
+                                      setConnectorPref({
+                                        kind: "bundled",
+                                        connector_id: b.name,
+                                        enabled: true,
+                                        default_account: e.target.value,
+                                      })
+                                    }
+                                    disabled={busy}
+                                    className="rounded-[0.5rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2 py-1 text-[0.6875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                                  >
+                                    <option value="">Default seat</option>
+                                    {(b.accounts ?? []).map((a) => (
+                                      <option key={a} value={a}>
+                                        {a}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              ) : null}
+                              {pref ? (
+                                <button
+                                  type="button"
+                                  onClick={() => resetConnectorPref("bundled", b.name)}
+                                  disabled={busy}
+                                  className="text-[0.6875rem] text-[var(--color-text-muted)] underline-offset-2 hover:underline disabled:opacity-50"
+                                >
+                                  Reset to default
+                                </button>
+                              ) : null}
+                            </div>
+                          </li>
+                        );
+                      })}
                     </ul>
                   </section>
                 ) : null}
