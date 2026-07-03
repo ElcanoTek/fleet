@@ -144,7 +144,7 @@ export function NavRail({
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
   collapse: RailCollapse;
-  account: { email: string; onSignOut: () => void; onSettings?: () => void };
+  account: { email: string; onSignOut: () => void };
   footer?: ReactNode;
   children?: ReactNode;
 }) {
@@ -328,7 +328,6 @@ export function NavRail({
         <AccountMenu
           email={account.email}
           onSignOut={account.onSignOut}
-          onSettings={account.onSettings}
           railCollapsed={collapsed}
         />
       </aside>

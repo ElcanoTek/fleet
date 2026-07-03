@@ -1,12 +1,12 @@
 "use client";
 
-import Image from "next/image";
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import { HealthPanel } from "./HealthPanel";
+import { ProvidersPanel } from "./ProvidersPanel";
 import { UsersPanel } from "./UsersPanel";
 
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { SettingsShell } from "@/app/settings/SettingsShell";
 
 // The admin page is intentionally minimalist — a single table keyed on
 // user email. Power tools belong in real observability (Grafana, etc);
@@ -110,35 +110,21 @@ export default function AdminPage() {
   const total = stats?.reduce((acc, u) => acc + u.total_cost_usd, 0) ?? 0;
   const totalTurns = stats?.reduce((acc, u) => acc + u.total_turns, 0) ?? 0;
 
-  // h-dvh + overflow-y-auto: own the vertical scroll — document scrolling is
-  // unreliable on iOS under the app shell's html/body rules (see
-  // settings/connections).
   return (
-    <main className="h-dvh overflow-y-auto bg-[var(--gradient-bg-home-signature)] px-6 py-10 text-[var(--color-text-primary)]">
-      <div className="mx-auto w-full max-w-4xl">
-        <header className="mb-6 flex items-center justify-between gap-4">
-          <Link href="/" className="flex items-center gap-2.5 no-underline">
-            <Image src="/logos/elcano-mark-primary.svg" alt="Elcano" width={28} height={28} priority />
-            <span className="font-heading text-[0.9375rem] font-semibold">Admin</span>
-          </Link>
-          <div className="flex items-center gap-2 text-[0.8125rem] text-[var(--color-text-secondary)]">
-            <button
-              type="button"
-              onClick={refresh}
-              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-              disabled={loading}
-            >
-              {loading ? "Loading…" : "Refresh"}
-            </button>
-            <Link
-              href="/"
-              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-            >
-              Back to chat
-            </Link>
-          </div>
-        </header>
-
+    <SettingsShell
+      title="Admin"
+      wide
+      actions={
+        <button
+          type="button"
+          onClick={refresh}
+          className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+          disabled={loading}
+        >
+          {loading ? "Loading…" : "Refresh"}
+        </button>
+      }
+    >
         <HealthPanel />
 
         {error ? (
@@ -205,8 +191,11 @@ export default function AdminPage() {
             <UsersPanel />
           </>
         )}
-      </div>
-    </main>
+
+        {/* Admin-managed LLM providers: rendered outside the stats error
+            branch so a stats failure never hides provider management. */}
+        <ProvidersPanel />
+    </SettingsShell>
   );
 }
 

@@ -2,9 +2,12 @@
 # scripts/update.sh — in-place update for an existing fleet install.
 #
 # Pulls the fleet checkout AND the client-config bundle checkout, rebuilds the
-# fleet binary + the Next web app, rebuilds the sandbox image ONLY when the
-# bundle's Containerfile changed, then restarts the systemd unit. Services
-# self-migrate on restart, so this script NEVER runs application migrations.
+# fleet binary + the Next web app, deploys the web build into the fleet-web
+# unit's WorkingDirectory (a build left only in the checkout never reaches the
+# browser), rebuilds the sandbox image ONLY when the bundle's Containerfile
+# changed, then restarts the systemd units (fleet, then fleet-web when
+# installed). Services self-migrate on restart, so this script NEVER runs
+# application migrations.
 #
 # Invoked by `fleet-admin update`, but also runnable directly on the host.
 #
@@ -266,7 +269,8 @@ step "3/5  Building the fleet binary + web app"
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
   info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
-  info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build)"
+  info "[dry-run] would run: (cd ${SRC_DIR}/web && npm ci && npm run build) with the NEXT_PUBLIC_* stamps from /etc/fleet/fleet-web.env"
+  info "[dry-run] would deploy the web build → the fleet-web unit's WorkingDirectory (else /opt/fleet/web)"
 else
   ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
   [[ -x "$SRC_DIR/fleet" && -x "$SRC_DIR/fleet-admin" ]] \
@@ -295,8 +299,40 @@ else
   fi
 
   if [[ -f "$SRC_DIR/web/package.json" ]]; then
-    ( cd "$SRC_DIR/web" && npm ci && npm run build ) || die "web build failed"
-    ok "web app built"
+    # Rebuild with the same NEXT_PUBLIC_* stamps bootstrap baked in (Next
+    # inlines them into the browser bundle at build time — a bare rebuild
+    # silently drops the public origin + app name). They are client-visible
+    # by definition, so grepping just those keys from the 0600 web env file
+    # leaks no secret — the file is still never sourced. The build id needs
+    # no stamp: next.config.ts derives it from the checkout's git SHA.
+    web_env_file="/etc/fleet/fleet-web.env"
+    web_origin=""; web_app_name=""
+    if [[ -r "$web_env_file" ]]; then
+      web_origin="$(grep '^NEXT_PUBLIC_PUBLIC_ORIGIN=' "$web_env_file" | cut -d= -f2- || true)"
+      web_app_name="$(grep '^NEXT_PUBLIC_APP_NAME=' "$web_env_file" | cut -d= -f2- || true)"
+    fi
+    ( cd "$SRC_DIR/web" \
+        && export NEXT_PUBLIC_PUBLIC_ORIGIN="$web_origin" NEXT_PUBLIC_APP_NAME="$web_app_name" \
+        && npm ci && npm run build ) || die "web build failed"
+    ok "web app built (origin=${web_origin:-<default>}, app=${web_app_name:-<default>})"
+
+    # Deploy the build to where fleet-web actually serves from (bootstrap's
+    # deploy_web_tier copies to the unit's WorkingDirectory, /opt/fleet/web by
+    # default). Without this copy + the restart in step 5, an update rebuilds
+    # the app in the checkout and the live site keeps serving the old bundle.
+    if systemctl cat fleet-web.service >/dev/null 2>&1; then
+      web_dst="$(systemctl show -p WorkingDirectory --value fleet-web.service 2>/dev/null)"
+      web_dst="${web_dst:-/opt/fleet/web}"
+      if [[ "$(cd "$web_dst" 2>/dev/null && pwd || echo "$web_dst")" == "$SRC_DIR/web" ]]; then
+        info "fleet-web runs from the source checkout (${web_dst}) — build is already in place."
+      elif install -d "$web_dst" 2>/dev/null && cp -a "$SRC_DIR/web/." "$web_dst/"; then
+        ok "deployed web app → ${web_dst}"
+      else
+        die "could not deploy the web build into ${web_dst} (need root?) — live web app left in place"
+      fi
+    else
+      info "fleet-web.service not installed — leaving the build in ${SRC_DIR}/web."
+    fi
   else
     warn "no web/package.json under ${SRC_DIR} — skipping web build."
   fi
@@ -341,6 +377,7 @@ if ! command -v systemctl >/dev/null 2>&1; then
   warn "systemctl not found — restart ${SERVICE_NAME} manually (no systemd on this box)."
 elif [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: systemctl restart ${SERVICE_NAME}"
+  info "[dry-run] would run: systemctl restart fleet-web (when the unit is installed)"
 elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
   warn "${SERVICE_NAME}.service is not installed — start fleet manually or run scripts/bootstrap.sh --enable-service."
 else
@@ -357,6 +394,18 @@ else
     ok "${SERVICE_NAME} is active"
   else
     die "${SERVICE_NAME} did not come back up — journalctl -u ${SERVICE_NAME} -n 50"
+  fi
+
+  # Restart the web tier so it serves the freshly deployed build. Explicit
+  # rather than left to dependency propagation: fleet-web BindsTo fleet.service,
+  # so the restart above already STOPPED it — an explicit start-or-restart both
+  # brings it back and picks up the new .next output.
+  if systemctl cat fleet-web.service >/dev/null 2>&1; then
+    if systemctl restart fleet-web 2>/dev/null; then
+      ok "fleet-web restarted on the new build"
+    else
+      warn "could not restart fleet-web — check: journalctl -u fleet-web -n 50"
+    fi
   fi
 fi
 

@@ -79,7 +79,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 	if strings.TrimSpace(userMessage) == "" {
 		return nil
 	}
-	model, err := m.resolver.Resolve(ctx, m.config.MemoryModel)
+	model, err := m.modelResolver().Resolve(ctx, m.config.MemoryModel)
 	if err != nil {
 		log.Printf("ExtractMemories: resolve memory model %q: %v", m.config.MemoryModel, err)
 		return nil

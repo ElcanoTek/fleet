@@ -17,7 +17,6 @@ import { StatsGrid, type StatFilter } from "./StatsGrid";
 import { TasksTable } from "./TasksTable";
 import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
-import { SettingsModal } from "./SettingsModal";
 import { SLAReportPanel } from "./SLAReportPanel";
 import { UsagePanel } from "./UsagePanel";
 import { DatasetsPanel } from "./DatasetsPanel";
@@ -56,13 +55,12 @@ function OrchestratorSlimHeader() {
 function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
   const session = useOrchestratorSession();
   const dashboard = useDashboardData(session.signedIn);
-  const { servers, reload: reloadServers } = useMcpServers(session.signedIn);
+  const { servers } = useMcpServers(session.signedIn);
   const { branding } = useClientConfig();
 
   const [statFilter, setStatFilter] = useState<StatFilter | null>(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [logTask, setLogTask] = useState<Task | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
   const railCollapse = useRailCollapse();
@@ -151,7 +149,6 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
         account={{
           email: session.username ?? "",
           onSignOut: () => void session.logout(),
-          onSettings: () => setSettingsOpen(true),
         }}
       >
         <div className={railCollapse.collapsed ? "sm:flex sm:justify-center" : ""}>
@@ -269,12 +266,6 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
         servers={servers}
         onClose={() => setTaskModalOpen(false)}
         onCreated={() => void dashboard.reload()}
-      />
-      <SettingsModal
-        open={settingsOpen}
-        servers={servers}
-        onClose={() => setSettingsOpen(false)}
-        onChanged={reloadServers}
       />
       <LogViewer task={logTask} onClose={() => setLogTask(null)} canStop={isAdmin} />
     </div>

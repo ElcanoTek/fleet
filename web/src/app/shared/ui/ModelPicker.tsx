@@ -147,7 +147,9 @@ export function ModelPicker({ id, value, onChange, placeholder, ...rest }: Model
               >
                 <span className="model-picker-header">
                   <span className="model-picker-name">{model.name}</span>
-                  {model.recommended ? (
+                  {model.workspace ? (
+                    <span className="model-picker-badge">Workspace</span>
+                  ) : model.recommended ? (
                     <span className="model-picker-badge">Recommended</span>
                   ) : null}
                 </span>

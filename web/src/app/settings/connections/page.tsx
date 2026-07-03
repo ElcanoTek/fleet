@@ -1,10 +1,9 @@
 "use client";
 
-import Image from "next/image";
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import NotificationsCard from "./NotificationsCard";
+import { SettingsShell } from "../SettingsShell";
 import {
   authHint,
   categoriesOf,
@@ -400,41 +399,12 @@ export default function ConnectionsPage() {
       .finally(() => setBusy(false));
   };
 
-  // h-dvh + overflow-y-auto: the page owns its vertical scroll. The app
-  // shell's html/body rules (h-full, overscroll-behavior: none) break
-  // document-level scrolling on iOS, so relying on body scroll left this
-  // page unscrollable on mobile.
   return (
-    <main className="h-dvh overflow-y-auto bg-[var(--gradient-bg-home-signature)] px-6 py-10 text-[var(--color-text-primary)]">
-      <div className="mx-auto w-full max-w-3xl">
-        <header className="mb-6 flex items-center justify-between gap-4">
-          <Link href="/" className="flex items-center gap-2.5 no-underline">
-            <Image
-              src="/logos/elcano-mark-primary.svg"
-              alt="Elcano"
-              width={28}
-              height={28}
-              priority
-            />
-            <span className="font-heading text-[0.9375rem] font-semibold">
-              Connections
-            </span>
-          </Link>
-          <Link
-            href="/"
-            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.8125rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-          >
-            Back to chat
-          </Link>
-        </header>
-
-        <p className="mb-5 text-[0.875rem] text-[var(--color-text-secondary)]">
-          Connect remote (hosted) MCP servers and sign in to each with your own
-          account. Connected servers&apos; tools become available to you in chat
-          and your scheduled tasks. Credentials are stored encrypted on the
-          server and never shared with other users.
-        </p>
-
+    <SettingsShell
+      title="Connections"
+      description="Connect remote (hosted) MCP servers and sign in to each with your own account. Connected servers' tools become available to you in chat and your scheduled tasks. Credentials are stored encrypted on the server and never shared with other users."
+    >
+      <>
         {notice ? (
           <NoticeBanner tone="success" className="mb-4">
             {notice}
@@ -1040,7 +1010,6 @@ export default function ConnectionsPage() {
 
         {/* Browser Web Push opt-in (#292) — per-browser, low-detail alerts. */}
         <NotificationsCard />
-      </div>
 
       {/* Consent step for endpoints not operated by the service's own vendor.
           A badge alone gets scrolled past; connecting sends conversation-
@@ -1128,6 +1097,7 @@ export default function ConnectionsPage() {
           </div>
         </div>
       ) : null}
-    </main>
+      </>
+    </SettingsShell>
   );
 }

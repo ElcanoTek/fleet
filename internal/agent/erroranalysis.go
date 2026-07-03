@@ -71,7 +71,7 @@ func (m *Manager) AnalyzeTaskFailure(ctx context.Context, taskPrompt, errMsg, se
 		return nil, fmt.Errorf("error-analysis: empty error message")
 	}
 	modelSlug := m.config.ErrorAnalysisModel
-	model, err := m.resolver.Resolve(ctx, modelSlug)
+	model, err := m.modelResolver().Resolve(ctx, modelSlug)
 	if err != nil {
 		return nil, fmt.Errorf("resolve error-analysis model %q: %w", modelSlug, err)
 	}

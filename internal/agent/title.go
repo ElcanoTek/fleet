@@ -21,7 +21,7 @@ func (m *Manager) SuggestTitle(ctx context.Context, userMessage, assistantReply 
 		return ""
 	}
 	titleModel := m.config.TitleModel
-	model, err := m.resolver.Resolve(ctx, titleModel)
+	model, err := m.modelResolver().Resolve(ctx, titleModel)
 	if err != nil {
 		log.Printf("SuggestTitle: resolve title model %q: %v", titleModel, err)
 		return ""
