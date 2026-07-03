@@ -81,10 +81,13 @@ type Manager struct {
 	// gating another (an optional server stuck always-on).
 	mcpReloadMu sync.Mutex
 
-	// resolver loads + caches OpenRouter models per slug (nil in the
-	// prompt/roster unit tests, which never run a turn). RunTurn / Summarize /
-	// SuggestTitle resolve through it.
-	resolver *agentcore.ModelResolver
+	// resolver loads + caches models per slug (nil in the prompt/roster unit
+	// tests, which never run a turn). RunTurn / Summarize / SuggestTitle
+	// resolve through it. Admin-managed providers can rebuild it at runtime
+	// (SetLLMProviders), so every runtime read goes through modelResolver()
+	// under resolverMu — mirroring the MCP gating hot-reload pattern above.
+	resolverMu sync.RWMutex
+	resolver   *agentcore.ModelResolver
 
 	// native is the per-process native-tool template (DefaultTools); each turn
 	// rebuilds a sandbox-bound variant via tools.NewTurnTools.

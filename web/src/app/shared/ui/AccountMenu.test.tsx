@@ -22,20 +22,6 @@ describe("AccountMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Sign out" })).toBeInTheDocument();
   });
 
-  it("omits Settings when no onSettings is provided (chat surface)", () => {
-    render(<AccountMenu email="sam@elcanotek.com" onSignOut={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
-    expect(screen.queryByRole("menuitem", { name: "Settings" })).toBeNull();
-  });
-
-  it("shows Settings when onSettings is provided (orchestrator surface) and invokes it", () => {
-    const onSettings = vi.fn();
-    render(<AccountMenu email="ops@elcanotek.com" onSignOut={() => {}} onSettings={onSettings} />);
-    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }));
-    expect(onSettings).toHaveBeenCalledTimes(1);
-  });
-
   it("invokes onSignOut from the menu", () => {
     const onSignOut = vi.fn();
     render(<AccountMenu email="sam@elcanotek.com" onSignOut={onSignOut} />);
@@ -90,7 +76,7 @@ describe("AccountMenu", () => {
     expect(screen.queryByRole("menu", { name: "Account" })).toBeNull();
   });
 
-  it("navigates to Connections and Admin from the menu (both surfaces)", () => {
+  it("navigates to Settings, Connections, Skills, and Admin from the menu (both surfaces)", () => {
     // jsdom marks location.assign non-configurable; swap the whole location
     // object for a stub to observe navigations.
     const original = window.location;
@@ -102,11 +88,17 @@ describe("AccountMenu", () => {
     });
     try {
       render(<AccountMenu email="sam@elcanotek.com" onSignOut={() => {}} />);
-      fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
-      fireEvent.click(screen.getByRole("menuitem", { name: "Connections" }));
+      const navigate = (item: string) => {
+        fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: item }));
+      };
+      navigate("Settings");
+      expect(assign).toHaveBeenCalledWith("/settings");
+      navigate("Connections");
       expect(assign).toHaveBeenCalledWith("/settings/connections");
-      fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
-      fireEvent.click(screen.getByRole("menuitem", { name: "Admin" }));
+      navigate("Skills");
+      expect(assign).toHaveBeenCalledWith("/settings/skills");
+      navigate("Admin");
       expect(assign).toHaveBeenCalledWith("/admin");
     } finally {
       Object.defineProperty(window, "location", { value: original, configurable: true, writable: true });

@@ -522,11 +522,46 @@ func defaultIfEmpty(s, def string) string {
 	return s
 }
 
-// Resolve loads + caches the OpenRouter model for a slug. Exposed so the
-// scheduled runner (cmd/fleet) resolves its task model through the SAME cached
-// resolver the interactive turns use.
+// Resolve loads + caches the model for a slug. Exposed so the scheduled
+// runner (cmd/fleet) resolves its task model through the SAME cached resolver
+// the interactive turns use.
 func (m *Manager) Resolve(ctx context.Context, slug string) (fantasy.LanguageModel, error) {
-	return m.resolver.Resolve(ctx, slug)
+	return m.modelResolver().Resolve(ctx, slug)
+}
+
+// modelResolver returns the current resolver snapshot. The resolver is
+// hot-swappable (SetLLMProviders), so runtime reads take the RLock; the
+// returned pointer is safe to use lock-free (a swap installs a fresh resolver,
+// never mutates a published one) — the same discipline as the MCP gating maps.
+func (m *Manager) modelResolver() *agentcore.ModelResolver {
+	m.resolverMu.RLock()
+	defer m.resolverMu.RUnlock()
+	return m.resolver
+}
+
+// SetLLMProviders rebuilds the model resolver over the given routing table and
+// swaps it in atomically — the runtime half of admin-managed LLM providers.
+// An empty table falls back to the single catch-all OpenRouter resolver
+// (exactly the boot default), and a table that fails eager construction
+// (bad type, missing key) leaves the CURRENT resolver serving — the swap is
+// all-or-nothing, so a bad admin edit can never take chat down.
+func (m *Manager) SetLLMProviders(providers []agentcore.ProviderConfig) error {
+	var (
+		resolver *agentcore.ModelResolver
+		err      error
+	)
+	if len(providers) > 0 {
+		resolver, err = agentcore.NewModelResolverWithProviders(providers, agentcore.DefaultProviderHeaders)
+	} else {
+		resolver, err = agentcore.NewModelResolver(m.config.OpenRouterAPIKey, agentcore.DefaultProviderHeaders)
+	}
+	if err != nil {
+		return err
+	}
+	m.resolverMu.Lock()
+	m.resolver = resolver
+	m.resolverMu.Unlock()
+	return nil
 }
 
 // MCPClient exposes the shared MCP client for the out-of-band approval-execution
@@ -719,7 +754,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		Lockdown: in.Lockdown,
 	}))
 
-	model, err := m.resolver.Resolve(ctx, in.Model)
+	model, err := m.modelResolver().Resolve(ctx, in.Model)
 	if err != nil {
 		return nil, fmt.Errorf("resolve model: %w", err)
 	}

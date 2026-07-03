@@ -10,9 +10,9 @@ import { mockChatBoot } from "./_mocks";
 // exposes the per-row kebab (whose "Select…" is the only way into select
 // mode), collapses to a 4.25rem icon strip with a persisted preference,
 // auto-collapses at ≤900px with an overlay+scrim expansion, explains the
-// sealed-row lock on hover/focus, and the chat account menu carries Theme +
-// Sign out but NOT Settings (Settings lives only in the Operations Center
-// account menu). All /api/* calls are intercepted.
+// sealed-row lock on hover/focus, and the account menu carries the unified
+// settings navigation (Settings · Connections · Skills · Admin) plus Theme +
+// Sign out identically on both surfaces. All /api/* calls are intercepted.
 
 const CONVERSATIONS = [
   { id: "c1", title: "Acme Renewal", persona: "default", model: "", pinned: true, updated_at: 40, folder: "Clients", labels: ["client", "urgent"] },
@@ -50,7 +50,7 @@ test("the rail marks the active surface and links to the other", async ({ page }
   await expect(page.getByRole("link", { name: "Operations Center" })).toBeVisible();
 });
 
-test("the account menu carries Theme + Sign out but not Settings on chat", async ({ page }) => {
+test("the account menu carries the settings navigation + Theme + Sign out on chat", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
   await page.goto("/chat");
@@ -62,7 +62,12 @@ test("the account menu carries Theme + Sign out but not Settings on chat", async
   await expect(menu).toContainText("e2e@example.com");
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Sign out" })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Settings" })).toHaveCount(0);
+  // The unified settings area (#169 follow-up): every section is a page,
+  // reachable identically from both surfaces' account menus.
+  await expect(page.getByRole("menuitem", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Connections" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Skills" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Admin" })).toBeVisible();
 });
 
 test("the rail derives Folders + Labels sections and filters by folder", async ({ page }) => {

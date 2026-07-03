@@ -2,14 +2,14 @@
 
 // AccountMenu — the rail footer's account control (#169). A single button shows
 // the avatar + email; opening it reveals the account menu (Settings · Connections
-// · Admin · Theme · Sign out) built on the shared Menu surface, so it is the same
-// component family as the conversation-row kebab. Connections (/settings/
-// connections, the per-user remote-MCP directory) and Admin (/admin, allowlist-
-// gated server-side) are plain page navigations available on both surfaces.
+// · Skills · Admin · Theme · Sign out) built on the shared Menu surface, so it is
+// the same component family as the conversation-row kebab. Settings (/settings,
+// the unified settings area), Connections (/settings/connections), Skills
+// (/settings/skills), and Admin (/admin, allowlist-gated server-side) are plain
+// page navigations available identically on both surfaces — the menu is one
+// component with no per-surface forks in what it offers.
 //
 // Surface-specific wiring:
-//   - onSettings is optional: omitted on the chat surface (Settings lives only
-//     in the Operations Center account menu), present in the orchestrator.
 //   - onSignOut is supplied per surface (chat posts a logout form; the
 //     orchestrator calls its session.logout()).
 //   - Theme is driven by the shared useTheme hook via a System/Light/Dark
@@ -39,12 +39,10 @@ function Avatar({ email, className }: { email: string; className?: string }) {
 export function AccountMenu({
   email,
   onSignOut,
-  onSettings,
   railCollapsed = false,
 }: {
   email: string;
   onSignOut: () => void;
-  onSettings?: () => void;
   // Collapsed-rail mode (≥sm): the button shrinks to an avatar-only 2.5rem
   // square and the menu opens at a fixed 15rem instead of stretching to the
   // (now tiny) anchor. The <sm drawer always shows the full button.
@@ -114,17 +112,15 @@ export function AccountMenu({
           </span>
         </div>
         <MenuSeparator />
-        {onSettings ? (
-          <MenuItem
-            icon={<Icon name="settings" className="size-4" />}
-            onClick={() => {
-              close();
-              onSettings();
-            }}
-          >
-            Settings
-          </MenuItem>
-        ) : null}
+        <MenuItem
+          icon={<Icon name="settings" className="size-4" />}
+          onClick={() => {
+            close();
+            window.location.assign("/settings");
+          }}
+        >
+          Settings
+        </MenuItem>
         <MenuItem
           icon={<Icon name="plug" className="size-4" />}
           onClick={() => {
