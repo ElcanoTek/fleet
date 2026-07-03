@@ -84,6 +84,30 @@ describe("ProvidersPanel", () => {
     });
   });
 
+  it("runs the connection test and renders the key-free result line", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith("/test") && init?.method === "POST") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            detail: "connected — 12 models served",
+            served_model_count: 12,
+            latency_ms: 245,
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ providers: [ROW] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Test" }));
+    const result = await screen.findByTestId(`probe-result-${ROW.id}`);
+    expect(result.textContent).toContain("connected — 12 models served");
+    expect(result.textContent).toContain("245ms");
+  });
+
   it("requires explicit confirmation for an enabled catch-all (empty models)", async () => {
     const fetchMock = mockFetch([]);
     vi.stubGlobal("fetch", fetchMock);
