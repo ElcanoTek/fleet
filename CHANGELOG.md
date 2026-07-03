@@ -15,6 +15,24 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Skills builder (docs/SKILLS.md phases 2 + 3): Settings → Skills gains a
+  "Your skills" section — create, edit, enable/disable, and delete personal
+  skills (name + description + markdown instructions). User skills are
+  DB-owned (`user_skills`, migration 033), strictly per-user, materialized
+  into the conversation workspace before each chat turn
+  (`user-skills/<name>/SKILL.md`) and listed in the prompt roster; `/name`
+  invocation matches them after bundle/built-in names. Scheduled tasks load
+  them too: the runner resolves the task owner and inlines their active
+  skills into the run's prompt (24KB budget, loud truncation). The agent can
+  draft skills from a run via the new `propose_skill` tool (both modes,
+  intercepted at the policy boundary like `propose_note`); proposals stage as
+  inert "Proposed by agent" entries the owner approves or deletes on the
+  Skills page.
+- Always-on bundled connectors now render as visible-but-locked rows on the
+  connections page — nothing is invisibly enabled.
+- New live-lane Playwright coverage drives the skills builder CRUD, the
+  connector directory search, and the availability toggles against the real
+  stack (real Postgres, real server, real prefs rows).
 - Built-in Agent Skills pack + skills library: fleet embeds five
   generally-useful skills (data-profiler, web-research-brief,
   code-review-checklist, release-notes, executive-report) that every bundle

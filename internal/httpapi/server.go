@@ -622,6 +622,9 @@ func (s *Server) Routes() http.Handler {
 	// composer "/" autocomplete. Read-only over the operator-owned bundle.
 	mux.Handle("/skills", auth(member(http.HandlerFunc(s.listSkills))))
 	mux.Handle("/skills/", auth(member(http.HandlerFunc(s.skillByName))))
+	// User-authored skills (the builder, docs/SKILLS.md phase 2).
+	mux.Handle("/user-skills", auth(member(mutate(http.HandlerFunc(s.userSkillsCollection)))))
+	mux.Handle("/user-skills/", auth(member(mutate(http.HandlerFunc(s.userSkillByID)))))
 	// Dynamic model discovery (#251): the model catalog, routed through the
 	// backend so the API key stays server-side and the allow-list is applied
 	// before the response reaches the browser.
@@ -2117,7 +2120,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// appended telling the agent to read that skill's SKILL.md now. Because the
 	// block lands on the persisted user message, the transcript records which
 	// skill was invoked. Unknown "/tokens" are ignored — no block, no error.
-	userMessage = s.applySkillInvocation(userMessage, req.Message)
+	userMessage = s.applySkillInvocation(turnCtx, user, userMessage, req.Message)
 	// Connector auto-recommendation (#512, opt-in): if the message is relevant to
 	// an Optional connector the user hasn't enabled, note it so the agent can
 	// suggest connecting it via /settings/connections (never auto-connecting).
@@ -2231,6 +2234,11 @@ func (s *Server) runTurnAsync(
 	// credential-account seats into the turn.
 	optionalEnabled, accountDefaults := s.applyConnectorPrefs(turnCtx, user, conv.OptionalMCPServersEnabled)
 
+	// User-authored skills (docs/SKILLS.md phase 2): sync the caller's active
+	// skills into this conversation's workspace and hand the roster to the
+	// prompt builder. Best-effort — a failure runs the turn without them.
+	userSkills := s.materializeUserSkills(turnCtx, user, conv.ID)
+
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:               userMessage,
 		Persona:                   conv.Persona,
@@ -2242,6 +2250,8 @@ func (s *Server) runTurnAsync(
 		UserEmail:                 user,
 		OptionalMCPServersEnabled: optionalEnabled,
 		MCPAccountDefaults:        accountDefaults,
+		UserSkills:                userSkills,
+		SkillProposer:             &skillProposer{ctx: turnCtx, store: s.store, user: user},
 		Lockdown:                  conv.Lockdown,
 		ImageAttachments:          imageAttachments,
 		ThinkingConfig:            resolveThinkingConfig(conv.ThinkingConfig, s.cfg.DefaultThinkingBudgetTokens),

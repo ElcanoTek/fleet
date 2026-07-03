@@ -71,7 +71,8 @@ type orchestrationState struct {
 	// noteProposer stages agent-proposed admin-notes edits (BOTH modes), unlike
 	// memoryProposer which is interactive-only. Wired by the drivers via
 	// setNoteProposer; nil leaves propose_note reporting "not wired".
-	noteProposer NoteProposer
+	noteProposer  NoteProposer
+	skillProposer SkillProposer
 
 	// ── task tracker (scheduled finish enforcement) ──
 	taskTrackerUsed   bool
@@ -189,6 +190,14 @@ func (o *orchestrationState) setNoteProposer(p NoteProposer) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.noteProposer = p
+}
+
+// setSkillProposer wires up the personal-skill proposer for this run (both
+// modes; docs/SKILLS.md phase 3).
+func (o *orchestrationState) setSkillProposer(p SkillProposer) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.skillProposer = p
 }
 
 // checkCeilings returns (blocked, reason). Called at every tool-call boundary so
@@ -441,6 +450,34 @@ func (o *orchestrationState) checkNoteProposal(toolName, rawInput string) (bool,
 	}
 	return true, fmt.Sprintf("NOTE_PROPOSED: staged for admin review (proposal_id=%s). "+
 		"An admin will publish or reject it; the change is NOT live yet. Do NOT retry the tool.", id)
+}
+
+// checkSkillProposal intercepts propose_skill calls (BOTH modes). Mirrors
+// checkNoteProposal: the staging IS the effect — the tool body never executes.
+func (o *orchestrationState) checkSkillProposal(toolName, rawInput string) (bool, string) {
+	if toolName != "propose_skill" {
+		return false, ""
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.skillProposer == nil {
+		return true, "SKILL_PROPOSAL_UNAVAILABLE: skill proposals are not enabled on this transport. Do NOT retry."
+	}
+	var args struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Body        string `json:"body"`
+		Reason      string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
+		return true, fmt.Sprintf("SKILL_PROPOSAL_FAILED: invalid arguments (%v).", err)
+	}
+	id, err := o.skillProposer.Propose(args.Name, args.Description, args.Body, args.Reason)
+	if err != nil {
+		return true, fmt.Sprintf("SKILL_PROPOSAL_FAILED: could not stage proposal (%v).", err)
+	}
+	return true, fmt.Sprintf("SKILL_PROPOSED: staged for the user's review on their Skills page (proposal_id=%s). "+
+		"It is NOT active yet and will not exist in later turns unless the user approves it. Do NOT retry the tool.", id)
 }
 
 // hasUnresolvedToolPlaceholder detects ${tool:…} binding tokens the model
