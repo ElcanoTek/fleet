@@ -37,9 +37,15 @@ func TestUserSkills(t *testing.T) {
 	if _, err := s.CreateUserSkill(ctx, me, "deal-check", "duplicate name for the same user must be refused", "b"); !errors.Is(err, ErrUserSkillInvalid) {
 		t.Errorf("duplicate name accepted: %v", err)
 	}
-	// A different user can reuse the name (per-user namespace).
-	if _, err := s.CreateUserSkill(ctx, other, "deal-check", "same name, different user, different skill entirely", "b"); err != nil {
+	// A different user can reuse the name (per-user namespace). Cleaned up via
+	// t.Cleanup — CI runs the suite twice (plain + race lane) against one
+	// database, so a leaked row turns the second run's insert into a unique
+	// violation.
+	otherSk, err := s.CreateUserSkill(ctx, other, "deal-check", "same name, different user, different skill entirely", "b")
+	if err != nil {
 		t.Errorf("cross-user name reuse should be fine: %v", err)
+	} else {
+		t.Cleanup(func() { _ = s.DeleteUserSkill(context.Background(), other, otherSk.ID) })
 	}
 
 	// Ownership scoping.
