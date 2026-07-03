@@ -53,7 +53,7 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 	if strings.TrimSpace(transcript) == "" {
 		return nil, fmt.Errorf("empty transcript")
 	}
-	model, err := m.resolver.Resolve(ctx, m.config.RecurringTaskModel)
+	model, err := m.modelResolver().Resolve(ctx, m.config.RecurringTaskModel)
 	if err != nil {
 		return nil, fmt.Errorf("resolve recurring-task model %q: %w", m.config.RecurringTaskModel, err)
 	}

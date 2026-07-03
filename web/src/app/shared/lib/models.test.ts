@@ -110,4 +110,42 @@ describe("loadModels (fetch + fallback)", () => {
     const models = await loadModels();
     expect(models).toEqual(SEED_MODELS);
   });
+
+  it("puts workspace-provider models first, flagged for the badge", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes("/api/llm-provider-models")) {
+          return {
+            ok: true,
+            json: async () => ({
+              models: [{ id: "anthropic-direct/claude-opus-4-8", name: "anthropic-direct: claude-opus-4-8" }],
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ data: [] }) };
+      }),
+    );
+    const models = await loadModels();
+    expect(models[0]).toMatchObject({
+      id: "anthropic-direct/claude-opus-4-8",
+      workspace: true,
+    });
+    // The catalog/seed entries still follow.
+    expect(models.some((m) => m.id === "anthropic/claude-opus-4.8")).toBe(true);
+  });
+
+  it("ignores a failing workspace-models endpoint", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes("/api/llm-provider-models")) {
+          return { ok: false, json: async () => ({}) };
+        }
+        return { ok: true, json: async () => ({ data: [] }) };
+      }),
+    );
+    const models = await loadModels();
+    expect(models).toEqual(SEED_MODELS);
+  });
 });

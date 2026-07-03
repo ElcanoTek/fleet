@@ -15,6 +15,19 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Admin-managed LLM providers ([docs/LLM-PROVIDERS.md](docs/LLM-PROVIDERS.md)):
+  Settings → Admin gains a "Model providers" panel — add an OpenRouter,
+  Anthropic, or OpenAI API key, or any OpenAI-compatible endpoint (Ollama,
+  vLLM…), with several providers routing simultaneously. Rows live in the chat
+  DB (`llm_providers`, migration 034) with keys sealed under the store's
+  secretbox cipher and **write-only** semantics (no read path ever returns a
+  key). Edits rebuild + hot-swap the model resolver — no restart — and the
+  admin rows overlay the client bundle's `providers:` table (same-name rows
+  replace, new names append). Enabled providers' listed models appear in the
+  shared model picker as `provider/model` entries with a "Workspace" badge.
+  With no rows configured, behavior is byte-identical to before (single
+  catch-all OpenRouter from `OPENROUTER_API_KEY`), keeping the fake-LLM seam
+  and existing deployments unchanged.
 - Skills builder (docs/SKILLS.md phases 2 + 3): Settings → Skills gains a
   "Your skills" section — create, edit, enable/disable, and delete personal
   skills (name + description + markdown instructions). User skills are
@@ -87,6 +100,12 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- Unified settings UX: Connections, Skills, the new General settings page
+  (concurrency cap + MCP credential accounts, formerly the Operations Center's
+  Settings modal — now retired), and Admin all render inside one shared
+  settings shell with a section nav, an Operations Center cross-link, and a
+  "Back to chat" button. The account menu offers Settings · Connections ·
+  Skills · Admin identically on both surfaces.
 - Web UI polish — rail, composer, motion, responsive (design-handoff parity):
   the rail collapses to a 4.25rem icon strip (toggle in the brand row,
   preference persisted to `localStorage["rail-collapsed"]`, avatar-only
@@ -112,6 +131,13 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- `fleet update` now actually ships web changes: `scripts/update.sh` deploys
+  the freshly built Next app into the `fleet-web` unit's WorkingDirectory
+  (`/opt/fleet/web`) and restarts `fleet-web` after the backend restart —
+  previously the build stayed in the source checkout and the live site kept
+  serving the old bundle. The rebuild also re-applies the `NEXT_PUBLIC_*`
+  origin/app-name stamps bootstrap baked in (grepped from
+  `/etc/fleet/fleet-web.env`; the 0600 file is still never sourced).
 - Runner terminal side effects gated on the DB write (#580): the success
   notification and email reply fired even when the terminal DB write failed,
   producing spurious "success" and duplicate emails on retry; all terminal

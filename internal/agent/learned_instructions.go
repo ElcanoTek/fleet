@@ -27,7 +27,7 @@ func (m *Manager) DistillLearnedInstruction(ctx context.Context, taskPrompt stri
 	if len(downCritiques) == 0 {
 		return ""
 	}
-	model, err := m.resolver.Resolve(ctx, m.config.MemoryModel)
+	model, err := m.modelResolver().Resolve(ctx, m.config.MemoryModel)
 	if err != nil {
 		return ""
 	}

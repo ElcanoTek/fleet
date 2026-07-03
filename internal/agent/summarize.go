@@ -42,7 +42,7 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 		return nil, fmt.Errorf("model %q not allowed in lockdown mode", in.Model)
 	}
 
-	model, err := m.resolver.Resolve(ctx, in.Model)
+	model, err := m.modelResolver().Resolve(ctx, in.Model)
 	if err != nil {
 		return nil, fmt.Errorf("resolve summarize model: %w", err)
 	}

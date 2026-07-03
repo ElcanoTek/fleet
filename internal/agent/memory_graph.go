@@ -100,7 +100,7 @@ func (m *Manager) ExtractMemoryGraph(ctx context.Context, content string) (*Extr
 		return nil, fmt.Errorf("memory-graph: empty content")
 	}
 	modelSlug := m.config.MemoryGraphModel
-	model, err := m.resolver.Resolve(ctx, modelSlug)
+	model, err := m.modelResolver().Resolve(ctx, modelSlug)
 	if err != nil {
 		return nil, fmt.Errorf("resolve memory-graph model %q: %w", modelSlug, err)
 	}

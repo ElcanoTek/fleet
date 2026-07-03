@@ -1,10 +1,9 @@
 "use client";
 
-import Image from "next/image";
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { StatusChip } from "@/app/shared/ui/StatusChip";
+import { SettingsShell } from "../SettingsShell";
 
 // Skills library (Settings → Skills). Browses every Agent Skill loaded on
 // this deployment — the operator's bundle skills plus fleet's built-in pack —
@@ -164,30 +163,10 @@ export default function SkillsPage() {
   );
 
   return (
-    <main className="h-dvh overflow-y-auto bg-[var(--gradient-bg-home-signature)] px-6 py-10 text-[var(--color-text-primary)]">
-      <div className="mx-auto w-full max-w-3xl">
-        <header className="mb-6 flex items-center justify-between gap-4">
-          <Link href="/" className="flex items-center gap-2.5 no-underline">
-            <Image
-              src="/logos/elcano-mark-primary.svg"
-              alt="Elcano"
-              width={28}
-              height={28}
-              priority
-            />
-            <span className="font-heading text-[0.9375rem] font-semibold">
-              Skills
-            </span>
-          </Link>
-          <Link
-            href="/"
-            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.8125rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-          >
-            Back to chat
-          </Link>
-        </header>
-
-        <p className="mb-5 text-[0.875rem] text-[var(--color-text-secondary)]">
+    <SettingsShell
+      title="Skills"
+      description={
+        <>
           Packaged, on-demand capabilities the agent can pick up when a task
           matches — your workspace&apos;s own skills plus fleet&apos;s built-in
           pack. Invoke one explicitly by starting a chat message with{" "}
@@ -195,8 +174,10 @@ export default function SkillsPage() {
             /skill-name
           </code>
           .
-        </p>
-
+        </>
+      }
+    >
+      <>
         {error ? (
           <p className="mb-4 text-[0.8125rem] text-[var(--color-danger-soft)]">
             {error}
@@ -449,7 +430,7 @@ export default function SkillsPage() {
           </code>{" "}
           knobs.
         </p>
-      </div>
-    </main>
+      </>
+    </SettingsShell>
   );
 }

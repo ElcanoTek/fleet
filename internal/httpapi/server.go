@@ -65,6 +65,11 @@ type Server struct {
 	hasUsers      atomic.Bool
 	lastUserCheck atomic.Int64
 
+	// llmProvidersChanged rebuilds + swaps the manager's model-resolver routing
+	// table after an admin LLM-provider edit (WithLLMProvidersChanged). nil in
+	// tests/mock mode: edits persist, the table swaps on next boot.
+	llmProvidersChanged func(context.Context) error
+
 	// isMember reports whether an email may use chat — the scoped-tier
 	// gate consulted by membershipMiddleware. nil in production, where it
 	// falls back to store.IsUser. Tests whose subject isn't membership
@@ -316,6 +321,14 @@ func WithClientConfig(b *clientconfig.Bundle) Option {
 // (or pass nil) to leave the feature off.
 func WithRemoteMCP(svc *remotemcp.Service) Option {
 	return func(s *Server) { s.remoteMCP = svc }
+}
+
+// WithLLMProvidersChanged wires the callback the admin LLM-provider endpoints
+// invoke after persisting a change: cmd/fleet points it at "re-read the store,
+// merge with the bundle table, swap the manager's resolver". Omitted (tests,
+// mock mode), edits persist without a live routing-table swap.
+func WithLLMProvidersChanged(fn func(context.Context) error) Option {
+	return func(s *Server) { s.llmProvidersChanged = fn }
 }
 
 // WithPush injects the browser Web Push sender (#292). Omit it (or pass nil)
@@ -676,6 +689,11 @@ func (s *Server) Routes() http.Handler {
 	// Migration status (#256): applied vs pending chat-DB migrations. Admin-gated
 	// like the other /admin/* reads; strictly read-only (applies nothing).
 	mux.Handle("/admin/migrations", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleMigrations)))))
+	// Admin-managed LLM providers: CRUD is admin-gated; the names+models read
+	// the model picker unions in is member-level (no secret material).
+	mux.Handle("/admin/llm-providers", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminLLMProviders)))))
+	mux.Handle("/admin/llm-providers/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminLLMProviderItem)))))
+	mux.Handle("/llm-provider-models", auth(member(http.HandlerFunc(s.handleLLMProviderModels))))
 	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits
 	// just inside recoverMiddleware and before bodyLimitMiddleware, so a blocked
 	// client IP is dropped before any body parsing, route dispatch, or auth

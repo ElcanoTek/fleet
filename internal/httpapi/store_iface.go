@@ -172,6 +172,13 @@ type chatStore interface {
 	// MigrationStatus reports applied vs pending chat-DB migrations for
 	// GET /admin/migrations (#256). Read-only.
 	MigrationStatus(ctx context.Context) (store.MigrationReport, error)
+	// Admin-managed LLM providers (migration 034): CRUD for /admin/llm-providers
+	// plus the member-level names+models read for the model picker. Key VALUES
+	// are write-only — no method here ever returns one.
+	ListLLMProviders(ctx context.Context) ([]store.LLMProvider, error)
+	CreateLLMProvider(ctx context.Context, in store.LLMProviderInput) (*store.LLMProvider, error)
+	UpdateLLMProvider(ctx context.Context, id string, in store.LLMProviderInput) (*store.LLMProvider, error)
+	DeleteLLMProvider(ctx context.Context, id string) error
 	SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap int) (expired int, evicted int, err error)
 	AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int, error)
 	SweepOrphanWorkspaces(ctx context.Context, root string) (int, error)

@@ -9,6 +9,9 @@ export type PickerModel = {
   recommended: boolean;
   created?: number | null;
   priceCompletion?: number | null;
+  // True for models served by an admin-configured workspace provider
+  // (Settings → Admin → Model providers) rather than the OpenRouter catalog.
+  workspace?: boolean;
 };
 
 type RawModel = {
@@ -140,24 +143,48 @@ async function fetchOpenRouterModels(): Promise<PickerModel[]> {
   }
 }
 
+// fetchWorkspaceModels pulls the admin-configured providers' model slugs
+// ("<provider>/<model>", see the Go /llm-provider-models endpoint). Same-origin
+// session fetch; any failure (older backend, signed-out probe) degrades to an
+// empty list so the picker is never blocked on this call.
+async function fetchWorkspaceModels(): Promise<PickerModel[]> {
+  try {
+    const response = await fetch("/api/llm-provider-models", { cache: "no-store" });
+    if (!response.ok) return [];
+    const payload = await response.json();
+    const data: Array<{ id?: unknown; name?: unknown }> = Array.isArray(payload?.models)
+      ? payload.models
+      : [];
+    return data
+      .map((m): PickerModel | null => {
+        const id = String(m?.id ?? "").trim();
+        if (!id) return null;
+        return { id, name: String(m?.name ?? id).trim(), recommended: false, workspace: true };
+      })
+      .filter((m): m is PickerModel => m !== null);
+  } catch {
+    return [];
+  }
+}
+
 let cachedModels: PickerModel[] | null = null;
 let inflight: Promise<PickerModel[]> | null = null;
 
-// Returns the merged (seed + OpenRouter) list, fetched once and cached. Falls
-// back to the seeds alone when the network call fails so callers always have
-// something to render.
+// Returns the merged (workspace + seed + OpenRouter) list, fetched once and
+// cached. Workspace-provider models come first so an admin-configured model is
+// immediately visible in browse mode; either fetch failing degrades to the
+// rest of the list, and the seeds alone are the floor.
 export async function loadModels(): Promise<PickerModel[]> {
   if (cachedModels) return cachedModels;
   if (inflight) return inflight;
   inflight = (async () => {
-    try {
-      const fetched = await fetchOpenRouterModels();
-      cachedModels = dedupeAndOrder(SEED_MODELS, fetched);
-    } catch {
-      cachedModels = SEED_MODELS.slice();
-    } finally {
-      inflight = null;
-    }
+    const [workspace, fetched] = await Promise.all([
+      fetchWorkspaceModels(),
+      fetchOpenRouterModels().catch(() => [] as PickerModel[]),
+    ]);
+    const base = fetched.length > 0 ? dedupeAndOrder(SEED_MODELS, fetched) : SEED_MODELS.slice();
+    cachedModels = dedupeAndOrder(workspace, base);
+    inflight = null;
     return cachedModels;
   })();
   return inflight;

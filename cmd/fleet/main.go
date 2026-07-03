@@ -451,7 +451,8 @@ func run() error {
 
 	// ── interactive engine (the concrete turnEngine) ──
 	serverSpecs := scheduledrun.BuildMCPSpecs(cfg)
-	mgr, err := agent.New(agent.ManagerOptions{
+	bundleProviders := toAgentcoreProviders(bundle)
+	mgr, err := buildInteractiveEngine(agent.ManagerOptions{
 		Config:               cfg,
 		ServerSpecs:          serverSpecs,
 		PersonasDir:          personasDir,
@@ -464,10 +465,7 @@ func run() error {
 		NoteProposer:         notesProvider, // same adapter; wires propose_note for every interactive turn
 		PersonaPolicies:      personaPolicies,
 		RemoteMCP:            remoteMCPResolver,
-		// Multi-provider LLM routing (#289): nil when the bundle declares no
-		// providers: block, which keeps the single-OpenRouter default.
-		LLMProviders: toAgentcoreProviders(bundle),
-	})
+	}, bundleProviders, chatStore, cfg.OpenRouterAPIKey)
 	if err != nil {
 		return fmt.Errorf("build interactive engine: %w", err)
 	}
@@ -525,6 +523,13 @@ func run() error {
 	// seam carries the budget gate so scheduling from chat cannot bypass a
 	// budget that would refuse the same user on POST /tasks (#601 part 2).
 	chatOpts = append(chatOpts, httpapi.WithTaskScheduler(taskSchedulerProvider(schedStorage, budgetEnforcer)))
+
+	// Admin-managed LLM providers: after a persisted edit the handler invokes
+	// this to re-read the store, re-merge with the bundle table, and swap the
+	// manager's resolver — the edit takes effect for the NEXT turn/run with no
+	// restart. A failed swap leaves the current table serving.
+	chatOpts = append(chatOpts, httpapi.WithLLMProvidersChanged(
+		llmProvidersReloader(mgr, chatStore, bundleProviders, cfg.OpenRouterAPIKey)))
 
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 
@@ -1067,7 +1072,7 @@ func logMCPReload(summary *mcp.ReloadSummary, err error) {
 		log.Printf("mcp reload (SIGHUP): error: %v", err)
 		return
 	}
-	log.Printf("mcp reload (SIGHUP): added=%d removed=%d restarted=%d unchanged=%d",
+	log.Printf("mcp reload (SIGHUP): added=%d removed=%d restarted=%d unchanged=%d", //nolint:gosec // G706 false positive: every arg is a len() int; gosec's taint engine misattributes a DB-string flow from the LLM-provider boot logs to this sink
 		len(summary.Added), len(summary.Removed), len(summary.Restarted), len(summary.Unchanged))
 }
 
@@ -1497,6 +1502,90 @@ func toAgentcoreProviders(bundle *clientconfig.Bundle) []agentcore.ProviderConfi
 		})
 	}
 	return out
+}
+
+// buildInteractiveEngine constructs the agent manager over the boot provider
+// table: the bundle's providers: block (#289) overlaid with the enabled
+// admin-managed DB rows. When BOTH are empty, opts.LLMProviders stays nil and
+// the manager falls back to the historical single-OpenRouter resolver
+// (including its "OPENROUTER_API_KEY required" boot error). A DB overlay that
+// is unreadable or fails eager construction (e.g. the encryption key changed
+// under a stored key) must never brick boot: it degrades to the bundle/env
+// table with a loud log, and the admin fixes the row in the UI.
+func buildInteractiveEngine(
+	opts agent.ManagerOptions,
+	bundleProviders []agentcore.ProviderConfig,
+	chatStore *store.Store,
+	openRouterKey string,
+) (*agent.Manager, error) {
+	opts.LLMProviders = bundleProviders
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	dbProviders, err := loadDBLLMProviders(ctx, chatStore)
+	switch {
+	case err != nil:
+		log.Printf("WARNING: admin LLM providers unavailable (%v) — booting with the bundle/env provider table only", err)
+	case len(dbProviders) > 0:
+		merged := opts
+		merged.LLMProviders = agentcore.MergeLLMProviders(bundleProviders, dbProviders, openRouterKey)
+		mgr, mergeErr := agent.New(merged)
+		if mergeErr == nil {
+			return mgr, nil
+		}
+		log.Printf("WARNING: provider table with admin rows failed to build (%v) — retrying with the bundle/env table only", mergeErr)
+	}
+	return agent.New(opts)
+}
+
+// llmProvidersReloader builds the WithLLMProvidersChanged callback: re-read
+// the admin rows, re-merge with the bundle/env table, swap the manager's
+// resolver. Kept as a named constructor (not an inline closure in run) so the
+// boot path and the hot-reload path visibly share loadDBLLMProviders +
+// MergeLLMProviders and cannot drift.
+//
+// The whole read→merge→swap is serialized under one mutex (the mcpReloadMu
+// pattern): the handler invokes this only after its write committed, so with
+// concurrent admin edits the LAST commit's read always runs last and the final
+// resolver state matches the final DB state — two overlapping reloads can
+// never swap in stale order.
+func llmProvidersReloader(
+	mgr *agent.Manager,
+	chatStore *store.Store,
+	bundleProviders []agentcore.ProviderConfig,
+	openRouterKey string,
+) func(context.Context) error {
+	var reloadMu sync.Mutex
+	return func(ctx context.Context) error {
+		reloadMu.Lock()
+		defer reloadMu.Unlock()
+		dbProviders, err := loadDBLLMProviders(ctx, chatStore)
+		if err != nil {
+			return err
+		}
+		return mgr.SetLLMProviders(agentcore.MergeLLMProviders(bundleProviders, dbProviders, openRouterKey))
+	}
+}
+
+// loadDBLLMProviders reads the enabled admin-managed provider rows (decrypted
+// keys — resolver building only, never serialized) and converts them to the
+// agentcore routing-table shape. Both the boot merge and the hot-swap callback
+// go through this one read so they can never disagree.
+func loadDBLLMProviders(ctx context.Context, chatStore *store.Store) ([]agentcore.ProviderConfig, error) {
+	rows, err := chatStore.LLMProviderConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.ProviderConfig, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, agentcore.ProviderConfig{
+			Name:    r.Name,
+			Type:    agentcore.ProviderType(r.Type),
+			APIKey:  r.APIKey,
+			BaseURL: r.BaseURL,
+			Models:  r.Models,
+		})
+	}
+	return out, nil
 }
 
 // personaKey normalizes a persona reference to its bare basename — stripping any
