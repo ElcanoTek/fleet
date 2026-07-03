@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
@@ -50,7 +51,28 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 		if servers == nil {
 			servers = []store.RemoteMCPServer{}
 		}
-		writeJSON(w, map[string]any{"servers": servers})
+		// Sharing decorations: the grants on the user's own servers (owner-only
+		// management surface) and the servers others shared WITH them (usable in
+		// their runs; read-only here, with the owner named for attribution).
+		shares, err := s.remoteMCP.SharesByOwner(r.Context(), user)
+		if err != nil {
+			s.remoteMCPError(w, err)
+			return
+		}
+		sharedRows, err := s.remoteMCP.SharedWithMe(r.Context(), user)
+		if err != nil {
+			s.remoteMCPError(w, err)
+			return
+		}
+		sharedWithMe := make([]sharedServerView, 0, len(sharedRows))
+		for _, m := range sharedRows {
+			sharedWithMe = append(sharedWithMe, sharedServerView{RemoteMCPServer: m, Owner: m.UserEmail})
+		}
+		writeJSON(w, map[string]any{
+			"servers":        servers,
+			"shares":         shares,
+			"shared_with_me": sharedWithMe,
+		})
 	case http.MethodPost:
 		var req addRemoteMCPRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -94,6 +116,28 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case sub == "shares" && r.Method == http.MethodPost:
+		var req shareRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := s.remoteMCP.ShareServer(r.Context(), user, id, req.Grantee); err != nil {
+			s.remoteMCPError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case strings.HasPrefix(sub, "shares/") && r.Method == http.MethodDelete:
+		grantee, err := url.PathUnescape(strings.TrimPrefix(sub, "shares/"))
+		if err != nil || grantee == "" {
+			http.Error(w, "grantee required", http.StatusBadRequest)
+			return
+		}
+		if err := s.remoteMCP.UnshareServer(r.Context(), user, id, grantee); err != nil {
+			s.remoteMCPError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case sub == "authorize" && r.Method == http.MethodPost:
 		authURL, err := s.remoteMCP.Authorize(r.Context(), user, id)
 		if err != nil {
@@ -110,6 +154,20 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// shareRequest grants use of a connection to another user on this box
+// ("grantee" is a user email, or "*" for everyone).
+type shareRequest struct {
+	Grantee string `json:"grantee"`
+}
+
+// sharedServerView is a server another user shared with the caller: the normal
+// row plus the owner's email for attribution (UserEmail itself never
+// serializes).
+type sharedServerView struct {
+	store.RemoteMCPServer
+	Owner string `json:"owner"`
 }
 
 type oauthCallbackRequest struct {
