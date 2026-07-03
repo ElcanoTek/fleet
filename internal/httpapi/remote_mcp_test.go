@@ -22,6 +22,8 @@ func TestRemoteMCPEndpointsDisabledReturn503(t *testing.T) {
 		{"add", http.MethodPost, "/remote-mcp-servers", s.remoteMCPServers},
 		{"delete", http.MethodDelete, "/remote-mcp-servers/abc", s.remoteMCPServerByID},
 		{"authorize", http.MethodPost, "/remote-mcp-servers/abc/authorize", s.remoteMCPServerByID},
+		{"share", http.MethodPost, "/remote-mcp-servers/abc/shares", s.remoteMCPServerByID},
+		{"unshare", http.MethodDelete, "/remote-mcp-servers/abc/shares/mate%40x.com", s.remoteMCPServerByID},
 		{"callback", http.MethodPost, "/oauth/mcp/callback", s.remoteMCPOAuthCallback},
 	}
 	for _, tc := range cases {
