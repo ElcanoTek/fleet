@@ -90,6 +90,13 @@ mcp_servers: []
 # The generic bundle adds nothing and inherits the defaults.
 remote_mcp_catalog: []
 
+# Built-in Agent Skills pack. Fleet embeds a small pack of generally-useful
+# skills (see internal/clientconfig/builtin_skills/ and docs/SKILLS.md) that
+# every bundle inherits by default alongside its own skills/ dir — a bundle
+# skill with the same name wins. Opt out or trim:
+#   skills_builtin: false     # bundle skills only
+#   skills_hidden: [name, …]  # drop individual built-in skills
+
 # Inline HTTP tools (issue #261). A lightweight alternative to an MCP server for
 # simple "call this REST endpoint" tools: declare name + method + URL + an input
 # JSON Schema inline, no subprocess required. Each entry is registered as a native

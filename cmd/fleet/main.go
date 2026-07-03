@@ -318,6 +318,16 @@ func run() error {
 	systemPromptsDir := bundle.SystemPromptsDir
 	skillsDir := bundle.SkillsDir
 
+	// Workspace symlinks must point at the REAL loaded dirs — in particular
+	// the merged bundle+builtin skills dir — not the legacy $CWD/<name>
+	// convention (see tools.SetSupportingDocDirs).
+	tools.SetSupportingDocDirs(map[string]string{
+		"personas":       personasDir,
+		"protocols":      protocolsDir,
+		"system_prompts": systemPromptsDir,
+		"skills":         skillsDir,
+	})
+
 	// Per-persona tool allowlists (Gate-4, #294): translate the bundle manifest's
 	// personas: block into the agentcore form once and hand the SAME map to both
 	// drivers. The generic bundle declares no personas: block, so this is empty

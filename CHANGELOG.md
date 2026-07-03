@@ -15,6 +15,16 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Built-in Agent Skills pack + skills library: fleet embeds five
+  generally-useful skills (data-profiler, web-research-brief,
+  code-review-checklist, release-notes, executive-report) that every bundle
+  inherits by default via a merged on-disk skills dir (bundle skills win name
+  collisions; `skills_builtin: false` / `skills_hidden: [...]` manifest knobs
+  opt out or trim). New Settings → Skills library page (account menu) with
+  search, Workspace/Built-in provenance badges, and a full SKILL.md read view
+  (`GET /skills/{name}`). Workspace symlinks now point at the registered
+  bundle dirs (`tools.SetSupportingDocDirs`) so merged skills resolve in every
+  sandboxed run. See `docs/SKILLS.md`.
 - Unified connector enablement: Settings → Connections is now the per-user
   AVAILABILITY layer for every connector. Bundled (sandboxed) connectors get
   an "Enabled for me" toggle and a default credential-account seat picker;

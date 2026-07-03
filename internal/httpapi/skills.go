@@ -3,6 +3,8 @@ package httpapi
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -29,6 +31,9 @@ import (
 type skillEntry struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	// Source distinguishes bundle-authored skills from fleet's built-in pack
+	// ("bundle" | "builtin") so the library UI can badge provenance.
+	Source string `json:"source"`
 }
 
 type skillsResponse struct {
@@ -57,9 +62,54 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	skills := s.bundleSkills()
 	entries := make([]skillEntry, 0, len(skills))
 	for _, sk := range skills {
-		entries = append(entries, skillEntry{Name: sk.Name, Description: sk.Description})
+		entries = append(entries, skillEntry{Name: sk.Name, Description: sk.Description, Source: s.skillSource(sk.Name)})
 	}
 	writeJSON(w, skillsResponse{Skills: entries})
+}
+
+// skillSource reports where a merged-roster skill came from: the bundle's own
+// skills/ dir wins collisions, so presence there means "bundle".
+func (s *Server) skillSource(name string) string {
+	if s.clientConfig == nil {
+		return "bundle"
+	}
+	dir := s.clientConfig.BundleSkillsDir
+	if dir == "" {
+		dir = s.clientConfig.SkillsDir
+	}
+	if _, err := os.Stat(filepath.Join(dir, name, "SKILL.md")); err == nil {
+		return "bundle"
+	}
+	return "builtin"
+}
+
+// skillByName serves GET /skills/{name}: the skill's full SKILL.md body for
+// the library UI's read view. The name is matched against the loaded roster
+// (never used as a raw path), so traversal is structurally impossible.
+func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/skills/"), "/")
+	for _, sk := range s.bundleSkills() {
+		if sk.Name != name {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.clientConfig.SkillsDir, sk.Dir, "SKILL.md")) // #nosec G304 — path from the validated roster, not the request.
+		if err != nil {
+			http.Error(w, "skill unreadable", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"name":        sk.Name,
+			"description": sk.Description,
+			"source":      s.skillSource(sk.Name),
+			"content":     string(data),
+		})
+		return
+	}
+	http.Error(w, "unknown skill", http.StatusNotFound)
 }
 
 // matchSkillInvocation detects an explicit "/<skill-name>" invocation at the
