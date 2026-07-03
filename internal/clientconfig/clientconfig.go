@@ -167,7 +167,15 @@ type Bundle struct {
 	PersonasDir      string
 	ProtocolsDir     string
 	SkillsDir        string
-	MCPDir           string
+	// BundleSkillsDir is the bundle's OWN skills/ dir (the author-owned
+	// source). SkillsDir may point at the merged bundle+builtin dir instead —
+	// see builtin_skills.go. Validation always runs against this one.
+	BundleSkillsDir string
+	// skillsBuiltin/skillsHidden carry the manifest knobs so Skills() can
+	// resync the merged dir on read (live-reload contract).
+	skillsBuiltin bool
+	skillsHidden  []string
+	MCPDir        string
 	// EvalsDir holds the bundle's eval & regression sets (#502): one YAML file
 	// per set of golden cases, loaded by internal/evals.LoadSets. Optional like
 	// every content dir — a bundle without evals/ simply has no eval sets. It is
@@ -729,14 +737,19 @@ type manifest struct {
 	// RemoteMCPHidden tombstones specific built-in entries by name so a bundle
 	// can drop individual listings (or an operator can kill a compromised one
 	// in a config-only change) without opting out of the whole directory.
-	RemoteMCPHidden []string         `yaml:"remote_mcp_catalog_hidden"`
-	Providers       []ProviderDef    `yaml:"providers"`
-	EmptyState      EmptyState       `yaml:"empty_state"`
-	TaskTemplates   []TaskTemplate   `yaml:"task_templates"`
-	AgentPolicy     AgentPolicy      `yaml:"agent_policy"`
-	Personas        []PersonaDef     `yaml:"personas"`
-	Pricing         PricingConfig    `yaml:"pricing"`
-	Sandbox         *sandboxManifest `yaml:"sandbox"`
+	RemoteMCPHidden []string `yaml:"remote_mcp_catalog_hidden"`
+	// SkillsBuiltin toggles inheriting fleet's embedded Agent Skills pack
+	// (default TRUE); SkillsHidden tombstones individual built-in skills. The
+	// skills analogues of the remote_mcp_catalog knobs — see builtin_skills.go.
+	SkillsBuiltin *bool            `yaml:"skills_builtin"`
+	SkillsHidden  []string         `yaml:"skills_hidden"`
+	Providers     []ProviderDef    `yaml:"providers"`
+	EmptyState    EmptyState       `yaml:"empty_state"`
+	TaskTemplates []TaskTemplate   `yaml:"task_templates"`
+	AgentPolicy   AgentPolicy      `yaml:"agent_policy"`
+	Personas      []PersonaDef     `yaml:"personas"`
+	Pricing       PricingConfig    `yaml:"pricing"`
+	Sandbox       *sandboxManifest `yaml:"sandbox"`
 }
 
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
@@ -827,6 +840,18 @@ func Load(dir string) (*Bundle, error) {
 		return nil, err
 	}
 	b.RemoteMCPCatalog = merged
+	// Inherit fleet's embedded Agent Skills pack by materializing a merged
+	// skills dir and pointing SkillsDir at it (bundle skills win collisions).
+	// Degrades loudly to the bundle's own dir on failure — skills are a
+	// capability, not a boot invariant.
+	b.BundleSkillsDir = b.SkillsDir
+	b.skillsBuiltin = m.SkillsBuiltin == nil || *m.SkillsBuiltin
+	b.skillsHidden = m.SkillsHidden
+	if mergedSkills, serr := materializeMergedSkills(b.BundleSkillsDir, b.skillsBuiltin, b.skillsHidden); serr != nil {
+		log.Printf("clientconfig: warning: builtin skills pack unavailable (%v) — using bundle skills only", serr)
+	} else {
+		b.SkillsDir = mergedSkills
+	}
 	// Warn (don't fail) on stdio script-path args that don't resolve under the
 	// bundle — a misspelled/missing `mcp/foo.py` would otherwise only surface as
 	// a silent connector launch failure at runtime.
