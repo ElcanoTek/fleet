@@ -58,6 +58,7 @@ type chatStore interface {
 	ListConnectorPrefs(ctx context.Context, userEmail string) (map[string]store.ConnectorPref, error)
 	// User-authored Agent Skills (docs/SKILLS.md phase 2).
 	CreateUserSkill(ctx context.Context, userEmail, name, description, body string) (*store.UserSkill, error)
+	CreateUserSkillProposal(ctx context.Context, userEmail, name, description, body string) (*store.UserSkill, error)
 	UpdateUserSkill(ctx context.Context, userEmail, id, name, description, body, status string) (*store.UserSkill, error)
 	ListUserSkills(ctx context.Context, userEmail string) ([]store.UserSkill, error)
 	DeleteUserSkill(ctx context.Context, userEmail, id string) error

@@ -85,6 +85,12 @@ type Options struct {
 	// disables remote-MCP wiring for scheduled runs even when RemoteMCP is set.
 	RemoteMCP  agent.RemoteMCPResolver
 	OwnerEmail func(ctx context.Context, userID uuid.UUID) (string, error)
+
+	// UserSkills returns the owner's ACTIVE builder skills for prompt
+	// inlining; SkillProposerFor binds propose_skill staging to the owner
+	// (docs/SKILLS.md). nil = capability off.
+	UserSkills       func(ctx context.Context, email string) ([]UserSkillDoc, error)
+	SkillProposerFor func(ownerEmail string) agentcore.SkillProposer
 }
 
 // Runner executes claimed scheduled tasks in-process through the unified runtime
@@ -128,6 +134,24 @@ type Runner struct {
 	// MCP servers into a headless run (#443). nil = feature off.
 	remoteMCP  agent.RemoteMCPResolver
 	ownerEmail func(ctx context.Context, userID uuid.UUID) (string, error)
+
+	// userSkills + skillProposerFor extend the same owner-resolution to the
+	// skills arc (docs/SKILLS.md): userSkills returns the owner's ACTIVE
+	// builder skills (inlined into the run's system prompt — a headless run has
+	// no per-conversation workspace to materialize files into, and writing
+	// per-user files into the SHARED workspace root would leak them across
+	// users), and skillProposerFor binds propose_skill staging to the owner.
+	// nil = capability off.
+	userSkills       func(ctx context.Context, email string) ([]UserSkillDoc, error)
+	skillProposerFor func(ownerEmail string) agentcore.SkillProposer
+}
+
+// UserSkillDoc is one user-authored skill in the shape the scheduled prompt
+// inlines (the runner is decoupled from the chat store's row type).
+type UserSkillDoc struct {
+	Name        string
+	Description string
+	Body        string
 }
 
 // IterationStore records per-iteration telemetry for a looped task (#179). It is
@@ -164,6 +188,8 @@ func New(opts Options) *Runner {
 		taskMemoryConfig:    opts.TaskMemoryConfig,
 		remoteMCP:           opts.RemoteMCP,
 		ownerEmail:          opts.OwnerEmail,
+		userSkills:          opts.UserSkills,
+		skillProposerFor:    opts.SkillProposerFor,
 	}
 	r.baseSystemPrompt = r.buildBaseSystemPrompt()
 	return r
@@ -621,6 +647,12 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	remoteOverlay := r.buildTaskRemoteOverlay(ctx, task, mcpClient)
 	defer remoteOverlay.Close()
 
+	// The task owner's builder skills + propose_skill staging (docs/SKILLS.md):
+	// resolve the owner once, mirror the remote-overlay best-effort posture —
+	// an unresolvable owner just runs without the capability, never fails the
+	// run.
+	ownerSkillEmail := r.resolveOwnerEmail(ctx, task)
+
 	// Per-task persona override (#221): a task may name a personas/<name>.yaml to
 	// swap in specialized domain expertise; empty uses the runner's global persona.
 	taskSystemPrompt, taskPersona := r.taskPromptAndPersona(task)
@@ -652,6 +684,8 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// run and persists the result in the task's output_json.
 	taskSystemPrompt += structuredoutput.PromptAugmentation(task.OutputSchema)
 
+	taskSystemPrompt = r.appendOwnerSkills(ctx, taskSystemPrompt, ownerSkillEmail)
+
 	// Captain's Log (#285): instruction_self_improve is the per-task opt-in gate
 	// that finally gives the flag runtime effect (#322). Only when it is set does
 	// the run get persistent task memory — the remember/recall tools + run-start
@@ -682,6 +716,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		Sandbox:       sb,
 		NotesProvider: r.notesProvider,
 		NoteProposer:  r.noteProposer,
+		SkillProposer: r.taskSkillProposer(ownerSkillEmail),
 		// Captain's Log persistent memory (#285): nil unless the task opted in (above).
 		TaskMemory:          taskMemory,
 		TaskID:              task.ID,
@@ -953,4 +988,81 @@ func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
 		}
 	}
 	return out
+}
+
+// resolveOwnerEmail maps task.CreatedBy to the chat-side owner email, "" when
+// unresolvable (capability off, API-key-created task, or lookup failure) —
+// mirroring the remote-overlay best-effort posture.
+func (r *Runner) resolveOwnerEmail(ctx context.Context, task *models.Task) string {
+	if r.ownerEmail == nil || task.CreatedBy == nil {
+		return ""
+	}
+	email, err := r.ownerEmail(ctx, *task.CreatedBy)
+	if err != nil {
+		return ""
+	}
+	return email
+}
+
+// appendOwnerSkills inlines the owner's ACTIVE builder skills into the run's
+// system prompt (docs/SKILLS.md). Scheduled runs inline the full bodies
+// instead of materializing files: there is no per-conversation workspace
+// here, and per-user files in the shared workspace root would be readable by
+// other users' runs. The section's total budget keeps a skill-heavy user from
+// blowing up every task prompt; anything dropped is dropped LOUDLY inside the
+// prompt so the agent knows.
+func (r *Runner) appendOwnerSkills(ctx context.Context, prompt, ownerEmail string) string {
+	if r.userSkills == nil || ownerEmail == "" {
+		return prompt
+	}
+	docs, err := r.userSkills(ctx, ownerEmail)
+	if err != nil || len(docs) == 0 {
+		return prompt
+	}
+	return prompt + renderUserSkillsSection(docs)
+}
+
+// taskSkillProposer binds propose_skill staging to the resolved task owner;
+// nil when the capability is off or the owner is unknown (the tool then stays
+// unregistered for the run).
+func (r *Runner) taskSkillProposer(ownerEmail string) agentcore.SkillProposer {
+	if r.skillProposerFor == nil || ownerEmail == "" {
+		return nil
+	}
+	return r.skillProposerFor(ownerEmail)
+}
+
+// userSkillsInlineBudget caps the total bytes of skill bodies inlined into a
+// scheduled prompt (the interactive path materializes files instead and needs
+// no cap).
+const userSkillsInlineBudget = 24 * 1024
+
+// renderUserSkillsSection renders the owner's builder skills as a prompt
+// section, full bodies inline, dropping (loudly) past the budget.
+func renderUserSkillsSection(docs []UserSkillDoc) string {
+	var b strings.Builder
+	b.WriteString("\n\n## Your user's skills\n\n")
+	b.WriteString("Skills this task's owner authored for their own runs. Apply one when the task matches its description; ignore the rest.\n")
+	used := 0
+	dropped := 0
+	for _, d := range docs {
+		if used+len(d.Body) > userSkillsInlineBudget {
+			dropped++
+			continue
+		}
+		used += len(d.Body)
+		b.WriteString("\n### ")
+		b.WriteString(d.Name)
+		b.WriteString("\n")
+		b.WriteString(d.Description)
+		b.WriteString("\n\n")
+		b.WriteString(d.Body)
+		if !strings.HasSuffix(d.Body, "\n") {
+			b.WriteString("\n")
+		}
+	}
+	if dropped > 0 {
+		fmt.Fprintf(&b, "\n(%d more skill(s) were omitted for space.)\n", dropped)
+	}
+	return b.String()
 }

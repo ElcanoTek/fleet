@@ -71,9 +71,9 @@ endpoint refuses an unknown seat up front.
 
 ## Honest scope
 
-- Always-on (non-optional) bundled connectors are not yet rendered in the
-  availability list; they remain implicit. Deferred: show them as
-  visible-but-locked rows.
+- Always-on (non-optional) bundled connectors render as visible-but-locked
+  rows ("Always on") — nothing is invisibly enabled, and nothing about them is
+  toggleable by design.
 - The task modal's pickable set is not filtered by the task author's prefs —
   orchestrator identity is not guaranteed to map to a chat user, and tasks are
   an operator surface; revisit if the identities unify.

@@ -90,6 +90,12 @@ type TurnInput struct {
 	// pending memory proposals for user confirmation.
 	MemoryProposer MemoryProposer
 
+	// SkillProposer, when set, intercepts propose_skill tool calls and stages
+	// an agent-drafted personal skill for THIS turn's user to review in the
+	// builder (docs/SKILLS.md phase 3). Per-turn like MemoryProposer so the
+	// proposal is attributed to the right owner.
+	SkillProposer agentcore.SkillProposer
+
 	// Lockdown is set when the conversation row has lockdown=true. Forces a
 	// per-turn container sandbox and constrains the resolved model slug to the
 	// operator's lockdown allow-list.
@@ -813,6 +819,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		ApprovalStager:  in.ApprovalStager,
 		MemoryProposer:  in.MemoryProposer,
 		NoteProposer:    m.noteProposer,
+		SkillProposer:   in.SkillProposer,
 		HealthRegistry:  m.health,
 		ThinkingConfig:  in.ThinkingConfig,
 	}

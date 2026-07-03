@@ -2251,6 +2251,7 @@ func (s *Server) runTurnAsync(
 		OptionalMCPServersEnabled: optionalEnabled,
 		MCPAccountDefaults:        accountDefaults,
 		UserSkills:                userSkills,
+		SkillProposer:             &skillProposer{ctx: turnCtx, store: s.store, user: user},
 		Lockdown:                  conv.Lockdown,
 		ImageAttachments:          imageAttachments,
 		ThinkingConfig:            resolveThinkingConfig(conv.ThinkingConfig, s.cfg.DefaultThinkingBudgetTokens),

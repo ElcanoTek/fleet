@@ -2,6 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,10 +19,42 @@ import (
 type skillsFakeStore struct {
 	*fakeChatStore
 	skills []store.UserSkill
+	nextID int
 }
 
 func (s *skillsFakeStore) ListUserSkills(_ context.Context, _ string) ([]store.UserSkill, error) {
 	return s.skills, nil
+}
+
+func (s *skillsFakeStore) CreateUserSkill(_ context.Context, email, name, description, body string) (*store.UserSkill, error) {
+	if name == "" {
+		return nil, store.ErrUserSkillInvalid
+	}
+	s.nextID++
+	sk := store.UserSkill{ID: string(rune('a' + s.nextID)), UserEmail: email, Name: name, Description: description, Body: body, Status: store.UserSkillStatusActive}
+	s.skills = append(s.skills, sk)
+	return &sk, nil
+}
+
+func (s *skillsFakeStore) UpdateUserSkill(_ context.Context, _, id, name, description, body, status string) (*store.UserSkill, error) {
+	for i := range s.skills {
+		if s.skills[i].ID == id {
+			s.skills[i].Name, s.skills[i].Description, s.skills[i].Body, s.skills[i].Status = name, description, body, status
+			cp := s.skills[i]
+			return &cp, nil
+		}
+	}
+	return nil, store.ErrUserSkillNotFound
+}
+
+func (s *skillsFakeStore) DeleteUserSkill(_ context.Context, _, id string) error {
+	for i := range s.skills {
+		if s.skills[i].ID == id {
+			s.skills = append(s.skills[:i], s.skills[i+1:]...)
+			return nil
+		}
+	}
+	return store.ErrUserSkillNotFound
 }
 
 // Materialization mirrors the DB into the conversation workspace: active
@@ -74,5 +109,63 @@ func TestMatchUserSkillInvocation(t *testing.T) {
 	}
 	if block := matchUserSkillInvocation("/unknown", skills); block != "" {
 		t.Errorf("unknown matched: %q", block)
+	}
+}
+
+func userSkillsReq(t *testing.T, _ *Server, handler http.HandlerFunc, method, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var r *http.Request
+	if body == "" {
+		r = httptest.NewRequest(method, target, nil)
+	} else {
+		r = httptest.NewRequest(method, target, strings.NewReader(body))
+	}
+	r = r.WithContext(context.WithValue(r.Context(), ctxKeyUser, "u@x.com"))
+	w := httptest.NewRecorder()
+	handler(w, r)
+	return w
+}
+
+// The CRUD endpoints round-trip through the store seam with the right status
+// codes: create → list → update (disable) → delete; invalid input 400s;
+// unknown ids 404.
+func TestUserSkillsEndpoints(t *testing.T) {
+	fs := &skillsFakeStore{fakeChatStore: newFakeChatStore()}
+	s := &Server{store: fs}
+
+	w := userSkillsReq(t, s, s.userSkillsCollection, http.MethodPost, "/user-skills",
+		`{"name":"deal-check","description":"verify a deal sheet","body":"1. Check."}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var created store.UserSkill
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := userSkillsReq(t, s, s.userSkillsCollection, http.MethodPost, "/user-skills",
+		`{"name":"","description":"d","body":"b"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("invalid create: %d", w.Code)
+	}
+
+	w = userSkillsReq(t, s, s.userSkillsCollection, http.MethodGet, "/user-skills", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "deal-check") {
+		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+
+	w = userSkillsReq(t, s, s.userSkillByID, http.MethodPut, "/user-skills/"+created.ID,
+		`{"name":"deal-check","description":"verify a deal sheet","body":"1. Check.","status":"disabled"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "disabled") {
+		t.Fatalf("update: %d %s", w.Code, w.Body.String())
+	}
+
+	if w := userSkillsReq(t, s, s.userSkillByID, http.MethodDelete, "/user-skills/ghost", ""); w.Code != http.StatusNotFound {
+		t.Errorf("delete ghost: %d", w.Code)
+	}
+	if w := userSkillsReq(t, s, s.userSkillByID, http.MethodDelete, "/user-skills/"+created.ID, ""); w.Code != http.StatusNoContent {
+		t.Errorf("delete: %d", w.Code)
+	}
+	if len(fs.skills) != 0 {
+		t.Errorf("delete left rows: %+v", fs.skills)
 	}
 }

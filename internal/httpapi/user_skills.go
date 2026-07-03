@@ -179,3 +179,20 @@ func matchUserSkillInvocation(message string, skills []store.UserSkill) string {
 	}
 	return ""
 }
+
+// skillProposer implements agentcore.SkillProposer for interactive turns: a
+// propose_skill call stages a PROPOSED row for the turn's user, who reviews it
+// on the Skills page. Mirrors memoryProposer's shape (approvals.go).
+type skillProposer struct {
+	ctx   context.Context
+	store chatStore
+	user  string
+}
+
+func (p *skillProposer) Propose(name, description, body, _ string) (string, error) {
+	sk, err := p.store.CreateUserSkillProposal(p.ctx, p.user, name, description, body)
+	if err != nil {
+		return "", err
+	}
+	return sk.ID, nil
+}

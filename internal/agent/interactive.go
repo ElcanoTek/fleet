@@ -99,6 +99,11 @@ type TurnConfig struct {
 	// propose_memory path is unchanged. Nil leaves propose_note "not wired".
 	NoteProposer agentcore.NoteProposer
 
+	// SkillProposer stages agent-drafted personal skills (propose_skill) for
+	// the turn's user to review (docs/SKILLS.md phase 3). Registered in
+	// lockstep like propose_note.
+	SkillProposer agentcore.SkillProposer
+
 	// ThinkingConfig, when set and Enabled, activates Claude extended thinking
 	// (#220) for the turn. nil = off. Resolved by the Manager from the
 	// per-conversation override or the global default.
@@ -132,6 +137,11 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	if tc.NoteProposer != nil {
 		policy.SetNoteProposer(tc.NoteProposer)
 		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeNoteTool())
+	}
+	// propose_skill under the same lockstep guarantee (docs/SKILLS.md phase 3).
+	if tc.SkillProposer != nil {
+		policy.SetSkillProposer(tc.SkillProposer)
+		nativeTools = append(append([]fantasy.AgentTool{}, nativeTools...), tools.NewProposeSkillTool())
 	}
 
 	deps := agentcore.Deps{

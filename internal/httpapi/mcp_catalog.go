@@ -87,6 +87,18 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.clientConfig != nil {
+		// Always-on (non-Optional) connectors render as visible-but-locked
+		// rows: no toggle, no opt-in — they are wired into every turn, and
+		// users should be able to see that.
+		for _, a := range s.clientConfig.AlwaysOnServers() {
+			resp.Bundled = append(resp.Bundled, mcpCatalogBundledEntry{
+				Name:        a.Name,
+				DisplayName: a.DisplayName,
+				Description: a.Description,
+				Optional:    false,
+				Trust:       "bundled",
+			})
+		}
 		for _, e := range s.clientConfig.RemoteMCPCatalog {
 			resp.ThirdParty = append(resp.ThirdParty, thirdPartyCatalogEntry(e))
 		}

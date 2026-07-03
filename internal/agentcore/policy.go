@@ -42,6 +42,10 @@ func (p *InteractivePolicy) orchestration() *orchestrationState { return p.orch 
 // memories which stay interactive-only).
 func (p *InteractivePolicy) SetNoteProposer(np NoteProposer) { p.orch.setNoteProposer(np) }
 
+// SetSkillProposer wires the personal-skill proposer (propose_skill) for this
+// run (docs/SKILLS.md phase 3).
+func (p *InteractivePolicy) SetSkillProposer(sp SkillProposer) { p.orch.setSkillProposer(sp) }
+
 // BeforeToolCall runs the interactive gate chain: ceilings → repeat-call guard →
 // email safety (rate-limit/dedup/approval staging) → risky-bash approval →
 // preview_email staging → schedule_task staging → suggest_advanced_model staging →
@@ -74,6 +78,9 @@ func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string
 		return true, msg
 	}
 	if blocked, msg := p.orch.checkNoteProposal(toolName, rawInput); blocked {
+		return true, msg
+	}
+	if blocked, msg := p.orch.checkSkillProposal(toolName, rawInput); blocked {
 		return true, msg
 	}
 	return false, ""
@@ -111,6 +118,10 @@ func (p *ScheduledPolicy) orchestration() *orchestrationState { return p.orch }
 
 // SetNoteProposer wires the admin-notes proposer (propose_note) for this run.
 func (p *ScheduledPolicy) SetNoteProposer(np NoteProposer) { p.orch.setNoteProposer(np) }
+
+// SetSkillProposer wires the personal-skill proposer (propose_skill) for this
+// run (docs/SKILLS.md phase 3).
+func (p *ScheduledPolicy) SetSkillProposer(sp SkillProposer) { p.orch.setSkillProposer(sp) }
 
 // Budget exposes this run's current cost/token ceilings and accumulated spend
 // (#175). The spawn_subagent tool reads the PARENT policy's Budget to size a
@@ -151,6 +162,9 @@ func (p *ScheduledPolicy) BeforeToolCall(toolName, toolCallID, rawInput string) 
 		return true, msg
 	}
 	if blocked, msg := p.orch.checkNoteProposal(toolName, rawInput); blocked {
+		return true, msg
+	}
+	if blocked, msg := p.orch.checkSkillProposal(toolName, rawInput); blocked {
 		return true, msg
 	}
 	return false, ""
