@@ -176,6 +176,9 @@ type chatStore interface {
 	// plus the member-level names+models read for the model picker. Key VALUES
 	// are write-only — no method here ever returns one.
 	ListLLMProviders(ctx context.Context) ([]store.LLMProvider, error)
+	// GetLLMProviderConfig decrypts ONE row's key for the host-side
+	// test-connection probe — the result never serializes to HTTP.
+	GetLLMProviderConfig(ctx context.Context, id string) (*store.LLMProviderConfig, error)
 	CreateLLMProvider(ctx context.Context, in store.LLMProviderInput) (*store.LLMProvider, error)
 	UpdateLLMProvider(ctx context.Context, id string, in store.LLMProviderInput) (*store.LLMProvider, error)
 	DeleteLLMProvider(ctx context.Context, id string) error

@@ -125,11 +125,23 @@ async function fetchProviders(): Promise<LLMProvider[] | null> {
   return data.providers ?? [];
 }
 
+// A finished test-connection probe for one row, as the backend reports it.
+type ProbeResult = {
+  ok: boolean;
+  status?: number;
+  detail: string;
+  served_model_count?: number;
+  missing_models?: string[];
+  latency_ms: number;
+};
+
 export function ProvidersPanel() {
   const [providers, setProviders] = useState<LLMProvider[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
+  // Per-row probe state: "running" while in flight, else the last result.
+  const [probes, setProbes] = useState<Record<string, "running" | ProbeResult>>({});
 
   useEffect(() => {
     let stale = false;
@@ -221,6 +233,29 @@ export function ProvidersPanel() {
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : "Update failed."))
       .finally(() => setBusy(false));
+  };
+
+  // Test connection: one host-side probe against the provider's real endpoint
+  // (key check + model-catalog cross-check where the type supports it). Works
+  // on disabled rows, so an admin can verify before enabling.
+  const test = (p: LLMProvider) => {
+    setProbes((cur) => ({ ...cur, [p.id]: "running" }));
+    fetch(`/api/admin/llm-providers/${encodeURIComponent(p.id)}/test`, { method: "POST" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error((await res.text()) || `Test failed: ${res.status}`);
+        return (await res.json()) as ProbeResult;
+      })
+      .then((result) => setProbes((cur) => ({ ...cur, [p.id]: result })))
+      .catch((err: unknown) =>
+        setProbes((cur) => ({
+          ...cur,
+          [p.id]: {
+            ok: false,
+            detail: err instanceof Error ? err.message : "Test failed.",
+            latency_ms: 0,
+          },
+        })),
+      );
   };
 
   const remove = (p: LLMProvider) => {
@@ -420,8 +455,36 @@ export function ProvidersPanel() {
                   {" · "}
                   {p.models.length > 0 ? `${p.models.length} model${p.models.length === 1 ? "" : "s"}` : "catch-all (any model)"}
                 </p>
+                {probes[p.id] && probes[p.id] !== "running" ? (
+                  <p
+                    className={`mt-0.5 text-[0.75rem] ${
+                      (probes[p.id] as ProbeResult).ok
+                        ? "text-[var(--color-success-soft)]"
+                        : "text-[var(--color-danger-soft)]"
+                    }`}
+                    data-testid={`probe-result-${p.id}`}
+                  >
+                    {(probes[p.id] as ProbeResult).ok ? "✓" : "✗"}{" "}
+                    {(probes[p.id] as ProbeResult).detail}
+                    {(probes[p.id] as ProbeResult).latency_ms > 0
+                      ? ` · ${(probes[p.id] as ProbeResult).latency_ms}ms`
+                      : ""}
+                    {((probes[p.id] as ProbeResult).missing_models?.length ?? 0) > 0
+                      ? ` — missing: ${(probes[p.id] as ProbeResult).missing_models!.join(", ")}`
+                      : ""}
+                  </p>
+                ) : null}
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => test(p)}
+                  disabled={busy || probes[p.id] === "running"}
+                  title="One authenticated call against the provider's endpoint — verifies the key/base URL and cross-checks the listed models."
+                  className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+                >
+                  {probes[p.id] === "running" ? "Testing…" : "Test"}
+                </button>
                 <button
                   type="button"
                   onClick={() => {

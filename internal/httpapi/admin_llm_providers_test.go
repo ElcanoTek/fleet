@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -137,5 +138,68 @@ func TestAdminLLMProvidersCRUD(t *testing.T) {
 	w = do(t, h, http.MethodGet, "/llm-provider-models", nil, "user@x.com")
 	if !strings.Contains(w.Body.String(), `"models":[]`) {
 		t.Fatalf("models after delete = %s, want empty", w.Body.String())
+	}
+}
+
+// The test-connection probe endpoint: admin-gated, works on DISABLED rows
+// (verify before enabling), decrypts the stored key host-side, and returns a
+// key-free summary. End-to-end against a local httptest endpoint — no seam
+// stub, so the store-decrypt → agentcore-probe path is genuinely exercised.
+func TestAdminLLMProviderTest(t *testing.T) {
+	_, h := llmFixture(t)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer sk-live-secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-5.2"}]}`))
+	}))
+	defer upstream.Close()
+
+	// A DISABLED row with a sealed key pointing at the local endpoint.
+	w := do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "gateway", "type": "openai", "base_url": upstream.URL,
+		"models": []string{"gpt-5.2", "missing-model"}, "enabled": false, "api_key": "sk-live-secret",
+	}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: status %d body %s", w.Code, w.Body.String())
+	}
+	var created store.LLMProvider
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	// Member: 403 (the probe reaches a decrypted key — admin-only).
+	w = do(t, h, http.MethodPost, "/admin/llm-providers/"+created.ID+"/test", nil, "user@x.com")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("member test: status %d want 403", w.Code)
+	}
+
+	// Admin: the probe authenticates with the STORED key and cross-checks models.
+	w = do(t, h, http.MethodPost, "/admin/llm-providers/"+created.ID+"/test", nil, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("test: status %d body %s", w.Code, w.Body.String())
+	}
+	var probe struct {
+		OK            bool     `json:"ok"`
+		Detail        string   `json:"detail"`
+		Served        int      `json:"served_model_count"`
+		MissingModels []string `json:"missing_models"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &probe); err != nil {
+		t.Fatalf("decode probe: %v", err)
+	}
+	if !probe.OK || probe.Served != 1 || len(probe.MissingModels) != 1 || probe.MissingModels[0] != "missing-model" {
+		t.Fatalf("probe = %+v, want ok with 1 served + missing-model warned", probe)
+	}
+	if strings.Contains(w.Body.String(), "sk-live-secret") {
+		t.Fatalf("probe response leaks the key: %s", w.Body.String())
+	}
+
+	// Unknown id → 404.
+	w = do(t, h, http.MethodPost, "/admin/llm-providers/00000000-0000-0000-0000-000000000000/test", nil, "boss@x.com")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown id: status %d want 404", w.Code)
 	}
 }

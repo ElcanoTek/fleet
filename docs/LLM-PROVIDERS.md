@@ -48,6 +48,17 @@ configured from the client bundle's `providers:` block.
   "Workspace" badge (`web/src/app/shared/lib/models.ts`), ahead of the
   OpenRouter catalog. Explicit prefix routing means a picked entry resolves
   through its provider even when slugs overlap.
+- **Test connection**: each row has a Test button →
+  `POST /admin/llm-providers/{id}/test` (admin-gated) → one host-side probe
+  against the provider's real endpoint (`internal/agentcore/provider_probe.go`):
+  OpenRouter's authenticated key-metadata endpoint, Anthropic/OpenAI/Ollama's
+  models catalog with the row's auth. Where the endpoint enumerates models,
+  the row's listed slugs are cross-checked — absences report as a warning
+  (gateways and Ollama tags legitimately under-enumerate), never a failure.
+  Works on disabled rows so an admin can verify before enabling. The decrypted
+  key travels only in the outbound auth header; the response is a key-free
+  summary (`ok`, `detail`, `served_model_count`, `missing_models`,
+  `latency_ms`).
 
 ## Security invariants (unchanged, extended)
 
@@ -77,10 +88,6 @@ configured from the client bundle's `providers:` block.
 
 ## What was deliberately deferred
 
-- **No test-connection probe.** Validation is eager client construction
-  (shape-level: type, key presence, base URL); a wrong key surfaces on first
-  use as a normal model-selection error. A host-side `/models` probe per type
-  is a natural follow-up.
 - **Catch-all providers aren't enumerated in the picker** — an empty models
   list serves any slug but contributes no picker rows (nothing to enumerate);
   users can still type any slug.

@@ -27,7 +27,11 @@ prior versions are listed because none have shipped.
   shared model picker as `provider/model` entries with a "Workspace" badge.
   With no rows configured, behavior is byte-identical to before (single
   catch-all OpenRouter from `OPENROUTER_API_KEY`), keeping the fake-LLM seam
-  and existing deployments unchanged.
+  and existing deployments unchanged. Each row has a **Test** button — one
+  host-side probe against the provider's real endpoint that verifies the
+  key/base URL and cross-checks the listed models against the endpoint's
+  catalog (absences warn, never fail); works on disabled rows so admins can
+  verify before enabling.
 - Skills builder (docs/SKILLS.md phases 2 + 3): Settings → Skills gains a
   "Your skills" section — create, edit, enable/disable, and delete personal
   skills (name + description + markdown instructions). User skills are
