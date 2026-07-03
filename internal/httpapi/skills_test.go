@@ -162,3 +162,50 @@ func TestListSkills_MethodNotAllowed(t *testing.T) {
 		t.Fatalf("status %d want 405", w.Code)
 	}
 }
+
+// The library endpoints: the roster carries provenance and GET /skills/{name}
+// returns the SKILL.md body for roster names only (never raw paths).
+func TestSkillByNameAndSource(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("skills_builtin: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sdir := filepath.Join(dir, "skills", "my-skill")
+	if err := os.MkdirAll(sdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: my-skill\ndescription: a bundle skill for the content endpoint test\n---\n\nStep one.\n"
+	if err := os.WriteFile(filepath.Join(sdir, "SKILL.md"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := clientconfig.Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	s := &Server{clientConfig: bundle}
+
+	req := httptest.NewRequest(http.MethodGet, "/skills/my-skill", nil)
+	w := httptest.NewRecorder()
+	s.skillByName(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	var resp struct {
+		Name, Source, Content string
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Source != "bundle" || !strings.Contains(resp.Content, "Step one.") {
+		t.Errorf("resp = %+v", resp)
+	}
+
+	// Unknown names (including traversal-shaped ones) 404 without touching disk.
+	for _, bad := range []string{"/skills/nope", "/skills/../../etc/passwd"} {
+		w := httptest.NewRecorder()
+		s.skillByName(w, httptest.NewRequest(http.MethodGet, bad, nil))
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 404", bad, w.Code)
+		}
+	}
+}

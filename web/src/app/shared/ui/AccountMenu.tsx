@@ -135,6 +135,15 @@ export function AccountMenu({
           Connections
         </MenuItem>
         <MenuItem
+          icon={<Icon name="sparkles" className="size-4" />}
+          onClick={() => {
+            close();
+            window.location.assign("/settings/skills");
+          }}
+        >
+          Skills
+        </MenuItem>
+        <MenuItem
           icon={<Icon name="activity" className="size-4" />}
           onClick={() => {
             close();

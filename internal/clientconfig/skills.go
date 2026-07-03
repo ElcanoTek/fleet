@@ -3,6 +3,7 @@ package clientconfig
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -206,6 +207,14 @@ func validSkillName(name string) bool {
 // from disk so an operator editing a skill in place takes effect without a
 // process restart — matching the persona/protocol live-reload contract.
 func (b *Bundle) Skills() []Skill {
+	// When the merged bundle+builtin dir is in use, resync it from its
+	// sources first so an operator editing a bundle skill in place is still
+	// picked up without a restart (the copy is a no-op when nothing changed).
+	if b.SkillsDir != b.BundleSkillsDir && b.BundleSkillsDir != "" {
+		if err := syncMergedSkills(b.BundleSkillsDir, b.SkillsDir, b.skillsHidden); err != nil {
+			log.Printf("clientconfig: warning: skills resync failed: %v", err)
+		}
+	}
 	skills, _ := ReadSkills(b.SkillsDir)
 	return skills
 }
@@ -216,6 +225,10 @@ func (b *Bundle) Skills() []Skill {
 // logs any problems as warnings; a CI test asserts the shipped bundle returns
 // none. It is the skills analogue of ValidateMCPArgPaths.
 func (b *Bundle) ValidateSkills() []string {
-	_, problems := ReadSkills(b.SkillsDir)
+	dir := b.BundleSkillsDir
+	if dir == "" {
+		dir = b.SkillsDir
+	}
+	_, problems := ReadSkills(dir)
 	return problems
 }
