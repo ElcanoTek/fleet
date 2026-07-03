@@ -112,6 +112,12 @@ func newFakeChatStore() *fakeChatStore {
 	}
 }
 
+// Connector prefs (unified connector UX): the fake has no prefs, meaning
+// operator defaults everywhere — the turn path reads this on every run.
+func (s *fakeChatStore) ListConnectorPrefs(_ context.Context, _ string) (map[string]store.ConnectorPref, error) {
+	return nil, nil
+}
+
 func (s *fakeChatStore) CreateConversation(_ context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

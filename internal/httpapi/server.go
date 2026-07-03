@@ -629,6 +629,8 @@ func (s *Server) Routes() http.Handler {
 	// Trust-labeled MCP directory (#538): bundled connectors vs curated
 	// third-party hosted servers, for the settings catalog UI.
 	mux.Handle("/mcp-catalog", auth(member(http.HandlerFunc(s.mcpCatalog))))
+	// Per-user connector availability prefs (unified connector UX).
+	mux.Handle("/connector-prefs", auth(member(mutate(http.HandlerFunc(s.connectorPrefs)))))
 	// Per-user remote (hosted) MCP servers + OAuth (#443). The /oauth/mcp/callback
 	// completion is POSTed here by the browser-facing Next.js callback route.
 	mux.Handle("/remote-mcp-servers", auth(member(mutate(http.HandlerFunc(s.remoteMCPServers)))))
@@ -1014,15 +1016,27 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	catalog := s.agent.MCPServerCatalog()
+	// Availability layer (unified connector UX): the user's connections-page
+	// prefs decide which bundled connectors this pre-conversation picker offers
+	// and which start enabled. Best-effort — a prefs read failure falls back to
+	// operator defaults.
+	prefs, perr := s.store.ListConnectorPrefs(r.Context(), userFromCtx(r.Context()))
+	if perr != nil {
+		prefs = nil
+	}
 	servers := make([]map[string]any, 0, len(catalog))
 	for _, info := range catalog {
+		avail, defaultOn, _ := bundledPrefFor(prefs, info)
+		if !avail {
+			continue
+		}
 		servers = append(servers, map[string]any{
 			"name":         info.Name,
 			"display_name": info.DisplayName,
 			"description":  info.Description,
 			"tools":        info.Tools,
 			"tool_count":   info.ToolCount,
-			"enabled":      info.EnabledByDefault,
+			"enabled":      defaultOn,
 			"beta":         info.Beta,
 			// Separate group so adding this longer key doesn't re-align
 			// the block above.
@@ -1688,8 +1702,21 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		for _, n := range conv.OptionalMCPServersEnabled {
 			enabled[n] = true
 		}
+		// Availability layer: a connector the user disabled on the connections
+		// page never appears in the conversation picker. Best-effort — a prefs
+		// read failure falls back to the full catalog rather than failing the
+		// settings read.
+		prefs, perr := s.store.ListConnectorPrefs(r.Context(), user)
+		if perr != nil {
+			prefs = nil
+		}
 		servers := make([]map[string]any, 0, len(s.agent.MCPServerCatalog()))
 		for _, info := range s.agent.MCPServerCatalog() {
+			if avail, _, _ := bundledPrefFor(prefs, info); !avail && !enabled[info.Name] {
+				// Hidden unless the conversation already opted it in before the
+				// user disabled it (then it stays visible so it can be turned off).
+				continue
+			}
 			servers = append(servers, map[string]any{
 				"name":         info.Name,
 				"display_name": info.DisplayName,
@@ -2198,6 +2225,11 @@ func (s *Server) runTurnAsync(
 		return
 	}
 
+	// Availability layer (unified connector UX): drop opted-in servers the
+	// user has since disabled on the connections page, and carry their default
+	// credential-account seats into the turn.
+	optionalEnabled, accountDefaults := s.applyConnectorPrefs(turnCtx, user, conv.OptionalMCPServersEnabled)
+
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:               userMessage,
 		Persona:                   conv.Persona,
@@ -2207,7 +2239,8 @@ func (s *Server) runTurnAsync(
 		ProjectInstructions:       projectInstructions,
 		ConversationID:            conv.ID,
 		UserEmail:                 user,
-		OptionalMCPServersEnabled: conv.OptionalMCPServersEnabled,
+		OptionalMCPServersEnabled: optionalEnabled,
+		MCPAccountDefaults:        accountDefaults,
 		Lockdown:                  conv.Lockdown,
 		ImageAttachments:          imageAttachments,
 		ThinkingConfig:            resolveThinkingConfig(conv.ThinkingConfig, s.cfg.DefaultThinkingBudgetTokens),

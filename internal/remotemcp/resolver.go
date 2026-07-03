@@ -30,17 +30,31 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 	if err != nil {
 		return nil, err
 	}
+	// Availability layer (unified connector UX): a connection the user turned
+	// off on the connections page — their own or one shared with them — is
+	// excluded from their runs. Best-effort: a prefs read failure keeps the
+	// default (enabled) rather than failing the run.
+	prefs, perr := s.store.ListConnectorPrefs(ctx, email)
+	if perr != nil {
+		prefs = nil
+	}
+	enabledForMe := func(id string) bool {
+		if p, ok := prefs[store.ConnectorPrefKey(store.ConnectorKindRemote, id)]; ok {
+			return p.Enabled
+		}
+		return true
+	}
 	out := make([]agent.RemoteMCPConn, 0, len(servers)+len(shared))
 	names := map[string]bool{}
 	for _, srv := range servers {
-		if srv.Status != store.RemoteMCPStatusConnected {
+		if srv.Status != store.RemoteMCPStatusConnected || !enabledForMe(srv.ID) {
 			continue
 		}
 		names[srv.Name] = true
 		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL})
 	}
 	for _, srv := range shared {
-		if srv.Status != store.RemoteMCPStatusConnected {
+		if srv.Status != store.RemoteMCPStatusConnected || !enabledForMe(srv.ID) {
 			continue
 		}
 		if names[srv.Name] {

@@ -15,6 +15,18 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Unified connector enablement: Settings → Connections is now the per-user
+  AVAILABILITY layer for every connector. Bundled (sandboxed) connectors get
+  an "Enabled for me" toggle and a default credential-account seat picker;
+  own and shared remote connections get personal On/Off ("Off for me" on a
+  shared connection never affects the owner or other grantees). Chat pickers
+  and turns honor the prefs (disabled connectors disappear; the default seat
+  rides into the turn as the MCP account) while scheduled tasks deliberately
+  keep their own pinned per-task `{server, account}` selection + credential
+  allowlist — supervised chat follows your defaults, unsupervised automation
+  never drifts with them. New `user_connector_prefs` (migration 032) +
+  `GET/PUT/DELETE /connector-prefs`; absence of a pref row means the operator
+  default, so nothing changes until a user opts. See `docs/CONNECTOR-PREFS.md`.
 - Remote MCP connection sharing: the owner of a connected hosted MCP server
   can share it with named users or with everyone on the box (`remote_mcp_shares`,
   migration 031). Grantees' chats and scheduled tasks mount the server's tools;

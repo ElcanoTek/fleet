@@ -29,7 +29,38 @@ export type CatalogBundled = {
   description: string;
   tool_count: number;
   beta?: boolean;
+  // Credential-account seat names (never secret values) provisioned for this
+  // connector; the availability UI offers them as the user's default seat.
+  accounts?: string[];
+  enabled_by_default?: boolean;
 };
+
+// A user's explicit availability choice for one connector (absence = operator
+// default). Mirrors the Go store.ConnectorPref wire shape.
+export type ConnectorPref = {
+  kind: "bundled" | "remote";
+  connector_id: string;
+  enabled: boolean;
+  default_account?: string;
+};
+
+// prefFor looks up an explicit pref; effectiveEnabled collapses the tri-state
+// for display: explicit choice wins, otherwise a connector is available.
+export function prefFor(
+  prefs: ConnectorPref[],
+  kind: "bundled" | "remote",
+  id: string,
+): ConnectorPref | undefined {
+  return prefs.find((p) => p.kind === kind && p.connector_id === id);
+}
+
+export function effectiveEnabled(
+  prefs: ConnectorPref[],
+  kind: "bundled" | "remote",
+  id: string,
+): boolean {
+  return prefFor(prefs, kind, id)?.enabled ?? true;
+}
 
 export type CatalogResponse = {
   bundled: CatalogBundled[];
