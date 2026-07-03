@@ -198,8 +198,13 @@ func TestLoadDefaultBundle(t *testing.T) {
 	if filepath.Base(b.SystemPromptsDir) != "system_prompts" {
 		t.Errorf("SystemPromptsDir = %q", b.SystemPromptsDir)
 	}
-	if filepath.Base(b.SkillsDir) != "skills" {
-		t.Errorf("SkillsDir = %q", b.SkillsDir)
+	// SkillsDir points at the merged bundle+builtin dir (builtin_skills.go);
+	// the bundle's own skills/ stays addressable as BundleSkillsDir.
+	if filepath.Base(b.BundleSkillsDir) != "skills" {
+		t.Errorf("BundleSkillsDir = %q", b.BundleSkillsDir)
+	}
+	if b.SkillsDir == b.BundleSkillsDir {
+		t.Errorf("SkillsDir should be the merged dir, got %q", b.SkillsDir)
 	}
 }
 

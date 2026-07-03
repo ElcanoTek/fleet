@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // Per-turn context plumbing for conversation-scoped workspace paths.
@@ -141,6 +142,22 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 		// Don't replace an existing file — could be a real file the
 		// agent wrote. Only create the symlink if nothing is there.
 		if _, err := os.Lstat(link); err == nil {
+			// A stale link from before a boot-time dir change (e.g. the
+			// merged skills dir moved) is repointed; a real file is never
+			// touched.
+			if configured := configuredSupportingDocDir(name); configured != "" {
+				if cur, lerr := os.Readlink(link); lerr == nil && cur != configured {
+					_ = os.Remove(link)
+					_ = os.Symlink(configured, link)
+				}
+			}
+			continue
+		}
+		// An explicitly configured dir (cmd/fleet wires the loaded bundle's
+		// dirs here, including the merged bundle+builtin skills dir) wins over
+		// the legacy cwd-relative convention.
+		if target := configuredSupportingDocDir(name); target != "" {
+			_ = os.Symlink(target, link)
 			continue
 		}
 		target := filepath.Join(cwd, name)
@@ -155,6 +172,40 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 		_ = os.Symlink(target, link)
 	}
 	return dir, nil
+}
+
+// Supporting-doc dir registry: cmd/fleet wires the loaded client bundle's
+// personas/protocols/system_prompts/skills dirs here at boot so workspace
+// symlinks point at the REAL content (in particular the merged bundle+builtin
+// skills dir — see clientconfig/builtin_skills.go) instead of relying on the
+// legacy $CWD/<name> symlink convention. Unset names keep the legacy behavior.
+var (
+	supportingDocDirsMu sync.RWMutex
+	supportingDocDirs   map[string]string
+)
+
+// SetSupportingDocDirs registers the absolute supporting-doc dirs (keys:
+// "personas", "protocols", "system_prompts", "skills"). Empty values are
+// ignored; relative paths are absolutized.
+func SetSupportingDocDirs(dirs map[string]string) {
+	abs := make(map[string]string, len(dirs))
+	for name, d := range dirs {
+		if d == "" {
+			continue
+		}
+		if a, err := filepath.Abs(d); err == nil {
+			abs[name] = a
+		}
+	}
+	supportingDocDirsMu.Lock()
+	supportingDocDirs = abs
+	supportingDocDirsMu.Unlock()
+}
+
+func configuredSupportingDocDir(name string) string {
+	supportingDocDirsMu.RLock()
+	defer supportingDocDirsMu.RUnlock()
+	return supportingDocDirs[name]
 }
 
 // resolveWorkspacePath turns a user-supplied path from the file-ops

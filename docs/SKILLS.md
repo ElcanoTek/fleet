@@ -81,6 +81,39 @@ parsed but **not** enforced as a hard authorization boundary — the real
 boundaries remain the sandbox, the MCP tool allowlists, and the critical-tool
 audit gate.
 
+## Built-in skills pack + library UI
+
+Fleet embeds five generally-useful skills in the binary
+(`internal/clientconfig/builtin_skills/`): `data-profiler` (stdlib-only
+profiler script), `web-research-brief`, `code-review-checklist`,
+`release-notes`, `executive-report`. Every bundle inherits them by default —
+the skills analogue of the built-in MCP directory.
+
+Skills are real files the sandbox bind-mounts, so inheritance works by
+**materialization**: `clientconfig.Load` syncs the bundle's `skills/` and the
+embedded pack into a merged on-disk dir (under `os.TempDir()/fleet-skills/`,
+keyed by bundle path; bundle wins a name collision, loudly) and points
+`Bundle.SkillsDir` at it. Every consumer — prompt roster, sandbox mounts,
+workspace symlinks, `/skills`, taskrun, evals — picks the pack up unchanged.
+`Skills()` resyncs from sources on read, preserving the edit-a-skill-in-place
+live-reload contract; `ValidateSkills` runs against the bundle's own dir
+(`Bundle.BundleSkillsDir`). Workspace symlinks honor the registered dirs
+(`tools.SetSupportingDocDirs`, wired at boot) rather than only the legacy
+`$CWD/<name>` convention.
+
+Manifest knobs (mirroring the MCP directory):
+
+```yaml
+skills_builtin: false      # opt out of the built-in pack entirely
+skills_hidden: [name, …]   # drop individual built-in skills
+```
+
+**Library UI**: Settings → Skills (account menu, next to Connections; visible
+from both the chat and Operations Center shells) — searchable roster with
+Workspace/Built-in provenance badges and a full SKILL.md read view backed by
+`GET /skills/{name}` (names resolve against the loaded roster, never raw
+paths).
+
 ## Deferred (phases 2/3)
 
 Per the maintainer's phasing comment on #513:

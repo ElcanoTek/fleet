@@ -621,6 +621,7 @@ func (s *Server) Routes() http.Handler {
 	// Bundle skill roster (#513 phase 1): name + description per skill, for the
 	// composer "/" autocomplete. Read-only over the operator-owned bundle.
 	mux.Handle("/skills", auth(member(http.HandlerFunc(s.listSkills))))
+	mux.Handle("/skills/", auth(member(http.HandlerFunc(s.skillByName))))
 	// Dynamic model discovery (#251): the model catalog, routed through the
 	// backend so the API key stays server-side and the allow-list is applied
 	// before the response reaches the browser.
