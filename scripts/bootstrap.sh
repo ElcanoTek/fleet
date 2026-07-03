@@ -451,6 +451,22 @@ if [[ -n "$CLIENT_CONFIG_ARG" ]]; then
   fi
 fi
 
+# ── persist the resolved client dir for `fleet update` ──
+# The env file is 0600 root-only and read ONLY by systemd; update.sh never
+# sources it (by design), so without this an interactive `fleet update` would
+# silently fall back to the in-repo GENERIC bundle and skip pulling the client
+# checkout. Mirror the client-config.pin channel: record the dir under the
+# state dir; a generic-bundle bootstrap clears it so re-runs converge.
+if [[ "$DRY_RUN" != "1" ]]; then
+  STATE_DIR="${FLEET_STATE_DIR:-$REPO_ROOT/.fleet-state}"
+  if [[ "$CLIENT_CONFIG_DIR" != "config/default" && "$CLIENT_CONFIG_DIR" != "$REPO_ROOT/config/default" ]]; then
+    _abs_client_dir="$(cd "$CLIENT_CONFIG_DIR" 2>/dev/null && pwd || printf '%s' "$CLIENT_CONFIG_DIR")"
+    mkdir -p "$STATE_DIR" && printf '%s\n' "$_abs_client_dir" > "$STATE_DIR/client-config.dir"
+  else
+    rm -f "$STATE_DIR/client-config.dir" 2>/dev/null || true
+  fi
+fi
+
 # ── client config bundle ──
 step "Checking client config bundle (FLEET_CLIENT_CONFIG_DIR=${CLIENT_CONFIG_DIR})"
 if [[ -f "${CLIENT_CONFIG_DIR}/manifest.yaml" ]]; then
