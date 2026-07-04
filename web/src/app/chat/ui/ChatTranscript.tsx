@@ -62,10 +62,12 @@ export type ChatTranscriptProps = {
   isStreaming: boolean;
   lastUserMessageId: number | null;
   lastAssistantMessageId: number | null;
-  // Keyboard `e` shortcut (#306): a monotonically-bumped nonce that asks the
-  // last user message to enter its inline editor. UserBubble owns the edit
-  // state, so the request arrives as a signal it watches. 0 = no request yet.
-  editLastUserSignal: number;
+  // Keyboard `e` shortcut (#306): a bumped nonce paired with the target message
+  // id, asking that message to enter its inline editor. UserBubble owns the edit
+  // state, so the request arrives as a signal it watches. Pairing with the id
+  // (not a bare counter) means only the explicitly-requested message opens.
+  // null = no request yet.
+  editLastUserSignal: { id: number; nonce: number } | null;
   selectedModel: string;
 
   // Turn / message actions
@@ -326,7 +328,11 @@ export function ChatTranscript({
                               message={message}
                               isLastUser={message.id === lastUserMessageId}
                               isStreaming={isStreaming}
-                              editRequestSignal={message.id === lastUserMessageId ? editLastUserSignal : 0}
+                              editRequestSignal={
+                                editLastUserSignal && editLastUserSignal.id === message.id
+                                  ? editLastUserSignal.nonce
+                                  : 0
+                              }
                               onResend={(edited) => void resendUserMessage(message.id, edited)}
                             />
                           ) : (

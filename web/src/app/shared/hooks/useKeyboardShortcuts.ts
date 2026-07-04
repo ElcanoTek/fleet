@@ -45,6 +45,15 @@ export interface KeyboardShortcut {
   allowInInput?: boolean;
   /** Whether the shortcut is currently active. Defaults to true. */
   enabled?: boolean;
+  /**
+   * Extra per-event guard, checked as part of matching (so a false result means
+   * the shortcut does NOT match and the event is left alone — no preventDefault,
+   * no handler). Use it when whether to claim the key depends on the event
+   * itself, e.g. a global `Enter` binding that must not hijack Enter while a
+   * button/link is focused. Returning true does not force a match; the key /
+   * modifier checks still apply.
+   */
+  when?: (event: KeyboardEvent) => boolean;
 }
 
 /** Returns true when the platform modifier (⌘ on macOS, Ctrl elsewhere) is held. */
@@ -94,6 +103,8 @@ export function matchesShortcut(event: KeyboardEvent, shortcut: KeyboardShortcut
   if (isTypingTarget(event.target)) {
     if (!shortcut.allowInInput) return false;
   }
+  // Final per-event guard (e.g. don't claim Enter when a button is focused).
+  if (shortcut.when && !shortcut.when(event)) return false;
   return true;
 }
 
