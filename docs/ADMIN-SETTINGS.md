@@ -35,11 +35,15 @@ needs a restart, ever.
   cover disjoint fields and cannot fight). With **no override set**, the two
   agentcore knobs keep reading their env var live per use (the holder is
   cleared, not pinned), so env-file edits + `reload-config` behave exactly as
-  they did before this feature. If the boot apply cannot load the override
-  rows, the box still serves with env-derived behavior but the panel degrades
-  to "unavailable" (501) rather than reporting overrides as in effect that
-  never applied; an edit whose apply hook fails is rolled back from the DB so
-  a value that never took effect can't activate silently on the next boot.
+  they did before this feature. Failure honesty is per-layer: an edit whose
+  apply hook fails is **rolled back** (Set) or **restored** (Reset) so the DB
+  can never disagree with the running system across a restart; a stored value
+  that fails to apply at boot (e.g. a rampart engine whose service URL
+  disappeared) keeps the panel up and marks that row ("saved but NOT in
+  effect", `apply_error`) so the admin can fix or Reset it from the UI —
+  and fixing a dependency **auto-heals** dependent keys without a reboot.
+  Only a boot that cannot even load the override rows degrades the panel to
+  "unavailable" (501), because then it could not render truthfully at all.
 - **API**: admin-gated `GET /admin/settings`,
   `PUT /admin/settings/{key}` (`{"value":"…"}`), `DELETE /admin/settings/{key}`
   (reset) on the chat server; web proxies under `/api/admin/settings`. Every
@@ -54,6 +58,8 @@ needs a restart, ever.
 | Setting key | Kind | Env var default | What it controls |
 | --- | --- | --- | --- |
 | `pii_redaction_mode` | `off`/`observe`/`redact`/`block` | `FLEET_PII_REDACTION_ENABLED` + `FLEET_PII_REDACTION_MODE` | Optional PII pass over tool output ([PII-REDACTION.md](PII-REDACTION.md)) |
+| `pii_redaction_engine` | `pattern`/`rampart` | `FLEET_PII_REDACTION_ENGINE` | Detector: built-in regexes or the Rampart ML service ([PII-REDACTION.md](PII-REDACTION.md)) |
+| `pii_rampart_url` | http(s) URL (or empty) | `FLEET_PII_RAMPART_URL` | Rampart detection service endpoint |
 | `tool_disclosure_threshold` | int 1–100000 | `FLEET_TOOL_DISCLOSURE_THRESHOLD` | Roster size that triggers BM25 tool disclosure ([TOOL-DISCLOSURE.md](TOOL-DISCLOSURE.md)) |
 | `max_tool_output_bytes` | int 1024–16 MiB, or 0 = no ceiling | `FLEET_MAX_TOOL_OUTPUT_BYTES` | Per-tool-call output cap before the transcript (#199) |
 | `phone_a_friend_enabled` | bool | `FLEET_PHONE_A_FRIEND_ENABLED` | One-time super-LLM review of scheduled runs ([AGENT-RUNTIME.md](AGENT-RUNTIME.md)) |

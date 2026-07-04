@@ -78,6 +78,10 @@ type Server struct {
 	// nil in tests/mock mode: the /admin/notify-settings endpoints answer 501.
 	notifySettings notifySettingsService
 
+	// piiProbe backs the Features panel's PII "Test detection" button
+	// (WithPIIRedactionProbe). nil in tests/mock mode: the endpoint answers 501.
+	piiProbe func(ctx context.Context) PIIProbeResult
+
 	// isMember reports whether an email may use chat — the scoped-tier
 	// gate consulted by membershipMiddleware. nil in production, where it
 	// falls back to store.IsUser. Tests whose subject isn't membership
@@ -712,6 +716,8 @@ func (s *Server) Routes() http.Handler {
 	// delivery attempt host-side.
 	mux.Handle("/admin/notify-settings", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminNotifySettings)))))
 	mux.Handle("/admin/notify-settings/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminNotifySettingsTest)))))
+	// PII redaction probe: run the live redactor over a synthetic sample.
+	mux.Handle("/admin/pii-redaction/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminPIIProbe)))))
 	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits
 	// just inside recoverMiddleware and before bodyLimitMiddleware, so a blocked
 	// client IP is dropped before any body parsing, route dispatch, or auth

@@ -10,7 +10,7 @@ import { FeatureSettingsPanel } from "./FeatureSettingsPanel";
 
 type Resolved = {
   key: string;
-  kind: "bool" | "int" | "enum";
+  kind: "bool" | "int" | "enum" | "url";
   enum?: string[];
   min?: number;
   max?: number;
@@ -220,6 +220,81 @@ describe("FeatureSettingsPanel", () => {
     fireEvent.click(screen.getByTestId("reset-tool_disclosure_threshold"));
     await waitFor(() => expect(screen.queryByText("Ignored override")).toBeNull());
     expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(true);
+  });
+
+  it("saves a url setting via its Save button and runs the detection probe", async () => {
+    const RAMPART_URL: Resolved = {
+      key: "pii_rampart_url",
+      kind: "url",
+      env_var: "FLEET_PII_RAMPART_URL",
+      value: "",
+      source: "default",
+      default: "",
+    };
+    const fetchMock = mockFetch([PII, RAMPART_URL], (url, init) => {
+      if (init.method === "PUT" && url.includes("pii_rampart_url")) {
+        return {
+          status: 200,
+          body: { ...RAMPART_URL, value: "http://127.0.0.1:8787/v1/redact", source: "admin" },
+        };
+      }
+      if (init.method === "POST" && url.includes("pii-redaction/test")) {
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            engine: "rampart",
+            mode: "redact",
+            detail: "name×1, ssn×1",
+            redacted: "Contact [GIVEN_NAME_1] ...",
+            latency_ms: 12,
+          },
+        };
+      }
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeatureSettingsPanel />);
+
+    const input = await screen.findByTestId("input-pii_rampart_url");
+    fireEvent.change(input, { target: { value: "http://127.0.0.1:8787/v1/redact" } });
+    fireEvent.click(screen.getByTestId("save-pii_rampart_url"));
+    await waitFor(() => expect(screen.getByText("Customized")).toBeInTheDocument());
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
+    expect(JSON.parse(String(put?.[1]?.body))).toEqual({
+      value: "http://127.0.0.1:8787/v1/redact",
+    });
+
+    // Probe: reports engine + findings + redacted preview.
+    fireEvent.click(screen.getByTestId("pii-probe-run"));
+    const result = await screen.findByTestId("pii-probe-result");
+    expect(result).toHaveTextContent(/rampart engine \(redact\)/);
+    expect(result).toHaveTextContent(/name×1, ssn×1/);
+    expect(result).toHaveTextContent(/\[GIVEN_NAME_1\]/);
+  });
+
+  it("surfaces a probe failure (dead rampart service) honestly", async () => {
+    const fetchMock = mockFetch([PII], (url, init) => {
+      if (init.method === "POST" && url.includes("pii-redaction/test")) {
+        return {
+          status: 200,
+          body: {
+            ok: false,
+            engine: "rampart",
+            mode: "redact",
+            detail: "rampart service unreachable: connection refused (tool calls fall back to the pattern engine)",
+            latency_ms: 3,
+          },
+        };
+      }
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeatureSettingsPanel />);
+    fireEvent.click(await screen.findByTestId("pii-probe-run"));
+    const result = await screen.findByTestId("pii-probe-result");
+    expect(result).toHaveTextContent(/unreachable/);
+    expect(result).toHaveTextContent(/fall back to the pattern engine/);
   });
 
   it("reports the admin-allowlist 403 instead of an empty panel", async () => {

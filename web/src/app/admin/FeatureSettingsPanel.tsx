@@ -20,7 +20,7 @@ import { StatusChip } from "@/app/shared/ui/StatusChip";
 
 type ResolvedSetting = {
   key: string;
-  kind: "bool" | "int" | "enum";
+  kind: "bool" | "int" | "enum" | "url";
   enum?: string[];
   min?: number;
   max?: number;
@@ -34,6 +34,9 @@ type ResolvedSetting = {
   // An override row exists but no longer validates (bounds tightened in a
   // later release): the default serves, and the row can only be cleared.
   stale?: boolean;
+  // The stored value failed to apply at boot (e.g. a rampart engine whose
+  // service URL vanished from the env) — env-derived behavior serves.
+  apply_error?: string;
 };
 
 type SettingMeta = {
@@ -56,6 +59,20 @@ const META: Record<string, SettingMeta> = {
       redact: "Replace each detected span with a [PII:kind] marker so the model sees the structure without the value.",
       block: "Withhold any tool result containing PII entirely — the strictest posture; the model sees only a blocked notice.",
     },
+  },
+  pii_redaction_engine: {
+    label: "PII detection engine",
+    description:
+      "How PII is detected. Pattern: built-in deterministic regexes (emails, SSNs, cards, IPs, phones) — no dependencies. Rampart: a small ML token-classification model (17 entity types incl. names, addresses, government IDs, bank numbers) running as a service you deploy next to fleet — see docs/PII-REDACTION.md. If the Rampart service is unreachable, tool calls fall back to the pattern engine.",
+    optionHelp: {
+      pattern: "Deterministic regex detection: five PII shapes, zero moving parts.",
+      rampart: "ML detection via your Rampart service (requires the service URL below). Redacts with stable numbered placeholders like [GIVEN_NAME_1].",
+    },
+  },
+  pii_rampart_url: {
+    label: "Rampart service URL",
+    description:
+      "Endpoint of your Rampart detection service (e.g. http://127.0.0.1:8787/v1/redact). Deploy it from scripts/rampart-service in the fleet repo. Leave empty when using the pattern engine.",
   },
   tool_disclosure_threshold: {
     label: "Tool disclosure threshold",
@@ -105,7 +122,10 @@ const META: Record<string, SettingMeta> = {
 };
 
 const GROUPS: { title: string; keys: string[] }[] = [
-  { title: "Privacy & data protection", keys: ["pii_redaction_mode"] },
+  {
+    title: "Privacy & data protection",
+    keys: ["pii_redaction_mode", "pii_redaction_engine", "pii_rampart_url"],
+  },
   {
     title: "Agent runtime",
     keys: [
@@ -268,6 +288,7 @@ export function FeatureSettingsPanel() {
                 />
               ))}
             </ul>
+            {group.title === "Privacy & data protection" ? <PIIProbe /> : null}
           </div>
         ))
       )}
@@ -337,6 +358,12 @@ function SettingRow({
               ignored — the server default is in effect. Reset to clear it.
             </p>
           ) : null}
+          {setting.apply_error ? (
+            <p className="mt-1 text-[0.75rem] text-[var(--color-warning-soft)]" data-testid={`apply-error-${setting.key}`}>
+              This value is saved but NOT in effect — it failed to apply at startup:{" "}
+              {setting.apply_error}. Fix it or Reset.
+            </p>
+          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -344,6 +371,14 @@ function SettingRow({
             <BoolControl setting={setting} busy={busy} onSave={onSave} />
           ) : setting.kind === "enum" ? (
             <EnumControl setting={setting} busy={busy} onSave={onSave} />
+          ) : setting.kind === "url" ? (
+            <UrlControl
+              setting={setting}
+              busy={busy}
+              draft={draft}
+              setDraft={setDraft}
+              onSave={onSave}
+            />
           ) : (
             <IntControl
               setting={setting}
@@ -456,6 +491,123 @@ function EnumControl({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// UrlControl — a text field for KindURL settings with an explicit Save once
+// dirty (mirrors IntControl; a URL shouldn't fire a write per keystroke).
+function UrlControl({
+  setting,
+  busy,
+  draft,
+  setDraft,
+  onSave,
+}: {
+  setting: ResolvedSetting;
+  busy: boolean;
+  draft: string | undefined;
+  setDraft: (v: string) => void;
+  onSave: (value: string) => void;
+}) {
+  const value = draft ?? setting.value;
+  const dirty = draft !== undefined && draft !== setting.value;
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="url"
+        value={value}
+        disabled={busy}
+        placeholder="http://127.0.0.1:8787/v1/redact"
+        aria-label={metaFor(setting.key).label}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && dirty) onSave(value);
+        }}
+        data-testid={`input-${setting.key}`}
+        className="w-72 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-1.5 font-mono text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
+      />
+      {dirty ? (
+        <button
+          type="button"
+          onClick={() => onSave(value)}
+          disabled={busy}
+          data-testid={`save-${setting.key}`}
+          className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] font-medium transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+        >
+          Save
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+// PIIProbe — the Privacy group's "Test detection" affordance: runs the LIVE
+// redactor (exactly what tool calls go through) over a synthetic sample and
+// shows the engine, detected kinds, latency, and the redacted preview so the
+// admin can see the marker style. A dead Rampart service reports as a failure
+// here (tool calls themselves fall back to the pattern engine).
+type PIIProbeResult = {
+  ok: boolean;
+  engine: string;
+  mode: string;
+  detail: string;
+  redacted?: string;
+  latency_ms: number;
+};
+
+function PIIProbe() {
+  const [state, setState] = useState<"idle" | "running" | PIIProbeResult>("idle");
+
+  const run = async () => {
+    setState("running");
+    try {
+      const response = await fetch("/api/admin/pii-redaction/test", { method: "POST" });
+      if (!response.ok) {
+        throw new Error((await response.text()).trim() || `Probe failed: ${response.status}`);
+      }
+      setState((await response.json()) as PIIProbeResult);
+    } catch (err) {
+      setState({
+        ok: false,
+        engine: "",
+        mode: "",
+        detail: err instanceof Error ? err.message : "Probe failed.",
+        latency_ms: 0,
+      });
+    }
+  };
+
+  return (
+    <div className="border-t border-[var(--color-border-subtle)] px-4 py-3" data-testid="pii-probe">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void run()}
+          disabled={state === "running"}
+          data-testid="pii-probe-run"
+          className="rounded-full border border-[var(--color-border-subtle)] px-3 py-1 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+        >
+          {state === "running" ? "Testing…" : "Test detection"}
+        </button>
+        <span className="text-[0.6875rem] text-[var(--color-text-muted)]">
+          runs the live redactor over a synthetic sample — save changes first
+        </span>
+      </div>
+      {state !== "idle" && state !== "running" ? (
+        <div className="mt-2 text-[0.75rem]" data-testid="pii-probe-result">
+          <p className={state.ok ? "text-[var(--color-success-soft)]" : "text-[var(--color-danger-soft)]"}>
+            {state.ok ? "✓" : "✕"} {state.engine ? `${state.engine} engine (${state.mode})` : ""}
+            {state.detail ? ` — ${state.detail}` : ""}
+            {state.latency_ms > 0 ? ` (${state.latency_ms} ms)` : ""}
+          </p>
+          {state.redacted ? (
+            <code className="mt-1 block overflow-x-auto rounded bg-[var(--color-overlay-soft)] px-2 py-1 font-mono text-[0.6875rem] text-[var(--color-text-secondary)]">
+              {state.redacted}
+            </code>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
