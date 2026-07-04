@@ -594,6 +594,11 @@ func validateTaskLimits(tc *models.TaskCreate) error {
 	if tc.MaxRetries != nil && (*tc.MaxRetries < 0 || *tc.MaxRetries > 10) {
 		return fmt.Errorf("max_retries must be between 0 and 10")
 	}
+	// Per-task thinking override (#220): nil = inherit; 0 = off; >0 = budget
+	// (clamped to the provider bounds at run time). A negative value is nonsense.
+	if tc.ThinkingBudgetTokens != nil && *tc.ThinkingBudgetTokens < 0 {
+		return fmt.Errorf("thinking_budget_tokens must be >= 0 (0 = off, omit to inherit the default)")
+	}
 	// Priority is bounded to [0,100] (#230); lower = more urgent. 0 is the unset
 	// sentinel that NewTask maps to Normal (50), so it is accepted here.
 	if tc.Priority < models.PriorityMin || tc.Priority > models.PriorityMax {
@@ -1589,6 +1594,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		AllowNetwork:           tc.AllowNetwork,
 		CarryContext:           tc.CarryContext,
 		AllowDelegation:        tc.AllowDelegation,
+		ThinkingBudgetTokens:   tc.ThinkingBudgetTokens,
 		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,
 		Recurrence:             tc.Recurrence,
@@ -1722,16 +1728,19 @@ func (h *Handlers) UpdateTaskTags(w http.ResponseWriter, r *http.Request) {
 // taskRerunOverrides is the optional subset of fields a re-run / clone may change
 // vs the source task (#270). Pointer fields → nil means "inherit from source".
 type taskRerunOverrides struct {
-	Prompt          *string  `json:"prompt,omitempty"`
-	Model           *string  `json:"model,omitempty"`
-	FallbackModel   *string  `json:"fallback_model,omitempty"`
-	MaxIterations   *int     `json:"max_iterations,omitempty"`
-	Priority        *int     `json:"priority,omitempty"`
-	AllowNetwork    *bool    `json:"allow_network,omitempty"`
-	AllowDelegation *bool    `json:"allow_delegation,omitempty"`
-	Description     *string  `json:"description,omitempty"`
-	Tags            []string `json:"tags,omitempty"`
-	Persona         *string  `json:"persona,omitempty"`
+	Prompt          *string `json:"prompt,omitempty"`
+	Model           *string `json:"model,omitempty"`
+	FallbackModel   *string `json:"fallback_model,omitempty"`
+	MaxIterations   *int    `json:"max_iterations,omitempty"`
+	Priority        *int    `json:"priority,omitempty"`
+	AllowNetwork    *bool   `json:"allow_network,omitempty"`
+	AllowDelegation *bool   `json:"allow_delegation,omitempty"`
+	// ThinkingBudgetTokens per-task thinking override (#220). Present sets it;
+	// a negative value clears back to inherit-global; absent leaves it.
+	ThinkingBudgetTokens *int     `json:"thinking_budget_tokens,omitempty"`
+	Description          *string  `json:"description,omitempty"`
+	Tags                 []string `json:"tags,omitempty"`
+	Persona              *string  `json:"persona,omitempty"`
 }
 
 // taskRerunRequest is the (optional) body of POST /tasks/{id}/rerun|clone.
@@ -1876,6 +1885,14 @@ func applyRerunOverrides(tc *models.TaskCreate, o taskRerunOverrides) {
 	}
 	if o.AllowDelegation != nil {
 		tc.AllowDelegation = *o.AllowDelegation
+	}
+	if o.ThinkingBudgetTokens != nil {
+		if *o.ThinkingBudgetTokens < 0 {
+			tc.ThinkingBudgetTokens = nil // clear → inherit the global default
+		} else {
+			v := *o.ThinkingBudgetTokens
+			tc.ThinkingBudgetTokens = &v
+		}
 	}
 	if o.Description != nil {
 		tc.Description = *o.Description
