@@ -33,6 +33,8 @@ over the env vars below until it is reset. See
 | --- | --- | --- |
 | `FLEET_PII_REDACTION_ENABLED` | `false` | Master switch. Off = byte-for-byte unchanged. |
 | `FLEET_PII_REDACTION_MODE` | `redact` (when enabled) | `observe` \| `redact` \| `block` |
+| `FLEET_PII_REDACTION_ENGINE` | `pattern` | `pattern` \| `rampart` (needs the URL below) |
+| `FLEET_PII_RAMPART_URL` | — | Rampart detection service endpoint |
 
 Modes:
 - **observe** — detect and audit-log findings (kind + count, never the raw
@@ -45,18 +47,77 @@ Modes:
 An enabled-but-unset or invalid mode defaults to `redact` — a misconfiguration
 keeps the control ON rather than silently disabling it.
 
-## What it detects (built-in deterministic redactor)
+## Detection engines
+
+Two engines implement the same `piiredact.Redactor` contract; pick one from
+the admin panel (`pii_redaction_engine`) or `FLEET_PII_REDACTION_ENGINE`:
+
+### `pattern` (default) — built-in deterministic redactor
 
 Email, US SSN (hyphenated), credit-card numbers (Luhn-validated to reject
 arbitrary digit runs), IPv4 (octet-range validated), and conservative NANP phone
-numbers (a separator is required, so a bare digit id isn't swept up).
+numbers (a separator is required, so a bare digit id isn't swept up). Zero
+dependencies, no model server. Matches are replaced with flat `[PII:<kind>]`
+markers.
 
-**This is a redaction aid, not a certified DLP engine.** It will miss unusual PII
-shapes and can false-positive; phone detection is deliberately conservative to
-limit noise. For stronger detection, the `piiredact.Redactor` interface accepts a
-pluggable implementation — e.g. an external ONNX classifier such as
-[Rampart](https://huggingface.co/nationaldesignstudio/rampart) behind an HTTP
-service — as a follow-on with no change to the wiring.
+### `rampart` — ML detection via an external service
+
+[Rampart](https://huggingface.co/nationaldesignstudio/rampart) is a 14.7 MB
+MiniLM token-classification ONNX model covering **17 PII entity types** —
+given names/surnames, phone, email, URL, IP, SSN, credit card, government ID,
+passport, driver's license, tax ID, bank account, routing number, and street
+address components — far beyond the pattern engine's five shapes. It runs
+**out of process** behind a small HTTP service you deploy next to fleet;
+[`scripts/rampart-service`](../scripts/rampart-service/README.md) is the
+reference implementation over the official npm runtime (~25 ms per call on
+CPU). Three ways to host it, easiest first:
+
+1. **One click in the admin panel.** Settings → Admin → Feature settings →
+   **Install Rampart service**. fleet builds the service container (the
+   ONNX model is baked into the image, so the service needs no runtime
+   network), runs it on loopback, health-checks it, fills in the service URL,
+   and re-starts it after a box reboot. Nothing to install first — fleet
+   already runs rootless podman for its sandbox, and the service build context
+   is embedded in the fleet binary (so it ships and updates with fleet; no
+   bootstrap/update changes needed). Then switch the engine to Rampart and
+   click **Test detection**.
+2. **`scripts/rampart-service/install.sh`** — the same container under a
+   systemd unit you own, for operators who prefer that.
+3. **Manual** (`npm start`, or the Containerfile) — see the service README.
+
+Either way, configure the endpoint via `pii_rampart_url` /
+`FLEET_PII_RAMPART_URL` (e.g. `http://127.0.0.1:8787/v1/redact`) — option 1
+fills it in for you.
+
+The service contract is deliberately text-in/text-out (no offset math across
+the process boundary):
+
+```
+POST <url>  {"text": "..."}
+200         {"text": "<redacted>", "findings": [{"kind": "given_name", "count": 1}, ...]}
+```
+
+Rampart redacts with **stable numbered placeholders** (`[GIVEN_NAME_1]`,
+`[SSN_1]`) so the model can still refer to entities distinctly. Two posture
+guarantees:
+
+- **Strict superset of the pattern floor.** The deterministic engine sweeps
+  Rampart's output as a second pass, so a structured shape the model misses
+  (a formatted phone number, in live testing) is still caught.
+- **Never fail-open.** If the service is unreachable or answers garbage, the
+  call falls back to the pattern engine (rate-limited log; the "Test
+  detection" button surfaces the outage). A restart with
+  `FLEET_PII_REDACTION_ENGINE=rampart` but no URL degrades to `pattern`,
+  never to off.
+
+The service sees raw tool output — bind it to loopback or a private network,
+same trust domain as fleet itself.
+
+**Either engine is a redaction aid, not a certified DLP engine.** Detection
+can miss unusual shapes and can false-positive. Use the admin panel's **Test
+detection** button (`POST /admin/pii-redaction/test`) to run the live redactor
+over a synthetic sample and see the engine, detected kinds, marker style, and
+latency.
 
 ## Honest scope / deferred
 
@@ -67,6 +128,5 @@ not silently missing):
   generated text (ingestion-side redaction with careful history-persistence
   handling).
 - Tool **arguments**, notifications (#292), eval goldens (#502), browser OCR.
-- The external ONNX/Rampart classifier implementation (interface-ready).
 - Per-conversation / per-task mode overrides (the admin setting is
   workspace-global).

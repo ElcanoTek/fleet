@@ -15,6 +15,28 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Rampart ML engine for PII redaction
+  ([docs/PII-REDACTION.md](docs/PII-REDACTION.md)): the #450 "interface-ready
+  follow-on" is now shipped — `pii_redaction_engine` picks `pattern` (the
+  built-in regexes) or `rampart`, the 17-entity-type MiniLM ONNX classifier
+  (names, addresses, government IDs, bank numbers, …) running behind an
+  operator-deployed HTTP service (`pii_rampart_url`;
+  [`scripts/rampart-service`](scripts/rampart-service/README.md) is the
+  reference implementation over the official npm runtime, ~25 ms/call on
+  CPU). Rampart redacts with stable numbered placeholders
+  (`[GIVEN_NAME_1]`), the deterministic engine sweeps its output as a second
+  pass (strict superset of the pattern floor — a missed formatted phone
+  number is still caught), and a service outage falls back to the pattern
+  engine, never fail-open. The Features panel gains the engine picker, the
+  service URL field, a **Test detection** button
+  (`POST /admin/pii-redaction/test`) that runs the live redactor over a
+  synthetic sample, and a **one-click Install Rampart service** button
+  (`/admin/pii-redaction/install`) — fleet builds the service container (model
+  baked in, reference service embedded in the binary), runs it on loopback via
+  the rootless podman it already uses for the sandbox, health-checks it, fills
+  in the service URL, and re-starts it after a reboot. No bootstrap/update
+  changes are needed to use it; operators who prefer their own systemd unit
+  can instead run `scripts/rampart-service/install.sh`.
 - Admin-managed task notifications
   ([docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md)): Settings → Admin gains a
   "Notifications" panel — configure the email (SMTP) and signed-webhook

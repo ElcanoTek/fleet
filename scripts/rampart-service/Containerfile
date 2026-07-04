@@ -1,0 +1,18 @@
+# fleet Rampart PII detection service (see README.md).
+# Build:  podman build -t fleet-rampart-service .
+# Run:    podman run -d -p 127.0.0.1:8787:8787 -e RAMPART_ADDR=0.0.0.0:8787 fleet-rampart-service
+FROM docker.io/library/node:22-slim
+
+WORKDIR /app
+COPY package.json ./
+RUN npm install --omit=dev
+
+COPY server.mjs ./
+
+# Pre-fetch the model at build time so the container starts serving without
+# network access to Hugging Face at runtime.
+RUN node -e "import('@nationaldesignstudio/rampart').then(m => m.loadNerClassifier({device:'cpu'})).then(() => console.log('model cached'))"
+
+ENV RAMPART_ADDR=0.0.0.0:8787
+EXPOSE 8787
+CMD ["node", "server.mjs"]
