@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +46,10 @@ const (
 	KindBool Kind = "bool"
 	KindInt  Kind = "int"
 	KindEnum Kind = "enum"
+	// KindURL is a free-text http(s) URL, empty allowed ("not configured").
+	// Used for operator-deployed service endpoints (never credentials — the
+	// registry stays secret-free by construction).
+	KindURL Kind = "url"
 )
 
 // Spec declares one admin-configurable setting: its stable key (DB + API), its
@@ -70,10 +75,21 @@ type Spec struct {
 // boot-bound setting here would make the admin page dishonest.
 func Registry() []Spec {
 	return []Spec{
-		// Privacy & data protection.
+		// Privacy & data protection. The three PII keys feed ONE redactor: the
+		// cmd/fleet apply hooks rebuild it from the current trio on any change.
 		{Key: "pii_redaction_mode", Kind: KindEnum,
 			Enum:   []string{"off", "observe", "redact", "block"},
 			EnvVar: "FLEET_PII_REDACTION_ENABLED / FLEET_PII_REDACTION_MODE"},
+		// ORDER MATTERS: the URL must apply BEFORE the engine. Boot ApplyAll
+		// runs hooks in this order, and the engine hook validates that a
+		// rampart selection has a URL — url-after-engine would reject a
+		// perfectly good persisted config at every boot (caught live).
+		// TestPIIRegistryOrderBootSafe guards this.
+		{Key: "pii_rampart_url", Kind: KindURL,
+			EnvVar: "FLEET_PII_RAMPART_URL"},
+		{Key: "pii_redaction_engine", Kind: KindEnum,
+			Enum:   []string{"pattern", "rampart"},
+			EnvVar: "FLEET_PII_REDACTION_ENGINE"},
 
 		// Agent runtime.
 		{Key: "tool_disclosure_threshold", Kind: KindInt, Min: 1, Max: 100000,
@@ -120,6 +136,15 @@ func Validate(spec Spec, value string) (string, error) {
 			}
 		}
 		return "", fmt.Errorf("%s: want one of %s, got %q", spec.Key, strings.Join(spec.Enum, "|"), value)
+	case KindURL:
+		if v == "" {
+			return "", nil
+		}
+		u, err := url.Parse(v)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return "", fmt.Errorf("%s: want an http(s) URL (or empty), got %q", spec.Key, value)
+		}
+		return v, nil
 	case KindInt:
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -161,6 +186,11 @@ type Resolved struct {
 	// Without this the ignored row would be invisible and undeletable from the
 	// panel, and could silently spring back to life if the bounds loosen again.
 	Stale bool `json:"stale,omitempty"`
+	// ApplyError, when non-empty, says this setting's last apply FAILED (e.g. a
+	// persisted rampart engine whose service URL disappeared from the env
+	// across a restart) — the stored value is NOT in effect. Surfaced so the
+	// panel is honest per-row and the admin can fix or Reset from the UI.
+	ApplyError string `json:"apply_error,omitempty"`
 }
 
 // SourceAdmin / SourceDefault are the Resolved.Source values.
@@ -191,6 +221,12 @@ type ApplyFunc func(value string, override bool) error
 var (
 	ErrUnknownKey   = errors.New("unknown setting key")
 	ErrInvalidValue = errors.New("invalid setting value")
+	// ErrLoadFailed wraps an ApplyAll that could not even READ the override
+	// rows — the one case where the panel cannot render truthfully and should
+	// degrade to 501. Per-key APPLY failures are not this: the panel stays up
+	// and the affected row carries its error (Resolved.ApplyError), so the
+	// admin can fix or Reset it from the UI instead of being stranded.
+	ErrLoadFailed = errors.New("workspace settings load failed")
 )
 
 // Service resolves, persists, and applies admin overrides. Set/Reset/ApplyAll
@@ -203,6 +239,9 @@ type Service struct {
 	defaults map[string]string // env-derived boot defaults, snapshotted before any override applies
 	hooks    map[string]ApplyFunc
 	mu       sync.Mutex
+	// applyErrs remembers, per key, the last boot-apply failure so Snapshot can
+	// surface it (Resolved.ApplyError). Cleared by a successful Set/Reset.
+	applyErrs map[string]string
 }
 
 // NewService builds a Service. defaults maps every registry key to its
@@ -217,10 +256,11 @@ type Service struct {
 // sources, so a kept-verbatim default is always parseable by its hook.
 func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc) (*Service, error) {
 	s := &Service{
-		st:       st,
-		specs:    map[string]Spec{},
-		defaults: map[string]string{},
-		hooks:    hooks,
+		st:        st,
+		specs:     map[string]Spec{},
+		defaults:  map[string]string{},
+		hooks:     hooks,
+		applyErrs: map[string]string{},
 	}
 	for _, spec := range Registry() {
 		s.specs[spec.Key] = spec
@@ -253,6 +293,8 @@ func (s *Service) Snapshot(ctx context.Context) ([]Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	out := make([]Resolved, 0, len(s.order))
 	for _, key := range s.order {
 		out = append(out, s.resolve(key, overrides))
@@ -281,6 +323,7 @@ func (s *Service) resolve(key string, overrides map[string]store.WorkspaceSettin
 		r.UpdatedAt = row.UpdatedAt
 		r.UpdatedBy = row.UpdatedBy
 	}
+	r.ApplyError = s.applyErrs[key]
 	return r
 }
 
@@ -312,16 +355,46 @@ func (s *Service) Set(ctx context.Context, key, value, updatedBy string) (Resolv
 		}
 		return Resolved{}, err
 	}
+	delete(s.applyErrs, key)
 	// Audit line: key and value are registry-validated constants (never raw
 	// input); updatedBy is the authenticated admin identity.
 	log.Printf("workspace settings: %s = %s (set by %s)", key, v, updatedBy)
+	s.retryFailedLocked(ctx)
 	return Resolved{
 		Spec: spec, Value: v, Source: SourceAdmin, Default: s.defaults[key],
 		UpdatedAt: row.UpdatedAt, UpdatedBy: row.UpdatedBy,
 	}, nil
 }
 
-// Reset deletes one override and re-applies the env-derived default.
+// retryFailedLocked re-applies any key whose last apply failed (ApplyError),
+// after some other setting changed — settings can depend on each other (the
+// rampart engine needs the rampart URL), so fixing the dependency should heal
+// the dependent without a reboot or a redundant re-save. Best-effort: a key
+// that still fails keeps its error. Callers hold s.mu.
+func (s *Service) retryFailedLocked(ctx context.Context) {
+	if len(s.applyErrs) == 0 {
+		return
+	}
+	overrides, err := s.st.WorkspaceSettings(ctx)
+	if err != nil {
+		return // keep existing errors; next change or boot retries
+	}
+	for _, key := range s.order {
+		if _, failed := s.applyErrs[key]; !failed {
+			continue
+		}
+		r := s.resolve(key, overrides)
+		if err := s.apply(key, r.Value, r.Source == SourceAdmin); err == nil {
+			delete(s.applyErrs, key)
+			log.Printf("workspace settings: %s recovered and is now in effect", key)
+		}
+	}
+}
+
+// Reset deletes one override and re-applies the env-derived default. If the
+// default cannot apply (e.g. resetting a rampart URL that the engine setting
+// still needs), the deleted row is re-inserted (compensation) so the DB never
+// disagrees with the running system across a restart.
 func (s *Service) Reset(ctx context.Context, key, updatedBy string) (Resolved, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -329,13 +402,26 @@ func (s *Service) Reset(ctx context.Context, key, updatedBy string) (Resolved, e
 	if !ok {
 		return Resolved{}, ErrUnknownKey
 	}
+	// Snapshot the row for compensation before deleting it.
+	overrides, err := s.st.WorkspaceSettings(ctx)
+	if err != nil {
+		return Resolved{}, fmt.Errorf("reset %s: %w", key, err)
+	}
+	prev, hadRow := overrides[key]
 	if err := s.st.DeleteWorkspaceSetting(ctx, key); err != nil {
 		return Resolved{}, fmt.Errorf("reset %s: %w", key, err)
 	}
 	if err := s.apply(key, s.defaults[key], false); err != nil {
+		if hadRow {
+			if _, restoreErr := s.st.SetWorkspaceSetting(ctx, key, prev.Value, prev.UpdatedBy); restoreErr != nil {
+				return Resolved{}, fmt.Errorf("%w (and restoring the previous value failed: %w)", err, restoreErr)
+			}
+		}
 		return Resolved{}, err
 	}
+	delete(s.applyErrs, key)
 	log.Printf("workspace settings: %s reset to default %s (by %s)", key, s.defaults[key], updatedBy)
+	s.retryFailedLocked(ctx)
 	return Resolved{Spec: spec, Value: s.defaults[key], Source: SourceDefault, Default: s.defaults[key]}, nil
 }
 
@@ -349,13 +435,16 @@ func (s *Service) ApplyAll(ctx context.Context) error {
 	defer s.mu.Unlock()
 	overrides, err := s.st.WorkspaceSettings(ctx)
 	if err != nil {
-		return fmt.Errorf("load workspace settings: %w", err)
+		return fmt.Errorf("%w: %w", ErrLoadFailed, err)
 	}
 	var errs []string
 	for _, key := range s.order {
 		r := s.resolve(key, overrides)
 		if err := s.apply(key, r.Value, r.Source == SourceAdmin); err != nil {
+			s.applyErrs[key] = err.Error()
 			errs = append(errs, fmt.Sprintf("%s: %v", key, err))
+		} else {
+			delete(s.applyErrs, key)
 		}
 	}
 	if len(errs) > 0 {

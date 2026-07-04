@@ -51,6 +51,8 @@ func (f *fakeStore) DeleteWorkspaceSetting(_ context.Context, key string) error 
 func testDefaults() map[string]string {
 	return map[string]string{
 		"pii_redaction_mode":                "off",
+		"pii_redaction_engine":              "pattern",
+		"pii_rampart_url":                   "",
 		"tool_disclosure_threshold":         "128",
 		"max_tool_output_bytes":             "65536",
 		"phone_a_friend_enabled":            "false",
@@ -150,6 +152,12 @@ func TestValidate(t *testing.T) {
 		{"tool_disclosure_threshold", "100001", "", true},
 		{"tool_disclosure_threshold", "abc", "", true},
 		{"max_tool_output_bytes", "0", "0", false}, // MinZeroOK: 0 = no ceiling
+		{"pii_redaction_engine", "Rampart", "rampart", false},
+		{"pii_redaction_engine", "onnx", "", true},
+		{"pii_rampart_url", "", "", false}, // empty = not configured
+		{"pii_rampart_url", "http://127.0.0.1:8787/v1/redact", "http://127.0.0.1:8787/v1/redact", false},
+		{"pii_rampart_url", "ftp://x", "", true},
+		{"pii_rampart_url", "not a url", "", true},
 		{"max_tool_output_bytes", "512", "", true}, // below Min and not 0
 		{"max_tool_output_bytes", "65536", "65536", false},
 	}
@@ -336,7 +344,7 @@ func TestRegistryShape(t *testing.T) {
 			if s.Min <= 0 || s.Max <= s.Min {
 				t.Errorf("%s: int bounds unset or inverted", s.Key)
 			}
-		case KindBool:
+		case KindBool, KindURL:
 		default:
 			t.Errorf("%s: unknown kind %q", s.Key, s.Kind)
 		}
@@ -360,5 +368,143 @@ func TestSetCompensatesOnApplyFailure(t *testing.T) {
 	}
 	if _, ok := st.rows["subagents_enabled"]; ok {
 		t.Error("a failed apply must roll back the persisted row")
+	}
+}
+
+// TestResetCompensatesOnApplyFailure: resetting a key whose DEFAULT cannot
+// apply (e.g. clearing a rampart URL the engine still needs) restores the
+// deleted row, so DB and live state never diverge across a restart.
+func TestResetCompensatesOnApplyFailure(t *testing.T) {
+	st := newFakeStore()
+	applied := map[string]string{}
+	hooks := testHooks(applied)
+	hooks["pii_rampart_url"] = func(v string, _ bool) error {
+		if v == "" {
+			return fmt.Errorf("engine still needs a URL")
+		}
+		return nil
+	}
+	svc, err := NewService(st, testDefaults(), hooks)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := svc.Set(ctx, "pii_rampart_url", "http://127.0.0.1:8787/v1/redact", "admin@x"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if _, err := svc.Reset(ctx, "pii_rampart_url", "admin@x"); err == nil {
+		t.Fatal("reset should fail when the default cannot apply")
+	}
+	row, ok := st.rows["pii_rampart_url"]
+	if !ok || row.Value != "http://127.0.0.1:8787/v1/redact" {
+		t.Fatalf("failed reset must restore the previous row, got %+v (present=%v)", row, ok)
+	}
+}
+
+// TestApplyAllRecordsPerKeyErrorsAndSnapshotSurfacesThem: a boot-apply
+// failure marks the key (Resolved.ApplyError) instead of hiding it, and a
+// later successful ApplyAll clears the mark.
+func TestApplyAllRecordsPerKeyErrorsAndSnapshotSurfacesThem(t *testing.T) {
+	st := newFakeStore()
+	st.rows["subagents_enabled"] = store.WorkspaceSetting{Key: "subagents_enabled", Value: "true"}
+	applied := map[string]string{}
+	hooks := testHooks(applied)
+	broken := true
+	hooks["subagents_enabled"] = func(string, bool) error {
+		if broken {
+			return fmt.Errorf("boom")
+		}
+		return nil
+	}
+	svc, err := NewService(st, testDefaults(), hooks)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	ctx := context.Background()
+	if err := svc.ApplyAll(ctx); err == nil || errors.Is(err, ErrLoadFailed) {
+		t.Fatalf("per-key failure should be a plain error, not ErrLoadFailed: %v", err)
+	}
+	snap, err := svc.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	found := false
+	for _, r := range snap {
+		if r.Key == "subagents_enabled" {
+			found = true
+			if r.ApplyError == "" {
+				t.Error("failed key must surface ApplyError")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing key")
+	}
+
+	broken = false
+	if err := svc.ApplyAll(ctx); err != nil {
+		t.Fatalf("second ApplyAll: %v", err)
+	}
+	snap, _ = svc.Snapshot(ctx)
+	for _, r := range snap {
+		if r.Key == "subagents_enabled" && r.ApplyError != "" {
+			t.Error("recovered key must clear ApplyError")
+		}
+	}
+}
+
+// TestApplyAllLoadFailureIsTyped: a store read failure wraps ErrLoadFailed so
+// the boot wiring can distinguish "cannot render truthfully" (501) from
+// per-key degradation (panel stays up).
+func TestApplyAllLoadFailureIsTyped(t *testing.T) {
+	st := newFakeStore()
+	st.failGet = fmt.Errorf("db down")
+	applied := map[string]string{}
+	svc := newTestService(t, st, applied)
+	if err := svc.ApplyAll(context.Background()); !errors.Is(err, ErrLoadFailed) {
+		t.Fatalf("want ErrLoadFailed, got %v", err)
+	}
+}
+
+// TestDependentKeyHealsAfterFix: a key that failed to apply at boot (rampart
+// engine with no URL) recovers automatically when the setting it depends on
+// is fixed — no reboot, no redundant re-save of the failed key.
+func TestDependentKeyHealsAfterFix(t *testing.T) {
+	st := newFakeStore()
+	st.rows["pii_redaction_engine"] = store.WorkspaceSetting{Key: "pii_redaction_engine", Value: "rampart"}
+	applied := map[string]string{}
+	hooks := testHooks(applied)
+	var url string
+	hooks["pii_rampart_url"] = func(v string, _ bool) error { url = v; return nil }
+	hooks["pii_redaction_engine"] = func(v string, _ bool) error {
+		if v == "rampart" && url == "" {
+			return fmt.Errorf("needs a URL")
+		}
+		applied["pii_redaction_engine"] = v
+		return nil
+	}
+	svc, err := NewService(st, testDefaults(), hooks)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	ctx := context.Background()
+
+	// Boot: the engine row fails (no URL yet) and is marked.
+	if err := svc.ApplyAll(ctx); err == nil {
+		t.Fatal("boot apply should report the failing engine")
+	}
+
+	// The admin fixes the dependency — the engine heals without being touched.
+	if _, err := svc.Set(ctx, "pii_rampart_url", "http://127.0.0.1:8787/v1/redact", "admin@x"); err != nil {
+		t.Fatalf("Set url: %v", err)
+	}
+	if applied["pii_redaction_engine"] != "rampart" {
+		t.Fatal("fixing the URL should re-apply the failed engine setting")
+	}
+	snap, _ := svc.Snapshot(ctx)
+	for _, r := range snap {
+		if r.Key == "pii_redaction_engine" && r.ApplyError != "" {
+			t.Errorf("healed key must clear ApplyError: %+v", r)
+		}
 	}
 }

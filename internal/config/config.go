@@ -301,6 +301,8 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_DEFAULT_NETWORK_MODE":              true,
 	"FLEET_PII_REDACTION_ENABLED":             true,
 	"FLEET_PII_REDACTION_MODE":                true,
+	"FLEET_PII_REDACTION_ENGINE":              true,
+	"FLEET_PII_RAMPART_URL":                   true,
 	"FLEET_CONTEXT_HANDLES_ENABLED":           true,
 	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED": true,
 	"FLEET_BROWSER_ENABLED":                   true,
@@ -860,6 +862,16 @@ type Config struct {
 	// when enabled), or "block" (withhold the tool result from the model).
 	// FLEET_PII_REDACTION_MODE. Validated + defaulted in cmd/fleet.
 	PIIRedactionMode string
+	// PIIRedactionEngine picks the detector: "pattern" (the built-in
+	// deterministic regexes, the default) or "rampart" (the MiniLM ONNX
+	// token-classification model behind an operator-deployed HTTP service —
+	// see docs/PII-REDACTION.md). FLEET_PII_REDACTION_ENGINE. Validated +
+	// defaulted in cmd/fleet; rampart additionally needs PIIRampartURL.
+	PIIRedactionEngine string
+	// PIIRampartURL is the Rampart detection service endpoint
+	// (FLEET_PII_RAMPART_URL), e.g. http://127.0.0.1:8787/v1/redact. Empty =
+	// the rampart engine cannot activate.
+	PIIRampartURL string
 	// ContextHandlesEnabled gates inline composer context handles (#517): a chat
 	// message may contain `@url:<url>` (host-side SSRF-guarded fetch) and
 	// `@file:"path"` (read from the conversation workspace, path-gated) that the
@@ -1210,6 +1222,8 @@ func Load(envFile string) (*Config, error) {
 		// PII redaction (#450) — optional, default off.
 		PIIRedactionEnabled: getenvFleetBool("PII_REDACTION_ENABLED", false),
 		PIIRedactionMode:    strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_MODE"))),
+		PIIRedactionEngine:  strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_ENGINE"))),
+		PIIRampartURL:       strings.TrimSpace(getenvFleet("PII_RAMPART_URL")),
 
 		// Composer context handles (#517) — optional, default off.
 		ContextHandlesEnabled: getenvFleetBool("CONTEXT_HANDLES_ENABLED", false),
