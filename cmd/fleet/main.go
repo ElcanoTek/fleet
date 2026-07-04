@@ -443,6 +443,13 @@ func run() error {
 	// DB-backed propose_note path (notesProvider, wired into both drivers below).
 	taskMemoryStore := &taskMemoryAdapter{store: notesStore}
 
+	// The store secret cipher (FLEET_MCP_OAUTH_ENCRYPTION_KEY) protects ALL
+	// at-rest secrets — remote-MCP OAuth tokens, LLM provider keys, and now
+	// notification secrets — so it installs whenever the key is set, not only
+	// when the remote-MCP feature (which additionally needs a public base URL)
+	// is enabled.
+	installStoreCipher(cfg, chatStore)
+
 	// ── per-user remote (hosted) MCP servers + OAuth (#443) ──
 	// remoteMCPSvc is the concrete service (for the HTTP endpoints); remoteMCPResolver
 	// is the same value as the agent-side interface (for the chat + scheduled overlay).
@@ -537,6 +544,12 @@ func run() error {
 	// config live setters, agentcore holders) — both now, at boot, and after
 	// every admin edit.
 	chatOpts = appendWorkspaceSettingsOption(chatOpts, cfg, chatStore)
+
+	// Admin-managed task notification settings (internal/notifyadmin): the
+	// admin Notifications panel. A persisted admin row hot-swaps the shared
+	// notifier's config at boot and after every edit; no row = the env-derived
+	// config already in taskNotifier keeps serving.
+	chatOpts = appendNotifySettingsOption(chatOpts, chatStore, taskNotifier)
 
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 
@@ -1785,11 +1798,14 @@ func buildTaskNotifier(pushSvc *webpush.Service) *notify.Notifier {
 	return n
 }
 
+// emailReplierFor always wires the notifier as the reply-back seam (#511):
+// ReplyToEmailEvent no-ops internally when SMTP isn't configured, and the
+// check is LIVE — an admin enabling SMTP from the Notifications panel turns
+// reply-back on with no restart (a boot-time nil would freeze it off).
 func emailReplierFor(n *notify.Notifier) runner.EmailReplier {
-	if !n.ReplyEnabled() {
-		return nil
+	if n.ReplyEnabled() {
+		log.Printf("email trigger reply-back: enabled")
 	}
-	log.Printf("email trigger reply-back: enabled")
 	return n
 }
 
@@ -1855,6 +1871,25 @@ func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*
 			FailedToday:    ds.FailedTasksToday,
 		}, nil
 	}
+}
+
+// installStoreCipher installs the at-rest secret cipher on the chat store
+// whenever FLEET_MCP_OAUTH_ENCRYPTION_KEY is set. Historically this happened
+// only inside setupRemoteMCP (which also requires FLEET_PUBLIC_BASE_URL), but
+// the cipher now also protects LLM provider keys and notification secrets —
+// features that must not silently require the remote-MCP feature to be on.
+// setupRemoteMCP re-installing the same cipher afterwards is harmless.
+func installStoreCipher(cfg *config.Config, chatStore *store.Store) {
+	if len(cfg.MCPOAuthEncryptionKey) == 0 {
+		return
+	}
+	cipher, err := secretbox.NewCipher(cfg.MCPOAuthEncryptionKey)
+	if err != nil {
+		// Config already validates the key length; degrade rather than crash.
+		log.Printf("store secret cipher: not installed — invalid encryption key: %v", err)
+		return
+	}
+	chatStore.SetTokenCipher(cipher)
 }
 
 // setupRemoteMCP wires the per-user remote-MCP + OAuth feature (#443). It is

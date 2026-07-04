@@ -74,6 +74,10 @@ type Server struct {
 	// nil in tests/mock mode: the /admin/settings endpoints answer 501.
 	workspaceSettings workspaceSettingsService
 
+	// notifySettings backs the admin Notifications panel (WithNotifySettings).
+	// nil in tests/mock mode: the /admin/notify-settings endpoints answer 501.
+	notifySettings notifySettingsService
+
 	// isMember reports whether an email may use chat — the scoped-tier
 	// gate consulted by membershipMiddleware. nil in production, where it
 	// falls back to store.IsUser. Tests whose subject isn't membership
@@ -703,6 +707,11 @@ func (s *Server) Routes() http.Handler {
 	// only, never secrets.
 	mux.Handle("/admin/settings", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminSettings)))))
 	mux.Handle("/admin/settings/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminSettingItem)))))
+	// Admin-managed task notification settings (internal/notifyadmin): secrets
+	// are write-only + sealed at rest; the test endpoint sends one real
+	// delivery attempt host-side.
+	mux.Handle("/admin/notify-settings", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminNotifySettings)))))
+	mux.Handle("/admin/notify-settings/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminNotifySettingsTest)))))
 	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits
 	// just inside recoverMiddleware and before bodyLimitMiddleware, so a blocked
 	// client IP is dropped before any body parsing, route dispatch, or auth
