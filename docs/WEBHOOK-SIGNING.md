@@ -1,5 +1,10 @@
 # Webhook signing (verifying fleet's outbound webhooks)
 
+> The signing secret (and the rest of the outbound webhook config) can be
+> managed at runtime from Settings → Admin → Notifications — see
+> [NOTIFICATIONS.md](NOTIFICATIONS.md). `FLEET_WEBHOOK_SECRET` remains the
+> env-file default.
+
 fleet's host-side notifier (`internal/notify`, #208) can POST a JSON payload to a
 webhook URL when a scheduled task reaches a terminal status. When a signing
 secret is configured, fleet signs each delivery with **HMAC-SHA256** so the

@@ -1078,6 +1078,14 @@ func (p *Pool) maybeReplyToEmailEvent(task *models.Task, session *models.LogSess
 	if p.emailReplier == nil {
 		return
 	}
+	// The replier is wired unconditionally so the admin Notifications panel can
+	// enable SMTP at runtime (#511 + notifyadmin); consult its LIVE enablement
+	// here so a deployment without SMTP still does no per-run trigger-event
+	// lookups (the pre-notifyadmin behavior, previously enforced by boot-time
+	// nil wiring).
+	if g, ok := p.emailReplier.(interface{ ReplyEnabled() bool }); ok && !g.ReplyEnabled() {
+		return
+	}
 	body := strings.TrimSpace(finalAssistantText(session))
 	if body == "" {
 		return // nothing to send back

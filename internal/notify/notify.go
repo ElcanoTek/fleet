@@ -63,6 +63,7 @@ import (
 	"net/smtp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"text/template"
 	"time"
 )
@@ -161,11 +162,16 @@ func (c Config) shouldFire(s Status) bool {
 }
 
 // Notifier fans a terminal Event out to the configured channels. It is built
-// once at startup from Config and is safe for concurrent use (it holds only
-// immutable config + the stdlib http/smtp clients, which are concurrency-safe).
+// once at startup and shared by every consumer (runner pool, budget enforcer,
+// email reply-back), which all hold the SAME pointer — so the config lives
+// behind an atomic snapshot that SetConfig can hot-swap when an admin edits
+// the notification settings (docs/ADMIN-SETTINGS.md). Every send takes ONE
+// snapshot at entry, so a swap mid-send can never mix the old host with the
+// new secret.
 type Notifier struct {
-	cfg    Config
-	client *http.Client
+	// state holds the current config + the HTTP client built for its timeout,
+	// swapped atomically as one unit by SetConfig.
+	state atomic.Pointer[notifierState]
 	// push is the optional per-user browser Web Push backend (#292), wired by
 	// cmd/fleet via SetPush when VAPID keys are configured. nil = the channel
 	// doesn't exist. Held as an interface so this package stays free of store
@@ -175,6 +181,22 @@ type Notifier struct {
 	// assert no secret is ever written. Defaults to the stdlib logger.
 	logf func(format string, args ...any)
 }
+
+// notifierState is one immutable config snapshot plus the client derived from
+// it. Never mutated after construction — SetConfig swaps the whole pointer.
+type notifierState struct {
+	cfg    Config
+	client *http.Client
+}
+
+func newState(cfg Config) *notifierState {
+	cfg.applyDefaults()
+	return &notifierState{cfg: cfg, client: &http.Client{Timeout: cfg.Timeout}}
+}
+
+// snapshot returns the current immutable state. Callers use ONE snapshot for a
+// whole operation.
+func (n *Notifier) snapshot() *notifierState { return n.state.Load() }
 
 // PushSender is the optional per-user push backend a Notifier fans out to in
 // addition to email/webhook (#292): Web Push today, other per-user channels
@@ -191,23 +213,35 @@ type PushSender interface {
 // false) the returned Notifier's Notify is a no-op, so callers can always wire a
 // non-nil Notifier and let config decide whether anything fires.
 func New(cfg Config) *Notifier {
-	cfg.applyDefaults()
-	return &Notifier{
-		cfg:    cfg,
-		client: &http.Client{Timeout: cfg.Timeout},
-		logf:   stdLogf,
-	}
+	n := &Notifier{logf: stdLogf}
+	n.state.Store(newState(cfg))
+	return n
 }
+
+// SetConfig hot-swaps the notifier's configuration (admin-managed notification
+// settings). Every consumer holds the same *Notifier, so one swap serves the
+// runner pool, the budget enforcer, and email reply-back alike; in-flight sends
+// finish on the snapshot they started with. Safe for concurrent use.
+func (n *Notifier) SetConfig(cfg Config) {
+	if n == nil {
+		return
+	}
+	n.state.Store(newState(cfg))
+}
+
+// Config returns a copy of the current configuration (secrets included — for
+// host-side use only, never serialize it to HTTP or logs).
+func (n *Notifier) Config() Config { return n.snapshot().cfg }
 
 // Enabled reports whether any channel is configured. Default OFF: with neither
 // an SMTP host + recipients nor a webhook URL, nothing fires.
-func (n *Notifier) Enabled() bool { return n.cfg.Enabled() }
+func (n *Notifier) Enabled() bool { return n.snapshot().cfg.Enabled() }
 
 // ReplyEnabled reports whether email reply-back (#511) can send: an SMTP host and
 // a From address are configured (a reply targets the inbound sender, so it needs
-// no EmailTo list). The runner wires the EmailReplier only when this is true so a
-// deployment without SMTP does no per-run reply lookups.
-func (n *Notifier) ReplyEnabled() bool { return n != nil && n.cfg.replyEnabled() }
+// no EmailTo list). Consulted live per reply — an admin enabling SMTP at runtime
+// turns reply-back on with no restart.
+func (n *Notifier) ReplyEnabled() bool { return n != nil && n.snapshot().cfg.replyEnabled() }
 
 // SetPush wires the optional per-user push backend (#292). Call once at
 // startup, before the Notifier is shared across goroutines; passing nil (or
@@ -230,23 +264,29 @@ func (n *Notifier) SetPush(p PushSender) {
 // additionally bounded by cfg.Timeout. A nil/closed Notifier or a disabled
 // config returns nil immediately.
 func (n *Notifier) Notify(ctx context.Context, ev Event) error {
+	if n == nil {
+		return nil
+	}
+	// ONE snapshot for the whole fan-out: a concurrent SetConfig must not mix
+	// configs between the gate, the email send, and the webhook send.
+	st := n.snapshot()
 	// The push backend counts as a configured channel (#292): a deployment with
 	// only VAPID keys set (no SMTP/webhook) must still fan out. The On-list
 	// status filter applies to every channel alike.
-	if n == nil || (!n.cfg.Enabled() && n.push == nil) || !n.cfg.shouldFire(ev.Status) {
+	if (!st.cfg.Enabled() && n.push == nil) || !st.cfg.shouldFire(ev.Status) {
 		return nil
 	}
 	var errs []error
-	if n.cfg.emailEnabled() {
-		if err := n.retry(ctx, func(ctx context.Context) error { return n.sendEmail(ctx, ev) }); err != nil {
+	if st.cfg.emailEnabled() {
+		if err := retry(ctx, st.cfg, func(ctx context.Context) error { return sendEmail(ctx, st.cfg, ev) }); err != nil {
 			n.logf("notify: email for task %s failed: %v", ev.TaskID, err)
 			errs = append(errs, fmt.Errorf("email: %w", err))
 		} else {
 			n.logf("notify: email for task %s sent", ev.TaskID)
 		}
 	}
-	if n.cfg.webhookEnabled() {
-		if err := n.retry(ctx, func(ctx context.Context) error { return n.sendWebhook(ctx, ev) }); err != nil {
+	if st.cfg.webhookEnabled() {
+		if err := retry(ctx, st.cfg, func(ctx context.Context) error { return sendWebhook(ctx, st, ev) }); err != nil {
 			n.logf("notify: webhook for task %s failed: %v", ev.TaskID, err)
 			errs = append(errs, fmt.Errorf("webhook: %w", err))
 		} else {
@@ -270,10 +310,11 @@ func (n *Notifier) Notify(ctx context.Context, ev Event) error {
 // each attempt bounded by cfg.Timeout. It returns the last attempt's error (nil
 // on success). The loop stops early if the parent ctx is cancelled. The returned
 // error is the channel's own error, which by construction names only the failure
-// mode (dial/auth/status), never a secret.
-func (n *Notifier) retry(ctx context.Context, fn func(context.Context) error) error {
+// mode (dial/auth/status), never a secret. A free function over one cfg
+// snapshot so a live config swap can't change the retry budget mid-loop.
+func retry(ctx context.Context, cfg Config, fn func(context.Context) error) error {
 	var lastErr error
-	attempts := n.cfg.Retries + 1
+	attempts := cfg.Retries + 1
 	for i := 0; i < attempts; i++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -282,10 +323,10 @@ func (n *Notifier) retry(ctx context.Context, fn func(context.Context) error) er
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(n.cfg.RetryBackoff):
+			case <-time.After(cfg.RetryBackoff):
 			}
 		}
-		attemptCtx, cancel := context.WithTimeout(ctx, n.cfg.Timeout)
+		attemptCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 		lastErr = fn(attemptCtx)
 		cancel()
 		if lastErr == nil {
@@ -299,8 +340,7 @@ func (n *Notifier) retry(ctx context.Context, fn func(context.Context) error) er
 // SendMail path, which negotiates STARTTLS when the server advertises it). The
 // SMTP password is read from the host config and handed to smtp.PlainAuth; it is
 // never placed in the message, the error, or any log line.
-func (n *Notifier) sendEmail(ctx context.Context, ev Event) error {
-	c := n.cfg
+func sendEmail(ctx context.Context, c Config, ev Event) error {
 	addr := net.JoinHostPort(c.SMTPHost, c.SMTPPort)
 	msg := renderEmail(c.SMTPFrom, c.EmailTo, ev)
 
@@ -336,23 +376,26 @@ func (n *Notifier) sendEmail(ctx context.Context, ev Event) error {
 // NEVER affects task status. The SMTP password is never placed in the message,
 // the error, or any log line.
 func (n *Notifier) ReplyToEmailEvent(ctx context.Context, to, subject, body, inReplyTo string) error {
-	if n == nil || !n.cfg.replyEnabled() {
+	if n == nil {
+		return nil
+	}
+	st := n.snapshot()
+	if !st.cfg.replyEnabled() {
 		return nil
 	}
 	to = strings.TrimSpace(to)
 	if to == "" {
 		return nil
 	}
-	return n.retry(ctx, func(ctx context.Context) error {
-		return n.sendReplyEmail(ctx, to, subject, body, inReplyTo)
+	return retry(ctx, st.cfg, func(ctx context.Context) error {
+		return sendReplyEmail(ctx, st.cfg, to, subject, body, inReplyTo)
 	})
 }
 
 // sendReplyEmail sends one reply over SMTP to the single inbound sender. Mirrors
 // sendEmail's context-honoring goroutine pattern, but addresses the reply to the
 // event's sender (not the configured EmailTo list).
-func (n *Notifier) sendReplyEmail(ctx context.Context, to, subject, body, inReplyTo string) error {
-	c := n.cfg
+func sendReplyEmail(ctx context.Context, c Config, to, subject, body, inReplyTo string) error {
 	addr := net.JoinHostPort(c.SMTPHost, c.SMTPPort)
 	msg := renderReplyEmail(c.SMTPFrom, to, subject, body, inReplyTo)
 
@@ -380,23 +423,23 @@ func (n *Notifier) sendReplyEmail(ctx context.Context, to, subject, body, inRepl
 // method) to the webhook URL, signing the body with HMAC-SHA256 when a secret is
 // configured. A non-2xx response is an error (so retry can re-attempt); the
 // error names only the status, never the URL's query or the signing secret.
-func (n *Notifier) sendWebhook(ctx context.Context, ev Event) error {
-	body, err := RenderWebhookBody(n.cfg.WebhookBodyTemplate, ev)
+func sendWebhook(ctx context.Context, st *notifierState, ev Event) error {
+	body, err := RenderWebhookBody(st.cfg.WebhookBodyTemplate, ev)
 	if err != nil {
 		return err
 	}
-	method := n.cfg.WebhookMethod
+	method := st.cfg.WebhookMethod
 	if method == "" {
 		method = http.MethodPost
 	}
-	req, err := http.NewRequestWithContext(ctx, method, n.cfg.WebhookURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, st.cfg.WebhookURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	setSignatureHeader(req, body, n.cfg.WebhookSecret)
+	setSignatureHeader(req, body, st.cfg.WebhookSecret)
 
-	resp, err := n.client.Do(req)
+	resp, err := st.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("webhook request: %w", err)
 	}

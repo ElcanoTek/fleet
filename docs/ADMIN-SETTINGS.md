@@ -84,12 +84,12 @@ knob. These deliberately did **not** move into the panel:
   is the honest unit of change. (The web UI's old concurrency-cap card, which
   called a `PUT /concurrency` endpoint fleet never served, was removed in the
   same change — it could only ever error.)
-- **Secret-bearing notification config** — `FLEET_SMTP_*`,
-  `FLEET_WEBHOOK_URL`/`SECRET`, VAPID keys. Making these admin-manageable
-  needs the sealed-secretbox, write-only-key treatment the LLM providers got
-  (llm_providers-style table + cipher), not a plain-text settings row. That is
-  the natural next slice of this feature; until then they stay host-side in
-  the env file per the credentials invariant.
+- **Secret-bearing notification config** — now has its own admin surface with
+  exactly that sealed-secretbox, write-only treatment: Settings → Admin →
+  **Notifications** ([NOTIFICATIONS.md](NOTIFICATIONS.md), `notify_settings`
+  migration 036). It is a separate slice from this registry because it holds
+  secrets. VAPID keys (Web Push) stay env-only — deployment identity material
+  bound at boot.
 - **Already hot-reloadable ceilings** — `FLEET_MAX_COST_USD`,
   `FLEET_MAX_TOTAL_TOKENS`, `FLEET_MAX_ITERATIONS`, temperatures ride the
   existing env-file reload ([CONFIG-RELOAD.md](CONFIG-RELOAD.md), SIGUSR2 /
@@ -107,8 +107,6 @@ knob. These deliberately did **not** move into the panel:
   per-conversation overrides.
 - Settings changes apply to the *next* turn/run/tool call; in-flight work is
   never interrupted (this is a feature, not a limitation).
-- Notification (SMTP/webhook) admin management: deferred, needs sealed
-  secrets (see above).
 - The registry lives server-side; the panel's labels/help copy live in the
   web app (`FeatureSettingsPanel.tsx`). A registry key added server-side
   before the panel learns its copy still renders (under "Other") from its raw

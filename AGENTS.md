@@ -143,6 +143,9 @@ same PR.
 - **Admin-managed workspace feature settings** (the Settings → Admin Features
   panel: DB override > env var > default, live apply, the registry admission
   rule, what stays env-only): [`docs/ADMIN-SETTINGS.md`](docs/ADMIN-SETTINGS.md)
+- **Task notifications** (email/webhook channels, the admin Notifications
+  panel with sealed write-only secrets + test sends, env precedence):
+  [`docs/NOTIFICATIONS.md`](docs/NOTIFICATIONS.md)
 - **Load testing & benchmarks** (`fleet-bench` HTTP chat load via the fake-LLM
   seam + subsystem throughput benchmarks): [`docs/LOAD-TESTING.md`](docs/LOAD-TESTING.md)
 - **Prompt-cache prefix-stability contract** (what must stay byte-stable in the

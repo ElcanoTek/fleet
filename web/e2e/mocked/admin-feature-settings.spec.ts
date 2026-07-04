@@ -47,6 +47,28 @@ async function mockAdmin(page: Page) {
   await page.route("**/api/admin/llm-providers", (r: Route) =>
     r.fulfill({ json: { providers: [] } }),
   );
+  await page.route("**/api/admin/notify-settings", (r: Route) =>
+    r.fulfill({
+      json: {
+        source: "env",
+        settings: {
+          notify_on: "",
+          smtp_host: "",
+          smtp_port: "587",
+          smtp_username: "",
+          has_smtp_password: false,
+          smtp_from: "",
+          email_to: "",
+          webhook_url: "https://hooks.example.com/x",
+          webhook_method: "POST",
+          webhook_body_template: "",
+          has_webhook_secret: true,
+        },
+        email_enabled: false,
+        webhook_enabled: true,
+      },
+    }),
+  );
   await page.route("**/api/admin/health-summary", (r: Route) =>
     r.fulfill({
       json: {
@@ -117,4 +139,12 @@ test("the features panel renders, toggles live, and resets to default", async ({
   await page.getByTestId("reset-subagents_enabled").click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(panel).not.toContainText("Customized");
+
+  // The notifications panel renders alongside, from its own endpoint, with
+  // honest channel status and no secret material.
+  const notifications = page.getByTestId("notifications-panel");
+  await expect(notifications).toBeVisible();
+  await expect(notifications).toContainText("Env config");
+  await expect(page.getByTestId("notify-webhook-url")).toHaveValue("https://hooks.example.com/x");
+  await expect(page.getByTestId("notify-webhook-secret")).toHaveValue("");
 });

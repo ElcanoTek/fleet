@@ -15,6 +15,22 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Admin-managed task notifications
+  ([docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md)): Settings → Admin gains a
+  "Notifications" panel — configure the email (SMTP) and signed-webhook
+  channels and the status filter at runtime, with a **Send test** button per
+  channel (one real delivery of a synthetic event, key-free result). The
+  config lives in the chat DB (`notify_settings`, migration 036) with the
+  SMTP password and webhook signing secret sealed under the store's secretbox
+  cipher and **write-only** semantics; a save hot-swaps the running
+  notifier's config (`notify.SetConfig` — one shared pointer serves the
+  runner, budget alerts, and email reply-back), so the next task completion
+  uses it with no restart. Env vars remain the deployment default; the saved
+  config replaces them wholesale and "Use env config" reverts. Email
+  reply-back (#511) enablement is now consulted live, so enabling SMTP from
+  the panel activates it without a restart. The store secret cipher now
+  installs whenever `FLEET_MCP_OAUTH_ENCRYPTION_KEY` is set (previously only
+  with the remote-MCP feature's public base URL also configured).
 - Admin-managed workspace feature settings
   ([docs/ADMIN-SETTINGS.md](docs/ADMIN-SETTINGS.md)): Settings → Admin gains a
   "Feature settings" panel — the env-flag-only product toggles (PII redaction

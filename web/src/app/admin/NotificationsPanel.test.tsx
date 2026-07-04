@@ -1,0 +1,183 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { NotificationsPanel } from "./NotificationsPanel";
+
+// NotificationsPanel — admin-managed task notifications. Load-bearing
+// assertions: the env view renders with honest channel status and no secret
+// material, a save sends typed secrets (and only typed secrets), untouched
+// secret fields are omitted (keep), clear sends "", revert DELETEs, and the
+// test button reports the key-free result.
+
+type View = {
+  source: "admin" | "env";
+  settings: Record<string, unknown>;
+  email_enabled: boolean;
+  webhook_enabled: boolean;
+};
+
+const ENV_VIEW: View = {
+  source: "env",
+  settings: {
+    notify_on: "",
+    smtp_host: "smtp.env.example",
+    smtp_port: "587",
+    smtp_username: "",
+    has_smtp_password: true,
+    smtp_from: "fleet@env.example",
+    email_to: "ops@env.example",
+    webhook_url: "",
+    webhook_method: "POST",
+    webhook_body_template: "",
+    has_webhook_secret: false,
+  },
+  email_enabled: true,
+  webhook_enabled: false,
+};
+
+function mockFetch(
+  view: View,
+  onWrite?: (url: string, init: RequestInit) => { status: number; body: unknown } | undefined,
+) {
+  let current = view;
+  return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+    if (!init || init.method === undefined || init.method === "GET") {
+      return { ok: true, status: 200, json: async () => current };
+    }
+    const custom = onWrite?.(url, init);
+    if (custom) {
+      if (custom.status < 400 && (custom.body as View).source) {
+        current = custom.body as View;
+      }
+      return {
+        ok: custom.status < 400,
+        status: custom.status,
+        json: async () => custom.body,
+        text: async () => JSON.stringify(custom.body),
+      };
+    }
+    return { ok: true, status: 200, json: async () => current, text: async () => "{}" };
+  });
+}
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("NotificationsPanel", () => {
+  it("renders the env view with honest channel status and no secrets", async () => {
+    vi.stubGlobal("fetch", mockFetch(ENV_VIEW));
+    render(<NotificationsPanel />);
+    expect(await screen.findByText("Env config", undefined, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByTestId("notify-smtp-host")).toHaveValue("smtp.env.example");
+    // Stored password shows status only, never a value.
+    expect(screen.getByText(/stored — leave blank to keep/)).toBeInTheDocument();
+    expect(screen.getByTestId("notify-smtp-password")).toHaveValue("");
+    expect(screen.getByText("Active")).toBeInTheDocument(); // email channel
+    expect(screen.getByText("Not configured")).toBeInTheDocument(); // webhook channel
+    // No revert button for env config.
+    expect(screen.queryByTestId("notify-revert")).toBeNull();
+  });
+
+  it("saves with write-only secret semantics (typed = sent, untouched = omitted)", async () => {
+    const fetchMock = mockFetch(ENV_VIEW, (url, init) => {
+      if (init.method === "PUT") {
+        return {
+          status: 200,
+          body: {
+            ...ENV_VIEW,
+            source: "admin",
+            settings: { ...ENV_VIEW.settings, updated_by: "boss@x.com" },
+          },
+        };
+      }
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<NotificationsPanel />);
+
+    // Type a webhook URL + its secret; leave the SMTP password untouched.
+    fireEvent.change(await screen.findByTestId("notify-webhook-url", undefined, { timeout: 5000 }), {
+      target: { value: "https://hooks.example.com/x" },
+    });
+    fireEvent.change(screen.getByTestId("notify-webhook-secret"), {
+      target: { value: "new-hook-secret" },
+    });
+    fireEvent.click(screen.getByTestId("notify-on-failure"));
+    fireEvent.click(screen.getByTestId("notify-save"));
+
+    await waitFor(() => expect(screen.getByText("Customized")).toBeInTheDocument());
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
+    const body = JSON.parse(String(put?.[1]?.body));
+    expect(body.webhook_url).toBe("https://hooks.example.com/x");
+    expect(body.webhook_secret).toBe("new-hook-secret");
+    expect(body.notify_on).toBe("failure");
+    // Untouched stored SMTP password: field omitted entirely (keep).
+    expect("smtp_password" in body).toBe(false);
+    expect(screen.getByTestId("notify-revert")).toBeInTheDocument();
+  });
+
+  it("clearing a stored secret sends an explicit empty string", async () => {
+    const fetchMock = mockFetch(ENV_VIEW, (url, init) => {
+      if (init.method === "PUT") return { status: 200, body: ENV_VIEW };
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<NotificationsPanel />);
+    fireEvent.click(await screen.findByTestId("notify-smtp-password-clear", undefined, { timeout: 5000 }));
+    fireEvent.click(screen.getByTestId("notify-save"));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, i]) => i?.method === "PUT")).toBe(true),
+    );
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
+    expect(JSON.parse(String(put?.[1]?.body)).smtp_password).toBe("");
+  });
+
+  it("reverting to env config DELETEs after confirmation", async () => {
+    const adminView: View = { ...ENV_VIEW, source: "admin" };
+    const fetchMock = mockFetch(adminView, (url, init) => {
+      if (init.method === "DELETE") return { status: 200, body: ENV_VIEW };
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+    render(<NotificationsPanel />);
+    fireEvent.click(await screen.findByTestId("notify-revert", undefined, { timeout: 5000 }));
+    await waitFor(() => expect(screen.getByText("Env config")).toBeInTheDocument());
+    expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(true);
+  });
+
+  it("the test button reports the key-free result", async () => {
+    const fetchMock = mockFetch(ENV_VIEW, (url, init) => {
+      if (init.method === "POST" && url.includes("/test")) {
+        return { status: 200, body: { ok: true, detail: "test email delivered", latency_ms: 42 } };
+      }
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<NotificationsPanel />);
+    fireEvent.click(await screen.findByTestId("notify-test-email", undefined, { timeout: 5000 }));
+    expect(await screen.findByTestId("notify-test-result-email")).toHaveTextContent(
+      /test email delivered \(42 ms\)/,
+    );
+    const post = fetchMock.mock.calls.find(([, i]) => i?.method === "POST");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ channel: "email" });
+  });
+
+  it("surfaces a validation rejection without losing the form", async () => {
+    const fetchMock = mockFetch(ENV_VIEW, (url, init) => {
+      if (init.method === "PUT") {
+        return { status: 400, body: "invalid notify settings: webhook_url must be http:// or https://" };
+      }
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<NotificationsPanel />);
+    fireEvent.change(await screen.findByTestId("notify-webhook-url", undefined, { timeout: 5000 }), {
+      target: { value: "ftp://nope" },
+    });
+    fireEvent.click(screen.getByTestId("notify-save"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/webhook_url must be/);
+    expect(screen.getByTestId("notify-webhook-url")).toHaveValue("ftp://nope");
+  });
+});
