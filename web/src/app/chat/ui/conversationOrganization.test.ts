@@ -11,6 +11,7 @@ import {
   pinnedUnfiled,
   recentUnfiled,
   removeLabel,
+  visibleConversationOrder,
   type OrganizableConversation,
 } from "./conversationOrganization";
 
@@ -138,5 +139,40 @@ describe("pinnedUnfiled / recentUnfiled", () => {
   it("excludes filed conversations from both sections", () => {
     expect(pinnedUnfiled(convs).map((c) => c.title)).toEqual(["Pinned loose"]);
     expect(recentUnfiled(convs).map((c) => c.title)).toEqual(["Recent loose"]);
+  });
+});
+
+describe("visibleConversationOrder", () => {
+  // This is the shared source of truth for keyboard j/k navigation (chat-
+  // experience) and the sidebar's rendered rows — the two must never drift.
+  const all = [
+    conv({ title: "Pinned loose", pinned: true }),
+    conv({ title: "Filed", pinned: true, folder: "Work" }),
+    conv({ title: "Recent loose", pinned: false }),
+  ];
+
+  it("returns pinned-unfiled then recent-unfiled when not filtering", () => {
+    const filtered = filterConversations(all, {});
+    expect(
+      visibleConversationOrder({ all, filtered, filtering: false }).map((c) => c.title),
+    ).toEqual(["Pinned loose", "Recent loose"]);
+  });
+
+  it("excludes filed conversations from the unfiltered order", () => {
+    const order = visibleConversationOrder({ all, filtered: all, filtering: false });
+    expect(order.map((c) => c.title)).not.toContain("Filed");
+  });
+
+  it("returns the filtered list verbatim (including filed rows) when filtering", () => {
+    const filtered = filterConversations(all, { folder: "Work" });
+    expect(
+      visibleConversationOrder({ all, filtered, filtering: true }).map((c) => c.title),
+    ).toEqual(["Filed"]);
+  });
+
+  it("does not mutate its inputs", () => {
+    const order = visibleConversationOrder({ all, filtered: all, filtering: false });
+    order.push(conv({ title: "extra" }));
+    expect(all).toHaveLength(3);
   });
 });

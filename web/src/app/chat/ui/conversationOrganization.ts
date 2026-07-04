@@ -128,3 +128,21 @@ export function pinnedUnfiled<T extends OrganizableConversation>(conversations: 
 export function recentUnfiled<T extends OrganizableConversation>(conversations: readonly T[]): T[] {
   return conversations.filter((c) => !c.pinned && !c.folder);
 }
+
+// visibleConversationOrder is the SINGLE source of truth for the flat, top-to-
+// bottom order the sidebar shows — so keyboard j/k navigation (in the parent)
+// and the rendered rows (in ConversationSidebar) can never drift. When a filter
+// is active the sidebar shows filteredConversations verbatim; otherwise it shows
+// pinned-unfiled then recent-unfiled (filed conversations live only in their
+// folder and are not keyboard-navigable from the main list). Archived rows are
+// a separate collapsible section and are intentionally excluded.
+export function visibleConversationOrder<T extends OrganizableConversation>(args: {
+  all: readonly T[];
+  filtered: readonly T[];
+  filtering: boolean;
+}): T[] {
+  if (args.filtering) {
+    return [...args.filtered];
+  }
+  return [...pinnedUnfiled(args.all), ...recentUnfiled(args.all)];
+}
