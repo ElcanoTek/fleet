@@ -85,3 +85,72 @@ func TestTaskPauseResumeLifecycle(t *testing.T) {
 		t.Fatalf("Q&A must clear after the run consumes it: %+v", got)
 	}
 }
+
+// TestExpirePausedTasks (#510): a task awaiting input past the window is failed
+// terminally; a fresh one and a disabled window are left alone.
+func TestExpirePausedTasks(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	pause := func(prompt string, startedAgo time.Duration) *models.Task {
+		t.Helper()
+		owner := uuid.New()
+		ownerStr := owner.String()
+		task := &models.Task{ID: uuid.New(), Prompt: prompt, Status: models.TaskStatusPending, CreatedAt: time.Now().UTC()}
+		if err := db.AddTask(ctx, task); err != nil {
+			t.Fatalf("AddTask: %v", err)
+		}
+		started := time.Now().Add(-startedAgo).UTC()
+		exp := time.Now().Add(5 * time.Minute).UTC()
+		task.Status = models.TaskStatusRunning
+		task.StartedAt = &started
+		task.LeaseOwner = &ownerStr
+		task.LeaseExpiresAt = &exp
+		if err := db.UpdateTask(ctx, task); err != nil {
+			t.Fatalf("UpdateTask(running): %v", err)
+		}
+		if ok, err := db.PauseTaskForQuestion(ctx, task.ID, owner, "which currency?"); err != nil || !ok {
+			t.Fatalf("pause: ok=%v err=%v", ok, err)
+		}
+		return task
+	}
+
+	old := pause("stale question", 2*time.Hour)     // started 120m ago
+	fresh := pause("fresh question", 1*time.Minute) // started 1m ago
+
+	// Disabled window is a no-op.
+	if n, err := db.ExpirePausedTasks(ctx, 0); err != nil || n != 0 {
+		t.Fatalf("disabled window: n=%d err=%v", n, err)
+	}
+
+	// 60-minute window: only the stale one expires.
+	n, err := db.ExpirePausedTasks(ctx, 60)
+	if err != nil {
+		t.Fatalf("ExpirePausedTasks: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expired %d, want 1 (only the 2h-old paused task)", n)
+	}
+
+	gotOld, _ := db.GetTask(ctx, old.ID)
+	if gotOld.Status != models.TaskStatusError || !gotOld.Status.IsTerminal() {
+		t.Errorf("stale paused task status = %s, want terminal error", gotOld.Status)
+	}
+	if gotOld.CompletedAt == nil {
+		t.Error("expired task should have completed_at stamped")
+	}
+	if gotOld.ErrorMessage == nil || *gotOld.ErrorMessage == "" || gotOld.PendingQuestion != "" {
+		t.Errorf("expired task should carry an error and clear the question: q=%q", gotOld.PendingQuestion)
+	}
+
+	gotFresh, _ := db.GetTask(ctx, fresh.ID)
+	if gotFresh.Status != models.TaskStatusPausedAwaitingInput {
+		t.Errorf("fresh paused task status = %s, want still paused", gotFresh.Status)
+	}
+
+	// Idempotent: a second sweep finds nothing new.
+	if n2, err := db.ExpirePausedTasks(ctx, 60); err != nil || n2 != 0 {
+		t.Fatalf("second sweep: n=%d err=%v", n2, err)
+	}
+}

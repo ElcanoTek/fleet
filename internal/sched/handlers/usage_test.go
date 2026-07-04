@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -224,4 +225,46 @@ func TestUsageReportMergesChatSource(t *testing.T) {
 			t.Fatalf("got %d, want 500", w.Code)
 		}
 	})
+}
+
+// TestUsageReportCSVExport: ?format=csv returns a text/csv attachment with the
+// header row + a trailing TOTAL row; an unknown format is a 400.
+func TestUsageReportCSVExport(t *testing.T) {
+	h, _ := setupTest(t)
+	do := func(query string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/admin/usage"+query, nil)
+		req.Header.Set("X-API-Key", "admin-key")
+		w := httptest.NewRecorder()
+		h.GetUsageReport(w, req)
+		return w
+	}
+
+	w := do("?format=csv&group_by=user")
+	if w.Code != http.StatusOK {
+		t.Fatalf("csv: got %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/csv; charset=utf-8" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	cd := w.Header().Get("Content-Disposition")
+	if !strings.Contains(cd, "attachment; filename=") || !strings.Contains(cd, "fleet-usage-user-") {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+	body := w.Body.String()
+	// Header row names the group dimension + token columns; TOTAL row present.
+	if !strings.HasPrefix(body, "user,label,cost_usd,") {
+		t.Errorf("csv header = %q", strings.SplitN(body, "\n", 2)[0])
+	}
+	if !strings.Contains(body, "TOTAL") {
+		t.Errorf("csv should end with a TOTAL row, got:\n%s", body)
+	}
+
+	// Unknown format → 400.
+	if w := do("?format=xlsx"); w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown format: got %d, want 400", w.Code)
+	}
+	// Explicit json still works.
+	if w := do("?format=json"); w.Code != http.StatusOK || w.Header().Get("Content-Type") == "text/csv; charset=utf-8" {
+		t.Fatalf("json format should stay JSON, got %d ct=%q", w.Code, w.Header().Get("Content-Type"))
+	}
 }

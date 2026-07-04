@@ -95,10 +95,15 @@ same PR.
 
 - Single Go module `github.com/ElcanoTek/fleet`, Go 1.26. Keep it `go vet`- and
   `golangci-lint`-clean — lint failures block CI.
-- **Coverage gates**: CI runs the plain `go test` step with
-  `-coverprofile=coverage.out -covermode=atomic`. Project coverage must not drop
-  more than 2% vs the base branch, and new patch code needs ≥60% coverage
-  (`codecov.yml`).
+- **Coverage (advisory, not a merge gate)**: CI runs the plain `go test` step
+  with `-coverprofile=coverage.out -covermode=atomic` and uploads to Codecov
+  with `fail_ci_if_error: false`. The thresholds in `codecov.yml` (project
+  drop ≤2%, patch ≥60%) are targets Codecov reports as a PR comment/check when
+  a `CODECOV_TOKEN` secret is configured — **they do NOT block merge**, and
+  without the token the upload is a silent no-op. Treat coverage as a quality
+  signal, not a gate: add tests that catch real behavior, not to chase a
+  number. (The real merge gates are build/vet/lint, the test suites, the
+  `-race` lane, govulncheck, Grype, the migration linter, and gitleaks.)
 - **Match the surrounding code:** naming, idioms, and comment density. The
   `internal/agentcore` package comments explain *why* each governance invariant
   holds — preserve that level of explanation when you extend it.

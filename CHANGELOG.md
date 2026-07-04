@@ -13,6 +13,19 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- Usage report CSV export ([docs/USAGE-ANALYTICS.md](docs/USAGE-ANALYTICS.md)):
+  `GET /admin/usage?format=csv` returns the report as a `text/csv` attachment
+  (row per bucket + a TOTAL row), and the Operations Center Usage panel gains a
+  **Download CSV** button using the current filters.
+- Optional paused-task auto-expire ([docs/ASK-NOTIFY.md](docs/ASK-NOTIFY.md)):
+  `FLEET_PAUSED_TASK_EXPIRY_MINUTES` (>0) makes the scheduler fail a task that
+  has sat in `paused_awaiting_input` past the window (terminal `error`),
+  mirroring the anti-starvation sweep (#230). Default 0 = OFF (wait forever),
+  so existing behavior is unchanged.
+
+
 ### Changed
 
 - Skill `allowed-tools` is now parsed and **surfaced** for review — the skills

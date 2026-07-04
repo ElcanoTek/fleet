@@ -328,6 +328,12 @@ func (s *Storage) PromoteStarvedTasks(ctx context.Context, windowMinutes int) (i
 	return s.db.PromoteStarvedTasks(ctx, windowMinutes)
 }
 
+// ExpirePausedTasks fails tasks stuck in paused_awaiting_input past the window
+// (#510). Returns the count expired.
+func (s *Storage) ExpirePausedTasks(ctx context.Context, windowMinutes int) (int64, error) {
+	return s.db.ExpirePausedTasks(ctx, windowMinutes)
+}
+
 // PendingQueueStats returns the per-effective-priority rollup of the pending
 // queue for GET /admin/queue (#230).
 func (s *Storage) PendingQueueStats(ctx context.Context) ([]models.QueuePriorityBucket, error) {

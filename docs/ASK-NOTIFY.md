@@ -37,8 +37,13 @@ starts clean with the answer injected.
 ## Timeout / audience (honest scope)
 
 - **Timeout**: a paused task stays paused until answered (it holds no resources,
-  so an indefinite wait is safe). An auto-expire sweep is a documented
-  follow-on.
+  so an indefinite wait is safe) — the default. `FLEET_PAUSED_TASK_EXPIRY_MINUTES`
+  (>0) opts into an auto-expire sweep: the scheduler fails a task that has
+  awaited input longer than the window (terminal `error`, stamped with an
+  "expired" message), mirroring the anti-starvation sweep (#230). Age is
+  measured from the run's start (the tasks table has no paused-at column), so
+  the window is conservative — fine for a minutes-to-hours TTL. Default 0 = OFF
+  (wait forever), preserving prior behavior.
 - **Audience/permission**: resuming requires the operator (cancel) permission;
   a per-owner/project-scoped "who may answer" model is a follow-on (coordinates
   with #509 projects + #292 notifications).

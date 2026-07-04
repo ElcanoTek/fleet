@@ -51,6 +51,12 @@ type Scheduler struct {
 	// never queue a low-priority task forever.
 	starvationWindowMin int
 
+	// Paused-task expiry (#510). pausedExpiryMin<=0 disables it (the default —
+	// an ask-pause then waits forever); otherwise every runLoop tick fails
+	// tasks that have sat in paused_awaiting_input longer than this, so an
+	// unattended question can't strand a task indefinitely.
+	pausedExpiryMin int
+
 	// scheduledBatchSize is the page size ProcessScheduledTasks fetches due tasks
 	// in. Defaults to defaultScheduledBatchSize; a field only so tests can inject
 	// a small value and exercise the multi-batch / soft-hold paths cheaply.
@@ -88,6 +94,14 @@ func (s *Scheduler) SetLogArchival(archiveAfterDays int) {
 // it can't be starved indefinitely by a stream of higher-priority work.
 func (s *Scheduler) SetStarvationWindow(windowMinutes int) {
 	s.starvationWindowMin = windowMinutes
+}
+
+// SetPausedExpiry configures the paused-task expiry sweep (#510). Call before
+// Start. windowMinutes<=0 leaves expiry OFF (a paused task waits forever);
+// otherwise a task awaiting input longer than this is failed with a terminal
+// error so it doesn't strand.
+func (s *Scheduler) SetPausedExpiry(windowMinutes int) {
+	s.pausedExpiryMin = windowMinutes
 }
 
 // New creates a new Scheduler.
@@ -141,6 +155,9 @@ func (s *Scheduler) runLoop() {
 		log.Printf("scheduler: anti-starvation promotion ON (promote pending tasks waiting > %dm to priority %d)",
 			s.starvationWindowMin, models.StarvationFloorPriority)
 	}
+	if s.pausedExpiryMin > 0 {
+		log.Printf("scheduler: paused-task expiry ON (fail tasks awaiting input > %dm)", s.pausedExpiryMin)
+	}
 
 	for {
 		select {
@@ -152,6 +169,7 @@ func (s *Scheduler) runLoop() {
 				s.ProcessScheduledTasks()
 				s.RecoverExpiredLeases()
 				s.runStarvationPromotion()
+				s.runPausedExpiry()
 			}()
 		case <-cleanupC:
 			func() {
@@ -183,6 +201,24 @@ func (s *Scheduler) runStarvationPromotion() {
 	if n > 0 {
 		log.Printf("scheduler: promoted %d starving task(s) to priority %d (waited > %dm)",
 			n, models.StarvationFloorPriority, s.starvationWindowMin)
+	}
+}
+
+// runPausedExpiry performs one paused-task expiry sweep (#510): it fails tasks
+// that have awaited input past the window. No-op when disabled. Logs only when
+// it expires something; a failure is logged but never fatal — the next tick
+// retries.
+func (s *Scheduler) runPausedExpiry() {
+	if s.pausedExpiryMin <= 0 {
+		return
+	}
+	n, err := s.storage.ExpirePausedTasks(context.Background(), s.pausedExpiryMin)
+	if err != nil {
+		log.Printf("scheduler: paused-task expiry failed: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("scheduler: expired %d paused task(s) awaiting input > %dm", n, s.pausedExpiryMin)
 	}
 }
 
