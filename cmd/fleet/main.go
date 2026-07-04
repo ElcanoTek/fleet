@@ -655,6 +655,9 @@ func run() error {
 	// waited past the window up to the High floor so a stream of higher-priority
 	// work can't starve them. Off when TaskStarvationWindowMinutes<=0.
 	sch.SetStarvationWindow(cfg.TaskStarvationWindowMinutes)
+	// Paused-task expiry (#510): fail tasks stuck awaiting input past the
+	// window. Off (wait forever) when TaskPausedExpiryMinutes<=0.
+	sch.SetPausedExpiry(cfg.TaskPausedExpiryMinutes)
 	sch.Start()
 	defer sch.Stop()
 

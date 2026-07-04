@@ -1593,6 +1593,39 @@ func (db *Database) PromoteStarvedTasks(ctx context.Context, windowMinutes int) 
 	return n, nil
 }
 
+// ExpirePausedTasks fails tasks that have sat in paused_awaiting_input past the
+// window (#510) — an unattended ask-pause otherwise waits forever. Mirrors
+// PromoteStarvedTasks: cutoff computed in Go, a single guarded UPDATE, count
+// returned; a non-positive window is a no-op (the default — waits forever).
+//
+// It moves them to the TERMINAL `error` status (not dead_lettered, which is the
+// runner's lease-guarded status by convention — a paused task holds no lease),
+// stamping completed_at + error_message and clearing the pending question so
+// the row reads as a clean terminal failure. Age is measured from started_at
+// (the run's start), the same proxy ListPausedTasks orders by — the tasks
+// table has no paused_at column, and for a minutes-to-hours TTL measuring from
+// run start is acceptably conservative.
+func (db *Database) ExpirePausedTasks(ctx context.Context, windowMinutes int) (int64, error) {
+	if windowMinutes <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(windowMinutes) * time.Minute)
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks
+		SET status = $1, completed_at = now(), error_message = $2, pending_question = NULL
+		WHERE status = $3
+		  AND started_at IS NOT NULL
+		  AND started_at < $4`,
+		string(models.TaskStatusError),
+		fmt.Sprintf("expired: awaited input for more than %d minute(s) with no answer", windowMinutes),
+		string(models.TaskStatusPausedAwaitingInput), cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // PendingQueueStats returns the per-effective-priority rollup of the pending
 // queue (#230): the count and the longest wait (seconds) at each distinct
 // effective_priority. The handler aggregates these into named tiers for

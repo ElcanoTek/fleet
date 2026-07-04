@@ -103,9 +103,17 @@ reduced opacity.
   an admin API key (#458 precedent). Both the admin key and an admin-role
   session are accepted; the gate is not weaker, just reachable.
 
+## CSV export
+
+`GET /admin/usage?format=csv` returns the current report as a `text/csv`
+attachment (`fleet-usage-<group_by>-<YYYYMMDD>.csv`): one row per bucket with
+the group key, cost columns, and token/iteration/turn counts, plus a trailing
+`TOTAL` row. Same admin gate + `group_by`/`from`/`to` params as the JSON form
+(`?format=json` is the default). The Operations Center Usage panel has a
+**Download CSV** button that hits it with the panel's current filters.
+
 ## Deferred (deliberately, part 1)
 
-- CSV export of the report.
 - Chat-side per-model attribution finer than the conversation's model override
   (`turn_metrics` does not record the per-turn model actually used).
 
