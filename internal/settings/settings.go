@@ -152,9 +152,15 @@ type Resolved struct {
 	// Default is the env-derived boot default the setting reverts to on reset.
 	Default string `json:"default"`
 	// UpdatedAt/UpdatedBy describe the override row (zero values when Source is
-	// "default").
+	// "default" and no stale row exists).
 	UpdatedAt int64  `json:"updated_at,omitempty"`
 	UpdatedBy string `json:"updated_by,omitempty"`
+	// Stale is true when an override row EXISTS but no longer validates (e.g. a
+	// bound tightened in a later release): the default serves, but the row is
+	// surfaced — with its attribution — so the admin can see and Reset it.
+	// Without this the ignored row would be invisible and undeletable from the
+	// panel, and could silently spring back to life if the bounds loosen again.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // SourceAdmin / SourceDefault are the Resolved.Source values.
@@ -166,15 +172,17 @@ const (
 // Store is the persistence seam (satisfied by *store.Store).
 type Store interface {
 	WorkspaceSettings(ctx context.Context) (map[string]store.WorkspaceSetting, error)
-	SetWorkspaceSetting(ctx context.Context, key, value, updatedBy string) error
+	SetWorkspaceSetting(ctx context.Context, key, value, updatedBy string) (store.WorkspaceSetting, error)
 	DeleteWorkspaceSetting(ctx context.Context, key string) error
 }
 
 // ApplyFunc pushes one setting's effective value into the running system
 // (swap the PII redactor, set a live config field, …). Hooks are injected by
-// cmd/fleet; a key without a hook persists but applies nothing — that would be
-// a wiring bug, surfaced by TestServiceEveryKeyHasHook-style checks there.
-type ApplyFunc func(value string) error
+// cmd/fleet. override says whether value comes from an admin row (true) or is
+// the env-derived default (false) — hooks that shadow a per-use env read (the
+// agentcore holders) must CLEAR their override on false rather than pin the
+// boot env value, so `unset = env keeps working live` stays true after boot.
+type ApplyFunc func(value string, override bool) error
 
 // ErrUnknownKey is returned for a key not in the registry; ErrInvalidValue
 // wraps a validation failure on Set. Both are reported BEFORE anything is
@@ -198,9 +206,15 @@ type Service struct {
 }
 
 // NewService builds a Service. defaults maps every registry key to its
-// env-derived boot default (already normalized); hooks maps keys to their
-// apply functions. Both must cover the registry — a missing default or hook is
-// a programming error reported at construction so it can't ship silently.
+// env-derived boot default; hooks maps keys to their apply functions. Both
+// must cover the registry — a MISSING default or hook is a programming error
+// reported at construction so it can't ship silently. A default that fails
+// registry validation is NOT an error: the registry bounds constrain what an
+// admin may write, but the env accepts a wider range (FLEET_MAX_TOOL_OUTPUT_BYTES=512
+// is a real, enforced 512-byte ceiling) — such a default is kept verbatim
+// (with a log) as the display/reset target so one out-of-bounds env value can
+// never disable the whole panel. cmd/fleet derives every default from typed
+// sources, so a kept-verbatim default is always parseable by its hook.
 func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc) (*Service, error) {
 	s := &Service{
 		st:       st,
@@ -217,7 +231,11 @@ func NewService(st Store, defaults map[string]string, hooks map[string]ApplyFunc
 		}
 		nd, err := Validate(spec, d)
 		if err != nil {
-			return nil, fmt.Errorf("settings: invalid boot default for %q: %w", spec.Key, err)
+			// Out-of-bounds env default: keep it verbatim. It is what the runtime
+			// actually does and what a reset must revert to; only NEW admin writes
+			// are held to the registry bounds.
+			log.Printf("workspace settings: env default for %s is outside the admin-settable bounds (%v); keeping it as the default", spec.Key, err)
+			nd = strings.TrimSpace(d)
 		}
 		s.defaults[spec.Key] = nd
 		if _, ok := hooks[spec.Key]; !ok {
@@ -243,27 +261,34 @@ func (s *Service) Snapshot(ctx context.Context) ([]Resolved, error) {
 }
 
 // resolve computes one key's Resolved from the override rows. An override that
-// no longer validates (e.g. a bound tightened in a later release) is treated
-// as absent — the default serves, rather than an invalid value poisoning
-// consumers.
+// no longer validates (e.g. a bound tightened in a later release) does not
+// serve — the default does — but it is surfaced as Stale with its attribution
+// so the panel can show and Reset it (an invisible row could otherwise spring
+// back to life when the bounds change again).
 func (s *Service) resolve(key string, overrides map[string]store.WorkspaceSetting) Resolved {
 	spec := s.specs[key]
 	r := Resolved{Spec: spec, Value: s.defaults[key], Source: SourceDefault, Default: s.defaults[key]}
 	if row, ok := overrides[key]; ok {
-		if v, err := Validate(spec, row.Value); err == nil {
-			r.Value = v
-			r.Source = SourceAdmin
+		v, err := Validate(spec, row.Value)
+		if err != nil {
+			r.Stale = true
 			r.UpdatedAt = row.UpdatedAt
 			r.UpdatedBy = row.UpdatedBy
+			return r
 		}
+		r.Value = v
+		r.Source = SourceAdmin
+		r.UpdatedAt = row.UpdatedAt
+		r.UpdatedBy = row.UpdatedBy
 	}
 	return r
 }
 
 // Set validates, persists, and applies one override. The value is validated
-// BEFORE the store write (a bad value is a 400, never persisted); the apply
-// hook runs after the write, and its error is returned so the caller can
-// report "saved, but applying failed" — the previous live value keeps serving.
+// BEFORE the store write (a bad value is a 400, never persisted). If the apply
+// hook fails, the just-written row is deleted again (compensation) so the DB
+// can never disagree with the running system across a restart — the admin sees
+// the error and the previous state, live and persisted, keeps serving.
 func (s *Service) Set(ctx context.Context, key, value, updatedBy string) (Resolved, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -275,50 +300,50 @@ func (s *Service) Set(ctx context.Context, key, value, updatedBy string) (Resolv
 	if err != nil {
 		return Resolved{}, fmt.Errorf("%w: %w", ErrInvalidValue, err)
 	}
-	if err := s.st.SetWorkspaceSetting(ctx, key, v, updatedBy); err != nil {
+	row, err := s.st.SetWorkspaceSetting(ctx, key, v, updatedBy)
+	if err != nil {
 		return Resolved{}, fmt.Errorf("persist %s: %w", key, err)
 	}
-	if err := s.apply(key, v); err != nil {
+	if err := s.apply(key, v, true); err != nil {
+		// Compensate: a value that did not take effect must not lie in wait in
+		// the DB to be silently activated by the next boot's ApplyAll.
+		if delErr := s.st.DeleteWorkspaceSetting(ctx, key); delErr != nil {
+			return Resolved{}, fmt.Errorf("%w (and rolling back the persisted row failed: %w — run Reset)", err, delErr)
+		}
 		return Resolved{}, err
 	}
 	// Audit line: key and value are registry-validated constants (never raw
 	// input); updatedBy is the authenticated admin identity.
 	log.Printf("workspace settings: %s = %s (set by %s)", key, v, updatedBy)
-	return s.resolveFresh(ctx, key)
+	return Resolved{
+		Spec: spec, Value: v, Source: SourceAdmin, Default: s.defaults[key],
+		UpdatedAt: row.UpdatedAt, UpdatedBy: row.UpdatedBy,
+	}, nil
 }
 
 // Reset deletes one override and re-applies the env-derived default.
-func (s *Service) Reset(ctx context.Context, key string) (Resolved, error) {
+func (s *Service) Reset(ctx context.Context, key, updatedBy string) (Resolved, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.specs[key]; !ok {
+	spec, ok := s.specs[key]
+	if !ok {
 		return Resolved{}, ErrUnknownKey
 	}
 	if err := s.st.DeleteWorkspaceSetting(ctx, key); err != nil {
 		return Resolved{}, fmt.Errorf("reset %s: %w", key, err)
 	}
-	if err := s.apply(key, s.defaults[key]); err != nil {
+	if err := s.apply(key, s.defaults[key], false); err != nil {
 		return Resolved{}, err
 	}
-	log.Printf("workspace settings: %s reset to default %s", key, s.defaults[key])
-	return s.resolveFresh(ctx, key)
-}
-
-// resolveFresh re-reads the override rows so the response reflects exactly
-// what was persisted (updated_at from the DB write, not a local guess).
-func (s *Service) resolveFresh(ctx context.Context, key string) (Resolved, error) {
-	overrides, err := s.st.WorkspaceSettings(ctx)
-	if err != nil {
-		return Resolved{}, err
-	}
-	return s.resolve(key, overrides), nil
+	log.Printf("workspace settings: %s reset to default %s (by %s)", key, s.defaults[key], updatedBy)
+	return Resolved{Spec: spec, Value: s.defaults[key], Source: SourceDefault, Default: s.defaults[key]}, nil
 }
 
 // ApplyAll pushes every setting's effective value into the running system —
-// called once at boot after the store is ready. Overrides that fail to apply
-// are collected (not short-circuited) so one bad hook can't stop the rest; the
-// caller logs and continues with env-derived behavior for the failed keys,
-// mirroring how a bad LLM-provider overlay degrades at boot.
+// called once at boot after the store is ready. Defaults apply with
+// override=false so env-shadowing hooks clear rather than pin the boot env
+// value. Overrides that fail to apply are collected (not short-circuited) so
+// one bad hook can't stop the rest; the caller decides how to degrade.
 func (s *Service) ApplyAll(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -329,7 +354,7 @@ func (s *Service) ApplyAll(ctx context.Context) error {
 	var errs []string
 	for _, key := range s.order {
 		r := s.resolve(key, overrides)
-		if err := s.apply(key, r.Value); err != nil {
+		if err := s.apply(key, r.Value, r.Source == SourceAdmin); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", key, err))
 		}
 	}
@@ -341,12 +366,12 @@ func (s *Service) ApplyAll(ctx context.Context) error {
 }
 
 // apply runs the key's hook. Callers hold s.mu.
-func (s *Service) apply(key, value string) error {
+func (s *Service) apply(key, value string, override bool) error {
 	hook := s.hooks[key]
 	if hook == nil {
 		return fmt.Errorf("no apply hook wired for %s", key)
 	}
-	if err := hook(value); err != nil {
+	if err := hook(value, override); err != nil {
 		return fmt.Errorf("apply %s: %w", key, err)
 	}
 	return nil

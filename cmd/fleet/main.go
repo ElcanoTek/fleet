@@ -1743,26 +1743,24 @@ func learnedInstructionProvider(cfg *config.Config, st *storage.Storage) schedul
 	return st
 }
 
-// configurePIIRedaction installs the process-wide PII redactor (#450) when
-// FLEET_PII_REDACTION_ENABLED is set. An enabled-but-unset (or invalid) mode
-// defaults to "redact" — a misconfiguration keeps the control ON (never silently
-// off) rather than failing boot. No-op (nil redactor) when disabled.
+// configurePIIRedaction installs the process-wide PII redactor (#450) from the
+// env config, before the store is up. The env→mode semantics live in ONE place
+// — defaultPIIRedactionMode/applyPIIRedactionMode (the workspace-settings
+// wiring) — so what boots here is byte-identical to what the admin panel
+// reports as the default and what Reset re-applies. Any DB override is layered
+// on later by the settings boot apply (appendWorkspaceSettingsOption).
 func configurePIIRedaction(cfg *config.Config) {
-	if !cfg.PIIRedactionEnabled {
+	mode := defaultPIIRedactionMode(cfg)
+	// The derived mode is a validated piiredact constant, never raw env input,
+	// so logging it can't inject.
+	if err := applyPIIRedactionMode(mode, false); err != nil {
+		log.Printf("PII redaction: failed to install redactor: %v", err)
 		return
 	}
-	mode, err := piiredact.ParseMode(cfg.PIIRedactionMode)
-	if err != nil {
-		// Deliberately do NOT echo the raw env value (tainted input → log injection).
-		log.Printf("PII redaction: invalid FLEET_PII_REDACTION_MODE, defaulting to redact")
-		mode = piiredact.ModeRedact
+	if mode != string(piiredact.ModeOff) {
+		//nolint:gosec // G706: mode is a validated piiredact.Mode constant (observe/redact/block), never raw input.
+		log.Printf("PII redaction: enabled (mode=%s)", mode)
 	}
-	if mode == piiredact.ModeOff {
-		mode = piiredact.ModeRedact
-	}
-	agentcore.SetPIIRedactor(piiredact.New(mode))
-	//nolint:gosec // G706: mode is a validated piiredact.Mode constant (observe/redact/block), never raw input.
-	log.Printf("PII redaction: enabled (mode=%s)", mode)
 }
 
 // emailReplierFor wires email reply-back (#511) only when SMTP is configured for

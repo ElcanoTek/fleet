@@ -25,7 +25,7 @@ import (
 type workspaceSettingsService interface {
 	Snapshot(ctx context.Context) ([]settings.Resolved, error)
 	Set(ctx context.Context, key, value, updatedBy string) (settings.Resolved, error)
-	Reset(ctx context.Context, key string) (settings.Resolved, error)
+	Reset(ctx context.Context, key, updatedBy string) (settings.Resolved, error)
 }
 
 // WithWorkspaceSettings injects the admin feature-settings service. Omitted
@@ -82,7 +82,7 @@ func (s *Server) handleAdminSettingItem(w http.ResponseWriter, r *http.Request) 
 		}
 		writeJSON(w, resolved)
 	case http.MethodDelete:
-		resolved, err := s.workspaceSettings.Reset(r.Context(), key)
+		resolved, err := s.workspaceSettings.Reset(r.Context(), key, userFromCtx(r.Context()))
 		if err != nil {
 			httpErrorForSetting(w, err)
 			return

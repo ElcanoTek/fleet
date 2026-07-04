@@ -38,16 +38,21 @@ func (s *Store) WorkspaceSettings(ctx context.Context) (map[string]WorkspaceSett
 	return out, rows.Err()
 }
 
-// SetWorkspaceSetting upserts one override. The caller (internal/settings) has
-// already validated key and value against the registry.
-func (s *Store) SetWorkspaceSetting(ctx context.Context, key, value, updatedBy string) error {
-	_, err := s.db.ExecContext(ctx, `
+// SetWorkspaceSetting upserts one override and returns the persisted row, so
+// the caller can report exactly what was written without a second read. The
+// caller (internal/settings) has already validated key and value against the
+// registry.
+func (s *Store) SetWorkspaceSetting(ctx context.Context, key, value, updatedBy string) (WorkspaceSetting, error) {
+	var ws WorkspaceSetting
+	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO workspace_settings (key, value, updated_at, updated_by)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (key) DO UPDATE
-		SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by`,
-		key, value, time.Now().Unix(), updatedBy)
-	return err
+		SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by
+		RETURNING key, value, updated_at, updated_by`,
+		key, value, time.Now().Unix(), updatedBy).
+		Scan(&ws.Key, &ws.Value, &ws.UpdatedAt, &ws.UpdatedBy)
+	return ws, err
 }
 
 // DeleteWorkspaceSetting removes one override, reverting the setting to its

@@ -12,9 +12,8 @@ import {
   validateTaskForm,
 } from "./validation";
 
-// Ported from moc tests/validation.test.js, plus the v2-new concurrency-cap
-// validator and the target_node_name removal (the task form no longer carries
-// or validates it).
+// Ported from moc tests/validation.test.js, plus the target_node_name removal
+// (the task form no longer carries or validates it).
 
 describe("validateUsername", () => {
   it("validates correct username", () => {

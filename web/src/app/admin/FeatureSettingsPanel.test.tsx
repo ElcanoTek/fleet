@@ -20,6 +20,7 @@ type Resolved = {
   source: "admin" | "default";
   default: string;
   updated_by?: string;
+  stale?: boolean;
 };
 
 const PII: Resolved = {
@@ -194,8 +195,31 @@ describe("FeatureSettingsPanel", () => {
     vi.stubGlobal("fetch", mockFetch([PII, unknown]));
     render(<FeatureSettingsPanel />);
     expect(await screen.findByText("Other")).toBeInTheDocument();
-    expect(screen.getByText("future feature enabled")).toBeInTheDocument();
+    expect(screen.getByText("Future feature enabled")).toBeInTheDocument();
     expect(screen.getByTestId("toggle-future_feature_enabled")).toBeInTheDocument();
+  });
+
+  it("surfaces a stale (ignored) override with a warning chip and a Reset", async () => {
+    const staleRow: Resolved = {
+      ...THRESHOLD,
+      source: "default",
+      stale: true,
+      updated_by: "old-admin@x.com",
+    };
+    const fetchMock = mockFetch([staleRow], (url, init) => {
+      if (init.method === "DELETE") {
+        return { status: 200, body: THRESHOLD };
+      }
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeatureSettingsPanel />);
+    expect(await screen.findByText("Ignored override")).toBeInTheDocument();
+    expect(screen.getByText(/outside this setting.s current bounds/)).toBeInTheDocument();
+    // The ignored row is still resettable.
+    fireEvent.click(screen.getByTestId("reset-tool_disclosure_threshold"));
+    await waitFor(() => expect(screen.queryByText("Ignored override")).toBeNull());
+    expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(true);
   });
 
   it("reports the admin-allowlist 403 instead of an empty panel", async () => {

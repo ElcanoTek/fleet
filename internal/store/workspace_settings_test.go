@@ -20,14 +20,18 @@ func TestWorkspaceSettingsCRUD(t *testing.T) {
 		t.Fatalf("fresh table should have no overrides, got %v", got)
 	}
 
-	if err := s.SetWorkspaceSetting(ctx, "pii_redaction_mode", "redact", "admin@x.com"); err != nil {
+	row, err := s.SetWorkspaceSetting(ctx, "pii_redaction_mode", "redact", "admin@x.com")
+	if err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if err := s.SetWorkspaceSetting(ctx, "subagents_enabled", "true", "admin@x.com"); err != nil {
+	if row.Value != "redact" || row.UpdatedBy != "admin@x.com" || row.UpdatedAt == 0 {
+		t.Errorf("upsert should return the persisted row, got %+v", row)
+	}
+	if _, err := s.SetWorkspaceSetting(ctx, "subagents_enabled", "true", "admin@x.com"); err != nil {
 		t.Fatalf("set second: %v", err)
 	}
 	// Upsert: same key again replaces value and attribution.
-	if err := s.SetWorkspaceSetting(ctx, "pii_redaction_mode", "block", "other@x.com"); err != nil {
+	if _, err := s.SetWorkspaceSetting(ctx, "pii_redaction_mode", "block", "other@x.com"); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 

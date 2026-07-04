@@ -63,7 +63,7 @@ func (f *fakeSettingsService) Set(_ context.Context, key, value, _ string) (sett
 	return f.resolved(key), nil
 }
 
-func (f *fakeSettingsService) Reset(_ context.Context, key string) (settings.Resolved, error) {
+func (f *fakeSettingsService) Reset(_ context.Context, key, _ string) (settings.Resolved, error) {
 	if _, ok := f.dflt[key]; !ok {
 		return settings.Resolved{}, settings.ErrUnknownKey
 	}
@@ -165,7 +165,7 @@ func TestAdminSettingsEndToEnd(t *testing.T) {
 	hooks := map[string]settings.ApplyFunc{}
 	for _, spec := range settings.Registry() {
 		key := spec.Key
-		hooks[key] = func(v string) error { applied[key] = v; return nil }
+		hooks[key] = func(v string, _ bool) error { applied[key] = v; return nil }
 		switch spec.Kind {
 		case settings.KindBool:
 			defaults[key] = "false"

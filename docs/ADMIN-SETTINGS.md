@@ -20,20 +20,31 @@ needs a restart, ever.
   before the row is written, so a bad value can never poison the store or the
   running process (the same discipline as config hot-reload, #286). An
   override that stops validating after an upgrade (e.g. a tightened bound) is
-  ignored in favor of the default rather than served.
+  not served — the default is — but it stays visible in the panel as an
+  **"Ignored override"** with its attribution, so it can be Reset rather than
+  lingering invisibly. The registry bounds constrain what an admin may write;
+  an env-var default outside those bounds (e.g. a legacy
+  `FLEET_MAX_TOOL_OUTPUT_BYTES=512`) is honored verbatim as the default — one
+  out-of-range env value never disables the panel.
 - **Applied live.** At boot (after the store is ready) and after every admin
   edit, the effective value is pushed into the running system: the PII
   redactor is hot-swapped (`agentcore.SetPIIRedactor`), the two agentcore
   knobs update atomic holders read per turn/tool call, and the config-backed
   toggles go through mutex-guarded `Live*` getters on the shared
   `config.Config` (the same lock the #286 reload uses; the two mechanisms
-  cover disjoint fields and cannot fight). A boot-time apply failure degrades
-  to env-derived behavior with a loud log — a bad row can never take the box
-  down.
+  cover disjoint fields and cannot fight). With **no override set**, the two
+  agentcore knobs keep reading their env var live per use (the holder is
+  cleared, not pinned), so env-file edits + `reload-config` behave exactly as
+  they did before this feature. If the boot apply cannot load the override
+  rows, the box still serves with env-derived behavior but the panel degrades
+  to "unavailable" (501) rather than reporting overrides as in effect that
+  never applied; an edit whose apply hook fails is rolled back from the DB so
+  a value that never took effect can't activate silently on the next boot.
 - **API**: admin-gated `GET /admin/settings`,
   `PUT /admin/settings/{key}` (`{"value":"…"}`), `DELETE /admin/settings/{key}`
   (reset) on the chat server; web proxies under `/api/admin/settings`. Every
-  write is audit-logged (key, validated value, admin identity).
+  write — set and reset — is audit-logged (key, validated value, admin
+  identity).
 - **No secrets, by construction.** The registry admits feature toggles and
   numeric bounds only. Secret-bearing config (SMTP passwords, webhook signing
   keys) is deliberately not admin-settable — see "What stays env-only" below.

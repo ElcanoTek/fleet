@@ -545,8 +545,14 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// falls back to the run's fallback model when unset. A resolution failure
 	// leaves the reviewer nil, which the agent treats as "skip the review" — the
 	// feature degrades gracefully rather than failing the run.
+	//
+	// Read the live toggle ONCE for this run's whole setup: it also feeds
+	// AgentOptions.PhoneAFriendEnabled below, and two separate reads could tear
+	// around a concurrent admin toggle (enabled-but-reviewerless, or a resolved
+	// reviewer the options then ignore). One read = one consistent run.
+	phoneAFriend := r.cfg.LivePhoneAFriendEnabled()
 	var reviewer fantasy.LanguageModel
-	if r.cfg.LivePhoneAFriendEnabled() {
+	if phoneAFriend {
 		reviewer = fallback
 		if slug := strings.TrimSpace(r.cfg.PhoneAFriendModel); slug != "" {
 			if rv, rerr := r.mgr.Resolve(ctx, slug); rerr == nil {
@@ -725,7 +731,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		CredentialAllowlist: taskCredentialAllowlist(task),
 		PersonaPolicy:       r.personaPolicy(taskPersona),
 		Overlay:             remoteOverlay,
-		PhoneAFriendEnabled: r.cfg.LivePhoneAFriendEnabled(),
+		PhoneAFriendEnabled: phoneAFriend,
 		ReviewerModel:       reviewer,
 		// Governed sub-agents / delegation (#175, #264): enabled when the fleet-wide
 		// FLEET_SUBAGENTS_ENABLED operator flag is on OR THIS task opted in via

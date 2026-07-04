@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
+import { humanizeVarName } from "@/app/shared/lib/taskTemplates";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 
@@ -29,6 +31,9 @@ type ResolvedSetting = {
   default: string;
   updated_at?: number;
   updated_by?: string;
+  // An override row exists but no longer validates (bounds tightened in a
+  // later release): the default serves, and the row can only be cleared.
+  stale?: boolean;
 };
 
 type SettingMeta = {
@@ -91,7 +96,7 @@ const META: Record<string, SettingMeta> = {
   connector_recommendations_enabled: {
     label: "Connector recommendations",
     description:
-      "Suggest relevant connectors to users based on what they ask for (a model call over the catalog; no user data leaves the box).",
+      "Suggest a not-yet-enabled connector when a chat message looks relevant to it. Deterministic keyword matching over the catalog — no model call, nothing leaves the box.",
   },
   context_handles_enabled: {
     label: "Composer context handles",
@@ -142,70 +147,54 @@ async function fetchSettings(): Promise<ResolvedSetting[] | null> {
 }
 
 function metaFor(key: string): SettingMeta {
-  return (
-    META[key] ?? {
-      label: key.replaceAll("_", " "),
-      description: "",
-    }
-  );
-}
-
-function labelForEnum(option: string): string {
-  return option.charAt(0).toUpperCase() + option.slice(1);
+  return META[key] ?? { label: humanizeVarName(key), description: "" };
 }
 
 export function FeatureSettingsPanel() {
-  const [settings, setSettings] = useState<ResolvedSetting[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // Per-key UI state: in-flight writes, numeric drafts, row-level errors.
-  const [busyKey, setBusyKey] = useState<string | null>(null);
+  // Load via the shared cancellation-safe hook; edits below patch rows into
+  // `edits` (keyed by setting) so a PUT/DELETE response re-renders one row
+  // without a refetch, and reload() gives the error state a real Retry.
+  const { data: loaded, loading, error, reload } = useCancellableFetch<ResolvedSetting[] | null>(
+    fetchSettings,
+    [],
+  );
+  const [edits, setEdits] = useState<Record<string, ResolvedSetting>>({});
+  // Per-key UI state: one write at a time, numeric drafts, row-level errors.
+  const [saving, setSaving] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    let stale = false;
-    fetchSettings()
-      .then((rows) => {
-        if (!stale && rows !== null) setSettings(rows);
-      })
-      .catch((err: unknown) => {
-        if (!stale) setError(err instanceof Error ? err.message : "Failed to load.");
-      });
-    return () => {
-      stale = true;
-    };
-  }, []);
-
-  // Replace one setting in place from a PUT/DELETE response so the row
-  // re-renders without a full refetch.
-  const applyResolved = (updated: ResolvedSetting) => {
-    setSettings((prev) =>
-      prev ? prev.map((s) => (s.key === updated.key ? updated : s)) : prev,
-    );
-    setDrafts((prev) => {
-      const next = { ...prev };
-      delete next[updated.key];
-      return next;
-    });
-  };
+  const settings = loaded ? loaded.map((s) => edits[s.key] ?? s) : null;
 
   const write = async (key: string, init: RequestInit) => {
-    setBusyKey(key);
+    setSaving(true);
     setRowErrors((prev) => ({ ...prev, [key]: "" }));
     try {
       const response = await fetch(`/api/admin/settings/${encodeURIComponent(key)}`, init);
+      if (response.status === 401) {
+        // Session expired mid-edit: re-authenticate instead of surfacing a raw
+        // 401 body as a row error (mirrors fetchSettings).
+        window.location.href = "/login";
+        return;
+      }
       if (!response.ok) {
         const text = (await response.text()).trim();
         throw new Error(text || `Request failed: ${response.status}`);
       }
-      applyResolved((await response.json()) as ResolvedSetting);
+      const updated = (await response.json()) as ResolvedSetting;
+      setEdits((prev) => ({ ...prev, [updated.key]: updated }));
+      setDrafts((prev) => {
+        const next = { ...prev };
+        delete next[updated.key];
+        return next;
+      });
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,
         [key]: err instanceof Error ? err.message : "Failed to save.",
       }));
     } finally {
-      setBusyKey(null);
+      setSaving(false);
     }
   };
 
@@ -245,10 +234,19 @@ export function FeatureSettingsPanel() {
       </p>
 
       {error ? (
-        <div className="px-4 py-3">
-          <NoticeBanner tone="danger">{error}</NoticeBanner>
+        <div className="flex items-center gap-3 px-4 py-3">
+          <NoticeBanner tone="danger" className="flex-1">
+            {error}
+          </NoticeBanner>
+          <button
+            type="button"
+            onClick={() => void reload()}
+            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] transition hover:bg-[var(--color-overlay-soft)]"
+          >
+            Retry
+          </button>
         </div>
-      ) : settings === null ? (
+      ) : loading || settings === null ? (
         <p className="px-4 py-4 text-[0.8125rem] text-[var(--color-text-muted)]">Loading…</p>
       ) : (
         grouped.map((group) => (
@@ -261,7 +259,7 @@ export function FeatureSettingsPanel() {
                 <SettingRow
                   key={s.key}
                   setting={s}
-                  busy={busyKey !== null}
+                  busy={saving}
                   rowError={rowErrors[s.key] ?? ""}
                   draft={drafts[s.key]}
                   setDraft={(v) => setDrafts((prev) => ({ ...prev, [s.key]: v }))}
@@ -296,6 +294,11 @@ function SettingRow({
 }) {
   const meta = metaFor(setting.key);
   const customized = setting.source === "admin";
+  // A stale row (stored override no longer within the current bounds) is not
+  // in effect, but it must stay visible and resettable — silently hiding it
+  // would let it spring back to life if a later release loosens the bounds.
+  const stale = setting.stale === true;
+  const resettable = customized || stale;
 
   return (
     <li
@@ -310,6 +313,8 @@ function SettingRow({
             </span>
             {customized ? (
               <StatusChip tone="success">Customized</StatusChip>
+            ) : stale ? (
+              <StatusChip tone="warning">Ignored override</StatusChip>
             ) : (
               <StatusChip tone="neutral">Server default</StatusChip>
             )}
@@ -324,8 +329,14 @@ function SettingRow({
             <code className="rounded bg-[var(--color-overlay-soft)] px-1">{setting.default}</code>{" "}
             from{" "}
             <code className="rounded bg-[var(--color-overlay-soft)] px-1">{setting.env_var}</code>
-            {customized && setting.updated_by ? <> · set by {setting.updated_by}</> : null}
+            {resettable && setting.updated_by ? <> · set by {setting.updated_by}</> : null}
           </p>
+          {stale ? (
+            <p className="mt-1 text-[0.75rem] text-[var(--color-warning-soft)]">
+              A stored override is outside this setting&apos;s current bounds and is being
+              ignored — the server default is in effect. Reset to clear it.
+            </p>
+          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -343,7 +354,7 @@ function SettingRow({
               onSave={onSave}
             />
           )}
-          {customized ? (
+          {resettable ? (
             <button
               type="button"
               onClick={onReset}
@@ -441,7 +452,7 @@ function EnumControl({
                 : "border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
             }`}
           >
-            {labelForEnum(option)}
+            {humanizeVarName(option)}
           </button>
         );
       })}

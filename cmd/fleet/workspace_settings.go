@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -42,9 +43,13 @@ func buildWorkspaceSettings(cfg *config.Config, st *store.Store) (*settings.Serv
 		"context_handles_enabled":           strconv.FormatBool(cfg.ContextHandlesEnabled),
 	}
 	hooks := map[string]settings.ApplyFunc{
-		"pii_redaction_mode":                applyPIIRedactionMode,
-		"tool_disclosure_threshold":         applyIntSetting(agentcore.SetToolDisclosureThreshold),
-		"max_tool_output_bytes":             applyIntSetting(agentcore.SetMaxToolOutputBytes),
+		"pii_redaction_mode": applyPIIRedactionMode,
+		// The two agentcore knobs shadow a PER-USE env read: with no admin
+		// override the holder is CLEARED (not pinned to the boot env value), so
+		// an env-file edit + #286 reload — or any process-env change — keeps
+		// taking effect live exactly as before this feature existed.
+		"tool_disclosure_threshold":         applyEnvShadowedInt(agentcore.SetToolDisclosureThreshold, 0),
+		"max_tool_output_bytes":             applyEnvShadowedInt(agentcore.SetMaxToolOutputBytes, -1),
 		"phone_a_friend_enabled":            applyBoolSetting(cfg.SetPhoneAFriendEnabled),
 		"subagents_enabled":                 applyBoolSetting(cfg.SetSubagentsEnabled),
 		"memory_autoindex_enabled":          applyBoolSetting(cfg.SetMemoryAutoIndexEnabled),
@@ -73,8 +78,9 @@ func defaultPIIRedactionMode(cfg *config.Config) string {
 // applyPIIRedactionMode hot-swaps the process-wide PII redactor (#450). "off"
 // installs nil (the tool-output pass becomes a byte-for-byte no-op); any other
 // validated mode installs a fresh PatternRedactor. Takes effect on the very
-// next tool call.
-func applyPIIRedactionMode(value string) error {
+// next tool call. The redactor holder is not env-shadowed (nothing re-reads
+// the env after boot), so override and default apply identically.
+func applyPIIRedactionMode(value string, _ bool) error {
 	mode, err := piiredact.ParseMode(value)
 	if err != nil {
 		return err
@@ -89,8 +95,10 @@ func applyPIIRedactionMode(value string) error {
 
 // applyBoolSetting adapts a config live setter to an ApplyFunc. The value was
 // registry-validated, so a parse failure is a wiring bug worth surfacing.
+// Config fields don't re-read the env after boot, so applying the default is
+// the same as applying an override of the same value.
 func applyBoolSetting(set func(bool)) settings.ApplyFunc {
-	return func(value string) error {
+	return func(value string, _ bool) error {
 		b, err := strconv.ParseBool(value)
 		if err != nil {
 			return fmt.Errorf("not a boolean: %q", value)
@@ -100,9 +108,17 @@ func applyBoolSetting(set func(bool)) settings.ApplyFunc {
 	}
 }
 
-// applyIntSetting adapts an int live setter to an ApplyFunc.
-func applyIntSetting(set func(int)) settings.ApplyFunc {
-	return func(value string) error {
+// applyEnvShadowedInt adapts an agentcore override holder to an ApplyFunc.
+// These holders SHADOW an env var that the runtime otherwise re-reads per use,
+// so a default (override=false) must CLEAR the holder with the given sentinel
+// — pinning the boot env value would freeze later env/reload changes that
+// worked before this feature existed.
+func applyEnvShadowedInt(set func(int), clearSentinel int) settings.ApplyFunc {
+	return func(value string, override bool) error {
+		if !override {
+			set(clearSentinel)
+			return nil
+		}
 		n, err := strconv.Atoi(value)
 		if err != nil {
 			return fmt.Errorf("not an integer: %q", value)
@@ -116,21 +132,30 @@ func applyIntSetting(set func(int)) settings.ApplyFunc {
 // effective value (override or env default) into the running system before the
 // listeners come up, and appends the httpapi option that serves the admin
 // endpoints. Failure degrades rather than bricking boot, mirroring the
-// LLM-provider overlay: a construction failure (a registry key without a
+// LLM-provider overlay — but it degrades to the 501 panel, never to a lying
+// one: if the boot apply cannot load the override rows (after a short retry),
+// the endpoints are NOT registered, because a panel that reports an override
+// as in effect when it never applied would be worse than no panel. Env-derived
+// behavior serves either way. A construction failure (a registry key without a
 // default or hook — a programming error, also caught by
-// TestBuildWorkspaceSettingsCoversRegistry) leaves the endpoints answering 501
-// with a loud log; a boot-apply failure keeps env-derived behavior for the
-// affected keys.
+// TestBuildWorkspaceSettingsCoversRegistry) degrades the same way.
 func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st *store.Store) []httpapi.Option {
 	svc, err := buildWorkspaceSettings(cfg, st)
 	if err != nil {
 		log.Printf("workspace settings: DISABLED — service construction failed (this is a wiring bug): %v", err)
 		return opts
 	}
-	if err := svc.ApplyAll(context.Background()); err != nil {
-		log.Printf("workspace settings: boot apply degraded to env defaults for some keys: %v", err)
+	// The store just served migrations, so a load failure here is a transient
+	// blip at worst — retry briefly before degrading.
+	var applyErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if applyErr = svc.ApplyAll(context.Background()); applyErr == nil {
+			return append(opts, httpapi.WithWorkspaceSettings(svc))
+		}
+		time.Sleep(time.Duration(attempt+1) * time.Second)
 	}
-	return append(opts, httpapi.WithWorkspaceSettings(svc))
+	log.Printf("workspace settings: DISABLED — boot apply failed, serving env-derived defaults (admin overrides NOT in effect): %v", applyErr)
+	return opts
 }
 
 // gatedErrorAnalyzer wraps the Manager's post-failure diagnosis (#317) so the

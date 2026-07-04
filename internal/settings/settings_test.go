@@ -32,12 +32,13 @@ func (f *fakeStore) WorkspaceSettings(context.Context) (map[string]store.Workspa
 	return out, nil
 }
 
-func (f *fakeStore) SetWorkspaceSetting(_ context.Context, key, value, updatedBy string) error {
+func (f *fakeStore) SetWorkspaceSetting(_ context.Context, key, value, updatedBy string) (store.WorkspaceSetting, error) {
 	if f.failSet != nil {
-		return f.failSet
+		return store.WorkspaceSetting{}, f.failSet
 	}
-	f.rows[key] = store.WorkspaceSetting{Key: key, Value: value, UpdatedAt: 1234, UpdatedBy: updatedBy}
-	return nil
+	row := store.WorkspaceSetting{Key: key, Value: value, UpdatedAt: 1234, UpdatedBy: updatedBy}
+	f.rows[key] = row
+	return row, nil
 }
 
 func (f *fakeStore) DeleteWorkspaceSetting(_ context.Context, key string) error {
@@ -62,13 +63,15 @@ func testDefaults() map[string]string {
 	}
 }
 
-// testHooks records every apply so tests can assert what reached the runtime.
+// testHooks records every apply (value + override flag) so tests can assert
+// what reached the runtime.
 func testHooks(applied map[string]string) map[string]ApplyFunc {
 	hooks := map[string]ApplyFunc{}
 	for _, spec := range Registry() {
 		key := spec.Key
-		hooks[key] = func(v string) error {
+		hooks[key] = func(v string, override bool) error {
 			applied[key] = v
+			applied[key+"/override"] = fmt.Sprintf("%v", override)
 			return nil
 		}
 	}
@@ -97,6 +100,24 @@ func TestNewServiceRequiresFullCoverage(t *testing.T) {
 	delete(hooks, "subagents_enabled")
 	if _, err := NewService(newFakeStore(), testDefaults(), hooks); err == nil {
 		t.Fatal("missing hook should fail construction")
+	}
+	// An OUT-OF-BOUNDS env default must NOT fail construction: the env accepts
+	// a wider range than the admin bounds, and one legacy env value disabling
+	// the whole panel would be a regression (the value is kept verbatim).
+	defaults = testDefaults()
+	defaults["max_tool_output_bytes"] = "512" // legal env ceiling, below admin Min
+	svc, err := NewService(newFakeStore(), defaults, testHooks(applied))
+	if err != nil {
+		t.Fatalf("out-of-bounds env default must not fail construction: %v", err)
+	}
+	snap, err := svc.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	for _, r := range snap {
+		if r.Key == "max_tool_output_bytes" && (r.Default != "512" || r.Value != "512") {
+			t.Errorf("verbatim env default should serve: %+v", r)
+		}
 	}
 	if _, err := NewService(newFakeStore(), map[string]string{}, map[string]ApplyFunc{}); err == nil {
 		t.Fatal("empty wiring should fail construction")
@@ -173,6 +194,9 @@ func TestSnapshotPrecedence(t *testing.T) {
 	if thr.Value != "128" || thr.Source != SourceDefault {
 		t.Errorf("invalid override should degrade to default: %+v", thr)
 	}
+	if !thr.Stale {
+		t.Error("an ignored override row must be surfaced as Stale so the panel can offer Reset")
+	}
 	if byKey["error_analysis_enabled"].Value != "true" {
 		t.Errorf("untouched setting should report its default")
 	}
@@ -208,6 +232,9 @@ func TestSetValidatesBeforePersistAndApplies(t *testing.T) {
 	if applied["pii_redaction_mode"] != "observe" {
 		t.Errorf("hook saw %q, want observe", applied["pii_redaction_mode"])
 	}
+	if applied["pii_redaction_mode/override"] != "true" {
+		t.Error("an admin Set must apply with override=true")
+	}
 	if st.rows["pii_redaction_mode"].Value != "observe" {
 		t.Errorf("persisted %q, want observe", st.rows["pii_redaction_mode"].Value)
 	}
@@ -224,7 +251,7 @@ func TestResetRevertsToDefault(t *testing.T) {
 	if _, err := svc.Set(ctx, "memory_autoindex_enabled", "true", "admin@x"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	r, err := svc.Reset(ctx, "memory_autoindex_enabled")
+	r, err := svc.Reset(ctx, "memory_autoindex_enabled", "admin@x")
 	if err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
@@ -234,10 +261,13 @@ func TestResetRevertsToDefault(t *testing.T) {
 	if applied["memory_autoindex_enabled"] != "false" {
 		t.Errorf("hook saw %q after reset, want false", applied["memory_autoindex_enabled"])
 	}
+	if applied["memory_autoindex_enabled/override"] != "false" {
+		t.Error("reset must apply as a DEFAULT (override=false) so env-shadowing hooks clear")
+	}
 	if _, ok := st.rows["memory_autoindex_enabled"]; ok {
 		t.Error("override row should be deleted on reset")
 	}
-	if _, err := svc.Reset(ctx, "nonsense"); !errors.Is(err, ErrUnknownKey) {
+	if _, err := svc.Reset(ctx, "nonsense", "admin@x"); !errors.Is(err, ErrUnknownKey) {
 		t.Fatalf("want ErrUnknownKey, got %v", err)
 	}
 }
@@ -249,7 +279,7 @@ func TestApplyAllPushesEffectiveValues(t *testing.T) {
 	st.rows["subagents_enabled"] = store.WorkspaceSetting{Key: "subagents_enabled", Value: "true"}
 	applied := map[string]string{}
 	hooks := testHooks(applied)
-	hooks["auto_title_enabled"] = func(string) error { return fmt.Errorf("boom") }
+	hooks["auto_title_enabled"] = func(string, bool) error { return fmt.Errorf("boom") }
 	svc, err := NewService(st, testDefaults(), hooks)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -259,8 +289,11 @@ func TestApplyAllPushesEffectiveValues(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "auto_title_enabled") {
 		t.Fatalf("ApplyAll should report the failing key, got %v", err)
 	}
-	if applied["subagents_enabled"] != "true" {
-		t.Errorf("override should apply, got %q", applied["subagents_enabled"])
+	if applied["subagents_enabled"] != "true" || applied["subagents_enabled/override"] != "true" {
+		t.Errorf("override should apply as override=true, got %q/%q", applied["subagents_enabled"], applied["subagents_enabled/override"])
+	}
+	if applied["pii_redaction_mode/override"] != "false" {
+		t.Error("a default must apply as override=false at boot")
 	}
 	if applied["error_analysis_enabled"] != "true" || applied["pii_redaction_mode"] != "off" {
 		t.Errorf("defaults should apply for un-overridden keys: %v", applied)
@@ -307,5 +340,25 @@ func TestRegistryShape(t *testing.T) {
 		default:
 			t.Errorf("%s: unknown kind %q", s.Key, s.Kind)
 		}
+	}
+}
+
+// TestSetCompensatesOnApplyFailure: a persisted override whose apply hook
+// fails is deleted again, so a value that never took effect can't lie in wait
+// for the next boot's ApplyAll.
+func TestSetCompensatesOnApplyFailure(t *testing.T) {
+	st := newFakeStore()
+	applied := map[string]string{}
+	hooks := testHooks(applied)
+	hooks["subagents_enabled"] = func(string, bool) error { return fmt.Errorf("hook down") }
+	svc, err := NewService(st, testDefaults(), hooks)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if _, err := svc.Set(context.Background(), "subagents_enabled", "true", "admin@x"); err == nil {
+		t.Fatal("want apply error")
+	}
+	if _, ok := st.rows["subagents_enabled"]; ok {
+		t.Error("a failed apply must roll back the persisted row")
 	}
 }
