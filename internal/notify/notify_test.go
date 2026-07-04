@@ -140,7 +140,7 @@ func TestWebhookSend_SignedAndStatus(t *testing.T) {
 	defer srv.Close()
 
 	n := New(Config{WebhookURL: srv.URL, WebhookSecret: secret})
-	if err := n.sendWebhook(context.Background(), sampleEvent()); err != nil {
+	if err := sendWebhook(context.Background(), n.snapshot(), sampleEvent()); err != nil {
 		t.Fatalf("sendWebhook: %v", err)
 	}
 
@@ -171,7 +171,7 @@ func TestWebhookSend_SignedAndStatus(t *testing.T) {
 	}))
 	defer bad.Close()
 	n2 := New(Config{WebhookURL: bad.URL})
-	if err := n2.sendWebhook(context.Background(), sampleEvent()); err == nil {
+	if err := sendWebhook(context.Background(), n2.snapshot(), sampleEvent()); err == nil {
 		t.Error("expected an error for a 500 response")
 	}
 }
@@ -189,7 +189,7 @@ func TestWebhookSend_Unsigned(t *testing.T) {
 	defer srv.Close()
 
 	n := New(Config{WebhookURL: srv.URL}) // no WebhookSecret
-	if err := n.sendWebhook(context.Background(), sampleEvent()); err != nil {
+	if err := sendWebhook(context.Background(), n.snapshot(), sampleEvent()); err != nil {
 		t.Fatalf("sendWebhook: %v", err)
 	}
 	if gotSig != "" || gotTS != "" {

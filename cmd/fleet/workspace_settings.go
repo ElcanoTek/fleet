@@ -19,6 +19,8 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
+	"github.com/ElcanoTek/fleet/internal/notify"
+	"github.com/ElcanoTek/fleet/internal/notifyadmin"
 	"github.com/ElcanoTek/fleet/internal/piiredact"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/settings"
@@ -181,4 +183,19 @@ func errorAnalyzerFor(cfg *config.Config, mgr *agent.Manager) runner.ErrorAnalyz
 		return nil
 	}
 	return gatedErrorAnalyzer{cfg: cfg, mgr: mgr}
+}
+
+// appendNotifySettingsOption wires the admin Notifications panel
+// (internal/notifyadmin): a persisted admin row hot-swaps the shared
+// notifier's config at boot; edits keep swapping it live. Same degrade posture
+// as the Features panel — if the boot apply can't read the row, the endpoints
+// are NOT registered (501 panel, never a lying one) and the env-derived config
+// already in the notifier keeps serving.
+func appendNotifySettingsOption(opts []httpapi.Option, st *store.Store, notifier *notify.Notifier) []httpapi.Option {
+	svc := notifyadmin.NewService(st, notify.Load(), notifier)
+	if err := svc.ApplyBoot(context.Background()); err != nil {
+		log.Printf("notify settings: DISABLED — boot apply failed, serving env-derived config (admin settings NOT in effect): %v", err)
+		return opts
+	}
+	return append(opts, httpapi.WithNotifySettings(svc))
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { FeatureSettingsPanel } from "./FeatureSettingsPanel";
 import { HealthPanel } from "./HealthPanel";
+import { NotificationsPanel } from "./NotificationsPanel";
 import { ProvidersPanel } from "./ProvidersPanel";
 import { UsersPanel } from "./UsersPanel";
 
@@ -197,6 +198,7 @@ export default function AdminPage() {
             the stats error branch so a stats failure never hides them. */}
         <ProvidersPanel />
         <FeatureSettingsPanel />
+        <NotificationsPanel />
     </SettingsShell>
   );
 }

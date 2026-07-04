@@ -55,6 +55,12 @@ type Config struct {
 // Enabled reports whether any channel is configured. Default OFF.
 func (c Config) Enabled() bool { return c.emailEnabled() || c.webhookEnabled() }
 
+// EmailConfigured / WebhookConfigured are the exported per-channel enablement
+// reads the admin notification settings surface (internal/notifyadmin) shows
+// as honest channel status.
+func (c Config) EmailConfigured() bool   { return c.emailEnabled() }
+func (c Config) WebhookConfigured() bool { return c.webhookEnabled() }
+
 // emailEnabled reports whether email can be sent (an SMTP host AND at least one
 // recipient). A host with no recipients — or recipients with no host — is inert.
 func (c Config) emailEnabled() bool {
