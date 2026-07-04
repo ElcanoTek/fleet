@@ -52,9 +52,9 @@ const META: Record<string, SettingMeta> = {
   pii_redaction_mode: {
     label: "PII redaction",
     description:
-      "Scan every tool result for PII (emails, SSNs, credit cards, IPs, phone numbers) before it reaches the model, on top of the always-on secret scrubber. Deterministic pattern matching — a redaction aid, not a certified DLP engine.",
+      "OPTIONAL and OFF by default. When on, scans every tool result for PII (emails, SSNs, credit cards, IPs, phone numbers) before it reaches the model, on top of the always-on secret scrubber. It only ever touches TOOL OUTPUT — never what users type into chat — so you can always send PII in a message; set the mode to Off to disable it entirely. Deterministic pattern matching (or the Rampart engine below) — a redaction aid, not a certified DLP engine.",
     optionHelp: {
-      off: "Tool output passes through unchanged.",
+      off: "Off (default): tool output passes through unchanged. PII is never redacted anywhere.",
       observe: "Detect and audit-log findings (kind + count, never the value) without changing the output — a monitoring posture.",
       redact: "Replace each detected span with a [PII:kind] marker so the model sees the structure without the value.",
       block: "Withhold any tool result containing PII entirely — the strictest posture; the model sees only a blocked notice.",
@@ -63,7 +63,7 @@ const META: Record<string, SettingMeta> = {
   pii_redaction_engine: {
     label: "PII detection engine",
     description:
-      "How PII is detected. Pattern: built-in deterministic regexes (emails, SSNs, cards, IPs, phones) — no dependencies. Rampart: a small ML token-classification model (17 entity types incl. names, addresses, government IDs, bank numbers) running as a service you deploy next to fleet — see docs/PII-REDACTION.md. If the Rampart service is unreachable, tool calls fall back to the pattern engine.",
+      "Which detector PII redaction uses WHEN it is on (no effect while the mode above is Off). Pattern: built-in deterministic regexes (emails, SSNs, cards, IPs, phones) — no dependencies. Rampart: a small ML token-classification model (17 entity types incl. names, addresses, government IDs, bank numbers) running as a service you deploy next to fleet — see docs/PII-REDACTION.md. If the Rampart service is unreachable, tool calls fall back to the pattern engine.",
     optionHelp: {
       pattern: "Deterministic regex detection: five PII shapes, zero moving parts.",
       rampart: "ML detection via your Rampart service (requires the service URL below). Redacts with stable numbered placeholders like [GIVEN_NAME_1].",

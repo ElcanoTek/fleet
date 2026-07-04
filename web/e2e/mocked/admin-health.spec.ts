@@ -46,6 +46,10 @@ test("the admin health panel renders live system metrics", async ({ page }) => {
 
   const panel = page.getByTestId("health-panel");
   await expect(panel).toBeVisible({ timeout: 15_000 });
+
+  // The header Refresh control is an icon-only button but stays reachable by
+  // its accessible name (aria-label), so the icon swap didn't drop a11y.
+  await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
   await expect(panel).toContainText("test-9.9.9"); // version
   await expect(panel).toContainText("$4.50"); // LLM spend today
   await expect(panel).toContainText("chat DB healthy"); // DB status pill
