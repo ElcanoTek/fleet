@@ -391,6 +391,13 @@ func (s *Storage) AddLogWithContext(ctx context.Context, taskID uuid.UUID, sessi
 	return session, nil
 }
 
+// ImportLogRaw upserts a pre-serialized log session verbatim (legacy import,
+// docs/LEGACY-IMPORT.md). See db.AddLogRaw for why the payload is not
+// round-tripped through models.LogSession.
+func (s *Storage) ImportLogRaw(ctx context.Context, taskID uuid.UUID, sessionJSON []byte) error {
+	return s.db.AddLogRaw(ctx, taskID, sessionJSON)
+}
+
 // GetLog gets the log session for a task.
 func (s *Storage) GetLog(taskID uuid.UUID) (*models.LogSession, error) {
 	return s.db.GetLog(context.Background(), taskID)
