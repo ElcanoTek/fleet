@@ -888,6 +888,11 @@ type TaskCreate struct {
 	// SLA monitor goroutine ignores it. When set, the warn/fail thresholds are
 	// expected * SLAWarnMultiplier / expected * SLAFailMultiplier.
 	ExpectedDurationMinutes *int `json:"expected_duration_minutes,omitempty"`
+	// ThinkingBudgetTokens is the per-task extended-thinking override (#220).
+	// nil = inherit the global FLEET_DEFAULT_THINKING_BUDGET_TOKENS; 0 = force
+	// thinking OFF for this task; N (>0) = this task's own budget (clamped to
+	// the provider bounds at run time). Scheduled runs only.
+	ThinkingBudgetTokens *int `json:"thinking_budget_tokens,omitempty"`
 	// SLAWarnMultiplier scales ExpectedDurationMinutes to the WARN threshold.
 	// Defaults to DefaultSLAWarnMultiplier (1.5) when a task carries an expected
 	// duration but omits an explicit multiplier.
@@ -1076,6 +1081,9 @@ type Task struct {
 	// (#274 SLA monitoring). Nil means no SLA is configured; the monitor ignores
 	// the task. See TaskCreate.ExpectedDurationMinutes.
 	ExpectedDurationMinutes *int `json:"expected_duration_minutes,omitempty"`
+	// ThinkingBudgetTokens is the per-task extended-thinking override (#220).
+	// See TaskCreate.ThinkingBudgetTokens. nil = inherit global.
+	ThinkingBudgetTokens *int `json:"thinking_budget_tokens,omitempty"`
 	// SLAWarnMultiplier / SLAFailMultiplier scale the expectation to the warn/fail
 	// thresholds (#274). Resolved to the defaults in NewTask when an expected
 	// duration is set but the multiplier is 0; otherwise persisted as written.
@@ -1170,6 +1178,7 @@ func NewTask(tc TaskCreate) *Task {
 		CreatedByTaskID:            tc.CreatedByTaskID,
 		RunIf:                      tc.RunIf,
 		ExpectedDurationMinutes:    tc.ExpectedDurationMinutes,
+		ThinkingBudgetTokens:       tc.ThinkingBudgetTokens,
 		SLAWarnMultiplier:          warnMul,
 		SLAFailMultiplier:          failMul,
 	}
@@ -1300,6 +1309,7 @@ func TaskToCreate(t *Task) TaskCreate {
 		// ActualDurationSeconds are runtime-only (like Status / AttemptCount)
 		// and are intentionally NOT carried.
 		ExpectedDurationMinutes: t.ExpectedDurationMinutes,
+		ThinkingBudgetTokens:    t.ThinkingBudgetTokens,
 		SLAWarnMultiplier:       t.SLAWarnMultiplier,
 		SLAFailMultiplier:       t.SLAFailMultiplier,
 	}
@@ -1332,6 +1342,7 @@ type TaskExportRecord struct {
 	CarryContext               bool                `json:"carry_context,omitempty"              yaml:"carry_context,omitempty"`
 	AllowEventTriggers         bool                `json:"allow_event_triggers,omitempty"       yaml:"allow_event_triggers,omitempty"`
 	AllowDelegation            bool                `json:"allow_delegation,omitempty"           yaml:"allow_delegation,omitempty"`
+	ThinkingBudgetTokens       *int                `json:"thinking_budget_tokens,omitempty"     yaml:"thinking_budget_tokens,omitempty"`
 	Persona                    string              `json:"persona,omitempty"                    yaml:"persona,omitempty"`
 	Description                string              `json:"description,omitempty"                yaml:"description,omitempty"`
 	ScheduledFor               *time.Time          `json:"scheduled_for,omitempty"              yaml:"scheduled_for,omitempty"`
@@ -1443,6 +1454,7 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		CarryContext:               rec.CarryContext,
 		AllowEventTriggers:         rec.AllowEventTriggers,
 		AllowDelegation:            rec.AllowDelegation,
+		ThinkingBudgetTokens:       rec.ThinkingBudgetTokens,
 		Persona:                    rec.Persona,
 		Description:                rec.Description,
 		ScheduledFor:               rec.ScheduledFor,
@@ -1496,6 +1508,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		CarryContext:               t.CarryContext,
 		AllowEventTriggers:         t.AllowEventTriggers,
 		AllowDelegation:            t.AllowDelegation,
+		ThinkingBudgetTokens:       t.ThinkingBudgetTokens,
 		Persona:                    t.Persona,
 		Description:                t.Description,
 		ScheduledFor:               t.ScheduledFor,

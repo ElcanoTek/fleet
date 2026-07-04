@@ -71,6 +71,9 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
   // SLA expected duration (#274): blank = no SLA. Stored as a string so the
   // empty/typing states round-trip cleanly; parsed to int on submit.
   const [expectedDuration, setExpectedDuration] = useState("");
+  // Per-task extended-thinking override (#220): "" = inherit the deployment
+  // default, "0" = off, a positive value = this task's budget in tokens.
+  const [thinkingBudget, setThinkingBudget] = useState("");
 
   // The NEW per-task MCP selection (replaces target_node_name).
   const [mcpSelection, setMcpSelection] = useState<MCPChoice[]>([]);
@@ -138,6 +141,9 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
       typeof t.expected_duration_minutes === "number" && t.expected_duration_minutes > 0
         ? String(t.expected_duration_minutes)
         : "",
+    );
+    setThinkingBudget(
+      typeof t.thinking_budget_tokens === "number" ? String(t.thinking_budget_tokens) : "",
     );
     if (typeof t.max_iterations === "number") {
       const known = MAX_ITER_OPTIONS.some((o) => o.value === String(t.max_iterations));
@@ -224,6 +230,10 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
     if (expectedDuration.trim()) {
       const mins = Number.parseInt(expectedDuration, 10);
       if (Number.isFinite(mins) && mins > 0) taskData.expected_duration_minutes = mins;
+    }
+    if (thinkingBudget.trim()) {
+      const budget = Number.parseInt(thinkingBudget, 10);
+      if (Number.isFinite(budget) && budget >= 0) taskData.thinking_budget_tokens = budget;
     }
     return taskData;
   };
@@ -677,6 +687,25 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                       </div>
                       <div className="advanced-setting-meta">
                         SLA expectation (#274). Blank = no SLA. The monitor warns at 1.5× and breaches at 2× (configurable per task via the API).
+                      </div>
+                    </div>
+                    <div className="advanced-setting">
+                      <div className="advanced-setting-row">
+                        <label htmlFor="taskThinkingBudget">Thinking budget (tokens)</label>
+                        <input
+                          id="taskThinkingBudget"
+                          type="number"
+                          min={0}
+                          step={1024}
+                          className="filter-input"
+                          inputMode="numeric"
+                          placeholder="inherit default"
+                          value={thinkingBudget}
+                          onChange={(e) => setThinkingBudget(e.target.value)}
+                        />
+                      </div>
+                      <div className="advanced-setting-meta">
+                        Extended thinking for this task (#220, Claude models). Blank = inherit the deployment default; 0 = off; a positive value sets this task&apos;s budget (clamped to the provider range at run time).
                       </div>
                     </div>
                   </div>

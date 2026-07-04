@@ -177,7 +177,10 @@ type TaskScheduleRequest struct {
 	RunAt         *time.Time
 	MaxIterations int
 	AllowNetwork  bool
-	Tags          []string
+	// ThinkingBudgetTokens is the per-task extended-thinking override (#220):
+	// nil = inherit the deployment default, 0 = off, >0 = this task's budget.
+	ThinkingBudgetTokens *int
+	Tags                 []string
 	// RequestedBy is the approving chat user's email — the principal the
 	// per-user rolling budget gate (#601 part 2) checks before the task is
 	// created, so scheduling from chat cannot bypass a budget that would refuse

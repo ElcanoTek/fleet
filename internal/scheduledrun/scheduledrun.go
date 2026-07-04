@@ -729,6 +729,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		TaskMemoryConfig:    r.taskMemoryConfig,
 		LearnedInstruction:  learnedInstruction,
 		CredentialAllowlist: taskCredentialAllowlist(task),
+		ThinkingBudget:      task.ThinkingBudgetTokens,
 		PersonaPolicy:       r.personaPolicy(taskPersona),
 		Overlay:             remoteOverlay,
 		PhoneAFriendEnabled: phoneAFriend,
