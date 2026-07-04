@@ -13,6 +13,19 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- Skill `allowed-tools` is now parsed and **surfaced** for review — the skills
+  library UI and `GET /skills` show each skill's declared tool contract (both
+  the YAML-list and comma-string frontmatter forms are accepted). It remains
+  **advisory, not enforced**: skills are read on-demand mid-turn with no single
+  "active skill" to gate a tool roster against, and a skill can never exceed
+  the turn's sandbox/MCP/approval limits, so a self-declared list can't be an
+  authorization boundary. The "Honesty in docs" invariant (AGENTS.md) and
+  docs/SKILLS.md now spell out why, plus the naming-portability caveat for
+  skills imported from Claude Code.
+
+
 ### Security
 
 - Interactive chat now honors the fleet-wide sandbox egress mode

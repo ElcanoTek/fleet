@@ -76,10 +76,40 @@ server is the authority on what matches.
 A skill can ship code that executes in the sandbox; the bundle is a
 trusted-but-reviewable supply chain, and a skill is only as trustworthy as the
 bundle it ships in. Explicit invocation does not change that: it selects among
-skills the operator already shipped. A skill's `allowed-tools` frontmatter is
-parsed but **not** enforced as a hard authorization boundary — the real
-boundaries remain the sandbox, the MCP tool allowlists, and the critical-tool
-audit gate.
+skills the operator already shipped.
+
+A skill's `allowed-tools` frontmatter is parsed and **surfaced** — the skills
+library UI and `GET /skills` show a skill's declared tools next to it, so an
+operator reviewing the supply chain can see the contract each skill claims —
+but it is **not** enforced as an authorization boundary. The real boundaries
+remain the sandbox, the MCP tool allowlists, and the critical-tool approval
+gate. This is deliberate, not a gap:
+
+- **There is no "active skill" to gate on.** Skills are read on-demand
+  mid-turn — the model reads a `SKILL.md` by path when it seems relevant, may
+  read several, and may follow one only partially. There is no
+  activate/deactivate event, so "which skill's `allowed-tools` applies to this
+  tool call?" has no honest answer. (Contrast personas, which are selected once
+  per turn and therefore *can* carry a hard per-turn tool allowlist.)
+- **A skill can never exceed the turn's existing capabilities.** Enforcing
+  `allowed-tools` could only ever *narrow* an already-authorized set, so it
+  can't stop anything the sandbox / MCP allowlist / approval gate don't already
+  stop.
+- **The list is author-controlled.** It is written by the same party you would
+  need to defend against, so treating a self-declared list as a security
+  boundary would be theater. Surfacing it for human review is the honest use.
+
+**Portability note:** skills imported from Claude Code declare tools by *its*
+names (`Read`, `Grep`, `Bash`), which differ from fleet's (`read_file`,
+`bash`, `run_python`). fleet surfaces the declared names verbatim and does not
+lint them against its own tool namespace — an imported skill's `allowed-tools`
+is informational here regardless of naming.
+
+If enforceable least-privilege for *trusted* skills is ever required, the clean
+design is a separate explicit "run this one skill" mode with a real
+platform-set active skill (where `effective_tools = baseline ∩ allowed-tools`),
+not a gate retrofitted onto ambient read-on-demand skills — and that would
+warrant its own ADR.
 
 ## Built-in skills pack + library UI
 
