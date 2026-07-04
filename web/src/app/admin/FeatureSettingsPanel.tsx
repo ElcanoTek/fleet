@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { humanizeVarName } from "@/app/shared/lib/taskTemplates";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
@@ -556,6 +556,131 @@ type PIIProbeResult = {
   latency_ms: number;
 };
 
+// Install-job status from /api/admin/pii-redaction/install.
+type PIIInstallStatus = {
+  state: "idle" | "running" | "done" | "failed";
+  log: string[] | null;
+  container_running: boolean;
+  url?: string;
+};
+
+// PIIInstall — the one-click Rampart service install: fleet builds the
+// service container (model baked in), runs it on loopback, supervises it, and
+// saves the URL setting. 501 (installer not wired) hides the affordance.
+function PIIInstall() {
+  const [status, setStatus] = useState<PIIInstallStatus | null | "unavailable">(null);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async (): Promise<PIIInstallStatus | null> => {
+    const response = await fetch("/api/admin/pii-redaction/install", { cache: "no-store" });
+    if (response.status === 501) {
+      setStatus("unavailable");
+      return null;
+    }
+    if (!response.ok) return null;
+    const st = (await response.json()) as PIIInstallStatus;
+    setStatus(st);
+    return st;
+  }, []);
+
+  const poll = useCallback(() => {
+    const timer = setInterval(() => {
+      void refresh().then((st) => {
+        if (st && st.state !== "running") clearInterval(timer);
+      });
+    }, 3000);
+  }, [refresh]);
+
+  useEffect(() => {
+    // Kick off the status fetch on a microtask so no setState runs in the
+    // effect's synchronous phase (react-hooks/set-state-in-effect); resume
+    // polling if an install is already running when the panel mounts.
+    let cancelled = false;
+    const id = setTimeout(() => {
+      void refresh().then((st) => {
+        if (!cancelled && st?.state === "running") poll();
+      });
+    }, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [refresh, poll]);
+
+  const install = async () => {
+    setError("");
+    const response = await fetch("/api/admin/pii-redaction/install", { method: "POST" });
+    if (!response.ok) {
+      setError((await response.text()).trim() || `Install failed: ${response.status}`);
+      return;
+    }
+    setStatus((await response.json()) as PIIInstallStatus);
+    poll();
+  };
+
+  const uninstall = async () => {
+    if (!window.confirm("Remove the fleet-managed Rampart service container?")) return;
+    setError("");
+    const response = await fetch("/api/admin/pii-redaction/install", { method: "DELETE" });
+    if (!response.ok) {
+      setError((await response.text()).trim() || `Uninstall failed: ${response.status}`);
+      return;
+    }
+    setStatus((await response.json()) as PIIInstallStatus);
+  };
+
+  if (status === "unavailable" || status === null) return null;
+
+  const running = status.state === "running";
+  const lastLog = status.log?.length ? status.log[status.log.length - 1] : "";
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2" data-testid="pii-install">
+      {status.container_running ? (
+        <>
+          <StatusChip tone="success">Service installed</StatusChip>
+          <span className="font-mono text-[0.6875rem] text-[var(--color-text-muted)]">{status.url}</span>
+          <button
+            type="button"
+            onClick={() => void uninstall()}
+            data-testid="pii-install-remove"
+            className="rounded-full border border-[var(--color-border-subtle)] px-2.5 py-1 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
+          >
+            Remove
+          </button>
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => void install()}
+            disabled={running}
+            data-testid="pii-install-run"
+            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] font-medium transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+          >
+            {running ? "Installing…" : "Install Rampart service"}
+          </button>
+          <span className="text-[0.6875rem] text-[var(--color-text-muted)]">
+            {running
+              ? lastLog || "working…"
+              : "builds + runs the detection service on this box (podman, loopback) and fills in the URL"}
+          </span>
+        </>
+      )}
+      {status.state === "failed" && lastLog ? (
+        <p className="w-full text-[0.75rem] text-[var(--color-danger-soft)]" role="alert" data-testid="pii-install-error">
+          {lastLog}
+        </p>
+      ) : null}
+      {error ? (
+        <p className="w-full text-[0.75rem] text-[var(--color-danger-soft)]" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function PIIProbe() {
   const [state, setState] = useState<"idle" | "running" | PIIProbeResult>("idle");
 
@@ -594,6 +719,7 @@ function PIIProbe() {
           runs the live redactor over a synthetic sample — save changes first
         </span>
       </div>
+      <PIIInstall />
       {state !== "idle" && state !== "running" ? (
         <div className="mt-2 text-[0.75rem]" data-testid="pii-probe-result">
           <p className={state.ok ? "text-[var(--color-success-soft)]" : "text-[var(--color-danger-soft)]"}>

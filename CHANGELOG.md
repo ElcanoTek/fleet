@@ -28,10 +28,15 @@ prior versions are listed because none have shipped.
   pass (strict superset of the pattern floor — a missed formatted phone
   number is still caught), and a service outage falls back to the pattern
   engine, never fail-open. The Features panel gains the engine picker, the
-  service URL field, and a **Test detection** button
+  service URL field, a **Test detection** button
   (`POST /admin/pii-redaction/test`) that runs the live redactor over a
-  synthetic sample and shows engine, detected kinds, marker style, and
-  latency.
+  synthetic sample, and a **one-click Install Rampart service** button
+  (`/admin/pii-redaction/install`) — fleet builds the service container (model
+  baked in, reference service embedded in the binary), runs it on loopback via
+  the rootless podman it already uses for the sandbox, health-checks it, fills
+  in the service URL, and re-starts it after a reboot. No bootstrap/update
+  changes are needed to use it; operators who prefer their own systemd unit
+  can instead run `scripts/rampart-service/install.sh`.
 - Admin-managed task notifications
   ([docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md)): Settings → Admin gains a
   "Notifications" panel — configure the email (SMTP) and signed-webhook

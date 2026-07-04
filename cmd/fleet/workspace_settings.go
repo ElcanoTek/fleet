@@ -25,6 +25,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/notifyadmin"
 	"github.com/ElcanoTek/fleet/internal/piiredact"
+	"github.com/ElcanoTek/fleet/internal/rampartinstall"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/settings"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -313,11 +314,21 @@ func appendWorkspaceSettingsOption(opts []httpapi.Option, cfg *config.Config, st
 	if applyErr != nil {
 		log.Printf("workspace settings: some overrides NOT in effect (env-derived behavior serves for those keys; fix or Reset them from the admin panel): %v", applyErr)
 	}
-	// The PII probe rides with the panel: it exercises the same state the
-	// hooks maintain, so it is only honest when the panel is live too.
+	// The PII probe + one-click Rampart installer ride with the panel: both
+	// exercise the same state the hooks maintain, so they are only honest when
+	// the panel is live too. The installer writes pii_rampart_url through the
+	// SAME audited settings path an admin edit uses, and fleet re-starts the
+	// managed container after a box reboot (rootless --restart=always does not
+	// survive reboots without systemd).
+	installer := rampartinstall.New("podman", func(ctx context.Context, url, updatedBy string) error {
+		_, err := svc.Set(ctx, "pii_rampart_url", url, updatedBy)
+		return err
+	})
+	go installer.EnsureRunning(context.Background())
 	return append(opts,
 		httpapi.WithWorkspaceSettings(svc),
-		httpapi.WithPIIRedactionProbe(pii.Probe))
+		httpapi.WithPIIRedactionProbe(pii.Probe),
+		httpapi.WithPIIRampartInstaller(installer))
 }
 
 // gatedErrorAnalyzer wraps the Manager's post-failure diagnosis (#317) so the

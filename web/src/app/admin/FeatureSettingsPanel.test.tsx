@@ -58,6 +58,20 @@ function mockFetch(
   onWrite?: (url: string, init: RequestInit) => { status: number; body: unknown } | undefined,
 ) {
   return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+    // The Rampart install manager polls this on mount; default to "not
+    // wired" (501) so it renders nothing unless a test opts in.
+    if (url.includes("/pii-redaction/install")) {
+      const custom = onWrite?.(url, init ?? { method: "GET" });
+      if (custom) {
+        return {
+          ok: custom.status < 400,
+          status: custom.status,
+          json: async () => custom.body,
+          text: async () => JSON.stringify(custom.body),
+        };
+      }
+      return { ok: false, status: 501, json: async () => ({}), text: async () => "" };
+    }
     if (!init || init.method === undefined || init.method === "GET") {
       return { ok: true, status: 200, json: async () => ({ settings }) };
     }
@@ -295,6 +309,39 @@ describe("FeatureSettingsPanel", () => {
     const result = await screen.findByTestId("pii-probe-result");
     expect(result).toHaveTextContent(/unreachable/);
     expect(result).toHaveTextContent(/fall back to the pattern engine/);
+  });
+
+  it("offers one-click Rampart install and shows the running service", async () => {
+    let installed = false;
+    const fetchMock = mockFetch([PII], (url, init) => {
+      if (!url.includes("/pii-redaction/install")) return undefined;
+      if (init.method === "POST") {
+        installed = true;
+        return { status: 200, body: { state: "done", log: ["done"], container_running: true, url: "http://127.0.0.1:8787/v1/redact" } };
+      }
+      // GET status poll.
+      return installed
+        ? { status: 200, body: { state: "done", log: ["done"], container_running: true, url: "http://127.0.0.1:8787/v1/redact" } }
+        : { status: 200, body: { state: "idle", log: [], container_running: false } };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeatureSettingsPanel />);
+
+    const btn = await screen.findByTestId("pii-install-run", undefined, { timeout: 5000 });
+    fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByText("Service installed")).toBeInTheDocument());
+    expect(screen.getByText("http://127.0.0.1:8787/v1/redact")).toBeInTheDocument();
+    const post = fetchMock.mock.calls.find(
+      ([u, i]) => String(u).includes("/pii-redaction/install") && (i as RequestInit)?.method === "POST",
+    );
+    expect(post).toBeTruthy();
+  });
+
+  it("hides the install affordance when the installer is not wired (501)", async () => {
+    vi.stubGlobal("fetch", mockFetch([PII])); // default install stub = 501
+    render(<FeatureSettingsPanel />);
+    await screen.findByText("PII redaction");
+    await waitFor(() => expect(screen.queryByTestId("pii-install")).toBeNull());
   });
 
   it("reports the admin-allowlist 403 instead of an empty panel", async () => {

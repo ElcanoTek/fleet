@@ -70,10 +70,24 @@ address components — far beyond the pattern engine's five shapes. It runs
 **out of process** behind a small HTTP service you deploy next to fleet;
 [`scripts/rampart-service`](../scripts/rampart-service/README.md) is the
 reference implementation over the official npm runtime (~25 ms per call on
-CPU) — **`scripts/rampart-service/install.sh` hosts it in one command**
-(rootless podman + systemd, model baked into the image, health-checked).
-Configure its endpoint via `pii_rampart_url` / `FLEET_PII_RAMPART_URL`
-(e.g. `http://127.0.0.1:8787/v1/redact`).
+CPU). Three ways to host it, easiest first:
+
+1. **One click in the admin panel.** Settings → Admin → Feature settings →
+   **Install Rampart service**. fleet builds the service container (the
+   ONNX model is baked into the image, so the service needs no runtime
+   network), runs it on loopback, health-checks it, fills in the service URL,
+   and re-starts it after a box reboot. Nothing to install first — fleet
+   already runs rootless podman for its sandbox, and the service build context
+   is embedded in the fleet binary (so it ships and updates with fleet; no
+   bootstrap/update changes needed). Then switch the engine to Rampart and
+   click **Test detection**.
+2. **`scripts/rampart-service/install.sh`** — the same container under a
+   systemd unit you own, for operators who prefer that.
+3. **Manual** (`npm start`, or the Containerfile) — see the service README.
+
+Either way, configure the endpoint via `pii_rampart_url` /
+`FLEET_PII_RAMPART_URL` (e.g. `http://127.0.0.1:8787/v1/redact`) — option 1
+fills it in for you.
 
 The service contract is deliberately text-in/text-out (no offset math across
 the process boundary):

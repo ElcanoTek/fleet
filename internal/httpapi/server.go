@@ -82,6 +82,10 @@ type Server struct {
 	// (WithPIIRedactionProbe). nil in tests/mock mode: the endpoint answers 501.
 	piiProbe func(ctx context.Context) PIIProbeResult
 
+	// piiInstaller backs the one-click Rampart service install
+	// (WithPIIRampartInstaller). nil: the endpoints answer 501.
+	piiInstaller piiRampartInstaller
+
 	// isMember reports whether an email may use chat — the scoped-tier
 	// gate consulted by membershipMiddleware. nil in production, where it
 	// falls back to store.IsUser. Tests whose subject isn't membership
@@ -718,6 +722,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/notify-settings/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminNotifySettingsTest)))))
 	// PII redaction probe: run the live redactor over a synthetic sample.
 	mux.Handle("/admin/pii-redaction/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminPIIProbe)))))
+	// One-click Rampart service install (build + run + supervise via podman).
+	mux.Handle("/admin/pii-redaction/install", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminPIIInstall)))))
 	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits
 	// just inside recoverMiddleware and before bodyLimitMiddleware, so a blocked
 	// client IP is dropped before any body parsing, route dispatch, or auth
