@@ -308,6 +308,7 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	existing.InstructionSelfImprove = tc.InstructionSelfImprove
 	existing.AllowNetwork = tc.AllowNetwork
 	existing.AllowDelegation = tc.AllowDelegation
+	existing.ThinkingBudgetTokens = tc.ThinkingBudgetTokens
 	existing.Persona = tc.Persona
 	existing.Description = tc.Description
 	existing.ScheduledFor = tc.ScheduledFor

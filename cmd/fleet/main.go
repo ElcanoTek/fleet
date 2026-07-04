@@ -1837,6 +1837,7 @@ func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enf
 			iters := req.MaxIterations
 			tc.MaxIterations = &iters
 		}
+		tc.ThinkingBudgetTokens = req.ThinkingBudgetTokens
 		// Tag chat-originated tasks for provenance so an operator can tell at a
 		// glance the task was created from a conversation rather than the API/CLI.
 		// EnqueueTask does NOT run the handler's tag normalization, so we apply the

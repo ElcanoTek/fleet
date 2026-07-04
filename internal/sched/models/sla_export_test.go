@@ -163,3 +163,47 @@ func TestExportImport_SLARoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestExportImport_ThinkingBudgetRoundTrip proves the per-task extended-thinking
+// override (#220) is part of the portable task definition: a set budget (incl.
+// the explicit 0 = off) survives an export→import round-trip in both JSON and
+// YAML, and an unset override round-trips as nil (inherit the global default) so
+// an OLD exported config stays valid and unchanged.
+func TestExportImport_ThinkingBudgetRoundTrip(t *testing.T) {
+	formats := []struct {
+		name      string
+		marshal   func(any) ([]byte, error)
+		unmarshal func([]byte, any) error
+	}{
+		{"json", json.Marshal, json.Unmarshal},
+		{"yaml", yaml.Marshal, yaml.Unmarshal},
+	}
+	for _, f := range formats {
+		t.Run(f.name+"/set", func(t *testing.T) {
+			rec, got := roundTripDefinition(t, &Task{Prompt: "p", ThinkingBudgetTokens: slaIntPtr(8192)}, f.marshal, f.unmarshal)
+			if rec.ThinkingBudgetTokens == nil || *rec.ThinkingBudgetTokens != 8192 {
+				t.Errorf("export record lost thinking budget: %v", rec.ThinkingBudgetTokens)
+			}
+			if got.ThinkingBudgetTokens == nil || *got.ThinkingBudgetTokens != 8192 {
+				t.Errorf("imported task lost thinking budget: %v", got.ThinkingBudgetTokens)
+			}
+		})
+		t.Run(f.name+"/explicit-off", func(t *testing.T) {
+			rec, got := roundTripDefinition(t, &Task{Prompt: "p", ThinkingBudgetTokens: slaIntPtr(0)}, f.marshal, f.unmarshal)
+			// 0 is a meaningful value (force off), distinct from unset — it must
+			// survive, not collapse to nil.
+			if rec.ThinkingBudgetTokens == nil || *rec.ThinkingBudgetTokens != 0 {
+				t.Errorf("explicit 0 (off) must round-trip in the export record, got %v", rec.ThinkingBudgetTokens)
+			}
+			if got.ThinkingBudgetTokens == nil || *got.ThinkingBudgetTokens != 0 {
+				t.Errorf("explicit 0 (off) must round-trip on import, got %v", got.ThinkingBudgetTokens)
+			}
+		})
+		t.Run(f.name+"/unset-inherits", func(t *testing.T) {
+			rec, got := roundTripDefinition(t, &Task{Prompt: "p"}, f.marshal, f.unmarshal)
+			if rec.ThinkingBudgetTokens != nil || got.ThinkingBudgetTokens != nil {
+				t.Error("an unset override must round-trip as nil (inherit the global default)")
+			}
+		})
+	}
+}

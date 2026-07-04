@@ -588,6 +588,9 @@ type TaskEdit struct {
 	AllowNetwork           bool
 	CarryContext           bool
 	AllowDelegation        bool
+	// ThinkingBudgetTokens is the per-task extended-thinking override (#220);
+	// nil = inherit the global default.
+	ThinkingBudgetTokens *int
 	// Persona replaces the task's per-task persona override (#221), assigned
 	// unconditionally from the full edit payload (empty = use the global persona).
 	Persona string
@@ -680,6 +683,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.AllowNetwork = edit.AllowNetwork
 	task.CarryContext = edit.CarryContext
 	task.AllowDelegation = edit.AllowDelegation
+	task.ThinkingBudgetTokens = edit.ThinkingBudgetTokens
 	task.Persona = edit.Persona
 	task.ScheduledFor = edit.ScheduledFor
 	task.Recurrence = edit.Recurrence

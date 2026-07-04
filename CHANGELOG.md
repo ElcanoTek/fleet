@@ -15,6 +15,19 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Per-task extended-thinking override (#220): a nullable `thinking_budget_tokens`
+  on tasks (sched migration 053) lets a scheduled task set its own Claude
+  thinking budget — NULL/omitted inherits the global
+  `FLEET_DEFAULT_THINKING_BUDGET_TOKENS` (unchanged behavior), `0` forces
+  thinking off, `N` sets its budget (clamped to the provider range at run
+  time). Exposed on the create/PATCH task API, the `schedule_task` tool, the
+  admin CLI import, and a "Thinking budget" field in the Operations Center
+  task-create form; carried through task export/import. Resolves override >
+  global, mirroring the interactive per-conversation override.
+
+
+### Added
+
 - Usage report CSV export ([docs/USAGE-ANALYTICS.md](docs/USAGE-ANALYTICS.md)):
   `GET /admin/usage?format=csv` returns the report as a `text/csv` attachment
   (row per bucket + a TOTAL row), and the Operations Center Usage panel gains a
