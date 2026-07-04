@@ -80,9 +80,12 @@ same PR.
   placeholders in tests; the real `OPENROUTER_API_KEY` lives outside the repo.
 - **Honesty in docs.** Claim only shipped, tested capabilities. If you add a
   capability, document what it actually does — and what it does not. (Example: a
-  skill's `allowed-tools` frontmatter is parsed but **not** enforced as a hard
-  authorization gate — the docs say so plainly rather than implying a boundary
-  that isn't there.)
+  skill's `allowed-tools` frontmatter is parsed and **surfaced** for review
+  (skills library UI, `/skills` API) but **not** enforced as an authorization
+  boundary — the docs say so plainly rather than implying a boundary that isn't
+  there. It structurally can't be one: skills are read on-demand mid-turn with
+  no single "active skill" to gate a roster against, and a skill can never
+  exceed the turn's existing sandbox/MCP/approval limits. See docs/SKILLS.md.)
 - **Client content is external.** Branding, the MCP catalog, personas, protocols,
   skills, and the sandbox Containerfile live in an out-of-repo client-config
   bundle (`FLEET_CLIENT_CONFIG_DIR`). fleet ships only the generic `config/default`

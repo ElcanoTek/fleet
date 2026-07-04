@@ -59,6 +59,16 @@ type Skill struct {
 	// "skills/research-report/SKILL.md" — the handle the agent reads on demand.
 	// It resolves inside the sandbox/workspace exactly like "protocols/foo.md".
 	Path string
+	// DeclaredAllowedTools is the skill's frontmatter `allowed-tools` list — the
+	// tools the skill author declares it needs. fleet parses and SURFACES this
+	// (skills library UI, /skills API) as a review/observability signal, but
+	// does NOT enforce it as an authorization boundary: skills are read
+	// on-demand mid-turn (no single "active skill" to gate a tool roster
+	// against), and a skill can never exceed the turn's existing capabilities —
+	// the real boundaries are the sandbox, the MCP allowlist, and the
+	// human-approval gate. See docs/SKILLS.md + the "Honesty in docs" invariant.
+	// nil when the field is absent.
+	DeclaredAllowedTools []string
 }
 
 // skillFrontmatter is the subset of SKILL.md YAML frontmatter fleet reads. The
@@ -69,6 +79,57 @@ type Skill struct {
 type skillFrontmatter struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
+	// AllowedTools accepts BOTH shapes the Agent Skills standard permits: a YAML
+	// list (`[Read, Grep]`) and a comma-separated scalar (`"Read, Grep"`). See
+	// declaredToolList.UnmarshalYAML. Parsed and surfaced, never enforced.
+	AllowedTools declaredToolList `yaml:"allowed-tools"`
+}
+
+// declaredToolList is an allowed-tools value that unmarshals from either a YAML
+// sequence or a comma/whitespace-separated scalar, tolerating both the spec's
+// list form and its string form without failing the whole skill parse.
+type declaredToolList []string
+
+func (d *declaredToolList) UnmarshalYAML(unmarshal func(any) error) error {
+	// Try the list form first.
+	var list []string
+	if err := unmarshal(&list); err == nil {
+		*d = normalizeToolList(list)
+		return nil
+	}
+	// Fall back to a scalar: "Read, Grep" or "Read Grep".
+	var scalar string
+	if err := unmarshal(&scalar); err != nil {
+		return err
+	}
+	*d = normalizeToolList(strings.FieldsFunc(scalar, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	}))
+	return nil
+}
+
+// normalizeToolList trims, drops blanks, and de-duplicates (order-preserving).
+func normalizeToolList(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, t := range in {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // maxSkillNameLen / maxSkillDescLen mirror the Agent Skills standard's field
@@ -160,7 +221,10 @@ func ReadSkills(skillsDir string) (skills []Skill, problems []string) {
 			problems = append(problems, fmt.Sprintf(
 				"%s: description is %d chars; the Agent Skills standard caps it at %d", rel, len(desc), maxSkillDescLen))
 		}
-		skills = append(skills, Skill{Dir: dir, Name: name, Description: desc, Path: rel})
+		skills = append(skills, Skill{
+			Dir: dir, Name: name, Description: desc, Path: rel,
+			DeclaredAllowedTools: meta.AllowedTools,
+		})
 	}
 	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
 	return skills, problems

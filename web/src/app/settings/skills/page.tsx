@@ -15,6 +15,11 @@ type SkillEntry = {
   name: string;
   description: string;
   source: string; // "bundle" | "builtin"
+  // The skill's declared `allowed-tools` (from SKILL.md frontmatter), surfaced
+  // for review. fleet does NOT enforce it — a skill's real limits are the
+  // sandbox, MCP allowlist, and approval gate — so it reads as a declared
+  // contract, not a permission grant. Absent for skills that don't declare it.
+  declared_allowed_tools?: string[];
 };
 
 type SkillDetail = SkillEntry & { content: string };
@@ -400,6 +405,15 @@ export default function SkillsPage() {
                   <p className="mt-1 text-[0.8125rem] text-[var(--color-text-muted)]">
                     {s.description}
                   </p>
+                  {s.declared_allowed_tools && s.declared_allowed_tools.length > 0 ? (
+                    <p className="mt-1.5 text-[0.6875rem] text-[var(--color-text-muted)]">
+                      <span className="uppercase tracking-wide">Declared tools</span>{" "}
+                      {s.declared_allowed_tools.join(", ")}{" "}
+                      <span title="Declared for review only — fleet does not enforce a skill's allowed-tools. The real limits are the sandbox, MCP allowlist, and approval gate.">
+                        (advisory)
+                      </span>
+                    </p>
+                  ) : null}
                   {openSkill === s.name ? (
                     detail ? (
                       <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap rounded-[0.75rem] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] p-3 text-[0.75rem] leading-relaxed text-[var(--color-text-secondary)]">
