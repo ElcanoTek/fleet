@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 // Tool-output ceiling (#199): a single, uniform cap on the size of any tool
@@ -24,10 +25,48 @@ var maxToolOutputBytesOnce struct {
 	v int
 }
 
-// maxToolOutputBytes resolves the per-tool-call output ceiling from
-// FLEET_MAX_TOOL_OUTPUT_BYTES (default 64 KB). A value <= 0 disables truncation.
-// Cached after the first read.
+// maxToolOutputOverride is the admin-settings live override; nil = unset (env
+// or built-in default serves). A pointer, not a sentinel int, because 0 ("no
+// ceiling") is itself a legal override value. Read per tool call, so a change
+// applies to the very next tool result with no restart.
+var maxToolOutputOverride atomic.Pointer[int]
+
+// SetMaxToolOutputBytes installs the process-wide admin override for the
+// tool-output ceiling (0 disables truncation); ClearMaxToolOutputBytes is
+// expressed by passing a negative value. Called by the workspace-settings
+// apply hook in cmd/fleet.
+func SetMaxToolOutputBytes(n int) {
+	if n < 0 {
+		maxToolOutputOverride.Store(nil)
+		return
+	}
+	maxToolOutputOverride.Store(&n)
+}
+
+// EnvMaxToolOutputBytes returns the env-derived ceiling (ignoring any admin
+// override) — the workspace-settings boot wiring reports it as the value a
+// reset reverts to. Negative env values normalize to 0 (both mean "no
+// ceiling"), so the settings registry sees only its two legal shapes.
+func EnvMaxToolOutputBytes() int {
+	if n := envMaxToolOutputBytes(); n > 0 {
+		return n
+	}
+	return 0
+}
+
+// maxToolOutputBytes resolves the per-tool-call output ceiling: the admin
+// override when set, else FLEET_MAX_TOOL_OUTPUT_BYTES (default 64 KB). A value
+// <= 0 disables truncation. The env resolution is cached after the first read;
+// the override is consulted live on every call.
 func maxToolOutputBytes() int {
+	if p := maxToolOutputOverride.Load(); p != nil {
+		return *p
+	}
+	return envMaxToolOutputBytes()
+}
+
+// envMaxToolOutputBytes is the cached FLEET_MAX_TOOL_OUTPUT_BYTES resolution.
+func envMaxToolOutputBytes() int {
 	maxToolOutputBytesOnce.Do(func() {
 		maxToolOutputBytesOnce.v = defaultMaxToolOutputBytes
 		if s := os.Getenv("FLEET_MAX_TOOL_OUTPUT_BYTES"); s != "" {

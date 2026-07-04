@@ -165,23 +165,6 @@ export function validateMaxIterations(value: unknown): ValidationResult {
   return { valid: true, message: "" };
 }
 
-// Global concurrency cap (FLEET_MAX_CONCURRENT_AGENTS). Mirrors the iteration
-// bound: a positive integer with a sane upper limit. Empty falls back to the
-// server default (4), so empty is valid.
-export function validateConcurrencyCap(value: unknown): ValidationResult {
-  if (value === null || value === undefined) return { valid: true, message: "" };
-  const trimmed = String(value).trim();
-  if (trimmed === "") return { valid: true, message: "" };
-  if (!/^\d+$/.test(trimmed)) {
-    return { valid: false, message: "Concurrency cap must be a whole number" };
-  }
-  const parsed = Number.parseInt(trimmed, 10);
-  if (parsed < 1 || parsed > 64) {
-    return { valid: false, message: "Concurrency cap must be between 1 and 64" };
-  }
-  return { valid: true, message: "" };
-}
-
 export type FileLike = { name: string; size?: number; type?: string };
 
 export type FileOptions = {

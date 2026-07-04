@@ -82,7 +82,7 @@ func appendConnectorRecommendationBlock(message string, recs []agent.OptionalSer
 // when the feature is enabled (#512), else returns it unchanged. A method so
 // postChat stays a single statement (no added complexity).
 func (s *Server) applyConnectorRecommendations(userMessage, rawMessage string, enabledOptional []string) string {
-	if !s.cfg.ConnectorRecommendationsEnabled || s.agent == nil {
+	if !s.cfg.LiveConnectorRecommendationsEnabled() || s.agent == nil {
 		return userMessage
 	}
 	enabled := make(map[string]bool, len(enabledOptional))

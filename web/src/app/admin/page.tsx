@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { FeatureSettingsPanel } from "./FeatureSettingsPanel";
 import { HealthPanel } from "./HealthPanel";
 import { ProvidersPanel } from "./ProvidersPanel";
 import { UsersPanel } from "./UsersPanel";
@@ -192,9 +193,10 @@ export default function AdminPage() {
           </>
         )}
 
-        {/* Admin-managed LLM providers: rendered outside the stats error
-            branch so a stats failure never hides provider management. */}
+        {/* Admin-managed LLM providers + feature settings: rendered outside
+            the stats error branch so a stats failure never hides them. */}
         <ProvidersPanel />
+        <FeatureSettingsPanel />
     </SettingsShell>
   );
 }

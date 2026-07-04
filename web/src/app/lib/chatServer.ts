@@ -102,3 +102,23 @@ export async function chatServerProxy(
     };
   }
 }
+
+/**
+ * chatServerPassthrough — the full proxy-route body: chatServerProxy, then
+ * re-emit the upstream response verbatim (status + body + Content-Type). The
+ * admin proxy routes each used to inline this trio; a passthrough fix (header
+ * forwarding, error shaping) belongs here, once.
+ */
+export async function chatServerPassthrough(
+  userEmail: string,
+  path: string,
+  init?: RequestInit,
+): Promise<NextResponse> {
+  const { upstream, error } = await chatServerProxy(userEmail, path, init);
+  if (error) return error;
+  const text = await upstream.text();
+  return new NextResponse(text, {
+    status: upstream.status,
+    headers: { "Content-Type": upstream.headers.get("Content-Type") ?? "application/json" },
+  });
+}

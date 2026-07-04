@@ -3,7 +3,6 @@
 import { ToastProvider } from "@/app/shared/ui/Toast";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
-import { ConcurrencyCapSetting } from "./ConcurrencyCapSetting";
 import { CredentialAccountAdmin } from "./CredentialAccountAdmin";
 import { SettingsShell } from "./SettingsShell";
 
@@ -13,9 +12,17 @@ import { SettingsShell } from "./SettingsShell";
 // section is a page inside the shared SettingsShell, reachable from the
 // account menu on both surfaces.
 //
-// Both cards talk to the orchestrator backend through /api/orchestrator/*,
-// which resolves the same session cookie the rest of the app uses;
-// authorization is enforced upstream at :8000 exactly as it was for the modal.
+// The concurrency-cap card that used to sit here was removed: it called
+// GET/PUT /concurrency, which fleet's orchestrator never served (a moc-era
+// leftover), so it could only ever error. The cap is FLEET_MAX_CONCURRENT_AGENTS
+// in the env file (boot-bound: it sizes the admission semaphore + sandbox warm
+// pool). Live-tunable workspace settings live in Settings → Admin → Feature
+// settings.
+//
+// The credential card talks to the orchestrator backend through
+// /api/orchestrator/*, which resolves the same session cookie the rest of the
+// app uses; authorization is enforced upstream at :8000 exactly as it was for
+// the modal.
 
 export default function GeneralSettingsPage() {
   return (
@@ -30,7 +37,7 @@ function GeneralSettings() {
   return (
     <SettingsShell
       title="General"
-      description="Workspace-wide agent settings: how many agents may run at once, and the credential accounts your MCP connectors sign in with."
+      description="The credential accounts your MCP connectors sign in with. Workspace-wide feature settings live under Admin."
     >
       {error ? (
         <NoticeBanner tone="danger" className="mb-4">
@@ -39,10 +46,6 @@ function GeneralSettings() {
           administrator if you expected access.
         </NoticeBanner>
       ) : null}
-
-      <section className="mb-6 rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)] p-4">
-        <ConcurrencyCapSetting />
-      </section>
 
       <section className="rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)] p-4">
         <CredentialAccountAdmin servers={servers} onChanged={() => void reload()} />
