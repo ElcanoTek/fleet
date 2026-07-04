@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -487,10 +488,10 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		if len(cfg.SandboxNetworkAllowlist) == 0 {
 			log.Printf("sandbox: WARNING network mode=allowlisted but the allowlist is EMPTY — networked SCHEDULED-task sandboxes can reach NO domains (set sandbox.network_allowlist in the bundle manifest)")
 		} else {
-			log.Printf("sandbox: network mode=allowlisted — networked SCHEDULED-task egress filtered to %v via the host proxy (best-effort; ADR-0012). Chat turns are unaffected (wiring deferred).", cfg.SandboxNetworkAllowlist)
+			log.Printf("sandbox: network mode=allowlisted — networked scheduled-task AND interactive chat egress filtered to %v via the host proxy (best-effort; ADR-0012).", cfg.SandboxNetworkAllowlist)
 		}
 	case sandbox.NetworkModeLockdown:
-		log.Printf("sandbox: network mode=lockdown — SCHEDULED-task egress sealed regardless of per-task AllowNetwork. Chat turns are unaffected (wiring deferred).")
+		log.Printf("sandbox: network mode=lockdown — scheduled-task AND interactive chat egress sealed regardless of per-task AllowNetwork.")
 	}
 	return sandbox.NewPool(poolCfg), nil
 }
@@ -617,38 +618,104 @@ func (m *Manager) computeMCPToolRoster(allow mcpAllowlist) []string {
 //
 //   - Lockdown chats ALWAYS get a fresh no-network locked-down container (never
 //     persistent): isolation is the whole point of lockdown.
-//   - When persistent REPL mode is on (#213) and this is a non-lockdown chat
-//     with a conversation ID, the turn borrows the conversation's long-lived
-//     sandbox so the python kernel survives across turns. The returned cleanup
-//     releases the borrow rather than closing the sandbox.
+//   - The fleet-wide egress posture (#211, FLEET_DEFAULT_NETWORK_MODE) then
+//     applies to ordinary chat turns exactly as it does to scheduled tasks
+//     (see takeTaskSandbox): `lockdown` seals every turn, `allowlisted` routes
+//     the turn's egress through the host proxy scoped to the bundle allowlist.
+//     Before this, chat turns silently got OPEN egress even when the operator
+//     set a containing mode — a real gap ADR-0012 called out as deferred.
+//   - When persistent REPL mode is on (#213) and this is an open-egress,
+//     non-lockdown chat with a conversation ID, the turn borrows the
+//     conversation's long-lived sandbox so the python kernel survives across
+//     turns. A containing network mode takes PRECEDENCE over persistence: an
+//     allowlisted turn needs a fresh per-turn proxy token (so it must
+//     cold-start) and a sealed turn must have no network at all, neither of
+//     which a shared long-lived container can provide. Containment is a
+//     security boundary; persistence is a convenience — the boundary wins.
 //   - Otherwise (the default) it's a fresh warm-pool container, closed at turn
 //     end via the returned cleanup.
 //
 // Scheduled runs never reach here — they drive agentcore.Run through the
 // scheduled runner, which owns its own per-run sandbox + worktree.
 func (m *Manager) takeTurnSandbox(ctx context.Context, lockdown bool, convID string) (*sandbox.Sandbox, func(), error) {
-	if lockdown {
-		if !m.config.LockdownAvailable() {
+	persistent := m.config.PersistentPythonREPL() && convID != ""
+	return takeTurnSandboxFrom(ctx, m.sandboxPool, turnSandboxPosture{
+		lockdown:          lockdown,
+		lockdownAvailable: m.config.LockdownAvailable(),
+		persistent:        persistent,
+		convID:            convID,
+	})
+}
+
+// turnSandboxTaker is the slice of *sandbox.Pool that takeTurnSandboxFrom uses.
+// An interface so the egress routing is unit-testable with a fake (mirroring
+// scheduledrun.sandboxTaker), rather than requiring a live podman pool.
+type turnSandboxTaker interface {
+	EgressDefault() (mode string, allowlist []string)
+	TakeContainer(ctx context.Context) (*sandbox.Sandbox, func(), error)
+	TakeContainerWithEgress(ctx context.Context, ov sandbox.ResourceOverride, allowlist []string) (*sandbox.Sandbox, func(), error)
+	TakePersistent(convID string) (*sandbox.Sandbox, func(), error)
+	Take() (*sandbox.Sandbox, func(), error)
+}
+
+// turnSandboxPosture is the per-turn decision inputs for the interactive
+// sandbox take.
+type turnSandboxPosture struct {
+	lockdown          bool   // this conversation is in lockdown mode
+	lockdownAvailable bool   // a sandbox image is configured (lockdown can run)
+	persistent        bool   // persistent REPL is on AND we have a conversation
+	convID            string // conversation id for the persistent borrow
+}
+
+// takeTurnSandboxFrom applies the interactive sandbox posture over taker (see
+// takeTurnSandbox for the full contract). Extracted as a free function over an
+// interface so the #211 egress routing is testable without a real pool.
+func takeTurnSandboxFrom(ctx context.Context, taker turnSandboxTaker, p turnSandboxPosture) (*sandbox.Sandbox, func(), error) {
+	mode, allowlist := taker.EgressDefault()
+
+	// A per-conversation lockdown OR the fleet-wide lockdown mode seals the turn.
+	if p.lockdown || mode == sandbox.NetworkModeLockdown {
+		if p.lockdown && !p.lockdownAvailable {
 			return nil, nil, fmt.Errorf("conversation is in lockdown mode but the server has no sandbox image configured")
 		}
-		sb, cleanup, err := m.sandboxPool.TakeContainer(ctx)
+		sb, cleanup, err := taker.TakeContainer(ctx)
+		if errors.Is(err, sandbox.ErrContainerUnavailable) {
+			// Host/mock pool (no container backend): nothing to seal — fall back
+			// to the host take, matching takeTaskSandbox's degrade.
+			return taker.Take()
+		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("take lockdown sandbox: %w", err)
 		}
 		return sb, cleanup, nil
 	}
-	if m.config.PersistentPythonREPL() && convID != "" {
+
+	// Fleet-wide allowlisted mode: filter the turn's egress through the host
+	// proxy (fresh per-turn token). Precedes persistence (a per-turn token
+	// can't be shared by a long-lived container). Fails closed in the pool.
+	if mode == sandbox.NetworkModeAllowlisted {
+		sb, cleanup, err := taker.TakeContainerWithEgress(ctx, sandbox.ResourceOverride{}, allowlist)
+		if errors.Is(err, sandbox.ErrContainerUnavailable) {
+			return taker.Take()
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("take allowlisted sandbox: %w", err)
+		}
+		return sb, cleanup, nil
+	}
+
+	if p.persistent {
 		// TakePersistent reuses the conversation's sandbox (or creates one,
 		// pulling a warm container for the first turn). It degrades to a per-turn
 		// Take internally if persistence is disabled in the pool, so this is
 		// always safe to call.
-		sb, cleanup, err := m.sandboxPool.TakePersistent(convID)
+		sb, cleanup, err := taker.TakePersistent(p.convID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("take persistent sandbox: %w", err)
 		}
 		return sb, cleanup, nil
 	}
-	sb, cleanup, err := m.sandboxPool.Take()
+	sb, cleanup, err := taker.Take()
 	if err != nil {
 		return nil, nil, fmt.Errorf("take sandbox: %w", err)
 	}
