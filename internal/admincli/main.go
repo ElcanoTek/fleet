@@ -28,6 +28,7 @@
 //	fleet worktree list|prune [--workspace DIR] [--older-than DUR]
 //	fleet backup  [--db=chat|sched|all] [--out DIR]
 //	fleet restore  --db=chat|sched <dump-file>
+//	fleet import <bundle.json> [--dry-run] [--live-only]
 //
 // The operator lifecycle is bootstrap → update → status: bootstrap provisions a
 // box, update rolls a new version in place, status (a.k.a. doctor) reports
@@ -92,6 +93,8 @@ func Run(argv []string) int {
 		return cmdBackup(argv[1:])
 	case "restore":
 		return cmdRestore(argv[1:])
+	case "import":
+		return cmdImport(argv[1:])
 	case "version", "--version", "-v":
 		// Build identity: the release version stamped from the top-level VERSION
 		// file plus the VCS revision. Touches no DB/host, so it works anywhere.
@@ -184,6 +187,9 @@ Database migrations (#256):
 Backup / restore (pg_dump -Fc / pg_restore; one dump file per DB):
   fleet backup  [--db=chat|sched|all] [--out DIR]   (writes fleet-<db>-<stamp>.dump; prints each path)
   fleet restore  --db=chat|sched <dump-file>         (--clean --if-exists; overwrites the live DB)
+
+Legacy migration (one-time; docs/LEGACY-IMPORT.md):
+  fleet import <bundle.json> [--dry-run] [--live-only]   (ingest a chat/moc migration bundle; idempotent re-runs)
 
 Connection:
   Chat DB:  --database-url or FLEET_CHAT_DATABASE_URL / DATABASE_URL

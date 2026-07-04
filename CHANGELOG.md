@@ -15,6 +15,16 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- One-time legacy migration ingest ([docs/LEGACY-IMPORT.md](docs/LEGACY-IMPORT.md)):
+  `fleet import <bundle.json>` consumes the versioned `fleet-migration-bundle`
+  JSON envelope produced by the deprecated chat repo (`chat-admin export`: users
+  with bcrypt hashes, conversations + full message history with pins and
+  timestamps preserved, memories) and the deprecated moc repo (`moc
+  -export-fleet`: sched users, scheduled/recurring tasks with next-run
+  recomputed in the task's timezone, run logs). All legacy-schema knowledge
+  lives in the exporters; fleet only consumes the bundle. Idempotent re-runs
+  (`--dry-run`, `--live-only` supported); imported history is FTS-indexed.
+
 - Per-task extended-thinking override (#220): a nullable `thinking_budget_tokens`
   on tasks (sched migration 053) lets a scheduled task set its own Claude
   thinking budget — NULL/omitted inherits the global
