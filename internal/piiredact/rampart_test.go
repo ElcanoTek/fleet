@@ -42,6 +42,9 @@ func TestRampartRedactMode(t *testing.T) {
 	srv := rampartStub(t, 200, rampartOKBody)
 	r := NewRampart(ModeRedact, srv.URL)
 
+	if r.Mode() != ModeRedact { // Redactor contract: reports its configured mode.
+		t.Errorf("Mode() = %q, want redact", r.Mode())
+	}
 	res := r.Redact(rampartInput)
 	if !strings.Contains(res.Text, "[GIVEN_NAME_1]") || strings.Contains(res.Text, "Alex") {
 		t.Errorf("redact should use the service's placeholder text: %q", res.Text)

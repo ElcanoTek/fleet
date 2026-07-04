@@ -133,6 +133,40 @@ func TestInstallBuildFailure(t *testing.T) {
 	waitState(t, i, StateFailed)
 }
 
+// TestInstallHealthTimeout: the image builds and the container "runs" (fake
+// podman succeeds) but the service never answers /healthz — the install must
+// fail with a clear message and persist no URL, not hang or claim success.
+func TestInstallHealthTimeout(t *testing.T) {
+	fr := &fakeRunner{fail: map[string]error{}, out: map[string]string{}}
+	// A health server that never returns 200.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	var saved string
+	i := New("podman", func(_ context.Context, url, by string) error { saved = url + "|" + by; return nil })
+	i.run = fr.run
+	var port int
+	_, _ = fmt.Sscanf(srv.URL, "http://127.0.0.1:%d", &port)
+	i.port = port
+	i.healthBudget = 300 * time.Millisecond // exercise the timeout fast
+
+	if err := i.Start("boss@x.com"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	st := waitState(t, i, StateFailed)
+	if !strings.Contains(strings.Join(st.Log, " "), "did not become healthy") {
+		t.Errorf("expected a health-timeout failure, log = %v", st.Log)
+	}
+	if saved != "" {
+		t.Error("an unhealthy install must not persist a URL")
+	}
+	// The build and run were still attempted.
+	if !fr.sawPrefix("podman build") || !fr.sawPrefix("podman run") {
+		t.Error("build+run should have been attempted before the health wait")
+	}
+}
+
 func TestUninstallAndEnsureRunning(t *testing.T) {
 	fr := &fakeRunner{fail: map[string]error{}, out: map[string]string{"container": "exited\n"}}
 	i, _ := testInstaller(t, fr)

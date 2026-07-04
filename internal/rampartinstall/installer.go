@@ -82,6 +82,9 @@ type Installer struct {
 	// setting on success (wired by cmd/fleet to the settings service).
 	setURL func(ctx context.Context, url, updatedBy string) error
 	client *http.Client
+	// healthBudget bounds the post-start health wait (default 90s; small in
+	// tests to exercise the never-healthy failure path).
+	healthBudget time.Duration
 
 	mu    sync.Mutex
 	state State
@@ -95,12 +98,13 @@ func New(podmanBinary string, setURL func(ctx context.Context, url, updatedBy st
 		podmanBinary = "podman"
 	}
 	return &Installer{
-		podman: podmanBinary,
-		port:   DefaultPort,
-		run:    defaultRun,
-		setURL: setURL,
-		client: &http.Client{Timeout: 3 * time.Second},
-		state:  StateIdle,
+		podman:       podmanBinary,
+		port:         DefaultPort,
+		run:          defaultRun,
+		setURL:       setURL,
+		client:       &http.Client{Timeout: 3 * time.Second},
+		state:        StateIdle,
+		healthBudget: 90 * time.Second,
 	}
 }
 
@@ -180,7 +184,7 @@ func (i *Installer) doInstall(ctx context.Context, updatedBy string) error {
 	}
 
 	i.appendLog("waiting for the service to answer")
-	if err := i.waitHealthy(ctx, 90*time.Second); err != nil {
+	if err := i.waitHealthy(ctx, i.healthBudget); err != nil {
 		return err
 	}
 
