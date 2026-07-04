@@ -70,6 +70,10 @@ type Server struct {
 	// tests/mock mode: edits persist, the table swaps on next boot.
 	llmProvidersChanged func(context.Context) error
 
+	// workspaceSettings backs the admin Features panel (WithWorkspaceSettings).
+	// nil in tests/mock mode: the /admin/settings endpoints answer 501.
+	workspaceSettings workspaceSettingsService
+
 	// isMember reports whether an email may use chat — the scoped-tier
 	// gate consulted by membershipMiddleware. nil in production, where it
 	// falls back to store.IsUser. Tests whose subject isn't membership
@@ -694,6 +698,11 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/llm-providers", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminLLMProviders)))))
 	mux.Handle("/admin/llm-providers/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminLLMProviderItem)))))
 	mux.Handle("/llm-provider-models", auth(member(http.HandlerFunc(s.handleLLMProviderModels))))
+	// Admin-managed workspace feature settings (internal/settings): the Features
+	// panel. Admin-gated like the rest of /admin/*; values are feature toggles
+	// only, never secrets.
+	mux.Handle("/admin/settings", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminSettings)))))
+	mux.Handle("/admin/settings/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminSettingItem)))))
 	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits
 	// just inside recoverMiddleware and before bodyLimitMiddleware, so a blocked
 	// client IP is dropped before any body parsing, route dispatch, or auth
@@ -2361,7 +2370,7 @@ func (s *Server) runTurnAsync(
 	// First-turn auto-title: on the opening turn, summarize the exchange
 	// into a 5-7 word sidebar title. Emits via the buffer so both the
 	// initial client and any reattach see it.
-	if s.cfg.AutoTitle && len(history) == 0 && !res.Cancelled && strings.TrimSpace(res.FinalText) != "" {
+	if s.cfg.LiveAutoTitle() && len(history) == 0 && !res.Cancelled && strings.TrimSpace(res.FinalText) != "" {
 		// Independent of persistCtx (and the request — this whole goroutine
 		// is detached): titling makes its own LLM call, and sharing persistCtx's
 		// 10s budget would let it starve the post-turn sweep below. The wait
@@ -2439,7 +2448,7 @@ func (s *Server) runTurnAsync(
 	// shutdown/Stop force-cancel propagates into the in-flight extraction rather
 	// than pinning the drain. Best-effort: any error is swallowed. Skips
 	// cancelled/empty turns. Off by default (opt-in).
-	if s.cfg.MemoryAutoIndexEnabled && !res.Cancelled && strings.TrimSpace(res.FinalText) != "" {
+	if s.cfg.LiveMemoryAutoIndexEnabled() && !res.Cancelled && strings.TrimSpace(res.FinalText) != "" {
 		memCtx, memCancel := context.WithTimeout(turnCtx, 30*time.Second)
 		s.autoIndexMemories(memCtx, buf, conv.ID, user, userInput, res.FinalText)
 		memCancel()

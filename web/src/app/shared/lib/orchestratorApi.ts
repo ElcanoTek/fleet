@@ -292,11 +292,6 @@ export type McpServer = {
   remote?: boolean;
 };
 
-export type ConcurrencyConfig = {
-  max_concurrent_agents: number;
-  warm_pool_size?: number;
-};
-
 export type LogMessage = {
   id?: string;
   role?: string;
@@ -525,14 +520,6 @@ export const orchestratorApi = {
       `/mcp-servers/${encodeURIComponent(server)}/accounts/${encodeURIComponent(account)}`,
       { method: "DELETE" },
     ),
-
-  // Global concurrency cap.
-  concurrency: () => request<ConcurrencyConfig>("/concurrency"),
-  setConcurrency: (max: number) =>
-    request<ConcurrencyConfig>("/concurrency", {
-      method: "PUT",
-      body: JSON.stringify({ max_concurrent_agents: max }),
-    }),
 
   // Dataset / table agent (#514).
   datasets: () => request<{ datasets: Dataset[] }>("/datasets"),

@@ -49,7 +49,7 @@ var (
 // the feature is enabled (#517), else returns userMessage unchanged. Kept as a
 // method so postChat stays a single statement (no added branch / complexity).
 func (s *Server) applyContextHandles(ctx context.Context, userMessage, rawMessage, conversationID string) string {
-	if !s.cfg.ContextHandlesEnabled {
+	if !s.cfg.LiveContextHandlesEnabled() {
 		return userMessage
 	}
 	blocks, notices := expandContextHandles(ctx, rawMessage, tools.WorkspaceDirForConversation(conversationID))

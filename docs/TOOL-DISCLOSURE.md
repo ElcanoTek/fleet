@@ -10,7 +10,9 @@ no vector DB, no network. (ADR-0026.)
 
 `buildFantasyTools` (the ONE builder both interactive and scheduled runs feed)
 counts the roster it would register. When that exceeds the disclosure threshold
-(`FLEET_TOOL_DISCLOSURE_THRESHOLD`, default 128 = the provider ceiling), it:
+(`FLEET_TOOL_DISCLOSURE_THRESHOLD`, default 128 = the provider ceiling; also
+tunable live from Settings → Admin → Feature settings, see
+[ADMIN-SETTINGS.md](ADMIN-SETTINGS.md)), it:
 
 - keeps **core tools** directly registered — native (bash/python/files/…),
   loader, pre-gated, and confirm_audit are NEVER deferred;

@@ -140,6 +140,9 @@ same PR.
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via
   `fleet mcp reload` / SIGHUP / admin endpoint): [`docs/MCP-RELOAD.md`](docs/MCP-RELOAD.md)
+- **Admin-managed workspace feature settings** (the Settings → Admin Features
+  panel: DB override > env var > default, live apply, the registry admission
+  rule, what stays env-only): [`docs/ADMIN-SETTINGS.md`](docs/ADMIN-SETTINGS.md)
 - **Load testing & benchmarks** (`fleet-bench` HTTP chat load via the fake-LLM
   seam + subsystem throughput benchmarks): [`docs/LOAD-TESTING.md`](docs/LOAD-TESTING.md)
 - **Prompt-cache prefix-stability contract** (what must stay byte-stable in the

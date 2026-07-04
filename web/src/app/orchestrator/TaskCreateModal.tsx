@@ -17,8 +17,7 @@ import { CostForecastPanel } from "./CostForecastPanel";
 // modals.js create-task modal, with ONE structural change from moc: the
 // `target_node_name` input is GONE, replaced by the shared
 // <McpServerPicker mode="task"> (enable/disable per MCP + per-MCP credential
-// account dropdown). The global concurrency cap setting also lives here, under
-// Advanced Settings.
+// account dropdown).
 
 const DEFAULT_PRIMARY_MODEL = "anthropic/claude-opus-4.8";
 const DEFAULT_FALLBACK_MODEL = "moonshotai/kimi-k2.6";

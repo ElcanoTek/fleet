@@ -7,15 +7,13 @@ import {
   validatePrompt,
   validateModel,
   validateMaxIterations,
-  validateConcurrencyCap,
   validateFile,
   validateScheduledTime,
   validateTaskForm,
 } from "./validation";
 
-// Ported from moc tests/validation.test.js, plus the v2-new concurrency-cap
-// validator and the target_node_name removal (the task form no longer carries
-// or validates it).
+// Ported from moc tests/validation.test.js, plus the target_node_name removal
+// (the task form no longer carries or validates it).
 
 describe("validateUsername", () => {
   it("validates correct username", () => {
@@ -103,22 +101,6 @@ describe("validateMaxIterations", () => {
     expect(validateMaxIterations("0").valid).toBe(false);
     expect(validateMaxIterations("abc").valid).toBe(false);
     expect(validateMaxIterations("").valid).toBe(true);
-  });
-});
-
-describe("validateConcurrencyCap (v2 — global cap)", () => {
-  it("accepts empty (server default)", () => {
-    expect(validateConcurrencyCap("").valid).toBe(true);
-    expect(validateConcurrencyCap(null).valid).toBe(true);
-  });
-  it("accepts a sane positive integer", () => {
-    expect(validateConcurrencyCap("4").valid).toBe(true);
-    expect(validateConcurrencyCap(8).valid).toBe(true);
-  });
-  it("rejects non-integers and out-of-range", () => {
-    expect(validateConcurrencyCap("abc").valid).toBe(false);
-    expect(validateConcurrencyCap("0").valid).toBe(false);
-    expect(validateConcurrencyCap("65").valid).toBe(false);
   });
 });
 
