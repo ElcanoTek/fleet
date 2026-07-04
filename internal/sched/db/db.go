@@ -2040,6 +2040,23 @@ func (db *Database) AddLog(ctx context.Context, taskID uuid.UUID, session *model
 	return err
 }
 
+// AddLogRaw stores a pre-serialized log session verbatim (legacy import,
+// docs/LEGACY-IMPORT.md). The payload travels byte-for-byte from the source
+// system's logs.session_data — no unmarshal/remarshal round-trip that could
+// drop fields a newer/older LogSession shape doesn't know about. Same
+// upsert-and-reset-archival semantics as AddLog.
+func (db *Database) AddLogRaw(ctx context.Context, taskID uuid.UUID, sessionJSON []byte) error {
+	_, err := db.conn.ExecContext(ctx, `
+		INSERT INTO logs (task_id, session_data, session_data_gz, session_compression)
+		VALUES ($1, $2, NULL, NULL)
+		ON CONFLICT (task_id) DO UPDATE SET
+			session_data = EXCLUDED.session_data,
+			session_data_gz = NULL,
+			session_compression = NULL`,
+		taskID, string(sessionJSON))
+	return err
+}
+
 // decodeLogRow turns one logs row into JSON bytes, transparently inflating (and
 // decrypting, when a key is configured) an archived payload (#272). Exactly one
 // of sessionData / gz is populated: a live row carries plaintext in sessionData
