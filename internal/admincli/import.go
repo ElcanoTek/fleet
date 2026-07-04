@@ -148,6 +148,7 @@ func cmdImport(argv []string) int {
 		return errf(1, "usage: fleet import <bundle.json> [--dry-run] [--live-only]")
 	}
 
+	//nolint:gosec // G304: the bundle path is an operator-supplied CLI positional (like backup/restore's dump paths), never request or LLM input.
 	body, err := os.ReadFile(file)
 	if err != nil {
 		return errf(1, "read bundle: %v", err)
@@ -197,7 +198,7 @@ func cmdImport(argv []string) int {
 			return errf(1, "open chat DB: %v", err)
 		}
 		err = importChatSection(ctx, chatStore, bundle.Chat, *dryRun, stats)
-		chatStore.Close()
+		_ = chatStore.Close()
 		if err != nil {
 			return errf(5, "chat section: %v", err)
 		}
@@ -208,11 +209,8 @@ func cmdImport(argv []string) int {
 		if st == nil {
 			return code
 		}
-		err := importSchedSection(ctx, st, bundle.Sched, *dryRun, *liveOnly, stats)
-		st.Close()
-		if err != nil {
-			return errf(5, "sched section: %v", err)
-		}
+		importSchedSection(ctx, st, bundle.Sched, *dryRun, *liveOnly, stats)
+		_ = st.Close()
 	}
 
 	printImportSummary(stats, *dryRun)
@@ -315,21 +313,28 @@ func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSec
 
 // validSchedTaskStatus is the set of statuses a bundle task may carry. The
 // exporters normalize anything transient (moc's assigned/leased/running) to a
-// terminal status before export; import stays strict rather than guessing.
+// terminal status before export; import stays strict rather than guessing —
+// the transient/paused states are explicitly rejected because they carry
+// lease/pending state a migrated row can't honor.
 func validSchedTaskStatus(s models.TaskStatus) bool {
 	switch s {
 	case models.TaskStatusPending, models.TaskStatusScheduled,
 		models.TaskStatusSuccess, models.TaskStatusError,
 		models.TaskStatusCancelled, models.TaskStatusDeadLettered:
 		return true
+	case models.TaskStatusLeased, models.TaskStatusRunning,
+		models.TaskStatusAnalyzing, models.TaskStatusPausedAwaitingInput:
+		return false
+	default:
+		return false
 	}
-	return false
 }
 
 // importSchedSection applies users → tasks → logs. Users first so task
 // created_by remapping can consult them; logs last so they attach to imported
-// task ids.
-func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSection, dryRun, liveOnly bool, stats *importStats) error {
+// task ids. Unlike the chat section, every failure here is per-record
+// (accumulated in stats) — nothing aborts the section.
+func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSection, dryRun, liveOnly bool, stats *importStats) {
 	// Users: matched by username. An existing account (e.g. the bootstrap
 	// admin) wins and imported tasks are re-attributed to its UUID; a new
 	// username is inserted with its source UUID + hash so logins keep working.
@@ -396,7 +401,7 @@ func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSect
 		if n := len(sec.Logs); n > 0 {
 			stats.warnf("--live-only: skipped %d run log(s)", n)
 		}
-		return nil
+		return
 	}
 	for _, l := range sec.Logs {
 		if l.TaskID == uuid.Nil || len(l.SessionData) == 0 || !json.Valid(l.SessionData) {
@@ -411,7 +416,6 @@ func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSect
 		}
 		bump(stats, "run logs", true)
 	}
-	return nil
 }
 
 // buildImportedTask converts one bundle task into a models.Task: minted through
@@ -443,7 +447,7 @@ func buildImportedTask(st *storage.Storage, bt bundleTask, remap map[uuid.UUID]u
 	if bt.Recurrence != "" {
 		if _, err := cron.ParseStandard(bt.Recurrence); err != nil {
 			if live {
-				return nil, live, fmt.Errorf("invalid recurrence %q: %v", bt.Recurrence, err)
+				return nil, live, fmt.Errorf("invalid recurrence %q: %w", bt.Recurrence, err)
 			}
 			// Terminal history: keep the row, the cron spec is never evaluated.
 			stats.warnf("task %s: terminal task carries unparseable recurrence %q (kept as history)", bt.ID, bt.Recurrence)
@@ -491,7 +495,7 @@ func buildImportedTask(st *storage.Storage, bt bundleTask, remap map[uuid.UUID]u
 		(task.ScheduledFor == nil || !task.ScheduledFor.After(time.Now())) {
 		next, err := st.ComputeNextRun(task)
 		if err != nil {
-			return nil, live, fmt.Errorf("compute next run: %v", err)
+			return nil, live, fmt.Errorf("compute next run: %w", err)
 		}
 		task.ScheduledFor = &next
 		task.Status = models.TaskStatusScheduled
