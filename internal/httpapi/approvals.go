@@ -1335,13 +1335,14 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 	}
 
 	req := TaskScheduleRequest{
-		Name:          strings.TrimSpace(p.Name),
-		Prompt:        strings.TrimSpace(p.Prompt),
-		Model:         strings.TrimSpace(p.Model),
-		Cron:          strings.TrimSpace(p.Cron),
-		MaxIterations: p.MaxIterations,
-		AllowNetwork:  p.AllowNetwork,
-		Tags:          p.Tags,
+		Name:                 strings.TrimSpace(p.Name),
+		Prompt:               strings.TrimSpace(p.Prompt),
+		Model:                strings.TrimSpace(p.Model),
+		Cron:                 strings.TrimSpace(p.Cron),
+		MaxIterations:        p.MaxIterations,
+		AllowNetwork:         p.AllowNetwork,
+		ThinkingBudgetTokens: p.ThinkingBudgetTokens,
+		Tags:                 p.Tags,
 		// The approving user is the budget principal for this create (#601
 		// part 2) — the seam refuses when their rolling budget is exhausted.
 		RequestedBy: approval.UserEmail,
