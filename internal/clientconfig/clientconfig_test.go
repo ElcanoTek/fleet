@@ -395,6 +395,27 @@ func TestReadSkills(t *testing.T) {
 		t.Errorf("expected >=4 problems for the malformed skills, got %d: %v", len(problems), problems)
 	}
 
+	// allowed-tools list form.
+	writeSkill("with-tools-list", "---\nname: with-tools-list\ndescription: has a tool list\nallowed-tools: [bash, run_python, read_file]\n---\n")
+	// allowed-tools comma-scalar form + de-dup + blank trimming.
+	writeSkill("with-tools-scalar", "---\nname: with-tools-scalar\ndescription: has a tool scalar\nallowed-tools: \"Read, Grep , Read,\"\n---\n")
+
+	got2, _ := ReadSkills(skills)
+	byName := map[string]Skill{}
+	for _, s := range got2 {
+		byName[s.Name] = s
+	}
+	if tl := byName["with-tools-list"].DeclaredAllowedTools; len(tl) != 3 || tl[0] != "bash" || tl[2] != "read_file" {
+		t.Errorf("list-form allowed-tools = %v", tl)
+	}
+	if ts := byName["with-tools-scalar"].DeclaredAllowedTools; len(ts) != 2 || ts[0] != "Read" || ts[1] != "Grep" {
+		t.Errorf("scalar-form allowed-tools (trim+dedup) = %v", ts)
+	}
+	// A skill with no allowed-tools has a nil declared list (absent, not empty).
+	if byName["good-skill"].DeclaredAllowedTools != nil {
+		t.Errorf("absent allowed-tools should be nil, got %v", byName["good-skill"].DeclaredAllowedTools)
+	}
+
 	// An absent skills/ dir is not a problem.
 	none, noProblems := ReadSkills(filepath.Join(dir, "does-not-exist"))
 	if len(none) != 0 || len(noProblems) != 0 {

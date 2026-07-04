@@ -35,6 +35,11 @@ type skillEntry struct {
 	// Source distinguishes bundle-authored skills from fleet's built-in pack
 	// ("bundle" | "builtin") so the library UI can badge provenance.
 	Source string `json:"source"`
+	// DeclaredAllowedTools is the skill's frontmatter `allowed-tools` (nil when
+	// absent), surfaced for REVIEW/observability — the library UI shows it so an
+	// operator can see a skill's declared tool contract. NOT an authorization
+	// boundary (see clientconfig.Skill.DeclaredAllowedTools / docs/SKILLS.md).
+	DeclaredAllowedTools []string `json:"declared_allowed_tools,omitempty"`
 }
 
 type skillsResponse struct {
@@ -63,7 +68,10 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	skills := s.bundleSkills()
 	entries := make([]skillEntry, 0, len(skills))
 	for _, sk := range skills {
-		entries = append(entries, skillEntry{Name: sk.Name, Description: sk.Description, Source: s.skillSource(sk.Name)})
+		entries = append(entries, skillEntry{
+			Name: sk.Name, Description: sk.Description, Source: s.skillSource(sk.Name),
+			DeclaredAllowedTools: sk.DeclaredAllowedTools,
+		})
 	}
 	writeJSON(w, skillsResponse{Skills: entries})
 }
@@ -103,10 +111,11 @@ func (s *Server) skillByName(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, map[string]any{
-			"name":        sk.Name,
-			"description": sk.Description,
-			"source":      s.skillSource(sk.Name),
-			"content":     string(data),
+			"name":                   sk.Name,
+			"description":            sk.Description,
+			"source":                 s.skillSource(sk.Name),
+			"declared_allowed_tools": sk.DeclaredAllowedTools,
+			"content":                string(data),
 		})
 		return
 	}
