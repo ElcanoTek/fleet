@@ -62,6 +62,10 @@ export type ChatTranscriptProps = {
   isStreaming: boolean;
   lastUserMessageId: number | null;
   lastAssistantMessageId: number | null;
+  // Keyboard `e` shortcut (#306): a monotonically-bumped nonce that asks the
+  // last user message to enter its inline editor. UserBubble owns the edit
+  // state, so the request arrives as a signal it watches. 0 = no request yet.
+  editLastUserSignal: number;
   selectedModel: string;
 
   // Turn / message actions
@@ -112,6 +116,7 @@ export function ChatTranscript({
   isStreaming,
   lastUserMessageId,
   lastAssistantMessageId,
+  editLastUserSignal,
   selectedModel,
   patchAssistantMessage,
   resendUserMessage,
@@ -321,6 +326,7 @@ export function ChatTranscript({
                               message={message}
                               isLastUser={message.id === lastUserMessageId}
                               isStreaming={isStreaming}
+                              editRequestSignal={message.id === lastUserMessageId ? editLastUserSignal : 0}
                               onResend={(edited) => void resendUserMessage(message.id, edited)}
                             />
                           ) : (
@@ -704,11 +710,16 @@ function UserBubble({
   message,
   isLastUser,
   isStreaming,
+  editRequestSignal,
   onResend,
 }: {
   message: Message;
   isLastUser: boolean;
   isStreaming: boolean;
+  // Keyboard `e` shortcut (#306): a bumped nonce asks this bubble to enter edit
+  // mode. Only the last user message ever receives a non-zero value. 0 = no
+  // request.
+  editRequestSignal: number;
   onResend: (edited: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -747,6 +758,20 @@ function UserBubble({
   }, [editing]);
 
   const startEdit = () => setEditing(true);
+
+  // React to the keyboard `e` shortcut: enter edit mode when the parent bumps
+  // editRequestSignal. Gated the same way the Edit button is (last user turn,
+  // not mid-stream). We compare against the last-seen nonce *during render* —
+  // the same "reset state when a prop changes" pattern used for draft above —
+  // so it fires once per request without a setState-in-effect cascade.
+  const [seenEditSignal, setSeenEditSignal] = useState(editRequestSignal);
+  if (editRequestSignal !== seenEditSignal) {
+    setSeenEditSignal(editRequestSignal);
+    if (editRequestSignal > 0 && isLastUser && !isStreaming && !editing) {
+      setEditing(true);
+    }
+  }
+
   const cancelEdit = () => {
     setEditing(false);
     setDraft(message.content);

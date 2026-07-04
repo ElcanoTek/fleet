@@ -519,6 +519,7 @@ function ConversationKebab({
 function ConvRow({
   conversation,
   active,
+  focused,
   streaming,
   editing,
   selecting,
@@ -532,6 +533,9 @@ function ConvRow({
 }: {
   conversation: ConversationSummary;
   active: boolean;
+  // focused = the keyboard j/k cursor is on this row (distinct from active =
+  // the open conversation). Renders a ring so the cursor is visible.
+  focused: boolean;
   streaming: boolean;
   editing: boolean;
   selecting: boolean;
@@ -549,6 +553,8 @@ function ConvRow({
 
   return (
     <div
+      data-conversation-id={conversation.id}
+      data-focused={focused ? "true" : undefined}
       className={[
         "group relative rounded-md transition",
         selecting && checked
@@ -556,6 +562,7 @@ function ConvRow({
           : active
             ? "bg-[var(--rail-active)]"
             : "hover:bg-[var(--rail-hover)]",
+        focused ? "ring-1 ring-inset ring-[var(--color-accent)]" : "",
       ].join(" ")}
     >
       {editing ? (
@@ -706,6 +713,8 @@ export function ConversationSidebar({
   conversations,
   filteredConversations,
   activeConversationId,
+  focusedConversationId,
+  renameSignal,
   loadConversation,
   streamingConvs,
   togglePin,
@@ -756,6 +765,14 @@ export function ConversationSidebar({
   conversations: ConversationSummary[];
   filteredConversations: ConversationSummary[];
   activeConversationId: string | null;
+  // Keyboard j/k cursor position (owned by ChatExperience so the same order
+  // drives nav and rendering). null when no row is focused.
+  focusedConversationId: string | null;
+  // Rename trigger from the parent's `r` shortcut: a monotonically-bumped nonce
+  // paired with the target id. The sidebar owns the inline-edit state
+  // (editingId), so the parent asks for a rename via this signal rather than
+  // reaching into that state. null before the first request.
+  renameSignal: { id: string; nonce: number } | null;
   loadConversation: (conversationId: string, options?: { preserveScroll?: boolean }) => Promise<void>;
   streamingConvs: Set<string>;
   togglePin: (conversation: ConversationSummary) => Promise<void>;
@@ -811,6 +828,16 @@ export function ConversationSidebar({
     [],
   );
 
+  // The parent's `r` shortcut asks for an inline rename by bumping renameSignal.
+  // We open the inline editor for the requested id when the nonce changes,
+  // comparing *during render* (React's "reset state when a prop changes"
+  // pattern) so it fires once per request without a setState-in-effect cascade.
+  const [seenRenameNonce, setSeenRenameNonce] = useState<number | null>(renameSignal?.nonce ?? null);
+  if (renameSignal && renameSignal.nonce !== seenRenameNonce) {
+    setSeenRenameNonce(renameSignal.nonce);
+    setEditingId(renameSignal.id);
+  }
+
   const folders = deriveFolders(conversations);
   const labelSummaries: LabelSummary[] = deriveLabels(conversations);
   const allLabelNames = labelSummaries.map((l) => l.name);
@@ -863,6 +890,7 @@ export function ConversationSidebar({
       key={conversation.id}
       conversation={conversation}
       active={activeConversationId === conversation.id}
+      focused={focusedConversationId === conversation.id}
       streaming={streamingConvs.has(conversation.id)}
       editing={editingId === conversation.id}
       selecting={selecting}
