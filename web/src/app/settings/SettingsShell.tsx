@@ -47,8 +47,8 @@ export function SettingsShell({
   return (
     <main className="h-dvh overflow-y-auto bg-[var(--gradient-bg-home-signature)] px-6 py-10 text-[var(--color-text-primary)]">
       <div className={`mx-auto w-full ${wide ? "max-w-4xl" : "max-w-3xl"}`}>
-        <header className="mb-4 flex items-center justify-between gap-4">
-          <Link href="/" className="flex items-center gap-2.5 no-underline">
+        <header className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <Link href="/" className="flex shrink-0 items-center gap-2.5 no-underline">
             <Image
               src="/logos/elcano-mark-primary.svg"
               alt="Elcano"
@@ -58,17 +58,20 @@ export function SettingsShell({
             />
             <span className="font-heading text-[0.9375rem] font-semibold">Settings</span>
           </Link>
-          <div className="flex items-center gap-2 text-[0.8125rem] text-[var(--color-text-secondary)]">
+          {/* whitespace-nowrap on each pill so a narrow (mobile) header wraps
+              the CLUSTER, never a single label's letters ("Operations Center"
+              used to stack mid-word). */}
+          <div className="flex flex-wrap items-center justify-end gap-2 text-[0.8125rem] text-[var(--color-text-secondary)]">
             {actions}
             <Link
               href="/orchestrator"
-              className="rounded-full border border-[var(--color-border-subtle)] px-3 py-1 transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+              className="whitespace-nowrap rounded-full border border-[var(--color-border-subtle)] px-3 py-1 transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
             >
               Operations Center
             </Link>
             <Link
               href="/"
-              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+              className="whitespace-nowrap rounded-full border border-[var(--color-border-strong)] px-3 py-1 transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
             >
               Back to chat
             </Link>
