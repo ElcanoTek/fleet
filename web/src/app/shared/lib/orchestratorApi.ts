@@ -211,6 +211,9 @@ export type TaskTemplateTask = {
   expected_duration_minutes?: number | null;
   sla_warn_multiplier?: number;
   sla_fail_multiplier?: number;
+  // Per-task extended-thinking override (#220): omit to inherit the default,
+  // 0 = off, >0 = this task's budget in tokens.
+  thinking_budget_tokens?: number | null;
 };
 
 // TaskTemplate is one "new task from a template" entry from the bundle's
