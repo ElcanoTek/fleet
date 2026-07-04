@@ -1,0 +1,506 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { StatusChip } from "@/app/shared/ui/StatusChip";
+
+// FeatureSettingsPanel — the admin Features panel: every workspace feature
+// setting the server registers (GET /api/admin/settings), with its effective
+// value, where it came from (env default vs admin override), and controls to
+// change or reset it. Every registered setting applies LIVE — the server
+// registry only admits settings whose consumers re-read per turn/run — so
+// there is deliberately no "restart required" state to render.
+//
+// Presentation (labels, grouping, help copy) lives here; the server owns the
+// registry, types, bounds, and validation. A setting the server adds before
+// this file learns about it still renders (in "Other", from its raw key) —
+// new backend settings never silently vanish from the panel.
+
+type ResolvedSetting = {
+  key: string;
+  kind: "bool" | "int" | "enum";
+  enum?: string[];
+  min?: number;
+  max?: number;
+  min_zero_ok?: boolean;
+  env_var: string;
+  value: string;
+  source: "admin" | "default";
+  default: string;
+  updated_at?: number;
+  updated_by?: string;
+};
+
+type SettingMeta = {
+  label: string;
+  description: string;
+  // Per-enum-option one-liners, shown for the selected option (PII modes).
+  optionHelp?: Record<string, string>;
+  // Suffix hint for numeric fields ("bytes — 0 disables the ceiling").
+  unitHint?: string;
+};
+
+const META: Record<string, SettingMeta> = {
+  pii_redaction_mode: {
+    label: "PII redaction",
+    description:
+      "Scan every tool result for PII (emails, SSNs, credit cards, IPs, phone numbers) before it reaches the model, on top of the always-on secret scrubber. Deterministic pattern matching — a redaction aid, not a certified DLP engine.",
+    optionHelp: {
+      off: "Tool output passes through unchanged.",
+      observe: "Detect and audit-log findings (kind + count, never the value) without changing the output — a monitoring posture.",
+      redact: "Replace each detected span with a [PII:kind] marker so the model sees the structure without the value.",
+      block: "Withhold any tool result containing PII entirely — the strictest posture; the model sees only a blocked notice.",
+    },
+  },
+  tool_disclosure_threshold: {
+    label: "Tool disclosure threshold",
+    description:
+      "When a conversation's tool roster grows past this many tools, MCP tools are searched on demand (tool_search → tool_call) instead of all being advertised at once. Lower it to shrink prompts on tool-heavy workspaces.",
+    unitHint: "tools",
+  },
+  max_tool_output_bytes: {
+    label: "Tool output ceiling",
+    description:
+      "Cap any single tool result before it enters the context window; oversized output keeps its head and tail. Protects against a cat of a huge file blowing out the conversation.",
+    unitHint: "bytes — 0 removes the ceiling",
+  },
+  phone_a_friend_enabled: {
+    label: "Phone-a-friend review",
+    description:
+      "Have a second model review each scheduled run's final output once before it's accepted. Adds one extra model call per run.",
+  },
+  subagents_enabled: {
+    label: "Sub-agent delegation",
+    description:
+      "Allow scheduled tasks to spawn governed child agents fleet-wide (individual tasks can also opt in with allow_delegation). Children inherit ceilings and policy from the parent run.",
+  },
+  memory_autoindex_enabled: {
+    label: "Memory auto-index",
+    description:
+      "After each chat turn, extract durable facts into the user's memory automatically instead of relying on explicit remember requests. Uses a cheap model call per turn.",
+  },
+  error_analysis_enabled: {
+    label: "Task error analysis",
+    description:
+      "When a scheduled task fails terminally, run an LLM diagnosis of what went wrong and surface it on the task page.",
+  },
+  auto_title_enabled: {
+    label: "Auto-title conversations",
+    description: "Generate a conversation title from the first exchange with a cheap model call.",
+  },
+  connector_recommendations_enabled: {
+    label: "Connector recommendations",
+    description:
+      "Suggest relevant connectors to users based on what they ask for (a model call over the catalog; no user data leaves the box).",
+  },
+  context_handles_enabled: {
+    label: "Composer context handles",
+    description: "Let users @-reference files and past conversations from the chat composer.",
+  },
+};
+
+const GROUPS: { title: string; keys: string[] }[] = [
+  { title: "Privacy & data protection", keys: ["pii_redaction_mode"] },
+  {
+    title: "Agent runtime",
+    keys: [
+      "tool_disclosure_threshold",
+      "max_tool_output_bytes",
+      "phone_a_friend_enabled",
+      "subagents_enabled",
+    ],
+  },
+  {
+    title: "Workspace features",
+    keys: [
+      "memory_autoindex_enabled",
+      "error_analysis_enabled",
+      "auto_title_enabled",
+      "connector_recommendations_enabled",
+      "context_handles_enabled",
+    ],
+  },
+];
+
+async function fetchSettings(): Promise<ResolvedSetting[] | null> {
+  const response = await fetch("/api/admin/settings", { cache: "no-store" });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    return null;
+  }
+  if (response.status === 403) {
+    throw new Error("You are not on the admin allowlist.");
+  }
+  if (response.status === 501) {
+    throw new Error("Workspace settings are not available on this deployment.");
+  }
+  if (!response.ok) {
+    throw new Error(`Settings request failed: ${response.status}`);
+  }
+  const data = (await response.json()) as { settings: ResolvedSetting[] };
+  return data.settings ?? [];
+}
+
+function metaFor(key: string): SettingMeta {
+  return (
+    META[key] ?? {
+      label: key.replaceAll("_", " "),
+      description: "",
+    }
+  );
+}
+
+function labelForEnum(option: string): string {
+  return option.charAt(0).toUpperCase() + option.slice(1);
+}
+
+export function FeatureSettingsPanel() {
+  const [settings, setSettings] = useState<ResolvedSetting[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Per-key UI state: in-flight writes, numeric drafts, row-level errors.
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let stale = false;
+    fetchSettings()
+      .then((rows) => {
+        if (!stale && rows !== null) setSettings(rows);
+      })
+      .catch((err: unknown) => {
+        if (!stale) setError(err instanceof Error ? err.message : "Failed to load.");
+      });
+    return () => {
+      stale = true;
+    };
+  }, []);
+
+  // Replace one setting in place from a PUT/DELETE response so the row
+  // re-renders without a full refetch.
+  const applyResolved = (updated: ResolvedSetting) => {
+    setSettings((prev) =>
+      prev ? prev.map((s) => (s.key === updated.key ? updated : s)) : prev,
+    );
+    setDrafts((prev) => {
+      const next = { ...prev };
+      delete next[updated.key];
+      return next;
+    });
+  };
+
+  const write = async (key: string, init: RequestInit) => {
+    setBusyKey(key);
+    setRowErrors((prev) => ({ ...prev, [key]: "" }));
+    try {
+      const response = await fetch(`/api/admin/settings/${encodeURIComponent(key)}`, init);
+      if (!response.ok) {
+        const text = (await response.text()).trim();
+        throw new Error(text || `Request failed: ${response.status}`);
+      }
+      applyResolved((await response.json()) as ResolvedSetting);
+    } catch (err) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [key]: err instanceof Error ? err.message : "Failed to save.",
+      }));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const save = (key: string, value: string) =>
+    write(key, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    });
+
+  const reset = (key: string) => write(key, { method: "DELETE" });
+
+  const byKey = new Map((settings ?? []).map((s) => [s.key, s]));
+  const grouped = GROUPS.map((g) => ({
+    title: g.title,
+    settings: g.keys.map((k) => byKey.get(k)).filter(Boolean) as ResolvedSetting[],
+  })).filter((g) => g.settings.length > 0);
+  // Settings the server registers that this file doesn't know yet.
+  const known = new Set(GROUPS.flatMap((g) => g.keys));
+  const other = (settings ?? []).filter((s) => !known.has(s.key));
+  if (other.length > 0) grouped.push({ title: "Other", settings: other });
+
+  return (
+    <section
+      className="mt-4 rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)]"
+      data-testid="feature-settings-panel"
+    >
+      <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
+        <span className="text-[0.75rem] uppercase tracking-wide text-[var(--color-text-muted)]">
+          Feature settings
+        </span>
+      </div>
+      <p className="px-4 pt-3 text-[0.75rem] text-[var(--color-text-muted)]">
+        Workspace-wide feature toggles. Every change applies live — the next turn, run, or tool
+        call picks it up; nothing here needs a restart. Each setting&apos;s deployment default
+        comes from the env var shown on the row; <em>Reset</em> reverts to it.
+      </p>
+
+      {error ? (
+        <div className="px-4 py-3">
+          <NoticeBanner tone="danger">{error}</NoticeBanner>
+        </div>
+      ) : settings === null ? (
+        <p className="px-4 py-4 text-[0.8125rem] text-[var(--color-text-muted)]">Loading…</p>
+      ) : (
+        grouped.map((group) => (
+          <div key={group.title} className="border-t border-[var(--color-border-subtle)] first:border-t-0">
+            <h3 className="px-4 pt-3 text-[0.6875rem] uppercase tracking-wide text-[var(--color-text-muted)]">
+              {group.title}
+            </h3>
+            <ul>
+              {group.settings.map((s) => (
+                <SettingRow
+                  key={s.key}
+                  setting={s}
+                  busy={busyKey !== null}
+                  rowError={rowErrors[s.key] ?? ""}
+                  draft={drafts[s.key]}
+                  setDraft={(v) => setDrafts((prev) => ({ ...prev, [s.key]: v }))}
+                  onSave={(value) => save(s.key, value)}
+                  onReset={() => reset(s.key)}
+                />
+              ))}
+            </ul>
+          </div>
+        ))
+      )}
+    </section>
+  );
+}
+
+function SettingRow({
+  setting,
+  busy,
+  rowError,
+  draft,
+  setDraft,
+  onSave,
+  onReset,
+}: {
+  setting: ResolvedSetting;
+  busy: boolean;
+  rowError: string;
+  draft: string | undefined;
+  setDraft: (v: string) => void;
+  onSave: (value: string) => void;
+  onReset: () => void;
+}) {
+  const meta = metaFor(setting.key);
+  const customized = setting.source === "admin";
+
+  return (
+    <li
+      className="border-t border-[var(--color-border-subtle)] px-4 py-3 first:border-t-0"
+      data-testid={`setting-${setting.key}`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0 flex-1 basis-64">
+          <div className="flex items-center gap-2">
+            <span className="text-[0.875rem] font-medium text-[var(--color-text-primary)]">
+              {meta.label}
+            </span>
+            {customized ? (
+              <StatusChip tone="success">Customized</StatusChip>
+            ) : (
+              <StatusChip tone="neutral">Server default</StatusChip>
+            )}
+          </div>
+          {meta.description ? (
+            <p className="mt-1 text-[0.75rem] leading-relaxed text-[var(--color-text-secondary)]">
+              {meta.description}
+            </p>
+          ) : null}
+          <p className="mt-1 text-[0.6875rem] text-[var(--color-text-muted)]">
+            Default{" "}
+            <code className="rounded bg-[var(--color-overlay-soft)] px-1">{setting.default}</code>{" "}
+            from{" "}
+            <code className="rounded bg-[var(--color-overlay-soft)] px-1">{setting.env_var}</code>
+            {customized && setting.updated_by ? <> · set by {setting.updated_by}</> : null}
+          </p>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          {setting.kind === "bool" ? (
+            <BoolControl setting={setting} busy={busy} onSave={onSave} />
+          ) : setting.kind === "enum" ? (
+            <EnumControl setting={setting} busy={busy} onSave={onSave} />
+          ) : (
+            <IntControl
+              setting={setting}
+              busy={busy}
+              draft={draft}
+              setDraft={setDraft}
+              unitHint={meta.unitHint}
+              onSave={onSave}
+            />
+          )}
+          {customized ? (
+            <button
+              type="button"
+              onClick={onReset}
+              disabled={busy}
+              data-testid={`reset-${setting.key}`}
+              className="rounded-full border border-[var(--color-border-subtle)] px-2.5 py-1 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            >
+              Reset
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {setting.kind === "enum" && meta.optionHelp?.[setting.value] ? (
+        <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
+          {meta.optionHelp[setting.value]}
+        </p>
+      ) : null}
+
+      {rowError ? (
+        <p className="mt-2 text-[0.75rem] text-[var(--color-danger-soft)]" role="alert">
+          {rowError}
+        </p>
+      ) : null}
+    </li>
+  );
+}
+
+// BoolControl — an accessible switch styled as the app's pill toggle.
+function BoolControl({
+  setting,
+  busy,
+  onSave,
+}: {
+  setting: ResolvedSetting;
+  busy: boolean;
+  onSave: (value: string) => void;
+}) {
+  const on = setting.value === "true";
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={metaFor(setting.key).label}
+      disabled={busy}
+      onClick={() => onSave(on ? "false" : "true")}
+      data-testid={`toggle-${setting.key}`}
+      className={`relative h-6 w-11 rounded-full border transition disabled:opacity-50 ${
+        on
+          ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_35%,transparent)]"
+          : "border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)]"
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full transition-[left] ${
+          on ? "left-[1.4rem] bg-[var(--color-accent)]" : "left-1 bg-[var(--color-text-muted)]"
+        }`}
+      />
+    </button>
+  );
+}
+
+// EnumControl — a segmented pill row, one pill per legal value.
+function EnumControl({
+  setting,
+  busy,
+  onSave,
+}: {
+  setting: ResolvedSetting;
+  busy: boolean;
+  onSave: (value: string) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={metaFor(setting.key).label}
+      className="flex flex-wrap gap-1"
+    >
+      {(setting.enum ?? []).map((option) => {
+        const active = setting.value === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            disabled={busy || active}
+            onClick={() => onSave(option)}
+            data-testid={`option-${setting.key}-${option}`}
+            className={`rounded-full border px-3 py-1 text-[0.75rem] transition disabled:opacity-60 ${
+              active
+                ? "border-[var(--color-accent)] font-medium text-[var(--color-text-primary)]"
+                : "border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+            }`}
+          >
+            {labelForEnum(option)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// IntControl — a numeric field with an explicit Save that appears once the
+// value is dirty (numbers shouldn't fire a workspace-wide write per keystroke).
+function IntControl({
+  setting,
+  busy,
+  draft,
+  setDraft,
+  unitHint,
+  onSave,
+}: {
+  setting: ResolvedSetting;
+  busy: boolean;
+  draft: string | undefined;
+  setDraft: (v: string) => void;
+  unitHint?: string;
+  onSave: (value: string) => void;
+}) {
+  const value = draft ?? setting.value;
+  const dirty = draft !== undefined && draft !== setting.value;
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="number"
+        inputMode="numeric"
+        value={value}
+        min={setting.min_zero_ok ? 0 : setting.min}
+        max={setting.max}
+        disabled={busy}
+        aria-label={metaFor(setting.key).label}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && dirty) onSave(value);
+        }}
+        data-testid={`input-${setting.key}`}
+        className="w-32 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-1.5 text-right text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
+      />
+      {unitHint ? (
+        <span className="hidden text-[0.6875rem] text-[var(--color-text-muted)] sm:inline">
+          {unitHint}
+        </span>
+      ) : null}
+      {dirty ? (
+        <button
+          type="button"
+          onClick={() => onSave(value)}
+          disabled={busy}
+          data-testid={`save-${setting.key}`}
+          className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] font-medium transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+        >
+          Save
+        </button>
+      ) : null}
+    </div>
+  );
+}

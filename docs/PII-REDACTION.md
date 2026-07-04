@@ -21,6 +21,14 @@ corrupted.
 
 ## Configuration
 
+**From the web UI (recommended):** Settings → Admin → Feature settings →
+**PII redaction** — pick `off` / `observe` / `redact` / `block`. The change
+applies to the very next tool call, no restart, and an admin override wins
+over the env vars below until it is reset. See
+[ADMIN-SETTINGS.md](ADMIN-SETTINGS.md).
+
+**From the env file (the deployment default):**
+
 | Env var | Default | Meaning |
 | --- | --- | --- |
 | `FLEET_PII_REDACTION_ENABLED` | `false` | Master switch. Off = byte-for-byte unchanged. |
@@ -60,4 +68,5 @@ not silently missing):
   handling).
 - Tool **arguments**, notifications (#292), eval goldens (#502), browser OCR.
 - The external ONNX/Rampart classifier implementation (interface-ready).
-- Per-conversation / per-task mode overrides.
+- Per-conversation / per-task mode overrides (the admin setting is
+  workspace-global).

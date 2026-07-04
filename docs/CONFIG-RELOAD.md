@@ -5,6 +5,12 @@ without a restart, so an operator can adjust a cost/token/iteration ceiling or
 the sampling temperature without interrupting active chat conversations or
 in-flight scheduled tasks.
 
+> Feature toggles (PII redaction, sub-agents, memory auto-index, …) have their
+> own, UI-first mechanism: admin-managed workspace settings, stored in the DB
+> and applied live — see [ADMIN-SETTINGS.md](ADMIN-SETTINGS.md). The two
+> cover **disjoint** settings: this page's reload is for the env-file ceilings
+> and temperatures below.
+
 Everything else — bind addresses, database DSNs, auth secrets, the
 admission-semaphore size, TLS — is bound into a listener, connection pool, or
 signing context **at startup** and cannot be swapped mid-run. A reload reports

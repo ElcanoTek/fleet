@@ -546,7 +546,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// leaves the reviewer nil, which the agent treats as "skip the review" — the
 	// feature degrades gracefully rather than failing the run.
 	var reviewer fantasy.LanguageModel
-	if r.cfg.PhoneAFriendEnabled {
+	if r.cfg.LivePhoneAFriendEnabled() {
 		reviewer = fallback
 		if slug := strings.TrimSpace(r.cfg.PhoneAFriendModel); slug != "" {
 			if rv, rerr := r.mgr.Resolve(ctx, slug); rerr == nil {
@@ -725,7 +725,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		CredentialAllowlist: taskCredentialAllowlist(task),
 		PersonaPolicy:       r.personaPolicy(taskPersona),
 		Overlay:             remoteOverlay,
-		PhoneAFriendEnabled: r.cfg.PhoneAFriendEnabled,
+		PhoneAFriendEnabled: r.cfg.LivePhoneAFriendEnabled(),
 		ReviewerModel:       reviewer,
 		// Governed sub-agents / delegation (#175, #264): enabled when the fleet-wide
 		// FLEET_SUBAGENTS_ENABLED operator flag is on OR THIS task opted in via
@@ -736,7 +736,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		// parent's model came from (r.mgr), so a per-child model choice keeps
 		// credentials host-side — never in the sandbox or model context.
 		Subagent: agent.SubagentOptions{
-			Enabled:        r.cfg.SubagentsEnabled || task.AllowDelegation,
+			Enabled:        r.cfg.LiveSubagentsEnabled() || task.AllowDelegation,
 			MaxDepth:       r.cfg.SubagentsMaxDepth,
 			MaxChildren:    r.cfg.SubagentsMaxChildren,
 			BudgetFraction: r.cfg.SubagentsBudgetFraction,

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"charm.land/fantasy"
 
@@ -42,11 +43,39 @@ func isDisclosureBridge(name string) bool {
 	return name == toolNameToolSearch || name == toolNameToolDescribe || name == toolNameToolCall
 }
 
+// disclosureThresholdOverride is the admin-settings live override (0 = unset).
+// The admin Features panel sets it through SetToolDisclosureThreshold; the
+// roster build reads it per turn, so a change applies on the next turn with no
+// restart. Atomic because the setter runs on the admin-API goroutine while
+// turns read concurrently.
+var disclosureThresholdOverride atomic.Int64
+
+// SetToolDisclosureThreshold installs (n > 0) or clears (n <= 0) the
+// process-wide admin override for the disclosure threshold. Called by the
+// workspace-settings apply hook in cmd/fleet.
+func SetToolDisclosureThreshold(n int) {
+	if n < 0 {
+		n = 0
+	}
+	disclosureThresholdOverride.Store(int64(n))
+}
+
 // disclosureThreshold returns the roster size at or below which nothing is
 // deferred (small catalogs are byte-for-byte unchanged). Above it, MCP tools
-// defer. FLEET_TOOL_DISCLOSURE_THRESHOLD overrides; default is the provider
-// ceiling so a roster that would otherwise ERROR instead degrades to disclosure.
+// defer. Precedence: admin override (workspace settings), then
+// FLEET_TOOL_DISCLOSURE_THRESHOLD; default is the provider ceiling so a roster
+// that would otherwise ERROR instead degrades to disclosure.
 func disclosureThreshold() int {
+	if n := disclosureThresholdOverride.Load(); n > 0 {
+		return int(n)
+	}
+	return EnvToolDisclosureThreshold()
+}
+
+// EnvToolDisclosureThreshold returns the env-derived threshold (ignoring any
+// admin override) — the workspace-settings boot wiring reports it as the value
+// a reset reverts to.
+func EnvToolDisclosureThreshold() int {
 	if v := strings.TrimSpace(os.Getenv("FLEET_TOOL_DISCLOSURE_THRESHOLD")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n

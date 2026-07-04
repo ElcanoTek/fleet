@@ -531,6 +531,13 @@ func run() error {
 	chatOpts = append(chatOpts, httpapi.WithLLMProvidersChanged(
 		llmProvidersReloader(mgr, chatStore, bundleProviders, cfg.OpenRouterAPIKey)))
 
+	// Admin-managed workspace feature settings (internal/settings): the admin
+	// Features panel. Defaults come from the env-derived Config; overrides load
+	// from the workspace_settings table and apply LIVE (PII redactor swap,
+	// config live setters, agentcore holders) — both now, at boot, and after
+	// every admin edit.
+	chatOpts = appendWorkspaceSettingsOption(chatOpts, cfg, chatStore)
+
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 
 	// Auto-approve-in-test (#225) bypasses the human-in-the-loop approval gate.
@@ -1734,16 +1741,6 @@ func learnedInstructionProvider(cfg *config.Config, st *storage.Storage) schedul
 		return nil
 	}
 	return st
-}
-
-// errorAnalyzerFor returns the runner's post-failure diagnosis seam (#317): the
-// Manager when FLEET_ERROR_ANALYSIS_ENABLED is on, else nil (analysis off). A
-// tiny helper so run() stays under the gocyclo ceiling.
-func errorAnalyzerFor(cfg *config.Config, mgr *agent.Manager) runner.ErrorAnalyzer {
-	if cfg == nil || !cfg.ErrorAnalysisEnabled {
-		return nil
-	}
-	return mgr
 }
 
 // configurePIIRedaction installs the process-wide PII redactor (#450) when

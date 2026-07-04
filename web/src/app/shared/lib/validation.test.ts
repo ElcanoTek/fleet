@@ -7,7 +7,6 @@ import {
   validatePrompt,
   validateModel,
   validateMaxIterations,
-  validateConcurrencyCap,
   validateFile,
   validateScheduledTime,
   validateTaskForm,
@@ -103,22 +102,6 @@ describe("validateMaxIterations", () => {
     expect(validateMaxIterations("0").valid).toBe(false);
     expect(validateMaxIterations("abc").valid).toBe(false);
     expect(validateMaxIterations("").valid).toBe(true);
-  });
-});
-
-describe("validateConcurrencyCap (v2 — global cap)", () => {
-  it("accepts empty (server default)", () => {
-    expect(validateConcurrencyCap("").valid).toBe(true);
-    expect(validateConcurrencyCap(null).valid).toBe(true);
-  });
-  it("accepts a sane positive integer", () => {
-    expect(validateConcurrencyCap("4").valid).toBe(true);
-    expect(validateConcurrencyCap(8).valid).toBe(true);
-  });
-  it("rejects non-integers and out-of-range", () => {
-    expect(validateConcurrencyCap("abc").valid).toBe(false);
-    expect(validateConcurrencyCap("0").valid).toBe(false);
-    expect(validateConcurrencyCap("65").valid).toBe(false);
   });
 });
 

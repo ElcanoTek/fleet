@@ -15,6 +15,22 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- Admin-managed workspace feature settings
+  ([docs/ADMIN-SETTINGS.md](docs/ADMIN-SETTINGS.md)): Settings → Admin gains a
+  "Feature settings" panel — the env-flag-only product toggles (PII redaction
+  mode, tool disclosure threshold, tool-output ceiling, phone-a-friend,
+  sub-agent delegation, memory auto-index, task error analysis, auto-title,
+  connector recommendations, context handles) are now visible and editable
+  from the web UI. Overrides live in the chat DB (`workspace_settings`,
+  migration 035) with precedence **admin override > env var > built-in
+  default**; every change is validated against a typed server-side registry,
+  audit-logged, applied **live** (next turn/run/tool call — the registry only
+  admits restart-free settings), and reversible per-setting via Reset. Env
+  vars keep working unchanged as the deployment defaults. The registry holds
+  no secrets by construction (SMTP/webhook notification config stays env-only
+  pending sealed-secret treatment). ADR:
+  [docs/adr/0030-admin-workspace-settings.md](docs/adr/0030-admin-workspace-settings.md).
+
 - Admin-managed LLM providers ([docs/LLM-PROVIDERS.md](docs/LLM-PROVIDERS.md)):
   Settings → Admin gains a "Model providers" panel — add an OpenRouter,
   Anthropic, or OpenAI API key, or any OpenAI-compatible endpoint (Ollama,
@@ -135,6 +151,13 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Removed the Settings → General concurrency-cap card: it called
+  `GET/PUT /concurrency`, endpoints fleet's orchestrator never served (a
+  moc-era leftover), so it could only ever surface an error toast. The cap
+  remains `FLEET_MAX_CONCURRENT_AGENTS` in the env file (boot-bound — it
+  sizes the admission semaphore and sandbox warm pool at startup); see
+  [docs/ADMIN-SETTINGS.md](docs/ADMIN-SETTINGS.md) for which settings are
+  live-tunable instead.
 - `fleet update` now actually ships web changes: `scripts/update.sh` deploys
   the freshly built Next app into the `fleet-web` unit's WorkingDirectory
   (`/opt/fleet/web`) and restarts `fleet-web` after the backend restart —
