@@ -151,10 +151,12 @@ describe("UsagePanel (#601)", () => {
     mockReport(report({ buckets: [bucket({ key: "alice@example.com", cost_usd: 1 })] }));
     // Stub navigation so the click doesn't actually change location.
     const original = window.location;
-    // @ts-expect-error redefining for the test
-    delete window.location;
-    // @ts-expect-error minimal stub
-    window.location = { href: "" };
+    // Replace location with a minimal writable stub for the navigation assertion.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: { href: "" } as unknown as Location,
+    });
     try {
       render(<UsagePanel />);
       const btn = await screen.findByTestId("usage-download-csv");
@@ -164,7 +166,11 @@ describe("UsagePanel (#601)", () => {
       expect(window.location.href).toContain("group_by=user");
       expect(window.location.href).toMatch(/from=\d{4}-\d{2}-\d{2}/);
     } finally {
-      window.location = original;
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        writable: true,
+        value: original,
+      });
     }
   });
 });

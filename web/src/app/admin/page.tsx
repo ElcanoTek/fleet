@@ -7,6 +7,7 @@ import { NotificationsPanel } from "./NotificationsPanel";
 import { ProvidersPanel } from "./ProvidersPanel";
 import { UsersPanel } from "./UsersPanel";
 
+import { Icon } from "@/app/shared/ui/Icon";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { SettingsShell } from "@/app/settings/SettingsShell";
 
@@ -120,10 +121,13 @@ export default function AdminPage() {
         <button
           type="button"
           onClick={refresh}
-          className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+          aria-label={loading ? "Refreshing…" : "Refresh"}
+          title="Refresh"
+          aria-busy={loading}
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--color-border-strong)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
           disabled={loading}
         >
-          {loading ? "Loading…" : "Refresh"}
+          <Icon name="refresh" className={`h-4 w-4${loading ? " animate-spin" : ""}`} />
         </button>
       }
     >

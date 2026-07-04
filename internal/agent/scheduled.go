@@ -118,6 +118,11 @@ type Agent struct {
 	// call (Gate-3, #184). nil = inherit global; threaded into RunConfig.
 	credentialAllowlist agentcore.CredentialAllowlist
 
+	// thinkingBudget is the per-task extended-thinking override (#220): nil =
+	// inherit the global FLEET_DEFAULT_THINKING_BUDGET_TOKENS, else this task's
+	// budget (0 = off, N = clamped on). Resolved in scheduledThinkingConfig.
+	thinkingBudget *int
+
 	// personaPolicy is the per-persona tool allowlist (Gate-4, #294). nil = no
 	// narrowing (the persona sees every tool the earlier gates permit); threaded
 	// into RunConfig so denied tools never enter the model's tool list.
@@ -171,6 +176,11 @@ type Options struct {
 	// call (Gate-3, #184). nil = inherit global. Threaded into RunConfig so the
 	// run loop denies any pair not on the list before the call is dispatched.
 	CredentialAllowlist agentcore.CredentialAllowlist
+
+	// ThinkingBudget is the per-task extended-thinking override (#220): nil =
+	// inherit the global default. The DRIVER (scheduledrun) sets it from the
+	// task's ThinkingBudgetTokens column.
+	ThinkingBudget *int
 
 	// PersonaPolicy is the per-persona tool allowlist (Gate-4, #294) for this
 	// task's resolved persona. nil = no narrowing (current behavior). The DRIVER
@@ -272,6 +282,7 @@ func NewAgent(opts Options) *Agent {
 		taskID:              opts.TaskID,
 		taskMemoryConfig:    opts.TaskMemoryConfig,
 		credentialAllowlist: opts.CredentialAllowlist,
+		thinkingBudget:      opts.ThinkingBudget,
 		personaPolicy:       opts.PersonaPolicy,
 		phoneAFriendEnabled: opts.PhoneAFriendEnabled,
 		reviewerModel:       opts.ReviewerModel,
@@ -625,12 +636,10 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		LoaderTools:     loaderTools,
 		NativeTools:     nativeTools,
 		ProviderHeaders: agentcore.DefaultProviderHeaders,
-		// Extended thinking (#220) for scheduled runs is driven by the GLOBAL
-		// default only (FLEET_DEFAULT_THINKING_BUDGET_TOKENS). A per-task override
-		// column is a documented follow-on; the global default uniformly enables
-		// thinking for every scheduled run when an operator turns it on. nil config
-		// (some test setups) → no default → thinking off.
-		ThinkingConfig: scheduledThinkingConfig(a.config),
+		// Extended thinking (#220): the per-task override (a.thinkingBudget) wins
+		// when set, else the GLOBAL default (FLEET_DEFAULT_THINKING_BUDGET_TOKENS).
+		// nil config (some test setups) with no override → thinking off.
+		ThinkingConfig: scheduledThinkingConfig(a.config, a.thinkingBudget),
 	}
 
 	res, err := agentcore.Run(ctx, agentcore.ModeScheduled, cfg, deps)
@@ -644,9 +653,14 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 }
 
 // scheduledThinkingConfig resolves the extended-thinking config for a scheduled
-// run from the global default (#220). nil config or a zero/unset default returns
-// nil (thinking off). Per-task overrides are a documented follow-on.
-func scheduledThinkingConfig(cfg *config.Config) *agentcore.ThinkingConfig {
+// run (#220): the per-task override wins when set (nil = inherit), else the
+// global default. A resolved budget <=0 means thinking off; a positive budget
+// is clamped to the provider bounds by ThinkingConfigForBudget. The
+// override>global precedence mirrors the interactive path's resolveThinkingConfig.
+func scheduledThinkingConfig(cfg *config.Config, override *int) *agentcore.ThinkingConfig {
+	if override != nil {
+		return agentcore.ThinkingConfigForBudget(*override)
+	}
 	if cfg == nil {
 		return nil
 	}
