@@ -27,7 +27,7 @@ import { parseSseChunk } from "@/app/lib/sse";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import { SearchBar } from "./SearchBar";
 import { useClientConfig } from "@/app/lib/useClientConfig";
-import { filterConversations } from "./conversationOrganization";
+import { filterConversations, visibleConversationOrder } from "./conversationOrganization";
 import {
   useKeyboardShortcuts,
   type KeyboardShortcut,
@@ -218,6 +218,18 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
     ],
   },
   {
+    title: "Conversation list",
+    entries: [
+      { chips: [{ label: "J" }], description: "Focus next conversation" },
+      { chips: [{ label: "K" }], description: "Focus previous conversation" },
+      { chips: [{ label: "Enter" }], description: "Open the focused conversation" },
+      { chips: [{ label: "P" }], description: "Pin / unpin the focused conversation" },
+      { chips: [{ label: "A" }], description: "Archive the focused conversation" },
+      { chips: [{ label: "R" }], description: "Rename the focused conversation" },
+      { chips: [{ label: "#" }], description: "Delete the focused conversation" },
+    ],
+  },
+  {
     title: "Composer",
     entries: [
       { chips: [{ label: "Enter" }], description: "Send the message" },
@@ -225,7 +237,27 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
       { chips: [{ shift: true }, { label: "Enter" }], description: "Insert a newline" },
     ],
   },
+  {
+    title: "Current conversation",
+    entries: [
+      { chips: [{ label: "Y" }], description: "Copy the last response" },
+      { chips: [{ label: "E" }], description: "Edit your last message" },
+    ],
+  },
 ];
+
+// isInteractiveTarget reports whether an element owns Enter itself (a button,
+// link, or ARIA widget), so the global Enter-to-open shortcut can decline to
+// claim the key — and thus never preventDefault — when one of these is focused.
+function isInteractiveTarget(el: Element | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  const tag = el.tagName;
+  if (tag === "BUTTON" || tag === "A" || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+    return true;
+  }
+  const role = el.getAttribute("role");
+  return role === "button" || role === "link" || role === "menuitem" || role === "option" || role === "tab";
+}
 
 // ── component ────────────────────────────────────────────────────────────
 
@@ -930,6 +962,32 @@ export function ChatExperience() {
     [conversations, filterFolder, filterLabels, sidebarQuery],
   );
 
+  // Keyboard list-navigation (#306). visibleOrder is the exact top-to-bottom
+  // order the sidebar renders (shared helper so nav and rendering can't drift):
+  // filtered results when a filter is active, otherwise pinned-unfiled then
+  // recent-unfiled. j/k move `focusedConversationId` through this list; Enter
+  // opens it; p/a/#/r act on it. The cursor is separate from
+  // activeConversationId (the open conversation).
+  const [focusedConversationId, setFocusedConversationId] = useState<string | null>(null);
+  // Rename request to the sidebar (it owns the inline-edit state). The `r`
+  // shortcut bumps the nonce; the sidebar opens its editor for that id.
+  const [renameSignal, setRenameSignal] = useState<{ id: string; nonce: number } | null>(null);
+  // Edit-last-user-message request to the transcript (it owns the edit state).
+  // The `e` shortcut bumps the nonce paired with the target message id. Pairing
+  // with the id (rather than a bare counter) means a message that merely
+  // *becomes* the last user turn later — e.g. after a rollback — never
+  // spuriously enters edit mode: only an explicit request for its id does.
+  const [editLastUserSignal, setEditLastUserSignal] = useState<{ id: number; nonce: number } | null>(null);
+  const visibleOrder = useMemo(
+    () =>
+      visibleConversationOrder({
+        all: conversations,
+        filtered: filteredConversations,
+        filtering: Boolean(filterFolder) || filterLabels.length > 0 || sidebarQuery.trim().length > 0,
+      }),
+    [conversations, filteredConversations, filterFolder, filterLabels, sidebarQuery],
+  );
+
   // With no query, show "default" + "advanced" + the top-ranked list. As
   // soon as the user types, expand the search to the full budget-filtered
   // catalog so they can find cheaper models without leaving the page.
@@ -1383,6 +1441,10 @@ export function ChatExperience() {
         }>;
       };
       setActiveConversationId(data.conversation.id);
+      // Opening a conversation clears the keyboard focus cursor (#306): the
+      // cursor is a transient nav aid, and letting it linger would keep the
+      // Enter-to-open shortcut armed after the user has already landed somewhere.
+      setFocusedConversationId(null);
       setSelectedPersona(data.conversation.persona);
       setSelectedModel(data.conversation.model || DEFAULT_MODEL);
       // Reset compaction UI state so the freshly-loaded conversation
@@ -2075,6 +2137,56 @@ export function ChatExperience() {
     setSidebarOpen(false);
   }, []);
 
+  // ── list-navigation shortcut handlers (#306) ─────────────────────────────
+  // The `focusedConv` cursor and the actions on it read `visibleOrder`, the
+  // shared top-to-bottom order the sidebar renders — so what j/k walks always
+  // matches what the user sees.
+  const focusedConv = useMemo(
+    () => visibleOrder.find((c) => c.id === focusedConversationId) ?? null,
+    [visibleOrder, focusedConversationId],
+  );
+
+  // moveFocus walks the cursor by `delta` rows through visibleOrder, clamping at
+  // the ends. From no selection, Down (+1) lands on the first row and Up (-1) on
+  // the last. Opens the drawer so the cursor is visible on mobile. The scroll-
+  // into-view is handled by the effect below (keyed on the new id) rather than
+  // here, so the setState updater stays pure and the row is scrolled *after* it
+  // has mounted/opened.
+  const moveFocus = useCallback(
+    (delta: number) => {
+      if (visibleOrder.length === 0) return;
+      setSidebarOpen(true);
+      const idx = focusedConversationId ? visibleOrder.findIndex((c) => c.id === focusedConversationId) : -1;
+      const next =
+        idx === -1
+          ? delta > 0
+            ? 0
+            : visibleOrder.length - 1
+          : Math.min(visibleOrder.length - 1, Math.max(0, idx + delta));
+      setFocusedConversationId(visibleOrder[next]?.id ?? null);
+    },
+    [visibleOrder, focusedConversationId],
+  );
+
+  // Keep the focused row in view as the cursor moves (the drawer/rail may be
+  // scrolled away from it). DOM read only — an effect is the right home for it;
+  // no-op if the row isn't mounted (e.g. the rail is collapsed on desktop).
+  useEffect(() => {
+    if (!focusedConversationId || typeof document === "undefined") return;
+    const row = document.querySelector(`[data-conversation-id="${CSS.escape(focusedConversationId)}"]`);
+    row?.scrollIntoView({ block: "nearest" });
+  }, [focusedConversationId]);
+
+  // copyLastResponse copies the active conversation's last assistant message to
+  // the clipboard (the `y` shortcut). No-op when there's nothing to copy.
+  const copyLastResponse = useCallback(() => {
+    if (!lastAssistantMessageId) return;
+    const msg = messages.find((m) => m.id === lastAssistantMessageId);
+    const text = msg?.content?.trim();
+    if (!text) return;
+    void navigator.clipboard?.writeText(text);
+  }, [lastAssistantMessageId, messages]);
+
   // Multi-select keyboard support (#279): Escape exits select mode (clearing
   // the selection); Delete / Backspace (when not typing in an input) opens the
   // bulk-delete confirm modal. The 3-second countdown is enforced inside the
@@ -2102,6 +2214,18 @@ export function ChatExperience() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selectMode, selectedIds.size, searchOpen, shortcutsOpen, pendingDeleteConversation]);
+
+  // The list-navigation + per-conversation/transcript shortcuts (#306) are
+  // suppressed whenever a transient surface owns the keyboard — the same
+  // convention the multi-select handler above follows — so a bare key never
+  // acts on a hidden conversation from behind an open overlay or dialog.
+  const listNavActive =
+    !searchOpen &&
+    !shortcutsOpen &&
+    !pendingDeleteConversation &&
+    !confirmBulkDelete &&
+    !bulkDeleteConfirm &&
+    !selectMode;
 
   const shortcuts = useMemo<KeyboardShortcut[]>(
     () => [
@@ -2138,17 +2262,104 @@ export function ChatExperience() {
         key: "?",
         handler: () => setShortcutsOpen(true),
       },
+      // ── conversation list navigation (#306) — bare keys, suppressed while
+      // typing and while a transient surface owns the keyboard (listNavActive).
+      // j/k walk the cursor; the rest act on the focused row.
+      {
+        key: "j",
+        enabled: listNavActive,
+        handler: () => moveFocus(1),
+      },
+      {
+        key: "k",
+        enabled: listNavActive,
+        handler: () => moveFocus(-1),
+      },
+      {
+        // Enter opens the focused conversation. Two guards keep it from hijacking
+        // Enter elsewhere: it's only enabled while a cursor is live, and `when`
+        // declines the match (so no preventDefault) if the focused element is an
+        // interactive control that owns Enter itself.
+        key: "Enter",
+        enabled: listNavActive && focusedConv !== null,
+        when: () => !isInteractiveTarget(document.activeElement),
+        handler: () => {
+          if (focusedConv) void loadConversation(focusedConv.id);
+        },
+      },
+      {
+        // p pins / unpins the focused conversation.
+        key: "p",
+        enabled: listNavActive && focusedConv !== null,
+        handler: () => {
+          if (focusedConv) void togglePin(focusedConv);
+        },
+      },
+      {
+        // a archives the focused conversation (it leaves the main list).
+        key: "a",
+        enabled: listNavActive && focusedConv !== null,
+        handler: () => {
+          if (focusedConv) void toggleArchive(focusedConv, true);
+        },
+      },
+      {
+        // r renames the focused conversation via the sidebar's inline editor.
+        key: "r",
+        enabled: listNavActive && focusedConv !== null,
+        handler: () => {
+          if (focusedConv) setRenameSignal((s) => ({ id: focusedConv.id, nonce: (s?.nonce ?? 0) + 1 }));
+        },
+      },
+      {
+        // "#" (Gmail-style) deletes the focused conversation through the
+        // existing confirm dialog — no silent destructive path.
+        key: "#",
+        enabled: listNavActive && focusedConv !== null,
+        handler: () => {
+          if (focusedConv) setPendingDeleteConversation({ id: focusedConv.id, title: focusedConv.title });
+        },
+      },
+      {
+        // y copies the active conversation's last assistant response.
+        key: "y",
+        enabled: listNavActive && lastAssistantMessageId !== null,
+        handler: () => copyLastResponse(),
+      },
+      {
+        // e edits the active conversation's last user message (transcript owns
+        // the edit state; we bump a signal paired with the target id). Skipped
+        // mid-stream, matching the Edit button's own availability.
+        key: "e",
+        enabled: listNavActive && lastUserMessageId !== null && !isStreaming,
+        handler: () => {
+          if (lastUserMessageId !== null) {
+            setEditLastUserSignal((s) => ({ id: lastUserMessageId, nonce: (s?.nonce ?? 0) + 1 }));
+          }
+        },
+      },
       {
         key: "Escape",
         allowInInput: true,
         handler: closeOverlays,
       },
     ],
-    // clearConversation is a fresh closure each render but stable in behavior;
-    // the hook reads the list through a ref so this list is rebuilt cheaply and
-    // never re-subscribes the listener.
+    // clearConversation / loadConversation / togglePin / toggleArchive are fresh
+    // closures each render but stable in behavior; the list-nav handlers read
+    // live cursor + message state, so those ARE listed so the array rebuilds
+    // when they change. The hook reads the list through a ref, so rebuilding is
+    // cheap and never re-subscribes the listener.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [closeOverlays],
+    [
+      closeOverlays,
+      listNavActive,
+      focusedConv,
+      moveFocus,
+      copyLastResponse,
+      lastAssistantMessageId,
+      lastUserMessageId,
+      isStreaming,
+    ],
   );
   useKeyboardShortcuts(shortcuts);
 
@@ -2531,6 +2742,8 @@ export function ChatExperience() {
           conversations={conversations}
           filteredConversations={filteredConversations}
           activeConversationId={activeConversationId}
+          focusedConversationId={focusedConversationId}
+          renameSignal={renameSignal}
           loadConversation={loadConversation}
           streamingConvs={streamingConvs}
           togglePin={togglePin}
@@ -3120,6 +3333,7 @@ export function ChatExperience() {
             isStreaming={isStreaming}
             lastUserMessageId={lastUserMessageId}
             lastAssistantMessageId={lastAssistantMessageId}
+            editLastUserSignal={editLastUserSignal}
             selectedModel={selectedModel}
             patchAssistantMessage={patchAssistantMessage}
             resendUserMessage={resendUserMessage}

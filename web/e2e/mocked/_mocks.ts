@@ -42,6 +42,10 @@ export function fulfillSse(route: Route, frames: Array<{ event: string; data: un
 export type ChatBootOptions = {
   personaDefault?: string;
   personas?: Array<{ id: string; name: string }>;
+  // Seed the conversation list (defaults to empty). Only the fields the sidebar
+  // reads are required; the rest are filled with sensible defaults so specs can
+  // pass a minimal `{ id, title }`.
+  conversations?: Array<Record<string, unknown>>;
 };
 
 export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
@@ -67,9 +71,35 @@ export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
     }),
   );
   await page.route("**/api/mcp-servers", (r: Route) => r.fulfill({ json: { servers: [] } }));
+  const seededConversations = (opts.conversations ?? []).map((c, i) => ({
+    persona: personaDefault,
+    model: "test-model",
+    pinned: false,
+    archived_at: null,
+    updated_at: 1_700_000_000 - i,
+    created_at: 1_700_000_000 - i,
+    labels: [],
+    folder: null,
+    ...c,
+  }));
   await page.route("**/api/conversations", (r: Route) => {
-    if (r.request().method() === "GET") return r.fulfill({ json: { conversations: [] } });
+    if (r.request().method() === "GET") return r.fulfill({ json: { conversations: seededConversations } });
     return r.fulfill({ json: {} });
+  });
+  // Per-conversation GET (loadConversation): return the seeded summary with an
+  // empty history so opening a conversation — on boot or via the keyboard —
+  // resolves cleanly instead of 502-ing against the absent Go backend.
+  await page.route("**/api/conversations/*", (r: Route) => {
+    if (r.request().method() !== "GET") return r.fulfill({ json: {} });
+    const url = new URL(r.request().url());
+    const id = url.pathname.split("/").pop() ?? "";
+    const found =
+      seededConversations.find((c) => (c as { id?: string }).id === id) ??
+      ({ id, title: "Conversation", persona: personaDefault, model: "test-model", pinned: false } as Record<
+        string,
+        unknown
+      >);
+    return r.fulfill({ json: { conversation: found, history: [] } });
   });
   await page.route("**/api/model-rankings", (r: Route) => r.fulfill({ json: { rankings: [] } }));
   await page.route("**/api/model-catalog", (r: Route) => r.fulfill({ json: { models: [] } }));

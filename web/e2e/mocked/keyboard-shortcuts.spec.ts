@@ -52,6 +52,45 @@ test("the sidebar shortcuts button opens the overlay (mouse equivalent)", async 
   await expect(page.getByTestId("shortcuts-overlay")).toBeHidden();
 });
 
+test("j / k move the conversation focus cursor through the visible list", async ({ page }) => {
+  await mockChatBoot(page, {
+    conversations: [
+      { id: "conv-alpha", title: "Alpha thread" },
+      { id: "conv-bravo", title: "Bravo thread" },
+    ],
+  });
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+
+  const alpha = page.locator('[data-conversation-id="conv-alpha"]');
+  const bravo = page.locator('[data-conversation-id="conv-bravo"]');
+  await expect(alpha).toBeVisible();
+
+  // No cursor initially; first "j" lands on the first row.
+  await expect(alpha).not.toHaveAttribute("data-focused", "true");
+  await page.keyboard.press("j");
+  await expect(alpha).toHaveAttribute("data-focused", "true");
+
+  // "j" advances to the next row; "k" goes back.
+  await page.keyboard.press("j");
+  await expect(bravo).toHaveAttribute("data-focused", "true");
+  await expect(alpha).not.toHaveAttribute("data-focused", "true");
+  await page.keyboard.press("k");
+  await expect(alpha).toHaveAttribute("data-focused", "true");
+
+  // Enter opens the focused conversation (fires its GET).
+  await page.keyboard.press("j"); // focus Bravo
+  await expect(bravo).toHaveAttribute("data-focused", "true");
+  const opened = page.waitForRequest((req) => req.url().includes("/api/conversations/conv-bravo"));
+  await page.keyboard.press("Enter");
+  await opened;
+
+  // The help overlay documents the new list-navigation shortcuts.
+  await page.keyboard.press("?");
+  await expect(page.getByTestId("shortcuts-list")).toContainText("Focus next conversation");
+  await expect(page.getByTestId("shortcuts-list")).toContainText("Rename the focused conversation");
+});
+
 test('"?" typed into the composer does NOT open the overlay (no hijack while typing)', async ({
   page,
 }) => {

@@ -112,6 +112,20 @@ describe("matchesShortcut", () => {
     const sc: KeyboardShortcut = { key: "?", enabled: false, handler: () => {} };
     expect(matchesShortcut(keyEvent({ key: "?" }), sc)).toBe(false);
   });
+
+  it("declines to match (no preventDefault) when the `when` guard returns false", () => {
+    setPlatform("Win32");
+    // Models the Enter-to-open binding: only claim Enter when a non-interactive
+    // element is focused, so a focused button keeps owning the key.
+    const onlyOnBody: KeyboardShortcut = {
+      key: "Enter",
+      when: (e) => (e.target as HTMLElement)?.tagName !== "BUTTON",
+      handler: () => {},
+    };
+    const button = document.createElement("button");
+    expect(matchesShortcut(keyEvent({ key: "Enter" }, button), onlyOnBody)).toBe(false);
+    expect(matchesShortcut(keyEvent({ key: "Enter" }, document.body), onlyOnBody)).toBe(true);
+  });
 });
 
 describe("useKeyboardShortcuts", () => {
