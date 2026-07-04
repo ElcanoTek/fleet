@@ -53,9 +53,9 @@ security boundary against a hostile process.** We state this in the code
   (`Pool.TakeContainerWithEgress`).
 - **`lockdown` as the default-mode value** is an egress kill-switch for the
   paths this change wires: it seals every **scheduled-task** sandbox, overriding
-  any per-task `AllowNetwork`. (Interactive chat turns are not yet wired — see
-  the deferred-scope note below — so the value is scoped to scheduled tasks
-  today, not literally "every sandbox fleet-wide".)
+  any per-task `AllowNetwork`. (Interactive chat turns were not wired in this
+  ADR; ADR-0031 extends both `lockdown` and `allowlisted` to the chat path, so
+  the value now genuinely applies fleet-wide.)
 
 This does not weaken ADR-0002: allowlisted is strictly *more* restrictive than
 the pre-existing **open** mode (which already grants unrestricted egress), and
@@ -87,9 +87,10 @@ the pre-existing **open** mode (which already grants unrestricted egress), and
   invariant.
 - Per-task / per-conversation allowlist overrides and a web UI are deferred
   follow-ups; this change ships the default-mode knob + the scheduled-task path
-  ONLY. The interactive chat sandbox path (`takeTurnSandbox`) does NOT yet
-  consult the mode — a non-lockdown chat turn still gets open egress regardless
-  of `FLEET_DEFAULT_NETWORK_MODE`. Wiring chat is a follow-up.
+  ONLY. **Update:** the interactive chat sandbox path (`takeTurnSandbox`) was
+  wired in ADR-0031 — chat turns now honor `FLEET_DEFAULT_NETWORK_MODE`
+  exactly as scheduled tasks do. Per-task/per-conversation overrides + a web UI
+  remain deferred.
 
 ## Alternatives considered
 
