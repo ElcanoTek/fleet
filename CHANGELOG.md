@@ -13,6 +13,16 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Security
+
+- Interactive chat now honors the fleet-wide sandbox egress mode
+  (`FLEET_DEFAULT_NETWORK_MODE`), closing a gap ADR-0012 deferred: a
+  non-lockdown chat turn used to get open network egress even under
+  `allowlisted` or `lockdown`. `takeTurnSandbox` now seals (`lockdown`) or
+  proxy-filters (`allowlisted`) chat turns exactly as scheduled tasks do; a
+  containing mode takes precedence over the persistent Python REPL. `open`
+  (the default) is unchanged. ADR-0031.
+
 ### Added
 
 - Rampart ML engine for PII redaction
