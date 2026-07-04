@@ -7,6 +7,6 @@ export const runtime = "nodejs";
 // (UsageReport, #601 part 1). Admin-only on the orchestrator side; the proxy
 // resolves the caller's identity.
 export async function GET(request: NextRequest) {
-  const qs = passThroughQuery(request, ["group_by", "from", "to"]);
+  const qs = passThroughQuery(request, ["group_by", "from", "to", "format"]);
   return proxyToOrchestrator(request, `/admin/usage${qs}`);
 }

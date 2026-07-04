@@ -11,8 +11,11 @@ package handlers
 
 import (
 	"context"
+	"encoding/csv"
+	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -144,7 +147,53 @@ func (h *Handlers) GetUsageReport(w http.ResponseWriter, r *http.Request) {
 		Sources: sources,
 		Note:    usagePricingNote,
 	}
-	writeJSON(w, http.StatusOK, out)
+
+	switch strings.TrimSpace(strings.ToLower(r.URL.Query().Get("format"))) {
+	case "", "json":
+		writeJSON(w, http.StatusOK, out)
+	case "csv":
+		writeUsageCSV(w, out)
+	default:
+		writeError(w, http.StatusBadRequest, "Invalid format (want json|csv)")
+	}
+}
+
+// writeUsageCSV streams the report as a CSV attachment — the admin "Download
+// CSV" button. Columns match the on-screen table (UsagePanel); a trailing
+// TOTAL row mirrors the report's Totals. The dollar-figures caveat from
+// UsageReport.Note is not repeated here (the header names the token columns,
+// which are the coverage-independent signal).
+func writeUsageCSV(w http.ResponseWriter, out *models.UsageReport) {
+	stamp := time.Now().UTC().Format("20060102")
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf("attachment; filename=%q", fmt.Sprintf("fleet-usage-%s-%s.csv", out.GroupBy, stamp)))
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{
+		out.GroupBy, "label", "cost_usd", "task_cost_usd", "chat_cost_usd",
+		"prompt_tokens", "completion_tokens", "cached_tokens", "task_iterations", "chat_turns",
+	})
+	row := func(b models.UsageBucket) []string {
+		return []string{
+			b.Key, b.Label,
+			strconv.FormatFloat(b.CostUSD, 'f', 4, 64),
+			strconv.FormatFloat(b.TaskCostUSD, 'f', 4, 64),
+			strconv.FormatFloat(b.ChatCostUSD, 'f', 4, 64),
+			strconv.FormatInt(b.PromptTokens, 10),
+			strconv.FormatInt(b.CompletionTokens, 10),
+			strconv.FormatInt(b.CachedTokens, 10),
+			strconv.FormatInt(b.TaskIterations, 10),
+			strconv.FormatInt(b.ChatTurns, 10),
+		}
+	}
+	for _, b := range out.Buckets {
+		_ = cw.Write(row(b))
+	}
+	totals := out.Totals
+	totals.Key = "TOTAL"
+	totals.Label = ""
+	_ = cw.Write(row(totals))
+	cw.Flush()
 }
 
 // mergeUsage folds the two meters' rows into one bucket list keyed on the

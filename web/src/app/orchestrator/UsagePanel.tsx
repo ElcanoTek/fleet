@@ -147,6 +147,23 @@ export function UsagePanel() {
             <option value="cost">Cost (USD)</option>
             <option value="tokens">Tokens</option>
           </select>
+          <button
+            type="button"
+            className="btn"
+            aria-label="Download the current usage report as CSV"
+            data-testid="usage-download-csv"
+            onClick={() => {
+              // Clock read + navigation in the click handler (not render) so the
+              // component body stays pure; matches the fetcher's `from` window.
+              const from = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000)
+                .toISOString()
+                .slice(0, 10);
+              const qs = new URLSearchParams({ format: "csv", group_by: groupBy, from });
+              window.location.href = `/api/orchestrator/admin/usage?${qs.toString()}`;
+            }}
+          >
+            Download CSV
+          </button>
         </div>
       </div>
 
