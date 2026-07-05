@@ -342,13 +342,33 @@ Deep references live in [`docs/`](docs/) so this README stays an orientation, no
 
 ## Built by Elcano (commercial support)
 
-fleet is built by **ElcanoTek**. The platform is MIT-licensed and yours to run;
-the same team takes on **commercial engagements** — custom agents tuned to your
-domain, fleets deployed and operated on your infrastructure, and bespoke MCP
-connectors into the systems your work lives in. When you'd rather have the
-people who wrote it design the connectors, protocols, and ceilings with you:
+fleet is built by **ElcanoTek**. Everything in this repository is the complete,
+MIT-licensed platform — there is no held-back enterprise edition. What an
+**Elcano engagement** adds is the team that built it, working inside your stack:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/open-source-vs-elcano-dark.svg">
+  <img alt="Everything in this repo is the full open-source fleet platform; an Elcano engagement adds custom MCP connectors, data integrations, add-on capabilities, forward-deployed engineering, production-ready workflows, and support" src="docs/img/open-source-vs-elcano-light.svg">
+</picture>
+
+- **Forward-deployed engineering.** Elcano engineers embed with your team, take
+  the workflows your people already run in chat, and make them
+  production-ready: scheduled, monitored, budgeted, and verified.
+- **Custom MCP connectors & data integrations.** Bespoke connectors into the
+  systems your work actually lives in — built, credential-brokered, and
+  maintained for your deployment.
+- **Add-on capabilities.** Agents and services Elcano builds and operates
+  beyond this repo — email-native agents, monitoring and analysis tools, and
+  other domain-specific pieces, packaged into your client-config bundle.
+- **Deployment, support & operations.** fleets stood up on your infrastructure
+  and kept healthy — upgrades, sandbox images, and model changes gated by evals
+  before they ship.
+
+Engagements don't shrink the repo: client-specific work lives in each client's
+config bundle, and platform improvements land here, in the open.
+
 [elcanotek.com](https://elcanotek.com) ·
-[brad@elcanotek.com](mailto:brad@elcanotek.com).
+[brad@elcanotek.com](mailto:brad@elcanotek.com)
 
 ## Contributing
 
