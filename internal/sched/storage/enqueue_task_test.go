@@ -3,11 +3,73 @@ package storage
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
+
+// TestEnqueueTask_AppliesDefaultTimezone proves the fix for the recurrence
+// timezone drift: a recurring task enqueued via the storage seam (the create_task
+// tool / chat schedule_task approval / promote-to-task) with no explicit timezone
+// must (1) persist the org default-task timezone so scheduleNextRecurrence
+// evaluates occurrence #2+ in it, and (2) evaluate the FIRST fire in that zone.
+// Before the fix, Timezone persisted as "UTC" and the first fire used the server
+// clock zone, so a "9am" recurring task drifted to 9am UTC after occurrence #1.
+func TestEnqueueTask_AppliesDefaultTimezone(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetDefaultTaskTimezone("America/New_York")
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+
+	id, _, _, err := store.EnqueueTask(context.Background(), models.TaskCreate{
+		Prompt:     "daily 9am report",
+		Recurrence: "0 9 * * *",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTask failed: %v", err)
+	}
+	got, err := store.GetTask(id)
+	if err != nil {
+		t.Fatalf("GetTask failed: %v", err)
+	}
+	if got.Timezone != "America/New_York" {
+		t.Fatalf("expected persisted timezone America/New_York (so recurrences stay local), got %q", got.Timezone)
+	}
+	if got.ScheduledFor == nil {
+		t.Fatal("expected a scheduled_for for a recurring task with no explicit run")
+	}
+	// The stored instant is UTC; rendered back in the task's zone it must be 9am.
+	if h := got.ScheduledFor.In(ny).Hour(); h != 9 {
+		t.Fatalf("first fire should be 09:00 America/New_York, got hour %d (%s)", h, got.ScheduledFor.In(ny))
+	}
+}
+
+// TestEnqueueTask_ExplicitTimezoneWins proves an explicit tc.Timezone is honored
+// over the org default and persisted for the recurrence path.
+func TestEnqueueTask_ExplicitTimezoneWins(t *testing.T) {
+	store, _ := newTestStore(t)
+	store.SetDefaultTaskTimezone("America/New_York")
+
+	id, _, _, err := store.EnqueueTask(context.Background(), models.TaskCreate{
+		Prompt:     "tokyo morning",
+		Recurrence: "0 9 * * *",
+		Timezone:   "Asia/Tokyo",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTask failed: %v", err)
+	}
+	got, err := store.GetTask(id)
+	if err != nil {
+		t.Fatalf("GetTask failed: %v", err)
+	}
+	if got.Timezone != "Asia/Tokyo" {
+		t.Fatalf("explicit timezone should win, got %q", got.Timezone)
+	}
+}
 
 // TestEnqueueTask_LineageRoundTrip proves the storage-layer task-create plumbing
 // the create_task tool calls (#277) persists the spawn lineage + capability flags

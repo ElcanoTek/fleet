@@ -64,6 +64,15 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Recurring tasks created by an agent or through the chat approval card no
+  longer drift to UTC. `EnqueueTask` (the `create_task` tool, the chat
+  `schedule_task` approval, promote-to-task) evaluated the first cron fire in
+  the server-clock zone and never persisted a per-task timezone, so
+  `FLEET_DEFAULT_TIMEZONE` was ignored and every occurrence after the first
+  fired in UTC (a "9am" task became 9am UTC). It now resolves and persists the
+  per-task timezone exactly like the HTTP create path, so recurrence stays in
+  the task's zone. HTTP-created tasks were already correct.
+
 - `fleet update` / `scripts/fleet-upgrade.sh` now actually install the freshly
   built binaries on the standard `/opt/fleet` topology. Both scripts parsed
   `systemctl show -p ExecStart --value` with `awk '{print $1}'`, which grabs
