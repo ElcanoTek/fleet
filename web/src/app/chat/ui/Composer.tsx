@@ -921,7 +921,7 @@ export function Composer({
                             aria-haspopup="true"
                             aria-expanded={mcpPickerOpen}
                             disabled={isStreaming}
-                            data-tip-top="Tools & MCP servers"
+                            data-tip-top="Tools for this conversation"
                             className={`${TOOL_BTN} ${enabledCount > 0 ? TOOL_BTN_ACTIVE : ""}`}
                             onClick={() => {
                               const next = !mcpPickerOpen;
