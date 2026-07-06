@@ -337,7 +337,7 @@ export function MenuItem({
       aria-expanded={ariaExpanded}
       onClick={onClick}
       className={[
-        "flex w-full items-center gap-2 rounded-[0.4rem] px-2 py-1.5 text-left text-[0.8125rem] transition",
+        "flex w-full items-center gap-2 rounded-[0.4rem] px-2 py-1.5 text-left text-[0.82rem] transition",
         "focus-visible:bg-[var(--color-overlay-soft)] focus-visible:outline-none",
         disabled ? "cursor-not-allowed opacity-50" : "",
         danger
