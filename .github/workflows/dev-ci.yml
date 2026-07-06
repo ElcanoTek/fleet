@@ -55,8 +55,26 @@ jobs:
           version: v2.12.2
           only-new-issues: false
 
+      - name: Disable podman so container sandbox tests self-skip
+        # Same as ci.yml's Go job: the runner ships podman, and the sandbox
+        # integration tests gate on exec.LookPath("podman") — absent → clean
+        # t.Skip; present-without-the-image → t.Fatalf. Masking the binary makes
+        # every container test skip; the real sandbox is exercised by the full
+        # gate's e2e-live job on the dev→main PR.
+        run: |
+          if command -v podman >/dev/null 2>&1; then
+            sudo mv "$(command -v podman)" "$(command -v podman).disabled"
+          fi
+          if command -v podman >/dev/null 2>&1; then
+            echo "podman still on PATH at $(command -v podman); failing" >&2
+            exit 1
+          fi
+          echo "podman is not on PATH (container sandbox tests will skip)"
+
       - name: Test (no -race; DB tests self-skip without a Postgres service)
-        run: go test -p 1 ./...
+        # Same tag as make test / ci.yml — internal/sandbox's host tests only
+        # compile with it.
+        run: go test -p 1 -tags fleet_host_executor ./...
 
   migrations:
     name: Migration DDL lint
