@@ -174,7 +174,11 @@ PrivateTmp=yes
 # system_prompts/) with SELinux relabeling (:Z), so Podman must be able to write
 # their security.selinux xattr — which ProtectSystem=strict otherwise blocks
 # (EROFS). bootstrap chowns the bundle to fleet so rootless relabel is permitted.
-ReadWritePaths=/var/lib/fleet /opt/fleet/client
+# The "-" prefix marks it ignore-if-missing: a bare deployment on the in-repo
+# config/default bundle has no /opt/fleet/client, and without the prefix systemd
+# fails namespace setup outright (status=226/NAMESPACE) — the service could
+# never start on a client-config-less box.
+ReadWritePaths=/var/lib/fleet -/opt/fleet/client
 
 [Install]
 WantedBy=multi-user.target

@@ -8,6 +8,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -111,6 +112,11 @@ type adminUser struct {
 	TeamID    string `json:"team_id"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
+	// OpsCenterAdmin reports whether the same email also holds the
+	// Operations Center (sched-plane) admin role — the two-plane view the
+	// `fleet admin list` CLI prints. Always false when no orchestrator seam
+	// is wired (WithOpsAdmins), so it never claims access that can't exist.
+	OpsCenterAdmin bool `json:"ops_center_admin"`
 }
 
 func toAdminUser(u store.User) adminUser {
@@ -123,10 +129,17 @@ func toAdminUser(u store.User) adminUser {
 	}
 }
 
-// handleAdminUsers serves GET /admin/users — every provisioned account with its
-// role + team, for the admin Users tab (#237). Admin-gated.
+// handleAdminUsers serves the /admin/users collection (#237): GET lists every
+// provisioned account with its role + team (+ the ops-center annotation when
+// the orchestrator seam is wired), POST creates one. Admin-gated.
 func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		// fallthrough to the list below
+	case http.MethodPost:
+		s.handleAdminUserCreate(w, r)
+		return
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -135,12 +148,52 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// One batched ops-center lookup for the whole table (never per-row).
+	// Best-effort: a briefly unreachable sched DB must not blank the user list.
+	opsSet := map[string]bool{}
+	if s.opsAdmins != nil {
+		if admins, err := s.opsAdmins.List(r.Context()); err == nil {
+			for _, a := range admins {
+				opsSet[strings.ToLower(a)] = true
+			}
+		}
+	}
 	out := make([]adminUser, 0, len(users))
 	for _, u := range users {
-		out = append(out, toAdminUser(u))
+		au := toAdminUser(u)
+		au.OpsCenterAdmin = opsSet[strings.ToLower(u.Email)]
+		out = append(out, au)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"users": out})
+}
+
+// handleAdminUserItem dispatches the /admin/users/{email}[/password] item
+// routes: PATCH (role/team, #237), DELETE (remove account), and
+// PUT {email}/password (reset). Admin-gated.
+func (s *Server) handleAdminUserItem(w http.ResponseWriter, r *http.Request) {
+	email := strings.TrimPrefix(r.URL.Path, "/admin/users/")
+	// The single sub-resource: /admin/users/{email}/password.
+	if rest, ok := strings.CutSuffix(email, "/password"); ok && rest != "" && !strings.Contains(rest, "/") {
+		if r.Method != http.MethodPut {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.handleAdminUserPassword(w, r, rest)
+		return
+	}
+	if email == "" || strings.Contains(email, "/") {
+		http.Error(w, "user email required", http.StatusBadRequest)
+		return
+	}
+	switch r.Method {
+	case http.MethodPatch:
+		s.handleAdminUserPatch(w, r, email)
+	case http.MethodDelete:
+		s.handleAdminUserDelete(w, r, email)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleAdminUserPatch serves PATCH /admin/users/{email} — assign a role and/or
@@ -148,16 +201,11 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 // field is left untouched, an empty team_id clears the team):
 //
 //	{ "role": "viewer", "team_id": "growth" }
-func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPatch {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	email := strings.TrimPrefix(r.URL.Path, "/admin/users/")
-	if email == "" || strings.Contains(email, "/") {
-		http.Error(w, "user email required", http.StatusBadRequest)
-		return
-	}
+//
+// Role writes carry the two-plane semantics of `fleet admin add`: promoting to
+// admin also ensures the Operations Center admin row; demoting removes it.
+// Demoting YOURSELF is refused — the same lockout guard as self-deletion.
+func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, email string) {
 	var body struct {
 		Role   *string `json:"role"`
 		TeamID *string `json:"team_id"`
@@ -168,6 +216,11 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Role == nil && body.TeamID == nil {
 		http.Error(w, "nothing to update (provide role and/or team_id)", http.StatusBadRequest)
+		return
+	}
+	if body.Role != nil && *body.Role != store.RoleAdmin &&
+		strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(userFromCtx(r.Context()))) {
+		http.Error(w, "refusing to demote your own account", http.StatusBadRequest)
 		return
 	}
 	u, err := s.store.SetUserRoleTeam(r.Context(), email, body.Role, body.TeamID)
@@ -182,8 +235,17 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if body.Role != nil {
+		if *body.Role == store.RoleAdmin {
+			s.ensureOpsAdmin(r, u.Email)
+		} else {
+			s.removeOpsAdmin(r, u.Email)
+		}
+		//nolint:gosec // G706: %q escapes CR/LF, so request-supplied values cannot forge a log line; role is store-validated.
+		log.Printf("admin users: set role of %q to %s by %q", u.Email, u.Role, userFromCtx(r.Context()))
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(toAdminUser(*u))
+	_ = json.NewEncoder(w).Encode(s.toAdminUserAnnotated(r, *u))
 }
 
 // handleProviderHealth returns the per-model LLM circuit-breaker snapshot (#267)
