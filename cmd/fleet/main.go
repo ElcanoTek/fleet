@@ -494,6 +494,10 @@ func run() error {
 		httpapi.WithStartTime(startTime),
 		httpapi.WithVersion(version.String()),
 		httpapi.WithWorkerStats(workerStatsProvider(schedStorage)),
+		// Admin Users tab two-plane writes (grant/revoke Operations Center
+		// admin alongside chat-role changes) — same composition `fleet admin
+		// add` does, triggered over HTTP.
+		httpapi.WithOpsAdmins(opsAdminsService{st: schedStorage}),
 		// Knowledge-graph extraction (#523): the seam is always wired; whether
 		// anything fires is gated by FLEET_MEMORY_GRAPH_ENABLED (default off).
 		httpapi.WithMemoryGraphExtractor(mgr.ExtractMemoryGraph),
@@ -1911,6 +1915,43 @@ func taskSchedulerProvider(schedStorage *storage.Storage, budgetGate *budget.Enf
 			NextRun: nextRunAt,
 		}, nil
 	}
+}
+
+// opsAdminsService adapts sched storage to httpapi's OpsAdmins seam so the
+// admin Users tab carries `fleet admin add`'s two-plane semantics: promoting a
+// chat user to admin ensures the Operations Center admin row (same idempotent
+// EnsureAdminUser the FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS boot seed uses),
+// demoting/deleting removes it, and the users list annotates who holds it.
+type opsAdminsService struct{ st *storage.Storage }
+
+func (o opsAdminsService) Ensure(ctx context.Context, email string) error {
+	return o.st.EnsureAdminUser(ctx, email)
+}
+
+// Remove deletes the sched-side row for email when it exists — Operations
+// Center access is revoked entirely, mirroring `fleet admin rm`. Emails are
+// matched as lowercased usernames (the #458 cookie-bridge convention). A
+// missing row is a no-op, so demoting a chat-only admin never errors.
+func (o opsAdminsService) Remove(ctx context.Context, email string) error {
+	u, err := o.st.GetUserByUsernameWithContext(ctx, strings.ToLower(strings.TrimSpace(email)))
+	if err != nil || u == nil {
+		return err
+	}
+	return o.st.DeleteUser(u.ID)
+}
+
+func (o opsAdminsService) List(ctx context.Context) ([]string, error) {
+	users, err := o.st.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(users))
+	for _, u := range users {
+		if u.Role == "admin" {
+			out = append(out, u.Username)
+		}
+	}
+	return out, nil
 }
 
 func workerStatsProvider(schedStorage *storage.Storage) func(context.Context) (*httpapi.WorkerStats, error) {

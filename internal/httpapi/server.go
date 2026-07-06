@@ -163,6 +163,12 @@ type Server struct {
 	// and calls the storage create path. nil → schedule_task approvals report the
 	// feature is unconfigured (no task is created).
 	scheduleTask func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error)
+
+	// opsAdmins grants/revokes/lists Operations-Center admin rows by email so
+	// the admin Users tab carries `fleet admin add`'s two-plane semantics.
+	// Injected (WithOpsAdmins) so httpapi stays sched-agnostic; nil → role
+	// writes touch the chat plane only and the list reports no annotation.
+	opsAdmins OpsAdmins
 }
 
 // TaskScheduleRequest is the sched-agnostic payload the chat approval path hands
@@ -701,10 +707,11 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
-	// Admin Users tab (#237): list accounts + their role/team; PATCH one account's
-	// role/team. Admin-gated like the other /admin/* endpoints.
+	// Admin Users tab (#237): GET list / POST create on the collection;
+	// PATCH role-team / DELETE / PUT …/password on the item. Admin-gated like
+	// the other /admin/* endpoints; role writes also drive the ops-center seam.
 	mux.Handle("/admin/users", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUsers)))))
-	mux.Handle("/admin/users/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUserPatch)))))
+	mux.Handle("/admin/users/", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminUserItem)))))
 	// Migration status (#256): applied vs pending chat-DB migrations. Admin-gated
 	// like the other /admin/* reads; strictly read-only (applies nothing).
 	mux.Handle("/admin/migrations", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleMigrations)))))

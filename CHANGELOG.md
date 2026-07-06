@@ -15,6 +15,19 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- `fleet update` systemd-unit drift check is now functional-diff-based and can
+  adopt the shipped unit in one step. It compares `deploy/*.service` against the
+  installed unit with comments and blank lines stripped, so a reworded header no
+  longer raises a spurious "a unit fix may not be live" warning. On a real
+  (functional) change an interactive run prints the diff and offers to adopt the
+  shipped unit — installing it, creating the `fleet-web` user + chowning `.next`
+  when the pre-#654 non-root migration requires it, and running `daemon-reload`
+  before the step-5 restart — so operators no longer hand-run `install`/`useradd`/
+  `daemon-reload` themselves. A new `--adopt-units` flag
+  (`FLEET_UPDATE_ADOPT_UNITS=1`) adopts unattended; `--yes` alone never adopts a
+  unit (it only skips the commit-range confirm), so an automated update can't
+  silently clobber an operator's hand-edited unit. Declined/non-interactive runs
+  still print the actionable manual hint.
 - Web UI/UX pass over four surfaces, matching the unified-shell design
   (fleet-unified reference): rail typography aligned to the design's type ramp
   (brand name 0.95rem/700, group headers 0.8rem, conversation/folder/label
@@ -38,6 +51,44 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **User management in the web UI.** Settings → Admin "Users & roles" now
+  covers the full lifecycle — create accounts (typed or generated password,
+  shown once), reassign role/team, reset passwords (generated, shown once),
+  and delete — so admins no longer need CLI access to the box. New chat-server
+  endpoints `POST /admin/users`, `DELETE /admin/users/{email}`, and
+  `PUT /admin/users/{email}/password` (admin-gated like the rest of
+  `/admin/*`; every write is audit-logged with the acting admin). Role writes
+  carry `fleet admin add`'s two-plane semantics: promoting to admin also
+  ensures the Operations Center admin row, demoting or deleting removes it —
+  via a new injected `WithOpsAdmins` seam (httpapi stays sched-agnostic), with
+  the users list annotating who holds it (`ops_center_admin`, the "ops" badge).
+  Self-demote and self-delete are refused so an admin can't lock themselves
+  out mid-session. Web proxy routes are Origin-checked (CSRF) like the other
+  mutating admin routes; passwords travel one way and never appear in
+  responses or logs.
+- **One-command admin provisioning + interactive bootstrap credentials.** New
+  `fleet admin add <email>` provisions a FULL admin across both user planes in
+  one idempotent step — the chat web login (password prompted hidden with
+  double-entry, or `--password -`), the chat-admin role, and the Operations
+  Center admin row the session-cookie bridge (#458) resolves by email — with
+  `fleet admin list` (two-plane view) and `fleet admin rm` (removes from both).
+  New `fleet config set-openrouter-key` (hidden prompt or `--key -`; upserts
+  `OPENROUTER_API_KEY` into the server env file) and `fleet config
+  set-auth-pubkey [<key>|--from <file>]` (enables Elcano SSO: accepts the
+  `auth pubkey` output line verbatim, validates standard-base64 → 32-byte
+  Ed25519 fail-closed, writes `AUTH_SIGNING_PUBKEY` — plus optional
+  `--login-url`/`--cookie-domain` — into the web env file). `scripts/bootstrap.sh`
+  is now fully interactive on a terminal: a bare run walks through the
+  deployment choices (systemd service? web UI? public TLS domain?) and then the
+  credentials — the OpenRouter key (hidden prompt when absent), the Elcano SSO
+  key under the web tier (`--auth-pubkey <value|@file>` skips the prompt and is
+  validated up-front, before the npm build), and admin registration once the
+  service is active (`--admin a@x,b@y` or an interactive prompt, passwords via
+  `fleet admin add`). Previously-set `AUTH_*` keys now carry across re-runs
+  (the web env rewrite used to silently drop them — SSO turned off on every
+  re-bootstrap). Explicit flags always win; non-TTY runs skip every prompt and
+  keep the old flag/default behavior, printing the equivalent `fleet admin add`
+  / `fleet config` follow-up commands instead.
 - One-time legacy migration ingest ([docs/LEGACY-IMPORT.md](docs/LEGACY-IMPORT.md)):
   `fleet import <bundle.json>` consumes the versioned `fleet-migration-bundle`
   JSON envelope produced by the deprecated chat repo (`chat-admin export`: users
@@ -87,6 +138,17 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- A bare deployment (no client-config bundle) could never start: two fresh-box
+  bugs found by running the full interactive bootstrap end-to-end in a clean
+  Fedora systemd container. (1) `deploy/fleet.service` listed
+  `/opt/fleet/client` in `ReadWritePaths=` unconditionally — on a box using the
+  in-repo `config/default` bundle that path doesn't exist, and systemd fails
+  namespace setup outright (`status=226/NAMESPACE`); it is now `-`-prefixed
+  (ignore-if-missing). (2) bootstrap wrote the default bundle dir into the env
+  file as the RELATIVE `config/default`, which the unit resolves under its
+  `WorkingDirectory=/var/lib/fleet` — "client config bundle … no such file or
+  directory" at boot; `CLIENT_CONFIG_DIR` is now absolutized (repo-anchored
+  default, CWD-resolved `--client-config` paths) before it is persisted.
 - Admin Health panel: the MCP catalog pills no longer render optional servers in
   the red **danger** tone, which read as "broken". The panel does not probe MCP
   servers — the flag is "enabled by default for new conversations" — so an

@@ -238,8 +238,15 @@ each piece yourself):
    > HMAC session cookie (signed with `APP_SESSION_SECRET`) so everything
    > downstream is identical: (1) a **self-contained email + password** path
    > (`POST /api/auth/login` → backend `/auth/verify` → bcrypt against the chat
-   > user store) — add users via `fleet chat user add`; (2) an optional Elcano
-   > **magic-link** cookie path, **disabled unless `AUTH_SIGNING_PUBKEY` is set**;
+   > user store) — add admins in one step via `fleet admin add <email>` (web
+   > login + chat-admin + Operations Center together; bootstrap also offers this
+   > interactively / via `--admin`), plain members via `fleet chat user add`, or
+   > — once one admin can log in — entirely from the UI: Settings → Admin →
+   > "Users & roles" covers create/role/team/password-reset/delete;
+   > (2) an optional Elcano **magic-link** cookie path, **disabled unless
+   > `AUTH_SIGNING_PUBKEY` is set** — enable it with `fleet config
+   > set-auth-pubkey` (paste the `auth pubkey` line, or `--from <file>`) or
+   > bootstrap's `--auth-pubkey <value|@file>`;
    > and (3) an optional **OIDC / OAuth2 SSO** path (Authorization Code + PKCE),
    > **disabled unless `FLEET_OIDC_ISSUER` + `FLEET_OIDC_CLIENT_ID` +
    > `FLEET_OIDC_CLIENT_SECRET` are set** (optional: `FLEET_OIDC_SCOPES`,
