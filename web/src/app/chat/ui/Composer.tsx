@@ -32,7 +32,6 @@ import {
   ADVANCED_MODEL_LABEL,
   DEFAULT_MODEL,
   DEFAULT_MODEL_LABEL,
-  labelForModel,
   tierForModel,
 } from "@/app/lib/modelAliases";
 import type { ContextUsage } from "@/app/lib/contextUsage";
@@ -94,8 +93,17 @@ const TOOL_BTN_ACTIVE =
 // The design's .composer-pop: the anchored popover surface every composer
 // menu shares. Mobile pins it to the viewport (the anchored layout could
 // push it off-screen behind the keyboard); ≥sm anchors above the trigger.
-const COMPOSER_POP =
-  "fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 grid gap-[0.1rem] rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-0 sm:w-[15.5rem]";
+// grid-cols-[minmax(0,1fr)]: an implicit `auto` grid column sizes to the
+// widest row's max-content, so a long model name would push every row wider
+// than the popover and force a horizontal scrollbar — minmax(0,1fr) pins the
+// column to the popover width and lets row content shrink/wrap instead.
+// Width lives on the per-menu variants: the model listbox is wider than the
+// design's 15.5rem so live model names + a badge fit on one line (they wrap,
+// never clip, if they outgrow even that).
+const COMPOSER_POP_BASE =
+  "fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 grid grid-cols-[minmax(0,1fr)] gap-[0.1rem] rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-0";
+const COMPOSER_POP = `${COMPOSER_POP_BASE} sm:w-[15.5rem]`;
+const COMPOSER_POP_WIDE = `${COMPOSER_POP_BASE} sm:w-[19rem]`;
 
 // The design's .pop-row / .pop-title / .pop-desc type ramp. Padding lives on
 // the composed variants (never stacked as competing utilities): POP_ROW is
@@ -174,6 +182,11 @@ export type ComposerProps = {
   // Model picker
   selectedModel: string;
   setSelectedModel: Dispatch<SetStateAction<string>>;
+  // Display label for the chip: the tier alias ("default"/"advanced") or the
+  // catalog display name for a known slug — the same string the menu row
+  // shows — falling back to the raw slug/typed text. Resolved by
+  // ChatExperience, which owns the catalog.
+  selectedModelLabel: string;
   modelError: { message: string; modelsUrl: string } | null;
   modelPickerOpen: boolean;
   setModelPickerOpen: Dispatch<SetStateAction<boolean>>;
@@ -241,6 +254,7 @@ export function Composer({
   personaPickerRef,
   selectedModel,
   setSelectedModel,
+  selectedModelLabel,
   modelError,
   modelPickerOpen,
   setModelPickerOpen,
@@ -697,11 +711,11 @@ export function Composer({
                         name="model"
                         className={`size-[0.85rem] ${modelError ? "" : "text-[var(--color-accent)]"}`}
                       />
-                      <span className="max-w-[9rem] truncate">{labelForModel(selectedModel)}</span>
+                      <span className="max-w-[11rem] truncate">{selectedModelLabel}</span>
                       <Icon name="selector" className="size-[0.8rem] text-[var(--color-text-muted)]" />
                     </button>
                     {modelPickerOpen && !isStreaming ? (
-                      <div className={COMPOSER_POP}>
+                      <div className={COMPOSER_POP_WIDE}>
                         <input
                           ref={modelInputRef}
                           type="text"
@@ -750,7 +764,7 @@ export function Composer({
                           id="composer-model-listbox"
                           role="listbox"
                           aria-label="Model options"
-                          className="grid max-h-72 gap-[0.1rem] overflow-y-auto"
+                          className="grid max-h-72 grid-cols-[minmax(0,1fr)] gap-[0.1rem] overflow-y-auto"
                         >
                           {isLoadingRankedModels || (isLoadingCatalog && modelSearchQuery.trim() !== "") ? (
                             <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
@@ -801,7 +815,7 @@ export function Composer({
                                     closeModelPicker(true);
                                   }}
                                 >
-                                  <span className={`${POP_TITLE} min-w-0 truncate`}>{model.name}</span>
+                                  <span className={`${POP_TITLE} min-w-0 break-words`}>{model.name}</span>
                                   {pill}
                                 </button>
                               );
@@ -953,7 +967,7 @@ export function Composer({
                               (the design's "Built-in" section is mock
                               content — always-on tools are not
                               per-conversation toggles here). */}
-                          <div className="grid max-h-80 gap-[0.1rem] overflow-y-auto">
+                          <div className="grid max-h-80 grid-cols-[minmax(0,1fr)] gap-[0.1rem] overflow-y-auto">
                             {isLoadingMcpServers ? (
                               <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
                             ) : (

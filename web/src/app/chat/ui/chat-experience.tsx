@@ -18,6 +18,7 @@ import {
   ADVANCED_MODEL_LABEL,
   DEFAULT_MODEL,
   DEFAULT_MODEL_LABEL,
+  labelForModel,
 } from "@/app/lib/modelAliases";
 import {
   computeContextUsage,
@@ -718,6 +719,19 @@ export function ChatExperience() {
     if (!slug) return undefined;
     return catalogModels.find((m) => m.slug === slug)?.contextLength;
   }, [catalogModels, selectedModel]);
+  // Display label for the model chip: tier alias ("default"/"advanced") >
+  // catalog/ranked display name > the raw slug (or in-progress typed text).
+  // Keeps the chip showing the same string as the model's menu row rather
+  // than the OpenRouter slug.
+  const selectedModelLabel = useMemo(() => {
+    const alias = labelForModel(selectedModel);
+    if (alias !== selectedModel) return alias;
+    const slug = selectedModel.trim();
+    if (!slug) return selectedModel;
+    const known =
+      catalogModels.find((m) => m.slug === slug) ?? rankedModels.find((m) => m.slug === slug);
+    return known?.name ?? selectedModel;
+  }, [selectedModel, catalogModels, rankedModels]);
   const contextUsage = useMemo<ContextUsage | null>(
     () =>
       computeContextUsage({
@@ -3422,6 +3436,7 @@ export function ChatExperience() {
               personaPickerRef={personaPickerRef}
               selectedModel={selectedModel}
               setSelectedModel={setSelectedModel}
+              selectedModelLabel={selectedModelLabel}
               modelError={modelError}
               modelPickerOpen={modelPickerOpen}
               setModelPickerOpen={setModelPickerOpen}
