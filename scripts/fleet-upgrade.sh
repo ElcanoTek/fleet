@@ -171,11 +171,17 @@ fi
 # here so the restart actually runs the new code.
 if [[ -z "$INSTALL_DIR" ]]; then
   if command -v systemctl >/dev/null 2>&1; then
-    exec_start="$(systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null | awk '{print $1}')"
+    # `systemctl show -p ExecStart --value` prints an exec-command struct
+    # ("{ path=/opt/fleet/fleet ; argv[]=... }"), NOT a bare path — extract
+    # the path= field. The old `awk '{print $1}'` grabbed the literal "{" and
+    # resolved INSTALL_DIR to the operator's cwd, so the swap (and therefore
+    # the backup/rollback guarantee) never touched /opt/fleet.
+    exec_start="$(systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null \
+      | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -n1)"
   else
     exec_start=""
   fi
-  if [[ -n "$exec_start" && -x "$(dirname "$exec_start")" ]]; then
+  if [[ "$exec_start" == /* && -x "$(dirname "$exec_start")" ]]; then
     INSTALL_DIR="$(dirname "$exec_start")"
   else
     INSTALL_DIR="/opt/fleet"

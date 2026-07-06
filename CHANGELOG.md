@@ -64,6 +64,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- `fleet update` / `scripts/fleet-upgrade.sh` now actually install the freshly
+  built binaries on the standard `/opt/fleet` topology. Both scripts parsed
+  `systemctl show -p ExecStart --value` with `awk '{print $1}'`, which grabs
+  the literal `{` of systemd's exec-command struct rather than the binary
+  path — `update.sh` then resolved the install dir to the source checkout and
+  skipped the copy as "in place" (the restart re-ran the OLD binary while
+  reporting success), and `fleet-upgrade.sh` resolved it to the operator's
+  cwd, voiding the backup/rollback guarantee. The `path=` field is now
+  extracted explicitly. `fleet update` also warns when the installed systemd
+  units have drifted from the shipped `deploy/*.service` (bootstrap installs
+  units only when absent, so shipped unit fixes never reached existing boxes
+  and were previously invisible).
+
 - Removed accidentally committed local agent-run artifacts (`hello.txt`,
   `audit_log.txt`, `data/audit/bash.log`, `data/task-run-*/session.json`) and
   added the server runtime `data/` directory to `.gitignore` so runtime output
@@ -71,6 +84,19 @@ prior versions are listed because none have shipped.
 
 
 ### Security
+
+- The public-facing web tier (`deploy/fleet-web.service`) now runs as a
+  dedicated unprivileged `fleet-web` system user instead of root; bootstrap
+  creates the user and hands it `.next/` (Next's runtime cache — the unit's
+  only writable path), and `fleet update` re-chowns it after each deploy.
+  Existing installs keep their current unit (bootstrap never overwrites);
+  `fleet update` now surfaces the drift with the exact adopt command.
+
+- The TLS edge (`deploy/Caddyfile` and the bootstrap-generated variant) now
+  sends `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, and
+  `X-Frame-Options: DENY` on every response, mirroring the values the Go
+  backends already set (`securityHeadersMiddleware`) so the whole origin
+  carries one header policy.
 
 - Interactive chat now honors the fleet-wide sandbox egress mode
   (`FLEET_DEFAULT_NETWORK_MODE`), closing a gap ADR-0012 deferred: a

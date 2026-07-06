@@ -281,8 +281,14 @@ else
   # restart below actually runs the NEW code. Without this the build is a no-op
   # against the live deployment.
   if [[ -z "$INSTALL_DIR" ]]; then
-    exec_start="$(systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null | awk '{print $1}')"
-    if [[ -n "$exec_start" && -x "$(dirname "$exec_start")" ]]; then
+    # `systemctl show -p ExecStart --value` prints an exec-command struct
+    # ("{ path=/opt/fleet/fleet ; argv[]=... }"), NOT a bare path — extract the
+    # path= field. The old `awk '{print $1}'` grabbed the literal "{", made
+    # dirname yield "." (== $SRC_DIR after the cd above), and the install was
+    # silently skipped as "in place": the restart re-ran the OLD binary.
+    exec_start="$(systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null \
+      | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -n1)"
+    if [[ "$exec_start" == /* && -x "$(dirname "$exec_start")" ]]; then
       INSTALL_DIR="$(dirname "$exec_start")"
     else
       INSTALL_DIR="/opt/fleet"
@@ -327,6 +333,15 @@ else
         info "fleet-web runs from the source checkout (${web_dst}) — build is already in place."
       elif install -d "$web_dst" 2>/dev/null && cp -a "$SRC_DIR/web/." "$web_dst/"; then
         ok "deployed web app → ${web_dst}"
+        # The cp above re-roots ownership; hand .next (Next's runtime cache —
+        # the unit's only ReadWritePaths entry) back to the unit's User= so a
+        # non-root fleet-web keeps working after every update. No-op for the
+        # legacy root unit (User= empty).
+        web_user="$(systemctl show -p User --value fleet-web.service 2>/dev/null)"
+        if [[ -n "$web_user" && -d "$web_dst/.next" ]] && id -u "$web_user" >/dev/null 2>&1; then
+          chown -R "$web_user:" "$web_dst/.next" 2>/dev/null \
+            || warn "chown ${web_dst}/.next to ${web_user} failed — fleet-web may not write its cache"
+        fi
       else
         die "could not deploy the web build into ${web_dst} (need root?) — live web app left in place"
       fi
@@ -368,6 +383,24 @@ else
   else
     warn "sandbox image build failed — run scripts/build-sandbox-image.sh manually before restarting."
   fi
+fi
+
+# ── unit-file drift check (warn-only) ───────────────────────────────────────
+# bootstrap installs deploy/*.service only when absent and this script never
+# rewrites them, so a unit fix shipped in a new release does NOT reach an
+# already-provisioned box on its own. Overwriting silently would clobber
+# operator hand-edits, so surface the drift and leave the decision to the
+# operator (drop-ins under /etc/systemd/system/<unit>.d/ survive a reinstall).
+if command -v systemctl >/dev/null 2>&1; then
+  for unit in fleet.service fleet-web.service; do
+    installed="/etc/systemd/system/$unit"
+    shipped="$SRC_DIR/deploy/$unit"
+    if [[ -f "$installed" && -f "$shipped" ]] && ! cmp -s "$shipped" "$installed"; then
+      warn "$unit differs from the shipped deploy/$unit — a unit fix in this release may not be live."
+      warn "  review: diff $installed $shipped"
+      warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload"
+    fi
+  done
 fi
 
 # ── 5. restart the service (services self-migrate on start) ────────────────

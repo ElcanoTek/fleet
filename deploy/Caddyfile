@@ -22,6 +22,17 @@
 fleet.example.com {
 	encode zstd gzip
 
+	# Security headers for the Next-served pages, mirroring exactly what the
+	# Go backends already set on their own responses (cmd/fleet/tls.go
+	# securityHeadersMiddleware) so the whole origin carries one policy.
+	# `header` replaces existing values, so proxied API responses that already
+	# carry these are not duplicated.
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+
 	reverse_proxy 127.0.0.1:3000 {
 		# SSE: stream tokens straight through, no response buffering, and a
 		# generous read timeout so long agent turns don't get cut off.
