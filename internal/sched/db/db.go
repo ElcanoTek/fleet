@@ -1598,13 +1598,27 @@ func (db *Database) PromoteStarvedTasks(ctx context.Context, windowMinutes int) 
 	// Compute the age cutoff in Go and compare against the TIMESTAMPTZ column
 	// directly — avoids any driver-specific interval-parameter typing.
 	cutoff := time.Now().UTC().Add(-time.Duration(windowMinutes) * time.Minute)
+	// Measure the wait from when the task became eligible to run, not from
+	// created_at. A recurring occurrence ROW is created at the PREVIOUS
+	// occurrence's completion, so by the time it flips to pending its created_at
+	// is already ~one period old — keying the sweep on created_at would
+	// floor-promote every recurring/retried task the instant it becomes pending,
+	// inverting the priority queue exactly when the operator enables the window.
+	// GREATEST(created_at, scheduled_for) is that eligibility time: a fresh
+	// recurrence's scheduled_for is its (near-now) fire time, a retry's is the
+	// backoff time, and a resume bumps scheduled_for to now() — so none are
+	// mis-promoted. created_at is never NULL, so Postgres GREATEST simply ignores
+	// a NULL scheduled_for (immediate tasks) and falls back to created_at.
+	// (A crash-recovered task keeps its old scheduled_for and so is promoted
+	// immediately — intended: recovered work should not lose more ground to
+	// freshly-queued bulk work.)
 	res, err := db.conn.ExecContext(ctx, `
 		UPDATE tasks
 		SET effective_priority = $1
 		WHERE status = $2
 		  AND priority > $1
 		  AND effective_priority > $1
-		  AND created_at < $3`,
+		  AND GREATEST(created_at, scheduled_for) < $3`,
 		models.StarvationFloorPriority, string(models.TaskStatusPending), cutoff)
 	if err != nil {
 		return 0, err
@@ -1614,9 +1628,10 @@ func (db *Database) PromoteStarvedTasks(ctx context.Context, windowMinutes int) 
 }
 
 // ExpirePausedTasks fails tasks that have sat in paused_awaiting_input past the
-// window (#510) — an unattended ask-pause otherwise waits forever. Mirrors
-// PromoteStarvedTasks: cutoff computed in Go, a single guarded UPDATE, count
-// returned; a non-positive window is a no-op (the default — waits forever).
+// window (#510) — an unattended ask-pause otherwise waits forever. A non-positive
+// window is a no-op (the default — waits forever). It returns the rows it moved
+// to the terminal state so the caller can spawn the next occurrence for recurring
+// tasks (see Storage.ExpirePausedTasks).
 //
 // It moves them to the TERMINAL `error` status (not dead_lettered, which is the
 // runner's lease-guarded status by convention — a paused task holds no lease),
@@ -1625,25 +1640,42 @@ func (db *Database) PromoteStarvedTasks(ctx context.Context, windowMinutes int) 
 // (the run's start), the same proxy ListPausedTasks orders by — the tasks
 // table has no paused_at column, and for a minutes-to-hours TTL measuring from
 // run start is acceptably conservative.
-func (db *Database) ExpirePausedTasks(ctx context.Context, windowMinutes int) (int64, error) {
+func (db *Database) ExpirePausedTasks(ctx context.Context, windowMinutes int) ([]*models.Task, error) {
 	if windowMinutes <= 0 {
-		return 0, nil
+		return nil, nil
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(windowMinutes) * time.Minute)
-	res, err := db.conn.ExecContext(ctx, `
+	// UPDATE ... RETURNING makes the terminal transition AND the capture of which
+	// rows transitioned atomic under one lock acquisition: a concurrent ResumeTask
+	// (guarded by `status='paused_awaiting_input'`) either commits first (this
+	// WHERE then excludes the row) or blocks and wakes to find status='error' —
+	// so a row is never both resumed and expired, and each expired row is returned
+	// exactly once. The caller spawns the next recurrence for returned recurring
+	// rows (see Storage.ExpirePausedTasks); without that, an expired occurrence of
+	// a recurring task would silently end the whole schedule.
+	rows, err := db.conn.QueryContext(ctx, `
 		UPDATE tasks
 		SET status = $1, completed_at = now(), error_message = $2, pending_question = NULL
 		WHERE status = $3
 		  AND started_at IS NOT NULL
-		  AND started_at < $4`,
+		  AND started_at < $4
+		RETURNING `+taskColumns,
 		string(models.TaskStatusError),
 		fmt.Sprintf("expired: awaited input for more than %d minute(s) with no answer", windowMinutes),
 		string(models.TaskStatusPausedAwaitingInput), cutoff)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n, _ := res.RowsAffected()
-	return n, nil
+	defer func() { _ = rows.Close() }()
+	var expired []*models.Task
+	for rows.Next() {
+		t, serr := db.scanTask(rows)
+		if serr != nil {
+			return nil, serr
+		}
+		expired = append(expired, t)
+	}
+	return expired, rows.Err()
 }
 
 // PendingQueueStats returns the per-effective-priority rollup of the pending
