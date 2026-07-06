@@ -90,7 +90,7 @@ yourself are already in the box, tested, and governed by the same core:
 
 - **An MCP connector library, two trust classes deep.** Your bundle's own
   connectors run **in the sandbox with credentials brokered host-side**, and a
-  curated directory of **65 verified official vendor-hosted MCP servers**
+  curated directory of **hundreds of verified vendor-hosted MCP servers**
   (GitHub, Google, Notion, Slack, Stripe, X, OpenRouter, Hugging Face, AWS, …)
   is one OAuth click away — each explicitly badged *Bundled* vs *Third-party*
   so users know what they're opting into ([`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md)).
@@ -312,7 +312,7 @@ self-migrates on start.
 |---|---|
 | `fleet bootstrap` | provision a box (Postgres, build, install, systemd, optional web + TLS) |
 | `fleet update` | `git pull` + rebuild + reinstall the binaries in place |
-| `fleet upgrade` | drain, swap, health-gate, and auto-roll-back on failure |
+| `scripts/fleet-upgrade.sh` | drain, swap, health-gate, and auto-roll-back on failure |
 | `fleet status` / `fleet diagnose` | health doctor / redacted support bundle |
 | `fleet restart` · `stop` · `logs` | service lifecycle |
 | `fleet chat [--email you@org]` | terminal TUI for the agent (token auto-read on-box) |
