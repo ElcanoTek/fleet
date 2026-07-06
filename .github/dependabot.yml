@@ -27,6 +27,11 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    # Version updates land on the dev integration branch (fast-lane CI; they
+    # soak there and ride the dev→main PR through the full gate). Dependabot
+    # SECURITY updates ignore target-branch and still go straight to main, so
+    # CVE fixes are never delayed behind dev.
+    target-branch: dev
     open-pull-requests-limit: 10
     # Wait before proposing freshly published releases (see header). Patch is the
     # tightest gate because auto-merge-dependabot.yml auto-merges patch bumps.
@@ -48,6 +53,11 @@ updates:
     directory: "/web"
     schedule:
       interval: weekly
+    # Version updates land on the dev integration branch (fast-lane CI; they
+    # soak there and ride the dev→main PR through the full gate). Dependabot
+    # SECURITY updates ignore target-branch and still go straight to main, so
+    # CVE fixes are never delayed behind dev.
+    target-branch: dev
     open-pull-requests-limit: 10
     # Same supply-chain cooldown as gomod (see header).
     cooldown:
@@ -76,6 +86,11 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    # Version updates land on the dev integration branch (fast-lane CI; they
+    # soak there and ride the dev→main PR through the full gate). Dependabot
+    # SECURITY updates ignore target-branch and still go straight to main, so
+    # CVE fixes are never delayed behind dev.
+    target-branch: dev
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps(actions)"

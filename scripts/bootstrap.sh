@@ -205,20 +205,20 @@ SCHED_DB_USER="${SCHED_DB_USER:-sched}"
 
 gen_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
 
-# upsert_env KEY VALUE — idempotently set KEY=VALUE in $ENV_FILE, replacing an
-# existing KEY= line in place and preserving comments/unrelated lines (mirrors
+# upsert_env_file FILE KEY VALUE — idempotently set KEY=VALUE in FILE, replacing
+# an existing KEY= line in place and preserving comments/unrelated lines (mirrors
 # internal/creds.SetEnvKey). No-ops under --dry-run. Values are written verbatim;
 # DSNs may contain '&'/'/' so we avoid sed substitution and rewrite via awk.
-upsert_env() {
-  local key="$1" value="$2"
+upsert_env_file() {
+  local file="$1" key="$2" value="$3"
   if [[ "$DRY_RUN" == "1" ]]; then
     # Never echo secret values in the plan — show the key only.
-    info "[dry-run] would set ${key}=… in ${ENV_FILE}"
+    info "[dry-run] would set ${key}=… in ${file}"
     return 0
   fi
-  [[ -f "$ENV_FILE" ]] || install -m 0600 /dev/null "$ENV_FILE"
+  [[ -f "$file" ]] || install -D -m 0600 /dev/null "$file"
   local tmp
-  tmp="$(mktemp "${ENV_FILE}.XXXXXX")"
+  tmp="$(mktemp "${file}.XXXXXX")"
   KEY="$key" VALUE="$value" awk '
     BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
     {
@@ -232,10 +232,13 @@ upsert_env() {
       print line
     }
     END { if (!done) print k "=" v }
-  ' "$ENV_FILE" > "$tmp"
+  ' "$file" > "$tmp"
   chmod 0600 "$tmp"
-  mv -f "$tmp" "$ENV_FILE"
+  mv -f "$tmp" "$file"
 }
+
+# upsert_env KEY VALUE — upsert into the main credential env file ($ENV_FILE).
+upsert_env() { upsert_env_file "$ENV_FILE" "$1" "$2"; }
 
 # ── dedicated service-user + rootless-Podman helpers (systemd/--enable-service) ──
 # deploy/fleet.service runs as a FIXED system user (User=fleet), NOT DynamicUser:
@@ -364,8 +367,12 @@ deploy_web_tier() {
     chown -R fleet-web:fleet-web "$web_dst/.next" || warn "chown ${web_dst}/.next to fleet-web failed"
   fi
 
-  # Write the 0600 web env. Chat/orchestrator tokens mirror the backend env;
-  # APP_SESSION_SECRET is generate-if-absent (rotating it logs everyone out).
+  # Write the 0600 web env by UPSERTING each key — never truncate/rewrite the
+  # whole file: it may carry operator-added keys beyond the bootstrap set (e.g.
+  # AUTH_SIGNING_PUBKEY / AUTH_LOGIN_URL / AUTH_COOKIE_DOMAIN for the external
+  # SSO), and a wholesale rewrite silently dropped them on every re-run.
+  # Chat/orchestrator tokens mirror the backend env; APP_SESSION_SECRET is
+  # generate-if-absent (rotating it logs everyone out).
   local chat_token admin_token app_secret
   chat_token="$(grep '^FLEET_SERVER_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
   admin_token="$(grep '^ADMIN_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
@@ -374,20 +381,24 @@ deploy_web_tier() {
   else
     app_secret="$(gen_secret 48)"
   fi
+  upsert_env_file "$web_env" CHAT_SERVER_URL           "http://127.0.0.1:8080"
+  upsert_env_file "$web_env" CHAT_SERVER_TOKEN         "$chat_token"
+  upsert_env_file "$web_env" ORCHESTRATOR_SERVER_URL   "http://127.0.0.1:8000"
+  upsert_env_file "$web_env" ORCHESTRATOR_SERVER_TOKEN "$admin_token"
+  upsert_env_file "$web_env" APP_SESSION_SECRET        "$app_secret"
+  upsert_env_file "$web_env" PORT                      "3000"
+  upsert_env_file "$web_env" NODE_ENV                  "production"
+  upsert_env_file "$web_env" NEXT_PUBLIC_PUBLIC_ORIGIN "$origin"
+  upsert_env_file "$web_env" NEXT_PUBLIC_APP_NAME      "$app_name"
+  upsert_env_file "$web_env" NEXT_PUBLIC_BUILD_ID      "$build_id"
 
   # Elcano SSO (AUTH_SIGNING_PUBKEY): --auth-pubkey wins (value or @file); else
-  # carry over what a previous run wrote (this block rewrites the file wholesale,
-  # so without the carry-over a re-run would silently disable SSO); else offer an
-  # interactive paste. Every path validates via normalize_auth_pubkey; a bad key
-  # DIES rather than deploying a web tier whose SSO fails on every login. The
-  # AUTH_LOGIN_URL/AUTH_COOKIE_DOMAIN/AUTH_COOKIE_NAME companions are carry-over
-  # only (set them with fleet config set-auth-pubkey / by hand).
-  local auth_pubkey="" auth_raw="" auth_login_url="" auth_cookie_domain="" auth_cookie_name=""
-  if [[ -f "$web_env" ]]; then
-    auth_login_url="$(grep '^AUTH_LOGIN_URL=' "$web_env" 2>/dev/null | cut -d= -f2- || true)"
-    auth_cookie_domain="$(grep '^AUTH_COOKIE_DOMAIN=' "$web_env" 2>/dev/null | cut -d= -f2- || true)"
-    auth_cookie_name="$(grep '^AUTH_COOKIE_NAME=' "$web_env" 2>/dev/null | cut -d= -f2- || true)"
-  fi
+  # an existing key is simply LEFT IN PLACE (the upsert-style writes above never
+  # truncate the file, so operator-added AUTH_* keys survive re-runs on their
+  # own — no carry-over machinery needed); else offer an interactive paste.
+  # Every path that WRITES validates via normalize_auth_pubkey — a bad key DIES
+  # rather than deploying a web tier whose SSO fails on every login.
+  local auth_raw="" auth_pubkey=""
   if [[ -n "$AUTH_PUBKEY_ARG" ]]; then
     auth_raw="$AUTH_PUBKEY_ARG"
     if [[ "$auth_raw" == @* ]]; then
@@ -395,45 +406,27 @@ deploy_web_tier() {
     fi
     auth_pubkey="$(normalize_auth_pubkey "$auth_raw")" \
       || die "--auth-pubkey is not a valid AUTH_SIGNING_PUBKEY (want the standard-base64 32-byte Ed25519 key from \`auth pubkey\`)"
+    upsert_env_file "$web_env" AUTH_SIGNING_PUBKEY "$auth_pubkey"
     ok "Elcano SSO key accepted (--auth-pubkey)"
-  elif [[ -f "$web_env" ]] && grep -q '^AUTH_SIGNING_PUBKEY=' "$web_env"; then
-    auth_pubkey="$(grep '^AUTH_SIGNING_PUBKEY=' "$web_env" | cut -d= -f2-)"
-    info "carrying over the existing AUTH_SIGNING_PUBKEY (Elcano SSO stays enabled)."
+  elif grep -q '^AUTH_SIGNING_PUBKEY=' "$web_env" 2>/dev/null; then
+    info "existing AUTH_SIGNING_PUBKEY left in place (Elcano SSO stays enabled)."
   elif [[ -t 0 ]]; then
     printf 'Optional Elcano SSO key — email+password login works without it (paste the `auth pubkey` line, or Enter to skip): '
     read -r auth_raw
     if [[ -n "$auth_raw" ]]; then
       auth_pubkey="$(normalize_auth_pubkey "$auth_raw")" \
         || die "that is not a valid AUTH_SIGNING_PUBKEY (want the standard-base64 32-byte Ed25519 key from \`auth pubkey\`)"
+      upsert_env_file "$web_env" AUTH_SIGNING_PUBKEY "$auth_pubkey"
       ok "Elcano SSO key accepted"
     else
       info "skipped — enable SSO later with: fleet config set-auth-pubkey"
     fi
   fi
 
-  install -D -m 0600 /dev/null "$web_env"
-  {
-    printf 'CHAT_SERVER_URL=%s\n'         "http://127.0.0.1:8080"
-    printf 'CHAT_SERVER_TOKEN=%s\n'       "$chat_token"
-    printf 'ORCHESTRATOR_SERVER_URL=%s\n' "http://127.0.0.1:8000"
-    printf 'ORCHESTRATOR_SERVER_TOKEN=%s\n' "$admin_token"
-    printf 'APP_SESSION_SECRET=%s\n'      "$app_secret"
-    printf 'PORT=%s\n'                    "3000"
-    printf 'NODE_ENV=%s\n'                "production"
-    printf 'NEXT_PUBLIC_PUBLIC_ORIGIN=%s\n' "$origin"
-    printf 'NEXT_PUBLIC_APP_NAME=%s\n'    "$app_name"
-    printf 'NEXT_PUBLIC_BUILD_ID=%s\n'    "$build_id"
-    [[ -n "$auth_pubkey" ]]        && printf 'AUTH_SIGNING_PUBKEY=%s\n' "$auth_pubkey"
-    [[ -n "$auth_login_url" ]]     && printf 'AUTH_LOGIN_URL=%s\n'      "$auth_login_url"
-    [[ -n "$auth_cookie_domain" ]] && printf 'AUTH_COOKIE_DOMAIN=%s\n'  "$auth_cookie_domain"
-    [[ -n "$auth_cookie_name" ]]   && printf 'AUTH_COOKIE_NAME=%s\n'    "$auth_cookie_name"
-    true
-  } > "$web_env"
-  chmod 0600 "$web_env"
-  if [[ -n "$auth_pubkey" ]]; then
-    ok "wrote ${web_env} (0600, Elcano SSO enabled)"
+  if grep -q '^AUTH_SIGNING_PUBKEY=' "$web_env" 2>/dev/null; then
+    ok "wrote ${web_env} (0600; operator-added keys preserved; Elcano SSO enabled)"
   else
-    ok "wrote ${web_env} (0600, email+password login only)"
+    ok "wrote ${web_env} (0600; operator-added keys preserved; email+password login only)"
   fi
 
   systemctl daemon-reload || true
@@ -748,9 +741,25 @@ if [[ "$ENABLE_SERVICE" == "1" && -f "${CLIENT_CONFIG_DIR}/mcp/requirements.txt"
 fi
 
 # ── Postgres provisioning ──
+# env_dsn_password KEY — extract the password from an existing postgres:// DSN
+# already recorded in $ENV_FILE (empty when the file/key/password is absent).
+# A re-run on a provisioned box MUST reuse the live password: without this, a
+# freshly generated password was written into the env-file DSN while the
+# CREATE ROLE below was skipped (role exists), leaving a DSN the cluster
+# rejects — the "idempotent re-run" broke DB auth on the next restart.
+env_dsn_password() {
+  local url
+  url="$(grep "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  if [[ "$url" =~ ^postgres(ql)?://[^:/@]+:([^@/]+)@ ]]; then
+    printf '%s' "${BASH_REMATCH[2]}"
+  fi
+}
+
 if [[ "$POSTGRES_MODE" == "local" ]]; then
   SSLMODE="disable"
+  CHAT_DB_PASSWORD="${CHAT_DB_PASSWORD:-$(env_dsn_password FLEET_CHAT_DATABASE_URL)}"
   CHAT_DB_PASSWORD="${CHAT_DB_PASSWORD:-$(gen_pass)}"
+  SCHED_DB_PASSWORD="${SCHED_DB_PASSWORD:-$(env_dsn_password FLEET_SCHED_DATABASE_URL)}"
   SCHED_DB_PASSWORD="${SCHED_DB_PASSWORD:-$(gen_pass)}"
 
   step "Branch A (local): install + init a local Postgres cluster"
@@ -796,13 +805,19 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
   fi
 
   step "Creating roles + databases idempotently (chat + sched)"
+  # CREATE-if-missing, then ALTER unconditionally: the ALTER converges an
+  # existing role to the resolved password (reused from the env file, or the
+  # operator's pre-set CHAT_DB_PASSWORD/SCHED_DB_PASSWORD), so the cluster and
+  # the env file always agree after every run.
   PSQL_SQL=$(cat <<SQL
 SELECT 'CREATE ROLE ${CHAT_DB_USER} LOGIN PASSWORD ''${CHAT_DB_PASSWORD}'''
  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${CHAT_DB_USER}')\gexec
+ALTER ROLE ${CHAT_DB_USER} WITH LOGIN PASSWORD '${CHAT_DB_PASSWORD}';
 SELECT 'CREATE DATABASE ${CHAT_DB_NAME} OWNER ${CHAT_DB_USER}'
  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${CHAT_DB_NAME}')\gexec
 SELECT 'CREATE ROLE ${SCHED_DB_USER} LOGIN PASSWORD ''${SCHED_DB_PASSWORD}'''
  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${SCHED_DB_USER}')\gexec
+ALTER ROLE ${SCHED_DB_USER} WITH LOGIN PASSWORD '${SCHED_DB_PASSWORD}';
 SELECT 'CREATE DATABASE ${SCHED_DB_NAME} OWNER ${SCHED_DB_USER}'
  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${SCHED_DB_NAME}')\gexec
 SQL
@@ -859,8 +874,10 @@ fi
 # ── write/refresh the env file (0600) ──
 # Persist the resolved DSNs + the client-bundle dir so the fleet process and
 # fleet-admin read them from the SAME 0600 file deploy/fleet.service EnvironmentFiles.
-# Idempotent: re-running rewrites these keys in place (passwords rotate only when
-# CHAT_DB_PASSWORD/SCHED_DB_PASSWORD are pre-set; generated ones change per run).
+# Idempotent: re-running rewrites these keys in place. Local-mode passwords are
+# reused from the env file's existing DSNs (or the operator's pre-set
+# CHAT_DB_PASSWORD/SCHED_DB_PASSWORD), and the cluster role is ALTERed to match —
+# the env file and the cluster never disagree after a run.
 step "Writing connection settings into ${ENV_FILE} (0600)"
 upsert_env FLEET_CHAT_DATABASE_URL "$CHAT_URL"
 upsert_env FLEET_SCHED_DATABASE_URL "$SCHED_URL"
