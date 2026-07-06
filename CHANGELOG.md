@@ -87,6 +87,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Admin Health panel: the MCP catalog pills no longer render optional servers in
+  the red **danger** tone, which read as "broken". The panel does not probe MCP
+  servers — the flag is "enabled by default for new conversations" — so an
+  off-by-default optional server is normal, not an error. On-by-default servers
+  are now `success` (green) and optional servers `neutral` (grey), never danger;
+  the header is relabeled "MCP catalog" with a tooltip clarifying it isn't a
+  health probe, and each pill has an explanatory title.
+
 - `fleet update` now pulls the client-config bundle even when the update changes
   `update.sh` itself. The self-update re-exec ran the new script with
   `--no-pull` to avoid re-fetching the already-fast-forwarded fleet checkout,
