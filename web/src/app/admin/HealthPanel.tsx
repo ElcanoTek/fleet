@@ -155,9 +155,26 @@ export function HealthPanel() {
       </div>
       {data.mcp_servers.length > 0 ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-[0.7rem] uppercase tracking-wide text-[var(--color-text-muted)]">MCP</span>
+          <span
+            className="text-[0.7rem] uppercase tracking-wide text-[var(--color-text-muted)]"
+            title="Optional-MCP catalog. Servers are not health-probed here; the tint shows whether each is on by default for new conversations."
+          >
+            MCP catalog
+          </span>
           {data.mcp_servers.map((s) => (
-            <StatusPill key={s.name} ok={s.enabled} label={s.name} />
+            // NOT a health signal — the endpoint doesn't ping servers
+            // (see internal/httpapi/health.go). `enabled` means "on by default
+            // for new conversations". So on-by-default reads as success and an
+            // optional (off-by-default) server is neutral — never danger, which
+            // would wrongly read as broken.
+            <StatusChip
+              key={s.name}
+              tone={s.enabled ? "success" : "neutral"}
+              className="font-medium"
+              title={s.enabled ? "On by default for new conversations" : "Optional — off by default (users enable it per conversation)"}
+            >
+              {s.name}
+            </StatusChip>
           ))}
         </div>
       ) : null}
