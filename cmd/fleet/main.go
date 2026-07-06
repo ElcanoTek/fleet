@@ -597,6 +597,7 @@ func run() error {
 		SandboxCPUsMax:     cfg.SandboxCPUsMax,
 		SandboxPidsMax:     cfg.SandboxPidsMax,
 	}
+	warnIfNoAdminKey(hcfg.AdminAPIKey)
 	h := handlers.New(hcfg, schedStorage, keyMgr)
 	// Wire the orchestrator's read-only Optional-MCP catalog + credential-account
 	// seats from the SAME in-process source the chat side uses: the Manager's
@@ -1679,6 +1680,19 @@ func addrOr(addr, def string) string {
 // reverse proxy. A bare ":8000" would bind every interface and expose the
 // orchestrator admin surface directly on hosts without a firewall. Multi-host
 // topologies opt in explicitly via FLEET_ORCHESTRATOR_ADDR.
+// warnIfNoAdminKey logs a startup warning when ADMIN_API_KEY is unset. Since
+// verifyAdminKey now fails closed on an empty configured key (an empty key used
+// to match an empty header and silently authenticate admin routes), the admin
+// surface (/keys, /users, /tasks/cleanup, config/MCP reload) is unreachable
+// without it — warn so an operator on a bare deploy isn't left guessing why
+// admin calls 403. bootstrap.sh always sets it. Extracted from run() to keep it
+// within the cyclomatic budget.
+func warnIfNoAdminKey(adminKey string) {
+	if strings.TrimSpace(adminKey) == "" {
+		log.Printf("WARNING: ADMIN_API_KEY is not set — the orchestrator admin API (/keys, /users, /tasks/cleanup, config/MCP reload) will reject all requests. Set it to enable admin access.")
+	}
+}
+
 func orchestratorAddr() string {
 	if v := strings.TrimSpace(os.Getenv("FLEET_ORCHESTRATOR_ADDR")); v != "" {
 		return v
