@@ -72,6 +72,15 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- The orchestrator listener now defaults to `127.0.0.1:8000` (loopback) instead
+  of `:8000` (all interfaces), matching the chat listener's loopback default
+  and what the deploy docs (Caddyfile, fleet.service, DEPLOYMENT.md) already
+  promised. On a host without a firewall, the old default exposed the
+  orchestrator/admin API directly to the network. Multi-host topologies that
+  relied on the wide bind must now set `FLEET_ORCHESTRATOR_ADDR` explicitly
+  (e.g. `0.0.0.0:8000`). The chat listener's last-resort fallback (used only
+  when `FLEET_SERVER_ADDR` is set but empty) is loopback now too.
+
 - Interactive chat now honors the fleet-wide sandbox egress mode
   (`FLEET_DEFAULT_NETWORK_MODE`), closing a gap ADR-0012 deferred: a
   non-lockdown chat turn used to get open network egress even under

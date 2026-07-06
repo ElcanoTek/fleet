@@ -773,7 +773,10 @@ func run() error {
 	registerRuntimeMetrics(chatSrv.ActiveTurns, pool.ActiveTasks, mgr.SandboxPool())
 
 	// ── boot listeners ──
-	chatAddr := addrOr(cfg.Addr, ":8080")
+	// Last-resort fallback only — config.Load already defaults Addr to
+	// 127.0.0.1:8080; keep the fallback loopback too so an explicitly empty
+	// FLEET_SERVER_ADDR can never widen the bind to every interface.
+	chatAddr := addrOr(cfg.Addr, "127.0.0.1:8080")
 	orchAddr := orchestratorAddr()
 
 	// Liveness + readiness probes (#215) on BOTH ports, sharing one check set
@@ -1664,11 +1667,19 @@ func addrOr(addr, def string) string {
 	return addr
 }
 
+// orchestratorAddr resolves the orchestrator listener address. The default is
+// loopback-only, matching the chat listener (config.Load defaults Addr to
+// 127.0.0.1:8080) and the deployment contract: the deploy docs (Caddyfile,
+// fleet.service, DEPLOYMENT.md, grafana/README.md) all promise that the Go
+// backends bind loopback and are only reached through the on-box web tier /
+// reverse proxy. A bare ":8000" would bind every interface and expose the
+// orchestrator admin surface directly on hosts without a firewall. Multi-host
+// topologies opt in explicitly via FLEET_ORCHESTRATOR_ADDR.
 func orchestratorAddr() string {
 	if v := strings.TrimSpace(os.Getenv("FLEET_ORCHESTRATOR_ADDR")); v != "" {
 		return v
 	}
-	return ":8000"
+	return "127.0.0.1:8000"
 }
 
 // ── graceful shutdown helpers (#278) ──
