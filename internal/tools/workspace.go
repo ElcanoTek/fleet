@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -172,6 +173,40 @@ func EnsureWorkspaceDir(conversationID string) (string, error) {
 		_ = os.Symlink(target, link)
 	}
 	return dir, nil
+}
+
+// Managed workspace-root registry: cmd/fleet registers the absolute workspace
+// root (the dir the sandbox bind-mounts) at boot so AllowedBaseDirs confines the
+// host-side file tools to the workspace tree instead of the process cwd — which
+// under systemd is the whole StateDirectory and would otherwise expose DataDir
+// state the sandbox never mounts. Unset (tests / CLI) keeps the legacy
+// cwd-based allowlist. Set once at boot before any turn runs.
+var (
+	managedWorkspaceRootMu sync.RWMutex
+	managedWorkspaceRoot   string
+)
+
+// SetWorkspaceRoot registers the absolute workspace root as the authoritative
+// base for host-side file operations (see AllowedBaseDirs). cmd/fleet calls this
+// with the same root the agent manager bind-mounts into the sandbox. An empty
+// value is ignored so a misconfigured caller can't silently widen the allowlist
+// back to cwd.
+func SetWorkspaceRoot(abs string) {
+	abs = strings.TrimSpace(abs)
+	if abs == "" {
+		return
+	}
+	managedWorkspaceRootMu.Lock()
+	defer managedWorkspaceRootMu.Unlock()
+	managedWorkspaceRoot = abs
+}
+
+// workspaceRootBase returns the registered workspace root, or "" when none was
+// registered (tests / CLI / dev).
+func workspaceRootBase() string {
+	managedWorkspaceRootMu.RLock()
+	defer managedWorkspaceRootMu.RUnlock()
+	return managedWorkspaceRoot
 }
 
 // Supporting-doc dir registry: cmd/fleet wires the loaded client bundle's
