@@ -18,23 +18,46 @@ func (e *PathSecurityError) Error() string {
 	return fmt.Sprintf("path security violation: %s (path: %s, allowed base: %s)", e.Reason, e.Path, e.BaseDir)
 }
 
-// AllowedBaseDirs returns the list of directories that file operations are allowed in.
-// By default, this is the current working directory and the system temp directory (for testing).
-// Additional directories can be specified via environment variable FLEET_ALLOWED_DIRS
-// (or the legacy CHAT_ALLOWED_DIRS alias), colon-separated.
+// AllowedBaseDirs returns the list of directories that host-side file operations
+// are allowed in. The primary base is:
+//
+//   - the registered workspace root (SetWorkspaceRoot), in a managed deployment; or
+//   - the process working directory, when no root is registered (tests / CLI).
+//
+// This distinction is the sandbox-confinement fix: under systemd the process cwd
+// is the whole StateDirectory (e.g. /var/lib/fleet), which contains BOTH the
+// bind-mounted workspace AND state the sandbox never sees — DataDir attachments/
+// uploads and api_keys.json. Allowlisting cwd therefore let the host-side file
+// tools (view_file/write_file/edit_file) read or write that non-workspace state
+// via an absolute path, bypassing the sandbox. cmd/fleet now registers the
+// workspace root the sandbox bind-mounts, so file tools are confined to the same
+// tree the sandbox sees (plus temp + FLEET_ALLOWED_DIRS). ValidatePath resolves
+// symlinks and re-checks the real path against this list, so a symlink planted
+// inside the workspace that points at DataDir is rejected too.
+//
+// The system temp dir and any operator-opted FLEET_ALLOWED_DIRS (legacy
+// CHAT_ALLOWED_DIRS) entries remain allowed in both modes.
 func AllowedBaseDirs() ([]string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current working directory: %w", err)
+	var dirs []string
+	if root := workspaceRootBase(); root != "" {
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve workspace root: %w", err)
+		}
+		dirs = append(dirs, abs)
+	} else {
+		// No managed workspace root registered (tests / CLI / dev): preserve the
+		// legacy cwd-based allowlist so those flows are unchanged.
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get current working directory: %w", err)
+		}
+		cwd, err = filepath.Abs(cwd)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve working directory: %w", err)
+		}
+		dirs = append(dirs, cwd)
 	}
-
-	// Resolve to absolute path
-	cwd, err = filepath.Abs(cwd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve working directory: %w", err)
-	}
-
-	dirs := []string{cwd}
 
 	// Allow the system temp directory (needed for testing)
 	tempDir := os.TempDir()

@@ -87,6 +87,47 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Paused-task expiry no longer kills a recurring task's schedule. The
+  `FLEET_PAUSED_TASK_EXPIRY_MINUTES` sweep failed an unattended ask-paused task
+  with a bare bulk UPDATE that bypassed the terminal-transition path — so an
+  expired occurrence of a recurring task went `error` AND permanently ended the
+  schedule (no next occurrence). The sweep now uses `UPDATE ... RETURNING` and
+  spawns the next occurrence for each expired recurring row (race-free against a
+  concurrent resume, which is status-guarded). Opt-in feature, default off. The
+  sweep still does not fire the runner's completion notification (the notifier
+  lives in the runner) — documented as a known gap.
+
+- The anti-starvation sweep (`FLEET_STARVATION_*`) measured wait from
+  `created_at`, but a recurring occurrence's row is created at the previous
+  occurrence's completion — so its `created_at` is ~one period old the moment it
+  becomes pending, and enabling the window floor-promoted every recurring/retried
+  task instantly, inverting the priority queue. It now keys on
+  `GREATEST(created_at, scheduled_for)` (the eligibility time); a genuinely
+  starving task is still promoted, a freshly-eligible one is not. Opt-in feature,
+  default off; no migration.
+
+- Recurring tasks created by an agent or through the chat approval card no
+  longer drift to UTC. `EnqueueTask` (the `create_task` tool, the chat
+  `schedule_task` approval, promote-to-task) evaluated the first cron fire in
+  the server-clock zone and never persisted a per-task timezone, so
+  `FLEET_DEFAULT_TIMEZONE` was ignored and every occurrence after the first
+  fired in UTC (a "9am" task became 9am UTC). It now resolves and persists the
+  per-task timezone exactly like the HTTP create path, so recurrence stays in
+  the task's zone. HTTP-created tasks were already correct.
+
+- `fleet update` / `scripts/fleet-upgrade.sh` now actually install the freshly
+  built binaries on the standard `/opt/fleet` topology. Both scripts parsed
+  `systemctl show -p ExecStart --value` with `awk '{print $1}'`, which grabs
+  the literal `{` of systemd's exec-command struct rather than the binary
+  path — `update.sh` then resolved the install dir to the source checkout and
+  skipped the copy as "in place" (the restart re-ran the OLD binary while
+  reporting success), and `fleet-upgrade.sh` resolved it to the operator's
+  cwd, voiding the backup/rollback guarantee. The `path=` field is now
+  extracted explicitly. `fleet update` also warns when the installed systemd
+  units have drifted from the shipped `deploy/*.service` (bootstrap installs
+  units only when absent, so shipped unit fixes never reached existing boxes
+  and were previously invisible).
+
 - Removed accidentally committed local agent-run artifacts (`hello.txt`,
   `audit_log.txt`, `data/audit/bash.log`, `data/task-run-*/session.json`) and
   added the server runtime `data/` directory to `.gitignore` so runtime output
@@ -94,6 +135,52 @@ prior versions are listed because none have shipped.
 
 
 ### Security
+
+- Host-side file tools (`view_file`/`write_file`/`edit_file`) are now confined to
+  the workspace root the sandbox bind-mounts, closing an absolute-path bypass.
+  Their allowlist (`AllowedBaseDirs`) fell back to the process working directory,
+  which under systemd is the whole StateDirectory (`/var/lib/fleet`) — so an
+  absolute path could read or write `data/` attachments/uploads and
+  `api_keys.json` that the sandbox never mounts, defeating the "sandbox is
+  mandatory" invariant for file I/O. `cmd/fleet` now registers the workspace root
+  (`tools.SetWorkspaceRoot`, resolved exactly as the agent manager resolves it)
+  as the authoritative base; the process cwd is no longer blessed. `ValidatePath`
+  already resolves symlinks and re-checks the real path, so a symlink planted in
+  the workspace pointing at `data/` is rejected too. `os.TempDir()` and
+  operator-opted `FLEET_ALLOWED_DIRS` remain allowed; unregistered (tests/CLI)
+  keeps the legacy cwd allowlist.
+
+- Orchestrator admin auth now fails closed when `ADMIN_API_KEY` is unset.
+  `verifyAdminKey` compared `sha256(header)` against `sha256(configured key)`
+  in constant time, but with the key unset `sha256("") == sha256("")`, so a
+  request sending no `X-API-Key` header authenticated as admin — silently
+  opening the entire admin surface (`/keys`, `/users`, `/tasks/cleanup`,
+  config/MCP reload, the principal `isAdmin` flag) on any deploy that left the
+  key unset. Now returns false on an empty configured key, closing all call
+  sites at once, and the process logs a startup warning when it's unset.
+  `bootstrap.sh` always sets the key, so bootstrapped deploys are unaffected.
+
+- The orchestrator listener now defaults to `127.0.0.1:8000` (loopback) instead
+  of `:8000` (all interfaces), matching the chat listener's loopback default
+  and what the deploy docs (Caddyfile, fleet.service, DEPLOYMENT.md) already
+  promised. On a host without a firewall, the old default exposed the
+  orchestrator/admin API directly to the network. Multi-host topologies that
+  relied on the wide bind must now set `FLEET_ORCHESTRATOR_ADDR` explicitly
+  (e.g. `0.0.0.0:8000`). The chat listener's last-resort fallback (used only
+  when `FLEET_SERVER_ADDR` is set but empty) is loopback now too.
+
+- The public-facing web tier (`deploy/fleet-web.service`) now runs as a
+  dedicated unprivileged `fleet-web` system user instead of root; bootstrap
+  creates the user and hands it `.next/` (Next's runtime cache — the unit's
+  only writable path), and `fleet update` re-chowns it after each deploy.
+  Existing installs keep their current unit (bootstrap never overwrites);
+  `fleet update` now surfaces the drift with the exact adopt command.
+
+- The TLS edge (`deploy/Caddyfile` and the bootstrap-generated variant) now
+  sends `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, and
+  `X-Frame-Options: DENY` on every response, mirroring the values the Go
+  backends already set (`securityHeadersMiddleware`) so the whole origin
+  carries one header policy.
 
 - Interactive chat now honors the fleet-wide sandbox egress mode
   (`FLEET_DEFAULT_NETWORK_MODE`), closing a gap ADR-0012 deferred: a

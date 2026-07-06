@@ -80,6 +80,12 @@ func match(pattern, name string) bool {
 type Storage struct {
 	db       *db.Database
 	location *time.Location
+	// defaultTaskTZ is the IANA name applied to a task created without an
+	// explicit timezone (FLEET_DEFAULT_TIMEZONE). Distinct from location
+	// (FLEET_TIMEZONE, the server clock): the HTTP create path resolves the
+	// per-task zone from this default, and EnqueueTask must do the same so
+	// agent/chat-created recurring tasks don't drift to UTC after occurrence #1.
+	defaultTaskTZ string
 }
 
 // New creates a new Storage instance.
@@ -111,6 +117,39 @@ func (s *Storage) SetTimezone(timezone string) {
 		return
 	}
 	s.location = loc
+}
+
+// SetDefaultTaskTimezone sets the IANA timezone applied to a task enqueued
+// without an explicit one (FLEET_DEFAULT_TIMEZONE). Empty leaves the default as
+// UTC. Mirrors the HTTP handler's defaultTaskTimezone so both create paths agree.
+func (s *Storage) SetDefaultTaskTimezone(timezone string) {
+	s.defaultTaskTZ = strings.TrimSpace(timezone)
+}
+
+// resolveTaskTimezone defaults an empty tc.Timezone to the configured
+// default-task timezone (else UTC), writes the resolved name back so it persists
+// with the task, and returns the loaded location for cron evaluation. Mirrors
+// handlers.resolveTaskTimezone so the tool/chat/promote create paths localize
+// recurrence exactly like the HTTP API. An unloadable name falls back to UTC
+// rather than failing the enqueue (the HTTP path validates earlier; here the
+// caller is an already-authorized run and we prefer a scheduled task in UTC over
+// a dropped one).
+func (s *Storage) resolveTaskTimezone(tc *models.TaskCreate) *time.Location {
+	tzName := strings.TrimSpace(tc.Timezone)
+	if tzName == "" {
+		tzName = s.defaultTaskTZ
+	}
+	if tzName == "" {
+		tzName = "UTC"
+	}
+	loc, err := time.LoadLocation(tzName)
+	if err != nil {
+		log.Printf("EnqueueTask: invalid timezone %q, using UTC: %v", tzName, err)
+		tc.Timezone = "UTC"
+		return time.UTC
+	}
+	tc.Timezone = tzName
+	return loc
 }
 
 // Location returns the configured timezone location for scheduling.
@@ -205,16 +244,23 @@ func (s *Storage) EnqueueTask(ctx context.Context, tc models.TaskCreate) (uuid.U
 		return uuid.Nil, "", time.Time{}, fmt.Errorf("prompt is required")
 	}
 
+	// Resolve + persist the per-task timezone (defaulting to the org default)
+	// BEFORE evaluating the cron, so the first fire is computed in the task's own
+	// zone AND models.NewTask persists that name — otherwise it defaulted to "UTC"
+	// and every occurrence after the first fired in UTC regardless of
+	// FLEET_DEFAULT_TIMEZONE (the recurrence path reads task.Timezone).
+	loc := s.resolveTaskTimezone(&tc)
+
 	if tc.Recurrence = strings.TrimSpace(tc.Recurrence); tc.Recurrence != "" {
 		schedule, err := cron.ParseStandard(tc.Recurrence)
 		if err != nil {
 			return uuid.Nil, "", time.Time{}, fmt.Errorf("recurrence must be a standard 5-field cron expression")
 		}
 		// With no explicit one-time run, wait for the next cron trigger (evaluated
-		// in the storage timezone) rather than running immediately. Always stored
+		// in the task's timezone) rather than running immediately. Always stored
 		// as an absolute UTC instant, matching the handler's create path.
 		if tc.ScheduledFor == nil {
-			next := schedule.Next(time.Now().In(s.location)).UTC()
+			next := schedule.Next(time.Now().In(loc)).UTC()
 			tc.ScheduledFor = &next
 		}
 	}
@@ -329,9 +375,33 @@ func (s *Storage) PromoteStarvedTasks(ctx context.Context, windowMinutes int) (i
 }
 
 // ExpirePausedTasks fails tasks stuck in paused_awaiting_input past the window
-// (#510). Returns the count expired.
+// (#510) and preserves the recurrence chain: for each expired occurrence of a
+// recurring task it spawns the next occurrence, so an unattended ask-pause on a
+// daily task no longer silently kills the whole schedule. Returns the count
+// expired.
+//
+// The recurrence spawn is post-commit + best-effort, matching
+// UpdateTaskStatusAtomicWithContext (the normal terminal-transition path also
+// spawns scheduleNextRecurrence after its tx commits). scheduleNextRecurrence
+// inserts a fresh pending row via AddTask and needs no lease — a paused task
+// holds none — so spawning from the sweep is safe.
+//
+// Known gap (unchanged by this fix): the expiry sweep does not fire the
+// task-completion notification the runner sends on a normal terminal failure —
+// the notifier lives in the runner, not the scheduler. The recurrence chain
+// (the correctness invariant) is what this restores; wiring expiry notifications
+// is a separate change.
 func (s *Storage) ExpirePausedTasks(ctx context.Context, windowMinutes int) (int64, error) {
-	return s.db.ExpirePausedTasks(ctx, windowMinutes)
+	expired, err := s.db.ExpirePausedTasks(ctx, windowMinutes)
+	if err != nil {
+		return 0, err
+	}
+	for _, task := range expired {
+		if strings.TrimSpace(task.Recurrence) != "" {
+			s.scheduleNextRecurrence(ctx, task)
+		}
+	}
+	return int64(len(expired)), nil
 }
 
 // PendingQueueStats returns the per-effective-priority rollup of the pending

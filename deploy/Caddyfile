@@ -8,7 +8,7 @@
 #                                   └─▶ orchestrator        127.0.0.1:8000
 #
 # The Next app is the ONLY public entrypoint. The two Go backends bind loopback
-# (cfg.Addr defaults to 127.0.0.1:8080; orchestrator to :8000) and are reached
+# (cfg.Addr defaults to 127.0.0.1:8080; orchestrator to 127.0.0.1:8000) and are reached
 # only by Next's own /api/* route handlers — including the SSE streams, which
 # Next proxies through /api/.../stream. So Caddy fronts Next; it does NOT expose
 # :8080 / :8000 to the internet.
@@ -21,6 +21,17 @@
 
 fleet.example.com {
 	encode zstd gzip
+
+	# Security headers for the Next-served pages, mirroring exactly what the
+	# Go backends already set on their own responses (cmd/fleet/tls.go
+	# securityHeadersMiddleware) so the whole origin carries one policy.
+	# `header` replaces existing values, so proxied API responses that already
+	# carry these are not duplicated.
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
 
 	reverse_proxy 127.0.0.1:3000 {
 		# SSE: stream tokens straight through, no response buffering, and a

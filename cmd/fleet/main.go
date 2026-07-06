@@ -328,6 +328,10 @@ func run() error {
 		"skills":         skillsDir,
 	})
 
+	// Confine the host-side file tools (view_file/write_file/edit_file) to the
+	// workspace root the sandbox bind-mounts (see confineFileToolsToWorkspace).
+	confineFileToolsToWorkspace(cfg.WorkspaceRoot)
+
 	// Per-persona tool allowlists (Gate-4, #294): translate the bundle manifest's
 	// personas: block into the agentcore form once and hand the SAME map to both
 	// drivers. The generic bundle declares no personas: block, so this is empty
@@ -418,6 +422,10 @@ func run() error {
 	}
 	defer schedStorage.Close()
 	schedStorage.SetTimezone(timezone())
+	// The org default-task timezone (distinct from the server clock above) so
+	// EnqueueTask — the create_task tool, chat schedule_task approval, and
+	// promote-to-task — localizes recurrence like the HTTP create path does.
+	schedStorage.SetDefaultTaskTimezone(defaultTaskTimezone())
 	log.Printf("sched DB connected + migrated")
 
 	// Bootstrap operators (#458): provision/promote the configured emails as
@@ -593,6 +601,7 @@ func run() error {
 		SandboxCPUsMax:     cfg.SandboxCPUsMax,
 		SandboxPidsMax:     cfg.SandboxPidsMax,
 	}
+	warnIfNoAdminKey(hcfg.AdminAPIKey)
 	h := handlers.New(hcfg, schedStorage, keyMgr)
 	// Wire the orchestrator's read-only Optional-MCP catalog + credential-account
 	// seats from the SAME in-process source the chat side uses: the Manager's
@@ -773,7 +782,10 @@ func run() error {
 	registerRuntimeMetrics(chatSrv.ActiveTurns, pool.ActiveTasks, mgr.SandboxPool())
 
 	// ── boot listeners ──
-	chatAddr := addrOr(cfg.Addr, ":8080")
+	// Last-resort fallback only — config.Load already defaults Addr to
+	// 127.0.0.1:8080; keep the fallback loopback too so an explicitly empty
+	// FLEET_SERVER_ADDR can never widen the bind to every interface.
+	chatAddr := addrOr(cfg.Addr, "127.0.0.1:8080")
 	orchAddr := orchestratorAddr()
 
 	// Liveness + readiness probes (#215) on BOTH ports, sharing one check set
@@ -1664,11 +1676,49 @@ func addrOr(addr, def string) string {
 	return addr
 }
 
+// orchestratorAddr resolves the orchestrator listener address. The default is
+// loopback-only, matching the chat listener (config.Load defaults Addr to
+// 127.0.0.1:8080) and the deployment contract: the deploy docs (Caddyfile,
+// fleet.service, DEPLOYMENT.md, grafana/README.md) all promise that the Go
+// backends bind loopback and are only reached through the on-box web tier /
+// reverse proxy. A bare ":8000" would bind every interface and expose the
+// orchestrator admin surface directly on hosts without a firewall. Multi-host
+// topologies opt in explicitly via FLEET_ORCHESTRATOR_ADDR.
+// warnIfNoAdminKey logs a startup warning when ADMIN_API_KEY is unset. Since
+// verifyAdminKey now fails closed on an empty configured key (an empty key used
+// to match an empty header and silently authenticate admin routes), the admin
+// surface (/keys, /users, /tasks/cleanup, config/MCP reload) is unreachable
+// without it — warn so an operator on a bare deploy isn't left guessing why
+// admin calls 403. bootstrap.sh always sets it. Extracted from run() to keep it
+// within the cyclomatic budget.
+func warnIfNoAdminKey(adminKey string) {
+	if strings.TrimSpace(adminKey) == "" {
+		log.Printf("WARNING: ADMIN_API_KEY is not set — the orchestrator admin API (/keys, /users, /tasks/cleanup, config/MCP reload) will reject all requests. Set it to enable admin access.")
+	}
+}
+
+// confineFileToolsToWorkspace registers the workspace root as the base for the
+// host-side file tools, resolved the SAME way the agent manager does
+// (cfg.WorkspaceRoot, else ./workspace). Without this their AllowedBaseDirs
+// falls back to the process cwd, which under systemd is the whole StateDirectory
+// (/var/lib/fleet) and would let an absolute path reach DataDir attachments/
+// uploads + api_keys.json that the sandbox never mounts. Extracted from run() to
+// keep it within the cyclomatic budget.
+func confineFileToolsToWorkspace(workspaceRoot string) {
+	root := strings.TrimSpace(workspaceRoot)
+	if root == "" {
+		root = "workspace"
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		tools.SetWorkspaceRoot(abs)
+	}
+}
+
 func orchestratorAddr() string {
 	if v := strings.TrimSpace(os.Getenv("FLEET_ORCHESTRATOR_ADDR")); v != "" {
 		return v
 	}
-	return ":8000"
+	return "127.0.0.1:8000"
 }
 
 // ── graceful shutdown helpers (#278) ──
