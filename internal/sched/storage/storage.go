@@ -375,9 +375,33 @@ func (s *Storage) PromoteStarvedTasks(ctx context.Context, windowMinutes int) (i
 }
 
 // ExpirePausedTasks fails tasks stuck in paused_awaiting_input past the window
-// (#510). Returns the count expired.
+// (#510) and preserves the recurrence chain: for each expired occurrence of a
+// recurring task it spawns the next occurrence, so an unattended ask-pause on a
+// daily task no longer silently kills the whole schedule. Returns the count
+// expired.
+//
+// The recurrence spawn is post-commit + best-effort, matching
+// UpdateTaskStatusAtomicWithContext (the normal terminal-transition path also
+// spawns scheduleNextRecurrence after its tx commits). scheduleNextRecurrence
+// inserts a fresh pending row via AddTask and needs no lease — a paused task
+// holds none — so spawning from the sweep is safe.
+//
+// Known gap (unchanged by this fix): the expiry sweep does not fire the
+// task-completion notification the runner sends on a normal terminal failure —
+// the notifier lives in the runner, not the scheduler. The recurrence chain
+// (the correctness invariant) is what this restores; wiring expiry notifications
+// is a separate change.
 func (s *Storage) ExpirePausedTasks(ctx context.Context, windowMinutes int) (int64, error) {
-	return s.db.ExpirePausedTasks(ctx, windowMinutes)
+	expired, err := s.db.ExpirePausedTasks(ctx, windowMinutes)
+	if err != nil {
+		return 0, err
+	}
+	for _, task := range expired {
+		if strings.TrimSpace(task.Recurrence) != "" {
+			s.scheduleNextRecurrence(ctx, task)
+		}
+	}
+	return int64(len(expired)), nil
 }
 
 // PendingQueueStats returns the per-effective-priority rollup of the pending

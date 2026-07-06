@@ -64,6 +64,25 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Paused-task expiry no longer kills a recurring task's schedule. The
+  `FLEET_PAUSED_TASK_EXPIRY_MINUTES` sweep failed an unattended ask-paused task
+  with a bare bulk UPDATE that bypassed the terminal-transition path — so an
+  expired occurrence of a recurring task went `error` AND permanently ended the
+  schedule (no next occurrence). The sweep now uses `UPDATE ... RETURNING` and
+  spawns the next occurrence for each expired recurring row (race-free against a
+  concurrent resume, which is status-guarded). Opt-in feature, default off. The
+  sweep still does not fire the runner's completion notification (the notifier
+  lives in the runner) — documented as a known gap.
+
+- The anti-starvation sweep (`FLEET_STARVATION_*`) measured wait from
+  `created_at`, but a recurring occurrence's row is created at the previous
+  occurrence's completion — so its `created_at` is ~one period old the moment it
+  becomes pending, and enabling the window floor-promoted every recurring/retried
+  task instantly, inverting the priority queue. It now keys on
+  `GREATEST(created_at, scheduled_for)` (the eligibility time); a genuinely
+  starving task is still promoted, a freshly-eligible one is not. Opt-in feature,
+  default off; no migration.
+
 - Recurring tasks created by an agent or through the chat approval card no
   longer drift to UTC. `EnqueueTask` (the `create_task` tool, the chat
   `schedule_task` approval, promote-to-task) evaluated the first cron fire in
