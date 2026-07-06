@@ -12,16 +12,22 @@
 # the same regression chat-web.service covered in the chat repo). Run BOTH units.
 #
 # Install (after `make build` + `cd web && npm ci && npm run build`):
+#   useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin \
+#     --no-create-home fleet-web              # the unit's unprivileged user (see below)
 #   install -d /opt/fleet/web
 #   cp -a web/. /opt/fleet/web/          # the built Next app (incl. .next/ + node_modules or run npm ci on the box)
+#   chown -R fleet-web:fleet-web /opt/fleet/web/.next   # the only path next writes at runtime
 #   install -D -m 0644 deploy/fleet-web.service /etc/systemd/system/fleet-web.service
 #   install -D -m 0600 /dev/null /etc/fleet/fleet-web.env   # then fill it in (see below)
 #   systemctl daemon-reload && systemctl enable --now fleet-web
 #
-# Minimum keys in /etc/fleet/fleet-web.env (0600):
+# Minimum keys in /etc/fleet/fleet-web.env (0600) — scripts/bootstrap.sh's
+# deploy_web_tier writes exactly this set:
 #   CHAT_SERVER_URL=http://127.0.0.1:8080         # the fleet chat backend (loopback)
 #   ORCHESTRATOR_SERVER_URL=http://127.0.0.1:8000 # the fleet orchestrator backend (loopback)
 #   CHAT_SERVER_TOKEN=...                          # MUST match the binary's FLEET_SERVER_TOKEN
+#   ORCHESTRATOR_SERVER_TOKEN=...                  # orchestrator API key (bootstrap mirrors ADMIN_API_KEY)
+#   APP_SESSION_SECRET=...                         # signs the web session cookie (rotating logs everyone out)
 #   PORT=3000                                      # the port `next start` binds (Caddy proxies to it)
 #   NODE_ENV=production
 #   # plus whatever auth env the web app needs (e.g. the elcano_auth public key).
@@ -46,8 +52,22 @@ RestartSec=5s
 KillSignal=SIGTERM
 TimeoutStopSec=30s
 
+# ── Service identity ──
+# This is the ONLY public-facing process, so it runs as a dedicated
+# unprivileged fixed system user — never root. Unlike fleet.service it drives
+# no rootless Podman, so it needs no subuid ranges; a plain nologin system
+# user is enough (bootstrap creates it; the header shows the manual useradd).
+# StateDirectory provides a writable HOME (/var/lib/fleet-web) for npm's
+# cache/config, which ProtectHome would otherwise mask.
+User=fleet-web
+Group=fleet-web
+StateDirectory=fleet-web
+StateDirectoryMode=0700
+Environment=HOME=/var/lib/fleet-web
+
 # Hardening — the web tier only needs to bind its port and reach the loopback
-# backends. It writes nothing outside its own dir (Next caches under .next/).
+# backends. It writes nothing outside .next/ (Next's runtime cache; chown it
+# to fleet-web when deploying, as bootstrap/update do).
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

@@ -266,6 +266,22 @@ deploy_web_tier() {
 
   install -d "$web_dst" && cp -a "$web_src/." "$web_dst/" && ok "deployed web app → ${web_dst}"
 
+  # fleet-web.service runs as the dedicated unprivileged fleet-web user (it is
+  # the public-facing process). Create the user idempotently and hand it the
+  # one path next writes at runtime (.next/ — the runtime cache); everything
+  # else stays root-owned and read-only to the unit.
+  if ! id -u fleet-web >/dev/null 2>&1; then
+    if command -v useradd >/dev/null 2>&1; then
+      useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin \
+        --no-create-home fleet-web && ok "created system user fleet-web"
+    else
+      warn "useradd not found — create the fleet-web user manually (see deploy/fleet-web.service)."
+    fi
+  fi
+  if id -u fleet-web >/dev/null 2>&1 && [[ -d "$web_dst/.next" ]]; then
+    chown -R fleet-web:fleet-web "$web_dst/.next" || warn "chown ${web_dst}/.next to fleet-web failed"
+  fi
+
   # Write the 0600 web env. Chat/orchestrator tokens mirror the backend env;
   # APP_SESSION_SECRET is generate-if-absent (rotating it logs everyone out).
   local chat_token admin_token app_secret
@@ -310,7 +326,10 @@ deploy_web_tier() {
   install -d /etc/caddy
   {
     [[ -n "${FLEET_ACME_EMAIL:-}" ]] && printf '{\n\temail %s\n}\n\n' "$FLEET_ACME_EMAIL"
-    printf '%s {\n\tencode zstd gzip\n\treverse_proxy 127.0.0.1:3000 {\n\t\tflush_interval -1\n\t\ttransport http {\n\t\t\tread_timeout 30m\n\t\t}\n\t}\n}\n' "$WEB_DOMAIN"
+    # Security headers mirror the Go backends' securityHeadersMiddleware
+    # (cmd/fleet/tls.go) so the whole origin carries one policy; keep this
+    # block in sync with deploy/Caddyfile.
+    printf '%s {\n\tencode zstd gzip\n\theader {\n\t\tStrict-Transport-Security "max-age=63072000; includeSubDomains"\n\t\tX-Content-Type-Options "nosniff"\n\t\tX-Frame-Options "DENY"\n\t}\n\treverse_proxy 127.0.0.1:3000 {\n\t\tflush_interval -1\n\t\ttransport http {\n\t\t\tread_timeout 30m\n\t\t}\n\t}\n}\n' "$WEB_DOMAIN"
   } > /etc/caddy/Caddyfile
   if command -v firewall-cmd >/dev/null 2>&1; then
     firewall-cmd --add-service=http --add-service=https --permanent >/dev/null 2>&1 || true
