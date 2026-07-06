@@ -6,7 +6,7 @@
 fleet runs as **one** `fleet` process on a **single host** (one well-sized
 server or VM). The browser only ever talks to the Next.js web app; the web app
 proxies, server-side over loopback, to the two Go backends the single process
-boots (chat on `127.0.0.1:8080`, orchestrator on `:8000`). Caddy fronts the web
+boots (chat on `127.0.0.1:8080`, orchestrator on `127.0.0.1:8000`). Caddy fronts the web
 app with TLS; the backends stay loopback-only.
 
 > **Single-host by design.** Scheduled-task crash recovery uses single-owner

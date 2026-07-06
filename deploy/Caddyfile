@@ -8,7 +8,7 @@
 #                                   └─▶ orchestrator        127.0.0.1:8000
 #
 # The Next app is the ONLY public entrypoint. The two Go backends bind loopback
-# (cfg.Addr defaults to 127.0.0.1:8080; orchestrator to :8000) and are reached
+# (cfg.Addr defaults to 127.0.0.1:8080; orchestrator to 127.0.0.1:8000) and are reached
 # only by Next's own /api/* route handlers — including the SSE streams, which
 # Next proxies through /api/.../stream. So Caddy fronts Next; it does NOT expose
 # :8080 / :8000 to the internet.
