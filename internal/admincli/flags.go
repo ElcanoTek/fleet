@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 // readStdinValue reads a secret/value from stdin (used when a flag is "-"),
@@ -16,6 +18,54 @@ func readStdinValue() (string, error) {
 		return "", fmt.Errorf("read stdin: %w", err)
 	}
 	return strings.TrimRight(string(b), "\r\n"), nil
+}
+
+// promptHidden reads one secret from an interactive terminal with echo off,
+// printing the prompt (and the trailing newline the disabled echo swallows) to
+// stderr so it never pollutes stdout/pipes.
+func promptHidden(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", strings.TrimSpace(prompt), err)
+	}
+	return strings.TrimRight(string(b), "\r\n"), nil
+}
+
+// resolveSecret resolves a secret from, in order: an explicit --flag value of
+// "-" (read from stdin, keeping it off argv), a non-empty --flag value (honored
+// for scripts, though argv exposure is discouraged), or — when the flag is empty
+// — an interactive hidden prompt on a TTY (falling back to stdin when piped).
+// When confirm is set and we prompted interactively, the value is entered twice
+// and must match, catching typos on create paths. isTTY is injected so tests can
+// exercise the piped path deterministically.
+func resolveSecret(flagVal, prompt string, confirm bool) (string, error) {
+	switch {
+	case flagVal == "-":
+		return readStdinValue()
+	case flagVal != "":
+		return flagVal, nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		// No flag and not a TTY (e.g. piped without "-") — read stdin anyway so
+		// `printf '%s' pw | fleet admin add x` still works.
+		return readStdinValue()
+	}
+	v, err := promptHidden(prompt)
+	if err != nil {
+		return "", err
+	}
+	if confirm {
+		again, err := promptHidden("confirm " + prompt)
+		if err != nil {
+			return "", err
+		}
+		if again != v {
+			return "", fmt.Errorf("entries did not match")
+		}
+	}
+	return v, nil
 }
 
 // chatDSNFromFlags resolves the chat DB DSN: --database-url, else
@@ -64,4 +114,36 @@ func envFilePath(flag string) string {
 func errf(code int, format string, a ...any) int {
 	fmt.Fprintf(os.Stderr, "error: "+format+"\n", a...)
 	return code
+}
+
+// splitPositionalValueFlags lifts the first true positional out of argv for
+// flag sets where EVERY flag takes a value. Unlike splitPositional (which
+// treats any non-dash token as the positional), a dash token without an
+// embedded "=" is assumed to consume the NEXT token as its value — so
+// `--from key.txt` keeps key.txt bound to --from instead of misreading it as
+// the positional. Only safe for flag sets with no boolean flags.
+func splitPositionalValueFlags(argv []string) (first string, flagArgs []string) {
+	i := 0
+	for i < len(argv) {
+		a := argv[i]
+		if len(a) > 0 && a[0] == '-' {
+			flagArgs = append(flagArgs, a)
+			// "--flag=value" is self-contained; bare "--flag" consumes the next
+			// token as its value.
+			if !strings.Contains(a, "=") && i+1 < len(argv) {
+				flagArgs = append(flagArgs, argv[i+1])
+				i += 2
+				continue
+			}
+			i++
+			continue
+		}
+		if first == "" {
+			first = a
+		} else {
+			flagArgs = append(flagArgs, a)
+		}
+		i++
+	}
+	return first, flagArgs
 }

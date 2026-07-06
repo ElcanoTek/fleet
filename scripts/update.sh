@@ -37,6 +37,9 @@
 #                          ref (fail-closed) when a signing key is configured.
 #   --no-pull              skip git fetch/ff; just rebuild the current checkout(s)
 #   --branch <name>        override the branch fast-forwarded in SRC_DIR (env FLEET_UPDATE_BRANCH)
+#   --adopt-units          adopt a shipped deploy/*.service that differs
+#                          functionally from the installed unit, WITHOUT the
+#                          interactive prompt (env FLEET_UPDATE_ADOPT_UNITS=1)
 #   --yes / -y             skip the confirm prompt (env FLEET_UPDATE_YES=1)
 #   --dry-run              print the plan; build/restart nothing
 #   -h | --help            this help
@@ -89,6 +92,12 @@ BRANCH_OVERRIDE="${FLEET_UPDATE_BRANCH:-}"
 # verify-tag/verify-commit the ref (fail-closed) when a signing key is set up.
 CLIENT_CONFIG_PIN="${FLEET_CLIENT_CONFIG_PIN:-}"
 CLIENT_CONFIG_VERIFY="${FLEET_CLIENT_CONFIG_VERIFY:-}"
+# Adopt a shipped deploy/*.service that drifted from the installed unit WITHOUT
+# prompting. Interactive runs ask instead (see the drift check below); this env/
+# flag is the unattended opt-in for automation. `--yes` alone never adopts units
+# (it only skips the commit-range confirm) so an unattended update can't silently
+# clobber an operator's hand-edited unit.
+ADOPT_UNITS="${FLEET_UPDATE_ADOPT_UNITS:-0}"
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -108,7 +117,8 @@ while [[ $# -gt 0 ]]; do
     --no-pull)        NO_PULL=1 ;;
     --yes|-y)         ASSUME_YES=1 ;;
     --dry-run)        DRY_RUN=1 ;;
-    -h|--help)        sed -n '2,40p' "$0"; exit 0 ;;
+    --adopt-units)    ADOPT_UNITS=1 ;;
+    -h|--help)        sed -n '2,45p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -143,6 +153,16 @@ warn() { printf '%s! %s%s\n' "$c_yellow" "$*" "$c_reset" >&2; }
 info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_reset" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
+# Print a unit diff indented under the warning, capped so a pathological
+# divergence can't flood the terminal (functional bodies are tiny in practice).
+show_unit_diff() {
+  printf '%s\n' "$1" | head -n 80 | sed 's/^/    /'
+  [[ "$(printf '%s\n' "$1" | wc -l)" -gt 80 ]] && info "    … (diff truncated; run the review command below for the full diff)"
+  say
+}
+# Emit the FUNCTIONAL body of a unit file — comments and blank lines stripped —
+# so cosmetic header churn between releases is not mistaken for a real change.
+unit_functional_body() { grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null || true; }
 
 [[ -d "$SRC_DIR/.git" ]] || die "no fleet source checkout at $SRC_DIR (run scripts/bootstrap.sh first)"
 
@@ -414,28 +434,94 @@ else
   fi
 fi
 
-# ── unit-file drift check (warn-only) ───────────────────────────────────────
+# ── unit-file drift check + optional adoption ───────────────────────────────
 # bootstrap installs deploy/*.service only when absent and this script never
 # rewrites them, so a unit fix shipped in a new release does NOT reach an
-# already-provisioned box on its own. Overwriting silently would clobber
-# operator hand-edits, so surface the drift and leave the decision to the
-# operator (drop-ins under /etc/systemd/system/<unit>.d/ survive a reinstall).
+# already-provisioned box on its own. We compare FUNCTIONAL lines only (comments
+# and blank lines stripped) so a reworded header never nags. On real drift an
+# interactive run shows the diff and offers to adopt the shipped unit in ONE step
+# (prerequisites + install + daemon-reload here; the step-5 restart applies it);
+# a non-interactive run falls back to the actionable manual hint unless
+# --adopt-units is set. Overwriting is always gated on explicit consent (a y/N
+# answer, or --adopt-units) so an update can never silently clobber an operator
+# hand-edit. Drop-ins under /etc/systemd/system/<unit>.d/ survive either path.
+NEED_DAEMON_RELOAD=0
 if command -v systemctl >/dev/null 2>&1; then
   for unit in fleet.service fleet-web.service; do
     installed="/etc/systemd/system/$unit"
     shipped="$SRC_DIR/deploy/$unit"
-    if [[ -f "$installed" && -f "$shipped" ]] && ! cmp -s "$shipped" "$installed"; then
-      warn "$unit differs from the shipped deploy/$unit — a unit fix in this release may not be live."
+    [[ -f "$installed" && -f "$shipped" ]] || continue
+    # Byte-identical → nothing to do.
+    cmp -s "$shipped" "$installed" && continue
+    # Empty functional diff → only comments/whitespace changed; note it and move
+    # on rather than raising a scary "a unit fix may not be live" on doc churn.
+    funcdiff="$(diff -u --label "$installed (installed)" --label "$shipped (shipped)" \
+      <(unit_functional_body "$installed") <(unit_functional_body "$shipped") 2>/dev/null || true)"
+    if [[ -z "$funcdiff" ]]; then
+      info "$unit differs from deploy/$unit only in comments/whitespace — no functional change, leaving as-is."
+      continue
+    fi
+
+    warn "$unit differs functionally from the shipped deploy/$unit — a unit fix in this release may not be live."
+
+    # The shipped fleet-web.service runs as a dedicated fleet-web user (#654);
+    # that user is created by `bootstrap --enable-web`, NOT by an update. On a
+    # box provisioned before #654 the user may not exist yet, so adopting the
+    # unit and restarting would fail with status=217/USER. Detect that so the
+    # adopt path (and the manual hint) create it first.
+    web_needs_user=0
+    web_dst=""
+    if [[ "$unit" == "fleet-web.service" ]] && grep -q '^User=fleet-web' "$shipped" 2>/dev/null && ! id -u fleet-web >/dev/null 2>&1; then
+      web_needs_user=1
+      web_dst="$(systemctl show -p WorkingDirectory --value fleet-web.service 2>/dev/null)"
+      web_dst="${web_dst:-/opt/fleet/web}"
+    fi
+
+    # Decide whether to adopt: --adopt-units adopts unattended; otherwise an
+    # interactive TTY (and not --yes, which means "don't ask me") gets a y/N
+    # prompt. Everything else falls through to the warn-only manual hint.
+    do_adopt=0
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would offer to adopt $shipped → $installed"
+      [[ "$web_needs_user" == "1" ]] && info "[dry-run] would first create the fleet-web user + chown ${web_dst}/.next"
+      show_unit_diff "$funcdiff"
+    elif [[ "$ADOPT_UNITS" == "1" ]]; then
+      do_adopt=1
+    elif [[ -t 0 && "$ASSUME_YES" != "1" ]]; then
+      show_unit_diff "$funcdiff"
+      _extra=""; [[ "$web_needs_user" == "1" ]] && _extra=" + create the fleet-web user"
+      printf '%s?%s Adopt the shipped %s%s%s? %s(install%s, daemon-reload, restart in step 5) (y/N)%s ' \
+        "$c_cyan" "$c_reset" "$c_bold" "$unit" "$c_reset" "$c_dim" "$_extra" "$c_reset"
+      read -r answer
+      case "${answer,,}" in y|yes) do_adopt=1 ;; esac
+    fi
+
+    if [[ "$do_adopt" == "1" ]]; then
+      # Prerequisite first so the step-5 restart of an adopted fleet-web.service
+      # doesn't die 217/USER on a pre-#654 box.
+      if [[ "$web_needs_user" == "1" ]]; then
+        if useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin --no-create-home fleet-web 2>/dev/null; then
+          ok "created the fleet-web system user"
+        else
+          warn "could not create the fleet-web user (need root?) — the fleet-web restart may fail; create it manually"
+        fi
+        if [[ -d "$web_dst/.next" ]] && chown -R fleet-web: "$web_dst/.next" 2>/dev/null; then
+          ok "chowned ${web_dst}/.next to fleet-web"
+        fi
+      fi
+      if install -m 0644 "$shipped" "$installed" 2>/dev/null; then
+        ok "adopted $shipped → $installed"
+        NEED_DAEMON_RELOAD=1
+      else
+        die "could not install $shipped → $installed (need root? re-run with sudo, or adopt manually) — live unit left in place"
+      fi
+    else
+      # Declined, non-interactive, or --yes: keep the actionable manual hint so
+      # nothing is lost and the operator can adopt out of band.
       warn "  review: diff $installed $shipped"
       warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload && systemctl restart ${unit%.service}"
-      # The shipped fleet-web.service runs as a dedicated fleet-web user (#654);
-      # that user is created by `bootstrap --enable-web`, NOT by an update. On a
-      # box provisioned before #654 the user may not exist yet, so adopting the
-      # unit and restarting would fail with status=217/USER. Surface the
-      # one-time prerequisite alongside the adopt command.
-      if [[ "$unit" == "fleet-web.service" ]] && grep -q '^User=fleet-web' "$shipped" 2>/dev/null && ! id -u fleet-web >/dev/null 2>&1; then
-        web_dst="$(systemctl show -p WorkingDirectory --value fleet-web.service 2>/dev/null)"
-        web_dst="${web_dst:-/opt/fleet/web}"
+      warn "  or re-run: fleet update --adopt-units   (adopts every drifted unit)"
+      if [[ "$web_needs_user" == "1" ]]; then
         warn "  first (fleet-web runs as a non-root user now): useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin --no-create-home fleet-web && chown -R fleet-web:fleet-web ${web_dst}/.next"
       fi
     fi
@@ -445,6 +531,17 @@ fi
 # ── 5. restart the service (services self-migrate on start) ────────────────
 step "5/5  Restarting the ${SERVICE_NAME} service"
 info "application migrations run inside each service on start — update.sh runs none."
+# Reload systemd once if we adopted any unit above, so the restarts below run the
+# freshly-installed unit rather than the cached old definition.
+if [[ "$NEED_DAEMON_RELOAD" == "1" ]] && command -v systemctl >/dev/null 2>&1; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would run: systemctl daemon-reload (adopted unit file(s))"
+  elif systemctl daemon-reload 2>/dev/null; then
+    ok "systemctl daemon-reload — adopted unit file(s) now live"
+  else
+    warn "systemctl daemon-reload failed (need root?) — run it before the restart, or the old unit stays cached"
+  fi
+fi
 if ! command -v systemctl >/dev/null 2>&1; then
   warn "systemctl not found — restart ${SERVICE_NAME} manually (no systemd on this box)."
 elif [[ "$DRY_RUN" == "1" ]]; then

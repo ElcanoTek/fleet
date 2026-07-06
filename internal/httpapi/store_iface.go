@@ -161,6 +161,12 @@ type chatStore interface {
 	// provisioned account, and PATCH a single account's role/team.
 	ListUsers(ctx context.Context) ([]store.User, error)
 	SetUserRoleTeam(ctx context.Context, email string, role, teamID *string) (*store.User, error)
+	// CreateUser/DeleteUser/UpdatePassword complete the admin Users tab CRUD so
+	// user management no longer requires CLI access to the box (`fleet admin
+	// add` / `fleet chat user ...` stay the scriptable equivalents).
+	CreateUser(ctx context.Context, email, plainPassword string) (*store.User, error)
+	DeleteUser(ctx context.Context, email string) error
+	UpdatePassword(ctx context.Context, email, plainPassword string) error
 	CountUsers(ctx context.Context) (int, error)
 	VerifyUser(ctx context.Context, email, plainPassword string) error
 	// Team-scoped, opt-in conversation sharing (#237). ListTeamConversations
