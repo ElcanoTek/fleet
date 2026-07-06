@@ -97,14 +97,17 @@ const TOOL_BTN_ACTIVE =
 const COMPOSER_POP =
   "fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 grid gap-[0.1rem] rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-0 sm:w-[15.5rem]";
 
-// The design's .pop-row / .pop-title / .pop-desc / .pop-sec type ramp.
-const POP_ROW =
-  "flex w-full items-center justify-between gap-2 rounded-[0.5rem] px-[0.6rem] py-[0.45rem] text-left text-[0.82rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
+// The design's .pop-row / .pop-title / .pop-desc type ramp. Padding lives on
+// the composed variants (never stacked as competing utilities): POP_ROW is
+// the design's row; the tools popover uses the tighter variant because its
+// rows carry two extra content lines.
+const POP_ROW_BASE =
+  "flex w-full items-center justify-between gap-2 rounded-[0.5rem] text-left text-[0.82rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
+const POP_ROW = `${POP_ROW_BASE} px-[0.6rem] py-[0.45rem]`;
+const POP_ROW_TIGHT = `${POP_ROW_BASE} items-start px-[0.6rem] py-[0.3rem]`;
 const POP_ROW_SELECTED = "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]";
 const POP_TITLE = "text-[0.82rem] font-medium text-[var(--color-text-primary)]";
 const POP_DESC = "text-[0.7rem] text-[var(--color-text-muted)]";
-const POP_SEC =
-  "px-[0.6rem] pb-[0.15rem] pt-[0.35rem] text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]";
 
 // The design's .mini-switch: the visual toggle knob inside a tools pop-row.
 // Purely decorative — the row <button> carries the aria-pressed state.
@@ -765,9 +768,11 @@ export function Composer({
                               const isFresh = isNewlyReleased(model.created);
                               let pill: ReactNode = null;
                               if (isTier) {
+                                // Same size/case as the tested/experimental
+                                // badges — green is the only differentiator.
                                 pill = (
-                                  <span className="shrink-0 rounded-[var(--radius-pill)] border border-[color-mix(in_srgb,var(--color-success)_40%,transparent)] px-[0.45rem] py-[0.14rem] text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-success)]">
-                                    Recommended
+                                  <span className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-success)_40%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-success)]">
+                                    recommended
                                   </span>
                                 );
                               } else if (tier === "tested") {
@@ -796,12 +801,7 @@ export function Composer({
                                     closeModelPicker(true);
                                   }}
                                 >
-                                  <span className="grid min-w-0 gap-[0.1rem]">
-                                    <span className={`${POP_TITLE} truncate`}>{model.name}</span>
-                                    {model.slug ? (
-                                      <span className={`${POP_DESC} truncate`}>{model.slug}</span>
-                                    ) : null}
-                                  </span>
+                                  <span className={`${POP_TITLE} min-w-0 truncate`}>{model.name}</span>
                                   {pill}
                                 </button>
                               );
@@ -947,11 +947,12 @@ export function Composer({
                       })()}
                       {mcpPickerOpen && !isStreaming ? (
                         <div className={COMPOSER_POP}>
-                          {/* One .pop-sec section: fleet's composer catalog
-                              only carries optional MCP servers (the design's
-                              "Built-in" section is mock content — always-on
-                              tools are not per-conversation toggles here). */}
-                          <div className={POP_SEC}>MCP servers</div>
+                          {/* No section heading for now: the catalog will
+                              grow into a mix of tool types, so a "MCP
+                              servers" label would over-promise structure
+                              (the design's "Built-in" section is mock
+                              content — always-on tools are not
+                              per-conversation toggles here). */}
                           <div className="grid max-h-80 gap-[0.1rem] overflow-y-auto">
                             {isLoadingMcpServers ? (
                               <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
@@ -962,7 +963,7 @@ export function Composer({
                                   type="button"
                                   aria-pressed={server.enabled}
                                   title={(server.tools ?? []).join(", ")}
-                                  className={`${POP_ROW} items-start`}
+                                  className={POP_ROW_TIGHT}
                                   onClick={() => {
                                     void toggleMcpServer(activeConversationId, server.name);
                                   }}
