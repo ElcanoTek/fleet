@@ -157,7 +157,7 @@ jobs:
 
       - name: Open PR with manifest update
         if: ${{ inputs.update_manifest != false }}
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "chore(sandbox): pin sandbox.image → ${{ github.sha }}"
           branch: bot/sandbox-image-${{ github.sha }}
