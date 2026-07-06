@@ -85,6 +85,16 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Orchestrator admin auth now fails closed when `ADMIN_API_KEY` is unset.
+  `verifyAdminKey` compared `sha256(header)` against `sha256(configured key)`
+  in constant time, but with the key unset `sha256("") == sha256("")`, so a
+  request sending no `X-API-Key` header authenticated as admin — silently
+  opening the entire admin surface (`/keys`, `/users`, `/tasks/cleanup`,
+  config/MCP reload, the principal `isAdmin` flag) on any deploy that left the
+  key unset. Now returns false on an empty configured key, closing all call
+  sites at once, and the process logs a startup warning when it's unset.
+  `bootstrap.sh` always sets the key, so bootstrapped deploys are unaffected.
+
 - The orchestrator listener now defaults to `127.0.0.1:8000` (loopback) instead
   of `:8000` (all interfaces), matching the chat listener's loopback default
   and what the deploy docs (Caddyfile, fleet.service, DEPLOYMENT.md) already
