@@ -453,6 +453,16 @@ func getClientIP(r *http.Request) string {
 // Auth middleware helpers
 
 func (h *Handlers) verifyAdminKey(r *http.Request) bool {
+	// Fail closed when no admin key is configured. Otherwise sha256("") on both
+	// sides would match a request that sends NO X-API-Key header, silently
+	// authenticating it as admin — every caller (both admin middlewares, the
+	// principal resolver, and the inline handlers in batch/estimate/upload)
+	// would then grant full access on a deployment that simply left
+	// ADMIN_API_KEY unset. Guarding here closes all of them at once; the
+	// duplicate guard in SchedRateLimitMiddleware is now redundant but harmless.
+	if h.config.AdminAPIKey == "" {
+		return false
+	}
 	apiKey := r.Header.Get("X-API-Key")
 	// Hash inputs to prevent length-deduction timing attacks before constant-time comparison
 	apiKeyHash := sha256.Sum256([]byte(apiKey))
