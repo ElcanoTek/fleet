@@ -328,6 +328,10 @@ func run() error {
 		"skills":         skillsDir,
 	})
 
+	// Confine the host-side file tools (view_file/write_file/edit_file) to the
+	// workspace root the sandbox bind-mounts (see confineFileToolsToWorkspace).
+	confineFileToolsToWorkspace(cfg.WorkspaceRoot)
+
 	// Per-persona tool allowlists (Gate-4, #294): translate the bundle manifest's
 	// personas: block into the agentcore form once and hand the SAME map to both
 	// drivers. The generic bundle declares no personas: block, so this is empty
@@ -1690,6 +1694,23 @@ func addrOr(addr, def string) string {
 func warnIfNoAdminKey(adminKey string) {
 	if strings.TrimSpace(adminKey) == "" {
 		log.Printf("WARNING: ADMIN_API_KEY is not set — the orchestrator admin API (/keys, /users, /tasks/cleanup, config/MCP reload) will reject all requests. Set it to enable admin access.")
+	}
+}
+
+// confineFileToolsToWorkspace registers the workspace root as the base for the
+// host-side file tools, resolved the SAME way the agent manager does
+// (cfg.WorkspaceRoot, else ./workspace). Without this their AllowedBaseDirs
+// falls back to the process cwd, which under systemd is the whole StateDirectory
+// (/var/lib/fleet) and would let an absolute path reach DataDir attachments/
+// uploads + api_keys.json that the sandbox never mounts. Extracted from run() to
+// keep it within the cyclomatic budget.
+func confineFileToolsToWorkspace(workspaceRoot string) {
+	root := strings.TrimSpace(workspaceRoot)
+	if root == "" {
+		root = "workspace"
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		tools.SetWorkspaceRoot(abs)
 	}
 }
 
