@@ -459,12 +459,23 @@ body {
   transition: color var(--transition-base), background var(--transition-base);
 }
 
-a,
-button,
-input,
-textarea,
-select {
-  font: inherit;
+/* Default interactive elements to the inherited font. In @layer base so it
+   sets the DEFAULT without beating Tailwind's font utilities: unlayered
+   author CSS outranks every @layer rule, and this rule used to sit unlayered
+   — which silently killed any text-size/weight utility placed directly on a
+   button, link, or form control (they all rendered at the body 13px/400
+   regardless of their classes). Tailwind's own preflight already ships the
+   same font:inherit default for form controls at this layer; `a` is kept for
+   explicitness. The touch-device 16px override below stays UNLAYERED on
+   purpose — it must beat the authored desktop sizes. */
+@layer base {
+  a,
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
 }
 
 /* iOS Safari zooms the page when a focused input has a computed font-size
