@@ -15,7 +15,12 @@
 # fresh copy when update.sh itself changed during the pull" trick: bash holds the
 # pre-update inode of this file open, so a fix to update.sh would otherwise only
 # take effect on the NEXT update. When the pull changes update.sh we re-exec the
-# new copy in rebuild-only mode.
+# new copy with FLEET_UPDATE_REEXEC=1 — the fleet checkout is already
+# fast-forwarded, so the re-exec skips only the SRC fetch + self-update detection
+# (so it can't loop) and then runs the rest normally, INCLUDING the client-config
+# bundle pull. (It is deliberately NOT re-exec'd in --no-pull mode, which would
+# also skip the bundle pull — that was a bug where a self-updating run left the
+# client bundle stale.)
 #
 # Flags / env (flags win over env):
 #   --src <dir>            fleet source checkout   (env SRC_DIR, default this repo)
@@ -61,6 +66,19 @@ SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 # actually runs the new code (a build alone leaves the live ExecStart untouched).
 INSTALL_DIR="${FLEET_INSTALL_DIR:-}"
 NO_PULL="${FLEET_UPDATE_NO_PULL:-0}"
+# REEXEC is an INTERNAL marker set only by the self-update re-exec below (never a
+# user flag). It means "the fleet checkout is ALREADY fast-forwarded to the
+# target — skip re-fetching it (and the self-update detection, so we don't loop),
+# but otherwise run a NORMAL update: the client-config bundle still pulls, the
+# sandbox-rebuild gate still compares Containerfile hashes." Distinct from
+# NO_PULL, which is the user's "rebuild the current checkouts, pull NOTHING".
+# Conflating the two used to make the re-exec skip the client-bundle pull too, so
+# an update that changed update.sh itself never advanced the bundle.
+REEXEC="${FLEET_UPDATE_REEXEC:-0}"
+# Skip the SRC (fleet checkout) fetch when the user asked for no-pull OR when we
+# were re-exec'd after already fast-forwarding it.
+SKIP_SRC_FETCH=0
+[[ "$NO_PULL" == "1" || "$REEXEC" == "1" ]] && SKIP_SRC_FETCH=1
 ASSUME_YES="${FLEET_UPDATE_YES:-0}"
 BRANCH_OVERRIDE="${FLEET_UPDATE_BRANCH:-}"
 # Client-config bundle pin: an explicit env/flag pin wins; otherwise the pin
@@ -128,7 +146,11 @@ run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 
 [[ -d "$SRC_DIR/.git" ]] || die "no fleet source checkout at $SRC_DIR (run scripts/bootstrap.sh first)"
 
-step "fleet update (src=${SRC_DIR}, client=${CLIENT_DIR}, service=${SERVICE_NAME}, no-pull=${NO_PULL}, dry-run=${DRY_RUN})"
+if [[ "$REEXEC" == "1" ]]; then
+  step "fleet update (src=${SRC_DIR}, client=${CLIENT_DIR}, service=${SERVICE_NAME}, post-self-update re-exec, dry-run=${DRY_RUN})"
+else
+  step "fleet update (src=${SRC_DIR}, client=${CLIENT_DIR}, service=${SERVICE_NAME}, no-pull=${NO_PULL}, dry-run=${DRY_RUN})"
+fi
 
 # ── 1. pull the fleet checkout ────────────────────────────────────────────
 step "1/5  Updating the fleet checkout"
@@ -137,13 +159,17 @@ git config --global --add safe.directory "$SRC_DIR" 2>/dev/null || true
 
 before_sha="$(git rev-parse HEAD)"
 
-if [[ "$NO_PULL" == "1" ]]; then
+if [[ "$SKIP_SRC_FETCH" == "1" ]]; then
   after_sha="$before_sha"
   # Restored across a self-re-exec so the final summary still shows the real
   # old → new range (see the re-exec block below).
   before_sha="${FLEET_UPDATE_BASE_SHA:-$before_sha}"
   target_branch="$(git rev-parse --abbrev-ref HEAD)"
-  ok "rebuild-only mode — skipping fetch, building ${after_sha:0:12}"
+  if [[ "$REEXEC" == "1" ]]; then
+    ok "post-self-update re-exec — fleet checkout already at ${after_sha:0:12}; continuing (client bundle still pulls)"
+  else
+    ok "rebuild-only mode — skipping fetch, building ${after_sha:0:12}"
+  fi
 else
   if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would: git fetch origin && fast-forward the current branch"
@@ -190,11 +216,14 @@ else
       # The shell running this script read the PRE-update file (bash holds the
       # old inode across the checkout above), so a fix to update.sh itself would
       # otherwise only take effect on the NEXT update. If this update changed
-      # update.sh, re-exec the fresh copy in rebuild-only mode (which skips the
-      # pull, so it won't loop).
+      # update.sh, re-exec the fresh copy with FLEET_UPDATE_REEXEC=1: the fleet
+      # checkout is already fast-forwarded, so the new copy skips ONLY the SRC
+      # fetch + self-update detection (no loop) and then runs the rest of the
+      # update normally — crucially still pulling the client-config bundle
+      # (NOT set to NO_PULL, which would skip it).
       if ! git diff --quiet "$before_sha" "$after_sha" -- scripts/update.sh; then
         warn "update.sh changed in this update — re-executing the new version"
-        exec env FLEET_UPDATE_NO_PULL=1 FLEET_UPDATE_YES=1 \
+        exec env FLEET_UPDATE_REEXEC=1 FLEET_UPDATE_YES=1 \
           FLEET_UPDATE_BASE_SHA="$before_sha" \
           FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" \
           FLEET_CLIENT_CONFIG_PIN="$CLIENT_CONFIG_PIN" \
@@ -398,7 +427,17 @@ if command -v systemctl >/dev/null 2>&1; then
     if [[ -f "$installed" && -f "$shipped" ]] && ! cmp -s "$shipped" "$installed"; then
       warn "$unit differs from the shipped deploy/$unit — a unit fix in this release may not be live."
       warn "  review: diff $installed $shipped"
-      warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload"
+      warn "  adopt:  install -m 0644 $shipped $installed && systemctl daemon-reload && systemctl restart ${unit%.service}"
+      # The shipped fleet-web.service runs as a dedicated fleet-web user (#654);
+      # that user is created by `bootstrap --enable-web`, NOT by an update. On a
+      # box provisioned before #654 the user may not exist yet, so adopting the
+      # unit and restarting would fail with status=217/USER. Surface the
+      # one-time prerequisite alongside the adopt command.
+      if [[ "$unit" == "fleet-web.service" ]] && grep -q '^User=fleet-web' "$shipped" 2>/dev/null && ! id -u fleet-web >/dev/null 2>&1; then
+        web_dst="$(systemctl show -p WorkingDirectory --value fleet-web.service 2>/dev/null)"
+        web_dst="${web_dst:-/opt/fleet/web}"
+        warn "  first (fleet-web runs as a non-root user now): useradd --system --home-dir /var/lib/fleet-web --shell /usr/sbin/nologin --no-create-home fleet-web && chown -R fleet-web:fleet-web ${web_dst}/.next"
+      fi
     fi
   done
 fi
