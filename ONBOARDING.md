@@ -38,7 +38,7 @@ them so a local run agrees with the gate.
 
 On a bare Fedora/RHEL box the bootstrap script installs the whole toolchain for
 you (`git curl jq golang nodejs python3 python3-pip gcc podman`); see the README
-"Quick start (one host)". For a **developer** checkout you can install the tools
+"Deploy" section. For a **developer** checkout you can install the tools
 above directly.
 
 ### Rootless Podman: subuid / subgid
