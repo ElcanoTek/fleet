@@ -85,13 +85,13 @@ jobs:
       IMAGE: ${{ inputs.image_name }}
     steps:
       - name: Checkout caller repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # The build script lives in fleet core; a client-config caller doesn't
       # have it. Checking it out into a subdir keeps ONE canonical builder
       # (same manifest parsing, same flags) instead of a drifting copy per repo.
       - name: Checkout fleet (build script)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ElcanoTek/fleet
           ref: ${{ inputs.fleet_ref || 'main' }}
