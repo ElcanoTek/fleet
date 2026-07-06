@@ -216,11 +216,17 @@ export function NavRail({
         onKeyDown={onAsideKeyDown}
         className={[
           // <sm: the off-canvas drawer (full rail content, translate toggled).
-          "fixed inset-y-0 left-0 z-30 flex h-[100dvh] w-[min(19rem,85vw)] flex-col gap-2 border-r border-[var(--color-border)] bg-[color-mix(in_srgb,var(--sidebar-surface)_96%,black)] py-[0.85rem] shadow-[var(--shadow-lg)] backdrop-blur-xl transition-transform duration-base max-sm:overflow-hidden",
+          // --sidebar-surface is a gradient, so it must land in
+          // background-image (the un-hinted arbitrary-value form emits
+          // background-color, which drops gradient values); --color-bg
+          // underneath keeps the drawer opaque over scrolled content.
+          "fixed inset-y-0 left-0 z-30 flex h-[100dvh] w-[min(19rem,85vw)] flex-col gap-2 border-r border-[var(--color-border)] bg-[var(--color-bg)] bg-[image:var(--sidebar-surface)] py-[0.85rem] shadow-[var(--shadow-lg)] backdrop-blur-xl transition-transform duration-base max-sm:overflow-hidden",
           sidebarOpen ? "translate-x-0" : "-translate-x-full",
           // ≥sm: in-flow sticky column (or the fixed narrow overlay), design
-          // widths: 300px expanded / 4.25rem collapsed strip.
-          "sm:z-30 sm:translate-x-0 sm:bg-[var(--sidebar-surface)] sm:backdrop-blur-0",
+          // widths: 300px expanded / 4.25rem collapsed strip. The design's
+          // rail surface is the semi-transparent --sidebar-surface gradient
+          // over the app-wide --gradient-bg on <body>.
+          "sm:z-30 sm:translate-x-0 sm:bg-transparent sm:backdrop-blur-0",
           overlay
             ? "sm:fixed sm:inset-y-0 sm:left-0 sm:z-[390] sm:shadow-[var(--shadow-md)]"
             : "sm:sticky sm:top-0 sm:h-screen sm:shadow-none",
@@ -247,7 +253,7 @@ export function NavRail({
               <span className="text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
                 {eyebrow}
               </span>
-              <span className="truncate font-heading text-[0.9375rem] font-semibold text-[var(--color-text-primary)]">
+              <span className="truncate font-heading text-[0.95rem] font-bold text-[var(--color-text-primary)]">
                 {brandName}
               </span>
             </span>

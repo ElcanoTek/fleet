@@ -2712,7 +2712,9 @@ export function ChatExperience() {
 
   return (
     <div
-      className={`h-[100dvh] overflow-hidden bg-[var(--gradient-bg-home-signature)] text-[var(--color-text-primary)] ${sidebarOpen ? "lg:overflow-hidden" : ""}`}
+      // No background of its own: the app-wide --gradient-bg painted on <body>
+      // (globals.css) shows through, so rail + main share one continuous surface.
+      className={`h-[100dvh] overflow-hidden text-[var(--color-text-primary)] ${sidebarOpen ? "lg:overflow-hidden" : ""}`}
     >
       {/* grid-cols-[minmax(0,1fr)] on mobile: without it the single implicit
           column auto-sizes to max-content of the main column, which can

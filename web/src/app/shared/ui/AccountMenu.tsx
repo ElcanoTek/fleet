@@ -83,7 +83,7 @@ export function AccountMenu({
         <Avatar email={email} />
         <span
           className={[
-            "min-w-0 flex-1 truncate text-[0.8125rem]",
+            "min-w-0 flex-1 truncate text-[0.82rem]",
             railCollapsed ? "sm:hidden" : "",
           ].join(" ")}
         >
@@ -107,7 +107,7 @@ export function AccountMenu({
       >
         <div className="flex items-center gap-2.5 px-2 py-1.5">
           <Avatar email={email} />
-          <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-medium text-[var(--color-text-primary)]">
+          <span className="min-w-0 flex-1 truncate text-[0.82rem] font-medium text-[var(--color-text-primary)]">
             {email}
           </span>
         </div>
