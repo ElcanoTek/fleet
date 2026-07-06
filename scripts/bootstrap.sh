@@ -13,12 +13,20 @@
 # sandbox image is rebuilt; the client bundle checkout is updated or left as-is).
 #
 # Usage:
+#   scripts/bootstrap.sh                             # INTERACTIVE on a terminal: prompts for the
+#                                                    # systemd-service / web-UI / domain choices, then
+#                                                    # the OpenRouter key, the Elcano SSO key (web), and
+#                                                    # admin users — a fresh box end-to-end, no flags.
 #   scripts/bootstrap.sh --postgres=local            # dnf+initdb+pg_hba+\gexec, sslmode=disable
 #   scripts/bootstrap.sh --postgres=external         # validate DSNs with SELECT 1, sslmode=require
-#   scripts/bootstrap.sh --postgres=local --dry-run  # print the plan, touch nothing
+#   scripts/bootstrap.sh --postgres=local --dry-run  # print the plan, touch nothing (prompts still ask,
+#                                                    # so the plan reflects your answers; pipe stdin to skip)
 #   scripts/bootstrap.sh --client-config <git-url[#<sha-or-tag>]|path>   # check out / point at a client bundle
 #   scripts/bootstrap.sh --enable-service            # systemctl enable --now fleet at the end
 #   scripts/bootstrap.sh --enable-web [--domain fleet.example.com]  # build + serve the web tier (TLS via Caddy with --domain)
+#
+# Explicit flags always win — each prompt is asked only when its flag was not
+# given, and non-TTY runs skip every prompt (flag/default behavior unchanged).
 #
 # End-to-end flow (every run): ensure 0600 env file → ensure the client bundle is
 # in place (--client-config) → build the sandbox image from the bundle → provision
@@ -47,6 +55,16 @@
 #                              login against the bundle's chat users.
 #   --domain <fqdn>            with --enable-web: front it with Caddy + automatic
 #                              TLS for <fqdn> (installs Caddy, opens 80/443).
+#   --admin <email[,email...]> register these emails as full admins (web login +
+#                              chat-admin + Operations Center) at the end of an
+#                              --enable-service run; passwords are prompted per
+#                              email (hidden). Interactive runs are prompted for
+#                              the list too, so the flag is optional.
+#   --auth-pubkey <val|@file>  enable Elcano SSO in the web tier: the
+#                              AUTH_SIGNING_PUBKEY value (or @file containing it;
+#                              both accept the `auth pubkey` output line
+#                              verbatim). Validated as a 32-byte Ed25519 key.
+#                              Interactive --enable-web runs are prompted.
 #   --dry-run                  print the plan; touch nothing.
 #
 # Env knobs (all optional; sensible local defaults):
@@ -87,6 +105,13 @@ CLIENT_CONFIG_ARG=""
 ENABLE_SERVICE=0
 ENABLE_WEB=0
 WEB_DOMAIN=""
+# --admin: comma-separated emails registered as full admins (both planes) at the
+# end of an --enable-service run; interactive runs are also PROMPTED when unset.
+ADMIN_EMAILS_ARG=""
+# --auth-pubkey: the Elcano SSO verification key (AUTH_SIGNING_PUBKEY) for the
+# web tier — a value or @file, both accepting the `auth pubkey` output line
+# verbatim. Interactive --enable-web runs are prompted when unset.
+AUTH_PUBKEY_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -99,9 +124,13 @@ while [[ $# -gt 0 ]]; do
     --enable-web)        ENABLE_WEB=1; ENABLE_SERVICE=1 ;;  # web proxies to the backend → enable it too
     --domain)            shift; [[ $# -gt 0 ]] || { echo "error: --domain needs an FQDN" >&2; exit 1; }; WEB_DOMAIN="$1" ;;
     --domain=*)          WEB_DOMAIN="${1#*=}" ;;
+    --admin)             shift; [[ $# -gt 0 ]] || { echo "error: --admin needs email[,email...]" >&2; exit 1; }; ADMIN_EMAILS_ARG="$1" ;;
+    --admin=*)           ADMIN_EMAILS_ARG="${1#*=}" ;;
+    --auth-pubkey)       shift; [[ $# -gt 0 ]] || { echo "error: --auth-pubkey needs a value or @file" >&2; exit 1; }; AUTH_PUBKEY_ARG="$1" ;;
+    --auth-pubkey=*)     AUTH_PUBKEY_ARG="${1#*=}" ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,73p' "$0"; exit 0 ;;
+      sed -n '2,93p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -119,6 +148,34 @@ info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '✗ %s\n' "$*" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 
+# ── interactive deployment selection (TTY only; flags always win) ────────────
+# A bare `scripts/bootstrap.sh` on a terminal walks the operator through the
+# three deployment choices instead of requiring flag archaeology: systemd
+# service? web UI? public domain? Explicit flags skip their prompt; non-TTY
+# runs (CI, pipes) skip all of them and keep the flag/default behavior, so
+# scripted invocations are unchanged. Deliberately ALSO prompts under --dry-run:
+# the answers change which plan is printed, which is exactly what a dry-run
+# preview is for (and nothing is executed either way). This must run BEFORE the
+# ENV_FILE resolution below, which branches on ENABLE_SERVICE.
+if [[ -t 0 ]]; then
+  if [[ "$ENABLE_SERVICE" != "1" ]] && command -v systemctl >/dev/null 2>&1; then
+    printf 'Run fleet as a systemd service (build + install + enable now)? [Y/n] '
+    read -r _ans
+    case "${_ans,,}" in n|no) info "dev mode — env goes to .env.local; start with: fleet serve" ;; *) ENABLE_SERVICE=1 ;; esac
+  fi
+  if [[ "$ENABLE_SERVICE" == "1" && "$ENABLE_WEB" != "1" ]]; then
+    printf 'Deploy the web UI (Next.js chat + Operations Center)? [Y/n] '
+    read -r _ans
+    case "${_ans,,}" in n|no) ;; *) ENABLE_WEB=1 ;; esac
+  fi
+  if [[ "$ENABLE_WEB" == "1" && -z "$WEB_DOMAIN" ]]; then
+    printf 'Public domain for automatic TLS (e.g. fleet.example.com; blank = loopback-only :3000): '
+    read -r WEB_DOMAIN
+    WEB_DOMAIN="$(printf '%s' "$WEB_DOMAIN" | tr -d '[:space:]')"
+  fi
+  unset _ans
+fi
+
 # Env file default: an explicit FLEET_ENV_FILE always wins. Otherwise, under
 # --enable-service (the systemd path) default to /etc/fleet/fleet.env — the path
 # deploy/fleet.service EnvironmentFiles — so the documented one-command deploy
@@ -131,7 +188,15 @@ elif [[ "$ENABLE_SERVICE" == "1" ]]; then
 else
   ENV_FILE=".env.local"
 fi
-CLIENT_CONFIG_DIR="${FLEET_CLIENT_CONFIG_DIR:-config/default}"
+# Absolute from the start: the systemd unit runs with WorkingDirectory=
+# /var/lib/fleet, so a RELATIVE dir written into the env file resolves there and
+# the service dies at boot ("client config bundle ... no such file or
+# directory"). The in-repo default anchors to this checkout; a relative env
+# value resolves against the caller's CWD when it exists, else the repo root.
+CLIENT_CONFIG_DIR="${FLEET_CLIENT_CONFIG_DIR:-$REPO_ROOT/config/default}"
+if [[ "$CLIENT_CONFIG_DIR" != /* ]]; then
+  CLIENT_CONFIG_DIR="$(cd "$CLIENT_CONFIG_DIR" 2>/dev/null && pwd || printf '%s/%s' "$REPO_ROOT" "$CLIENT_CONFIG_DIR")"
+fi
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 CHAT_DB_NAME="${CHAT_DB_NAME:-chat}"
 CHAT_DB_USER="${CHAT_DB_USER:-chat}"
@@ -235,10 +300,27 @@ ensure_env_secret() {
   upsert_env "$key" "$(gen_secret "$len")"
 }
 
+# normalize_auth_pubkey VALUE — echo the bare base64 AUTH_SIGNING_PUBKEY, or fail.
+# Accepts the `auth pubkey` output line (AUTH_SIGNING_PUBKEY=<b64>) or the bare
+# key, strips quotes/whitespace, and requires the decode to be exactly 32 bytes
+# (an Ed25519 public key) — mirroring `fleet config set-auth-pubkey`, so a bad
+# paste fails HERE, not as silent SSO login failures later.
+normalize_auth_pubkey() {
+  local v="$1" n
+  v="${v#AUTH_SIGNING_PUBKEY=}"
+  v="$(printf '%s' "$v" | tr -d '[:space:]')"
+  v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
+  [[ -n "$v" ]] || return 1
+  n="$(printf '%s' "$v" | base64 -d 2>/dev/null | wc -c)" || n=0
+  [[ "$n" == "32" ]] || return 1
+  printf '%s' "$v"
+}
+
 # deploy_web_tier — build + run the Next.js web tier, and (with --domain) front it
 # with Caddy TLS. Self-contained email+password login against the bundle's chat
-# users (fleet-admin chat user add ...); the external Elcano SSO stays disabled
-# unless AUTH_SIGNING_PUBKEY is set. The only client-specific input is --domain.
+# users (fleet admin add / fleet chat user add ...); the external Elcano SSO turns
+# on when AUTH_SIGNING_PUBKEY is provided (--auth-pubkey, an interactive paste, or
+# carried over from a previous run's fleet-web.env).
 deploy_web_tier() {
   local web_src="$REPO_ROOT/web" web_dst="/opt/fleet/web" web_env="/etc/fleet/fleet-web.env"
   local origin app_name build_id
@@ -292,6 +374,43 @@ deploy_web_tier() {
   else
     app_secret="$(gen_secret 48)"
   fi
+
+  # Elcano SSO (AUTH_SIGNING_PUBKEY): --auth-pubkey wins (value or @file); else
+  # carry over what a previous run wrote (this block rewrites the file wholesale,
+  # so without the carry-over a re-run would silently disable SSO); else offer an
+  # interactive paste. Every path validates via normalize_auth_pubkey; a bad key
+  # DIES rather than deploying a web tier whose SSO fails on every login. The
+  # AUTH_LOGIN_URL/AUTH_COOKIE_DOMAIN/AUTH_COOKIE_NAME companions are carry-over
+  # only (set them with fleet config set-auth-pubkey / by hand).
+  local auth_pubkey="" auth_raw="" auth_login_url="" auth_cookie_domain="" auth_cookie_name=""
+  if [[ -f "$web_env" ]]; then
+    auth_login_url="$(grep '^AUTH_LOGIN_URL=' "$web_env" 2>/dev/null | cut -d= -f2- || true)"
+    auth_cookie_domain="$(grep '^AUTH_COOKIE_DOMAIN=' "$web_env" 2>/dev/null | cut -d= -f2- || true)"
+    auth_cookie_name="$(grep '^AUTH_COOKIE_NAME=' "$web_env" 2>/dev/null | cut -d= -f2- || true)"
+  fi
+  if [[ -n "$AUTH_PUBKEY_ARG" ]]; then
+    auth_raw="$AUTH_PUBKEY_ARG"
+    if [[ "$auth_raw" == @* ]]; then
+      auth_raw="$(cat "${auth_raw#@}")" || die "--auth-pubkey: cannot read ${AUTH_PUBKEY_ARG#@}"
+    fi
+    auth_pubkey="$(normalize_auth_pubkey "$auth_raw")" \
+      || die "--auth-pubkey is not a valid AUTH_SIGNING_PUBKEY (want the standard-base64 32-byte Ed25519 key from \`auth pubkey\`)"
+    ok "Elcano SSO key accepted (--auth-pubkey)"
+  elif [[ -f "$web_env" ]] && grep -q '^AUTH_SIGNING_PUBKEY=' "$web_env"; then
+    auth_pubkey="$(grep '^AUTH_SIGNING_PUBKEY=' "$web_env" | cut -d= -f2-)"
+    info "carrying over the existing AUTH_SIGNING_PUBKEY (Elcano SSO stays enabled)."
+  elif [[ -t 0 ]]; then
+    printf 'Optional Elcano SSO key — email+password login works without it (paste the `auth pubkey` line, or Enter to skip): '
+    read -r auth_raw
+    if [[ -n "$auth_raw" ]]; then
+      auth_pubkey="$(normalize_auth_pubkey "$auth_raw")" \
+        || die "that is not a valid AUTH_SIGNING_PUBKEY (want the standard-base64 32-byte Ed25519 key from \`auth pubkey\`)"
+      ok "Elcano SSO key accepted"
+    else
+      info "skipped — enable SSO later with: fleet config set-auth-pubkey"
+    fi
+  fi
+
   install -D -m 0600 /dev/null "$web_env"
   {
     printf 'CHAT_SERVER_URL=%s\n'         "http://127.0.0.1:8080"
@@ -304,8 +423,18 @@ deploy_web_tier() {
     printf 'NEXT_PUBLIC_PUBLIC_ORIGIN=%s\n' "$origin"
     printf 'NEXT_PUBLIC_APP_NAME=%s\n'    "$app_name"
     printf 'NEXT_PUBLIC_BUILD_ID=%s\n'    "$build_id"
+    [[ -n "$auth_pubkey" ]]        && printf 'AUTH_SIGNING_PUBKEY=%s\n' "$auth_pubkey"
+    [[ -n "$auth_login_url" ]]     && printf 'AUTH_LOGIN_URL=%s\n'      "$auth_login_url"
+    [[ -n "$auth_cookie_domain" ]] && printf 'AUTH_COOKIE_DOMAIN=%s\n'  "$auth_cookie_domain"
+    [[ -n "$auth_cookie_name" ]]   && printf 'AUTH_COOKIE_NAME=%s\n'    "$auth_cookie_name"
+    true
   } > "$web_env"
-  chmod 0600 "$web_env"; ok "wrote ${web_env} (0600)"
+  chmod 0600 "$web_env"
+  if [[ -n "$auth_pubkey" ]]; then
+    ok "wrote ${web_env} (0600, Elcano SSO enabled)"
+  else
+    ok "wrote ${web_env} (0600, email+password login only)"
+  fi
 
   systemctl daemon-reload || true
   if systemctl enable --now fleet-web >/dev/null 2>&1; then
@@ -350,6 +479,21 @@ deploy_web_tier() {
 }
 
 step "fleet bootstrap (postgres=${POSTGRES_MODE}, dry-run=${DRY_RUN})"
+
+# Fail fast on a bad --auth-pubkey BEFORE any provisioning work — the web-tier
+# write also validates (belt-and-braces, and it re-reads an @file that may have
+# changed), but a typo'd key should die here in the first second, not after a
+# multi-minute npm build.
+if [[ -n "$AUTH_PUBKEY_ARG" ]]; then
+  _apk_raw="$AUTH_PUBKEY_ARG"
+  if [[ "$_apk_raw" == @* ]]; then
+    _apk_raw="$(cat "${_apk_raw#@}")" || die "--auth-pubkey: cannot read ${AUTH_PUBKEY_ARG#@}"
+  fi
+  normalize_auth_pubkey "$_apk_raw" >/dev/null \
+    || die "--auth-pubkey is not a valid AUTH_SIGNING_PUBKEY (want the standard-base64 32-byte Ed25519 key from \`auth pubkey\`)"
+  ok "Elcano SSO key validated"
+  unset _apk_raw
+fi
 
 # ── system dependencies: the build + runtime + sandbox toolchain ──
 # So `git clone … && bash scripts/bootstrap.sh …` provisions a BARE box end to
@@ -461,11 +605,16 @@ if [[ -n "$CLIENT_CONFIG_ARG" ]]; then
     fi
     CLIENT_CONFIG_DIR="$CHECKOUT"
   else
-    # A path: point at it directly (must exist unless dry-run).
+    # A path: point at it directly (must exist unless dry-run). Absolutized for
+    # the same reason as the default above — the env file must never carry a
+    # CWD-relative bundle path.
     if [[ "$DRY_RUN" != "1" && ! -d "$CLIENT_CONFIG_ARG" ]]; then
       die "--client-config path ${CLIENT_CONFIG_ARG} does not exist"
     fi
     CLIENT_CONFIG_DIR="$CLIENT_CONFIG_ARG"
+    if [[ "$CLIENT_CONFIG_DIR" != /* ]]; then
+      CLIENT_CONFIG_DIR="$(cd "$CLIENT_CONFIG_DIR" 2>/dev/null && pwd || printf '%s' "$CLIENT_CONFIG_DIR")"
+    fi
     ok "using client config at ${CLIENT_CONFIG_DIR}"
   fi
 fi
@@ -720,7 +869,25 @@ upsert_env FLEET_CLIENT_CONFIG_DIR "$CLIENT_CONFIG_DIR"
 upsert_env FLEET_ENV_FILE "$ENV_FILE"
 if [[ "$DRY_RUN" != "1" ]]; then
   ok "wrote FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL / FLEET_CLIENT_CONFIG_DIR / FLEET_ENV_FILE"
-  info "remember to add OPENROUTER_API_KEY and the bundle's MCP connector credentials."
+  # OPENROUTER_API_KEY: prompt for it interactively (hidden) when absent, so the
+  # documented one-command deploy ends with a runnable service instead of a
+  # "remember to add the key" homework item. Skippable (blank), non-TTY runs
+  # keep the reminder, and an existing key is never re-prompted (idempotent).
+  if grep -q '^OPENROUTER_API_KEY=' "$ENV_FILE" 2>/dev/null; then
+    info "OPENROUTER_API_KEY already set in ${ENV_FILE} — leaving it."
+  elif [[ -t 0 ]]; then
+    printf 'OpenRouter API key (from https://openrouter.ai/keys; blank to skip): '
+    read -rs _or_key; printf '\n'
+    if [[ -n "$_or_key" ]]; then
+      upsert_env OPENROUTER_API_KEY "$_or_key"
+      ok "wrote OPENROUTER_API_KEY"
+    else
+      info "skipped — set it later with: fleet config set-openrouter-key"
+    fi
+    unset _or_key
+  else
+    info "remember to add OPENROUTER_API_KEY (fleet config set-openrouter-key) and the bundle's MCP connector credentials."
+  fi
   info "if the bundle's default persona differs from 'assistant', set PERSONA_DEFAULT=<persona> in ${ENV_FILE}."
 fi
 
@@ -811,6 +978,62 @@ if [[ "$ENABLE_WEB" == "1" ]]; then
     warn "systemctl not found — skipping --enable-web (no systemd on this box)."
   else
     deploy_web_tier
+  fi
+fi
+
+# ── register admin users (interactive; or --admin email[,email...]) ─────────
+# One `fleet admin add` per email provisions the FULL admin across both user
+# planes (web login + chat-admin + Operations Center; passwords prompted hidden
+# by the binary). Needs the service RUNNING first: the users tables exist only
+# after each service's self-migration, and Type=notify holds "active" until
+# READY=1 — which fires after migrations — so wait-for-active is the precise
+# "DBs are migrated" signal.
+if [[ "$ENABLE_SERVICE" == "1" ]]; then
+  step "Admin users"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would wait for ${SERVICE_NAME} to be active, then register admins (--admin or interactive prompt) via: fleet admin add <email>"
+  elif [[ ! -t 0 && -z "$ADMIN_EMAILS_ARG" ]]; then
+    info "non-interactive and no --admin — register admins later with: fleet admin add <email>"
+  elif [[ ! -t 0 ]]; then
+    warn "--admin needs an interactive terminal for the password prompts — register later with: fleet admin add <email>"
+  elif ! command -v systemctl >/dev/null 2>&1 || ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
+    info "${SERVICE_NAME}.service not installed — register admins later with: fleet admin add <email>"
+  else
+    _active=0
+    for _ in $(seq 1 60); do
+      [[ "$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)" == "active" ]] && { _active=1; break; }
+      sleep 2
+    done
+    if [[ "$_active" != "1" ]]; then
+      warn "${SERVICE_NAME} not active yet — skipping admin registration (run fleet admin add <email> once it is up)."
+    else
+      _admin_emails="$ADMIN_EMAILS_ARG"
+      if [[ -z "$_admin_emails" ]]; then
+        printf 'Admin email(s), comma-separated (blank to skip): '
+        read -r _admin_emails
+      fi
+      _fleet_bin="$INSTALL_DIR/fleet"; [[ -x "$_fleet_bin" ]] || _fleet_bin="$(command -v fleet || true)"
+      if [[ -z "$_admin_emails" ]]; then
+        info "skipped — register admins later with: fleet admin add <email>"
+      elif [[ -z "$_fleet_bin" ]]; then
+        warn "fleet binary not found — register admins manually: fleet admin add <email>"
+      else
+        IFS=',' read -ra _emails <<< "$_admin_emails"
+        for _email in "${_emails[@]}"; do
+          _email="$(printf '%s' "$_email" | tr -d '[:space:]')"
+          [[ -n "$_email" ]] || continue
+          # The binary prompts for the password (hidden, double-entry) on the
+          # same TTY; DSNs are handed over explicitly so this works before the
+          # operator's shell has any fleet env.
+          if FLEET_CHAT_DATABASE_URL="$CHAT_URL" FLEET_SCHED_DATABASE_URL="$SCHED_URL" \
+             "$_fleet_bin" admin add "$_email"; then
+            ok "admin ${_email} registered (web login + Operations Center)"
+          else
+            warn "could not register ${_email} — retry with: fleet admin add ${_email}"
+          fi
+        done
+      fi
+    fi
   fi
 fi
 
