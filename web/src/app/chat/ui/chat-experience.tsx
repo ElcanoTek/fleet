@@ -212,8 +212,8 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
     title: "Global",
     entries: [
       { chips: [{ mod: true }, { label: "K" }], description: "Open search" },
-      { chips: [{ mod: true }, { label: "N" }], description: "New conversation" },
-      { chips: [{ mod: true }, { label: "J" }], description: "Focus the message composer" },
+      { chips: [{ mod: true }, { shift: true }, { label: "O" }], description: "New conversation" },
+      { chips: [{ shift: true }, { label: "Esc" }], description: "Focus the message composer" },
       { chips: [{ label: "?" }], description: "Show this keyboard-shortcut help" },
       { chips: [{ label: "Esc" }], description: "Close search, help, or the sidebar" },
     ],
@@ -2249,25 +2249,29 @@ export function ChatExperience() {
         allowInInput: true,
         handler: () => setSearchOpen(true),
       },
+      // Bindings deliberately NOT taken, so core browser features keep working:
+      // ⌘/Ctrl+F (find-in-page — the natural way to search the visible
+      // transcript), ⌘/Ctrl+N (new window — reserved in Chrome, a page can't
+      // even intercept it, so a binding there silently fails AND pops a
+      // window), ⌘/Ctrl+J (downloads). The replacements below follow ChatGPT's
+      // chords, the closest muscle memory for an AI-chat app.
       {
-        // Cmd/Ctrl+F is an alternate binding for search, but NOT while typing —
-        // there it must fall through to the browser's in-page find.
-        key: "f",
+        // New conversation: ⌘/Ctrl+Shift+O (the ChatGPT "new chat" chord).
+        // Shadows the browser's rarely-used bookmarks-library chord, which is
+        // interceptable — unlike the reserved ⌘N this replaces.
+        key: "o",
         mod: true,
-        allowInInput: false,
-        handler: () => setSearchOpen(true),
-      },
-      {
-        key: "n",
-        mod: true,
-        shift: false,
+        shift: true,
         allowInInput: true,
         handler: () => clearConversation(),
       },
       {
-        // Focus the composer from anywhere (mirrors clicking into it).
-        key: "j",
-        mod: true,
+        // Focus the composer from anywhere: Shift+Esc (the ChatGPT chord —
+        // ⌘J collided with the browser's downloads shortcut). Declared before
+        // the bare-Escape binding; first match wins, and bare Escape sets
+        // shift:false so the two never both claim one keystroke.
+        key: "Escape",
+        shift: true,
         allowInInput: true,
         handler: () => promptRef.current?.focus(),
       },
@@ -2354,6 +2358,7 @@ export function ChatExperience() {
       },
       {
         key: "Escape",
+        shift: false,
         allowInInput: true,
         handler: closeOverlays,
       },

@@ -15,6 +15,15 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- Chat keyboard shortcuts no longer collide with core browser shortcuts. The
+  bindings that shadowed browser features are gone or moved: ⌘/Ctrl+F is
+  released back to find-in-page (⌘K remains the search binding), "new
+  conversation" moves from ⌘/Ctrl+N (reserved in Chrome — uninterceptable, it
+  opened a browser window) to **⌘/Ctrl+Shift+O**, and "focus the composer"
+  moves from ⌘/Ctrl+J (browser downloads) to **Shift+Esc** — both matching
+  ChatGPT's chords, the prevailing muscle memory for AI-chat apps. The
+  bare-key set (?, j/k, Enter, p, a, r, #, y, e) is unchanged; the "?" help
+  overlay reflects the new chords.
 - `fleet update` systemd-unit drift check is now functional-diff-based and can
   adopt the shipped unit in one step. It compares `deploy/*.service` against the
   installed unit with comments and blank lines stripped, so a reworded header no
