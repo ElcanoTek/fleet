@@ -418,6 +418,10 @@ func run() error {
 	}
 	defer schedStorage.Close()
 	schedStorage.SetTimezone(timezone())
+	// The org default-task timezone (distinct from the server clock above) so
+	// EnqueueTask — the create_task tool, chat schedule_task approval, and
+	// promote-to-task — localizes recurrence like the HTTP create path does.
+	schedStorage.SetDefaultTaskTimezone(defaultTaskTimezone())
 	log.Printf("sched DB connected + migrated")
 
 	// Bootstrap operators (#458): provision/promote the configured emails as
