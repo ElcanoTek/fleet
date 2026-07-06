@@ -120,17 +120,20 @@ func TestExpirePausedTasks(t *testing.T) {
 	fresh := pause("fresh question", 1*time.Minute) // started 1m ago
 
 	// Disabled window is a no-op.
-	if n, err := db.ExpirePausedTasks(ctx, 0); err != nil || n != 0 {
-		t.Fatalf("disabled window: n=%d err=%v", n, err)
+	if got, err := db.ExpirePausedTasks(ctx, 0); err != nil || len(got) != 0 {
+		t.Fatalf("disabled window: n=%d err=%v", len(got), err)
 	}
 
 	// 60-minute window: only the stale one expires.
-	n, err := db.ExpirePausedTasks(ctx, 60)
+	expired, err := db.ExpirePausedTasks(ctx, 60)
 	if err != nil {
 		t.Fatalf("ExpirePausedTasks: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("expired %d, want 1 (only the 2h-old paused task)", n)
+	if len(expired) != 1 {
+		t.Fatalf("expired %d, want 1 (only the 2h-old paused task)", len(expired))
+	}
+	if expired[0].ID != old.ID {
+		t.Fatalf("expired the wrong task: got %s, want %s", expired[0].ID, old.ID)
 	}
 
 	gotOld, _ := db.GetTask(ctx, old.ID)
@@ -150,7 +153,7 @@ func TestExpirePausedTasks(t *testing.T) {
 	}
 
 	// Idempotent: a second sweep finds nothing new.
-	if n2, err := db.ExpirePausedTasks(ctx, 60); err != nil || n2 != 0 {
-		t.Fatalf("second sweep: n=%d err=%v", n2, err)
+	if got2, err := db.ExpirePausedTasks(ctx, 60); err != nil || len(got2) != 0 {
+		t.Fatalf("second sweep: n=%d err=%v", len(got2), err)
 	}
 }
