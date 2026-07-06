@@ -87,6 +87,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- `fleet update` now pulls the client-config bundle even when the update changes
+  `update.sh` itself. The self-update re-exec ran the new script with
+  `--no-pull` to avoid re-fetching the already-fast-forwarded fleet checkout,
+  but `--no-pull` also skips the client-bundle pull (step 2, which hadn't run
+  yet) — so any release that touched `update.sh` left the bundle stale. The
+  re-exec now uses an internal `FLEET_UPDATE_REEXEC` marker that skips only the
+  SRC fetch + self-update detection (no loop) and otherwise runs a normal update,
+  including the bundle pull and the Containerfile-hash sandbox-rebuild gate. Also
+  made the unit-drift adopt hint accurate for `fleet-web.service`: it now shows
+  the one-time `useradd fleet-web` + `.next` chown prerequisite (the unit runs as
+  a non-root user since the deploy-hardening change) and a `systemctl restart`, so
+  following it doesn't leave the web tier failing to start.
+
 - Paused-task expiry no longer kills a recurring task's schedule. The
   `FLEET_PAUSED_TASK_EXPIRY_MINUTES` sweep failed an unattended ask-paused task
   with a bare bulk UPDATE that bypassed the terminal-transition path — so an
