@@ -62,6 +62,14 @@ prior versions are listed because none have shipped.
   skills imported from Claude Code.
 
 
+### Fixed
+
+- Removed accidentally committed local agent-run artifacts (`hello.txt`,
+  `audit_log.txt`, `data/audit/bash.log`, `data/task-run-*/session.json`) and
+  added the server runtime `data/` directory to `.gitignore` so runtime output
+  can no longer land in the repository.
+
+
 ### Security
 
 - Interactive chat now honors the fleet-wide sandbox egress mode
