@@ -1,0 +1,119 @@
+# Fast CI lane for the `dev` integration branch — quick signal, not the full
+# gate. Direct pushes to dev run ONLY: Go compile+vet+lint+test (no Postgres
+# service — the DB-backed tests self-skip; no -race lane), the migration DDL
+# lint, and the gitleaks secret scan (the no-secrets invariant is never
+# weakened, on any branch). Deliberately skipped here and deferred to the
+# dev→main PR, which runs the full ci.yml gate: the -race lane, govulncheck,
+# the Grype image scan, web lint/test/build, both Playwright suites, and
+# CodeQL. ci.yml does not fire on dev at all (its push/pull_request triggers
+# filter to main), so this file is dev's only automated signal.
+#
+# `Dev gate` is the single aggregate job (same pattern as ci.yml's `CI gate`):
+# when the dev branch is protected, require just that one check.
+name: Dev CI (fast lane)
+
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+# Rapid successive pushes cancel the previous run — the point of this lane is
+# feedback on the latest state, not a queue of stale results.
+concurrency:
+  group: dev-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go compile / vet / lint / test (fast)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Compile
+        run: go build ./...
+
+      - name: go vet
+        # Same tag as ci.yml so host.go (gated behind fleet_host_executor) is
+        # vetted too — without it the sandbox package's host tests don't compile.
+        run: go vet -tags fleet_host_executor ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          # Keep pinned in lockstep with ci.yml + .golangci.yml (see the note
+          # there) so the fast lane and the full gate never disagree.
+          version: v2.12.2
+          only-new-issues: false
+
+      - name: Test (no -race; DB tests self-skip without a Postgres service)
+        run: go test -p 1 ./...
+
+  migrations:
+    name: Migration DDL lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history so the merge-base with origin/main resolves and the
+          # linter can diff the branch's new/changed migration files.
+          fetch-depth: 0
+
+      - name: Lint changed migrations for dangerous DDL
+        env:
+          # The pushed-from SHA; empty on edge cases (new branch / force-push) →
+          # the script falls back to merge-base with origin/main, then a clean skip.
+          MIGRATION_LINT_BASE: ${{ github.event.before }}
+        run: scripts/check-migrations.sh
+
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install gitleaks
+        # Same pinned release + checksum as ci.yml — reproducible, can't be
+        # silently changed by an upstream re-tag.
+        env:
+          GITLEAKS_VERSION: '8.30.1'
+          GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+        run: |
+          set -euo pipefail
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSL -o "$tarball" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
+          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run gitleaks
+        run: gitleaks dir . --redact --exit-code 1
+
+  dev-gate:
+    name: Dev gate
+    # Aggregate check for branch protection: passes only when every fast-lane
+    # job succeeded (mirrors ci.yml's `CI gate`).
+    if: always()
+    needs: [go, migrations, gitleaks]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any fast-lane job failed
+        run: |
+          results='${{ join(needs.*.result, ' ') }}'
+          echo "job results: $results"
+          for r in $results; do
+            [ "$r" = "success" ] || { echo "a fast-lane job did not succeed"; exit 1; }
+          done
