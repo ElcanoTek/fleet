@@ -153,28 +153,27 @@ export function ContextRing({
   disabled: boolean;
   onClick: () => void;
 }) {
-  // SVG ring math. r=8 keeps the ring at roughly the same visual
-  // weight as the surrounding icon buttons (paperclip, wrench) — a
-  // small affordance inside the h-7 (28px) button rather than filling
-  // it edge-to-edge. Two strokes on the same circle: a muted "rail"
-  // full circle plus a colored progress arc whose length =
-  // circumference * fraction. Stroke ends rounded so low fills don't
-  // read as a sharp splinter.
-  const r = 8;
+  // SVG ring math per the unified-shell design's .tool-btn.ring: the ring
+  // hugs the button's edge (inset 1px, r=14 in a 32-unit viewBox) around a
+  // centered compress icon. Two strokes on the same circle: the design's
+  // .ring-track (accent at 26%) plus a colored progress arc whose length =
+  // circumference * fraction. Stroke ends rounded so low fills don't read
+  // as a sharp splinter.
+  const r = 14;
   const circumference = 2 * Math.PI * r;
   const fraction = usage?.fraction ?? 0;
   const cappedFraction = Math.min(1, fraction);
   const dashFilled = circumference * cappedFraction;
   const dashEmpty = circumference - dashFilled;
 
-  // Color follows the same severity bands as the stats-panel chip so
-  // both surfaces speak with one voice.
+  // Color follows the live severity bands (lib/contextUsage.ts: warn ≥70%,
+  // danger ≥90%) with the design's color ramp: accent → warning → danger.
   const arcColor =
     usage?.severity === "danger"
       ? "var(--color-danger)"
       : usage?.severity === "warn"
-        ? "var(--color-accent)"
-        : "var(--color-text-muted)";
+        ? "var(--color-warning)"
+        : "var(--color-accent)";
 
   // Same defensive clamp as formatContextUsage: if fraction > 1 we
   // show "100%+" instead of an alarming impossible number. See the
@@ -196,44 +195,51 @@ export function ContextRing({
     <button
       type="button"
       aria-label={isSummarizing ? "Compacting conversation…" : pct !== null ? `Context ${pct} full — click to compact` : "Compact this conversation"}
+      data-tip-top={isSummarizing ? "Compacting conversation…" : pct !== null ? `Compact conversation — ${pct} full` : "Compact conversation"}
       title={titleText}
       disabled={disabled}
       onClick={onClick}
-      className="group inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--color-text-secondary)] transition hover:opacity-80 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40"
+      className="relative inline-flex h-[1.95rem] w-[1.95rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] text-[var(--color-text-secondary)] transition hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40"
     >
-      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
-        {/* Rail — full muted circle. Always rendered, even before  */}
-        {/* the first turn summary lands, so the user doesn't see   */}
-        {/* an icon flicker into a ring when the meter first        */}
-        {/* arrives. Empty ring = "no usage data yet," not a       */}
-        {/* different control.                                      */}
+      {/* The design's .ring-svg: hugs the round button (inset 1px), with
+          the percent conveyed by the arc + aria-label/tip, never text. */}
+      <svg
+        viewBox="0 0 32 32"
+        fill="none"
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-[1px] h-[calc(100%-2px)] w-[calc(100%-2px)]"
+      >
+        {/* Track — full circle at 26% accent (the design's .ring-track).
+            Always rendered, even before the first turn summary lands, so
+            the user doesn't see an icon flicker into a ring when the
+            meter first arrives. Empty ring = "no usage data yet," not a
+            different control. */}
         <circle
-          cx="14"
-          cy="14"
+          cx="16"
+          cy="16"
           r={r}
-          fill="none"
-          stroke="var(--color-border-strong)"
+          stroke="color-mix(in srgb, var(--color-accent) 26%, transparent)"
           strokeWidth="2"
         />
         {/* Progress arc — rotated -90deg so the fill starts at the */}
         {/* top of the circle and walks clockwise. Length is 0 when */}
         {/* usage is null, which renders as nothing on top of the   */}
-        {/* rail.                                                   */}
+        {/* track.                                                  */}
         {usage ? (
           <circle
-            cx="14"
-            cy="14"
+            cx="16"
+            cy="16"
             r={r}
-            fill="none"
             stroke={arcColor}
             strokeWidth="2"
             strokeLinecap="round"
             strokeDasharray={`${dashFilled} ${dashEmpty}`}
-            transform="rotate(-90 14 14)"
+            transform="rotate(-90 16 16)"
             style={{ transition: "stroke-dasharray 240ms ease, stroke 240ms ease" }}
           />
         ) : null}
       </svg>
+      <Icon name="compress" className="size-3.5" />
     </button>
   );
 }

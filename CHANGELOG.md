@@ -13,6 +13,29 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- Web UI/UX pass over four surfaces, matching the unified-shell design
+  (fleet-unified reference): rail typography aligned to the design's type ramp
+  (brand name 0.95rem/700, group headers 0.8rem, conversation/folder/label
+  rows 0.875rem, menu items and account email 0.82rem, filter chips 0.78rem);
+  a click-toggled ⓘ explainer next to the Recent group header stating the
+  retention default (unpinned chats delete after 14 days of inactivity —
+  `CONVERSATION_TTL_DAYS` — pin to keep; dismisses on outside click and
+  Escape); a new app-wide `--gradient-bg` page-background token painted once
+  on `<body>` (cover, fixed) beneath now-transparent chat/orchestrator shells,
+  with `--sidebar-surface` moved to the design's rail gradient; and the chat
+  composer toolbar rebuilt to the design — model chip opening a listbox
+  popover (search field on top preserves type-to-search + free slug entry,
+  with arrow-key navigation, Esc close, and focus return), a toolbar divider,
+  icon tool-buttons (persona · attach · tools with a corner count badge ·
+  context ring), sectioned tools popover with mini-switch toggles populated
+  from the live optional-MCP catalog, and the circular gradient send button.
+  Composer popovers now all close on Escape and return focus to their
+  trigger. Fixes a latent styling bug where gradient tokens consumed via
+  bare arbitrary-value background classes compiled to `background-color`
+  and never painted (now emitted as `background-image`).
+
 ### Added
 
 - One-time legacy migration ingest ([docs/LEGACY-IMPORT.md](docs/LEGACY-IMPORT.md)):

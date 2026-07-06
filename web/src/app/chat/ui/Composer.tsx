@@ -5,15 +5,19 @@
 // it owns no turn/send state machine of its own. Every value, setter, ref,
 // and callback it needs is threaded in as a prop from ChatExperience, which
 // keeps owning the per-conversation composer state, the upload pipeline, and
-// the streaming turn loop. The container follows the unified-shell design's
-// .composer (53rem, --composer-surface, --radius-xl, the focus-fading
-// keyboard hint below the bar, the sealed strip); the toolbar keeps the
-// pre-polish control set and layout. The behavioral contracts the specs
-// drive — placeholder format, aria-labels, textarea-first, send flow,
+// the streaming turn loop. Container AND toolbar follow the unified-shell
+// design's .composer: 53rem, --composer-surface, --radius-xl, the
+// focus-fading keyboard hint, the sealed strip, and the design toolbar —
+// model chip + listbox popover (with a search field the design doesn't have,
+// preserving type-to-search + free slug entry), .composer-div divider,
+// .tool-btn icon buttons (persona · attach · tools-with-badge · context
+// ring), and the circular arrow send button. The behavioral contracts the
+// specs drive — placeholder format, aria-labels ("Attach files", "Model",
+// "Optional tools", "Send message"), textarea-first, send flow,
 // Enter-vs-Shift+Enter, attachments, model/persona/MCP pickers, Stop — are
 // unchanged.
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { Icon } from "./Icon";
 import {
@@ -77,6 +81,51 @@ function looksLikeCode(text: string): boolean {
 // muscle-memory default for every major chat UI).
 const SEND_KEY_STORAGE = "fleet.sendKey";
 const CODE_NUDGE_TIMEOUT_MS = 6000;
+
+// ── Design toolbar building blocks (unified shell .composer-toolbar) ────────
+// The design's .tool-btn: a 1.95rem radius-md icon button that tints with the
+// accent on hover; TOOL_BTN_ACTIVE marks an engaged control (tools with
+// servers enabled, send-on-Enter on).
+const TOOL_BTN =
+  "relative inline-flex h-[1.95rem] w-[1.95rem] shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40";
+const TOOL_BTN_ACTIVE =
+  "bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)] hover:bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)]";
+
+// The design's .composer-pop: the anchored popover surface every composer
+// menu shares. Mobile pins it to the viewport (the anchored layout could
+// push it off-screen behind the keyboard); ≥sm anchors above the trigger.
+const COMPOSER_POP =
+  "fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 grid gap-[0.1rem] rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-0 sm:w-[15.5rem]";
+
+// The design's .pop-row / .pop-title / .pop-desc / .pop-sec type ramp.
+const POP_ROW =
+  "flex w-full items-center justify-between gap-2 rounded-[0.5rem] px-[0.6rem] py-[0.45rem] text-left text-[0.82rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]";
+const POP_ROW_SELECTED = "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]";
+const POP_TITLE = "text-[0.82rem] font-medium text-[var(--color-text-primary)]";
+const POP_DESC = "text-[0.7rem] text-[var(--color-text-muted)]";
+const POP_SEC =
+  "px-[0.6rem] pb-[0.15rem] pt-[0.35rem] text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]";
+
+// The design's .mini-switch: the visual toggle knob inside a tools pop-row.
+// Purely decorative — the row <button> carries the aria-pressed state.
+function MiniSwitch({ on }: { on: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`relative mt-[0.2rem] h-[0.875rem] w-6 shrink-0 rounded-full transition ${
+        on
+          ? "bg-[var(--color-primary)]"
+          : "bg-[color-mix(in_srgb,var(--color-primary)_32%,transparent)]"
+      }`}
+    >
+      <span
+        className={`absolute left-[2px] top-[2px] size-[0.625rem] rounded-full transition ${
+          on ? "translate-x-[0.625rem] bg-white" : "bg-[var(--color-text-muted)]"
+        }`}
+      />
+    </span>
+  );
+}
 
 export type ComposerProps = {
   // Textarea value + draft handling
@@ -255,6 +304,28 @@ export function Composer({
       return true;
     }
   });
+  // Keyboard support for the model listbox (the design's .composer-pop):
+  // ArrowUp/Down move this highlight from the search field, Enter picks it,
+  // Escape closes and returns focus to the chip. Clamped at use so a
+  // shrinking match list can't strand it.
+  const [modelHighlight, setModelHighlight] = useState(0);
+  // Popover triggers, for the Esc/selection focus-return contract.
+  const modelChipRef = useRef<HTMLButtonElement | null>(null);
+  const personaButtonRef = useRef<HTMLButtonElement | null>(null);
+  const mcpButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  const openModelPicker = () => {
+    setModelPickerOpen(true);
+    setModelSearchQuery("");
+    setModelHighlight(0);
+    void loadRankedModels();
+    void loadCatalogModels();
+  };
+  const closeModelPicker = (returnFocus: boolean) => {
+    setModelPickerOpen(false);
+    setModelSearchQuery("");
+    if (returnFocus) modelChipRef.current?.focus();
+  };
 
   // Persist the send-key preference whenever it changes. Wrapped in a
   // try/catch because localStorage can throw in private-browsing modes
@@ -279,7 +350,11 @@ export function Composer({
   return (
     <>
             <form
-              className={`relative mx-auto w-full max-w-[53rem] rounded-[var(--radius-xl)] border bg-[var(--composer-surface)] px-4 pt-[0.85rem] pb-[0.65rem] shadow-[var(--shadow-md)] transition-colors ${
+              // p-0 shell per the design: the textarea and toolbar own their
+              // padding. The image: hint matters because --composer-surface
+              // is a gradient — the un-hinted arbitrary-value form emits
+              // background-color, which drops gradient values.
+              className={`relative mx-auto w-full max-w-[53rem] rounded-[var(--radius-xl)] border bg-[image:var(--composer-surface)] shadow-[var(--shadow-md)] transition-colors ${
                 isDraggingOver
                   ? "border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/30"
                   : sealed
@@ -314,11 +389,11 @@ export function Composer({
                 </div>
               )}
               {/* Sealed strip along the composer's top edge (the design's
-                  .composer-sealed-strip): negative margins cancel the form
-                  padding so the strip runs edge-to-edge, with its top corners
-                  following the container radius. */}
+                  .composer-sealed-strip). First child of the p-0 shell, so it
+                  runs edge-to-edge with its top corners following the
+                  container radius. */}
               {sealed ? (
-                <div className="-mx-4 -mt-[0.85rem] mb-[0.65rem] flex items-center gap-[0.45rem] rounded-t-[calc(var(--radius-xl)-1px)] border-b border-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-4 py-[0.45rem] text-[0.75rem] text-[var(--color-text-secondary)]">
+                <div className="flex items-center gap-[0.45rem] rounded-t-[calc(var(--radius-xl)-1px)] border-b border-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-[1.05rem] py-[0.45rem] text-[0.75rem] text-[var(--color-text-secondary)]">
                   <Icon name="lock" className="size-[0.8rem] shrink-0 text-[var(--color-accent)]" />
                   <span>Sealed — your data and an approved model stay in this sandbox. Nothing leaves.</span>
                 </div>
@@ -383,7 +458,7 @@ export function Composer({
               <textarea
                 id="promptInput"
                 ref={promptRef}
-                className="min-h-[3.4rem] w-full resize-none overflow-y-auto bg-transparent px-[0.1rem] pt-[0.1rem] pb-[0.55rem] text-[16px] leading-[1.5] text-[var(--color-text-primary)] outline-none transition-[height] duration-fast placeholder:text-[var(--color-text-muted)] sm:text-[0.9rem]"
+                className="min-h-[68px] w-full resize-none overflow-y-auto bg-transparent px-[1.05rem] pt-[0.85rem] pb-[0.35rem] text-[16px] leading-[1.5] text-[var(--color-text-primary)] outline-none transition-[height] duration-fast placeholder:text-[var(--color-text-muted)] sm:text-[0.9rem]"
                 placeholder={promptPlaceholder}
                 rows={1}
                 suppressHydrationWarning
@@ -486,7 +561,7 @@ export function Composer({
                   draft in a fenced block so the model renders it as code
                   rather than inlining the snippet as prose. */}
               {showCodeNudge ? (
-                <div className="mt-1.5 flex items-center gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]">
+                <div className="mx-[1.05rem] mt-1.5 flex items-center gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]">
                   <span>Pasted code? Wrap in triple backticks for better formatting.</span>
                   <button
                     type="button"
@@ -510,7 +585,7 @@ export function Composer({
               ) : null}
 
               {pendingAttachments.length > 0 || attachmentError ? (
-                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                <div className="mx-[1.05rem] mb-2 flex flex-wrap items-center gap-1.5">
                   {pendingAttachments.map((a) => (
                     <PendingAttachmentChip
                       key={a.clientId}
@@ -530,7 +605,7 @@ export function Composer({
               {spreadsheetNudge.show ? (
                 <div
                   role="status"
-                  className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
+                  className="mx-[1.05rem] mb-2 flex flex-wrap items-center justify-between gap-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
                 >
                   <span>
                     Spreadsheets analyze better on{" "}
@@ -575,18 +650,173 @@ export function Composer({
                 }}
               />
 
-              <div className="flex items-end justify-between gap-2">
-                <div className="flex min-w-0 flex-wrap items-center gap-2 overflow-visible">
-                  <button
-                    type="button"
-                    aria-label="Attach files"
-                    title="Attach files"
-                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-[var(--color-border-strong)] text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
-                    disabled={isStreaming || isUploadingAttachments}
-                    onClick={() => fileInputRef.current?.click()}
+              <div className="flex items-center justify-between gap-2 px-[0.7rem] pt-[0.45rem] pb-[0.6rem]">
+                <div className="flex min-w-0 flex-wrap items-center gap-[0.35rem] overflow-visible">
+                  {/* Model chip (the design's .model-chip): icon + current
+                      model + caret opening the .composer-pop listbox. The
+                      search field at the top of the popover preserves the
+                      old inline input's type-to-search-the-catalog and free
+                      slug entry; Esc closes and returns focus to the chip. */}
+                  <div
+                    ref={modelPickerRef}
+                    className="relative inline-flex"
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && modelPickerOpen) {
+                        event.stopPropagation();
+                        closeModelPicker(true);
+                      }
+                    }}
                   >
-                    <Icon name="paperclip" className="size-3.5" />
-                  </button>
+                    <button
+                      ref={modelChipRef}
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded={modelPickerOpen}
+                      disabled={isStreaming}
+                      title={
+                        modelError
+                          ? modelError.message
+                          : `OpenRouter model slug — aliases: ${DEFAULT_MODEL_LABEL} → ${DEFAULT_MODEL}, ${ADVANCED_MODEL_LABEL} → ${ADVANCED_MODEL}`
+                      }
+                      className={`inline-flex h-[1.95rem] shrink-0 items-center gap-[0.4rem] rounded-[var(--radius-md)] py-[0.3rem] pl-[0.6rem] pr-[0.5rem] text-[0.78rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${
+                        modelError
+                          ? "text-[var(--color-danger)]"
+                          : modelPickerOpen
+                            ? "bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-text-primary)]"
+                            : "text-[var(--color-text-secondary)] hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)]"
+                      }`}
+                      onClick={() => {
+                        if (modelPickerOpen) closeModelPicker(false);
+                        else openModelPicker();
+                      }}
+                    >
+                      <Icon
+                        name="model"
+                        className={`size-[0.85rem] ${modelError ? "" : "text-[var(--color-accent)]"}`}
+                      />
+                      <span className="max-w-[9rem] truncate">{labelForModel(selectedModel)}</span>
+                      <Icon name="selector" className="size-[0.8rem] text-[var(--color-text-muted)]" />
+                    </button>
+                    {modelPickerOpen && !isStreaming ? (
+                      <div className={COMPOSER_POP}>
+                        <input
+                          ref={modelInputRef}
+                          type="text"
+                          autoFocus
+                          spellCheck={false}
+                          autoCapitalize="off"
+                          autoCorrect="off"
+                          placeholder="Search models…"
+                          aria-label="Model"
+                          role="combobox"
+                          aria-expanded="true"
+                          aria-controls="composer-model-listbox"
+                          aria-activedescendant={
+                            filteredRankedModels.length > 0
+                              ? `composer-model-opt-${Math.min(modelHighlight, filteredRankedModels.length - 1)}`
+                              : undefined
+                          }
+                          className="w-full rounded-[0.5rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.6rem] py-[0.32rem] text-[0.82rem] text-[var(--color-text-primary)] outline-none transition placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-border-strong)]"
+                          value={modelSearchQuery}
+                          onChange={(event) => {
+                            // Typing both filters the catalog and — as with
+                            // the old inline input — keeps free slug entry
+                            // working: the raw text is the selected model
+                            // until a row is picked.
+                            setSelectedModel(event.target.value);
+                            setModelSearchQuery(event.target.value);
+                            setModelHighlight(0);
+                          }}
+                          onKeyDown={(event) => {
+                            const count = filteredRankedModels.length;
+                            if (event.key === "ArrowDown" && count > 0) {
+                              event.preventDefault();
+                              setModelHighlight((h) => (Math.min(h, count - 1) + 1) % count);
+                            } else if (event.key === "ArrowUp" && count > 0) {
+                              event.preventDefault();
+                              setModelHighlight((h) => (Math.min(h, count - 1) - 1 + count) % count);
+                            } else if (event.key === "Enter") {
+                              event.preventDefault();
+                              const pick = filteredRankedModels[Math.min(modelHighlight, count - 1)];
+                              if (pick) setSelectedModel(pick.slug);
+                              closeModelPicker(true);
+                            }
+                          }}
+                        />
+                        <div
+                          id="composer-model-listbox"
+                          role="listbox"
+                          aria-label="Model options"
+                          className="grid max-h-72 gap-[0.1rem] overflow-y-auto"
+                        >
+                          {isLoadingRankedModels || (isLoadingCatalog && modelSearchQuery.trim() !== "") ? (
+                            <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
+                          ) : filteredRankedModels.length === 0 ? (
+                            <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">No matches</div>
+                          ) : (
+                            filteredRankedModels.map((model, i) => {
+                              // One pill per row, picked from a strict
+                              // hierarchy so the listbox stays uncluttered:
+                              //   recommended > tested > ✨ new > experimental
+                              // recommended = tier slug (default/advanced),
+                              // styled as the design's .rec-tag.
+                              const tier = model.slug ? tierForModel(model.slug) : null;
+                              const isTier = tier === "default" || tier === "advanced";
+                              const isFresh = isNewlyReleased(model.created);
+                              let pill: ReactNode = null;
+                              if (isTier) {
+                                pill = (
+                                  <span className="shrink-0 rounded-[var(--radius-pill)] border border-[color-mix(in_srgb,var(--color-success)_40%,transparent)] px-[0.45rem] py-[0.14rem] text-[0.58rem] font-semibold uppercase tracking-[0.06em] text-[var(--color-success)]">
+                                    Recommended
+                                  </span>
+                                );
+                              } else if (tier === "tested") {
+                                pill = <ModelValidationBadge tier="tested" />;
+                              } else if (isFresh) {
+                                pill = <NewModelBadge />;
+                              } else if (tier === "experimental") {
+                                pill = <ModelValidationBadge tier="experimental" />;
+                              }
+                              const isSelected = model.slug === selectedModel;
+                              const isHighlighted =
+                                i === Math.min(modelHighlight, filteredRankedModels.length - 1);
+                              return (
+                                <button
+                                  key={model.slug || "__default__"}
+                                  id={`composer-model-opt-${i}`}
+                                  type="button"
+                                  role="option"
+                                  aria-selected={isSelected}
+                                  title={model.slug ? `${model.name} (${model.slug})` : "Use the server-configured default model"}
+                                  className={`${POP_ROW} ${isSelected ? POP_ROW_SELECTED : ""} ${
+                                    isHighlighted && !isSelected ? "bg-[var(--rail-hover)]" : ""
+                                  }`}
+                                  onClick={() => {
+                                    setSelectedModel(model.slug);
+                                    closeModelPicker(true);
+                                  }}
+                                >
+                                  <span className="grid min-w-0 gap-[0.1rem]">
+                                    <span className={`${POP_TITLE} truncate`}>{model.name}</span>
+                                    {model.slug ? (
+                                      <span className={`${POP_DESC} truncate`}>{model.slug}</span>
+                                    ) : null}
+                                  </span>
+                                  {pill}
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  {/* The design's .composer-div divider between the model
+                      chip and the icon-button cluster. */}
+                  <span
+                    aria-hidden="true"
+                    className="mx-[0.15rem] h-[1.1rem] w-px shrink-0 bg-[var(--color-border-strong)]"
+                  />
                   {(() => {
                     // Persona is locked server-side once a conversation has any
                     // turns, so once the chat is underway the picker is read-only
@@ -601,278 +831,98 @@ export function Composer({
                     return (
                       <div
                         ref={personaPickerRef}
-                        className="relative inline-flex min-w-0 items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]"
+                        className="relative inline-flex"
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape" && personaPickerOpen) {
+                            event.stopPropagation();
+                            setPersonaPickerOpen(false);
+                            personaButtonRef.current?.focus();
+                          }
+                        }}
                       >
+                        {/* Icon-only .tool-btn (the design has no persona
+                            control; it joins the icon cluster per review).
+                            The active persona is announced via the
+                            aria-label and shown in the hover tip; the
+                            popover marks it with the selected state. */}
                         <button
+                          ref={personaButtonRef}
                           type="button"
                           aria-haspopup="listbox"
                           aria-expanded={personaPickerOpen}
-                          title={`Persona — ${formatPersona(selectedPersona)}`}
-                          // Collapsed default = circle the same size as
-                          // the paperclip / wrench buttons (h-7 w-7) so
-                          // the composer toolbar reads as a row of
-                          // matching controls instead of two long pills
-                          // hogging space. It stays that size until you
-                          // click it open — no hover/focus expansion, so
-                          // the click target never moves out from under
-                          // the cursor. Open reveals the persona name and
-                          // the dropdown marks the active one.
-                          className={`composer-pill-text group relative inline-flex h-7 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border-strong)] bg-transparent text-[0.72rem] text-[var(--color-text-secondary)] transition-[width] duration-200 hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] ${
-                            personaPickerOpen ? "w-24 sm:w-44" : "w-7"
-                          }`}
+                          aria-label={`Persona — ${formatPersona(selectedPersona)}`}
+                          data-tip-top={`Persona — ${formatPersona(selectedPersona)}`}
+                          className={`${TOOL_BTN} ${personaPickerOpen ? TOOL_BTN_ACTIVE : ""}`}
                           onClick={() => setPersonaPickerOpen((open) => !open)}
                         >
-                          <span
-                            aria-hidden="true"
-                            className={`absolute inset-0 grid place-items-center transition-opacity duration-200 ${
-                              personaPickerOpen ? "opacity-0" : "opacity-100"
-                            }`}
-                          >
-                            <Icon name="persona" className="size-3.5" />
-                          </span>
-                          <span
-                            className={`truncate px-2.5 transition-opacity duration-200 ${
-                              personaPickerOpen ? "opacity-100" : "opacity-0"
-                            }`}
-                          >
-                            {formatPersona(selectedPersona)}
-                          </span>
+                          <Icon name="persona" className="size-3.5" />
                         </button>
                         {personaPickerOpen ? (
-                          <div
-                            role="listbox"
-                            aria-label="Persona"
-                            className="absolute bottom-[calc(100%+0.35rem)] left-0 z-30 w-40 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:w-44"
-                          >
-                            <div className="max-h-72 overflow-y-auto py-1">
-                              {personaOptions.map((p) => {
-                                const selected = p === selectedPersona;
-                                return (
-                                  <button
-                                    key={p}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={selected}
-                                    className={[
-                                      "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[0.74rem] transition hover:bg-[var(--color-overlay-soft)]",
-                                      selected
-                                        ? "bg-[var(--color-overlay-soft)] font-semibold text-[var(--color-accent)]"
-                                        : "text-[var(--color-text-primary)]",
-                                    ].join(" ")}
-                                    onMouseDown={(event) => event.preventDefault()}
-                                    onClick={() => {
-                                      setSelectedPersona(p);
-                                      setPersonaPickerOpen(false);
-                                    }}
-                                  >
-                                    <span className="truncate">{formatPersona(p)}</span>
-                                    {selected ? (
-                                      <span
-                                        aria-hidden="true"
-                                        className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
-                                      />
-                                    ) : null}
-                                  </button>
-                                );
-                              })}
-                            </div>
+                          <div role="listbox" aria-label="Persona" className={COMPOSER_POP}>
+                            {personaOptions.map((p) => {
+                              const selected = p === selectedPersona;
+                              return (
+                                <button
+                                  key={p}
+                                  type="button"
+                                  role="option"
+                                  aria-selected={selected}
+                                  className={`${POP_ROW} ${selected ? POP_ROW_SELECTED : ""}`}
+                                  onClick={() => {
+                                    setSelectedPersona(p);
+                                    setPersonaPickerOpen(false);
+                                    personaButtonRef.current?.focus();
+                                  }}
+                                >
+                                  <span className={`${POP_TITLE} truncate`}>{formatPersona(p)}</span>
+                                  {selected ? (
+                                    <span
+                                      aria-hidden="true"
+                                      className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
+                                    />
+                                  ) : null}
+                                </button>
+                              );
+                            })}
                           </div>
                         ) : null}
                       </div>
                     );
                   })()}
-                  {/* No leading "Persona" / "Model" word labels — the
-                      pill values themselves convey what each control is,
-                      and dropping the labels keeps the persona dropdown's
-                      `left-0` anchored to the button (with the label, on
-                      desktop it offset the dropdown to the left of the
-                      pill). Encourages exploration: the pills look
-                      clickable on their own. */}
-                  {/* Wrapper is a <div>, not a <label>: with <label> a click
-                      anywhere inside (e.g. on a model option) bubbles up and
-                      triggers the implicit "focus my <input>" behavior, which
-                      re-runs the input's onFocus handler and re-opens the
-                      picker we just closed. <div> drops that behavior; the
-                      input is still focusable directly. */}
-                  <div ref={modelPickerRef} className="relative inline-flex min-w-0 items-center gap-1.5 text-[0.72rem] text-[var(--color-text-muted)]">
-                    {/* Same collapsed-circle treatment as the persona
-                        button — a centered icon stands in for the model in
-                        the collapsed state, and the live input fades in only
-                        once the picker is open (click/focus). No hover/focus
-                        width expansion, so the control isn't a moving target. */}
-                    <div
-                      className={`group relative h-7 shrink-0 overflow-hidden rounded-full border bg-transparent transition-[width] duration-200 ${
-                        modelError
-                          ? "border-[var(--color-danger)]"
-                          : "border-[var(--color-border-strong)] hover:border-[var(--color-accent)]"
-                      } ${
-                        isStreaming
-                          ? "w-7 cursor-not-allowed opacity-40"
-                          : modelPickerOpen
-                            ? "w-24 sm:w-44"
-                            : "w-7"
-                      }`}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={`pointer-events-none absolute inset-0 grid place-items-center transition-opacity duration-200 ${
-                          modelError ? "text-[var(--color-danger)]" : "text-[var(--color-text-secondary)]"
-                        } ${
-                          modelPickerOpen ? "opacity-0" : "opacity-100"
-                        }`}
-                      >
-                        <Icon name="model" className="size-3.5" />
-                      </span>
-                      <input
-                        ref={modelInputRef}
-                        type="text"
-                        spellCheck={false}
-                        autoCapitalize="off"
-                        autoCorrect="off"
-                        placeholder="default"
-                        aria-label="Model"
-                        // text-center matches the persona button next to
-                        // it (which is flex-centered). Without it the
-                        // input sits left-aligned and the two pills read
-                        // as different controls even when same-sized.
-                        // truncate on the input ellipses long model slugs
-                        // when the field isn't focused (modern browsers
-                        // honor text-overflow:ellipsis on <input> in that
-                        // state) — when the user taps to edit, native
-                        // input scroll takes over and the ellipsis lifts.
-                        className={`relative h-full w-full truncate bg-transparent px-2.5 text-center text-[0.72rem] outline-none transition-opacity duration-200 disabled:opacity-60 ${
-                          modelError
-                            ? "text-[var(--color-danger)]"
-                            : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                        } ${
-                          modelPickerOpen
-                            ? "opacity-100"
-                            : "opacity-0 focus:opacity-100"
-                        }`}
-                        value={labelForModel(selectedModel)}
-                        disabled={isStreaming}
-                        title={`OpenRouter model slug — aliases: ${DEFAULT_MODEL_LABEL} → ${DEFAULT_MODEL}, ${ADVANCED_MODEL_LABEL} → ${ADVANCED_MODEL}`}
-                        onFocus={() => {
-                          setModelPickerOpen(true);
-                          setModelSearchQuery("");
-                          void loadRankedModels();
-                          void loadCatalogModels();
-                        }}
-                        onClick={() => {
-                          setModelPickerOpen(true);
-                          setModelSearchQuery("");
-                          void loadRankedModels();
-                          void loadCatalogModels();
-                        }}
-                        onChange={(event) => {
-                          setSelectedModel(event.target.value);
-                          setModelSearchQuery(event.target.value);
-                          setModelPickerOpen(true);
-                          void loadRankedModels();
-                          void loadCatalogModels();
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape") setModelPickerOpen(false);
-                        }}
-                      />
-                    </div>
-                    {modelPickerOpen && !isStreaming ? (
-                      // Mobile pins the popover to the viewport so the
-                      // anchored layout can't push it off-screen. Desktop
-                      // anchors to the picker button's left edge and grows
-                      // rightward — the composer's footer cluster lives on
-                      // the left of the row, so there's always more room to
-                      // the right; right-anchoring used to extend the
-                      // popover leftward and got clipped by `main`'s
-                      // overflow-hidden (and visually covered by the
-                      // sidebar overlay at sm-to-lg widths).
-                      <div className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.35rem)] sm:left-0 sm:w-64">
-                        <div className="max-h-72 overflow-y-auto py-1">
-                          {isLoadingRankedModels || (isLoadingCatalog && modelSearchQuery.trim() !== "") ? (
-                            <div className="px-3 py-2 text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
-                          ) : filteredRankedModels.length === 0 ? (
-                            <div className="px-3 py-2 text-[0.74rem] text-[var(--color-text-muted)]">No matches</div>
-                          ) : (
-                            filteredRankedModels.map((model) => {
-                              // Tier rows get a "recommended" pill so the user
-                              // can spot the curated picks at a glance; non-tier
-                              // rows show the tested/experimental validation
-                              // signal instead.
-                              // One pill per row, picked from a strict
-                              // hierarchy so the dropdown stays uncluttered:
-                              //   recommended > tested > ✨ new > experimental
-                              // recommended = tier slug (default/advanced).
-                              // tested = vetted end-to-end with our tools.
-                              // new = listed on OpenRouter within the last
-                              //   NEW_MODEL_WINDOW_DAYS.
-                              // experimental = catchall: a known slug we
-                              //   haven't classified.
-                              const tier = model.slug ? tierForModel(model.slug) : null;
-                              const isTier = tier === "default" || tier === "advanced";
-                              const isFresh = isNewlyReleased(model.created);
-                              let pill: ReactNode = null;
-                              if (isTier) {
-                                pill = (
-                                  <span className="shrink-0 rounded-full bg-[var(--color-accent)] px-1.5 py-0 text-[0.6rem] font-semibold leading-4 tabular-nums text-[var(--color-surface-1)]">
-                                    recommended
-                                  </span>
-                                );
-                              } else if (tier === "tested") {
-                                pill = <ModelValidationBadge tier="tested" />;
-                              } else if (isFresh) {
-                                pill = <NewModelBadge />;
-                              } else if (tier === "experimental") {
-                                pill = <ModelValidationBadge tier="experimental" />;
-                              }
-                              const isSelected = model.slug === selectedModel;
-                              return (
-                                <button
-                                  key={model.slug || "__default__"}
-                                  type="button"
-                                  aria-current={isSelected ? "true" : undefined}
-                                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[0.74rem] transition hover:bg-[var(--color-overlay-soft)] ${
-                                    isSelected
-                                      ? "bg-[var(--color-overlay-soft)] font-semibold text-[var(--color-accent)]"
-                                      : "text-[var(--color-text-primary)]"
-                                  }`}
-                                  title={model.slug ? `${model.name} (${model.slug})` : "Use the server-configured default model"}
-                                  onMouseDown={(event) => event.preventDefault()}
-                                  onClick={() => {
-                                    setSelectedModel(model.slug);
-                                    setModelSearchQuery("");
-                                    setModelPickerOpen(false);
-                                    // Blur the input so the on-screen
-                                    // keyboard dismisses on mobile and
-                                    // `focus-within` clears, letting the
-                                    // wrapper collapse back to the
-                                    // circle. Safe on desktop too —
-                                    // matches the pre-collapsing
-                                    // behavior where focus naturally
-                                    // moved when the picker closed.
-                                    modelInputRef.current?.blur();
-                                  }}
-                                >
-                                  <span className="truncate">{model.name}</span>
-                                  {pill}
-                                </button>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
+                  <button
+                    type="button"
+                    aria-label="Attach files"
+                    data-tip-top="Attach files"
+                    className={TOOL_BTN}
+                    disabled={isStreaming || isUploadingAttachments}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Icon name="paperclip" className="size-3.5" />
+                  </button>
                   {mcpServers.length > 0 ? (
-                    <div ref={mcpPickerRef} className="relative inline-flex">
+                    <div
+                      ref={mcpPickerRef}
+                      className="relative inline-flex"
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape" && mcpPickerOpen) {
+                          event.stopPropagation();
+                          setMcpPickerOpen(false);
+                          mcpButtonRef.current?.focus();
+                        }
+                      }}
+                    >
                       {(() => {
                         const enabledCount = mcpServers.filter((s) => s.enabled).length;
                         return (
                           <button
+                            ref={mcpButtonRef}
                             type="button"
                             aria-label="Optional tools"
+                            aria-haspopup="true"
+                            aria-expanded={mcpPickerOpen}
                             disabled={isStreaming}
-                            title="Optional tools for this conversation"
-                            className={`inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-full border border-[var(--color-border-strong)] text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${enabledCount > 0 ? "pl-2 pr-1.5" : "w-7"}`}
+                            data-tip-top="Tools & MCP servers"
+                            className={`${TOOL_BTN} ${enabledCount > 0 ? TOOL_BTN_ACTIVE : ""}`}
                             onClick={() => {
                               const next = !mcpPickerOpen;
                               setMcpPickerOpen(next);
@@ -885,8 +935,10 @@ export function Composer({
                             }}
                           >
                             <Icon name="wrench" className="size-3.5" />
+                            {/* The design's .tool-badge: enabled-count bubble
+                                pinned to the button's top-right corner. */}
                             {enabledCount > 0 ? (
-                              <span className="inline-flex min-w-[1rem] items-center justify-center rounded-full bg-[var(--color-accent)] px-1 text-[0.6rem] font-medium leading-4 text-[var(--color-surface-1)] tabular-nums">
+                              <span className="pointer-events-none absolute right-0 top-0 inline-flex h-[0.875rem] min-w-[0.875rem] -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent)] px-[2px] font-[family-name:var(--font-code)] text-[0.56rem] font-medium tabular-nums text-[var(--color-bg)]">
                                 {enabledCount}
                               </span>
                             ) : null}
@@ -894,32 +946,30 @@ export function Composer({
                         );
                       })()}
                       {mcpPickerOpen && !isStreaming ? (
-                        // Same fixed/absolute split as the model picker
-                        // above — see the comment there for context.
-                        <div className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 overflow-hidden rounded-[0.9rem] border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-surface-2)_96%,black)] shadow-[var(--shadow-lg)] backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.35rem)] sm:left-0 sm:w-72">
-                          <div className="max-h-80 overflow-y-auto py-1">
+                        <div className={COMPOSER_POP}>
+                          {/* One .pop-sec section: fleet's composer catalog
+                              only carries optional MCP servers (the design's
+                              "Built-in" section is mock content — always-on
+                              tools are not per-conversation toggles here). */}
+                          <div className={POP_SEC}>MCP servers</div>
+                          <div className="grid max-h-80 gap-[0.1rem] overflow-y-auto">
                             {isLoadingMcpServers ? (
-                              <div className="px-3 py-2 text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
+                              <div className="px-[0.6rem] py-[0.45rem] text-[0.74rem] text-[var(--color-text-muted)]">Loading...</div>
                             ) : (
                               mcpServers.map((server) => (
-                                <label
+                                <button
                                   key={server.name}
-                                  className="flex cursor-pointer items-start gap-2 px-3 py-2 text-[0.74rem] transition hover:bg-[var(--color-overlay-soft)]"
+                                  type="button"
+                                  aria-pressed={server.enabled}
                                   title={(server.tools ?? []).join(", ")}
+                                  className={`${POP_ROW} items-start`}
+                                  onClick={() => {
+                                    void toggleMcpServer(activeConversationId, server.name);
+                                  }}
                                 >
-                                  <input
-                                    type="checkbox"
-                                    className="mt-0.5 h-3.5 w-3.5 shrink-0"
-                                    checked={server.enabled}
-                                    onChange={() => {
-                                      void toggleMcpServer(activeConversationId, server.name);
-                                    }}
-                                  />
-                                  <span className="flex flex-col gap-0.5">
+                                  <span className="grid min-w-0 gap-[0.1rem]">
                                     <span className="flex items-center gap-1.5">
-                                      <span className="font-medium text-[var(--color-text-primary)]">
-                                        {server.display_name || server.name}
-                                      </span>
+                                      <span className={POP_TITLE}>{server.display_name || server.name}</span>
                                       {server.beta ? (
                                         <span
                                           className="rounded-sm border border-[var(--color-border-strong)] px-1 py-px text-[0.55rem] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]"
@@ -930,15 +980,14 @@ export function Composer({
                                       ) : null}
                                     </span>
                                     {server.description ? (
-                                      <span className="text-[0.7rem] leading-snug text-[var(--color-text-muted)]">
-                                        {server.description}
-                                      </span>
+                                      <span className={`${POP_DESC} leading-snug`}>{server.description}</span>
                                     ) : null}
                                     <span className="text-[0.65rem] text-[var(--color-text-muted)]">
                                       {server.tool_count} tool{server.tool_count === 1 ? "" : "s"}
                                     </span>
                                   </span>
-                                </label>
+                                  <MiniSwitch on={server.enabled} />
+                                </button>
                               ))
                             )}
                           </div>
@@ -971,7 +1020,7 @@ export function Composer({
                   ) : null}
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-[0.35rem]">
                   {isStreaming ? (
                     <button
                       className="text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
@@ -999,13 +1048,12 @@ export function Composer({
                       Stop
                     </button>
                   ) : null}
-                  {/* Send-key preference toggle (issue #315). A small ⚙ pill
-                      cycles between "Send on Enter" (default) and "Send on
-                      Ctrl/Cmd+Enter". The active mode is shown as the pill's
-                      title/aria-label so it's discoverable on hover and
-                      screen-reader friendly; clicking flips + persists it.
-                      Sits right next to Send so the toggle is in the same
-                      glance as the key it configures. */}
+                  {/* Send-key preference toggle (issue #315), restyled as the
+                      design's .tool-btn with the return-key glyph; the active
+                      state marks "Send on Enter" on. The mode is announced
+                      via aria-label and the hover tip; clicking flips +
+                      persists it. Sits right next to Send so the toggle is
+                      in the same glance as the key it configures. */}
                   <button
                     type="button"
                     aria-label={
@@ -1013,26 +1061,34 @@ export function Composer({
                         ? "Send on Enter (click to switch to Ctrl+Enter)"
                         : "Send on Ctrl+Enter (click to switch to Enter)"
                     }
-                    title={
-                      sendOnEnter
-                        ? "Send on Enter — click to use Ctrl+Enter"
-                        : "Send on Ctrl+Enter — click to use Enter"
-                    }
+                    data-tip-top={sendOnEnter ? "Send on Enter" : "Send on Ctrl+Enter"}
                     aria-pressed={sendOnEnter}
-                    className="inline-flex h-7 shrink-0 items-center justify-center rounded-full border border-[var(--color-border-strong)] px-2 text-[0.6875rem] text-[var(--color-text-secondary)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                    className={`${TOOL_BTN} ${sendOnEnter ? TOOL_BTN_ACTIVE : ""}`}
                     onClick={() => setSendOnEnter((v) => !v)}
                   >
-                    <span aria-hidden="true" className="leading-none">⏎</span>
+                    <Icon name="return-key" className="size-3.5" />
                     <span className="sr-only">{sendOnEnter ? "Enter" : "Ctrl+Enter"}</span>
                   </button>
+                  {/* The design's .send-btn: a 2.1rem circle that lights up
+                      with the action gradient once there is content to send
+                      (the image: hint keeps the gradient token in
+                      background-image). */}
                   <button
                     aria-label="Send message"
-                    className="inline-flex min-w-[3rem] items-center justify-center rounded-full bg-[var(--color-text-primary)] px-3 py-2 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-30 sm:min-w-[3.25rem]"
+                    className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
+                      prompt.trim() && !isStreaming && !isUploadingAttachments
+                        ? "bg-[image:var(--gradient-action-primary)] text-white hover:-translate-y-px"
+                        : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
+                    }`}
                     type="submit"
                     disabled={!prompt.trim() || isStreaming || isUploadingAttachments}
                     title={isUploadingAttachments ? "Uploading attachments…" : "Send message"}
                   >
-                    {isUploadingAttachments ? "…" : "Send"}
+                    {isUploadingAttachments ? (
+                      <span aria-hidden="true">…</span>
+                    ) : (
+                      <Icon name="arrow-up" className="size-4" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -1050,13 +1106,13 @@ export function Composer({
             >
               {sendOnEnter ? (
                 <>
-                  <b className="font-semibold text-[var(--color-text-secondary)]">Shift+Enter</b> for a new line ·{" "}
-                  <b className="font-semibold text-[var(--color-text-secondary)]">Enter</b> to send
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Enter</b> to send ·{" "}
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Shift+Enter</b> for a new line
                 </>
               ) : (
                 <>
-                  <b className="font-semibold text-[var(--color-text-secondary)]">Enter</b> for a new line ·{" "}
-                  <b className="font-semibold text-[var(--color-text-secondary)]">Ctrl+Enter</b> to send
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Ctrl+Enter</b> to send ·{" "}
+                  <b className="font-semibold text-[var(--color-text-secondary)]">Enter</b> for a new line
                 </>
               )}
             </p>

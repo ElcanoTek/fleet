@@ -103,6 +103,77 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+// ── Recent-section info note ─────────────────────────────────────────────────
+// The ⓘ next to the "Recent" group header click-toggles the retention
+// explainer on the shared .conv-tooltip surface (portaled to <body> like the
+// sealed tooltip above, and for the same reason). Click-toggle rather than
+// hover-only so it works on touch; dismissed by clicking anywhere else or
+// pressing Escape. The copy states the server's default TTL
+// (CONVERSATION_TTL_DAYS, default 14); pinning is the one user action that
+// always exempts a chat from the sweep, so that is the action we name.
+const RECENT_INFO_TEXT =
+  "Unpinned chats are deleted after 14 days of inactivity. Pin a chat to keep it.";
+
+function RecentInfoButton() {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!pos) return;
+    // Clicks on the trigger itself are the toggle's job; everything else
+    // (including clicks inside the tooltip, which only carries static text)
+    // dismisses. Listeners attach only while open.
+    const onDocClick = (e: MouseEvent) => {
+      if (btnRef.current && e.target instanceof Node && btnRef.current.contains(e.target)) return;
+      setPos(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPos(null);
+    };
+    document.addEventListener("click", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [pos]);
+
+  return (
+    <span className="relative inline-flex">
+      <button
+        ref={btnRef}
+        type="button"
+        aria-label="About recent chats"
+        aria-expanded={pos !== null}
+        className="hit-area inline-flex items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] aria-expanded:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          // Same placement math as the sealed tooltip: below the button,
+          // shifted so the surface's arrow points back at the anchor.
+          setPos(
+            pos ? null : { top: Math.round(r.bottom + 7), left: Math.round(r.left + r.width / 2 - 17) },
+          );
+        }}
+      >
+        <Icon name="info" className="size-[0.9rem]" />
+      </button>
+      {pos && typeof document !== "undefined"
+        ? createPortal(
+            <span
+              role="tooltip"
+              className="conv-tooltip"
+              style={{ top: pos.top, left: pos.left }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {RECENT_INFO_TEXT}
+            </span>,
+            document.body,
+          )
+        : null}
+    </span>
+  );
+}
+
 // ── Label chips ────────────────────────────────────────────────────────────
 function LabelChip({
   name,
@@ -247,7 +318,7 @@ function LabelsPanel({
       />
       {fresh.length > 0 && !atMax ? (
         <div className="flex flex-col gap-1">
-          <span className="text-[0.625rem] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+          <span className="text-[0.66rem] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
             Suggestions
           </span>
           <div className="flex flex-wrap gap-1.5">
@@ -572,7 +643,7 @@ function ConvRow({
           // sync effect. autoFocus + select-on-focus mirror the prior behavior.
           autoFocus
           aria-label={`Rename ${conversation.title}`}
-          className="mx-[0.4rem] my-[0.32rem] w-[calc(100%-0.8rem)] rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.8125rem] text-[var(--color-text-primary)] outline-none"
+          className="mx-[0.4rem] my-[0.32rem] w-[calc(100%-0.8rem)] rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.875rem] text-[var(--color-text-primary)] outline-none"
           defaultValue={conversation.title}
           onFocus={(e) => e.currentTarget.select()}
           onBlur={(e) => onCommitRename(e.currentTarget.value)}
@@ -591,7 +662,7 @@ function ConvRow({
           type="button"
           aria-pressed={selecting ? checked : undefined}
           className={[
-            "block w-full min-w-0 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.8125rem] transition",
+            "block w-full min-w-0 rounded-md py-2 pl-[0.55rem] pr-9 text-left text-[0.875rem] transition",
             selecting && checked
               ? "text-[var(--color-text-primary)]"
               : active
@@ -683,7 +754,7 @@ function SectionToggle({
       type="button"
       aria-expanded={open}
       onClick={onToggle}
-      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
+      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
     >
       <Icon name={icon} className="size-3.5 shrink-0 text-[var(--color-accent)]" />
       <span className="min-w-0 flex-1 text-left">{label}</span>
@@ -916,7 +987,7 @@ export function ConversationSidebar({
                 aria-pressed={filterFolder === f.name}
                 onClick={() => setFilterFolder(filterFolder === f.name ? null : f.name)}
                 className={[
-                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] transition",
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.875rem] transition",
                   filterFolder === f.name
                     ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
                     : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
@@ -944,7 +1015,7 @@ export function ConversationSidebar({
                 aria-pressed={filterLabels.includes(l.name)}
                 onClick={() => toggleLabelFilter(l.name)}
                 className={[
-                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] transition",
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.875rem] transition",
                   filterLabels.includes(l.name)
                     ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
                     : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
@@ -1079,7 +1150,7 @@ export function ConversationSidebar({
         >
           <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
             {filterFolder ? (
-              <span className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-0.5 pl-2 pr-1 text-[0.72rem] text-[var(--color-text-primary)]">
+              <span className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-0.5 pl-2 pr-1 text-[0.78rem] text-[var(--color-text-primary)]">
                 <span className="text-[var(--color-text-muted)]">Folder:</span> {filterFolder}
                 <button
                   type="button"
@@ -1094,7 +1165,7 @@ export function ConversationSidebar({
             {filterLabels.map((l) => (
               <span
                 key={l}
-                className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-0.5 pl-2 pr-1 text-[0.72rem] text-[var(--color-text-primary)]"
+                className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-0.5 pl-2 pr-1 text-[0.78rem] text-[var(--color-text-primary)]"
               >
                 <span className="text-[var(--color-text-muted)]">Label:</span> {l}
                 <button
@@ -1110,7 +1181,7 @@ export function ConversationSidebar({
           </div>
           <button
             type="button"
-            className="shrink-0 rounded px-1.5 py-0.5 text-[0.72rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
+            className="shrink-0 rounded px-1.5 py-0.5 text-[0.78rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)]"
             onClick={clearFilters}
           >
             Clear
@@ -1121,11 +1192,11 @@ export function ConversationSidebar({
       {/* Conversation list */}
       <div className={["mt-2 flex-1 overflow-y-auto", railCollapsed ? "sm:hidden" : ""].join(" ")}>
         {isLoadingHistory ? (
-          <p className="px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)]">Loading…</p>
+          <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">Loading…</p>
         ) : filtering ? (
           <>
             {filteredConversations.length === 0 ? (
-              <p className="px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)]">
+              <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
                 {searching ? `No chats match “${sidebarQuery.trim()}”.` : "Nothing matches this filter."}
               </p>
             ) : (
@@ -1141,7 +1212,7 @@ export function ConversationSidebar({
           <>
             {pinned.length > 0 ? (
               <div className="mb-1">
-                <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-secondary)]">
+                <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
                   <Icon name="pin" className="size-3.5 shrink-0 text-[var(--color-accent)]" />
                   Pinned
                 </div>
@@ -1151,9 +1222,12 @@ export function ConversationSidebar({
             {foldersSection}
             {labelsSection}
             <div className="mb-1">
-              <div className="px-2 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-secondary)]">Recent</div>
+              <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
+                Recent
+                <RecentInfoButton />
+              </div>
               {recent.length === 0 ? (
-                <p className="px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-muted)]">No saved chats yet.</p>
+                <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">No saved chats yet.</p>
               ) : (
                 recent.map(renderRow)
               )}

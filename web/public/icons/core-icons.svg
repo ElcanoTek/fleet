@@ -309,4 +309,19 @@
     <path d="M16 12h.001"/>
     <path d="M7 16h10"/>
   </symbol>
+
+  <symbol id="arrow-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 19V5"></path>
+    <path d="M5 12l7-7 7 7"></path>
+  </symbol>
+
+  <symbol id="return-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 5v6a2 2 0 0 1-2 2H5"></path>
+    <path d="M9 9l-4 4 4 4"></path>
+  </symbol>
+
+  <symbol id="compress" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7 4l5 5 5-5"></path>
+    <path d="M7 20l5-5 5 5"></path>
+  </symbol>
 </svg>

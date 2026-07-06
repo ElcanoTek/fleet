@@ -88,7 +88,13 @@
     radial-gradient(circle at 92% 2%, rgba(88, 111, 124, 0.28), transparent 32%),
     radial-gradient(circle at 72% 82%, rgba(114, 114, 171, 0.18), transparent 30%),
     linear-gradient(150deg, #0f0612 0%, #1a0b1e 52%, #090409 100%);
-  --page-background-image: url("/backgrounds/chat-bg-dark.svg");
+  /* App-wide page background (unified-shell design): painted once on <body>
+     under the transparent chat/orchestrator shells, so the rail and main
+     column share a single continuous gradient. */
+  --gradient-bg:
+    radial-gradient(circle at 8% -4%, rgba(114, 114, 171, 0.3), transparent 34%),
+    radial-gradient(circle at 92% 2%, rgba(88, 111, 124, 0.24), transparent 32%),
+    linear-gradient(150deg, #0f0612 0%, #1a0b1e 52%, #090409 100%);
   --gradient-bg-ops-console:
     radial-gradient(ellipse at center, rgba(113, 114, 170, 0.06) 0%, transparent 60%),
     linear-gradient(180deg, #1a0b1e 0%, #241b31 40%, #1a0b1e 100%);
@@ -102,9 +108,7 @@
     linear-gradient(140deg, #7272ab, #586f7c);
   --gradient-featured-top-accent:
     linear-gradient(90deg, rgba(200, 201, 237, 0.95), rgba(114, 114, 171, 0.45));
-  --sidebar-surface:
-    linear-gradient(180deg, rgba(16, 8, 21, 0.9), rgba(19, 12, 25, 0.82)),
-    var(--gradient-bg-ops-console);
+  --sidebar-surface: linear-gradient(180deg, rgba(16, 8, 21, 0.92), rgba(19, 12, 25, 0.86));
   --hero-surface:
     linear-gradient(165deg, rgba(31, 18, 39, 0.9), rgba(29, 18, 37, 0.72)),
     var(--gradient-surface-panel);
@@ -198,7 +202,9 @@
     radial-gradient(circle at 9% -8%, rgba(114, 114, 171, 0.28), transparent 42%),
     radial-gradient(circle at 90% 0%, rgba(88, 111, 124, 0.24), transparent 38%),
     linear-gradient(150deg, #f7f9ff 0%, #eaf0ff 52%, #e2e9fb 100%);
-  --page-background-image: url("/backgrounds/chat-bg-light.svg");
+  --gradient-bg:
+    radial-gradient(circle at 9% -8%, rgba(114, 114, 171, 0.24), transparent 42%),
+    linear-gradient(150deg, #f7f9ff 0%, #eaf0ff 52%, #e2e9fb 100%);
   --gradient-bg-ops-console:
     radial-gradient(circle at 18% 22%, rgba(88, 111, 124, 0.28), transparent 48%),
     radial-gradient(circle at 80% 82%, rgba(114, 114, 171, 0.22), transparent 46%),
@@ -211,9 +217,7 @@
   --gradient-action-primary: linear-gradient(140deg, #565699, #41566a);
   --gradient-featured-top-accent:
     linear-gradient(90deg, rgba(114, 114, 171, 0.42), rgba(88, 111, 124, 0.22));
-  --sidebar-surface:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(240, 245, 255, 0.9)),
-    var(--gradient-bg-ops-console);
+  --sidebar-surface: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(240, 245, 255, 0.9));
   --hero-surface:
     linear-gradient(165deg, rgba(255, 255, 255, 0.96), rgba(239, 244, 255, 0.92)),
     var(--gradient-surface-panel);
@@ -445,11 +449,9 @@ body {
 
 body {
   background-color: var(--color-bg);
-  background-image: var(--page-background-image);
-  background-position: center top;
-  background-repeat: no-repeat;
+  background-image: var(--gradient-bg);
   background-size: cover;
-  background-attachment: scroll;
+  background-attachment: fixed;
   color: var(--color-text-primary);
   font-family: var(--font-body);
   font-size: var(--font-size-body);
@@ -475,17 +477,6 @@ select {
   input,
   textarea,
   select {
-    font-size: 16px;
-  }
-
-  /* Composer toolbar buttons that visually pair with one of the inputs
-     above (e.g. the persona-picker button next to the model-slug input).
-     Without this they'd render at ~0.72rem while the paired input got
-     bumped to 16px, making the pills look like different controls on
-     mobile. Apply this class only to the buttons that pair with an
-     input — not to every toolbar button — since the bigger size makes
-     the button taller, and we don't want every icon button growing too. */
-  .composer-pill-text {
     font-size: 16px;
   }
 

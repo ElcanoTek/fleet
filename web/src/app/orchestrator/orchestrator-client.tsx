@@ -137,7 +137,9 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   // Signed in — the unified two-column shell: rail + main dashboard.
   return (
     <div
-      className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] overflow-hidden bg-[var(--gradient-bg-ops-console)] text-[var(--color-text-primary)] sm:grid-cols-[auto_minmax(0,1fr)]"
+      // Transparent shell: the app-wide --gradient-bg on <body> (globals.css)
+      // is the one page background shared with the chat view.
+      className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] overflow-hidden text-[var(--color-text-primary)] sm:grid-cols-[auto_minmax(0,1fr)]"
     >
       <NavRail
         activeView="orchestrator"
