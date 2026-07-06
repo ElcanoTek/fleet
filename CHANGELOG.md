@@ -85,6 +85,20 @@ prior versions are listed because none have shipped.
 
 ### Security
 
+- Host-side file tools (`view_file`/`write_file`/`edit_file`) are now confined to
+  the workspace root the sandbox bind-mounts, closing an absolute-path bypass.
+  Their allowlist (`AllowedBaseDirs`) fell back to the process working directory,
+  which under systemd is the whole StateDirectory (`/var/lib/fleet`) — so an
+  absolute path could read or write `data/` attachments/uploads and
+  `api_keys.json` that the sandbox never mounts, defeating the "sandbox is
+  mandatory" invariant for file I/O. `cmd/fleet` now registers the workspace root
+  (`tools.SetWorkspaceRoot`, resolved exactly as the agent manager resolves it)
+  as the authoritative base; the process cwd is no longer blessed. `ValidatePath`
+  already resolves symlinks and re-checks the real path, so a symlink planted in
+  the workspace pointing at `data/` is rejected too. `os.TempDir()` and
+  operator-opted `FLEET_ALLOWED_DIRS` remain allowed; unregistered (tests/CLI)
+  keeps the legacy cwd allowlist.
+
 - Orchestrator admin auth now fails closed when `ADMIN_API_KEY` is unset.
   `verifyAdminKey` compared `sha256(header)` against `sha256(configured key)`
   in constant time, but with the key unset `sha256("") == sha256("")`, so a
