@@ -67,6 +67,9 @@ web/.e2e-live.env
 /cutlass
 fleet-session.json
 
+# Server runtime data directory (attachments, audit logs, task-run workspaces)
+/data/
+
 # Per-run bash audit logs the agent loop writes to CWD during tests.
 internal/acpruntime/data/
 internal/acpingress/data/
