@@ -1,7 +1,7 @@
 # deploy/fleet.service — systemd unit for the single `fleet` binary.
 #
 # ONE process boots, on one box: the chat HTTP/SSE server (default
-# 127.0.0.1:8080), the orchestrator HTTP server (default :8000), the scheduler
+# 127.0.0.1:8080), the orchestrator HTTP server (default 127.0.0.1:8000), the scheduler
 # ticker, and the capped in-process worker pool. See cmd/fleet/main.go.
 #
 # Install:
@@ -34,7 +34,7 @@
 #   # manifest references, e.g. SENDGRID_API_KEY=..., XANDR_USERNAME=...).
 #   # optional:
 #   # FLEET_SERVER_ADDR=127.0.0.1:8080           # chat listener  (default 127.0.0.1:8080)
-#   # FLEET_ORCHESTRATOR_ADDR=127.0.0.1:8000     # orchestrator listener (default :8000)
+#   # FLEET_ORCHESTRATOR_ADDR=127.0.0.1:8000     # orchestrator listener (default 127.0.0.1:8000)
 #   # FLEET_SERVER_TOKEN=...                      # shared chat token (web sets CHAT_SERVER_TOKEN to match)
 #   # ADMIN_API_KEY=...                           # orchestrator admin API key (full access)
 #   # FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS=ops@example.com,lead@example.com
