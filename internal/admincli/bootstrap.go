@@ -43,8 +43,11 @@ func cmdBootstrap(argv []string) int {
 }
 
 // findScript locates a repo script by basename. It probes, in order:
-// $FLEET_ROOT/scripts/<name>, ./scripts/<name>, and the binary's own
-// scripts/<name>. Shared by the bootstrap and update wrappers.
+// $FLEET_ROOT/scripts/<name>, ./scripts/<name>, the binary's own
+// scripts/<name>, and the binary's src/scripts/<name> (the bootstrap deploy
+// layout: binaries in FLEET_INSTALL_DIR, e.g. /opt/fleet, with the source
+// checkout alongside at <install-dir>/src — so `fleet update` works from any
+// cwd without FLEET_ROOT). Shared by the bootstrap and update wrappers.
 func findScript(name string) string {
 	candidates := []string{}
 	if root := strings.TrimSpace(os.Getenv("FLEET_ROOT")); root != "" {
@@ -52,7 +55,9 @@ func findScript(name string) string {
 	}
 	candidates = append(candidates, filepath.Join("scripts", name))
 	if exe, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "scripts", name))
+		candidates = append(candidates,
+			filepath.Join(filepath.Dir(exe), "scripts", name),
+			filepath.Join(filepath.Dir(exe), "src", "scripts", name))
 	}
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil { //nolint:gosec // G703: candidate paths are operator-controlled (FLEET_ROOT env, the literal "scripts/<name>", the binary's own dir), never request or LLM input.
