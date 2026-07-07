@@ -15,6 +15,15 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Bootstrap re-runs no longer lock admins out of the Operations Center**:
+  `scripts/bootstrap.sh` wrote `ORCHESTRATOR_SERVER_TOKEN=<ADMIN_API_KEY>` into
+  `/etc/fleet/fleet-web.env`, but the orchestrator's header-trust path verifies
+  `X-Orchestrator-Server-Token` against the chat shared secret
+  (`FLEET_SERVER_TOKEN`), fail-closed — so any bootstrap (re-)run 403'd every
+  cookie-authenticated Operations Center request until the env file was
+  hand-repaired. Bootstrap now mirrors `FLEET_SERVER_TOKEN` into both
+  `CHAT_SERVER_TOKEN` and `ORCHESTRATOR_SERVER_TOKEN`, matching the middleware
+  and the web tier's documented fallback.
 - **Operations Center model picker actually lists the catalog again**: the
   task form's picker fetched the OpenRouter catalog directly from the
   browser, which the app's Content-Security-Policy (`connect-src 'self'`,
