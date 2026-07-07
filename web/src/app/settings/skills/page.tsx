@@ -282,7 +282,7 @@ export default function SkillsPage() {
             </ConnField>
             <ConnField label="Instructions (markdown — concrete steps the agent follows)">
               <textarea
-                className={`${SETTINGS_INPUT} min-h-[9rem] resize-y pt-[0.55rem] font-[family-name:var(--font-code)] text-[0.76rem] leading-[1.6]`}
+                className={`${SETTINGS_INPUT} min-h-[9rem]! resize-y pt-[0.55rem]! font-[family-name:var(--font-code)] text-[0.76rem]! leading-[1.6]`}
                 placeholder={"1. Read the attached sheet.\n2. Check…"}
                 value={draft.body}
                 onChange={(e) => setDraft({ ...draft, body: e.target.value })}
@@ -321,7 +321,7 @@ export default function SkillsPage() {
         ) : (
           <ConnRows>
             {mine.map((sk) => (
-              <div key={sk.id} className={SKILL_ROW}>
+              <div key={sk.id} data-testid={`skill-row-${sk.name}`} className={SKILL_ROW}>
                 <div className={SKILL_HEAD}>
                   <CopyChip name={sk.name} />
                   <ConnBadge
@@ -418,7 +418,7 @@ export default function SkillsPage() {
         ) : (
           <ConnRows>
             {filtered.map((s) => (
-              <div key={s.name} className={SKILL_ROW}>
+              <div key={s.name} data-testid={`skill-row-${s.name}`} className={SKILL_ROW}>
                 <div className={SKILL_HEAD}>
                   <CopyChip name={s.name} />
                   <ConnBadge variant={s.source === "bundle" ? "success" : "neutral"}>

@@ -11,31 +11,51 @@ import { Icon } from "@/app/shared/ui/Icon";
 
 /* ── Buttons (.btn / .btn-primary / .btn-ghost / .btn-sm / .conn-reveal) ── */
 
+// NOTE on composition: Tailwind v4 emits same-property utilities in a fixed
+// (value-sorted) order, so "base class + appended override" does NOT cascade
+// like inline CSS — the emitted order decides. btnClass therefore computes
+// exactly ONE class per contested property (border-color, text-color,
+// hover background) instead of stacking overrides.
 const BTN_BASE =
-  "inline-flex items-center justify-center gap-[0.4rem] rounded-[var(--radius-md)] border border-transparent font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center justify-center gap-[0.4rem] rounded-[var(--radius-md)] border font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50";
 
 export function btnClass({
   variant = "ghost",
   sm = false,
   reveal = false,
   danger = false,
+  armed = false,
 }: {
   variant?: "primary" | "ghost";
   sm?: boolean;
   reveal?: boolean;
   danger?: boolean;
+  // The InlineConfirmButton's armed state: danger colors applied NOW, not on
+  // hover.
+  armed?: boolean;
 } = {}): string {
-  return [
-    BTN_BASE,
-    sm ? "px-[0.7rem] py-[0.3rem] text-[0.78rem]" : "px-[0.85rem] py-[0.45rem] text-[0.85rem]",
-    variant === "primary"
-      ? "bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)]"
-      : "text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]",
-    reveal ? "border-[var(--color-border)]" : "",
-    danger
-      ? "hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]"
-      : "",
-  ].join(" ");
+  const size = sm
+    ? "px-[0.7rem] py-[0.3rem] text-[0.78rem]"
+    : "px-[0.85rem] py-[0.45rem] text-[0.85rem]";
+  const border = armed
+    ? "border-[color-mix(in_srgb,var(--color-danger)_45%,transparent)]"
+    : reveal
+      ? "border-[var(--color-border)]"
+      : "border-transparent";
+  let color: string;
+  if (variant === "primary") {
+    color = "bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)]";
+  } else if (armed) {
+    color =
+      "bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] text-[var(--color-danger)]";
+  } else if (danger) {
+    color =
+      "text-[var(--color-text-secondary)] hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] hover:text-[var(--color-danger)]";
+  } else {
+    color =
+      "text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]";
+  }
+  return [BTN_BASE, size, border, color].join(" ");
 }
 
 // RevealButton — the design's "＋ Add …" / "× Cancel" panel-header toggle
@@ -288,12 +308,7 @@ export function InlineConfirmButton({
       onKeyDown={(e) => {
         if (e.key === "Escape") setArmed(false);
       }}
-      className={[
-        btnClass({ sm: true, danger: !armed }),
-        armed
-          ? "border-[color-mix(in_srgb,var(--color-danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] text-[var(--color-danger)]"
-          : "",
-      ].join(" ")}
+      className={btnClass({ sm: true, danger: !armed, armed })}
     >
       {armed ? confirmLabel : label}
     </button>
