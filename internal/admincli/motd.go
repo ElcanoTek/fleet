@@ -52,13 +52,15 @@ func renderMOTD(ver, unit, svcState string, color bool) string {
 		grn  = "32"
 		ylw  = "33"
 	)
-	// A compact masted-ship mark — fleet is a fleet of ships. Kept small so it
+	// A rowing galley — fleet is a fleet of ships, oars out. Kept small so it
 	// fits a login banner without dominating the terminal.
 	banner := strings.Join([]string{
-		`    .  .  .   `,
-		`  __|__|__|__   ` + paint(bold, "fleet") + "  " + paint(dim, ver),
-		`  \  fleet  /   ` + paint(dim, "self-hosted agent platform"),
-		`   \______/    `,
+		`     __4___`,
+		`  _  \ \ \ \      ` + paint(bold, "fleet") + "  " + paint(dim, ver),
+		` <'\ /_/_/_/      ` + paint(dim, "self-hosted agent platform"),
+		`  ((____!___/)`,
+		`   \0\0\0\0\/`,
+		`   ~~~~~~~~~~`,
 	}, "\n")
 
 	var b strings.Builder

@@ -109,7 +109,7 @@ func TestAdminStats_ExcludesSoftDeleted(t *testing.T) {
 	if err := s.SetPinned(ctx, owner, gone.ID, true); err != nil {
 		t.Fatalf("SetPinned: %v", err)
 	}
-	if err := s.AppendHistory(ctx, gone.ID, []agent.HistoryEntry{
+	if _, err := s.AppendHistory(ctx, gone.ID, []agent.HistoryEntry{
 		{Role: "user", Type: "text", Content: []byte(`{"text":"hi"}`)},
 	}); err != nil {
 		t.Fatalf("AppendHistory: %v", err)

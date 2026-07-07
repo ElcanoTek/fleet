@@ -22,7 +22,7 @@ func seedConv(t *testing.T, s *Server, user string) *store.Conversation {
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
-	if err := s.store.AppendHistory(ctx, conv.ID, []agent.HistoryEntry{
+	if _, err := s.store.AppendHistory(ctx, conv.ID, []agent.HistoryEntry{
 		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"summarize scheduled tasks that failed today"}`)},
 		{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"3 failed: nightly-etl, db-backup, weekly-report."}`)},
 	}); err != nil {

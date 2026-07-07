@@ -32,6 +32,7 @@ export type CatalogEntry = {
 // tier slots don't already cover. Order is the order the picker shows
 // them in. Meta and Cohere are intentionally omitted.
 export const MAJOR_LABS: ReadonlyArray<{ prefix: string; name: string }> = [
+  { prefix: "z-ai", name: "Z.AI" },
   { prefix: "anthropic", name: "Anthropic" },
   { prefix: "openai", name: "OpenAI" },
   { prefix: "google", name: "Google" },
@@ -192,6 +193,13 @@ export async function loadCatalog(): Promise<Catalog> {
   return inflight;
 }
 
+// baseSlug strips an OpenRouter ":variant" suffix (":nitro", ":free", …) so
+// variant slugs compare equal to their base model.
+export function baseSlug(slug: string): string {
+  const i = slug.indexOf(":");
+  return i === -1 ? slug : slug.slice(0, i);
+}
+
 // Text-completion models emit text tokens ONLY. Every model on
 // OpenRouter that declares an image or audio output today is a
 // dedicated generator (Nano Banana, GPT Image, GPT Audio, Lyria, the
@@ -241,14 +249,18 @@ export function listLatestPerLab(
   catalog: Catalog,
   excludeSlugs: ReadonlyArray<string> = [],
 ): CatalogEntry[] {
-  const exclude = new Set(excludeSlugs);
+  // Variant-insensitive exclusion: "z-ai/glm-5.2:nitro" (a pinned slug) and
+  // the catalog's "z-ai/glm-5.2" are the same model — a lab's "newest" row
+  // duplicating a pinned row helps nobody. Compare base slugs (strip the
+  // ":variant" suffix) on both sides.
+  const exclude = new Set(excludeSlugs.map(baseSlug));
   const out: CatalogEntry[] = [];
   for (const { prefix } of MAJOR_LABS) {
     const labPrefix = `${prefix}/`;
     let best: CatalogEntry | undefined;
     for (const entry of catalog.entries.values()) {
       if (!entry.slug.startsWith(labPrefix)) continue;
-      if (exclude.has(entry.slug)) continue;
+      if (exclude.has(baseSlug(entry.slug))) continue;
       // Skip OpenRouter's `:free` tier variants. They're typically the
       // same weights as a paid sibling but with stricter rate limits +
       // smaller context windows; surfacing them as the lab's "newest"

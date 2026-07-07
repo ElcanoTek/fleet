@@ -107,7 +107,7 @@ func TestAppendAndLoadHistory(t *testing.T) {
 		textEntry("user", "hi"),
 		textEntry("assistant", "hello"),
 	}
-	if err := s.AppendHistory(ctx, c.ID, entries); err != nil {
+	if _, err := s.AppendHistory(ctx, c.ID, entries); err != nil {
 		t.Fatalf("AppendHistory: %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestDelete_CascadesMessages(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
-	_ = s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{textEntry("user", "x")})
+	_, _ = s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{textEntry("user", "x")})
 
 	if err := s.Delete(ctx, "u@x.com", c.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -247,7 +247,7 @@ func TestReplaceSummary_HappyPath(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
-	_ = s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
+	_, _ = s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
 		textEntry("user", "hi"),
 		textEntry("assistant", "hello"),
 	})

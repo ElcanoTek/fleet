@@ -1431,7 +1431,7 @@ func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolNa
 		"is_err": isErr,
 	})
 	entry.Content = payload
-	if err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {
+	if _, err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {
 		log.Printf("AppendHistory (approval result): %v", err)
 	}
 }

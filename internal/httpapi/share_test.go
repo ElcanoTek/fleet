@@ -26,7 +26,7 @@ func TestConversationShare_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
-	if err := st.AppendHistory(ctx, conv.ID, []agent.HistoryEntry{
+	if _, err := st.AppendHistory(ctx, conv.ID, []agent.HistoryEntry{
 		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"how do I sort?"}`)},
 		{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"sort.Slice"}`)},
 	}); err != nil {
