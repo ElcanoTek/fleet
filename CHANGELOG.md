@@ -13,8 +13,45 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Operations Center model picker actually lists the catalog again**: the
+  task form's picker fetched the OpenRouter catalog directly from the
+  browser, which the app's Content-Security-Policy (`connect-src 'self'`,
+  #590) silently blocks — stranding the picker on its two seed models. It now
+  loads through the existing session-gated `/api/model-catalog` proxy, so the
+  full text-model catalog (plus pricing for ranking) is searchable again.
+
+### Added
+
+- **Workspace-provider models in the chat picker**: models from
+  admin-configured LLM providers (Settings → Admin → Model providers) now
+  appear in the chat composer's model menu with a "workspace" pill — they
+  previously surfaced only in the task form's picker. Labels and context
+  windows resolve for the chip and the context ring too.
+- **Catch-all providers get a browsable catalog (catwalk)**: an
+  Anthropic/OpenAI provider saved with an empty models list (= serves any
+  slug) previously contributed nothing to the pickers. The member-level
+  `GET /llm-provider-models` read now also returns the enabled provider
+  roster (name/type/catch_all — no secrets), and the web tier expands such
+  rows into `<provider>/<model>` entries from the
+  [catwalk](https://github.com/charmbracelet/catwalk) model database (the
+  same no-auth catalog Charm's Crush uses) via a new session-gated
+  `/api/catwalk-models` proxy with a 24 h cache. `CATWALK_URL` overrides the
+  default `https://catwalk.charm.land` for air-gapped deployments; failures
+  degrade to typed slugs. See `docs/LLM-PROVIDERS.md`.
+
 ### Changed
 
+- **New Task modal redesign**: the Operations Center create-task form is now
+  grouped into titled sections (Task · Schedule · Email · Tools & files ·
+  Advanced) with consistent field styling — several controls (the advanced
+  toggles, run_if row, tags/persona inputs) previously rendered with no CSS
+  at all. Real toggle switches with full-row click targets, a two-column grid
+  for schedule/model/limit fields, the custom cron input promoted next to the
+  presets (click an active preset again to clear it), a Cancel button, and
+  Estimate Cost anchored at the footer's start. Field IDs, validation, and
+  submit behavior are unchanged.
 - **Chat share UX**: creating (or revisiting) a share link now opens a
   proper dialog — the full URL in a selectable field, an explicit "Copy
   link" button with copied-state feedback, a read-only-access explainer,

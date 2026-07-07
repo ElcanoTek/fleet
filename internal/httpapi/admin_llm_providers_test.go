@@ -122,12 +122,23 @@ func TestAdminLLMProvidersCRUD(t *testing.T) {
 			ID       string `json:"id"`
 			Provider string `json:"provider"`
 		} `json:"models"`
+		Providers []struct {
+			Name     string `json:"name"`
+			Type     string `json:"type"`
+			CatchAll bool   `json:"catch_all"`
+		} `json:"providers"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &models); err != nil {
 		t.Fatalf("decode models: %v", err)
 	}
 	if len(models.Models) != 2 || models.Models[0].ID != "anthropic-direct/claude-sonnet-4-5" {
 		t.Fatalf("models = %+v, want 2 prefixed slugs", models.Models)
+	}
+	// The provider roster rides along (name/type/catch_all only) so the web
+	// tier can expand catch-all providers from a public model catalog.
+	if len(models.Providers) != 1 || models.Providers[0].Name != "anthropic-direct" ||
+		models.Providers[0].Type != "anthropic" || models.Providers[0].CatchAll {
+		t.Fatalf("providers = %+v, want anthropic-direct/anthropic/catch_all=false", models.Providers)
 	}
 
 	// Delete; the row disappears from both reads.
@@ -138,6 +149,43 @@ func TestAdminLLMProvidersCRUD(t *testing.T) {
 	w = do(t, h, http.MethodGet, "/llm-provider-models", nil, "user@x.com")
 	if !strings.Contains(w.Body.String(), `"models":[]`) {
 		t.Fatalf("models after delete = %s, want empty", w.Body.String())
+	}
+}
+
+// A catch-all row (no models list) contributes no model rows to the
+// member-level read but IS listed in `providers` with catch_all=true, so the
+// web tier can expand it from the catwalk catalog.
+func TestLLMProviderModelsCatchAll(t *testing.T) {
+	_, h := llmFixture(t)
+
+	w := do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "gateway", "type": "openai", "enabled": true, "api_key": "sk-gw-secret",
+	}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("catch-all create: status %d body %s", w.Code, w.Body.String())
+	}
+
+	w = do(t, h, http.MethodGet, "/llm-provider-models", nil, "user@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("provider-models: status %d", w.Code)
+	}
+	var models struct {
+		Models    []struct{ ID string } `json:"models"`
+		Providers []struct {
+			Name     string `json:"name"`
+			Type     string `json:"type"`
+			CatchAll bool   `json:"catch_all"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &models); err != nil {
+		t.Fatalf("decode models: %v", err)
+	}
+	if len(models.Models) != 0 {
+		t.Fatalf("models = %+v, want none (catch-all enumerates nothing)", models.Models)
+	}
+	if len(models.Providers) != 1 || models.Providers[0].Name != "gateway" ||
+		models.Providers[0].Type != "openai" || !models.Providers[0].CatchAll {
+		t.Fatalf("providers = %+v, want gateway/openai/catch_all=true", models.Providers)
 	}
 }
 

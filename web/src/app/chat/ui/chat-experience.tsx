@@ -54,6 +54,7 @@ import {
 } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
+import { loadWorkspaceModels } from "@/app/shared/lib/workspaceModels";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { Composer } from "./Composer";
@@ -145,6 +146,10 @@ export type RankedModel = {
   // Drives the "✨ new" pill in the picker — entries within
   // NEW_MODEL_WINDOW_DAYS get the badge.
   created?: number;
+  // True for models served by an admin-configured workspace provider
+  // ("<provider>/<model>" explicit-routing slugs). Drives the picker's
+  // "workspace" pill.
+  workspace?: boolean;
 };
 
 // Optional MCP servers the user can toggle on per-conversation. The catalog
@@ -420,6 +425,11 @@ export function ChatExperience() {
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [rankedModels, setRankedModels] = useState<RankedModel[]>([]);
   const [catalogModels, setCatalogModels] = useState<RankedModel[]>([]);
+  // Admin-configured workspace-provider models (Settings → Admin → Model
+  // providers), "<provider>/<model>" slugs. Loaded once on mount via the
+  // shared lib (which also expands catch-all anthropic/openai providers from
+  // the catwalk catalog); empty when none are configured or the fetch fails.
+  const [workspaceModels, setWorkspaceModels] = useState<RankedModel[]>([]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [personaPickerOpen, setPersonaPickerOpen] = useState(false);
   const [modelSearchQuery, setModelSearchQuery] = useState<string>("");
@@ -717,8 +727,11 @@ export function ChatExperience() {
   const contextLength = useMemo(() => {
     const slug = selectedModel.trim();
     if (!slug) return undefined;
-    return catalogModels.find((m) => m.slug === slug)?.contextLength;
-  }, [catalogModels, selectedModel]);
+    return (
+      catalogModels.find((m) => m.slug === slug)?.contextLength ??
+      workspaceModels.find((m) => m.slug === slug)?.contextLength
+    );
+  }, [catalogModels, workspaceModels, selectedModel]);
   // Display label for the model chip: tier alias ("default"/"advanced") >
   // catalog/ranked display name > the raw slug (or in-progress typed text).
   // Keeps the chip showing the same string as the model's menu row rather
@@ -729,9 +742,11 @@ export function ChatExperience() {
     const slug = selectedModel.trim();
     if (!slug) return selectedModel;
     const known =
-      catalogModels.find((m) => m.slug === slug) ?? rankedModels.find((m) => m.slug === slug);
+      catalogModels.find((m) => m.slug === slug) ??
+      rankedModels.find((m) => m.slug === slug) ??
+      workspaceModels.find((m) => m.slug === slug);
     return known?.name ?? selectedModel;
-  }, [selectedModel, catalogModels, rankedModels]);
+  }, [selectedModel, catalogModels, rankedModels, workspaceModels]);
   const contextUsage = useMemo<ContextUsage | null>(
     () =>
       computeContextUsage({
@@ -1051,9 +1066,12 @@ export function ChatExperience() {
     }
 
     if (!query) {
+      // Browse order: pinned defaults, then workspace-provider models (the
+      // operator configured them deliberately — they outrank the generic
+      // rankings), then the ranked list.
       const seen = new Set<string>();
       const out: RankedModel[] = [];
-      for (const m of [...defaults, ...rankedModels]) {
+      for (const m of [...defaults, ...workspaceModels, ...rankedModels]) {
         if (seen.has(m.slug)) continue;
         seen.add(m.slug);
         out.push(m);
@@ -1065,7 +1083,8 @@ export function ChatExperience() {
       m.slug.toLowerCase().includes(query) || m.name.toLowerCase().includes(query);
     const seen = new Set<string>();
     const matches: RankedModel[] = [];
-    for (const d of defaults) {
+    for (const d of [...defaults, ...workspaceModels]) {
+      if (seen.has(d.slug)) continue;
       if (matchesQuery(d)) {
         seen.add(d.slug);
         matches.push(d);
@@ -1079,7 +1098,7 @@ export function ChatExperience() {
       if (matches.length >= MAX_SEARCH_RESULTS) break;
     }
     return matches;
-  }, [rankedModels, catalogModels, modelSearchQuery, isLockdown, serverConfig.lockdownAllowedModels]);
+  }, [rankedModels, catalogModels, workspaceModels, modelSearchQuery, isLockdown, serverConfig.lockdownAllowedModels]);
 
   const loadRankedModels = async () => {
     if (rankedModels.length > 0 || isLoadingRankedModels) return;
@@ -2524,6 +2543,30 @@ export function ChatExperience() {
       cancelled = true;
     };
   }, [loadCatalogModels]);
+
+  // Load the workspace-provider models once on mount so the picker's browse
+  // view and the chip label can resolve them. The shared lib caches per page
+  // load and never rejects (failures resolve to []), so this is cheap and
+  // safe to fire unconditionally.
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      void loadWorkspaceModels().then((models) => {
+        if (cancelled || models.length === 0) return;
+        setWorkspaceModels(
+          models.map((m) => ({
+            slug: m.id,
+            name: m.name,
+            contextLength: m.contextLength,
+            workspace: true,
+          })),
+        );
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Refresh the active conversation when the tab/window becomes visible
   // again. The server now keeps generating after the SSE connection

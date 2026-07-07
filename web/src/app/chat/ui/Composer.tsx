@@ -774,9 +774,11 @@ export function Composer({
                             filteredRankedModels.map((model, i) => {
                               // One pill per row, picked from a strict
                               // hierarchy so the listbox stays uncluttered:
-                              //   recommended > tested > ✨ new > experimental
-                              // recommended = one of the two pinned slugs,
-                              // styled as the design's .rec-tag.
+                              //   recommended > workspace > tested > ✨ new >
+                              //   experimental. recommended = one of the two
+                              //   pinned slugs, styled as the design's
+                              //   .rec-tag; workspace = a slug served by an
+                              //   admin-configured provider.
                               const tier = model.slug ? tierForModel(model.slug) : null;
                               const isTier = tier === "default" || tier === "advanced";
                               const isFresh = isNewlyReleased(model.created);
@@ -787,6 +789,12 @@ export function Composer({
                                 pill = (
                                   <span className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-success)_40%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-success)]">
                                     recommended
+                                  </span>
+                                );
+                              } else if (model.workspace) {
+                                pill = (
+                                  <span className="shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] px-1.5 py-0 text-[0.6rem] font-medium leading-4 tabular-nums text-[var(--color-accent)]">
+                                    workspace
                                   </span>
                                 );
                               } else if (tier === "tested") {
