@@ -2358,8 +2358,19 @@ func (s *Server) runTurnAsync(
 	persistCtx, persistCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer persistCancel()
 
-	if err := s.store.AppendHistory(persistCtx, conv.ID, res.NewHistory); err != nil {
+	persistedIDs, err := s.store.AppendHistory(persistCtx, conv.ID, res.NewHistory)
+	if err != nil {
 		log.Printf("persist history error (user=%s conv=%s): %v", user, conv.ID, err)
+	} else {
+		// Tell the live stream which DB rows this turn's messages became, so
+		// the client can backfill Message.dbId without a reload — the Branch
+		// button (#454) only renders for persisted messages, and without this
+		// it stayed hidden until the conversation was re-opened. Emitted after
+		// turn.completed (ids exist only post-persist) and before finishTurn
+		// seals the buffer, so live AND replayed streams both carry it.
+		buf.Emit("history.persisted", map[string]any{
+			"entries": historyPersistedEntries(res.NewHistory, persistedIDs),
+		})
 	}
 
 	// Tool-call audit ledger (#224): derive one row per tool call from the same

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
 import { listLatestPerLab, loadCatalog } from "@/app/lib/openrouterModels";
+import { TIER_MODELS } from "@/app/lib/modelAliases";
 
 export const runtime = "nodejs";
 
@@ -26,7 +27,10 @@ export async function GET() {
 
   try {
     const catalog = await loadCatalog();
-    const entries = listLatestPerLab(catalog);
+    // Exclude the pinned picker rows (variant-insensitively): a lab's
+    // "newest" entry that IS the pinned model would render as a duplicate
+    // row right under the pin.
+    const entries = listLatestPerLab(catalog, TIER_MODELS.map((t) => t.slug));
     if (entries.length === 0) {
       throw new Error("no per-lab models were found");
     }

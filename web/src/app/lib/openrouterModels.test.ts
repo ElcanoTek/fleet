@@ -452,6 +452,23 @@ describe("listLatestPerLab", () => {
     expect(slugs).toEqual([overBudgetOpenAI.slug, googleText.slug]);
   });
 
+  it("excludes pinned models variant-insensitively (\":nitro\" pin vs base catalog slug)", async () => {
+    const glmBase: CatalogEntry = {
+      slug: "z-ai/glm-5.2",
+      name: "GLM 5.2",
+      completionPerToken: 0.000002,
+      promptPerToken: 0.0000005,
+      outputModalities: ["text"],
+      created: 1_760_000_000,
+    };
+    mockOpenRouter([glmBase, openaiOld]);
+    const catalog = await loadCatalog();
+    // The pin carries a :nitro suffix; the catalog lists the base slug. The
+    // lab row must not duplicate the pinned model.
+    const slugs = listLatestPerLab(catalog, ["z-ai/glm-5.2:nitro"]).map((e) => e.slug);
+    expect(slugs).toEqual([openaiOld.slug]);
+  });
+
   it("omits labs entirely when they have no qualifying entries", async () => {
     mockOpenRouter([openaiOld]);
     const catalog = await loadCatalog();

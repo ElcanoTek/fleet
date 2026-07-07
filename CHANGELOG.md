@@ -15,6 +15,21 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- The **Branch** button appears as soon as a turn finishes, not after a
+  reload. The turn stream gains a `history.persisted` event: after the
+  server persists the turn's history rows it tells the live stream which
+  DB ids the messages became, and the client backfills them — the Branch
+  affordance (which gates on a persisted id) enables immediately. Mocked
+  turns emit the same event, so Playwright covers the flow.
+- Model picker polish: the two pinned rows are named in the same
+  "Lab: Model" style as every other row ("Z.AI: GLM 5.2 (nitro)",
+  "Anthropic: Claude Fable 5"); Z.AI joins the per-lab "newest model"
+  curation (listed first); and a lab's newest entry is excluded
+  variant-insensitively when it IS the pinned model (a ":nitro" pin and
+  its base catalog slug no longer render as duplicate rows).
+- The login MOTD banner is now a rowing galley (oars out) instead of the
+  small masted-ship mark.
+
 - **Model lineup + no price ceiling + alias retirement.** The recommended
   everyday model is now `z-ai/glm-5.2:nitro` and the strong tier is
   `anthropic/claude-fable-5`, across chat (picker pins, new-conversation

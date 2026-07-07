@@ -19,7 +19,7 @@ func TestSearchConversations_TitleAndContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
-	if err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
+	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
 		textEntry("user", "How do goroutines compare to async functions?"),
 		textEntry("assistant", "A goroutine is a lightweight thread scheduled by the Go runtime."),
 	}); err != nil {
@@ -102,7 +102,7 @@ func TestBackfillSearchContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
-	if err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
+	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
 		textEntry("user", "tell me about hippopotamus migration"),
 	}); err != nil {
 		t.Fatalf("AppendHistory: %v", err)
@@ -148,7 +148,7 @@ func TestSearchDisabledSkipsIndexing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
-	if err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
+	if _, err := s.AppendHistory(ctx, c.ID, []agent.HistoryEntry{
 		textEntry("user", "secretkeyword in the body"),
 	}); err != nil {
 		t.Fatalf("AppendHistory: %v", err)

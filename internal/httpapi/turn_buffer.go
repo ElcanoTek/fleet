@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -587,4 +588,21 @@ func writeCapabilitiesFrame(w http.ResponseWriter, flusher http.Flusher) error {
 	}
 	flusher.Flush()
 	return nil
+}
+
+// historyPersistedEntries pairs just-persisted history entries with their DB
+// ids for the history.persisted stream event: the minimal shape ({id, role})
+// the client needs to backfill Message.dbId (the Branch button gates on it).
+// ids is order-aligned with entries (AppendHistory's RETURNING order); a
+// length mismatch yields the common prefix rather than a panic.
+func historyPersistedEntries(entries []agent.HistoryEntry, ids []int64) []map[string]any {
+	n := len(entries)
+	if len(ids) < n {
+		n = len(ids)
+	}
+	out := make([]map[string]any, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, map[string]any{"id": ids[i], "role": entries[i].Role})
+	}
+	return out
 }
