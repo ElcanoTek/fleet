@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import {
-  MAX_COMPLETION_USD_PER_MILLION,
-  MODELS_PAGE_URL,
-  validateSlug,
-} from "@/app/lib/openrouterModels";
+import { MODELS_PAGE_URL, validateSlug } from "@/app/lib/openrouterModels";
 
 export const runtime = "nodejs";
 
@@ -27,7 +23,6 @@ export async function GET(request: NextRequest) {
       reason: "empty",
       message: "Model slug is required.",
       models_url: MODELS_PAGE_URL,
-      max_completion_usd_per_million: MAX_COMPLETION_USD_PER_MILLION,
     });
   }
 
@@ -40,7 +35,6 @@ export async function GET(request: NextRequest) {
         known: result.entry !== undefined,
         completion_usd_per_million:
           result.entry !== undefined ? result.entry.completionPerToken * 1_000_000 : null,
-        max_completion_usd_per_million: MAX_COMPLETION_USD_PER_MILLION,
       });
     }
     return NextResponse.json({
@@ -51,7 +45,6 @@ export async function GET(request: NextRequest) {
       models_url: result.modelsUrl,
       completion_usd_per_million:
         result.entry !== undefined ? result.entry.completionPerToken * 1_000_000 : null,
-      max_completion_usd_per_million: MAX_COMPLETION_USD_PER_MILLION,
     });
   } catch (error) {
     return NextResponse.json(

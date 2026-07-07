@@ -504,8 +504,8 @@ func TestSplitLockdownModels_DefaultsWhenEmpty(t *testing.T) {
 		t.Fatalf("expected default list with both tier slots, got %v", got)
 	}
 	wantContains := []string{
-		"google/gemini-3.5-flash",
-		"anthropic/claude-opus-4.8",
+		"z-ai/glm-5.2:nitro",
+		"anthropic/claude-fable-5",
 	}
 	for _, w := range wantContains {
 		found := false

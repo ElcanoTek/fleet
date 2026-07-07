@@ -1,74 +1,75 @@
-// Frontend model-slug aliases.
+// Frontend model-slug constants.
 //
 // The chat-server has no concept of a "default" model — every /chat
 // request carries the slug the UI resolved. So the product's blessed
 // slugs live here as named constants. Update either by editing the
 // value below; no env plumbing required.
 //
-// Two tier slots, distinguished by the cost/capability axis we want
-// the user to think in:
-//   - default  — cheap, fast, the everyday pick
-//   - advanced — strongest reasoning + longest context
+// There are no user-facing "default"/"advanced" ALIASES anymore — the
+// picker pins two rows by their real display names and the UI always
+// shows actual model names. What remains is two ROLE slots:
+//   - DEFAULT_MODEL — what a new conversation starts on (shown with the
+//     "recommended" pill in the picker)
+//   - ADVANCED_MODEL — the stronger escalation target: the model the
+//     agent's suggest_advanced_model card and the spreadsheet nudge
+//     offer to switch to (also pinned in the picker)
 //
-// Beyond the tier slots we also classify every other slug as either
+// Beyond the two pinned slots we classify every other slug as either
 // "tested" (we've validated it works end-to-end with our tools and
 // system prompt) or "experimental" (anything else the user types in).
-// The picker shows the tier label for the three slots and a small
-// tested/experimental tag for everything else, so the user can tell
-// at a glance which models we've vouched for.
 //
-// Keep this list in sync with the server-side lockdown allow-list
+// Keep the slugs in sync with the server-side lockdown allow-list
 // default (server/internal/config/config.go → splitLockdownModels)
-// and with the OpenRouter upstream-pin table
-// (server/internal/agent/fantasy.go → canonicalUpstream).
+// and the agentcore mirrors (agentcore/models.go → DefaultCoreModel /
+// DefaultMaxModel, config.DefaultTitleModel).
 
-// Tier slugs are PINNED to exact model versions — deliberately NOT the
+// Pinned slugs are EXACT model versions — deliberately NOT the
 // `~`-prefixed OpenRouter floating aliases (`~google/gemini-flash-latest`
-// etc.): fantasy's send-side reasoning reconstruction keys on the slug's
+// etc.): the send-side reasoning reconstruction keys on the slug's
 // family prefix, which the `~` sigil defeats, so thinking signatures get
 // dropped across tool loops and Anthropic hard-400s with "Invalid
 // `signature` in `thinking` block" (root-caused + live-verified
-// 2026-06-04; see server/internal/agent/fantasy.go → isAliasModel).
-// Trade-off: lab refreshes (Gemini 3.5 → 4 Flash, Opus 4.8 → 4.9) now
-// require bumping these constants — and their server-side mirrors
-// (agent.AdvancedModelSlug, config.DefaultTitleModel, lockdown
-// defaults) — instead of floating automatically.
-export const DEFAULT_MODEL = "google/gemini-3.5-flash";
-export const DEFAULT_MODEL_LABEL = "default";
+// 2026-06-04). Trade-off: lab refreshes require bumping these constants
+// — and their server-side mirrors — instead of floating automatically.
+export const DEFAULT_MODEL = "z-ai/glm-5.2:nitro";
+export const DEFAULT_MODEL_LABEL = "GLM 5.2 Nitro";
 
-export const ADVANCED_MODEL = "anthropic/claude-opus-4.8";
-export const ADVANCED_MODEL_LABEL = "advanced";
+export const ADVANCED_MODEL = "anthropic/claude-fable-5";
+export const ADVANCED_MODEL_LABEL = "Claude Fable 5";
 
 // TIER_MODELS is the ordered list the picker pins to the top of the
-// dropdown when no search query is active.
+// dropdown when no search query is active. Rows render their display
+// names; the picker adds the "recommended" pill.
 export const TIER_MODELS: ReadonlyArray<{ slug: string; label: string }> = [
   { slug: DEFAULT_MODEL, label: DEFAULT_MODEL_LABEL },
   { slug: ADVANCED_MODEL, label: ADVANCED_MODEL_LABEL },
 ];
 
 // TESTED_MODELS lists slugs we've validated end-to-end against our
-// tool catalog and system prompt but don't promote to a tier slot.
-// Anything not in this set and not a tier slug is treated as
+// tool catalog and system prompt but don't pin to the top of the
+// picker. Anything not in this set and not a pinned slug is treated as
 // "experimental" — it should still work, but we haven't checked.
 const TESTED_MODELS: ReadonlySet<string> = new Set([
   "openai/gpt-5.4",
 ]);
 
+// ModelTier keys are INTERNAL badge categories (the visible pill for the
+// two pinned rows reads "recommended"); "default"/"advanced" survive as
+// key names only to keep the badge plumbing stable.
 export type ModelTier = "default" | "advanced" | "tested" | "experimental";
 
-// labelForModel returns the friendly alias for a tier slug, or the
-// raw slug otherwise. Used by the model-picker input + dropdown to
-// show "default" / "advanced" instead of the OpenRouter slug.
+// labelForModel returns the display name for a pinned slug, or the raw
+// slug otherwise. Used by the model-picker chip + dropdown so the two
+// pinned models read as real model names, never as aliases.
 export function labelForModel(slug: string): string {
   if (slug === DEFAULT_MODEL) return DEFAULT_MODEL_LABEL;
   if (slug === ADVANCED_MODEL) return ADVANCED_MODEL_LABEL;
   return slug;
 }
 
-// tierForModel classifies a slug into a UI badge category. Tier slugs
-// are returned by their own tier name so the picker can tag them with
-// the matching "default" / "advanced" pill; everything else is
-// "tested" or "experimental".
+// tierForModel classifies a slug into a UI badge category. Pinned slugs
+// get their slot key (rendered as the "recommended" pill); everything
+// else is "tested" or "experimental".
 export function tierForModel(slug: string): ModelTier {
   if (slug === DEFAULT_MODEL) return "default";
   if (slug === ADVANCED_MODEL) return "advanced";

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
 import { chatServerFetch } from "@/app/lib/chatServer";
 import { verifyOrigin } from "@/app/lib/csrf";
-import { MODELS_PAGE_URL, validateSlug } from "@/app/lib/openrouterModels";
+import { MODELS_PAGE_URL } from "@/app/lib/openrouterModels";
 
 export const runtime = "nodejs";
 
@@ -33,8 +33,6 @@ export async function POST(request: NextRequest) {
 
   // Enforce the completion-price ceiling before we proxy. The client also
   // validates, but we re-check here so direct API calls can't bypass it.
-  const modelError = await guardModel(bodyText);
-  if (modelError) return modelError;
 
   let upstream: Response;
   try {
@@ -64,34 +62,6 @@ export async function POST(request: NextRequest) {
       "X-Accel-Buffering": "no",
     },
   });
-}
-
-async function guardModel(bodyText: string): Promise<NextResponse | null> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(bodyText);
-  } catch {
-    // Malformed JSON — let chat-server return its own 400.
-    return null;
-  }
-  const slug =
-    parsed && typeof parsed === "object" && "model" in parsed
-      ? (parsed as { model?: unknown }).model
-      : undefined;
-  if (typeof slug !== "string" || !slug.trim()) return null;
-
-  try {
-    const result = await validateSlug(slug);
-    if (result.ok || result.reason !== "over_budget") return null;
-    return NextResponse.json(
-      { error: result.message, models_url: result.modelsUrl },
-      { status: 400 },
-    );
-  } catch {
-    // Catalog fetch failed — fail open rather than block the user on an
-    // upstream OpenRouter outage.
-    return null;
-  }
 }
 
 // Re-exported so other routes / tests can reference the same link without

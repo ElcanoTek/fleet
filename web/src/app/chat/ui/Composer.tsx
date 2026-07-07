@@ -693,7 +693,7 @@ export function Composer({
                       title={
                         modelError
                           ? modelError.message
-                          : `OpenRouter model slug — aliases: ${DEFAULT_MODEL_LABEL} → ${DEFAULT_MODEL}, ${ADVANCED_MODEL_LABEL} → ${ADVANCED_MODEL}`
+                          : `OpenRouter model slug — e.g. ${DEFAULT_MODEL} (recommended) or ${ADVANCED_MODEL} (strongest)`
                       }
                       className={`inline-flex h-[1.95rem] shrink-0 items-center gap-[0.4rem] rounded-[var(--radius-md)] py-[0.3rem] pl-[0.6rem] pr-[0.5rem] text-[0.78rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40 ${
                         modelError
@@ -775,7 +775,7 @@ export function Composer({
                               // One pill per row, picked from a strict
                               // hierarchy so the listbox stays uncluttered:
                               //   recommended > tested > ✨ new > experimental
-                              // recommended = tier slug (default/advanced),
+                              // recommended = one of the two pinned slugs,
                               // styled as the design's .rec-tag.
                               const tier = model.slug ? tierForModel(model.slug) : null;
                               const isTier = tier === "default" || tier === "advanced";

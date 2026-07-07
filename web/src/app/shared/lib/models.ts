@@ -24,27 +24,15 @@ type RawModel = {
 
 export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 
-// Per-token price ceilings ($/token). 8e-6 = $8 per million tokens.
-const MAX_PROMPT_PRICE = 8e-6;
-const MAX_COMPLETION_PRICE = 30e-6;
-
 const REQUEST_TIMEOUT_MS = 8000;
 export const MAX_RESULTS = 50;
 
 // Hand-picked entries shown immediately and used as a fallback when the
 // OpenRouter fetch fails. Pinned release slugs (not floating `~` aliases).
 export const SEED_MODELS: PickerModel[] = [
-  { id: "anthropic/claude-opus-4.8", name: "Anthropic: Claude Opus 4.8", recommended: true },
-  { id: "moonshotai/kimi-k2.6", name: "MoonshotAI: Kimi K2.6", recommended: true },
-  { id: "google/gemini-3.5-flash", name: "Google: Gemini 3.5 Flash", recommended: true },
+  { id: "z-ai/glm-5.2:nitro", name: "Z.AI: GLM 5.2 (nitro)", recommended: true },
+  { id: "anthropic/claude-fable-5", name: "Anthropic: Claude Fable 5", recommended: true },
 ];
-
-export function isAffordable(model: RawModel): boolean {
-  const prompt = Number.parseFloat(String(model?.pricing?.prompt ?? ""));
-  const completion = Number.parseFloat(String(model?.pricing?.completion ?? ""));
-  if (!Number.isFinite(prompt) || !Number.isFinite(completion)) return false;
-  return prompt <= MAX_PROMPT_PRICE && completion <= MAX_COMPLETION_PRICE;
-}
 
 export function isTextOutput(model: RawModel): boolean {
   const arch = model?.architecture;
@@ -134,7 +122,6 @@ async function fetchOpenRouterModels(): Promise<PickerModel[]> {
     const payload = await response.json();
     const data: RawModel[] = Array.isArray(payload?.data) ? payload.data : [];
     return data
-      .filter(isAffordable)
       .filter(isTextOutput)
       .map(normaliseModel)
       .filter((m): m is PickerModel => m !== null);
