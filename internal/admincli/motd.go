@@ -54,18 +54,25 @@ func renderMOTD(ver, unit, svcState string, color bool) string {
 	)
 	// A rowing galley — fleet is a fleet of ships, oars out. Kept small so it
 	// fits a login banner without dominating the terminal.
+	//
+	// Each art line is painted cyan on its own rather than wrapping the whole
+	// banner in one \x1b[36m…\x1b[0m: the "fleet"/version/tagline spans use
+	// \x1b[0m (a full reset) to close themselves, which would kill a single
+	// outer cyan and leave the hull below "fleet" colourless. Painting the art
+	// segments individually keeps the whole ship uniformly cyan and lets the
+	// word "fleet" read bold against it.
 	banner := strings.Join([]string{
-		`     __4___`,
-		`  _  \ \ \ \      ` + paint(bold, "fleet") + "  " + paint(dim, ver),
-		` <'\ /_/_/_/      ` + paint(dim, "self-hosted agent platform"),
-		`  ((____!___/)`,
-		`   \0\0\0\0\/`,
-		`   ~~~~~~~~~~`,
+		paint(cyan, `     __4___`),
+		paint(cyan, `  _  \ \ \ \      `) + paint(bold, "fleet") + "  " + paint(dim, ver),
+		paint(cyan, ` <'\ /_/_/_/      `) + paint(dim, "self-hosted agent platform"),
+		paint(cyan, `  ((____!___/)`),
+		paint(cyan, `   \0\0\0\0\/`),
+		paint(cyan, `   ~~~~~~~~~~`),
 	}, "\n")
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(paint(cyan, banner))
+	b.WriteString(banner)
 	b.WriteString("\n\n")
 
 	// Service state — green active / yellow otherwise / dim when there's no
