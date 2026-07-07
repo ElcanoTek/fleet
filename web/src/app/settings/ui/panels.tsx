@@ -300,12 +300,10 @@ export function CopyChip({ name }: { name: string }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const copy = () => {
-    try {
-      void navigator.clipboard.writeText(`/${name}`);
-    } catch {
-      // Clipboard unavailable (permissions, non-secure context): the visual
-      // state still confirms the intent; nothing else to do.
-    }
+    // Clipboard denial rejects the PROMISE (permissions, non-secure context,
+    // headless) — a try/catch around the call would miss it and surface an
+    // unhandled rejection. The visual state still confirms the intent.
+    navigator.clipboard?.writeText(`/${name}`).catch(() => {});
     setCopied(true);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopied(false), 1400);

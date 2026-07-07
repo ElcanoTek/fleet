@@ -72,7 +72,11 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
         collapse={collapse}
         account={{ email, onSignOut: signOut }}
       />
-      <div className="flex min-w-0 flex-col">
+      {/* min-h-0 + overflow-hidden keep this grid item at the track height
+          (its min-height:auto would otherwise grow it to the content and
+          silently clip everything below the fold); the <main> then owns the
+          scroll, so the topbar stays put — the design's .main/.view split. */}
+      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
         <PageTopBar title="Settings" onMenu={() => setSidebarOpen(true)} />
         <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex w-full max-w-[74rem] items-start gap-9 px-6 pb-14 pt-7 max-[900px]:flex-col max-[900px]:gap-5">

@@ -346,6 +346,9 @@ export function ClampText({
     if (!el) return;
     const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1);
     measure();
+    // jsdom (unit tests) has no ResizeObserver — the initial measure is all
+    // it gets there; browsers re-measure on width changes.
+    if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();

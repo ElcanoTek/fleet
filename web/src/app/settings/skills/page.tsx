@@ -21,6 +21,7 @@ import {
   DirSearch,
   SetSection,
 } from "../ui/panels";
+import { ClampText } from "../ui/atoms";
 
 // Skills library (Settings → Skills, fleet-unified settings pass). Two panels
 // on the design's .skill-row anatomy: "Your skills" — the personal skill
@@ -70,7 +71,10 @@ function skillMd(sk: { name: string; description: string; body: string }): strin
 const SKILL_ROW =
   "grid gap-[0.45rem] border-b border-[var(--color-border-subtle)] px-[0.1rem] py-3 last:border-b-0";
 const SKILL_HEAD = "flex flex-wrap items-center gap-[0.55rem]";
-const SKILL_DESC = "m-0 text-[0.76rem] leading-[1.55] text-[var(--color-text-secondary)]";
+// The design's .skill-desc metrics, applied over ClampText's base (with
+// per-utility importance — same-property utilities are order-fragile). The
+// brief adds the 3-line clamp + expand the mock lacks.
+const SKILL_DESC = "text-[0.76rem]! leading-[1.55]!";
 // .code-block.skill-md — capped height so a long SKILL.md scrolls inside the
 // row instead of stretching the page.
 const SKILL_MD =
@@ -390,7 +394,7 @@ export default function SkillsPage() {
                     />
                   </span>
                 </div>
-                {sk.description ? <p className={SKILL_DESC}>{sk.description}</p> : null}
+                {sk.description ? <ClampText text={sk.description} className={SKILL_DESC} /> : null}
                 {openMine === sk.id ? <pre className={SKILL_MD}>{skillMd(sk)}</pre> : null}
               </div>
             ))}
@@ -433,7 +437,7 @@ export default function SkillsPage() {
                     {openSkill === s.name ? "Hide" : "View"}
                   </button>
                 </div>
-                <p className={SKILL_DESC}>{s.description}</p>
+                <ClampText text={s.description} className={SKILL_DESC} />
                 {s.declared_allowed_tools && s.declared_allowed_tools.length > 0 ? (
                   <p className="mb-0 mt-[0.15rem] text-[0.6875rem] text-[var(--color-text-muted)]">
                     <span className="uppercase tracking-wide">Declared tools</span>{" "}
