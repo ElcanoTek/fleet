@@ -51,23 +51,24 @@ func renderMOTD(ver, unit, svcState string, color bool) string {
 		bold = "1"
 		grn  = "32"
 		ylw  = "33"
+		red  = "91"      // bright red  — the flag at the masthead
+		wht  = "97"      // bright white — the sail + yardarm
+		brn  = "38;5;94" // 256-col brown — wooden hull, bow & oars
 	)
 	// A rowing galley — fleet is a fleet of ships, oars out. Kept small so it
-	// fits a login banner without dominating the terminal.
-	//
-	// Each art line is painted cyan on its own rather than wrapping the whole
-	// banner in one \x1b[36m…\x1b[0m: the "fleet"/version/tagline spans use
-	// \x1b[0m (a full reset) to close themselves, which would kill a single
-	// outer cyan and leave the hull below "fleet" colourless. Painting the art
-	// segments individually keeps the whole ship uniformly cyan and lets the
-	// word "fleet" read bold against it.
+	// fits a login banner without dominating the terminal. The art is painted
+	// piece by piece rather than as one block: a red flag on the yardarm, a
+	// white sail, a brown hull/bow/oars, and cyan water. Each piece is its own
+	// \x1b[…m…\x1b[0m span (the reset closes every span), so the colours never
+	// bleed into one another the way a single outer wrap would once an inner
+	// span reset it.
 	banner := strings.Join([]string{
-		paint(cyan, `     __4___`),
-		paint(cyan, `  _  \ \ \ \      `) + paint(bold, "fleet") + "  " + paint(dim, ver),
-		paint(cyan, ` <'\ /_/_/_/      `) + paint(dim, "self-hosted agent platform"),
-		paint(cyan, `  ((____!___/)`),
-		paint(cyan, `   \0\0\0\0\/`),
-		paint(cyan, `   ~~~~~~~~~~`),
+		"     " + paint(wht, "__") + paint(red, "4") + paint(wht, "___"),
+		"  " + paint(brn, "_") + "  " + paint(wht, `\ \ \ \`) + "      " + paint(bold, "fleet") + "  " + paint(dim, ver),
+		" " + paint(brn, "<'") + paint(wht, `\ /_/_/_/`) + "      " + paint(dim, "self-hosted agent platform"),
+		"  " + paint(brn, `((____!___/)`),
+		"   " + paint(brn, `\0\0\0\0\/`),
+		"   " + paint(cyan, `~~~~~~~~~~`),
 	}, "\n")
 
 	var b strings.Builder
