@@ -1,21 +1,17 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "@/app/lib/auth";
-import {
-  listLatestPerLab,
-  loadCatalog,
-  MAX_COMPLETION_USD_PER_MILLION,
-} from "@/app/lib/openrouterModels";
+import { listLatestPerLab, loadCatalog } from "@/app/lib/openrouterModels";
 
 export const runtime = "nodejs";
 
 // GET /api/model-rankings
 //
-// Returns one model per major lab — the newest within-budget text-only
-// entry from each — to populate the picker dropdown when no search
-// query is active. Tier slugs (default/advanced) are NOT excluded: a
-// user typing "claude" should be able to find Claude Sonnet listed
-// under Anthropic even though it's also pinned at the top under the
-// "advanced" alias. Both rows select the same model.
+// Returns one model per major lab — the newest text-only entry from
+// each (no price ceiling) — to populate the picker dropdown when no
+// search query is active. The two pinned slugs are NOT excluded: a
+// user typing "claude" should be able to find the pinned Claude under
+// Anthropic even though it's also pinned at the top. Both rows select
+// the same model.
 //
 // We previously scraped openrouter.ai/rankings?view=day for this. That
 // endpoint isn't officially supported and returned a daily popularity
@@ -32,12 +28,11 @@ export async function GET() {
     const catalog = await loadCatalog();
     const entries = listLatestPerLab(catalog);
     if (entries.length === 0) {
-      throw new Error("no per-lab models within budget were found");
+      throw new Error("no per-lab models were found");
     }
     return NextResponse.json({
       models: entries.map((e) => ({ slug: e.slug, name: e.name, created: e.created })),
       cached_at: catalog.fetchedAt,
-      max_completion_usd_per_million: MAX_COMPLETION_USD_PER_MILLION,
     });
   } catch (error) {
     return NextResponse.json(

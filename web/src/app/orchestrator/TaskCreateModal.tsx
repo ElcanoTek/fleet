@@ -19,8 +19,8 @@ import { CostForecastPanel } from "./CostForecastPanel";
 // <McpServerPicker mode="task"> (enable/disable per MCP + per-MCP credential
 // account dropdown).
 
-const DEFAULT_PRIMARY_MODEL = "anthropic/claude-opus-4.8";
-const DEFAULT_FALLBACK_MODEL = "moonshotai/kimi-k2.6";
+const DEFAULT_PRIMARY_MODEL = "z-ai/glm-5.2:nitro";
+const DEFAULT_FALLBACK_MODEL = "anthropic/claude-fable-5";
 
 const SCHEDULE_PRESETS = [
   { label: "Weekdays 9am", cron: "0 9 * * 1-5" },

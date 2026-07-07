@@ -1,18 +1,10 @@
 // OpenRouter model catalog + pricing cache.
 //
 // The /api/v1/models endpoint is public (no key needed). We pull it once a
-// day, index by slug, and expose helpers so both the rankings dropdown and
-// the custom-slug input can enforce a $30-per-million-output-token ceiling.
-//
-// $30 is deliberately a few dollars above the advanced tier (Opus-latest at
-// $25/M output) so Opus is comfortably inside the ceiling rather than sitting
-// exactly on it — a minor upstream price nudge shouldn't silently re-block it.
-// The genuinely premium tiers stay out: Opus-4/4.1 ($75/M) and the *-fast
-// variants ($50-150/M).
-
-export const MAX_COMPLETION_USD_PER_MILLION = 30;
-// pricing.completion on the OpenRouter models endpoint is USD per single token.
-export const MAX_COMPLETION_USD_PER_TOKEN = MAX_COMPLETION_USD_PER_MILLION / 1_000_000;
+// day, index by slug, and expose helpers for the rankings dropdown and the
+// custom-slug input. There is deliberately NO price ceiling: any model on
+// OpenRouter is pickable — spend is governed by the per-run cost ceilings
+// (FLEET_MAX_COST_USD), not by restricting model selection.
 export const MODELS_PAGE_URL = "https://openrouter.ai/models";
 export const MODELS_API_URL = "https://openrouter.ai/api/v1/models";
 
@@ -74,7 +66,7 @@ export type ValidateResult =
   | { ok: true; entry?: CatalogEntry }
   | {
       ok: false;
-      reason: "empty" | "over_budget";
+      reason: "empty";
       message: string;
       modelsUrl: string;
       entry?: CatalogEntry;
@@ -200,10 +192,6 @@ export async function loadCatalog(): Promise<Catalog> {
   return inflight;
 }
 
-export function isWithinBudget(entry: CatalogEntry): boolean {
-  return entry.completionPerToken <= MAX_COMPLETION_USD_PER_TOKEN;
-}
-
 // Text-completion models emit text tokens ONLY. Every model on
 // OpenRouter that declares an image or audio output today is a
 // dedicated generator (Nano Banana, GPT Image, GPT Audio, Lyria, the
@@ -221,14 +209,14 @@ export function isTextCompletion(entry: CatalogEntry): boolean {
   );
 }
 
-// Entries the picker is allowed to offer: within the completion-price
-// ceiling and capable of text output. Sorted by completion price
-// descending — expensive (but still under $25/M) surfaces first as a
-// proxy for quality — with a stable slug tiebreak.
+// Entries the picker is allowed to offer: any catalog model capable of
+// text output (no price ceiling). Sorted by completion price descending —
+// expensive surfaces first as a proxy for quality — with a stable slug
+// tiebreak.
 export function listAllowed(catalog: Catalog): CatalogEntry[] {
   const out: CatalogEntry[] = [];
   for (const entry of catalog.entries.values()) {
-    if (isWithinBudget(entry) && isTextCompletion(entry)) out.push(entry);
+    if (isTextCompletion(entry)) out.push(entry);
   }
   out.sort((a, b) => {
     if (b.completionPerToken !== a.completionPerToken) {
@@ -267,7 +255,6 @@ export function listLatestPerLab(
       // pick would mislead users into a degraded experience when the
       // paid version would be a few cents per million.
       if (entry.slug.endsWith(":free")) continue;
-      if (!isWithinBudget(entry)) continue;
       if (!isTextCompletion(entry)) continue;
       if (!best) {
         best = entry;
@@ -286,24 +273,13 @@ export function listLatestPerLab(
   return out;
 }
 
-export function overBudgetMessage(slug: string, entry: CatalogEntry): string {
-  const perMillion = entry.completionPerToken * 1_000_000;
-  return (
-    `Model "${slug}" costs $${perMillion.toFixed(2)} per million output tokens, ` +
-    `which is over the $${MAX_COMPLETION_USD_PER_MILLION} limit enforced by this chat. ` +
-    `Pick a different model from ${MODELS_PAGE_URL}.`
-  );
-}
-
 // Validate a user-supplied slug against the catalog.
 //
 // - Empty → rejected as "empty".
-// - Present in catalog and over budget → rejected as "over_budget" with a
-//   user-facing message and a link back to the OpenRouter models page.
-// - Present in catalog and within budget → ok with the entry.
-// - Not in catalog (unknown/new slug) → ok without an entry. We only block
-//   models we can prove are over budget; unknown slugs pass through so
-//   newly released models keep working if the cache is stale.
+// - Present in catalog → ok with the entry (no price gating — spend is
+//   governed by the per-run cost ceilings, not by model selection).
+// - Not in catalog (unknown/new slug) → ok without an entry, so newly
+//   released models keep working if the cache is stale.
 export async function validateSlug(slug: string): Promise<ValidateResult> {
   const trimmed = slug.trim();
   if (!trimmed) {
@@ -318,15 +294,6 @@ export async function validateSlug(slug: string): Promise<ValidateResult> {
   const entry = resolveSlug(catalog, trimmed);
   if (!entry) {
     return { ok: true };
-  }
-  if (!isWithinBudget(entry)) {
-    return {
-      ok: false,
-      reason: "over_budget",
-      message: overBudgetMessage(trimmed, entry),
-      modelsUrl: MODELS_PAGE_URL,
-      entry,
-    };
   }
   return { ok: true, entry };
 }

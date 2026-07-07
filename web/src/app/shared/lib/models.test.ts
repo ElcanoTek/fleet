@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   filterModels,
-  isAffordable,
   isTextOutput,
   loadModels,
   normaliseModel,
@@ -15,16 +14,6 @@ import {
 // model-picker.js). The DOM/positioning is tested via the ModelPicker.test.tsx
 // component test; here we cover affordability, modality, ranking, and the
 // fetch-fallback-to-seeds behavior.
-
-describe("isAffordable", () => {
-  it("keeps models under the per-token ceilings", () => {
-    expect(isAffordable({ pricing: { prompt: "0.000003", completion: "0.000015" } })).toBe(true);
-  });
-  it("drops models over the ceilings or with missing pricing", () => {
-    expect(isAffordable({ pricing: { prompt: "0.00001", completion: "0.00005" } })).toBe(false);
-    expect(isAffordable({ pricing: {} })).toBe(false);
-  });
-});
 
 describe("isTextOutput", () => {
   it("keeps text and vision (text-in/out) models", () => {
@@ -101,7 +90,7 @@ describe("loadModels (fetch + fallback)", () => {
       }),
     );
     const models = await loadModels();
-    expect(models.some((m) => m.id === "anthropic/claude-opus-4.8")).toBe(true);
+    expect(models.some((m) => m.id === "z-ai/glm-5.2:nitro")).toBe(true);
     expect(models.some((m) => m.id === "deepseek/deepseek-v3.2")).toBe(true);
   });
 
@@ -132,7 +121,7 @@ describe("loadModels (fetch + fallback)", () => {
       workspace: true,
     });
     // The catalog/seed entries still follow.
-    expect(models.some((m) => m.id === "anthropic/claude-opus-4.8")).toBe(true);
+    expect(models.some((m) => m.id === "z-ai/glm-5.2:nitro")).toBe(true);
   });
 
   it("ignores a failing workspace-models endpoint", async () => {

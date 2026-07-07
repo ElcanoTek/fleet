@@ -54,9 +54,9 @@ const (
 	envEmailS3Prefix     = "EMAIL_S3_PREFIX"
 )
 
-// DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL:
-// the "default" product tier. Mirrors the frontend's DEFAULT_MODEL.
-const DefaultTitleModel = "google/gemini-3.5-flash"
+// DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL.
+// Mirrors the frontend's DEFAULT_MODEL (the recommended everyday pick).
+const DefaultTitleModel = "z-ai/glm-5.2:nitro"
 
 // DefaultFromEmail is the fallback From address for outgoing mail. Neutral by
 // default; a deployment overrides via SENDGRID_FROM_EMAIL / MAILBUX_FROM_EMAIL.
@@ -1467,8 +1467,8 @@ func splitLockdownModels(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return []string{
-			"google/gemini-3.5-flash",   // default
-			"anthropic/claude-opus-4.8", // advanced
+			"z-ai/glm-5.2:nitro",       // recommended default
+			"anthropic/claude-fable-5", // strong tier
 		}
 	}
 	parts := strings.Split(raw, ",")

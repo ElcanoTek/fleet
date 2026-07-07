@@ -1167,7 +1167,7 @@ export function ChatExperience() {
           message?: string;
           models_url?: string;
         };
-        if (data.allowed === false && data.reason === "over_budget" && data.message) {
+        if (data.allowed === false && data.message) {
           setModelError({
             message: data.message,
             modelsUrl: data.models_url ?? "https://openrouter.ai/models",

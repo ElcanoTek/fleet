@@ -15,6 +15,25 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Model lineup + no price ceiling + alias retirement.** The recommended
+  everyday model is now `z-ai/glm-5.2:nitro` and the strong tier is
+  `anthropic/claude-fable-5`, across chat (picker pins, new-conversation
+  default, title/metadata fallbacks, lockdown-mode default allow-list) AND
+  the Operations Center (task-create primary/fallback defaults + picker
+  seeds). The user-facing "default"/"advanced" ALIASES are retired: the
+  picker's two pinned rows now show real model names ("GLM 5.2 Nitro",
+  "Claude Fable 5") with the existing "recommended" pill, and the
+  escalation flow (`suggest_advanced_model`), the spreadsheet nudge, and
+  the model chip all render the actual model name — the strong-tier ROLE
+  survives (the agent can still suggest switching up), only the aliasing
+  is gone. Both price ceilings on model selection are removed (the chat
+  picker's $30/M-output cap and the Operations Center picker's $8/$30 per-M
+  caps): any OpenRouter model is pickable, and spend stays governed by the
+  per-run cost ceilings (`FLEET_MAX_COST_USD`), not by restricting
+  selection. Claude Fable 5 is wired into the extended-thinking family
+  gate; the 1M long-context beta is deliberately NOT enabled for it until
+  verified upstream (falls back to the standard window).
+
 - Chat keyboard shortcuts no longer collide with core browser shortcuts. The
   bindings that shadowed browser features are gone or moved: ⌘/Ctrl+F is
   released back to find-in-page (⌘K remains the search binding), "new
