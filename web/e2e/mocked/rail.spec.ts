@@ -68,9 +68,11 @@ test("the account menu carries Settings (+subtext) + Theme + Sign out on chat", 
   const settingsItem = page.getByRole("menuitem", { name: /Settings/ });
   await expect(settingsItem).toBeVisible();
   await expect(settingsItem).toContainText("Connections, skills & workspace settings");
-  await expect(page.getByRole("menuitem", { name: "Connections" })).toHaveCount(0);
-  await expect(page.getByRole("menuitem", { name: "Skills" })).toHaveCount(0);
-  await expect(page.getByRole("menuitem", { name: "Admin" })).toHaveCount(0);
+  // exact: Playwright's name matching is substring by default, and the
+  // Settings item's accessible name contains "Connections, skills…".
+  await expect(page.getByRole("menuitem", { name: "Connections", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "Skills", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "Admin", exact: true })).toHaveCount(0);
 });
 
 test("the rail derives Folders + Labels sections and filters by folder", async ({ page }) => {

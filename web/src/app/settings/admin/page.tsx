@@ -152,9 +152,6 @@ export default function AdminOverviewPage() {
       stale = true;
       clearInterval(id);
     };
-    // applyHealth/applyStats close over nothing but setters; re-running on
-    // their identity would restart the poll every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [admin]);
 
   if (admin !== "admin") return null;

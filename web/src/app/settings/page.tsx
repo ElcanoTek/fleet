@@ -9,7 +9,7 @@
 // The credential-account admin that used to squat on this page moved to
 // Settings → Connections, where the design places it.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { BrowserNotificationsRow } from "./BrowserNotificationsRow";
 import { SetRow, SetSwitch, Segmented } from "./ui/atoms";
 import { SetSection } from "./ui/panels";
@@ -28,16 +28,16 @@ const THEME_OPTIONS = [
 ] as const satisfies readonly { value: ThemePreference; label: string }[];
 
 function SendOnEnterRow() {
-  // Read lazily on first render (client component; localStorage can throw in
-  // private-browsing modes — fall back to the "enter" default).
-  const [sendOnEnter, setSendOnEnter] = useState(true);
-  useEffect(() => {
+  // Same lazy-initializer read the composer uses: SSR (no window) and
+  // private-browsing storage failures both fall back to the "enter" default.
+  const [sendOnEnter, setSendOnEnter] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
     try {
-      setSendOnEnter((localStorage.getItem(SEND_KEY_STORAGE) ?? "enter") === "enter");
+      return (localStorage.getItem(SEND_KEY_STORAGE) ?? "enter") === "enter";
     } catch {
-      // Storage unavailable: keep the default.
+      return true;
     }
-  }, []);
+  });
 
   const toggle = () => {
     const next = !sendOnEnter;
