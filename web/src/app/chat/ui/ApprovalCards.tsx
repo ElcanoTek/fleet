@@ -146,7 +146,10 @@ export function ApprovalCard({
   // shows none.
   const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
 
-  const resolve = async (approved: boolean) => {
+  const resolve = async (
+    approved: boolean,
+    edits?: { name?: string; prompt?: string; cron?: string },
+  ) => {
     if (submitting || approval.status !== "pending" || !conversationId) return;
     setSubmitting(approved ? "send" : "cancel");
     try {
@@ -155,7 +158,11 @@ export function ApprovalCard({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ approved, scope: applyAll ? "session" : "once" }),
+          body: JSON.stringify({
+            approved,
+            scope: applyAll ? "session" : "once",
+            ...(edits && Object.keys(edits).length > 0 ? { edits } : {}),
+          }),
         },
       );
       if (!response.ok) {
@@ -491,12 +498,31 @@ function ScheduleTaskCard({
 }: {
   approval: Approval;
   submitting: "send" | "cancel" | null;
-  onResolve: (approved: boolean) => void;
+  onResolve: (approved: boolean, edits?: { name?: string; prompt?: string; cron?: string }) => void;
 }) {
   const countdown = useApprovalCountdown(approval.expiresAt, approval.status);
   const s = approval.summary;
   const name = (s.name ?? "").trim();
   const promptPreview = s.prompt_preview ?? "";
+  // Inline edit-before-approve: the proposal is a starting point, not a
+  // take-it-or-leave-it. Fields start from the STAGED values (summary.prompt is
+  // the full prompt — the preview is truncated); on approve, only fields that
+  // actually differ are sent as edits, and the server re-validates them with
+  // the same checks the staged args passed.
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(name);
+  const [editCron, setEditCron] = useState((s.cron ?? "").trim());
+  const [editPrompt, setEditPrompt] = useState((s.prompt ?? promptPreview).trim());
+
+  const collectEdits = (): { name?: string; prompt?: string; cron?: string } | undefined => {
+    if (!editing) return undefined;
+    const edits: { name?: string; prompt?: string; cron?: string } = {};
+    if (editName.trim() !== name) edits.name = editName.trim();
+    const stagedPrompt = (s.prompt ?? promptPreview).trim();
+    if (editPrompt.trim() !== stagedPrompt) edits.prompt = editPrompt.trim();
+    if (s.recurring && editCron.trim() !== (s.cron ?? "").trim()) edits.cron = editCron.trim();
+    return Object.keys(edits).length > 0 ? edits : undefined;
+  };
 
   // Render the schedule as a single human-readable line.
   const scheduleLine = s.recurring
@@ -570,7 +596,37 @@ function ScheduleTaskCard({
         ) : null}
       </div>
 
-      {promptPreview ? (
+      {editing && approval.status === "pending" ? (
+        <div className="mt-2 grid gap-2">
+          <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-muted)]">
+            Name
+            <input
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              className="rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1 text-[0.78rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+            />
+          </label>
+          {s.recurring ? (
+            <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-muted)]">
+              Cron schedule
+              <input
+                value={editCron}
+                onChange={(e) => setEditCron(e.target.value)}
+                className="rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1 text-[0.78rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+              />
+            </label>
+          ) : null}
+          <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-muted)]">
+            Prompt
+            <textarea
+              value={editPrompt}
+              onChange={(e) => setEditPrompt(e.target.value)}
+              rows={6}
+              className="rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1 text-[0.78rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+            />
+          </label>
+        </div>
+      ) : promptPreview ? (
         <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-overlay-strong)] p-2 text-[0.75rem] text-[var(--color-text-primary)]">
           {promptPreview}
         </pre>
@@ -578,14 +634,36 @@ function ScheduleTaskCard({
 
       {approval.status === "pending" ? (
         <div className="mt-3 flex flex-col gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               className="rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
               disabled={submitting !== null || countdown.expired}
-              onClick={() => onResolve(true)}
+              onClick={() => onResolve(true, collectEdits())}
             >
-              {submitting === "send" ? "Scheduling…" : "Approve & schedule"}
+              {submitting === "send"
+                ? "Scheduling…"
+                : editing && collectEdits()
+                  ? "Approve with changes"
+                  : "Approve & schedule"}
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              disabled={submitting !== null}
+              onClick={() => {
+                setEditing((was) => {
+                  if (was) {
+                    // Discard: reset fields to the staged values.
+                    setEditName(name);
+                    setEditCron((s.cron ?? "").trim());
+                    setEditPrompt((s.prompt ?? promptPreview).trim());
+                  }
+                  return !was;
+                });
+              }}
+            >
+              {editing ? "Discard edits" : "Edit…"}
             </button>
             <button
               type="button"

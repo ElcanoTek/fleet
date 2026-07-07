@@ -15,6 +15,21 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Chat share UX**: creating (or revisiting) a share link now opens a
+  proper dialog — the full URL in a selectable field, an explicit "Copy
+  link" button with copied-state feedback, a read-only-access explainer,
+  and "Stop sharing" — instead of only flipping a small sidebar icon and
+  silently writing the clipboard (which browsers can block with no
+  feedback). The shared-row menu item is now "Share link…".
+- **schedule_task approval card is editable**: the "Make recurring task"
+  proposal (and any agent-staged schedule_task) can be adjusted before
+  approving — Edit… exposes the name, cron schedule (recurring tasks),
+  and the FULL prompt (the card previously showed a truncated preview
+  only); "Approve with changes" sends just the changed fields, and the
+  server applies them to the staged args BEFORE the same validation and
+  single task-create path the unedited flow uses. Nothing is created
+  until approve, as before.
+
 - The **Branch** button appears as soon as a turn finishes, not after a
   reload. The turn stream gains a `history.persisted` event: after the
   server persists the turn's history rows it tells the live stream which
