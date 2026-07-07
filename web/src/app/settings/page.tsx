@@ -1,55 +1,87 @@
 "use client";
 
-import { ToastProvider } from "@/app/shared/ui/Toast";
-import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
-import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
-import { CredentialAccountAdmin } from "./CredentialAccountAdmin";
-import { SettingsShell } from "./SettingsShell";
-
-// Settings → General. These controls used to live in an Operations
-// Center-only modal while Connections and Skills were standalone pages — three
-// different chromes for what users read as one "settings" area. Now every
-// section is a page inside the shared SettingsShell, reachable from the
-// account menu on both surfaces.
+// Settings → General (fleet-unified settings pass): personal preference rows —
+// Theme (mirrors the account-menu segmented control via the shared useTheme
+// hook), Send on Enter (the composer's localStorage preference), and the
+// browser-notifications opt-in (moved here from the Connections page; the
+// operator-side VAPID setup is env-only and intentionally not rendered).
 //
-// The concurrency-cap card that used to sit here was removed: it called
-// GET/PUT /concurrency, which fleet's orchestrator never served (a moc-era
-// leftover), so it could only ever error. The cap is FLEET_MAX_CONCURRENT_AGENTS
-// in the env file (boot-bound: it sizes the admission semaphore + sandbox warm
-// pool). Live-tunable workspace settings live in Settings → Admin → Feature
-// settings.
-//
-// The credential card talks to the orchestrator backend through
-// /api/orchestrator/*, which resolves the same session cookie the rest of the
-// app uses; authorization is enforced upstream at :8000 exactly as it was for
-// the modal.
+// The credential-account admin that used to squat on this page moved to
+// Settings → Connections, where the design places it.
 
-export default function GeneralSettingsPage() {
+import { useEffect, useState } from "react";
+import { BrowserNotificationsRow } from "./BrowserNotificationsRow";
+import { SetRow, SetSwitch, Segmented } from "./ui/atoms";
+import { SetSection } from "./ui/panels";
+import { useTheme, type ThemePreference } from "@/app/shared/hooks/useTheme";
+
+// The composer's send-key preference key (chat/ui/Composer.tsx keeps the
+// constant private to avoid pulling the composer into this bundle — the
+// literal and its values are a shared contract: "enter" | "ctrl+enter",
+// absent = "enter").
+const SEND_KEY_STORAGE = "fleet.sendKey";
+
+const THEME_OPTIONS = [
+  { value: "system", label: "System" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+] as const satisfies readonly { value: ThemePreference; label: string }[];
+
+function SendOnEnterRow() {
+  // Read lazily on first render (client component; localStorage can throw in
+  // private-browsing modes — fall back to the "enter" default).
+  const [sendOnEnter, setSendOnEnter] = useState(true);
+  useEffect(() => {
+    try {
+      setSendOnEnter((localStorage.getItem(SEND_KEY_STORAGE) ?? "enter") === "enter");
+    } catch {
+      // Storage unavailable: keep the default.
+    }
+  }, []);
+
+  const toggle = () => {
+    const next = !sendOnEnter;
+    setSendOnEnter(next);
+    try {
+      localStorage.setItem(SEND_KEY_STORAGE, next ? "enter" : "ctrl+enter");
+    } catch {
+      // Storage unavailable: the choice applies to this page's state only.
+    }
+  };
+
   return (
-    <ToastProvider>
-      <GeneralSettings />
-    </ToastProvider>
+    <SetRow
+      label="Send on Enter"
+      desc="Enter sends the message; Shift+Enter adds a line. When off, Enter adds a line and ⌘+Enter sends. The composer toggle mirrors this."
+    >
+      <SetSwitch on={sendOnEnter} onToggle={toggle} label="Send on Enter" />
+    </SetRow>
   );
 }
 
-function GeneralSettings() {
-  const { servers, error, reload } = useMcpServers(true);
-  return (
-    <SettingsShell
-      title="General"
-      description="The credential accounts your MCP connectors sign in with. Workspace-wide feature settings live under Admin."
-    >
-      {error ? (
-        <NoticeBanner tone="danger" className="mb-4">
-          Couldn&apos;t load Operations Center settings ({error}). Your account
-          may not be provisioned for the Operations Center — ask an
-          administrator if you expected access.
-        </NoticeBanner>
-      ) : null}
+export default function GeneralSettingsPage() {
+  const { themePreference, setTheme } = useTheme();
 
-      <section className="rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)] p-4">
-        <CredentialAccountAdmin servers={servers} onChanged={() => void reload()} />
-      </section>
-    </SettingsShell>
+  return (
+    <SetSection
+      title="General"
+      intro="Personal preferences — they affect only you, not your workspace."
+    >
+      <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[1.15rem] py-[0.3rem]">
+        <SetRow
+          label="Theme"
+          desc="System follows your OS appearance. Also switchable from the account menu."
+        >
+          <Segmented
+            value={themePreference}
+            options={THEME_OPTIONS}
+            onChange={setTheme}
+            label="Theme"
+          />
+        </SetRow>
+        <SendOnEnterRow />
+        <BrowserNotificationsRow />
+      </div>
+    </SetSection>
   );
 }

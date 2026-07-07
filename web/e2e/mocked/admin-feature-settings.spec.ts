@@ -2,9 +2,11 @@ import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
 
-// Mocked e2e for the admin Features panel: /admin renders every workspace
-// feature setting from GET /api/admin/settings, a toggle PUTs the override and
-// re-renders with admin provenance, and Reset DELETEs back to the default.
+// Mocked e2e for the admin Features page (settings redesign): /settings/admin/
+// features renders every workspace feature setting from GET /api/admin/settings,
+// a toggle PUTs the override and re-renders with the Overridden badge + Reset,
+// and Reset DELETEs back to the default. The Notifications page renders from
+// its own endpoint at /settings/admin/notifications.
 
 type Resolved = {
   key: string;
@@ -42,6 +44,7 @@ async function mockAdmin(page: Page) {
     r.fulfill({ json: { email: "admin@example.com" } }),
   );
   await page.route("**/api/version", (r: Route) => r.fulfill({ json: { build_id: "test" } }));
+  await page.route("**/api/client-config", (r: Route) => r.fulfill({ json: {} }));
   await page.route("**/api/admin/stats", (r: Route) => r.fulfill({ json: { users: [] } }));
   await page.route("**/api/admin/users", (r: Route) => r.fulfill({ json: { users: [] } }));
   await page.route("**/api/admin/llm-providers", (r: Route) =>
@@ -69,30 +72,6 @@ async function mockAdmin(page: Page) {
       },
     }),
   );
-  await page.route("**/api/admin/health-summary", (r: Route) =>
-    r.fulfill({
-      json: {
-        fleet_version: "test",
-        uptime_seconds: 60,
-        db: { chat: "healthy", pool_size: 5, in_use: 1, idle: 4 },
-        workers: {
-          total: 1,
-          active: 0,
-          idle: 1,
-          queued_tasks: 0,
-          running_tasks: 0,
-          completed_today: 0,
-          failed_today: 0,
-        },
-        llm: { calls_today: 0, cost_today_usd: 0, avg_cost_per_call: 0 },
-        mcp_servers: [],
-        conversations_active: 0,
-        sandbox_pool: { size: 0, available: 0 },
-        memory_mb: 1,
-        goroutines: 1,
-      },
-    }),
-  );
 
   await page.route("**/api/admin/settings", (r: Route) => r.fulfill({ json: { settings: SETTINGS } }));
   await page.route("**/api/admin/settings/subagents_enabled", (r: Route) => {
@@ -117,33 +96,52 @@ test.beforeEach(async ({ context }) => {
   await loginViaCookie(context);
 });
 
-test("the features panel renders, toggles live, and resets to default", async ({ page }) => {
+test("the Features page renders, toggles live, and resets to default", async ({ page }) => {
   await mockAdmin(page);
-  await page.goto("/admin");
+  await page.goto("/settings/admin/features");
 
   const panel = page.getByTestId("feature-settings-panel");
   await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(panel).toContainText("PII redaction");
-  await expect(panel).toContainText("Privacy & data protection");
+  await expect(panel).toContainText(/Privacy & data protection/i);
   await expect(panel).toContainText("FLEET_SUBAGENTS_ENABLED");
 
-  // Toggle sub-agents on: PUT round-trip flips the switch + provenance chip.
+  // Toggle sub-agents on: PUT round-trip flips the switch, and the row's
+  // badge flips to the design's Overridden state with a Reset affordance.
   const toggle = page.getByTestId("toggle-subagents_enabled");
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await expect(panel).toContainText("Customized");
+  await expect(panel).toContainText("Overridden");
   await expect(panel).toContainText("set by admin@example.com");
 
   // Reset: DELETE reverts to the env default.
   await page.getByTestId("reset-subagents_enabled").click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
-  await expect(panel).not.toContainText("Customized");
+  await expect(panel).not.toContainText("Overridden");
+});
 
-  // The notifications panel renders alongside, from its own endpoint, with
-  // honest channel status and no secret material.
+test("the Features filter narrows rows and hides empty groups", async ({ page }) => {
+  await mockAdmin(page);
+  await page.goto("/settings/admin/features");
+
+  const panel = page.getByTestId("feature-settings-panel");
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole("textbox", { name: "Filter settings" }).fill("sub-agent");
+  await expect(panel).toContainText("Sub-agent delegation");
+  await expect(panel).not.toContainText("PII redaction");
+
+  await page.getByRole("textbox", { name: "Filter settings" }).fill("zzz-no-match");
+  await expect(page.getByText(/No settings match/)).toBeVisible();
+});
+
+test("the Notifications page renders channel status without secret material", async ({ page }) => {
+  await mockAdmin(page);
+  await page.goto("/settings/admin/notifications");
+
   const notifications = page.getByTestId("notifications-panel");
-  await expect(notifications).toBeVisible();
+  await expect(notifications).toBeVisible({ timeout: 15_000 });
   await expect(notifications).toContainText("Env config");
   await expect(page.getByTestId("notify-webhook-url")).toHaveValue("https://hooks.example.com/x");
   await expect(page.getByTestId("notify-webhook-secret")).toHaveValue("");

@@ -50,7 +50,7 @@ test("the rail marks the active surface and links to the other", async ({ page }
   await expect(page.getByRole("link", { name: "Operations Center" })).toBeVisible();
 });
 
-test("the account menu carries the settings navigation + Theme + Sign out on chat", async ({ page }) => {
+test("the account menu carries Settings (+subtext) + Theme + Sign out on chat", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
   await page.goto("/chat");
@@ -62,12 +62,15 @@ test("the account menu carries the settings navigation + Theme + Sign out on cha
   await expect(menu).toContainText("e2e@example.com");
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Sign out" })).toBeVisible();
-  // The unified settings area (#169 follow-up): every section is a page,
-  // reachable identically from both surfaces' account menus.
-  await expect(page.getByRole("menuitem", { name: "Settings" })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Connections" })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Skills" })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Admin" })).toBeVisible();
+  // The settings redesign: one Settings item with its subtext line; the
+  // sections (Connections/Skills/Admin) live in the settings area's own
+  // sub-nav, not the menu.
+  const settingsItem = page.getByRole("menuitem", { name: /Settings/ });
+  await expect(settingsItem).toBeVisible();
+  await expect(settingsItem).toContainText("Connections, skills & workspace settings");
+  await expect(page.getByRole("menuitem", { name: "Connections" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "Skills" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "Admin" })).toHaveCount(0);
 });
 
 test("the rail derives Folders + Labels sections and filters by folder", async ({ page }) => {
