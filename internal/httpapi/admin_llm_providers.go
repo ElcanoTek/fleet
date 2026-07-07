@@ -217,8 +217,11 @@ func httpErrorForLLMProvider(w http.ResponseWriter, err error) {
 // read the model picker unions into its list: enabled providers' names, types,
 // and model slugs. Slugs are prefixed "<provider>/<model>" (explicit routing)
 // so a picked entry resolves through its provider regardless of list overlap.
-// Catch-all providers (empty models list) contribute no rows — they serve any
-// slug and have nothing to enumerate. No secret material in this response.
+// Catch-all providers (empty models list) contribute no model rows of their
+// own — they serve any slug — but they ARE listed in `providers` with
+// catch_all=true so the web tier can offer a catalog for them (it expands
+// known types from the public catwalk model database). No secret material in
+// this response: names, types, and model slugs only.
 func (s *Server) handleLLMProviderModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -235,11 +238,18 @@ func (s *Server) handleLLMProviderModels(w http.ResponseWriter, r *http.Request)
 		Provider string `json:"provider"`
 		Type     string `json:"type"`
 	}
+	type providerInfo struct {
+		Name     string `json:"name"`
+		Type     string `json:"type"`
+		CatchAll bool   `json:"catch_all"` // true when the models list is empty (serves any slug)
+	}
 	out := []entry{}
+	provs := []providerInfo{}
 	for _, p := range providers {
 		if !p.Enabled {
 			continue
 		}
+		provs = append(provs, providerInfo{Name: p.Name, Type: p.Type, CatchAll: len(p.Models) == 0})
 		for _, m := range p.Models {
 			out = append(out, entry{
 				ID:       p.Name + "/" + m,
@@ -249,5 +259,5 @@ func (s *Server) handleLLMProviderModels(w http.ResponseWriter, r *http.Request)
 			})
 		}
 	}
-	writeJSON(w, map[string]any{"models": out})
+	writeJSON(w, map[string]any{"models": out, "providers": provs})
 }

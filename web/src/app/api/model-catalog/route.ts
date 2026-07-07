@@ -21,6 +21,9 @@ export async function GET() {
       name: entry.name,
       context_length: entry.contextLength,
       created: entry.created,
+      // Completion price per token — the task-form picker uses it as a
+      // quality-proxy tiebreak when ranking search matches.
+      price_completion: entry.completionPerToken,
     }));
     return NextResponse.json({
       models,
