@@ -1898,6 +1898,13 @@ export function ChatExperience() {
     }
   };
 
+  // The share dialog (#226 UX): opened whenever a share link is created or
+  // managed, so the user SEES the URL with an explicit Copy affordance instead
+  // of inferring success from a small sidebar icon. {id,token,title} of the
+  // conversation being shared; null = closed.
+  const [shareDialog, setShareDialog] = useState<{ id: string; token: string; title: string } | null>(null);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
+
   // buildShareUrl turns a share token into the absolute, copy-paste link a
   // recipient opens. window.origin is the deployment origin the user is on (#226).
   const buildShareUrl = (token: string) =>
@@ -1931,6 +1938,10 @@ export function ChatExperience() {
     const token = data.token ?? "";
     patchShareToken(conversation.id, token);
     if (!token) return false;
+    // Show the link explicitly — the icon-only affordance was easy to miss and
+    // clipboard writes can be silently blocked; the dialog is the honest UX.
+    setShareLinkCopied(false);
+    setShareDialog({ id: conversation.id, token, title: conversation.title });
     try {
       await navigator.clipboard.writeText(buildShareUrl(token));
       return true;
@@ -1950,9 +1961,16 @@ export function ChatExperience() {
     }
   };
 
-  // copyShareLink re-copies an already-shared conversation's link (#226).
+  // copyShareLink surfaces an already-shared conversation's link (#226): opens
+  // the share dialog (URL + explicit Copy) and best-effort pre-copies.
   const copyShareLink = async (conversation: ConversationSummary): Promise<boolean> => {
     if (!conversation.share_token) return false;
+    setShareLinkCopied(false);
+    setShareDialog({
+      id: conversation.id,
+      token: conversation.share_token,
+      title: conversation.title,
+    });
     try {
       await navigator.clipboard.writeText(buildShareUrl(conversation.share_token));
       return true;
@@ -3129,6 +3147,68 @@ export function ChatExperience() {
                   }}
                 >
                   Compact
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {shareDialog ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <button
+              aria-label="Close share dialog"
+              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
+              type="button"
+              onClick={() => setShareDialog(null)}
+            />
+            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[28rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
+              <div className="mb-3 grid gap-2">
+                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Share link</h2>
+                <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
+                  Anyone with this link can view a <strong>read-only</strong> copy of{" "}
+                  <strong>&quot;{shareDialog.title}&quot;</strong>. Revoke it any time with{" "}
+                  <em>Stop sharing</em>.
+                </p>
+              </div>
+              <div className="mb-4 flex items-center gap-2">
+                <input
+                  readOnly
+                  aria-label="Share link URL"
+                  value={buildShareUrl(shareDialog.token)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-transparent px-2.5 py-1.5 font-mono text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard
+                      ?.writeText(buildShareUrl(shareDialog.token))
+                      .then(() => setShareLinkCopied(true))
+                      .catch(() => setShareLinkCopied(false));
+                  }}
+                  className="shrink-0 rounded-full border border-[var(--color-accent)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)]"
+                >
+                  {shareLinkCopied ? "Copied ✓" : "Copy link"}
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const conv = conversations.find((c) => c.id === shareDialog.id);
+                    if (conv) void unshareConversation(conv);
+                    setShareDialog(null);
+                  }}
+                  className="rounded-full border border-[var(--color-danger-border)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)]"
+                >
+                  Stop sharing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShareDialog(null)}
+                  className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                >
+                  Done
                 </button>
               </div>
             </div>

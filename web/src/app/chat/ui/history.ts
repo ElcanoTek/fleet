@@ -117,6 +117,9 @@ export type Approval = {
     name?: string;
     /** First 200 chars of the task prompt. */
     prompt_preview?: string;
+    // Full staged prompt (schedule_task): the card's edit mode starts from
+    // this, since prompt_preview is rune-truncated for display.
+    prompt?: string;
     /** True for a cron task, false for one-time / run-immediately. */
     recurring?: boolean;
     /** Cron expression for a recurring task. */
