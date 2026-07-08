@@ -1,12 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { FeatureSettingsPanel } from "./FeatureSettingsPanel";
+import FeaturesAdminPage from "./page";
 
-// FeatureSettingsPanel — the admin Features panel. Load-bearing assertions:
-// settings render grouped with provenance chips, a toggle PUTs and re-renders
-// from the response, an enum change PUTs the picked option, a customized row
-// resets via DELETE, unknown server keys still render (never vanish), and a
-// server-side rejection surfaces as a row error.
+// Settings → Admin → Features — the admin Features page. Load-bearing
+// assertions: settings render grouped with provenance badges, a toggle PUTs
+// and re-renders from the response, an enum change PUTs the picked option, an
+// overridden row resets via DELETE, unknown server keys still render (never
+// vanish), a server-side rejection surfaces as a row error, the filter hides
+// empty groups, and the Rampart probe/install flows report honestly.
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn() }),
+}));
+
+// Admin gate: visibility-only; force "admin" so the page renders. (The real
+// hook probes an admin endpoint; authorization stays server-side regardless.)
+vi.mock("../../useIsAdmin", () => ({
+  useIsAdmin: () => "admin",
+}));
 
 type Resolved = {
   key: string;
@@ -93,18 +104,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("FeatureSettingsPanel", () => {
+describe("FeaturesAdminPage", () => {
   it("renders settings grouped with provenance and env-var attribution", async () => {
     vi.stubGlobal(
       "fetch",
       mockFetch([PII, { ...SUBAGENTS, value: "true", source: "admin", updated_by: "boss@x.com" }]),
     );
-    render(<FeatureSettingsPanel />);
+    render(<FeaturesAdminPage />);
     expect(await screen.findByText("PII redaction")).toBeInTheDocument();
     expect(screen.getByText("Privacy & data protection")).toBeInTheDocument();
     expect(screen.getByText("Sub-agent delegation")).toBeInTheDocument();
-    // Provenance: one customized row (with reset + attribution), one default.
-    expect(screen.getByText("Customized")).toBeInTheDocument();
+    // Provenance: one overridden row (with reset + attribution), one default.
+    expect(screen.getByText("Overridden")).toBeInTheDocument();
     expect(screen.getByText("Server default")).toBeInTheDocument();
     expect(screen.getByText(/set by boss@x.com/)).toBeInTheDocument();
     expect(screen.getByText("FLEET_SUBAGENTS_ENABLED")).toBeInTheDocument();
@@ -122,7 +133,7 @@ describe("FeatureSettingsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<FeatureSettingsPanel />);
+    render(<FeaturesAdminPage />);
     const toggle = await screen.findByTestId("toggle-subagents_enabled");
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
@@ -130,7 +141,7 @@ describe("FeatureSettingsPanel", () => {
     const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
     expect(put?.[0]).toBe("/api/admin/settings/subagents_enabled");
     expect(JSON.parse(String(put?.[1]?.body))).toEqual({ value: "true" });
-    expect(screen.getByText("Customized")).toBeInTheDocument();
+    expect(screen.getByText("Overridden")).toBeInTheDocument();
   });
 
   it("picking an enum option PUTs it and shows the option help", async () => {
@@ -141,14 +152,16 @@ describe("FeatureSettingsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<FeatureSettingsPanel />);
-    fireEvent.click(await screen.findByTestId("option-pii_redaction_mode-redact"));
+    render(<FeaturesAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Redact" }));
     await waitFor(() =>
-      expect(screen.getByTestId("option-pii_redaction_mode-redact")).toHaveAttribute(
-        "aria-checked",
+      expect(screen.getByRole("button", { name: "Redact" })).toHaveAttribute(
+        "aria-pressed",
         "true",
       ),
     );
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(JSON.parse(String(put?.[1]?.body))).toEqual({ value: "redact" });
     expect(screen.getByText(/\[PII:kind\] marker/)).toBeInTheDocument();
   });
 
@@ -164,7 +177,7 @@ describe("FeatureSettingsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<FeatureSettingsPanel />);
+    render(<FeaturesAdminPage />);
     const input = await screen.findByTestId("input-tool_disclosure_threshold");
     // No Save button until the value is dirty; typing alone fires no write.
     expect(screen.queryByTestId("save-tool_disclosure_threshold")).toBeNull();
@@ -188,13 +201,10 @@ describe("FeatureSettingsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<FeatureSettingsPanel />);
-    fireEvent.click(await screen.findByTestId("option-pii_redaction_mode-block"));
+    render(<FeaturesAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Block" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/invalid setting value/);
-    expect(screen.getByTestId("option-pii_redaction_mode-off")).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    expect(screen.getByRole("button", { name: "Off" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("renders unknown server keys under Other so new settings never vanish", async () => {
@@ -207,13 +217,13 @@ describe("FeatureSettingsPanel", () => {
       default: "false",
     };
     vi.stubGlobal("fetch", mockFetch([PII, unknown]));
-    render(<FeatureSettingsPanel />);
+    render(<FeaturesAdminPage />);
     expect(await screen.findByText("Other")).toBeInTheDocument();
     expect(screen.getByText("Future feature enabled")).toBeInTheDocument();
     expect(screen.getByTestId("toggle-future_feature_enabled")).toBeInTheDocument();
   });
 
-  it("surfaces a stale (ignored) override with a warning chip and a Reset", async () => {
+  it("surfaces a stale (ignored) override with a warning note and a Reset", async () => {
     const staleRow: Resolved = {
       ...THRESHOLD,
       source: "default",
@@ -227,13 +237,39 @@ describe("FeatureSettingsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<FeatureSettingsPanel />);
-    expect(await screen.findByText("Ignored override")).toBeInTheDocument();
-    expect(screen.getByText(/outside this setting.s current bounds/)).toBeInTheDocument();
+    render(<FeaturesAdminPage />);
+    expect(
+      await screen.findByText(/outside this setting.s current bounds/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/set by old-admin@x.com/)).toBeInTheDocument();
     // The ignored row is still resettable.
     fireEvent.click(screen.getByTestId("reset-tool_disclosure_threshold"));
-    await waitFor(() => expect(screen.queryByText("Ignored override")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText(/outside this setting.s current bounds/)).toBeNull(),
+    );
     expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(true);
+  });
+
+  it("filters settings live and hides groups with nothing visible", async () => {
+    vi.stubGlobal("fetch", mockFetch([PII, SUBAGENTS, THRESHOLD]));
+    render(<FeaturesAdminPage />);
+    await screen.findByText("PII redaction");
+
+    const filter = screen.getByLabelText("Filter settings");
+    fireEvent.change(filter, { target: { value: "sub-agent" } });
+    expect(screen.getByText("Sub-agent delegation")).toBeInTheDocument();
+    expect(screen.queryByText("PII redaction")).toBeNull();
+    expect(screen.queryByText("Privacy & data protection")).toBeNull();
+
+    // The Rampart action block keeps the Privacy group alive via its own
+    // search text even when every setting row is filtered out.
+    fireEvent.change(filter, { target: { value: "podman" } });
+    expect(screen.getByText("Privacy & data protection")).toBeInTheDocument();
+    expect(screen.getByTestId("pii-probe-run")).toBeInTheDocument();
+    expect(screen.queryByText("PII redaction")).toBeNull();
+
+    fireEvent.change(filter, { target: { value: "zzz-no-match" } });
+    expect(screen.getByText(/No settings match/)).toBeInTheDocument();
   });
 
   it("saves a url setting via its Save button and runs the detection probe", async () => {
@@ -268,12 +304,12 @@ describe("FeatureSettingsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<FeatureSettingsPanel />);
+    render(<FeaturesAdminPage />);
 
     const input = await screen.findByTestId("input-pii_rampart_url");
     fireEvent.change(input, { target: { value: "http://127.0.0.1:8787/v1/redact" } });
     fireEvent.click(screen.getByTestId("save-pii_rampart_url"));
-    await waitFor(() => expect(screen.getByText("Customized")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Overridden")).toBeInTheDocument());
     const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
     expect(JSON.parse(String(put?.[1]?.body))).toEqual({
       value: "http://127.0.0.1:8787/v1/redact",
@@ -304,7 +340,7 @@ describe("FeatureSettingsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<FeatureSettingsPanel />);
+    render(<FeaturesAdminPage />);
     fireEvent.click(await screen.findByTestId("pii-probe-run"));
     const result = await screen.findByTestId("pii-probe-result");
     expect(result).toHaveTextContent(/unreachable/);
@@ -325,7 +361,7 @@ describe("FeatureSettingsPanel", () => {
         : { status: 200, body: { state: "idle", log: [], container_running: false } };
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<FeatureSettingsPanel />);
+    render(<FeaturesAdminPage />);
 
     const btn = await screen.findByTestId("pii-install-run", undefined, { timeout: 5000 });
     fireEvent.click(btn);
@@ -337,9 +373,37 @@ describe("FeatureSettingsPanel", () => {
     expect(post).toBeTruthy();
   });
 
+  it("removes the managed container only after inline confirmation", async () => {
+    const fetchMock = mockFetch([PII], (url, init) => {
+      if (!url.includes("/pii-redaction/install")) return undefined;
+      if (init.method === "DELETE") {
+        return { status: 200, body: { state: "idle", log: [], container_running: false } };
+      }
+      // GET status: a running managed container.
+      return {
+        status: 200,
+        body: { state: "done", log: ["done"], container_running: true, url: "http://127.0.0.1:8787/v1/redact" },
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<FeaturesAdminPage />);
+
+    const remove = await screen.findByTestId("pii-install-remove", undefined, { timeout: 5000 });
+    // First click arms; no DELETE yet.
+    fireEvent.click(remove);
+    expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(false);
+    expect(remove).toHaveTextContent("Confirm remove");
+    // Second click fires the DELETE and the affordance returns to install.
+    fireEvent.click(remove);
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(true),
+    );
+    await waitFor(() => expect(screen.getByTestId("pii-install-run")).toBeInTheDocument());
+  });
+
   it("hides the install affordance when the installer is not wired (501)", async () => {
     vi.stubGlobal("fetch", mockFetch([PII])); // default install stub = 501
-    render(<FeatureSettingsPanel />);
+    render(<FeaturesAdminPage />);
     await screen.findByText("PII redaction");
     await waitFor(() => expect(screen.queryByTestId("pii-install")).toBeNull());
   });
@@ -349,7 +413,7 @@ describe("FeatureSettingsPanel", () => {
       "fetch",
       vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) }),
     );
-    render(<FeatureSettingsPanel />);
+    render(<FeaturesAdminPage />);
     expect(await screen.findByText(/not on the admin allowlist/)).toBeInTheDocument();
   });
 });

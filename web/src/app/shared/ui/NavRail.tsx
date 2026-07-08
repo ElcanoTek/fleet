@@ -33,7 +33,10 @@ import { NavToChat, NavToOrchestrator } from "./CrossViewNav";
 import { Icon } from "./Icon";
 import { AccountMenu } from "./AccountMenu";
 
-export type RailView = "chat" | "orchestrator";
+// "settings" renders the rail with neither surface active (the design's
+// settings view): Chat/Operations Center stay plain links and the account
+// button below takes the `current` tint instead.
+export type RailView = "chat" | "orchestrator" | "settings";
 
 export const RAIL_COLLAPSED_STORAGE_KEY = "rail-collapsed";
 const NARROW_QUERY = "(max-width: 900px)";
@@ -335,6 +338,7 @@ export function NavRail({
           email={account.email}
           onSignOut={account.onSignOut}
           railCollapsed={collapsed}
+          current={activeView === "settings"}
         />
       </aside>
     </>
