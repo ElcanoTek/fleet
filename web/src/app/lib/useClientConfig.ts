@@ -8,7 +8,9 @@ import { DEFAULT_PILLS, type ProtocolPill } from "@/app/chat/ui/protocolPills";
 // so the chat UI renders client-agnostic branding + empty-state pills instead
 // of hardcoded strings. It falls back to neutral defaults on error / while
 // loading, so the experience is never blank and never client-specific by
-// accident.
+// accident. The last successful payload is cached at module scope so a
+// remount (crossing between /chat and /orchestrator) re-renders the real
+// branding immediately instead of flashing the defaults.
 //
 // The endpoint is member-gated, so this hook is only ever called from
 // authenticated surfaces (the chat experience). Pre-auth surfaces (the login
@@ -46,10 +48,33 @@ type ClientConfigResponse = {
   empty_state?: { cards?: ProtocolPill[] };
 };
 
+// The last successful /api/client-config payload, cached at module scope.
+// Chat ⇄ Operations Center is ordinary route navigation (two routes, one
+// rail), so crossing surfaces remounts the shell — and this hook with it.
+// Without the cache every crossing restarted from the neutral defaults and
+// the rail's brand row flashed the default app name until the re-fetch
+// resolved; seeding state from the cache renders the last-known branding on
+// the first frame instead. The fetch still runs on every mount so a
+// long-lived page picks up config changes. Hydration stays consistent: the
+// fetch only ever runs in a browser effect, so on the server and on any
+// initial document load the cache is empty and both sides render defaults.
+let cachedConfig: { branding: ClientBranding; pills: ProtocolPill[] } | null = null;
+
+// Module-scope reader so the useState initializers don't read a mutable
+// module binding directly from the component body (react-hooks/purity —
+// same pattern as nowMs in chat-experience.tsx).
+const readCachedConfig = () => cachedConfig;
+
+export function __resetClientConfigCacheForTests() {
+  cachedConfig = null;
+}
+
 export function useClientConfig(enabled = true): UseClientConfig {
-  const [branding, setBranding] = useState<ClientBranding>(DEFAULT_BRANDING);
-  const [pills, setPills] = useState<ProtocolPill[]>(DEFAULT_PILLS);
-  const [loading, setLoading] = useState(enabled);
+  const [branding, setBranding] = useState<ClientBranding>(
+    () => readCachedConfig()?.branding ?? DEFAULT_BRANDING,
+  );
+  const [pills, setPills] = useState<ProtocolPill[]>(() => readCachedConfig()?.pills ?? DEFAULT_PILLS);
+  const [loading, setLoading] = useState(() => enabled && readCachedConfig() === null);
 
   useEffect(() => {
     if (!enabled) return;
@@ -62,14 +87,18 @@ export function useClientConfig(enabled = true): UseClientConfig {
         const data = (await res.json()) as ClientConfigResponse;
         if (cancelled) return;
         // Merge over neutral defaults so a partial branding block still renders.
-        setBranding({ ...DEFAULT_BRANDING, ...(data.branding ?? {}) });
         const cards = data.empty_state?.cards;
-        setPills(Array.isArray(cards) && cards.length > 0 ? cards : DEFAULT_PILLS);
+        const next = {
+          branding: { ...DEFAULT_BRANDING, ...(data.branding ?? {}) },
+          pills: Array.isArray(cards) && cards.length > 0 ? cards : DEFAULT_PILLS,
+        };
+        cachedConfig = next;
+        setBranding(next.branding);
+        setPills(next.pills);
       } catch {
-        if (cancelled) return;
-        // Fall back to neutral defaults — never blank, never client-specific.
-        setBranding(DEFAULT_BRANDING);
-        setPills(DEFAULT_PILLS);
+        // Keep whatever the state was seeded with — the cached config on a
+        // remount, the neutral defaults otherwise. Never blank, never
+        // client-specific by accident.
       } finally {
         if (!cancelled) setLoading(false);
       }
