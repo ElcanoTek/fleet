@@ -2643,9 +2643,80 @@ export function ChatExperience() {
     // it keeps exhaustive-deps honest without changing the mount-once run.
   }, [attachedConvIdsRef]);
 
-  // Initial load: session, personas, conversations, most-recent conversation.
+  // Initial load: session, conversations, most-recent conversation.
+  //
+  // Only the three fetches the conversation render actually needs sit on the
+  // spinner's critical path — session, conversations, and loadConversation.
+  // The nice-to-haves (personas, skills, server-config, MCP catalog preview)
+  // fire concurrently and never gate `isLoadingHistory`, so returning to /chat
+  // from /settings paints the conversation as soon as its history arrives
+  // instead of after six serial round-trips.
   useEffect(() => {
     let cancelled = false;
+    // The personas fetch races the critical path. loadConversation sets the
+    // opened conversation's persona last, so if personas resolves afterwards
+    // its default-persona write would clobber it. We only seed the default
+    // when no conversation is being loaded, and flip this flag before awaiting
+    // loadConversation so a late personas resolution skips the write.
+    let willLoadConversation = false;
+
+    // Personas — nice-to-have; the server falls back to default. Sets the
+    // roster always, but the default persona only when no conversation loads.
+    const loadPersonas = async () => {
+      try {
+        const pr = await fetch("/api/personas", { cache: "no-store" });
+        if (pr.ok) {
+          const pd = (await pr.json()) as PersonasResponse;
+          if (!cancelled) {
+            setPersonas(pd.personas);
+            if (!willLoadConversation) setSelectedPersona(pd.default);
+          }
+        }
+      } catch {
+        // Personas are nice-to-have; the server falls back to default.
+      }
+    };
+
+    // Bundle skill roster for the composer "/" autocomplete (#513).
+    // Best-effort: an older server without /skills just leaves the
+    // autocomplete empty.
+    const loadSkills = async () => {
+      try {
+        const sr = await fetch("/api/skills", { cache: "no-store" });
+        if (sr.ok) {
+          const sd = (await sr.json()) as { skills?: SkillInfo[] };
+          if (!cancelled) setSkills(sd.skills ?? []);
+        }
+      } catch {
+        // Optional nicety — plain "/text" messages still send fine.
+      }
+    };
+
+    // Capability fetch — currently just lockdown availability.
+    // Best-effort: a 404 / network error means the older server
+    // doesn't expose this endpoint, so we keep the feature off.
+    const loadServerConfig = async () => {
+      try {
+        const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
+        if (cfgRes.ok) {
+          const cfg = (await cfgRes.json()) as {
+            lockdown_available: boolean;
+            lockdown_only: boolean;
+            lockdown_allowed_models: string[] | null;
+          };
+          if (!cancelled) {
+            setServerConfig({
+              lockdownAvailable: cfg.lockdown_available === true,
+              lockdownOnly: cfg.lockdown_only === true,
+              lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
+            });
+          }
+        }
+      } catch {
+        // Optional capability — leave lockdown off when the server
+        // is too old to advertise it.
+      }
+    };
 
     const loadInitialState = async () => {
       try {
@@ -2657,63 +2728,6 @@ export function ChatExperience() {
         const sessionData = (await sessionResponse.json()) as { email: string };
         if (cancelled) return;
         setUserEmail(sessionData.email);
-
-        // Personas
-        try {
-          const pr = await fetch("/api/personas", { cache: "no-store" });
-          if (pr.ok) {
-            const pd = (await pr.json()) as PersonasResponse;
-            if (!cancelled) {
-              setPersonas(pd.personas);
-              setSelectedPersona(pd.default);
-            }
-          }
-        } catch {
-          // Personas are nice-to-have; the server falls back to default.
-        }
-
-        // Bundle skill roster for the composer "/" autocomplete (#513).
-        // Best-effort: an older server without /skills just leaves the
-        // autocomplete empty.
-        try {
-          const sr = await fetch("/api/skills", { cache: "no-store" });
-          if (sr.ok) {
-            const sd = (await sr.json()) as { skills?: SkillInfo[] };
-            if (!cancelled) setSkills(sd.skills ?? []);
-          }
-        } catch {
-          // Optional nicety — plain "/text" messages still send fine.
-        }
-
-        // Prime the Tools picker catalog so it renders for new chats too.
-        // loadConversation will overwrite with per-conversation enabled
-        // state once an existing conversation is opened. Called through a
-        // latest-ref so this mount-once bootstrap keeps `[]` deps.
-        if (!cancelled) void loadMcpServerCatalogPreviewRef.current();
-
-        // Capability fetch — currently just lockdown availability.
-        // Best-effort: a 404 / network error means the older server
-        // doesn't expose this endpoint, so we keep the feature off.
-        try {
-          const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
-          if (cfgRes.ok) {
-            const cfg = (await cfgRes.json()) as {
-              lockdown_available: boolean;
-              lockdown_only: boolean;
-              lockdown_allowed_models: string[] | null;
-            };
-            if (!cancelled) {
-              setServerConfig({
-                lockdownAvailable: cfg.lockdown_available === true,
-                lockdownOnly: cfg.lockdown_only === true,
-                lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
-              });
-            }
-          }
-        } catch {
-          // Optional capability — leave lockdown off when the server
-          // is too old to advertise it.
-        }
 
         const conversationsResponse = await fetch("/api/conversations", { cache: "no-store" });
         if (!conversationsResponse.ok) {
@@ -2732,11 +2746,25 @@ export function ChatExperience() {
           setActiveConversationId(null);
           return;
         }
+        // Flip before awaiting so a personas fetch that resolves after this
+        // point does not overwrite the loaded conversation's persona.
+        willLoadConversation = true;
         await loadConversationRef.current(latest.id);
       } finally {
         if (!cancelled) setIsLoadingHistory(false);
       }
     };
+
+    // Kick off the nice-to-haves concurrently — they set their own state when
+    // they resolve but never block the spinner. loadMcpServerCatalogPreview
+    // primes the Tools picker so it renders for new chats too; loadConversation
+    // overwrites it with per-conversation enabled state once an existing
+    // conversation opens. Both are called through their latest-refs so this
+    // mount-once bootstrap keeps `[]` deps.
+    void loadPersonas();
+    void loadSkills();
+    void loadServerConfig();
+    void loadMcpServerCatalogPreviewRef.current();
 
     void loadInitialState();
     return () => {
