@@ -14,8 +14,9 @@
 // SummarizeProgressCard — were module-level functions in chat-experience whose
 // only callers are this transcript JSX, so they move here verbatim (the
 // originals are removed from chat-experience to keep one definition each).
-import { useEffect, useRef, useState } from "react";
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { LoadingLogo } from "./LoadingLogo";
 import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
 import { getPill, type ProtocolPill } from "./protocolPills";
@@ -91,6 +92,75 @@ export type ChatTranscriptProps = {
   loadCatalogModels: () => void | Promise<void>;
 };
 
+// The transcript is virtualized (@tanstack/react-virtual): only the rows near
+// the viewport are mounted, so a long conversation no longer pays to render
+// react-markdown + react-syntax-highlighter for every message on every keystroke
+// or scroll. To feed a flat, stable-indexed list to the virtualizer, the former
+// inline `messages.map` — with its compaction-boundary early-returns and the
+// leading summarize card/error — is flattened into this explicit row model.
+type TranscriptRow =
+  // Live compaction progress card (only while summarizing).
+  | { kind: "summarizing" }
+  // Compaction error banner.
+  | { kind: "summarize-error" }
+  // The single "Show N earlier turns" expander that stands in for the whole
+  // collapsed pre-summary range.
+  | { kind: "expander" }
+  // A compaction summary banner message.
+  | { kind: "summary"; message: Message }
+  // A normal user/assistant turn. `isPreSummary` dims pre-compaction turns when
+  // the range is expanded (matching the former inline opacity-60 rule).
+  | { kind: "message"; message: Message; isPreSummary: boolean };
+
+// VirtualTranscriptRow is the absolutely-positioned wrapper the virtualizer
+// places each visible row into. It also owns the entrance-animation gate:
+// because virtualization mounts/unmounts rows as they scroll past the viewport,
+// applying the `message-enter-*` class unconditionally would replay the 200ms
+// slide every time a row re-entered view. Instead a row plays its entrance only
+// the first time its message id is ever shown (tracked in the shared `seenIds`
+// set, marked after render by ChatTranscript). The decision is captured in lazy
+// state so it stays stable across the streaming re-renders of a live turn —
+// mirroring the pre-virtualization behavior where the class lived on one
+// persistent DOM node and fired once on mount.
+function VirtualTranscriptRow({
+  index,
+  start,
+  measureElement,
+  animationId,
+  animationClass,
+  seenIds,
+  children,
+}: {
+  index: number;
+  start: number;
+  measureElement: (node: HTMLDivElement | null) => void;
+  animationId: number | undefined;
+  animationClass: string | undefined;
+  seenIds: Set<number>;
+  children: (enterClass: string) => ReactNode;
+}) {
+  const [animate] = useState(
+    () => animationId !== undefined && !seenIds.has(animationId),
+  );
+  const enterClass = animate ? animationClass ?? "" : "";
+  return (
+    <div
+      data-index={index}
+      ref={measureElement}
+      className="min-w-0"
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: "100%",
+        transform: `translateY(${start}px)`,
+      }}
+    >
+      {children(enterClass)}
+    </div>
+  );
+}
+
 export function ChatTranscript({
   conversationRef,
   streamEndRef,
@@ -132,6 +202,89 @@ export function ChatTranscript({
   loadRankedModels,
   loadCatalogModels,
 }: ChatTranscriptProps) {
+  // Flatten the message list (plus the leading summarize card/error and the
+  // compaction expander) into the explicit, stable-indexed row model the
+  // virtualizer consumes. This reproduces the former inline map's control flow:
+  // when a compaction summary exists and the pre-summary range is collapsed,
+  // the whole range [0, summaryIndex) is represented by a single expander row.
+  const rows = useMemo<TranscriptRow[]>(() => {
+    const out: TranscriptRow[] = [];
+    if (isSummarizing) out.push({ kind: "summarizing" });
+    if (summarizeError) out.push({ kind: "summarize-error" });
+    const collapsed = summaryIndex >= 0 && !summaryExpanded;
+    messages.forEach((message, idx) => {
+      const isPreSummary = summaryIndex >= 0 && idx < summaryIndex;
+      if (isPreSummary && collapsed) {
+        // The single expander stands in for the first hidden turn; every other
+        // hidden turn is skipped (matches the former `return null`).
+        if (idx === 0) out.push({ kind: "expander" });
+        return;
+      }
+      if (message.kind === "summary") {
+        out.push({ kind: "summary", message });
+        return;
+      }
+      out.push({ kind: "message", message, isPreSummary });
+    });
+    return out;
+  }, [messages, summaryIndex, summaryExpanded, isSummarizing, summarizeError]);
+
+  // Message ids whose entrance animation has already been accounted for. Marked
+  // after every render (see below), so a row re-mounting on scroll never
+  // replays its slide-in — only genuinely new turns animate. See
+  // VirtualTranscriptRow for how the gate is applied.
+  const animatedIdsRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    for (const message of messages) animatedIdsRef.current.add(message.id);
+  }, [messages]);
+
+  // Inter-row gap, matched to the former `gap-5 sm:gap-6` grid (20px / 24px at
+  // the 640px `sm` breakpoint). Fed to the virtualizer so measured offsets and
+  // the total size include the spacing. Lazy-initialized from the current
+  // breakpoint and only updated on media-query changes, so it never sets state
+  // during the effect body.
+  const [rowGap, setRowGap] = useState(() =>
+    typeof window !== "undefined" &&
+    window.matchMedia("(min-width: 640px)").matches
+      ? 24
+      : 20,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    const onChange = (event: MediaQueryListEvent) => setRowGap(event.matches ? 24 : 20);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  // The virtualizer scrolls inside the existing conversation <section> (the same
+  // element the parent's auto-scroll / snap-to-bottom effects drive), so those
+  // behaviors keep working unchanged: the spacer's height feeds scrollHeight and
+  // the streamEndRef sentinel still sits at the very bottom. Rows are
+  // dynamically measured (variable-height markdown/code) via measureElement;
+  // unmeasured rows use a running average around this estimate.
+  const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
+    count: rows.length,
+    getScrollElement: () => conversationRef.current,
+    estimateSize: () => 180,
+    overscan: 6,
+    gap: rowGap,
+    getItemKey: (index) => {
+      const row = rows[index];
+      switch (row.kind) {
+        case "summarizing":
+          return "row:summarizing";
+        case "summarize-error":
+          return "row:summarize-error";
+        case "expander":
+          return "row:expander";
+        case "summary":
+          return `row:summary:${row.message.id}`;
+        case "message":
+          return `row:message:${row.message.id}`;
+      }
+    },
+  });
+
   return (
           <section
             ref={conversationRef}
@@ -202,59 +355,83 @@ export function ChatTranscript({
                   ) : null}
                 </div>
               ) : (
-                <div className="grid min-w-0 gap-5 sm:gap-6">
-                  {isSummarizing ? (
-                    <SummarizeProgressCard
-                      startedAt={summarizeStartedAt}
-                      streamingText={summarizeStream}
-                    />
-                  ) : null}
-                  {summarizeError ? (
-                    <div
-                      role="alert"
-                      className="rounded-[0.6rem] border border-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.78rem] text-[var(--color-danger)]"
-                    >
-                      {summarizeError}
-                    </div>
-                  ) : null}
-                  {messages.map((message, idx) => {
-                    // Compaction boundary: when a summary message
-                    // exists, every message before it is collapsed by
-                    // default behind a single expander row. We render
-                    // the expander at the position of the first
-                    // hidden message and short-circuit the others.
-                    if (summaryIndex >= 0 && idx < summaryIndex) {
-                      if (!summaryExpanded) {
-                        if (idx !== 0) return null;
-                        return (
-                          <button
-                            key="__collapsed_range_expander__"
-                            type="button"
-                            className="mx-auto flex w-full items-center justify-center gap-2 rounded-[0.6rem] border border-dashed border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem] text-[var(--color-text-muted)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)]"
-                            aria-expanded={false}
-                            onClick={() => setSummaryExpanded(true)}
-                          >
-                            <Icon name="chevron-down" className="size-3" />
-                            Show {summaryIndex} earlier turn{summaryIndex === 1 ? "" : "s"} — compacted below
-                          </button>
-                        );
-                      }
-                    }
-                    if (message.kind === "summary") {
+                <div className="min-w-0">
+                  {/* Virtualized transcript: only rows near the viewport are
+                      mounted. The spacer div carries the full measured height so
+                      the parent's scrollHeight-based auto-scroll + snap-to-bottom
+                      effects (driven off conversationRef) and the streamEndRef
+                      sentinel below keep behaving exactly as before. */}
+                  <div
+                    className="relative min-w-0"
+                    style={{ height: virtualizer.getTotalSize(), width: "100%" }}
+                  >
+                    {virtualizer.getVirtualItems().map((virtualRow) => {
+                      const row = rows[virtualRow.index];
+                      const animationId =
+                        row.kind === "message" ? row.message.id : undefined;
+                      const animationClass =
+                        row.kind === "message"
+                          ? row.message.role === "user"
+                            ? "message-enter-user"
+                            : "message-enter-assistant"
+                          : undefined;
                       return (
-                        <SummaryBanner
-                          key={message.id}
-                          message={message}
-                          collapsedRangeCount={summaryIndex}
-                          summaryExpanded={summaryExpanded}
-                          onToggleExpand={() => setSummaryExpanded((v) => !v)}
-                          onResummarize={() => setConfirmSummarize(true)}
-                          isSummarizing={isSummarizing}
-                        />
-                      );
-                    }
-                    const isPreSummary = summaryIndex >= 0 && idx < summaryIndex;
-                    const taskTrackerDisplay = taskTrackerDisplayForMessage(message);
+                        <VirtualTranscriptRow
+                          key={virtualRow.key}
+                          index={virtualRow.index}
+                          start={virtualRow.start}
+                          measureElement={virtualizer.measureElement}
+                          animationId={animationId}
+                          animationClass={animationClass}
+                          seenIds={animatedIdsRef.current}
+                        >
+                          {(enterClass) => {
+                            if (row.kind === "summarizing") {
+                              return (
+                                <SummarizeProgressCard
+                                  startedAt={summarizeStartedAt}
+                                  streamingText={summarizeStream}
+                                />
+                              );
+                            }
+                            if (row.kind === "summarize-error") {
+                              return (
+                                <div
+                                  role="alert"
+                                  className="rounded-[0.6rem] border border-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.78rem] text-[var(--color-danger)]"
+                                >
+                                  {summarizeError}
+                                </div>
+                              );
+                            }
+                            if (row.kind === "expander") {
+                              return (
+                                <button
+                                  type="button"
+                                  className="mx-auto flex w-full items-center justify-center gap-2 rounded-[0.6rem] border border-dashed border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem] text-[var(--color-text-muted)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)]"
+                                  aria-expanded={false}
+                                  onClick={() => setSummaryExpanded(true)}
+                                >
+                                  <Icon name="chevron-down" className="size-3" />
+                                  Show {summaryIndex} earlier turn{summaryIndex === 1 ? "" : "s"} — compacted below
+                                </button>
+                              );
+                            }
+                            if (row.kind === "summary") {
+                              return (
+                                <SummaryBanner
+                                  message={row.message}
+                                  collapsedRangeCount={summaryIndex}
+                                  summaryExpanded={summaryExpanded}
+                                  onToggleExpand={() => setSummaryExpanded((v) => !v)}
+                                  onResummarize={() => setConfirmSummarize(true)}
+                                  isSummarizing={isSummarizing}
+                                />
+                              );
+                            }
+                            const message = row.message;
+                            const isPreSummary = row.isPreSummary;
+                            const taskTrackerDisplay = taskTrackerDisplayForMessage(message);
                     const activeTaskTitle = taskTrackerDisplay?.activeTask ?? null;
                     const toolCalls = message.toolCalls ?? [];
                     const pythonStreams = message.pythonStreams ?? [];
@@ -303,7 +480,6 @@ export function ChatTranscript({
                     }
                     return (
                       <article
-                        key={message.id}
                         className={[
                           // min-w-0 lets this grid item shrink to its track
                           // instead of expanding to fit a wide descendant
@@ -312,9 +488,11 @@ export function ChatTranscript({
                           // min-width:auto pushes the whole chat column
                           // past the viewport on mobile.
                           "flex min-w-0 gap-3",
-                          message.role === "user"
-                            ? "justify-end message-enter-user"
-                            : "justify-start message-enter-assistant",
+                          message.role === "user" ? "justify-end" : "justify-start",
+                          // Entrance animation — gated by VirtualTranscriptRow so
+                          // it plays once per turn and never replays when a row
+                          // re-mounts on scroll. Empty string when not animating.
+                          enterClass,
                           // Pre-summary turns visible only when expanded;
                           // dim them so users grok they are reference
                           // history and not part of the model's live
@@ -695,8 +873,12 @@ export function ChatTranscript({
                           )}
                         </div>
                       </article>
-                    );
-                  })}
+                            );
+                          }}
+                        </VirtualTranscriptRow>
+                      );
+                    })}
+                  </div>
                   <div ref={streamEndRef} />
                 </div>
               )}
