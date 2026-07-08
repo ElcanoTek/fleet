@@ -411,6 +411,9 @@ export default function ConnectionsPage() {
   // Anchor for the directory results: clicking a category pill scrolls back
   // to the top of the list (the sticky bar keeps search + chips in view).
   const directoryResultsRef = useRef<HTMLDivElement | null>(null);
+  // The sticky search + chip bar itself — measured on chip clicks so the
+  // scroll can land the results just below it instead of underneath it.
+  const dirBarRef = useRef<HTMLDivElement | null>(null);
 
   const apply = (isStale: () => boolean) => {
     fetchServers()
@@ -671,6 +674,13 @@ export default function ConnectionsPage() {
   const scrollDirectoryResults = () => {
     const el = directoryResultsRef.current;
     if (!el) return;
+    // The sticky bar overlays the top of the scrollport, so a bare
+    // scrollIntoView would park the results count, category heading, and
+    // first card row underneath it. Its height varies with how the chips wrap
+    // at each viewport width, so measure it at click time (plus breathing
+    // room) rather than hardcoding a scroll margin.
+    const barHeight = dirBarRef.current?.getBoundingClientRect().height ?? 0;
+    el.style.scrollMarginTop = `${Math.ceil(barHeight) + 16}px`;
     const reduce =
       typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1071,7 +1081,11 @@ export default function ConnectionsPage() {
 
           {catalogOpen ? (
             <>
-              <div className="sticky top-0 z-20 mb-[1.1rem] grid gap-[0.55rem] border-b border-[var(--color-border)] bg-[var(--color-bg)] pb-[0.75rem] pt-[0.7rem] [background-attachment:fixed] [background-image:var(--gradient-bg)] [background-size:cover]">
+              <div
+                ref={dirBarRef}
+                data-testid="dir-filter-bar"
+                className="sticky top-0 z-20 mb-[1.1rem] grid gap-[0.55rem] border-b border-[var(--color-border)] bg-[var(--color-bg)] pb-[0.75rem] pt-[0.7rem] [background-attachment:fixed] [background-image:var(--gradient-bg)] [background-size:cover]"
+              >
                 <DirSearch
                   value={catalogQuery}
                   onChange={setCatalogQuery}
