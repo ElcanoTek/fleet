@@ -18,6 +18,11 @@ const SERVERS: McpServer[] = [
   { name: "magnite", accounts: [] },
 ];
 
+// The add-account form sits behind the panel's "Add account" reveal.
+function openForm() {
+  fireEvent.click(screen.getByTestId("credential-account-add"));
+}
+
 describe("CredentialAccountAdmin — write-only secrets", () => {
   beforeEach(() => {
     createAccount.mockClear();
@@ -31,6 +36,7 @@ describe("CredentialAccountAdmin — write-only secrets", () => {
     expect(screen.getByTestId("credential-account-xandr-existing_acct")).toBeInTheDocument();
     // …and there is no element anywhere echoing a secret value back. The only
     // secret inputs are the empty write-only fields in the create form.
+    openForm();
     const secretInputs = screen.getAllByTestId(/credential-secret-value-/);
     for (const el of secretInputs) {
       expect((el as HTMLInputElement).value).toBe("");
@@ -40,6 +46,7 @@ describe("CredentialAccountAdmin — write-only secrets", () => {
 
   it("starts the secret value field EMPTY (never pre-filled from storage)", () => {
     render(<CredentialAccountAdmin servers={SERVERS} />);
+    openForm();
     const secret = screen.getByTestId("credential-secret-value-0") as HTMLInputElement;
     expect(secret.value).toBe("");
     expect(secret.type).toBe("password");
@@ -47,6 +54,7 @@ describe("CredentialAccountAdmin — write-only secrets", () => {
 
   it("submits secrets as a write-only payload (key+value forwarded, never read back)", async () => {
     render(<CredentialAccountAdmin servers={SERVERS} />);
+    openForm();
     fireEvent.change(screen.getByLabelText("Account name"), { target: { value: "client_a" } });
     fireEvent.change(screen.getByLabelText("Secret key"), { target: { value: "XANDR_API_KEY" } });
     fireEvent.change(screen.getByTestId("credential-secret-value-0"), {
@@ -63,18 +71,27 @@ describe("CredentialAccountAdmin — write-only secrets", () => {
 
   it("drops empty secret values (never writes a key with '')", async () => {
     render(<CredentialAccountAdmin servers={SERVERS} />);
+    openForm();
     fireEvent.change(screen.getByLabelText("Account name"), { target: { value: "client_a" } });
     fireEvent.change(screen.getByLabelText("Secret key"), { target: { value: "XANDR_API_KEY" } });
-    // Leave the value EMPTY → the submit must be rejected (no createAccount).
+    // Leave the value EMPTY → the submit must be rejected (no createAccount),
+    // with the reason surfaced inline.
     fireEvent.click(screen.getByText("Save account"));
     // give any async a tick
     await Promise.resolve();
     expect(createAccount).not.toHaveBeenCalled();
+    expect(screen.getByText("Add at least one secret KEY=value")).toBeInTheDocument();
   });
 
-  it("deletes an account by name", async () => {
+  it("deletes an account by name after an inline confirm (no window.confirm)", async () => {
     render(<CredentialAccountAdmin servers={SERVERS} />);
-    fireEvent.click(screen.getByLabelText("Delete xandr account existing_acct"));
+    const del = screen.getByTestId("credential-account-delete-xandr-existing_acct");
+    // First click only ARMS the button…
+    fireEvent.click(del);
+    expect(deleteAccount).not.toHaveBeenCalled();
+    expect(del).toHaveTextContent("Confirm delete");
+    // …the second click fires the DELETE.
+    fireEvent.click(del);
     await waitFor(() => expect(deleteAccount).toHaveBeenCalledWith("xandr", "existing_acct"));
   });
 });

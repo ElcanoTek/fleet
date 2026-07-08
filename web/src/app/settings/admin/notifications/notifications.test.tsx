@@ -1,12 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { NotificationsPanel } from "./NotificationsPanel";
+import NotificationsAdminPage from "./page";
 
-// NotificationsPanel — admin-managed task notifications. Load-bearing
-// assertions: the env view renders with honest channel status and no secret
-// material, a save sends typed secrets (and only typed secrets), untouched
-// secret fields are omitted (keep), clear sends "", revert DELETEs, and the
-// test button reports the key-free result.
+// Settings → Admin → Notifications — admin-managed task notifications.
+// Load-bearing assertions: the env view renders with honest channel status
+// and no secret material, a save sends typed secrets (and only typed
+// secrets), untouched secret fields are omitted (keep), clear sends "",
+// revert DELETEs, and the test button reports the key-free result.
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn() }),
+}));
+
+// Admin gate: visibility-only; force "admin" so the page renders. (The real
+// hook probes an admin endpoint; authorization stays server-side regardless.)
+vi.mock("../../useIsAdmin", () => ({
+  useIsAdmin: () => "admin",
+}));
 
 type View = {
   source: "admin" | "env";
@@ -64,16 +74,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("NotificationsPanel", () => {
+describe("NotificationsAdminPage", () => {
   it("renders the env view with honest channel status and no secrets", async () => {
     vi.stubGlobal("fetch", mockFetch(ENV_VIEW));
-    render(<NotificationsPanel />);
+    render(<NotificationsAdminPage />);
     expect(await screen.findByText("Env config", undefined, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getByTestId("notify-smtp-host")).toHaveValue("smtp.env.example");
     // Stored password shows status only, never a value.
     expect(screen.getByText(/stored — leave blank to keep/)).toBeInTheDocument();
     expect(screen.getByTestId("notify-smtp-password")).toHaveValue("");
-    expect(screen.getByText("Active")).toBeInTheDocument(); // email channel
+    expect(screen.getByText("Configured")).toBeInTheDocument(); // email channel
     expect(screen.getByText("Not configured")).toBeInTheDocument(); // webhook channel
     // No revert button for env config.
     expect(screen.queryByTestId("notify-revert")).toBeNull();
@@ -94,7 +104,7 @@ describe("NotificationsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<NotificationsPanel />);
+    render(<NotificationsAdminPage />);
 
     // Type a webhook URL + its secret; leave the SMTP password untouched.
     fireEvent.change(await screen.findByTestId("notify-webhook-url", undefined, { timeout: 5000 }), {
@@ -103,10 +113,11 @@ describe("NotificationsPanel", () => {
     fireEvent.change(screen.getByTestId("notify-webhook-secret"), {
       target: { value: "new-hook-secret" },
     });
-    fireEvent.click(screen.getByTestId("notify-on-failure"));
+    fireEvent.click(screen.getByRole("button", { name: "failure" }));
     fireEvent.click(screen.getByTestId("notify-save"));
 
-    await waitFor(() => expect(screen.getByText("Customized")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Overridden")).toBeInTheDocument());
+    expect(screen.getByText(/Last saved by boss@x.com/)).toBeInTheDocument();
     const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
     const body = JSON.parse(String(put?.[1]?.body));
     expect(body.webhook_url).toBe("https://hooks.example.com/x");
@@ -123,7 +134,7 @@ describe("NotificationsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<NotificationsPanel />);
+    render(<NotificationsAdminPage />);
     fireEvent.click(await screen.findByTestId("notify-smtp-password-clear", undefined, { timeout: 5000 }));
     fireEvent.click(screen.getByTestId("notify-save"));
     await waitFor(() =>
@@ -141,10 +152,41 @@ describe("NotificationsPanel", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
-    render(<NotificationsPanel />);
+    render(<NotificationsAdminPage />);
     fireEvent.click(await screen.findByTestId("notify-revert", undefined, { timeout: 5000 }));
     await waitFor(() => expect(screen.getByText("Env config")).toBeInTheDocument());
     expect(fetchMock.mock.calls.some(([, i]) => i?.method === "DELETE")).toBe(true);
+  });
+
+  it("the notify-on chips parse and rewrite the CSV, preserving unknown tokens", async () => {
+    const view: View = {
+      ...ENV_VIEW,
+      settings: { ...ENV_VIEW.settings, notify_on: "failure, custom_status" },
+    };
+    const fetchMock = mockFetch(view, (url, init) => {
+      if (init.method === "PUT") return { status: 200, body: view };
+      return undefined;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<NotificationsAdminPage />);
+    const failure = await screen.findByRole("button", { name: "failure" }, { timeout: 5000 });
+    expect(failure).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "success" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    // Toggle failure off, success on: custom_status must survive the rewrite.
+    fireEvent.click(failure);
+    fireEvent.click(screen.getByRole("button", { name: "success" }));
+    fireEvent.click(screen.getByTestId("notify-save"));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, i]) => i?.method === "PUT")).toBe(true),
+    );
+    const put = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT");
+    const sent = String(JSON.parse(String(put?.[1]?.body)).notify_on)
+      .split(",")
+      .sort();
+    expect(sent).toEqual(["custom_status", "success"]);
   });
 
   it("the test button reports the key-free result", async () => {
@@ -155,7 +197,7 @@ describe("NotificationsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<NotificationsPanel />);
+    render(<NotificationsAdminPage />);
     fireEvent.click(await screen.findByTestId("notify-test-email", undefined, { timeout: 5000 }));
     expect(await screen.findByTestId("notify-test-result-email")).toHaveTextContent(
       /test email delivered \(42 ms\)/,
@@ -172,7 +214,7 @@ describe("NotificationsPanel", () => {
       return undefined;
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<NotificationsPanel />);
+    render(<NotificationsAdminPage />);
     fireEvent.change(await screen.findByTestId("notify-webhook-url", undefined, { timeout: 5000 }), {
       target: { value: "ftp://nope" },
     });

@@ -1,20 +1,21 @@
 "use client";
 
-// AccountMenu — the rail footer's account control (#169). A single button shows
-// the avatar + email; opening it reveals the account menu (Settings · Connections
-// · Skills · Admin · Theme · Sign out) built on the shared Menu surface, so it is
-// the same component family as the conversation-row kebab. Settings (/settings,
-// the unified settings area), Connections (/settings/connections), Skills
-// (/settings/skills), and Admin (/admin, allowlist-gated server-side) are plain
-// page navigations available identically on both surfaces — the menu is one
-// component with no per-surface forks in what it offers.
+// AccountMenu — the rail footer's account control (#169, settings pass). A
+// single button shows the avatar + email; opening it reveals the account menu
+// built on the shared Menu surface, so it is the same component family as the
+// conversation-row kebab. Contents per the design: account header (avatar +
+// email) · Settings with its subtext line ("Connections, skills & workspace
+// settings") · Theme (System/Light/Dark segmented) · Sign out. Connections,
+// Skills, and Admin are no longer separate menu items — they are sections of
+// the settings area's own sub-nav (Admin only for admins, resolved there).
 //
 // Surface-specific wiring:
 //   - onSignOut is supplied per surface (chat posts a logout form; the
 //     orchestrator calls its session.logout()).
 //   - Theme is driven by the shared useTheme hook via a System/Light/Dark
-//     segmented control (System follows the OS preference live), replacing
-//     the standalone header ThemeToggle on both surfaces.
+//     segmented control (System follows the OS preference live).
+//   - `current` marks the settings surface: the anchor button and the
+//     Settings item take the primary tint (the design's `.current` state).
 
 import { useRef, useState } from "react";
 import { useTheme } from "@/app/shared/hooks/useTheme";
@@ -40,6 +41,7 @@ export function AccountMenu({
   email,
   onSignOut,
   railCollapsed = false,
+  current = false,
 }: {
   email: string;
   onSignOut: () => void;
@@ -47,6 +49,8 @@ export function AccountMenu({
   // square and the menu opens at a fixed 15rem instead of stretching to the
   // (now tiny) anchor. The <sm drawer always shows the full button.
   railCollapsed?: boolean;
+  // True on the settings surface — tints the anchor + Settings item.
+  current?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
@@ -77,6 +81,7 @@ export function AccountMenu({
           "flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-2 text-left transition",
           "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
           open ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]" : "",
+          current && !open ? "account-current" : "",
           railCollapsed ? "sm:mx-auto sm:size-10 sm:justify-center sm:gap-0 sm:p-0" : "",
         ].join(" ")}
       >
@@ -114,6 +119,8 @@ export function AccountMenu({
         <MenuSeparator />
         <MenuItem
           icon={<Icon name="settings" className="size-4" />}
+          description="Connections, skills & workspace settings"
+          className={current ? "menu-item-current" : ""}
           onClick={() => {
             close();
             window.location.assign("/settings");
@@ -121,34 +128,8 @@ export function AccountMenu({
         >
           Settings
         </MenuItem>
-        <MenuItem
-          icon={<Icon name="plug" className="size-4" />}
-          onClick={() => {
-            close();
-            window.location.assign("/settings/connections");
-          }}
-        >
-          Connections
-        </MenuItem>
-        <MenuItem
-          icon={<Icon name="puzzle" className="size-4" />}
-          onClick={() => {
-            close();
-            window.location.assign("/settings/skills");
-          }}
-        >
-          Skills
-        </MenuItem>
-        <MenuItem
-          icon={<Icon name="shield" className="size-4" />}
-          onClick={() => {
-            close();
-            window.location.assign("/admin");
-          }}
-        >
-          Admin
-        </MenuItem>
-        <div className="flex items-center gap-2 px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-secondary)]">
+        <MenuSeparator />
+        <div className="flex items-center gap-2 px-2 py-1.5 text-[0.82rem] text-[var(--color-text-secondary)]">
           <Icon name="moon" className="size-4 shrink-0 text-[var(--color-text-muted)]" />
           <span className="min-w-0 flex-1">Theme</span>
           <span
