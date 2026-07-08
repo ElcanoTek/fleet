@@ -15,6 +15,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Settings sections no longer jump in width while navigating**: the settings
+  shell's scroll container now reserves a stable scrollbar gutter
+  (`scrollbar-gutter: stable`). Sections differ in height — General and the
+  Admin overview fit the viewport while Connections and Skills scroll — so on
+  classic-scrollbar platforms (Windows/Linux) the scrollbar appeared and
+  disappeared across navigations, resizing the centered layout and shifting
+  the sub-nav and content sideways. Every section now renders at the same
+  width, including while Connections/Skills catalogs are still loading.
 - **Bootstrap re-runs no longer lock admins out of the Operations Center**:
   `scripts/bootstrap.sh` wrote `ORCHESTRATOR_SERVER_TOKEN=<ADMIN_API_KEY>` into
   `/etc/fleet/fleet-web.env`, but the orchestrator's header-trust path verifies
