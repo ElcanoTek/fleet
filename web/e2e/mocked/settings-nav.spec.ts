@@ -42,6 +42,51 @@ async function mockShell(page: Page, opts: { admin: boolean }) {
   );
 }
 
+// mockSectionData feeds Connections + Skills enough catalog rows that both
+// sections overflow the viewport (as they do in production), while General
+// and the Admin overview fit — the height mix that made the width jump below
+// reproducible in a real browser.
+async function mockSectionData(page: Page) {
+  await page.route("**/api/remote-mcp-servers", (r: Route) =>
+    r.fulfill({ json: { servers: [], shares: {}, shared_with_me: [] } }),
+  );
+  await page.route("**/api/mcp-catalog", (r: Route) =>
+    r.fulfill({
+      json: {
+        bundled: Array.from({ length: 8 }, (_, i) => ({
+          name: `conn-${i}`,
+          display_name: `Connector ${i}`,
+          description: `Bundled connector ${i} with a description long enough to wrap.`,
+          tool_count: 3,
+          optional: true,
+        })),
+        third_party: Array.from({ length: 12 }, (_, i) => ({
+          name: `tp-${i}`,
+          display_name: `Third Party ${i}`,
+          description: `Hosted server ${i}.`,
+          url: `https://example.com/${i}`,
+          provenance: "official",
+          category: "development",
+        })),
+        remote_mcp_enabled: true,
+      },
+    }),
+  );
+  await page.route("**/api/connector-prefs", (r: Route) => r.fulfill({ json: { prefs: [] } }));
+  await page.route("**/api/skills", (r: Route) =>
+    r.fulfill({
+      json: {
+        skills: Array.from({ length: 25 }, (_, i) => ({
+          name: `skill-${i}`,
+          description: `Test skill ${i} with enough text to give the row realistic height.`,
+          source: "bundle",
+        })),
+      },
+    }),
+  );
+  await page.route("**/api/user-skills", (r: Route) => r.fulfill({ json: { skills: [] } }));
+}
+
 test.beforeEach(async ({ context }) => {
   await loginViaCookie(context);
 });
@@ -86,6 +131,72 @@ test("the Admin parent expands to its five children for admins", async ({ page }
     "aria-current",
     "page",
   );
+});
+
+// The settings shell must not change width across sections. Sections differ in
+// height (General/Admin fit the viewport; Connections/Skills scroll), and the
+// shell's <main> is the scroll container — without a reserved scrollbar gutter,
+// classic-scrollbar platforms (Windows/Linux) resize the centered wrap whenever
+// the scrollbar appears, so the sub-nav and content jump between sections.
+// Headless Chromium only has overlay (zero-width) scrollbars, so the spec
+// forces a classic 15px one and checks the gutter is reserved even where
+// nothing scrolls, then walks every section asserting identical geometry.
+test("sections keep identical geometry (scrollbar gutter is reserved)", async ({ page }) => {
+  await mockShell(page, { admin: true });
+  await mockSectionData(page);
+  await page.goto("/settings");
+  await page.addStyleTag({
+    content: "main::-webkit-scrollbar { width: 15px; }",
+  });
+
+  const geometry = () =>
+    page.evaluate(() => {
+      const nav = document.querySelector('nav[aria-label="Settings sections"]');
+      const content = nav?.parentElement?.querySelector(":scope > div:last-child");
+      const box = (el: Element | null) => {
+        const r = el?.getBoundingClientRect();
+        return r ? { x: r.x, w: r.width } : null;
+      };
+      const main = document.querySelector("main");
+      return { nav: box(nav ?? null), content: box(content ?? null), main: main?.clientWidth };
+    });
+
+  await expect(page.getByRole("switch", { name: "Send on Enter" })).toBeVisible({
+    timeout: 15_000,
+  });
+  // General doesn't scroll, yet the gutter must already be reserved: with the
+  // forced 15px scrollbar, clientWidth sits 15px inside offsetWidth. This is
+  // the assertion that fails if [scrollbar-gutter:stable] is dropped.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const main = document.querySelector("main");
+        return main ? main.offsetWidth - main.clientWidth : null;
+      }),
+    )
+    .toBe(15);
+  const general = await geometry();
+
+  const nav = page.getByRole("navigation", { name: "Settings sections" });
+
+  await nav.getByRole("link", { name: "Connections" }).click();
+  await expect(page.getByText("Connector 0").first()).toBeVisible({ timeout: 15_000 });
+  expect(await geometry()).toEqual(general);
+
+  await nav.getByRole("link", { name: "Skills" }).click();
+  await expect(page.getByText("skill-0").first()).toBeVisible({ timeout: 15_000 });
+  expect(await geometry()).toEqual(general);
+
+  await page.getByTestId("setnav-admin").click();
+  await page.waitForURL("**/settings/admin");
+  await expect(page.getByRole("link", { name: "Overview" })).toBeVisible({ timeout: 15_000 });
+  expect(await geometry()).toEqual(general);
+
+  await nav.getByRole("link", { name: "General" }).click();
+  await expect(page.getByRole("switch", { name: "Send on Enter" })).toBeVisible({
+    timeout: 15_000,
+  });
+  expect(await geometry()).toEqual(general);
 });
 
 test("non-admins see no Admin section and admin routes bounce to /settings", async ({ page }) => {

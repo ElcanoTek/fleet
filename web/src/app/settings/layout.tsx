@@ -78,7 +78,13 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
           scroll, so the topbar stays put — the design's .main/.view split. */}
       <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
         <PageTopBar title="Settings" onMenu={() => setSidebarOpen(true)} />
-        <main className="min-h-0 flex-1 overflow-y-auto">
+        {/* scrollbar-gutter:stable — sections differ in height (General/Admin
+            fit the viewport; Connections/Skills overflow), so on classic-
+            scrollbar platforms the scrollbar would otherwise appear and
+            disappear across navigations, resizing the centered wrap and making
+            the sub-nav + content jump. Reserving the gutter keeps every
+            section at the same width. */}
+        <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
           <div className="mx-auto flex w-full max-w-[74rem] items-start gap-9 px-6 pb-14 pt-7 max-[900px]:flex-col max-[900px]:gap-5">
             <SetNav />
             <div
