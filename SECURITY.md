@@ -8,7 +8,7 @@ its users safe.
 **Please do not report security vulnerabilities through public GitHub issues,
 pull requests, or discussions.**
 
-Instead, report them privately by email to **brad@elcanotek.com**.
+Instead, report them privately by email to **hello@elcanotek.com**.
 
 Please include as much of the following as you can, so we can triage quickly:
 
