@@ -100,23 +100,20 @@ const (
 
 // providerOptions builds OpenRouter options for the active model slug.
 // Reasoning is suppressed for `~`-alias slugs (fantasy drops their thinking
-// signatures). The 1M-context beta header is attached when the primary or
-// fallback is a long-context Claude slug.
+// signatures). The 1M-context beta header is attached when the active slug is
+// a long-context Claude.
 func (e *engine) providerOptions(modelSlug string) fantasy.ProviderOptions {
 	if e.providerOptionsFn != nil {
 		return e.providerOptionsFn(modelSlug)
 	}
 	opts := &openrouter.ProviderOptions{}
 
-	primarySlug := ""
-	if e.model != nil {
-		primarySlug = e.model.Model()
-	}
-	fallbackSlug := ""
-	if e.fallbackModel != nil {
-		fallbackSlug = e.fallbackModel.Model()
-	}
-	if anthropicLongContextSlug(primarySlug) || anthropicLongContextSlug(fallbackSlug) {
+	// Gated on the ACTIVE slug — same rule as thinking below — so a fallback
+	// step to a non-long-context model doesn't carry a stray anthropic_beta
+	// extra-body field. (Previously keyed on primary-or-fallback, which
+	// attached the header to whichever model was active as long as either
+	// configured slug was long-context.)
+	if anthropicLongContextSlug(modelSlug) {
 		if opts.ExtraBody == nil {
 			opts.ExtraBody = make(map[string]any)
 		}
@@ -521,6 +518,14 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			}
 			return nil
 		},
-		PrepareStep: budgetGuardedStep(r.orch, promptCachingStep(modelSlug, WithCacheEnvPrefix(r.engine.envPrefix))),
+		PrepareStep: budgetGuardedStep(r.orch, promptCachingStep(modelSlug,
+			WithCacheEnvPrefix(r.engine.envPrefix),
+			// The shared loop is where compaction summaries live (the engine's
+			// compaction paths insert them into this history), so the optional
+			// 4th breakpoint anchors the summary as a stable boundary between
+			// the cached head and the evolving tail. nil = default prefix
+			// matcher (isCompactionSummaryMessage).
+			WithCompactionSummaryBreakpoint(nil),
+		)),
 	})
 }

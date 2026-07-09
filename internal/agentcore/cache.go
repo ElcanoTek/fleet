@@ -43,6 +43,17 @@ import (
 var explicitBreakpointPrefixes = []string{
 	"anthropic/",
 	"google/",
+	// Provider-local slugs (#289 native providers). A model routed through a
+	// native provider carries the bare model id — selectProvider strips the
+	// "<provider-name>/" routing prefix and fantasy's Model() returns what was
+	// loaded — so "claude-fable-5" must match here or native-Anthropic runs get
+	// NO breakpoints and pay full input price every turn. fantasy's native
+	// anthropic provider reads the same anthropic.Name ProviderOptions the
+	// OpenRouter hook does, so the markers translate identically. Bare slugs
+	// never reach OpenRouter (its catalog requires the "<lab>/" form), so this
+	// cannot mis-mark an implicit-cache upstream.
+	"claude-",
+	"gemini-",
 }
 
 // supportsExplicitBreakpoints reports whether the model slug routes to a

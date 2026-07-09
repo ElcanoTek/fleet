@@ -29,6 +29,17 @@ func TestSupportsExplicitBreakpoints(t *testing.T) {
 		// prefix matching so the alias inherits the lab's caching policy.
 		{"~anthropic/claude-sonnet-latest", true},
 		{"~google/gemini-flash-latest", true},
+		// Provider-local slugs (#289 native providers): selectProvider strips
+		// the "<provider-name>/" routing prefix, so the engine sees the bare
+		// model id. These must still get breakpoints — a native-Anthropic run
+		// without them pays full input price every turn.
+		{"claude-fable-5", true},
+		{"claude-opus-4.6", true},
+		{"Claude-Sonnet-4.6", true}, // case-insensitive, same as the "/" forms
+		{"gemini-3-flash-preview", true},
+		// Bare slugs of implicit-cache families stay unmarked.
+		{"gpt-5.4", false},
+		{"kimi-k2.5", false},
 		// Implicit-cache families — no explicit breakpoints.
 		{"openai/gpt-5.4", false},
 		{"openai/gpt-5.4-nano", false},
