@@ -69,6 +69,7 @@ import { useTurnStream, type TurnStreamDeps } from "./useTurnStream";
 // from "./chat-experience" — keep resolving unchanged.
 import { autoFenceRawHtmlDocument, renderAssistantContent } from "./AssistantContent";
 export { autoFenceRawHtmlDocument, renderAssistantContent };
+import { readChatSession, writeChatSession } from "./chatSessionStore";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -275,12 +276,29 @@ function isInteractiveTarget(el: Element | null): boolean {
 // share it with no React dependency.
 
 export function ChatExperience() {
+  // Cross-navigation rehydration. /chat and /settings are separate App Router
+  // route segments, so leaving chat fully unmounts this component. The module
+  // store (./chatSessionStore) keeps the conversation state alive across that
+  // unmount; `restoredSession` is its snapshot captured once at mount. Non-null
+  // means we're returning to chat with a warm cache and can paint instantly +
+  // revalidate in the background; null is a genuine cold start (or a hard
+  // reload) that runs the full blocking bootstrap below. Captured via a lazy
+  // useState initializer so the impure module read happens once, off the render
+  // path, and every state below can seed from the same stable value.
+  const [restoredSession] = useState(() => readChatSession());
   // Keep messages keyed by conversation id (plus the PENDING sentinel
   // for brand-new chats). This lets users navigate between chats during
   // an in-flight stream without losing the streaming UI state — the
   // stream events keep landing in the originating conv's slot whether
   // it's currently displayed or not.
-  const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>({});
+  const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>(
+    () => restoredSession?.messagesByConv ?? {},
+  );
+  // True once the initial bootstrap (cold start) or the rehydration (warm
+  // return) has established a snapshot worth persisting. Gates the mirror
+  // effect below so a mid-cold-start unmount never saves a half-empty snapshot
+  // that a return would mistake for a warm cache.
+  const [bootstrapped, setBootstrapped] = useState(() => restoredSession !== null);
   // Per-conversation composer state — drafts, queued attachments, attachment
   // errors, and in-flight upload marks — lives in usePerConvComposerState,
   // keyed by currentConvKey (real conv id or the PENDING sentinel for the
@@ -311,13 +329,19 @@ export function ChatExperience() {
   // slot. Instantiated below once currentConvKey is in scope. See
   // ./useTurnStreamState.
   const [crossfadingMessageIds, setCrossfadingMessageIds] = useState<number[]>([]);
-  const [userEmail, setUserEmail] = useState("");
-  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [userEmail, setUserEmail] = useState(() => restoredSession?.userEmail ?? "");
+  const [conversations, setConversations] = useState<ConversationSummary[]>(
+    () => restoredSession?.conversations ?? [],
+  );
   // Archived conversations (#282): fetched separately, shown in a collapsed
   // "Archived" section at the bottom of the sidebar.
-  const [archivedConversations, setArchivedConversations] = useState<ConversationSummary[]>([]);
+  const [archivedConversations, setArchivedConversations] = useState<ConversationSummary[]>(
+    () => restoredSession?.archivedConversations ?? [],
+  );
   const [showArchived, setShowArchived] = useState(false);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    () => restoredSession?.activeConversationId ?? null,
+  );
   // The slot identifier the rest of the UI hangs off of: the active
   // conv id when one is loaded, the PENDING sentinel when the user is
   // on the empty new-chat view, or a per-submission pending key during
@@ -385,7 +409,9 @@ export function ChatExperience() {
     key.startsWith(`${PENDING_CONV_KEY}:`);
   const realConvId = (key: string | null): string | null =>
     key && !isPendingKey(key) ? key : null;
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  // Cold start shows the full blocking spinner; a warm return (restoredSession
+  // present) paints the cached transcript immediately and never blocks.
+  const [isLoadingHistory, setIsLoadingHistory] = useState(() => restoredSession === null);
   const [pendingDeleteConversation, setPendingDeleteConversation] =
     useState<PendingDeleteConversation | null>(null);
   // Header title click-to-edit. Holds the draft string while the input is
@@ -405,8 +431,10 @@ export function ChatExperience() {
   const [selectMode, setSelectMode] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
-  const [personas, setPersonas] = useState<string[]>([]);
-  const [selectedPersona, setSelectedPersona] = useState<string>("");
+  const [personas, setPersonas] = useState<string[]>(() => restoredSession?.personas ?? []);
+  const [selectedPersona, setSelectedPersona] = useState<string>(
+    () => restoredSession?.selectedPersona ?? "",
+  );
   // Which empty-state protocol pill the user has opened into its form/intake
   // panel (null = show the card grid). Only meaningful on the empty new-chat
   // view; reset whenever we return to a clean slate.
@@ -422,7 +450,9 @@ export function ChatExperience() {
   // (DEFAULT_MODEL = fast tier, ADVANCED_MODEL = strong tier) live in
   // ../lib/modelAliases so other surfaces (nudge banners, tests) share a
   // single source of truth.
-  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
+  const [selectedModel, setSelectedModel] = useState<string>(
+    () => restoredSession?.selectedModel ?? DEFAULT_MODEL,
+  );
   const [rankedModels, setRankedModels] = useState<RankedModel[]>([]);
   const [catalogModels, setCatalogModels] = useState<RankedModel[]>([]);
   // Admin-configured workspace-provider models (Settings → Admin → Model
@@ -448,17 +478,20 @@ export function ChatExperience() {
   const [mcpPickerOpen, setMcpPickerOpen] = useState(false);
   // Bundle skill roster for the composer "/" autocomplete (#513). Fetched
   // once at startup — the roster is bundle-owned and static for the session.
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>(() => restoredSession?.skills ?? []);
   // Server-exposed capability flags. Fetched once on mount from
   // /api/server-config. Drives the lockdown affordance: when
   // lockdownAvailable is false the +button stays a plain "+"
   // (matches the UI-as-it-is-now contract for operators who haven't
   // opted into lockdown opt-in mode).
-  const [serverConfig, setServerConfig] = useState<ServerConfig>({
-    lockdownAvailable: false,
-    lockdownOnly: false,
-    lockdownAllowedModels: [],
-  });
+  const [serverConfig, setServerConfig] = useState<ServerConfig>(
+    () =>
+      restoredSession?.serverConfig ?? {
+        lockdownAvailable: false,
+        lockdownOnly: false,
+        lockdownAllowedModels: [],
+      },
+  );
   // pendingLockdown is set when the user clicks "New lockdown chat"
   // and cleared once the conversation is actually created. The flag
   // rides along on the first /api/chat POST as `lockdown: true`.
@@ -562,8 +595,16 @@ export function ChatExperience() {
   const personaPickerRef = useRef<HTMLDivElement | null>(null);
   const mcpPickerRef = useRef<HTMLDivElement | null>(null);
   const fadeTimeoutsRef = useRef<number[]>([]);
-  const messagesByConvRef = useRef<Record<string, Message[]>>({});
-  const activeConversationIdRef = useRef<string | null>(null);
+  // Seeded from the rehydrated snapshot so closure reads on the very first
+  // render (streamTurn callbacks, the visibility-refresh listener) see the
+  // warm cache immediately, not empty values that the sync effects below only
+  // catch up to after the first commit.
+  const messagesByConvRef = useRef<Record<string, Message[]>>(
+    restoredSession?.messagesByConv ?? {},
+  );
+  const activeConversationIdRef = useRef<string | null>(
+    restoredSession?.activeConversationId ?? null,
+  );
   // Cache-bust drift flag. Set when /api/version reports a new build id.
   // We never reload the page automatically — instead we surface an
   // "Update available" button in the sidebar so the user chooses when
@@ -577,6 +618,40 @@ export function ChatExperience() {
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  // Mirror the cross-navigation slice of chat state into the module store on
+  // every change, so leaving /chat (which unmounts this component) always
+  // leaves a fresh snapshot for the next mount to rehydrate from. Gated on
+  // `bootstrapped` so a mid-cold-start unmount can't persist a half-empty
+  // snapshot that a return would then treat as a warm cache. See
+  // ./chatSessionStore.
+  useEffect(() => {
+    if (!bootstrapped) return;
+    writeChatSession({
+      messagesByConv,
+      conversations,
+      archivedConversations,
+      activeConversationId,
+      personas,
+      selectedPersona,
+      selectedModel,
+      skills,
+      serverConfig,
+      userEmail,
+    });
+  }, [
+    bootstrapped,
+    messagesByConv,
+    conversations,
+    archivedConversations,
+    activeConversationId,
+    personas,
+    selectedPersona,
+    selectedModel,
+    skills,
+    serverConfig,
+    userEmail,
+  ]);
 
   // Keyboard shortcuts are registered declaratively through the shared
   // useKeyboardShortcuts hook below (search the comment "shortcut catalog"),
@@ -1435,7 +1510,7 @@ export function ChatExperience() {
 
   const loadConversation = async (
     conversationId: string,
-    options: { preserveScroll?: boolean } = {},
+    options: { preserveScroll?: boolean; background?: boolean } = {},
   ) => {
     // If this conversation is currently streaming, the local in-memory
     // copy has the in-flight UI updates that the server hasn't
@@ -1453,7 +1528,10 @@ export function ChatExperience() {
       return;
     }
 
-    setIsLoadingHistory(true);
+    // background: a warm-return revalidation already has the cached transcript
+    // on screen, so it must NOT flash the blocking spinner — it swaps in the
+    // fresh server copy underneath the rendered messages.
+    if (!options.background) setIsLoadingHistory(true);
     try {
       const response = await fetch(`/api/conversations/${conversationId}`, { cache: "no-store" });
       if (!response.ok) throw new Error("Unable to load conversation.");
@@ -1552,7 +1630,7 @@ export function ChatExperience() {
       setConvMessages(data.conversation.id, next);
       setSidebarOpen(false);
     } finally {
-      setIsLoadingHistory(false);
+      if (!options.background) setIsLoadingHistory(false);
     }
 
     // After the DB-backed history is rendered, check whether a turn
@@ -2643,9 +2721,86 @@ export function ChatExperience() {
     // it keeps exhaustive-deps honest without changing the mount-once run.
   }, [attachedConvIdsRef]);
 
-  // Initial load: session, personas, conversations, most-recent conversation.
+  // Initial load: session, conversations, most-recent conversation.
+  //
+  // Only the three fetches the conversation render actually needs sit on the
+  // spinner's critical path — session, conversations, and loadConversation.
+  // The nice-to-haves (personas, skills, server-config, MCP catalog preview)
+  // fire concurrently and never gate `isLoadingHistory`, so returning to /chat
+  // from /settings paints the conversation as soon as its history arrives
+  // instead of after six serial round-trips.
   useEffect(() => {
     let cancelled = false;
+    // The personas fetch races the critical path. loadConversation sets the
+    // opened conversation's persona last, so if personas resolves afterwards
+    // its default-persona write would clobber it. We only seed the default
+    // when no conversation is being loaded, and flip this flag before awaiting
+    // loadConversation so a late personas resolution skips the write.
+    let willLoadConversation = false;
+    // Local pending-key check (mirrors the component's isPendingKey) so this
+    // mount-once effect keeps `[]` deps instead of depending on a per-render
+    // helper. PENDING_CONV_KEY is a module constant. A real conversation id is
+    // anything that isn't the empty-new-chat sentinel or a per-submission slot.
+    const isRealConvId = (id: string | null): id is string =>
+      id !== null && id !== PENDING_CONV_KEY && !id.startsWith(`${PENDING_CONV_KEY}:`);
+
+    // Personas — nice-to-have; the server falls back to default. Sets the
+    // roster always, but the default persona only when no conversation loads.
+    const loadPersonas = async () => {
+      try {
+        const pr = await fetch("/api/personas", { cache: "no-store" });
+        if (pr.ok) {
+          const pd = (await pr.json()) as PersonasResponse;
+          if (!cancelled) {
+            setPersonas(pd.personas);
+            if (!willLoadConversation) setSelectedPersona(pd.default);
+          }
+        }
+      } catch {
+        // Personas are nice-to-have; the server falls back to default.
+      }
+    };
+
+    // Bundle skill roster for the composer "/" autocomplete (#513).
+    // Best-effort: an older server without /skills just leaves the
+    // autocomplete empty.
+    const loadSkills = async () => {
+      try {
+        const sr = await fetch("/api/skills", { cache: "no-store" });
+        if (sr.ok) {
+          const sd = (await sr.json()) as { skills?: SkillInfo[] };
+          if (!cancelled) setSkills(sd.skills ?? []);
+        }
+      } catch {
+        // Optional nicety — plain "/text" messages still send fine.
+      }
+    };
+
+    // Capability fetch — currently just lockdown availability.
+    // Best-effort: a 404 / network error means the older server
+    // doesn't expose this endpoint, so we keep the feature off.
+    const loadServerConfig = async () => {
+      try {
+        const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
+        if (cfgRes.ok) {
+          const cfg = (await cfgRes.json()) as {
+            lockdown_available: boolean;
+            lockdown_only: boolean;
+            lockdown_allowed_models: string[] | null;
+          };
+          if (!cancelled) {
+            setServerConfig({
+              lockdownAvailable: cfg.lockdown_available === true,
+              lockdownOnly: cfg.lockdown_only === true,
+              lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
+            });
+          }
+        }
+      } catch {
+        // Optional capability — leave lockdown off when the server
+        // is too old to advertise it.
+      }
+    };
 
     const loadInitialState = async () => {
       try {
@@ -2657,63 +2812,6 @@ export function ChatExperience() {
         const sessionData = (await sessionResponse.json()) as { email: string };
         if (cancelled) return;
         setUserEmail(sessionData.email);
-
-        // Personas
-        try {
-          const pr = await fetch("/api/personas", { cache: "no-store" });
-          if (pr.ok) {
-            const pd = (await pr.json()) as PersonasResponse;
-            if (!cancelled) {
-              setPersonas(pd.personas);
-              setSelectedPersona(pd.default);
-            }
-          }
-        } catch {
-          // Personas are nice-to-have; the server falls back to default.
-        }
-
-        // Bundle skill roster for the composer "/" autocomplete (#513).
-        // Best-effort: an older server without /skills just leaves the
-        // autocomplete empty.
-        try {
-          const sr = await fetch("/api/skills", { cache: "no-store" });
-          if (sr.ok) {
-            const sd = (await sr.json()) as { skills?: SkillInfo[] };
-            if (!cancelled) setSkills(sd.skills ?? []);
-          }
-        } catch {
-          // Optional nicety — plain "/text" messages still send fine.
-        }
-
-        // Prime the Tools picker catalog so it renders for new chats too.
-        // loadConversation will overwrite with per-conversation enabled
-        // state once an existing conversation is opened. Called through a
-        // latest-ref so this mount-once bootstrap keeps `[]` deps.
-        if (!cancelled) void loadMcpServerCatalogPreviewRef.current();
-
-        // Capability fetch — currently just lockdown availability.
-        // Best-effort: a 404 / network error means the older server
-        // doesn't expose this endpoint, so we keep the feature off.
-        try {
-          const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
-          if (cfgRes.ok) {
-            const cfg = (await cfgRes.json()) as {
-              lockdown_available: boolean;
-              lockdown_only: boolean;
-              lockdown_allowed_models: string[] | null;
-            };
-            if (!cancelled) {
-              setServerConfig({
-                lockdownAvailable: cfg.lockdown_available === true,
-                lockdownOnly: cfg.lockdown_only === true,
-                lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
-              });
-            }
-          }
-        } catch {
-          // Optional capability — leave lockdown off when the server
-          // is too old to advertise it.
-        }
 
         const conversationsResponse = await fetch("/api/conversations", { cache: "no-store" });
         if (!conversationsResponse.ok) {
@@ -2732,13 +2830,91 @@ export function ChatExperience() {
           setActiveConversationId(null);
           return;
         }
+        // Flip before awaiting so a personas fetch that resolves after this
+        // point does not overwrite the loaded conversation's persona.
+        willLoadConversation = true;
         await loadConversationRef.current(latest.id);
       } finally {
-        if (!cancelled) setIsLoadingHistory(false);
+        if (!cancelled) {
+          setIsLoadingHistory(false);
+          // Bootstrap done — start mirroring state into the module store so a
+          // later navigation to /settings leaves a warm snapshot to return to.
+          setBootstrapped(true);
+        }
       }
     };
 
-    void loadInitialState();
+    // Warm return from another route (e.g. /settings). State was already
+    // rehydrated from the module store via the lazy initializers above, so the
+    // transcript is on screen. Refresh everything in the background and
+    // reconcile — never toggling the blocking spinner — so nothing that landed
+    // while we were away (a completed turn, a new conversation, a persona
+    // change) is missed. See ./chatSessionStore.
+    const revalidateInBackground = async () => {
+      try {
+        const sessionResponse = await fetch("/api/session", { cache: "no-store" });
+        if (!sessionResponse.ok) {
+          window.location.href = "/login";
+          return;
+        }
+        const sessionData = (await sessionResponse.json()) as { email: string };
+        if (cancelled) return;
+        setUserEmail(sessionData.email);
+      } catch {
+        // Offline / transient: keep showing the cached session; the next
+        // return (or the visibility-refresh listener) will try again.
+        return;
+      }
+      // Refresh both sidebar lists (cheap, no chat repaint).
+      void refreshConversationsRef.current();
+      // Revalidate the conversation the user is looking at. preserveScroll so a
+      // reconcile doesn't yank them off wherever the initial rehydration snap
+      // (queued below) left them; background so it never flashes the spinner.
+      // loadConversation also re-attaches to any turn that is still in flight
+      // server-side, so a stream that was aborted on unmount resumes on return.
+      const activeId = activeConversationIdRef.current;
+      if (isRealConvId(activeId)) {
+        void loadConversationRef.current(activeId, { preserveScroll: true, background: true });
+      }
+    };
+
+    // Kick off the nice-to-haves concurrently — they set their own state when
+    // they resolve but never block the spinner. loadMcpServerCatalogPreview
+    // primes the Tools picker so it renders for new chats too; loadConversation
+    // overwrites it with per-conversation enabled state once an existing
+    // conversation opens. Both are called through their latest-refs so this
+    // mount-once bootstrap keeps `[]` deps.
+    // Read the module store directly (not the `restoredSession` state) so this
+    // effect keeps `[]` deps. On a warm return the mirror effect has already
+    // re-persisted the rehydrated snapshot, so this returns the same data the
+    // lazy initializers seeded from; on a cold start it's still null (the
+    // mirror effect is gated on `bootstrapped`, false until loadInitialState
+    // finishes).
+    const restored = readChatSession();
+    const warm = restored !== null;
+    // On a warm return the active conversation's persona is already restored;
+    // flip the guard so a late personas resolution doesn't clobber it with the
+    // default (mirrors the cold-start critical-path guard set in
+    // loadInitialState).
+    if (warm && restored?.activeConversationId) willLoadConversation = true;
+
+    void loadPersonas();
+    void loadSkills();
+    void loadServerConfig();
+    void loadMcpServerCatalogPreviewRef.current();
+
+    if (warm) {
+      // Snap the freshly-rehydrated transcript to the latest message on the
+      // first commit — returning to chat should land on the newest reply, the
+      // same "I just opened this chat" affordance a cold load gives.
+      const activeId = restored?.activeConversationId ?? null;
+      if (isRealConvId(activeId)) {
+        pendingHistoryScrollRef.current = activeId;
+      }
+      void revalidateInBackground();
+    } else {
+      void loadInitialState();
+    }
     return () => {
       cancelled = true;
     };

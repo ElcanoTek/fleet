@@ -55,8 +55,10 @@ export const metadata: Metadata = {
     url: PUBLIC_ORIGIN,
     images: [
       {
-        url: "/icon.png",
-        alt: APP_NAME,
+        url: "/share.png",
+        width: 1280,
+        height: 640,
+        alt: "Put your agents to work on infrastructure you own.",
       },
     ],
   },
@@ -64,7 +66,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: SHARE_TITLE,
     description: SHARE_DESCRIPTION,
-    images: ["/icon.png"],
+    images: ["/share.png"],
   },
 };
 

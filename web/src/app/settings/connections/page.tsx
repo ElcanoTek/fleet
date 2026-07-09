@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import NotificationsCard from "./NotificationsCard";
-import { SettingsShell } from "../SettingsShell";
 import {
   authHint,
   categoriesOf,
@@ -14,12 +12,40 @@ import {
   needsTenantURL,
   prefFor,
   provenanceBadge,
+  type CatalogBundled,
   type CatalogResponse,
   type CatalogThirdParty,
   type ConnectorPref,
 } from "./catalog";
+import { CredentialAccountAdmin } from "./CredentialAccountAdmin";
+import {
+  btnClass,
+  ClampText,
+  ConnBadge,
+  InlineConfirmButton,
+  RevealButton,
+  SetSwitch,
+  SETTINGS_INPUT,
+  type BadgeVariant,
+} from "../ui/atoms";
+import {
+  ConnEmpty,
+  ConnField,
+  ConnForm,
+  ConnGroup,
+  ConnGroupHead,
+  ConnPanel,
+  ConnPanelHead,
+  ConnPanelSub,
+  ConnRow,
+  ConnRows,
+  DirCatHead,
+  DirChip,
+  DirSearch,
+  SetSection,
+} from "../ui/panels";
+import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
-import { StatusChip, type StatusTone } from "@/app/shared/ui/StatusChip";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -51,10 +77,10 @@ type ListResponse = {
 
 // The trust-labeled MCP directory (#538, expanded into a categorized,
 // searchable connector directory). Bundled entries are the operator's
-// sandboxed connectors (informational here — they're toggled per conversation
-// in the Tools picker); third-party entries are hosted servers the user can
-// add to the connect flow below. Types + the grouping/search/provenance
-// helpers live in ./catalog (unit-tested there).
+// sandboxed connectors, surfaced under "Your connections" with the per-user
+// availability toggle; third-party entries are hosted servers the user can
+// add to the connect flow. Types + the grouping/search/provenance helpers
+// live in ./catalog (unit-tested there).
 
 const STATUS_LABEL: Record<string, string> = {
   login_required: "Login required",
@@ -63,13 +89,27 @@ const STATUS_LABEL: Record<string, string> = {
   error: "Error",
 };
 
-function statusTone(status: string): StatusTone {
+function statusVariant(status: string): BadgeVariant {
   switch (status) {
     case "connected":
       return "success";
     case "needs_reauth":
     case "error":
-      return "warning";
+      return "warn";
+    default:
+      return "neutral";
+  }
+}
+
+// provenanceVariant maps the catalog helper's trust label onto the design's
+// badge palette: Official reads success, Aggregator reads warn (it sees your
+// traffic), Community reads neutral — the group intro carries the caution.
+function provenanceVariant(provenance: string): BadgeVariant {
+  switch (provenanceBadge(provenance).label) {
+    case "Official":
+      return "success";
+    case "Aggregator":
+      return "warn";
     default:
       return "neutral";
   }
@@ -129,6 +169,215 @@ async function fetchCatalog(): Promise<CatalogResponse | null> {
   return (await res.json()) as CatalogResponse;
 }
 
+// ToggleForMe — the design's .conn-toggle: a small switch plus a clickable
+// state label ("Enabled for me" / "Off for me" …). The switch is the
+// accessible control; the label is a convenience click target.
+function ToggleForMe({
+  on,
+  onLabel,
+  offLabel,
+  ariaLabel,
+  onToggle,
+  disabled,
+  title,
+}: {
+  on: boolean;
+  onLabel: string;
+  offLabel: string;
+  ariaLabel: string;
+  onToggle: () => void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-2" title={title}>
+      <SetSwitch small on={on} onToggle={onToggle} label={ariaLabel} disabled={disabled} />
+      <span
+        className="cursor-pointer select-none text-[0.74rem] font-medium text-[var(--color-text-secondary)]"
+        onClick={() => {
+          if (!disabled) onToggle();
+        }}
+      >
+        {on ? onLabel : offLabel}
+      </span>
+    </span>
+  );
+}
+
+// COMPACT_SELECT — the design's .conn-select .settings-input (the inline
+// account seat picker on bundled cards). Written out rather than composed as
+// SETTINGS_INPUT + overrides: Tailwind v4 orders same-property utilities by
+// value, so appended min-h/w/py/text-size "overrides" would lose to the base.
+const COMPACT_SELECT =
+  "min-h-[1.9rem] w-auto appearance-none rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-[0.15rem] pl-[0.6rem] pr-[1.9rem] text-[0.75rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]";
+
+// BundledCard — one operator-bundled connector (.conn-card): availability
+// toggle, optional default credential-account seat, and the explicit-pref
+// reset. Top-level so ClampText's expand state survives parent re-renders.
+function BundledCard({
+  entry,
+  pref,
+  on,
+  busy,
+  onToggle,
+  onPickAccount,
+  onReset,
+}: {
+  entry: CatalogBundled;
+  pref: ConnectorPref | undefined;
+  on: boolean;
+  busy: boolean;
+  onToggle: () => void;
+  onPickAccount: (account: string) => void;
+  onReset: () => void;
+}) {
+  const label = entry.display_name || entry.name;
+  return (
+    <div
+      data-testid={`bundled-card-${entry.name}`}
+      className="flex flex-col gap-[0.55rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.9rem] py-[0.8rem]"
+    >
+      <div className="flex flex-wrap items-center gap-[0.55rem]">
+        <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
+          {label}
+        </span>
+        <ConnBadge variant="success">Bundled</ConnBadge>
+        {entry.beta ? <ConnBadge>Beta</ConnBadge> : null}
+      </div>
+      {entry.description ? <ClampText text={entry.description} /> : null}
+      <div className="mt-auto flex flex-wrap items-center gap-[0.8rem]">
+        <ToggleForMe
+          on={on}
+          onLabel="Enabled for me"
+          offLabel="Disabled for me"
+          ariaLabel={`Enable ${label} for me`}
+          onToggle={onToggle}
+          disabled={busy}
+          title="Off hides this connector from your chat pickers and runs; scheduled tasks keep their own pinned selection."
+        />
+        {on && (entry.accounts?.length ?? 0) > 0 ? (
+          <label className="inline-flex items-center gap-[0.45rem] text-[0.73rem] text-[var(--color-text-muted)]">
+            Account
+            <span className="select-wrap inline-block">
+              <select
+                className={COMPACT_SELECT}
+                value={pref?.default_account ?? ""}
+                onChange={(e) => onPickAccount(e.target.value)}
+                disabled={busy}
+                aria-label={`${entry.name} credential account`}
+              >
+                <option value="">Default seat</option>
+                {(entry.accounts ?? []).map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </span>
+          </label>
+        ) : null}
+        {pref ? (
+          <button
+            type="button"
+            onClick={onReset}
+            disabled={busy}
+            className="border-none bg-transparent p-0 text-[0.72rem] text-[var(--color-accent)] underline underline-offset-2 disabled:opacity-50"
+          >
+            Reset
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// DirectoryCard — one third-party entry (.dir-card): provenance badge,
+// clamped description, vendor + vetting links, auth signal, and the gated
+// one-click Add.
+function DirectoryCard({
+  entry,
+  added,
+  busy,
+  remoteEnabled,
+  onAdd,
+}: {
+  entry: CatalogThirdParty;
+  added: boolean;
+  busy: boolean;
+  remoteEnabled: boolean;
+  onAdd: () => void;
+}) {
+  const hint = authHint(entry);
+  const linkClass =
+    "border-b border-dotted border-[var(--color-border-strong)] text-[var(--color-text-secondary)] no-underline hover:text-[var(--color-text-primary)]";
+  return (
+    <div
+      data-testid={`dir-card-${entry.name}`}
+      className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[0.95rem] py-[0.85rem]"
+    >
+      <div className="flex flex-wrap items-center gap-[0.55rem]">
+        <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
+          {entry.display_name}
+        </span>
+        <ConnBadge variant={provenanceVariant(entry.provenance)}>
+          {provenanceBadge(entry.provenance).label}
+        </ConnBadge>
+      </div>
+      {entry.description ? <ClampText text={entry.description} /> : null}
+      <div className="mt-auto flex items-center gap-[0.6rem] text-[0.72rem] text-[var(--color-text-muted)]">
+        <span className="min-w-0 flex-1 truncate">
+          {entry.vendor || entry.url}
+          {entry.docs_url ? (
+            <>
+              {" · "}
+              <a href={entry.docs_url} target="_blank" rel="noreferrer" className={linkClass}>
+                docs
+              </a>
+            </>
+          ) : null}
+          {entry.repo_url ? (
+            <>
+              {" · "}
+              <a href={entry.repo_url} target="_blank" rel="noreferrer" className={linkClass}>
+                source
+              </a>
+            </>
+          ) : null}
+        </span>
+        {remoteEnabled ? (
+          needsTenantURL(entry) ? (
+            // A {placeholder} endpoint is per-organization — no one-click Add;
+            // the user pastes their own URL into the Remote servers form.
+            <span
+              className="shrink-0 whitespace-nowrap"
+              title="This endpoint is per-organization — copy your own URL from the vendor docs into the form above."
+            >
+              {hint}
+            </span>
+          ) : (
+            <>
+              {hint ? <span className="shrink-0 whitespace-nowrap">{hint}</span> : null}
+              <button
+                type="button"
+                onClick={onAdd}
+                disabled={busy || added}
+                className={[
+                  "shrink-0 rounded-[var(--radius-pill)] border bg-transparent px-[0.85rem] py-[0.24rem] text-[0.76rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
+                  added
+                    ? "border-[var(--color-success-border)] text-[var(--color-success)]"
+                    : "border-[var(--color-border-strong)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-overlay-soft)] disabled:opacity-50",
+                ].join(" ")}
+              >
+                {added ? "Added" : "Add"}
+              </button>
+            </>
+          )
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function ConnectionsPage() {
   const [initialBanner] = useState(readCallbackBanner);
   const [servers, setServers] = useState<RemoteServer[] | null>(null);
@@ -153,8 +402,18 @@ export default function ConnectionsPage() {
   const [notice, setNotice] = useState<string | null>(initialBanner.notice);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [addServerOpen, setAddServerOpen] = useState(false);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  // The MCP server catalog (names + credential-account names, never secrets)
+  // feeds the credential-accounts panel, same as the old General page did.
+  const { servers: mcpServers, reload: reloadMcpServers } = useMcpServers(true);
+  // Anchor for the directory results: clicking a category pill scrolls back
+  // to the top of the list (the sticky bar keeps search + chips in view).
+  const directoryResultsRef = useRef<HTMLDivElement | null>(null);
+  // The sticky search + chip bar itself — measured on chip clicks so the
+  // scroll can land the results just below it instead of underneath it.
+  const dirBarRef = useRef<HTMLDivElement | null>(null);
 
   const apply = (isStale: () => boolean) => {
     fetchServers()
@@ -178,6 +437,16 @@ export default function ConnectionsPage() {
     setError(null);
     setLoading(true);
     apply(() => false);
+  };
+
+  // refreshCatalog re-reads bundled accounts + third-party entries — called
+  // after credential-account changes so new seats appear in the card selects.
+  const refreshCatalog = () => {
+    fetchCatalog()
+      .then((c) => {
+        if (c) setCatalog(c);
+      })
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -223,6 +492,7 @@ export default function ConnectionsPage() {
         }
         setName("");
         setUrl("");
+        setAddServerOpen(false);
         setNotice("Server added. Click Connect to log in.");
         refresh();
       })
@@ -238,13 +508,10 @@ export default function ConnectionsPage() {
     })
       .then(async (res) => {
         if (!res.ok) {
-          throw new Error(
-            (await res.text()) || `Authorize failed: ${res.status}`,
-          );
+          throw new Error((await res.text()) || `Authorize failed: ${res.status}`);
         }
         const data = (await res.json()) as { redirect_url?: string };
-        if (!data.redirect_url)
-          throw new Error("No authorization URL returned.");
+        if (!data.redirect_url) throw new Error("No authorization URL returned.");
         // Full-page navigation to the authorization server. It redirects back to
         // /api/oauth/mcp/callback, which returns here with ?connected / ?error.
         window.location.href = data.redirect_url;
@@ -373,14 +640,9 @@ export default function ConnectionsPage() {
       .finally(() => setBusy(false));
   };
 
-  const disconnect = (id: string, label: string) => {
-    if (
-      !window.confirm(
-        `Disconnect "${label}"? Its stored tokens are revoked and removed.`,
-      )
-    ) {
-      return;
-    }
+  // Remove is confirmed inline on the button itself (InlineConfirmButton) —
+  // no window.confirm.
+  const disconnect = (id: string) => {
     setError(null);
     setBusy(true);
     fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}`, {
@@ -388,9 +650,7 @@ export default function ConnectionsPage() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error(
-            (await res.text()) || `Disconnect failed: ${res.status}`,
-          );
+          throw new Error((await res.text()) || `Disconnect failed: ${res.status}`);
         }
         setNotice("Disconnected.");
         refresh();
@@ -399,617 +659,508 @@ export default function ConnectionsPage() {
       .finally(() => setBusy(false));
   };
 
+  // Directory filtering. A live search spans EVERY category — it overrides
+  // the active pill (without clearing it, so emptying the search restores the
+  // filter). Pills themselves are true filters.
+  const thirdParty = catalog?.third_party ?? [];
+  const trimmedQuery = catalogQuery.trim();
+  const effectiveCategory = trimmedQuery ? "" : catalogCategory;
+  const dirHits = filterCatalog(thirdParty, catalogQuery, effectiveCategory);
+  const dirFiltering = trimmedQuery !== "" || catalogCategory !== "";
+  const dirCategories = categoriesOf(thirdParty);
+  const activeCategoryLabel =
+    dirCategories.find((c) => c.slug === catalogCategory)?.label ?? catalogCategory;
+
+  const scrollDirectoryResults = () => {
+    const el = directoryResultsRef.current;
+    if (!el) return;
+    // The sticky bar overlays the top of the scrollport, so a bare
+    // scrollIntoView would park the results count, category heading, and
+    // first card row underneath it. Its height varies with how the chips wrap
+    // at each viewport width, so measure it at click time (plus breathing
+    // room) rather than hardcoding a scroll margin.
+    const barHeight = dirBarRef.current?.getBoundingClientRect().height ?? 0;
+    el.style.scrollMarginTop = `${Math.ceil(barHeight) + 16}px`;
+    const reduce =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  };
+
+  const pickCategory = (slug: string) => {
+    setCatalogCategory((cur) => (cur === slug ? "" : slug));
+    scrollDirectoryResults();
+  };
+
   return (
-    <SettingsShell
+    <SetSection
       title="Connections"
-      description="Connect remote (hosted) MCP servers and sign in to each with your own account. Connected servers' tools become available to you in chat and your scheduled tasks. Credentials are stored encrypted on the server and never shared with other users."
+      intro="Connect remote (hosted) MCP servers and sign in to each with your own account. Connected servers’ tools become available to you in chat and your scheduled tasks. Credentials are stored encrypted on the server and never shared with other users."
     >
-      <>
-        {notice ? (
-          <NoticeBanner tone="success" className="mb-4">
-            {notice}
-          </NoticeBanner>
-        ) : null}
-        {error ? (
-          <NoticeBanner tone="danger" className="mb-4">
-            {error}
-          </NoticeBanner>
+      {notice ? (
+        <NoticeBanner tone="success" className="mb-4">
+          {notice}
+        </NoticeBanner>
+      ) : null}
+      {error ? (
+        <NoticeBanner tone="danger" className="mb-4">
+          {error}
+        </NoticeBanner>
+      ) : null}
+
+      {/* ── Group 1 — Your connections ── */}
+      <ConnGroup>
+        <ConnGroupHead title="Your connections">
+          Everything already available to you — the connectors bundled with your
+          workspace, plus any remote servers you’ve added yourself.
+        </ConnGroupHead>
+
+        {catalog && catalog.bundled.length > 0 ? (
+          <ConnPanel>
+            <ConnPanelHead title="Bundled by your workspace" />
+            <ConnPanelSub>
+              Reviewed and shipped by your operator. These run inside the sandbox on this
+              deployment with credentials held server-side — nothing leaves the box except the
+              connector’s own API calls. Turning one off here hides it from your chats; pick a
+              default credential account and each conversation can still narrow the set in the
+              Tools picker. Scheduled tasks pin their own selection and are unaffected.
+            </ConnPanelSub>
+            <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
+              {catalog.bundled.map((b) => {
+                if (b.optional === false) {
+                  // Always-on: operator-wired into every turn; shown locked so
+                  // nothing is invisibly enabled.
+                  return (
+                    <div
+                      key={b.name}
+                      className="flex flex-col gap-[0.55rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-[0.9rem] py-[0.8rem]"
+                    >
+                      <div className="flex flex-wrap items-center gap-[0.55rem]">
+                        <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
+                          {b.display_name || b.name}
+                        </span>
+                        <ConnBadge>Always on</ConnBadge>
+                      </div>
+                      {/* .conn-desc.muted — the important flag is needed
+                          because ClampText's own text color would otherwise
+                          win the same-property utility ordering. */}
+                      <ClampText
+                        text={b.description || "Enabled by your operator in every conversation."}
+                        className="text-[var(--color-text-muted)]!"
+                      />
+                    </div>
+                  );
+                }
+                const pref = prefFor(prefs, "bundled", b.name);
+                const on = effectiveEnabled(prefs, "bundled", b.name);
+                return (
+                  <BundledCard
+                    key={b.name}
+                    entry={b}
+                    pref={pref}
+                    on={on}
+                    busy={busy}
+                    onToggle={() =>
+                      setConnectorPref({
+                        kind: "bundled",
+                        connector_id: b.name,
+                        enabled: !on,
+                        default_account: on ? "" : pref?.default_account,
+                      })
+                    }
+                    onPickAccount={(account) =>
+                      setConnectorPref({
+                        kind: "bundled",
+                        connector_id: b.name,
+                        enabled: true,
+                        default_account: account,
+                      })
+                    }
+                    onReset={() => resetConnectorPref("bundled", b.name)}
+                  />
+                );
+              })}
+            </div>
+          </ConnPanel>
         ) : null}
 
-        <form
-          onSubmit={addServer}
-          className="mb-6 rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)] p-4"
-        >
-          <h2 className="mb-3 text-[0.9rem] font-semibold">
-            Add a remote MCP server
-          </h2>
-          <div className="grid gap-3 sm:grid-cols-[1fr_2fr_auto] sm:items-end">
-            <label className="grid gap-1 text-[0.75rem] text-[var(--color-text-muted)]">
-              Name
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="my-server"
-                required
-                className="rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-              />
-            </label>
-            <label className="grid gap-1 text-[0.75rem] text-[var(--color-text-muted)]">
-              Server URL
-              <input
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://mcp.example.com/mcp"
-                type="url"
-                required
-                className="rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={busy || !name.trim() || !url.trim()}
-              className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
-            >
-              {busy ? "Working…" : "Add"}
-            </button>
-          </div>
-        </form>
-
-        <div className="overflow-hidden rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)]">
-          <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2">
-            <span className="text-[0.75rem] uppercase tracking-wide text-[var(--color-text-muted)]">
-              Your servers
-            </span>
-            <button
-              type="button"
-              onClick={refresh}
-              disabled={loading}
-              className="text-[0.75rem] text-[var(--color-text-secondary)] underline-offset-2 hover:underline disabled:opacity-50"
-            >
-              {loading ? "Loading…" : "Refresh"}
-            </button>
-          </div>
+        <ConnPanel>
+          <ConnPanelHead title="Remote servers">
+            <RevealButton
+              open={addServerOpen}
+              closedLabel="Add remote server"
+              onClick={() => setAddServerOpen((o) => !o)}
+            />
+          </ConnPanelHead>
+          <ConnPanelSub>
+            Hosted MCP endpoints you’ve connected yourself — from the directory below, or by
+            URL.
+          </ConnPanelSub>
+          {addServerOpen ? (
+            <form onSubmit={addServer}>
+              <ConnForm>
+                <ConnField label="Name">
+                  <input
+                    className={SETTINGS_INPUT}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="my-server"
+                    required
+                  />
+                </ConnField>
+                <ConnField label="Server URL" grow>
+                  <input
+                    className={SETTINGS_INPUT}
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    placeholder="https://mcp.example.com/mcp"
+                    type="url"
+                    required
+                  />
+                </ConnField>
+                <button
+                  type="submit"
+                  disabled={busy || !name.trim() || !url.trim()}
+                  className={btnClass({ variant: "primary" })}
+                >
+                  Add
+                </button>
+              </ConnForm>
+            </form>
+          ) : null}
           {loading ? (
-            <p className="px-4 py-5 text-center text-[0.875rem] text-[var(--color-text-muted)]">
+            <p className="mt-[0.2rem] py-[1.05rem] text-center text-[0.79rem] text-[var(--color-text-muted)]">
               Loading…
             </p>
           ) : servers && servers.length > 0 ? (
-            <ul>
-              {servers.map((s) => (
-                <li
-                  key={s.id}
-                  className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-subtle)] px-4 py-3 last:border-none"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-[var(--color-text-primary)]">
+            <ConnRows>
+              {servers.map((s) => {
+                const enabledForMe = effectiveEnabled(prefs, "remote", s.id);
+                const shareCount = shares[s.id]?.length ?? 0;
+                return (
+                  <ConnRow
+                    key={s.id}
+                    name={
+                      <span className="inline-flex flex-wrap items-center gap-[0.55rem]">
                         {s.name}
+                        <ConnBadge variant={statusVariant(s.status)}>
+                          {STATUS_LABEL[s.status] ?? s.status}
+                        </ConnBadge>
                       </span>
-                      <StatusChip tone={statusTone(s.status)}>
-                        {STATUS_LABEL[s.status] ?? s.status}
-                      </StatusChip>
-                    </div>
-                    <p className="truncate text-[0.75rem] text-[var(--color-text-muted)]">
-                      {s.url}
-                    </p>
-                    {s.status_detail ? (
-                      <p className="text-[0.6875rem] text-[var(--color-warning-soft)]">
-                        {s.status_detail}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => connect(s.id)}
-                      disabled={busy}
-                      className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
-                    >
-                      {s.status === "connected" ? "Reconnect" : "Connect"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setConnectorPref({
-                          kind: "remote",
-                          connector_id: s.id,
-                          enabled: !effectiveEnabled(prefs, "remote", s.id),
-                        })
-                      }
-                      disabled={busy}
-                      className={`rounded-full border px-3 py-1 text-[0.75rem] transition disabled:opacity-50 ${
-                        effectiveEnabled(prefs, "remote", s.id)
-                          ? "border-[var(--color-success-strong)] text-[var(--color-success-soft)]"
-                          : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:bg-[var(--color-overlay-soft)]"
-                      }`}
-                      title="Off hides this connection from your own chats and tasks; people you share with are unaffected."
-                    >
-                      {effectiveEnabled(prefs, "remote", s.id) ? "On" : "Off"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShareGrantee("");
-                        setShareOpenFor((cur) => (cur === s.id ? null : s.id));
-                      }}
-                      disabled={busy}
-                      className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
-                    >
-                      Share{(shares[s.id]?.length ?? 0) > 0 ? ` (${shares[s.id].length})` : ""}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => disconnect(s.id, s.name)}
-                      disabled={busy}
-                      className="rounded-full border border-[var(--color-border-subtle)] px-3 py-1 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                  {shareOpenFor === s.id ? (
-                    <div className="mt-1 w-full rounded-[0.75rem] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
-                      <p className="mb-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                        People you share with can use this connection in their
-                        chats and scheduled tasks. Their tool calls run under{" "}
-                        <strong className="text-[var(--color-text-secondary)]">
-                          your
-                        </strong>{" "}
-                        login, brokered server-side — they never see the
-                        credential, and removing a share revokes access
-                        immediately.
-                      </p>
-                      {(shares[s.id] ?? []).length > 0 ? (
-                        <ul className="mb-2 flex flex-wrap gap-1.5">
-                          {(shares[s.id] ?? []).map((g) => (
-                            <li
-                              key={g}
-                              className="flex items-center gap-1.5 rounded-full border border-[var(--color-border-strong)] px-2.5 py-0.5 text-[0.75rem]"
-                            >
-                              {granteeLabel(g)}
-                              <button
-                                type="button"
-                                onClick={() => unshare(s.id, g)}
-                                disabled={busy}
-                                aria-label={`Stop sharing with ${granteeLabel(g)}`}
-                                className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                              >
-                                ×
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      <div className="flex flex-wrap items-center gap-2">
-                        <input
-                          value={shareGrantee}
-                          onChange={(e) => setShareGrantee(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              share(s.id, shareGrantee);
+                    }
+                    sub={s.url}
+                    actions={
+                      <>
+                        <span className="mr-[0.25rem]">
+                          <ToggleForMe
+                            on={enabledForMe}
+                            onLabel="On for me"
+                            offLabel="Off for me"
+                            ariaLabel={`Enable ${s.name} for me`}
+                            onToggle={() =>
+                              setConnectorPref({
+                                kind: "remote",
+                                connector_id: s.id,
+                                enabled: !enabledForMe,
+                              })
                             }
-                          }}
-                          placeholder="teammate@example.com"
-                          type="email"
-                          className="min-w-0 flex-1 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                        />
+                            disabled={busy}
+                            title="Off hides this connection from your own chats and tasks; people you share with are unaffected."
+                          />
+                        </span>
                         <button
                           type="button"
-                          onClick={() => share(s.id, shareGrantee)}
-                          disabled={busy || !shareGrantee.trim()}
-                          className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.75rem] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+                          onClick={() => connect(s.id)}
+                          disabled={busy}
+                          className={btnClass({ sm: true, reveal: true })}
                         >
-                          Share
+                          {s.status === "connected" ? "Reconnect" : "Connect"}
                         </button>
-                        {(shares[s.id] ?? []).includes("*") ? null : (
-                          <button
-                            type="button"
-                            onClick={() => share(s.id, "*")}
-                            disabled={busy}
-                            className="rounded-full border border-[var(--color-border-subtle)] px-3 py-1 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
-                          >
-                            Share with everyone
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
+                        <button
+                          type="button"
+                          aria-expanded={shareOpenFor === s.id}
+                          onClick={() => {
+                            setShareGrantee("");
+                            setShareOpenFor((cur) => (cur === s.id ? null : s.id));
+                          }}
+                          disabled={busy}
+                          className={btnClass({ sm: true, reveal: true })}
+                        >
+                          Share{shareCount > 0 ? ` (${shareCount})` : ""}
+                        </button>
+                        <InlineConfirmButton
+                          label="Remove"
+                          confirmLabel="Confirm remove"
+                          onConfirm={() => disconnect(s.id)}
+                          disabled={busy}
+                        />
+                      </>
+                    }
+                    detail={
+                      shareOpenFor === s.id ? (
+                        <div className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
+                          <p className="mb-2 mt-0 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
+                            People you share with can use this connection in their chats and
+                            scheduled tasks. Their tool calls run under{" "}
+                            <strong className="text-[var(--color-text-secondary)]">your</strong>{" "}
+                            login, brokered server-side — they never see the credential, and
+                            removing a share revokes access immediately.
+                          </p>
+                          {(shares[s.id] ?? []).length > 0 ? (
+                            <ul className="mb-2 flex flex-wrap gap-1.5">
+                              {(shares[s.id] ?? []).map((g) => (
+                                <li
+                                  key={g}
+                                  className="flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-[var(--color-border-strong)] px-2.5 py-0.5 text-[0.75rem] text-[var(--color-text-secondary)]"
+                                >
+                                  {granteeLabel(g)}
+                                  <button
+                                    type="button"
+                                    onClick={() => unshare(s.id, g)}
+                                    disabled={busy}
+                                    aria-label={`Stop sharing with ${granteeLabel(g)}`}
+                                    className="text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                                  >
+                                    ×
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              value={shareGrantee}
+                              onChange={(e) => setShareGrantee(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  share(s.id, shareGrantee);
+                                }
+                              }}
+                              placeholder="teammate@example.com"
+                              type="email"
+                              className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => share(s.id, shareGrantee)}
+                              disabled={busy || !shareGrantee.trim()}
+                              className={btnClass({ sm: true, reveal: true })}
+                            >
+                              Share
+                            </button>
+                            {(shares[s.id] ?? []).includes("*") ? null : (
+                              <button
+                                type="button"
+                                onClick={() => share(s.id, "*")}
+                                disabled={busy}
+                                className={btnClass({ sm: true })}
+                              >
+                                Share with everyone
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ) : null
+                    }
+                  >
+                    {s.status_detail ? (
+                      <span className="text-[0.72rem] text-[var(--color-warning)] [overflow-wrap:anywhere]">
+                        {s.status_detail}
+                      </span>
+                    ) : null}
+                  </ConnRow>
+                );
+              })}
+            </ConnRows>
           ) : (
-            <p className="px-4 py-5 text-center text-[0.875rem] text-[var(--color-text-muted)]">
-              No remote servers yet. Add one above to get started.
-            </p>
+            <ConnEmpty>
+              No remote servers yet — pick one from the directory below, or add one by URL.
+            </ConnEmpty>
           )}
-        </div>
+        </ConnPanel>
 
         {sharedWithMe.length > 0 ? (
-          <div className="mt-6 overflow-hidden rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)]">
-            <div className="border-b border-[var(--color-border)] px-4 py-2">
-              <span className="text-[0.75rem] uppercase tracking-wide text-[var(--color-text-muted)]">
-                Shared with you
-              </span>
-            </div>
-            <p className="px-4 pt-3 text-[0.75rem] text-[var(--color-text-muted)]">
-              Connections other users shared with you. Their tools are
-              available in your chats and scheduled tasks; calls run under the
-              owner&apos;s login, brokered server-side.
-            </p>
-            <ul>
-              {sharedWithMe.map((s) => (
-                <li
-                  key={s.id}
-                  className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-subtle)] px-4 py-3 last:border-none"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-[var(--color-text-primary)]">
+          <ConnPanel>
+            <ConnPanelHead title="Shared with you" />
+            <ConnPanelSub>
+              Connections other users shared with you. Their tools are available in your chats
+              and scheduled tasks; calls run under the owner&apos;s login, brokered server-side.
+            </ConnPanelSub>
+            <ConnRows>
+              {sharedWithMe.map((s) => {
+                const on = effectiveEnabled(prefs, "remote", s.id);
+                return (
+                  <ConnRow
+                    key={s.id}
+                    name={
+                      <span className="inline-flex flex-wrap items-center gap-[0.55rem]">
                         {s.name}
+                        <ConnBadge variant={statusVariant(s.status)}>
+                          {STATUS_LABEL[s.status] ?? s.status}
+                        </ConnBadge>
                       </span>
-                      <StatusChip tone={statusTone(s.status)}>
-                        {STATUS_LABEL[s.status] ?? s.status}
-                      </StatusChip>
-                    </div>
-                    <p className="truncate text-[0.75rem] text-[var(--color-text-muted)]">
-                      {s.url}
-                    </p>
-                  </div>
-                  <span className="flex items-center gap-2 text-[0.75rem] text-[var(--color-text-secondary)]">
-                    shared by {s.owner}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setConnectorPref({
-                          kind: "remote",
-                          connector_id: s.id,
-                          enabled: !effectiveEnabled(prefs, "remote", s.id),
-                        })
-                      }
-                      disabled={busy}
-                      className={`rounded-full border px-3 py-1 text-[0.75rem] transition disabled:opacity-50 ${
-                        effectiveEnabled(prefs, "remote", s.id)
-                          ? "border-[var(--color-success-strong)] text-[var(--color-success-soft)]"
-                          : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:bg-[var(--color-overlay-soft)]"
-                      }`}
-                      title="Off hides this shared connection from your chats and tasks — only for you; the owner and other users are unaffected."
-                    >
-                      {effectiveEnabled(prefs, "remote", s.id) ? "On for me" : "Off for me"}
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
+                    }
+                    sub={s.url}
+                    actions={
+                      <>
+                        <span className="text-[0.72rem] text-[var(--color-text-muted)]">
+                          shared by {s.owner}
+                        </span>
+                        <span className="ml-[0.45rem]">
+                          <ToggleForMe
+                            on={on}
+                            onLabel="On for me"
+                            offLabel="Off for me"
+                            ariaLabel={`Enable ${s.name} for me`}
+                            onToggle={() =>
+                              setConnectorPref({
+                                kind: "remote",
+                                connector_id: s.id,
+                                enabled: !on,
+                              })
+                            }
+                            disabled={busy}
+                            title="Off hides this shared connection from your chats and tasks — only for you; the owner and other users are unaffected."
+                          />
+                        </span>
+                      </>
+                    }
+                  />
+                );
+              })}
+            </ConnRows>
+          </ConnPanel>
         ) : null}
+      </ConnGroup>
 
-        {catalog &&
-        (catalog.third_party.length > 0 || catalog.bundled.length > 0) ? (
-          <div className="mt-6 overflow-hidden rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)]">
-            <button
-              type="button"
-              onClick={() => setCatalogOpen((v) => !v)}
-              className="flex w-full items-center justify-between px-4 py-3 text-left"
-            >
-              <span className="text-[0.75rem] uppercase tracking-wide text-[var(--color-text-muted)]">
+      {/* ── Group 2 — Credential accounts ── */}
+      <ConnGroup>
+        <ConnGroupHead title="Credential accounts">
+          Named sign-ins your connectors use — e.g. one per client seat. Secret values are
+          write-only; they are never displayed after saving.
+        </ConnGroupHead>
+        <CredentialAccountAdmin
+          servers={mcpServers}
+          onChanged={() => {
+            void reloadMcpServers();
+            // Bundled cards offer accounts as default seats — refresh them too.
+            refreshCatalog();
+          }}
+        />
+      </ConnGroup>
+
+      {/* ── Group 3 — Connector directory (collapsible) ── */}
+      {catalog && catalog.third_party.length > 0 ? (
+        <ConnGroup>
+          {/* ConnGroupHead's metrics, recomposed so the collapse toggle sits on
+              the title row. */}
+          <div className="mb-[0.8rem]">
+            <div className="flex items-center justify-between gap-4">
+              <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">
                 Connector directory
-              </span>
-              <span className="text-[0.75rem] text-[var(--color-text-secondary)]">
-                {catalogOpen
-                  ? "Hide"
-                  : `Browse ${catalog.third_party.length + catalog.bundled.length}`}
-              </span>
-            </button>
-            {catalogOpen ? (
-              <div className="border-t border-[var(--color-border)]">
-                {catalog.bundled.length > 0 ? (
-                  <section className="border-b border-[var(--color-border-subtle)] px-4 py-3">
-                    <h3 className="mb-1 text-[0.8125rem] font-semibold">
-                      Bundled by your workspace
-                    </h3>
-                    <p className="mb-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                      Reviewed and shipped by your operator. These run inside
-                      the sandbox on this deployment with credentials held
-                      server-side — nothing leaves the box except the
-                      connector&apos;s own API calls. Turning one off here
-                      hides it from your chats; pick a default credential
-                      account and each conversation can still narrow the set
-                      in the Tools picker. Scheduled tasks pin their own
-                      selection and are unaffected.
-                    </p>
-                    <ul className="grid gap-2 sm:grid-cols-2">
-                      {catalog.bundled.map((b) => {
-                        const pref = prefFor(prefs, "bundled", b.name);
-                        const on = effectiveEnabled(prefs, "bundled", b.name);
-                        if (b.optional === false) {
-                          // Always-on: operator-wired into every turn; shown
-                          // locked so nothing is invisibly enabled.
-                          return (
-                            <li
-                              key={b.name}
-                              className="rounded-[0.75rem] border border-[var(--color-border-subtle)] px-3 py-2 opacity-80"
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="min-w-0 truncate text-[0.8125rem] font-medium">
-                                  {b.display_name || b.name}
-                                </span>
-                                <StatusChip tone="neutral">Always on</StatusChip>
-                              </div>
-                              <p className="mt-1 line-clamp-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                                {b.description ||
-                                  "Enabled by your operator in every conversation."}
-                              </p>
-                            </li>
-                          );
-                        }
-                        return (
-                          <li
-                            key={b.name}
-                            className="rounded-[0.75rem] border border-[var(--color-border-subtle)] px-3 py-2"
-                          >
-                            <div className="flex items-center gap-2">
-                              <span className="min-w-0 truncate text-[0.8125rem] font-medium">
-                                {b.display_name || b.name}
-                              </span>
-                              <StatusChip tone="success">Bundled</StatusChip>
-                              {b.beta ? (
-                                <span className="rounded-full border border-[var(--color-border-strong)] px-2 py-0.5 text-[0.6875rem] text-[var(--color-text-muted)]">
-                                  Beta
-                                </span>
-                              ) : null}
-                            </div>
-                            <p className="mt-1 line-clamp-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                              {b.description}
-                            </p>
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setConnectorPref({
-                                    kind: "bundled",
-                                    connector_id: b.name,
-                                    enabled: !on,
-                                    default_account: on ? "" : pref?.default_account,
-                                  })
-                                }
-                                disabled={busy}
-                                className={`rounded-full border px-3 py-1 text-[0.6875rem] transition disabled:opacity-50 ${
-                                  on
-                                    ? "border-[var(--color-success-strong)] text-[var(--color-success-soft)]"
-                                    : "border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:bg-[var(--color-overlay-soft)]"
-                                }`}
-                                title="Off hides this connector from your chat pickers and runs; scheduled tasks keep their own pinned selection."
-                              >
-                                {on ? "Enabled for me" : "Disabled for you"}
-                              </button>
-                              {on && (b.accounts?.length ?? 0) > 0 ? (
-                                <label className="flex items-center gap-1.5 text-[0.6875rem] text-[var(--color-text-muted)]">
-                                  Account
-                                  <select
-                                    value={pref?.default_account ?? ""}
-                                    onChange={(e) =>
-                                      setConnectorPref({
-                                        kind: "bundled",
-                                        connector_id: b.name,
-                                        enabled: true,
-                                        default_account: e.target.value,
-                                      })
-                                    }
-                                    disabled={busy}
-                                    className="rounded-[0.5rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2 py-1 text-[0.6875rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                                  >
-                                    <option value="">Default seat</option>
-                                    {(b.accounts ?? []).map((a) => (
-                                      <option key={a} value={a}>
-                                        {a}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                              ) : null}
-                              {pref ? (
-                                <button
-                                  type="button"
-                                  onClick={() => resetConnectorPref("bundled", b.name)}
-                                  disabled={busy}
-                                  className="text-[0.6875rem] text-[var(--color-text-muted)] underline-offset-2 hover:underline disabled:opacity-50"
-                                >
-                                  Reset to default
-                                </button>
-                              ) : null}
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </section>
+              </h3>
+              <button
+                type="button"
+                aria-expanded={catalogOpen}
+                onClick={() => setCatalogOpen((v) => !v)}
+                className={btnClass({ sm: true })}
+              >
+                {catalogOpen ? "Hide" : `Browse ${catalog.third_party.length}`}
+              </button>
+            </div>
+            <p className="mb-0 mt-[0.35rem] text-[0.78rem] leading-[1.55] text-[var(--color-text-muted)] [&_b]:font-semibold [&_b]:text-[var(--color-text-secondary)]">
+              Hosted servers run by the named operator, not by your workspace. Connecting one
+              signs you in with that operator and sends tool calls — which can include parts of
+              your conversation — to their service under their terms. <b>Official</b> = the
+              service’s own vendor runs the endpoint; <b>Aggregator</b> and <b>Community</b>{" "}
+              endpoints are run by someone else — vet them via the linked docs and source before
+              connecting.
+            </p>
+          </div>
+
+          {catalogOpen ? (
+            <>
+              <div
+                ref={dirBarRef}
+                data-testid="dir-filter-bar"
+                className="sticky top-0 z-20 mb-[1.1rem] grid gap-[0.55rem] border-b border-[var(--color-border)] bg-[var(--color-bg)] pb-[0.75rem] pt-[0.7rem] [background-attachment:fixed] [background-image:var(--gradient-bg)] [background-size:cover]"
+              >
+                <DirSearch
+                  value={catalogQuery}
+                  onChange={setCatalogQuery}
+                  placeholder="Search servers — try “postgres”, “crm”, “scraping”…"
+                  label="Search connector directory"
+                />
+                <div className="flex flex-wrap gap-[0.35rem]" role="tablist" aria-label="Filter by category">
+                  <DirChip
+                    active={catalogCategory === ""}
+                    onClick={() => {
+                      setCatalogCategory("");
+                      scrollDirectoryResults();
+                    }}
+                    count={catalog.third_party.length}
+                    role="tab"
+                    ariaSelected={catalogCategory === ""}
+                  >
+                    All
+                  </DirChip>
+                  {dirCategories.map((c) => (
+                    <DirChip
+                      key={c.slug}
+                      active={catalogCategory === c.slug}
+                      onClick={() => pickCategory(c.slug)}
+                      count={c.count}
+                      role="tab"
+                      ariaSelected={catalogCategory === c.slug}
+                    >
+                      {c.label}
+                    </DirChip>
+                  ))}
+                </div>
+              </div>
+
+              <div ref={directoryResultsRef}>
+                {dirFiltering ? (
+                  <p className="m-0 text-[0.72rem] text-[var(--color-text-muted)]">
+                    {dirHits.length === 1 ? "1 server matches" : `${dirHits.length} servers match`}
+                  </p>
                 ) : null}
-                {catalog.third_party.length > 0 ? (
-                  <section className="px-4 py-3">
-                    <h3 className="mb-1 text-[0.8125rem] font-semibold">
-                      Hosted servers
-                    </h3>
-                    <p className="mb-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                      Run by the named operator, not by your workspace.
-                      Connecting one signs you in with that operator and sends
-                      tool calls — which can include parts of your conversation
-                      — to their service under their terms.{" "}
-                      <span className="text-[var(--color-text-secondary)]">
-                        Official
-                      </span>{" "}
-                      = the service&apos;s own vendor runs the endpoint;{" "}
-                      <span className="text-[var(--color-text-secondary)]">
-                        Aggregator
-                      </span>{" "}
-                      and{" "}
-                      <span className="text-[var(--color-text-secondary)]">
-                        Community
-                      </span>{" "}
-                      endpoints are run by someone else — vet them via the
-                      linked docs and source before connecting.
-                    </p>
-                    <input
-                      value={catalogQuery}
-                      onChange={(e) => setCatalogQuery(e.target.value)}
-                      placeholder={`Search ${catalog.third_party.length} servers — try "postgres", "crm", "scraping"…`}
-                      className="mb-2 w-full rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                    />
-                    <div className="mb-3 flex flex-wrap gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setCatalogCategory("")}
-                        className={`rounded-full border px-2.5 py-0.5 text-[0.6875rem] transition ${
-                          catalogCategory === ""
-                            ? "border-[var(--color-accent)] text-[var(--color-text-primary)]"
-                            : "border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)]"
-                        }`}
-                      >
-                        All ({catalog.third_party.length})
-                      </button>
-                      {categoriesOf(catalog.third_party).map((c) => (
-                        <button
-                          key={c.slug}
-                          type="button"
-                          onClick={() =>
-                            setCatalogCategory((cur) =>
-                              cur === c.slug ? "" : c.slug,
-                            )
-                          }
-                          className={`rounded-full border px-2.5 py-0.5 text-[0.6875rem] transition ${
-                            catalogCategory === c.slug
-                              ? "border-[var(--color-accent)] text-[var(--color-text-primary)]"
-                              : "border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)]"
-                          }`}
-                        >
-                          {c.label} ({c.count})
-                        </button>
-                      ))}
+                {dirHits.length === 0 ? (
+                  <ConnEmpty>
+                    No servers match “{trimmedQuery}”
+                    {!trimmedQuery && catalogCategory ? ` in ${activeCategoryLabel}` : ""}.
+                  </ConnEmpty>
+                ) : (
+                  groupByCategory(dirHits).map((group) => (
+                    <div key={group.slug}>
+                      <DirCatHead>{group.label}</DirCatHead>
+                      <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
+                        {group.entries.map((tp) => (
+                          <DirectoryCard
+                            key={tp.name}
+                            entry={tp}
+                            added={(servers ?? []).some((s) => s.url === tp.url)}
+                            busy={busy}
+                            remoteEnabled={catalog.remote_mcp_enabled}
+                            onAdd={() => requestAddFromCatalog(tp)}
+                          />
+                        ))}
+                      </div>
                     </div>
-                    {(() => {
-                      const filtered = filterCatalog(
-                        catalog.third_party,
-                        catalogQuery,
-                        catalogCategory,
-                      );
-                      if (filtered.length === 0) {
-                        return (
-                          <p className="py-4 text-center text-[0.8125rem] text-[var(--color-text-muted)]">
-                            No servers match — try a different search, or add
-                            any hosted MCP server by URL in the form above.
-                          </p>
-                        );
-                      }
-                      return groupByCategory(filtered).map((group) => (
-                        <div key={group.slug} className="mb-3 last:mb-0">
-                          <h4 className="mb-1.5 text-[0.6875rem] uppercase tracking-wide text-[var(--color-text-muted)]">
-                            {group.label}
-                          </h4>
-                          <ul className="grid gap-2 sm:grid-cols-2">
-                            {group.entries.map((tp) => {
-                              const already = (servers ?? []).some(
-                                (s) => s.url === tp.url,
-                              );
-                              const badge = provenanceBadge(tp.provenance);
-                              const hint = authHint(tp);
-                              return (
-                                <li
-                                  key={tp.name}
-                                  className="flex flex-col rounded-[0.75rem] border border-[var(--color-border-subtle)] px-3 py-2"
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <span className="min-w-0 truncate text-[0.8125rem] font-medium">
-                                      {tp.display_name}
-                                    </span>
-                                    <StatusChip tone={badge.tone}>
-                                      {badge.label}
-                                    </StatusChip>
-                                  </div>
-                                  <p className="mt-1 line-clamp-2 flex-1 text-[0.75rem] text-[var(--color-text-muted)]">
-                                    {tp.description}
-                                  </p>
-                                  <div className="mt-2 flex items-center justify-between gap-2">
-                                    <span className="truncate text-[0.6875rem] text-[var(--color-text-muted)]">
-                                      {tp.vendor || tp.url}
-                                      {tp.docs_url ? (
-                                        <>
-                                          {" · "}
-                                          <a
-                                            href={tp.docs_url}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="underline-offset-2 hover:underline"
-                                          >
-                                            docs
-                                          </a>
-                                        </>
-                                      ) : null}
-                                      {tp.repo_url ? (
-                                        <>
-                                          {" · "}
-                                          <a
-                                            href={tp.repo_url}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="underline-offset-2 hover:underline"
-                                          >
-                                            source
-                                          </a>
-                                        </>
-                                      ) : null}
-                                    </span>
-                                    {catalog.remote_mcp_enabled ? (
-                                      needsTenantURL(tp) ? (
-                                        <span
-                                          className="whitespace-nowrap text-[0.6875rem] text-[var(--color-text-muted)]"
-                                          title="This endpoint is per-organization — copy your own URL from the vendor docs into the form above."
-                                        >
-                                          {hint}
-                                        </span>
-                                      ) : (
-                                        <span className="flex items-center gap-2 whitespace-nowrap">
-                                          {hint ? (
-                                            <span className="text-[0.6875rem] text-[var(--color-text-muted)]">
-                                              {hint}
-                                            </span>
-                                          ) : null}
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              requestAddFromCatalog(tp)
-                                            }
-                                            disabled={busy || already}
-                                            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-[0.6875rem] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
-                                          >
-                                            {already ? "Added" : "Add"}
-                                          </button>
-                                        </span>
-                                      )
-                                    ) : null}
-                                  </div>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        </div>
-                      ));
-                    })()}
-                    {!catalog.remote_mcp_enabled ? (
-                      <p className="mt-2 text-[0.6875rem] text-[var(--color-text-muted)]">
-                        Connecting hosted servers requires the operator to
-                        configure remote MCP OAuth
-                        (FLEET_MCP_OAUTH_ENCRYPTION_KEY and
-                        FLEET_PUBLIC_BASE_URL).
-                      </p>
-                    ) : null}
-                  </section>
+                  ))
+                )}
+                {!catalog.remote_mcp_enabled ? (
+                  <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">
+                    Connecting hosted servers requires the operator to configure remote MCP
+                    OAuth (FLEET_MCP_OAUTH_ENCRYPTION_KEY and FLEET_PUBLIC_BASE_URL).
+                  </p>
                 ) : null}
               </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {/* Browser Web Push opt-in (#292) — per-browser, low-detail alerts. */}
-        <NotificationsCard />
+            </>
+          ) : null}
+        </ConnGroup>
+      ) : null}
 
       {/* Consent step for endpoints not operated by the service's own vendor.
           A badge alone gets scrolled past; connecting sends conversation-
@@ -1025,16 +1176,16 @@ export default function ConnectionsPage() {
           onClick={() => setConsentFor(null)}
         >
           <div
-            className="w-full max-w-md rounded-[1rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)]"
+            className="w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-2 flex items-center gap-2">
               <h3 className="text-[0.9375rem] font-semibold">
                 Connect {consentFor.display_name}?
               </h3>
-              <StatusChip tone={provenanceBadge(consentFor.provenance).tone}>
+              <ConnBadge variant={provenanceVariant(consentFor.provenance)}>
                 {provenanceBadge(consentFor.provenance).label}
-              </StatusChip>
+              </ConnBadge>
             </div>
             <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
               This endpoint is operated by{" "}
@@ -1044,8 +1195,9 @@ export default function ConnectionsPage() {
               {provenanceBadge(consentFor.provenance).label === "Aggregator"
                 ? " — a platform that hosts access to other vendors' services, not the services themselves."
                 : " — not the vendor of the underlying service, and not your workspace."}{" "}
-              Once connected, it receives your tool calls (which can include
-              parts of your conversations){consentFor.auth === "oauth"
+              Once connected, it receives your tool calls (which can include parts of your
+              conversations)
+              {consentFor.auth === "oauth"
                 ? " and holds the access token you grant during sign-in"
                 : ""}
               .
@@ -1081,7 +1233,7 @@ export default function ConnectionsPage() {
               <button
                 type="button"
                 onClick={() => setConsentFor(null)}
-                className="rounded-full border border-[var(--color-border-subtle)] px-4 py-1.5 text-[0.8125rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
+                className={btnClass({ reveal: true })}
               >
                 Cancel
               </button>
@@ -1089,7 +1241,7 @@ export default function ConnectionsPage() {
                 type="button"
                 onClick={() => addFromCatalog(consentFor)}
                 disabled={busy}
-                className="rounded-full border border-[var(--color-border-strong)] px-4 py-1.5 text-[0.8125rem] font-medium transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
+                className={btnClass({ variant: "primary" })}
               >
                 I trust this operator — add
               </button>
@@ -1097,7 +1249,6 @@ export default function ConnectionsPage() {
           </div>
         </div>
       ) : null}
-      </>
-    </SettingsShell>
+    </SetSection>
   );
 }

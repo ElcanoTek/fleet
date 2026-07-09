@@ -250,6 +250,9 @@
      popovers/menus/tooltips, animate-pop-up-base for modals. */
   --animate-pop-up: pop-up var(--motion-fast) ease both;
   --animate-pop-up-base: pop-up var(--motion-base) ease both;
+  /* Settings-area section entrance (design's set-fade): opacity-only, re-run
+     by keying the section wrapper on the active route. */
+  --animate-set-fade: set-fade var(--motion-fast) ease both;
 }
 
 /* Tokenized duration utilities for components that need an explicit
@@ -286,6 +289,34 @@
     opacity: 1;
     transform: none;
   }
+}
+
+@keyframes set-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Settings-area "current" tints (the account button + the menu's Settings item
+   while viewing /settings). Plain rules rather than Tailwind arbitrary values
+   because the color-mix percentage differs per theme (18%/14% on dark, 9% on
+   light) and the light override needs the data-theme selector. */
+.account-current {
+  background: color-mix(in srgb, var(--color-primary) 18%, transparent);
+  color: var(--color-text-primary);
+}
+:root[data-theme="light"] .account-current {
+  background: color-mix(in srgb, var(--color-primary) 9%, transparent);
+}
+.menu-item-current {
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  color: var(--color-text-primary);
+}
+:root[data-theme="light"] .menu-item-current {
+  background: color-mix(in srgb, var(--color-primary) 9%, transparent);
 }
 
 /* Conversation label chips (#258/#279). The chip color rides on a single
