@@ -1,13 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+// Browser notifications preference row (Settings → General). The Web Push
+// opt-in that used to live on the Connections page as NotificationsCard
+// (#292), re-expressed as the design's preference row: label + description
+// left, a switch right. Enabling walks the standard flow —
+// Notification.requestPermission() → register /sw.js → subscribe with the
+// server's VAPID public key (fetched, never build-time embedded) → store the
+// subscription server-side. Disabling unsubscribes locally AND deletes the
+// stored row. The extra real-world states the design doesn't show
+// (unsupported browser / operator hasn't configured VAPID / permission
+// denied) render as a note under the description with the switch disabled.
 
-// Browser notifications opt-in (#292). Enabling walks the standard Web Push
-// flow: Notification.requestPermission() → register /sw.js → subscribe with
-// the server's VAPID public key (fetched, never build-time embedded) → store
-// the subscription server-side. Disabling unsubscribes locally AND deletes
-// the stored row. Notifications are low-detail by design (task done/failed,
-// approval needed, waiting for an answer — never message content).
+import { useEffect, useState } from "react";
+import { SetRow, SetSwitch } from "./ui/atoms";
 
 type PushState =
   | "loading" // probing support + current subscription
@@ -42,7 +47,7 @@ async function fetchVapidKey(): Promise<string | null> {
   return data.key;
 }
 
-export default function NotificationsCard() {
+export function BrowserNotificationsRow() {
   const [state, setState] = useState<PushState>("loading");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -137,66 +142,50 @@ export default function NotificationsCard() {
     }
   };
 
+  const note =
+    state === "unsupported" ? (
+      <span className="text-[var(--color-text-muted)]">
+        This browser doesn&apos;t support Web Push notifications. Chrome, Edge, Firefox, and Safari
+        16.4+ do.
+      </span>
+    ) : state === "denied" ? (
+      <span className="text-[var(--color-warning-soft)]">
+        Notifications are blocked for this site. Allow them in your browser&apos;s site settings,
+        then reload this page.
+      </span>
+    ) : state === "unconfigured" ? (
+      <span className="text-[var(--color-text-muted)]">
+        Push notifications are not configured on this server — ask your operator to set them up.
+      </span>
+    ) : error ? (
+      <span className="text-[var(--color-danger-soft)]">{error}</span>
+    ) : null;
+
   return (
-    <div className="mt-6 rounded-[1rem] border border-[var(--color-border)] bg-[var(--gradient-surface-panel)] p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-[0.9rem] font-semibold">Browser notifications</h2>
-          <p className="mt-1 text-[0.75rem] text-[var(--color-text-muted)]">
-            Get an alert when a task finishes, needs an approval, or is waiting for your answer —
-            even when this tab is in the background. Alerts carry only the task name and state,
-            never message content.
-          </p>
-        </div>
-        {state === "enabled" ? (
-          <button
-            type="button"
-            onClick={disable}
-            disabled={busy}
-            className="rounded-full border border-[var(--color-border-subtle)] px-4 py-2 text-[0.8125rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
-          >
-            {busy ? "Working…" : "Disable"}
-          </button>
-        ) : state === "disabled" ? (
-          <button
-            type="button"
-            onClick={enable}
-            disabled={busy}
-            className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium transition hover:bg-[var(--color-overlay-soft)] disabled:opacity-50"
-          >
-            {busy ? "Working…" : "Enable notifications"}
-          </button>
-        ) : null}
-      </div>
-      {state === "enabled" ? (
-        <p className="mt-2 text-[0.75rem] text-[var(--color-success-soft)]">
-          Notifications are on in this browser.
-        </p>
-      ) : null}
-      {state === "unsupported" ? (
-        <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-          This browser doesn&apos;t support Web Push notifications. Chrome, Edge, Firefox, and
-          Safari 16.4+ do.
-        </p>
-      ) : null}
-      {state === "denied" ? (
-        <p className="mt-2 text-[0.75rem] text-[var(--color-warning-soft)]">
-          Notifications are blocked for this site. Allow them in your browser&apos;s site settings,
-          then reload this page.
-        </p>
-      ) : null}
-      {state === "unconfigured" ? (
-        <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-          Push notifications are not configured on this server. The operator must run{" "}
-          <code className="rounded bg-[var(--color-overlay-soft)] px-1">
-            fleet generate-vapid-keys
-          </code>{" "}
-          and set FLEET_VAPID_PUBLIC_KEY, FLEET_VAPID_PRIVATE_KEY, and FLEET_VAPID_CONTACT.
-        </p>
-      ) : null}
-      {error ? (
-        <p className="mt-2 text-[0.75rem] text-[var(--color-danger-soft)]">{error}</p>
-      ) : null}
-    </div>
+    <SetRow
+      label="Browser notifications"
+      desc={
+        <>
+          Get an alert when a task finishes, needs an approval, or is waiting for your answer —
+          even when this tab is in the background. Alerts carry only the task name and state, never
+          message content.
+          {note ? <span className="mt-[0.3rem] block">{note}</span> : null}
+        </>
+      }
+    >
+      <SetSwitch
+        on={state === "enabled"}
+        onToggle={() => {
+          if (busy) return;
+          if (state === "enabled") void disable();
+          else if (state === "disabled") void enable();
+        }}
+        disabled={busy || !(state === "enabled" || state === "disabled")}
+        label="Browser notifications"
+        testId="browser-notifications-switch"
+      />
+    </SetRow>
   );
 }
+
+export default BrowserNotificationsRow;

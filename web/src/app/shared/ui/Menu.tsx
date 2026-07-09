@@ -309,24 +309,30 @@ export function Menu({
 
 // MenuItem — a single actionable row (role="menuitem"). `icon` is a core-icons
 // sprite name; `trailing` renders at the row's end (caret, check, badge).
+// `description` renders the design's two-line item (.conv-menu-item.two-line):
+// the icon top-aligns and a smaller muted line wraps under the label.
 export function MenuItem({
   icon,
   children,
+  description,
   onClick,
   danger,
   disabled,
   trailing,
   ariaHasPopup,
   ariaExpanded,
+  className,
 }: {
   icon?: ReactNode;
   children: ReactNode;
+  description?: ReactNode;
   onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   danger?: boolean;
   disabled?: boolean;
   trailing?: ReactNode;
   ariaHasPopup?: boolean;
   ariaExpanded?: boolean;
+  className?: string;
 }) {
   return (
     <button
@@ -337,16 +343,36 @@ export function MenuItem({
       aria-expanded={ariaExpanded}
       onClick={onClick}
       className={[
-        "flex w-full items-center gap-2 rounded-[0.4rem] px-2 py-1.5 text-left text-[0.82rem] transition",
+        "flex w-full gap-2 rounded-[0.4rem] px-2 py-1.5 text-left text-[0.82rem] transition",
+        description ? "items-start" : "items-center",
         "focus-visible:bg-[var(--color-overlay-soft)] focus-visible:outline-none",
         disabled ? "cursor-not-allowed opacity-50" : "",
         danger
           ? "text-[var(--color-danger)] hover:bg-[color-mix(in_srgb,var(--color-danger)_14%,transparent)]"
           : "text-[var(--color-text-secondary)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]",
+        className ?? "",
       ].join(" ")}
     >
-      {icon ? <span className="grid size-4 shrink-0 place-items-center text-current">{icon}</span> : null}
-      <span className="min-w-0 flex-1 truncate">{children}</span>
+      {icon ? (
+        <span
+          className={[
+            "grid size-4 shrink-0 place-items-center text-current",
+            description ? "mt-[0.14rem]" : "",
+          ].join(" ")}
+        >
+          {icon}
+        </span>
+      ) : null}
+      {description ? (
+        <span className="grid min-w-0 flex-1 gap-[0.12rem]">
+          <span className="truncate">{children}</span>
+          <span className="whitespace-normal text-[0.67rem] leading-[1.35] text-[var(--color-text-muted)]">
+            {description}
+          </span>
+        </span>
+      ) : (
+        <span className="min-w-0 flex-1 truncate">{children}</span>
+      )}
       {trailing ? <span className="ml-auto shrink-0">{trailing}</span> : null}
     </button>
   );

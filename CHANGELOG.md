@@ -36,6 +36,30 @@ prior versions are listed because none have shipped.
   by the other (possibly non-Claude) model. It is now gated on the active
   slug, the same rule extended thinking already used.
 
+- **Settings sections no longer jump in width while navigating**: the settings
+  shell's scroll container now reserves a stable scrollbar gutter
+  (`scrollbar-gutter: stable`). Sections differ in height — General and the
+  Admin overview fit the viewport while Connections and Skills scroll — so on
+  classic-scrollbar platforms (Windows/Linux) the scrollbar appeared and
+  disappeared across navigations, resizing the centered layout and shifting
+  the sub-nav and content sideways. Every section now renders at the same
+  width, including while Connections/Skills catalogs are still loading.
+- **Bootstrap re-runs no longer lock admins out of the Operations Center**:
+  `scripts/bootstrap.sh` wrote `ORCHESTRATOR_SERVER_TOKEN=<ADMIN_API_KEY>` into
+  `/etc/fleet/fleet-web.env`, but the orchestrator's header-trust path verifies
+  `X-Orchestrator-Server-Token` against the chat shared secret
+  (`FLEET_SERVER_TOKEN`), fail-closed — so any bootstrap (re-)run 403'd every
+  cookie-authenticated Operations Center request until the env file was
+  hand-repaired. Bootstrap now mirrors `FLEET_SERVER_TOKEN` into both
+  `CHAT_SERVER_TOKEN` and `ORCHESTRATOR_SERVER_TOKEN`, matching the middleware
+  and the web tier's documented fallback.
+- **Operations Center model picker actually lists the catalog again**: the
+  task form's picker fetched the OpenRouter catalog directly from the
+  browser, which the app's Content-Security-Policy (`connect-src 'self'`,
+  #590) silently blocks — stranding the picker on its two seed models. It now
+  loads through the existing session-gated `/api/model-catalog` proxy, so the
+  full text-model catalog (plus pricing for ranking) is searchable again.
+
 ### Docs
 
 - **PROMPT-CACHE-CONTRACT.md**: records the day-granular Runtime Date
@@ -43,13 +67,6 @@ prior versions are listed because none have shipped.
   cache miss per conversation per UTC-midnight rollover, deliberate), and
   documents the provider-local slug forms + the now-default compaction
   breakpoint.
-
-- **Operations Center model picker actually lists the catalog again**: the
-  task form's picker fetched the OpenRouter catalog directly from the
-  browser, which the app's Content-Security-Policy (`connect-src 'self'`,
-  #590) silently blocks — stranding the picker on its two seed models. It now
-  loads through the existing session-gated `/api/model-catalog` proxy, so the
-  full text-model catalog (plus pricing for ranking) is searchable again.
 
 ### Added
 

@@ -1,11 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { ProvidersPanel, type LLMProvider } from "./ProvidersPanel";
+import ProvidersAdminPage, { type LLMProvider } from "./page";
 
-// ProvidersPanel — the admin surface for admin-managed LLM providers. The
-// load-bearing assertions: rows render with honest key/enabled status chips
-// (never a key value), the add form validates before any network call, and a
-// create POSTs the write-only key exactly once.
+// Settings → Admin → Providers — the admin surface for admin-managed LLM
+// providers. The load-bearing assertions: rows render with an honest
+// type/models/disabled sub line (never a key value), the add form validates
+// before any network call, a create POSTs the write-only key exactly once,
+// the connection test renders its key-free result, and Remove requires the
+// inline two-click confirmation before the DELETE fires.
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn() }),
+}));
+
+// Admin gate: visibility-only; force "admin" so the page renders. (The real
+// hook probes an admin endpoint; authorization stays server-side regardless.)
+vi.mock("../../useIsAdmin", () => ({
+  useIsAdmin: () => "admin",
+}));
 
 const ROW: LLMProvider = {
   id: "p1",
@@ -33,20 +45,40 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("ProvidersPanel", () => {
-  it("lists providers with status chips and no key material", async () => {
-    vi.stubGlobal("fetch", mockFetch([ROW]));
-    render(<ProvidersPanel />);
+describe("ProvidersAdminPage", () => {
+  it("lists providers with an honest sub line and no key material", async () => {
+    const disabledCatchAll: LLMProvider = {
+      id: "p2",
+      name: "local-ollama",
+      type: "ollama",
+      base_url: "http://localhost:11434/v1",
+      models: [],
+      enabled: false,
+      has_api_key: false,
+      created_at: 1,
+      updated_at: 1,
+    };
+    vi.stubGlobal("fetch", mockFetch([ROW, disabledCatchAll]));
+    render(<ProvidersAdminPage />);
     expect(await screen.findByText("anthropic-direct")).toBeInTheDocument();
-    expect(screen.getByText("Key stored")).toBeInTheDocument();
-    expect(screen.getByText("Enabled")).toBeInTheDocument();
-    expect(screen.getByText(/1 model/)).toBeInTheDocument();
+    expect(screen.getByText("Anthropic · 1 model")).toBeInTheDocument();
+    expect(
+      screen.getByText("Ollama (local) · catch-all (any model) · disabled"),
+    ).toBeInTheDocument();
+    // Keyless is only flagged for types that need a key (ollama doesn't).
+    expect(screen.queryByText("No key")).toBeNull();
+  });
+
+  it("flags a keyed provider with no stored key", async () => {
+    vi.stubGlobal("fetch", mockFetch([{ ...ROW, has_api_key: false }]));
+    render(<ProvidersAdminPage />);
+    expect(await screen.findByText("No key")).toBeInTheDocument();
   });
 
   it("validates the draft before any mutation request", async () => {
     const fetchMock = mockFetch([]);
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPanel />);
+    render(<ProvidersAdminPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
     fireEvent.change(screen.getByPlaceholderText("my-provider"), {
       target: { value: "Bad/Name" },
@@ -60,7 +92,7 @@ describe("ProvidersPanel", () => {
   it("creates a provider, sending the key write-only", async () => {
     const fetchMock = mockFetch([]);
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPanel />);
+    render(<ProvidersAdminPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
     fireEvent.change(screen.getByPlaceholderText("my-provider"), {
       target: { value: "openrouter-team" },
@@ -101,7 +133,7 @@ describe("ProvidersPanel", () => {
       return { ok: true, status: 200, json: async () => ({ providers: [ROW] }) };
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPanel />);
+    render(<ProvidersAdminPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Test" }));
     const result = await screen.findByTestId(`probe-result-${ROW.id}`);
     expect(result.textContent).toContain("connected — 12 models served");
@@ -113,7 +145,7 @@ describe("ProvidersPanel", () => {
     vi.stubGlobal("fetch", fetchMock);
     const confirmSpy = vi.fn().mockReturnValue(false);
     vi.stubGlobal("confirm", confirmSpy);
-    render(<ProvidersPanel />);
+    render(<ProvidersAdminPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
     fireEvent.change(screen.getByPlaceholderText("my-provider"), {
       target: { value: "fallback" },
@@ -125,5 +157,22 @@ describe("ProvidersPanel", () => {
     expect(confirmSpy).toHaveBeenCalledOnce();
     // Declined → no POST fired.
     expect(fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST")).toHaveLength(0);
+  });
+
+  it("removes a provider only after the inline confirm's second click", async () => {
+    const fetchMock = mockFetch([ROW]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    const remove = await screen.findByRole("button", { name: "Remove" });
+    // First click arms the button; nothing is deleted yet.
+    fireEvent.click(remove);
+    expect(remove).toHaveTextContent("Confirm remove");
+    expect(fetchMock.mock.calls.filter(([, i]) => i && (i as RequestInit).method === "DELETE")).toHaveLength(0);
+    // Second click fires the DELETE (the stored key goes with the row).
+    fireEvent.click(remove);
+    await waitFor(() => {
+      const del = fetchMock.mock.calls.find(([, i]) => i && (i as RequestInit).method === "DELETE");
+      expect(del?.[0]).toBe("/api/admin/llm-providers/p1");
+    });
   });
 });
