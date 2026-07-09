@@ -63,6 +63,11 @@ prompt stable within a conversation:
 - **No volatile tokens near the prefix.** Do not embed `time.Now()`, a random
   request id, or a per-turn counter in the system prompt. (Per-turn dynamic
   context belongs in the message tail, not the cached system prefix.)
+  *Sanctioned exception:* the Runtime Date Context section
+  (`runtimeDateContext`, `internal/agent/prompt.go`) embeds the current UTC
+  date at **day** granularity — a deliberate compromise that costs exactly one
+  cache miss per conversation per UTC-midnight rollover in exchange for
+  correct "today" reasoning. Do not tighten it below day precision.
 - **Deterministic roster.** The MCP/skill/persona roster injected into the prompt
   must be built from a stable, ordered source (sort before joining), never a raw
   map range.
@@ -77,14 +82,17 @@ the contract is enforced by review + the no-volatile-tokens rule above.
 
 `internal/agentcore/cache.go` (`promptCachingStep`) installs explicit
 `cache_control: {type: "ephemeral"}` breakpoints, but **only for slugs that route
-to a provider honoring explicit breakpoints** — `anthropic/` and `google/`
-(see `explicitBreakpointPrefixes`); a leading `~` floating-alias sigil is stripped
-first. Everything else relies on the upstream's implicit caching and gets no
-markers. Placement (Anthropic allows 4 breakpoints per request):
+to a provider honoring explicit breakpoints** — OpenRouter-form `anthropic/` and
+`google/`, plus the provider-local `claude-`/`gemini-` forms a native provider
+(#289) reports (see `explicitBreakpointPrefixes`); a leading `~` floating-alias
+sigil is stripped first. Everything else relies on the upstream's implicit
+caching and gets no markers. Placement (Anthropic allows 4 breakpoints per
+request):
 
 1. The **last system message** — anchors the stable system-prompt + tool prefix.
-2. (optional) The **compaction summary**, when `WithCompactionSummaryBreakpoint`
-   is set — a stable boundary between the cached head and the evolving tail.
+2. The **compaction summary** (`WithCompactionSummaryBreakpoint`, enabled in the
+   shared loop) — a stable boundary between the cached head and the evolving
+   tail after a compaction pass.
 3. The **last two non-system messages** — a rolling recency window.
 
 Breakpoint placement is itself part of the contract: the last-system-message
