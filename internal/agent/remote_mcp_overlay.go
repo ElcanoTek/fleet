@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -112,7 +113,11 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 	for _, conn := range conns {
 		// Opt-in gate (chat): only wire servers the conversation selected. A
 		// non-selected server is not "skipped" — the user chose not to enable it.
-		if enabled != nil && !enabled[conn.Name] {
+		// The persisted opt-in list is canonically lowercase (the HTTP layer
+		// normalizes on write) while remote server names keep the case the user
+		// typed, so check the lowercased form too — exact match first so any
+		// pre-existing list entry keeps working.
+		if enabled != nil && !enabled[conn.Name] && !enabled[strings.ToLower(conn.Name)] {
 			continue
 		}
 		if registered >= maxOverlayServers {
