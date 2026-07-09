@@ -119,7 +119,7 @@ func TestProviderOptions_LongContextHeaderGating(t *testing.T) {
 	if eb := orExtraBody(t, e, "anthropic/claude-sonnet-4.6"); eb == nil || eb["anthropic_beta"] == nil {
 		t.Errorf("anthropic_beta missing for active long-context slug: %#v", eb)
 	}
-	for _, slug := range []string{"anthropic/claude-fable-5", "openai/gpt-5.4", "z-ai/glm-5.2:nitro"} {
+	for _, slug := range []string{"anthropic/claude-fable-5", "openai/gpt-5.4", "z-ai/glm-5.2"} {
 		if eb := orExtraBody(t, e, slug); eb != nil && eb["anthropic_beta"] != nil {
 			t.Errorf("anthropic_beta should be absent for active slug %q, got %#v", slug, eb["anthropic_beta"])
 		}
