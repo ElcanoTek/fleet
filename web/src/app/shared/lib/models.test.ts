@@ -94,7 +94,7 @@ describe("loadModels (fetch + fallback)", () => {
       }),
     );
     const models = await loadModels();
-    expect(models.some((m) => m.id === "z-ai/glm-5.2:nitro")).toBe(true);
+    expect(models.some((m) => m.id === "z-ai/glm-5.2")).toBe(true);
     expect(models.some((m) => m.id === "deepseek/deepseek-v3.2")).toBe(true);
   });
 
@@ -126,7 +126,7 @@ describe("loadModels (fetch + fallback)", () => {
       workspace: true,
     });
     // The catalog/seed entries still follow.
-    expect(models.some((m) => m.id === "z-ai/glm-5.2:nitro")).toBe(true);
+    expect(models.some((m) => m.id === "z-ai/glm-5.2")).toBe(true);
   });
 
   it("expands a catch-all workspace provider from the catwalk catalog", async () => {

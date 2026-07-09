@@ -16,10 +16,13 @@ import (
 // either mode resolves the same model.
 const (
 	// DefaultCoreModel is the cost-efficient primary (scheduled tasks + the
-	// Operations Center default). :nitro is OpenRouter's throughput-priority
-	// routing — deliberately NOT provider-pinned (a single-provider pin would
-	// defeat nitro's route-to-fastest semantics; see upstreamPinFor).
-	DefaultCoreModel = "z-ai/glm-5.2:nitro"
+	// Operations Center default). No :nitro variant: throughput-priority
+	// routing sprays requests across ~26 GLM providers, and prompt caches are
+	// per-upstream — so the implicit-cache discount (~80% on cached input)
+	// almost never hit. The plain slug is soft-pinned to the Z.AI upstream
+	// (see canonicalUpstream) for cache locality, verified live 2026-07-09:
+	// 3968/4018 prompt tokens served from cache on the second pinned call.
+	DefaultCoreModel = "z-ai/glm-5.2"
 	// DefaultMaxModel is the strong/fallback tier — the model escalation
 	// (suggest_advanced_model) and task fallback resolve to. Pinned, never a
 	// `~latest` alias.

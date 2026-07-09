@@ -19,7 +19,7 @@ import { CostForecastPanel } from "./CostForecastPanel";
 // <McpServerPicker mode="task"> (enable/disable per MCP + per-MCP credential
 // account dropdown).
 
-const DEFAULT_PRIMARY_MODEL = "z-ai/glm-5.2:nitro";
+const DEFAULT_PRIMARY_MODEL = "z-ai/glm-5.2";
 const DEFAULT_FALLBACK_MODEL = "anthropic/claude-fable-5";
 
 const SCHEDULE_PRESETS = [

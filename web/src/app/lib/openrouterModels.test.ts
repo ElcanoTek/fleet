@@ -463,8 +463,8 @@ describe("listLatestPerLab", () => {
     };
     mockOpenRouter([glmBase, openaiOld]);
     const catalog = await loadCatalog();
-    // The pin carries a :nitro suffix; the catalog lists the base slug. The
-    // lab row must not duplicate the pinned model.
+    // A pinned slug may carry a ":variant" suffix while the catalog lists the
+    // base slug. The lab row must not duplicate the pinned model.
     const slugs = listLatestPerLab(catalog, ["z-ai/glm-5.2:nitro"]).map((e) => e.slug);
     expect(slugs).toEqual([openaiOld.slug]);
   });

@@ -56,7 +56,7 @@ const (
 
 // DefaultTitleModel is the fallback for FLEET_TITLE_MODEL / CHAT_TITLE_MODEL.
 // Mirrors the frontend's DEFAULT_MODEL (the recommended everyday pick).
-const DefaultTitleModel = "z-ai/glm-5.2:nitro"
+const DefaultTitleModel = "z-ai/glm-5.2"
 
 // DefaultFromEmail is the fallback From address for outgoing mail. Neutral by
 // default; a deployment overrides via SENDGRID_FROM_EMAIL / MAILBUX_FROM_EMAIL.
@@ -1467,7 +1467,7 @@ func splitLockdownModels(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return []string{
-			"z-ai/glm-5.2:nitro",       // recommended default
+			"z-ai/glm-5.2",             // recommended default
 			"anthropic/claude-fable-5", // strong tier
 		}
 	}
