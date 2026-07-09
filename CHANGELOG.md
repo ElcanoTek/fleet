@@ -15,6 +15,18 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Default core tier drops `:nitro` for cache locality**: the default
+  `z-ai/glm-5.2:nitro` slug asked OpenRouter for throughput-priority
+  routing, spraying requests across the ~26 providers serving GLM-5.2 —
+  and prompt caches are per-upstream, so the implicit-cache discount
+  (~80% off cached input) almost never hit. The default is now the plain
+  `z-ai/glm-5.2`, soft-pinned to the Z.AI upstream via `canonicalUpstream`
+  (Order + fallbacks allowed, same policy as the Anthropic/OpenAI/Moonshot
+  pins). Verified live: the second pinned call served 3,968 of 4,018 prompt
+  tokens from cache; with `:nitro` the same pair read 0. Trade-off: routing
+  now prefers Z.AI's own endpoint over whichever provider is momentarily
+  fastest; fallbacks still engage if Z.AI is down.
+
 - **Prompt caching works on native LLM providers**: a model served by a
   native provider (#289) reports its provider-local slug (`claude-fable-5`,
   no `anthropic/` prefix), which failed `supportsExplicitBreakpoints`'s

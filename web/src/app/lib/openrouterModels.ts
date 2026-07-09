@@ -249,9 +249,9 @@ export function listLatestPerLab(
   catalog: Catalog,
   excludeSlugs: ReadonlyArray<string> = [],
 ): CatalogEntry[] {
-  // Variant-insensitive exclusion: "z-ai/glm-5.2:nitro" (a pinned slug) and
-  // the catalog's "z-ai/glm-5.2" are the same model — a lab's "newest" row
-  // duplicating a pinned row helps nobody. Compare base slugs (strip the
+  // Variant-insensitive exclusion: a pinned "z-ai/glm-5.2:nitro"-style slug
+  // and the catalog's "z-ai/glm-5.2" are the same model — a lab's "newest"
+  // row duplicating a pinned row helps nobody. Compare base slugs (strip the
   // ":variant" suffix) on both sides.
   const exclude = new Set(excludeSlugs.map(baseSlug));
   const out: CatalogEntry[] = [];

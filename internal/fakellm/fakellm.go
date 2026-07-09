@@ -138,7 +138,7 @@ func New() *Server {
 			Text: "fake-llm default reply.",
 		}}},
 		models: []string{
-			"z-ai/glm-5.2:nitro",
+			"z-ai/glm-5.2",
 			"anthropic/claude-fable-5",
 			"anthropic/claude-opus-4.8",
 			"anthropic/claude-sonnet-4.6",

@@ -43,7 +43,7 @@ describe("ModelPicker", () => {
     await waitFor(() => screen.getByText("Anthropic: Claude Fable 5"));
     fireEvent.change(input, { target: { value: "glm" } });
     await waitFor(() => {
-      expect(screen.getByText("Z.AI: GLM 5.2 (nitro)")).toBeInTheDocument();
+      expect(screen.getByText("Z.AI: GLM 5.2")).toBeInTheDocument();
     });
     expect(screen.queryByText("Anthropic: Claude Fable 5")).not.toBeInTheDocument();
   });
@@ -52,9 +52,9 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox") as HTMLInputElement;
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("Z.AI: GLM 5.2 (nitro)"));
-    fireEvent.click(screen.getByText("Z.AI: GLM 5.2 (nitro)"));
-    expect(input.value).toBe("z-ai/glm-5.2:nitro");
+    await waitFor(() => screen.getByText("Z.AI: GLM 5.2"));
+    fireEvent.click(screen.getByText("Z.AI: GLM 5.2"));
+    expect(input.value).toBe("z-ai/glm-5.2");
   });
 
   it("shows the 'type a custom slug' empty state for no matches", async () => {

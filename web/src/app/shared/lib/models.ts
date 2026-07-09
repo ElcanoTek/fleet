@@ -30,7 +30,7 @@ export const MAX_RESULTS = 50;
 // Hand-picked entries shown immediately and used as a fallback when the
 // catalog fetch fails. Pinned release slugs (not floating `~` aliases).
 export const SEED_MODELS: PickerModel[] = [
-  { id: "z-ai/glm-5.2:nitro", name: "Z.AI: GLM 5.2 (nitro)", recommended: true },
+  { id: "z-ai/glm-5.2", name: "Z.AI: GLM 5.2", recommended: true },
   { id: "anthropic/claude-fable-5", name: "Anthropic: Claude Fable 5", recommended: true },
 ];
 

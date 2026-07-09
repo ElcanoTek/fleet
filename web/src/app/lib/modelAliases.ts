@@ -31,8 +31,8 @@
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04). Trade-off: lab refreshes require bumping these constants
 // — and their server-side mirrors — instead of floating automatically.
-export const DEFAULT_MODEL = "z-ai/glm-5.2:nitro";
-export const DEFAULT_MODEL_LABEL = "Z.AI: GLM 5.2 (nitro)";
+export const DEFAULT_MODEL = "z-ai/glm-5.2";
+export const DEFAULT_MODEL_LABEL = "Z.AI: GLM 5.2";
 
 export const ADVANCED_MODEL = "anthropic/claude-fable-5";
 export const ADVANCED_MODEL_LABEL = "Anthropic: Claude Fable 5";
