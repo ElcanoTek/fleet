@@ -15,6 +15,35 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Prompt caching works on native LLM providers**: a model served by a
+  native provider (#289) reports its provider-local slug (`claude-fable-5`,
+  no `anthropic/` prefix), which failed `supportsExplicitBreakpoints`'s
+  prefix match — so native-Anthropic runs got **no** `cache_control`
+  breakpoints and paid full input price on every turn (~10× the cached rate
+  on the strong tier). Bare `claude-`/`gemini-` slugs now match; fantasy's
+  native Anthropic provider reads the same per-message marker shape the
+  OpenRouter hook does, verified live against OpenRouter (99.8% cache-read
+  on the second call).
+- **Compaction summaries are cache boundaries now**: the shared loop enables
+  `WithCompactionSummaryBreakpoint`, so the summary message a compaction
+  pass inserts carries its own breakpoint (4 total — Anthropic's maximum)
+  instead of the tail markers having to re-cover it. The option existed and
+  `interactive.go` tagged summaries for it, but no production caller ever
+  enabled it.
+- **1M-context beta header follows the active model**: `anthropic_beta:
+  context-1m` was attached whenever the *configured* primary or fallback was
+  a long-context Claude, so it also rode along on requests actually served
+  by the other (possibly non-Claude) model. It is now gated on the active
+  slug, the same rule extended thinking already used.
+
+### Docs
+
+- **PROMPT-CACHE-CONTRACT.md**: records the day-granular Runtime Date
+  Context as the sanctioned exception to the no-`time.Now()` rule (one
+  cache miss per conversation per UTC-midnight rollover, deliberate), and
+  documents the provider-local slug forms + the now-default compaction
+  breakpoint.
+
 - **Operations Center model picker actually lists the catalog again**: the
   task form's picker fetched the OpenRouter catalog directly from the
   browser, which the app's Content-Security-Policy (`connect-src 'self'`,
