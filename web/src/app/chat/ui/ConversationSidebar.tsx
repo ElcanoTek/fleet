@@ -813,6 +813,7 @@ export function ConversationSidebar({
   onBulkPin,
   onBulkMoveFolder,
   onBulkAddLabel,
+  onOpenProjects,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
@@ -875,6 +876,9 @@ export function ConversationSidebar({
   onBulkPin: () => void;
   onBulkMoveFolder: (folder: string) => void;
   onBulkAddLabel: (label: string) => void;
+  // Opens the Projects modal (#509). Lives in the rail (like Claude/ChatGPT)
+  // rather than the page header; ChatExperience owns the modal state.
+  onOpenProjects: () => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [foldersOpen, setFoldersOpen] = useState(true);
@@ -1110,6 +1114,28 @@ export function ConversationSidebar({
           <SealedNewChatButton onClick={() => clearConversation({ lockdown: true })} />
         ) : null}
       </div>
+
+      {/* Projects (#509) — a rail nav row right under New chat, where Claude
+          and ChatGPT put theirs. Collapsed (≥sm) it becomes an icon-only
+          square with a data-tip, matching the New-chat row above. Opening the
+          modal also closes the <sm drawer so the modal isn't stacked on it. */}
+      <button
+        type="button"
+        className={[
+          "mt-1.5 flex w-full items-center gap-2 rounded-[var(--radius-md)] px-3 py-2 text-[0.8125rem] font-medium text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
+          railCollapsed ? "sm:size-10 sm:justify-center sm:gap-0 sm:p-0" : "",
+        ].join(" ")}
+        title="Projects"
+        aria-label="Projects"
+        data-tip={railCollapsed ? "Projects" : undefined}
+        onClick={() => {
+          setSidebarOpen(false);
+          onOpenProjects();
+        }}
+      >
+        <Icon name="briefcase" className="size-4" />
+        <span className={railCollapsed ? "sm:hidden" : ""}>Projects</span>
+      </button>
 
       {/* Search filter — the design's .chat-search: leading magnifier icon and
           a custom clear button (type="text" so the native search clear never
