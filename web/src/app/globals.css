@@ -250,6 +250,9 @@
      popovers/menus/tooltips, animate-pop-up-base for modals. */
   --animate-pop-up: pop-up var(--motion-fast) ease both;
   --animate-pop-up-base: pop-up var(--motion-base) ease both;
+  /* Settings-area section entrance (design's set-fade): opacity-only, re-run
+     by keying the section wrapper on the active route. */
+  --animate-set-fade: set-fade var(--motion-fast) ease both;
 }
 
 /* Tokenized duration utilities for components that need an explicit
@@ -286,6 +289,34 @@
     opacity: 1;
     transform: none;
   }
+}
+
+@keyframes set-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Settings-area "current" tints (the account button + the menu's Settings item
+   while viewing /settings). Plain rules rather than Tailwind arbitrary values
+   because the color-mix percentage differs per theme (18%/14% on dark, 9% on
+   light) and the light override needs the data-theme selector. */
+.account-current {
+  background: color-mix(in srgb, var(--color-primary) 18%, transparent);
+  color: var(--color-text-primary);
+}
+:root[data-theme="light"] .account-current {
+  background: color-mix(in srgb, var(--color-primary) 9%, transparent);
+}
+.menu-item-current {
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  color: var(--color-text-primary);
+}
+:root[data-theme="light"] .menu-item-current {
+  background: color-mix(in srgb, var(--color-primary) 9%, transparent);
 }
 
 /* Conversation label chips (#258/#279). The chip color rides on a single
@@ -1189,8 +1220,6 @@ button {
 .credential-account-form input,
 .credential-account-form select,
 .concurrency-cap-row input,
-#promptTextarea,
-#recurrenceInput,
 .model-picker-input {
   width: 100%;
   padding: 0.5rem 0.7rem;
@@ -1928,13 +1957,16 @@ tr.sla-row-fail {
    a fixed header and a fixed footer (#169 design handoff: .modal-lg +
    .modal-footer). */
 .modal-lg {
-  max-width: 660px;
+  max-width: 760px;
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 4rem);
+  box-shadow: var(--shadow-lg);
 }
 .modal-lg .modal-header {
   flex: 0 0 auto;
+  align-items: flex-start;
+  padding: 1.15rem 1.6rem 1.05rem;
 }
 /* The design leaves the modal title as a default <h3> (1.17em, bold). Tailwind's
    preflight resets headings to inherit, so restore that exact sizing/weight on
@@ -1943,24 +1975,222 @@ tr.sla-row-fail {
   font-size: 1.17em;
   font-weight: 700;
 }
+.modal-subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
 .modal-lg .modal-body {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
-  padding: 1.5rem 1.6rem;
+  padding: 0.35rem 1.6rem 1.5rem;
 }
-/* Field rhythm matches the design's task form exactly: 1.6rem between fields
-   (the .task-form gap) and 0.55rem under each label before its control (the
-   .task-field gap). */
+/* Field rhythm: 1.15rem between fields inside a section and 0.45rem under each
+   label before its control. Sections (below) provide the larger separations. */
 .modal-lg .form-group {
-  margin-bottom: 1.6rem;
+  margin-bottom: 1.15rem;
 }
-.modal-lg .form-group > label {
+.modal-lg .form-group:last-child {
+  margin-bottom: 0;
+}
+.modal-lg .form-group > label:not([class]),
+.modal-lg .form-group > .form-label {
   display: block;
-  margin-bottom: 0.55rem;
+  margin-bottom: 0.45rem;
 }
 .modal-lg .form-label-row {
-  margin-bottom: 0.55rem;
+  margin-bottom: 0.45rem;
+}
+
+/* ── Task-form sections ─────────────────────────────────────────────────────
+   The create-task form is grouped into titled sections (Task · Schedule ·
+   Email · Tools & files · Advanced) separated by hairlines, so the eye gets
+   an anchor per concern instead of one undifferentiated column. */
+.task-section {
+  padding: 1.35rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.task-section:last-of-type {
+  border-bottom: none;
+  padding-bottom: 0.5rem;
+}
+.task-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.95rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Two-up (auto-fitting) field rows: date+cron, model pickers, numeric caps.
+   Inner .form-group margins collapse — the grid gap is the rhythm. */
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem 1.25rem;
+}
+.field-grid > .form-group,
+.field-grid .form-group {
+  margin-bottom: 0;
+}
+
+/* Muted single-line helper under a control (lighter cousin of
+   .advanced-setting-meta, which older surfaces still use). */
+.field-hint {
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+/* Collapsed "Documentation, tags & persona" disclosure. */
+.form-details {
+  border: 1px solid var(--color-border);
+  border-radius: 0.6rem;
+  background: var(--color-overlay-soft);
+}
+.form-details summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.83rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  list-style: none;
+  border-radius: 0.6rem;
+}
+.form-details summary::-webkit-details-marker {
+  display: none;
+}
+.form-details summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.form-details-arrow {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  transition: transform var(--motion-fast, 0.12s) ease;
+}
+.form-details[open] .form-details-arrow {
+  transform: rotate(90deg);
+}
+.form-details-body {
+  padding: 0.85rem 0.85rem 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+/* Toggle switches (Captain's Log / network egress / carry context). The
+   whole row is the <label>, so clicking the text flips the checkbox too. */
+.switch-group {
+  border: 1px solid var(--color-border);
+  border-radius: 0.6rem;
+  overflow: hidden;
+}
+.switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  padding: 0.75rem 0.9rem;
+  cursor: pointer;
+}
+.switch-row + .switch-row {
+  border-top: 1px solid var(--color-border);
+}
+.switch-row:hover {
+  background: var(--rail-hover);
+}
+.switch-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.switch-row-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.switch-row-desc {
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 2.15rem;
+  height: 1.25rem;
+  margin-top: 0.05rem;
+}
+.toggle-switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-overlay-strong);
+  transition: background var(--motion-fast, 0.12s) ease, border-color var(--motion-fast, 0.12s) ease;
+  pointer-events: none;
+}
+.toggle-slider::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0.17rem;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  transform: translateY(-50%);
+  transition: left var(--motion-fast, 0.12s) ease, background var(--motion-fast, 0.12s) ease;
+}
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.toggle-switch input:checked + .toggle-slider::before {
+  left: calc(100% - 1.02rem);
+  background: var(--color-white);
+}
+.toggle-switch input:focus-visible + .toggle-slider {
+  box-shadow: var(--focus-ring);
+}
+
+/* Pre-run gate inline options (timeout + on-error). */
+.run-if-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.run-if-option-label {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+/* ID selectors so these beat the generic .modal-lg filled-field width. */
+.modal-lg #runIfTimeoutInput {
+  width: 5.5rem;
+}
+.modal-lg #runIfOnErrorSelect {
+  width: auto;
 }
 /* One consistent input-label typography across both modals: a single size +
    medium weight for every field label (bare <label>, .form-label, and the
@@ -2002,16 +2232,41 @@ tr.sla-row-fail {
 .modal-lg .credential-account-admin > .advanced-setting-meta {
   margin-bottom: 0.6rem;
 }
-/* Filled fields to match the design's modal form styling. Scoped to the large
-   modals; leaves checkboxes/radios (toggles) and the bare input rule elsewhere
-   untouched. */
-.modal-lg input:not([type="checkbox"]):not([type="radio"]),
+/* Filled fields to match the design's modal form styling — one rule for EVERY
+   text-like control in the large modals (several used to fall through to
+   browser defaults). Scoped to the large modals; leaves checkboxes/radios
+   (toggles) and the bare input rule elsewhere untouched. */
+.modal-lg input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
 .modal-lg select,
 .modal-lg textarea {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.55rem;
   background: var(--color-overlay-soft);
+  color: var(--color-text-primary);
+  font-size: 0.875rem;
+  transition: border-color var(--motion-fast, 0.12s) ease;
+}
+.modal-lg input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus-visible,
+.modal-lg select:focus-visible,
+.modal-lg textarea:focus-visible {
+  outline: none;
+  border-color: var(--color-border-strong);
+  box-shadow: var(--focus-ring);
+}
+.modal-lg input::placeholder,
+.modal-lg textarea::placeholder {
+  color: var(--color-text-muted);
+  opacity: 0.75;
+}
+.modal-lg textarea {
+  resize: vertical;
+  min-height: 4.5rem;
 }
 .modal-footer {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 0.6rem;
   flex: 0 0 auto;
@@ -2021,6 +2276,11 @@ tr.sla-row-fail {
 }
 .modal-footer .btn {
   padding: 0.55rem 1.15rem;
+}
+/* Pushes the remaining footer actions to the right (Estimate Cost sits at the
+   start edge, Cancel/Launch cluster at the end). */
+.modal-footer-start {
+  margin-right: auto;
 }
 .settings-divider {
   height: 1px;
@@ -2126,40 +2386,98 @@ tr.sla-row-fail {
 }
 .advanced-toggle {
   display: flex;
-  align-items: center;
-  gap: 0.4rem;
+  align-items: baseline;
+  gap: 0.55rem;
+  width: 100%;
   background: transparent;
   border: none;
-  color: var(--color-text-primary);
+  color: var(--color-text-muted);
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
   padding: 0;
+}
+.advanced-toggle:hover {
+  color: var(--color-text-secondary);
+}
+.advanced-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 0.3rem;
+}
+.advanced-toggle .arrow {
+  font-size: 0.65rem;
+}
+.advanced-toggle-hint {
+  margin-left: auto;
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  text-transform: none;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  opacity: 0.8;
+}
+.advanced-body {
+  margin-top: 1rem;
 }
 .schedule-datetime-group {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
+.modal-lg .schedule-datetime-group input[type="date"] {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+.modal-lg .schedule-datetime-group input[type="time"] {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 6.75rem;
+}
+.schedule-time-label {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
 .schedule-presets {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+  margin-top: 1rem;
 }
 .preset-btn {
   border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  border-radius: 0.55rem;
   background: transparent;
   color: var(--color-text-secondary);
-  padding: 0.4rem 0.6rem;
+  padding: 0.45rem 0.7rem;
   cursor: pointer;
   text-align: left;
+  transition: border-color var(--motion-fast, 0.12s) ease, background var(--motion-fast, 0.12s) ease;
+}
+.preset-btn:hover {
+  border-color: var(--color-border-strong);
+  background: var(--rail-hover);
+}
+.preset-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 .preset-btn.active {
   border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 16%, transparent);
   color: var(--color-text-primary);
 }
+.preset-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
 .preset-cron {
-  font-size: 0.7rem;
+  margin-top: 0.1rem;
+  font-size: 0.68rem;
+  font-family: var(--font-code-ui);
   color: var(--color-text-muted);
 }
 
@@ -2172,18 +2490,24 @@ tr.sla-row-fail {
 .template-card {
   display: flex;
   align-items: flex-start;
-  gap: 0.5rem;
+  gap: 0.55rem;
   border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
-  background: transparent;
+  border-radius: 0.6rem;
+  background: var(--color-overlay-soft);
   color: var(--color-text-secondary);
-  padding: 0.6rem;
+  padding: 0.65rem 0.75rem;
   cursor: pointer;
   text-align: left;
+  transition: border-color var(--motion-fast, 0.12s) ease, background var(--motion-fast, 0.12s) ease;
 }
 .template-card:hover {
   border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
   color: var(--color-text-primary);
+}
+.template-card:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 .template-card-icon {
   font-size: 1.2rem;

@@ -13,8 +13,161 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Default core tier drops `:nitro` for cache locality**: the default
+  `z-ai/glm-5.2:nitro` slug asked OpenRouter for throughput-priority
+  routing, spraying requests across the ~26 providers serving GLM-5.2 —
+  and prompt caches are per-upstream, so the implicit-cache discount
+  (~80% off cached input) almost never hit. The default is now the plain
+  `z-ai/glm-5.2`, soft-pinned to the Z.AI upstream via `canonicalUpstream`
+  (Order + fallbacks allowed, same policy as the Anthropic/OpenAI/Moonshot
+  pins). Verified live: the second pinned call served 3,968 of 4,018 prompt
+  tokens from cache; with `:nitro` the same pair read 0. Trade-off: routing
+  now prefers Z.AI's own endpoint over whichever provider is momentarily
+  fastest; fallbacks still engage if Z.AI is down.
+
+- **Prompt caching works on native LLM providers**: a model served by a
+  native provider (#289) reports its provider-local slug (`claude-fable-5`,
+  no `anthropic/` prefix), which failed `supportsExplicitBreakpoints`'s
+  prefix match — so native-Anthropic runs got **no** `cache_control`
+  breakpoints and paid full input price on every turn (~10× the cached rate
+  on the strong tier). Bare `claude-`/`gemini-` slugs now match; fantasy's
+  native Anthropic provider reads the same per-message marker shape the
+  OpenRouter hook does, verified live against OpenRouter (99.8% cache-read
+  on the second call).
+- **Compaction summaries are cache boundaries now**: the shared loop enables
+  `WithCompactionSummaryBreakpoint`, so the summary message a compaction
+  pass inserts carries its own breakpoint (4 total — Anthropic's maximum)
+  instead of the tail markers having to re-cover it. The option existed and
+  `interactive.go` tagged summaries for it, but no production caller ever
+  enabled it.
+- **1M-context beta header follows the active model**: `anthropic_beta:
+  context-1m` was attached whenever the *configured* primary or fallback was
+  a long-context Claude, so it also rode along on requests actually served
+  by the other (possibly non-Claude) model. It is now gated on the active
+  slug, the same rule extended thinking already used.
+
+- **Settings sections no longer jump in width while navigating**: the settings
+  shell's scroll container now reserves a stable scrollbar gutter
+  (`scrollbar-gutter: stable`). Sections differ in height — General and the
+  Admin overview fit the viewport while Connections and Skills scroll — so on
+  classic-scrollbar platforms (Windows/Linux) the scrollbar appeared and
+  disappeared across navigations, resizing the centered layout and shifting
+  the sub-nav and content sideways. Every section now renders at the same
+  width, including while Connections/Skills catalogs are still loading.
+- **Bootstrap re-runs no longer lock admins out of the Operations Center**:
+  `scripts/bootstrap.sh` wrote `ORCHESTRATOR_SERVER_TOKEN=<ADMIN_API_KEY>` into
+  `/etc/fleet/fleet-web.env`, but the orchestrator's header-trust path verifies
+  `X-Orchestrator-Server-Token` against the chat shared secret
+  (`FLEET_SERVER_TOKEN`), fail-closed — so any bootstrap (re-)run 403'd every
+  cookie-authenticated Operations Center request until the env file was
+  hand-repaired. Bootstrap now mirrors `FLEET_SERVER_TOKEN` into both
+  `CHAT_SERVER_TOKEN` and `ORCHESTRATOR_SERVER_TOKEN`, matching the middleware
+  and the web tier's documented fallback.
+- **Operations Center model picker actually lists the catalog again**: the
+  task form's picker fetched the OpenRouter catalog directly from the
+  browser, which the app's Content-Security-Policy (`connect-src 'self'`,
+  #590) silently blocks — stranding the picker on its two seed models. It now
+  loads through the existing session-gated `/api/model-catalog` proxy, so the
+  full text-model catalog (plus pricing for ranking) is searchable again.
+
+### Docs
+
+- **PROMPT-CACHE-CONTRACT.md**: records the day-granular Runtime Date
+  Context as the sanctioned exception to the no-`time.Now()` rule (one
+  cache miss per conversation per UTC-midnight rollover, deliberate), and
+  documents the provider-local slug forms + the now-default compaction
+  breakpoint.
+
+### Added
+
+- **Workspace-provider models in the chat picker**: models from
+  admin-configured LLM providers (Settings → Admin → Model providers) now
+  appear in the chat composer's model menu with a "workspace" pill — they
+  previously surfaced only in the task form's picker. Labels and context
+  windows resolve for the chip and the context ring too.
+- **Catch-all providers get a browsable catalog (catwalk)**: an
+  Anthropic/OpenAI provider saved with an empty models list (= serves any
+  slug) previously contributed nothing to the pickers. The member-level
+  `GET /llm-provider-models` read now also returns the enabled provider
+  roster (name/type/catch_all — no secrets), and the web tier expands such
+  rows into `<provider>/<model>` entries from the
+  [catwalk](https://github.com/charmbracelet/catwalk) model database (the
+  same no-auth catalog Charm's Crush uses) via a new session-gated
+  `/api/catwalk-models` proxy with a 24 h cache. `CATWALK_URL` overrides the
+  default `https://catwalk.charm.land` for air-gapped deployments; failures
+  degrade to typed slugs. See `docs/LLM-PROVIDERS.md`.
+
 ### Changed
 
+- **New Task modal redesign**: the Operations Center create-task form is now
+  grouped into titled sections (Task · Schedule · Email · Tools & files ·
+  Advanced) with consistent field styling — several controls (the advanced
+  toggles, run_if row, tags/persona inputs) previously rendered with no CSS
+  at all. Real toggle switches with full-row click targets, a two-column grid
+  for schedule/model/limit fields, the custom cron input promoted next to the
+  presets (click an active preset again to clear it), a Cancel button, and
+  Estimate Cost anchored at the footer's start. Field IDs, validation, and
+  submit behavior are unchanged.
+- **Chat share UX**: creating (or revisiting) a share link now opens a
+  proper dialog — the full URL in a selectable field, an explicit "Copy
+  link" button with copied-state feedback, a read-only-access explainer,
+  and "Stop sharing" — instead of only flipping a small sidebar icon and
+  silently writing the clipboard (which browsers can block with no
+  feedback). The shared-row menu item is now "Share link…".
+- **schedule_task approval card is editable**: the "Make recurring task"
+  proposal (and any agent-staged schedule_task) can be adjusted before
+  approving — Edit… exposes the name, cron schedule (recurring tasks),
+  and the FULL prompt (the card previously showed a truncated preview
+  only); "Approve with changes" sends just the changed fields, and the
+  server applies them to the staged args BEFORE the same validation and
+  single task-create path the unedited flow uses. Nothing is created
+  until approve, as before.
+
+- The **Branch** button appears as soon as a turn finishes, not after a
+  reload. The turn stream gains a `history.persisted` event: after the
+  server persists the turn's history rows it tells the live stream which
+  DB ids the messages became, and the client backfills them — the Branch
+  affordance (which gates on a persisted id) enables immediately. Mocked
+  turns emit the same event, so Playwright covers the flow.
+- Model picker polish: the two pinned rows are named in the same
+  "Lab: Model" style as every other row ("Z.AI: GLM 5.2 (nitro)",
+  "Anthropic: Claude Fable 5"); Z.AI joins the per-lab "newest model"
+  curation (listed first); and a lab's newest entry is excluded
+  variant-insensitively when it IS the pinned model (a ":nitro" pin and
+  its base catalog slug no longer render as duplicate rows).
+- The login MOTD banner is now a rowing galley (oars out) instead of the
+  small masted-ship mark.
+
+- **Model lineup + no price ceiling + alias retirement.** The recommended
+  everyday model is now `z-ai/glm-5.2:nitro` and the strong tier is
+  `anthropic/claude-fable-5`, across chat (picker pins, new-conversation
+  default, title/metadata fallbacks, lockdown-mode default allow-list) AND
+  the Operations Center (task-create primary/fallback defaults + picker
+  seeds). The user-facing "default"/"advanced" ALIASES are retired: the
+  picker's two pinned rows now show real model names ("GLM 5.2 Nitro",
+  "Claude Fable 5") with the existing "recommended" pill, and the
+  escalation flow (`suggest_advanced_model`), the spreadsheet nudge, and
+  the model chip all render the actual model name — the strong-tier ROLE
+  survives (the agent can still suggest switching up), only the aliasing
+  is gone. Both price ceilings on model selection are removed (the chat
+  picker's $30/M-output cap and the Operations Center picker's $8/$30 per-M
+  caps): any OpenRouter model is pickable, and spend stays governed by the
+  per-run cost ceilings (`FLEET_MAX_COST_USD`), not by restricting
+  selection. Claude Fable 5 is wired into the extended-thinking family
+  gate; the 1M long-context beta is deliberately NOT enabled for it until
+  verified upstream (falls back to the standard window).
+
+- Chat keyboard shortcuts no longer collide with core browser shortcuts. The
+  bindings that shadowed browser features are gone or moved: ⌘/Ctrl+F is
+  released back to find-in-page (⌘K remains the search binding), "new
+  conversation" moves from ⌘/Ctrl+N (reserved in Chrome — uninterceptable, it
+  opened a browser window) to **⌘/Ctrl+Shift+O**, and "focus the composer"
+  moves from ⌘/Ctrl+J (browser downloads) to **Shift+Esc** — both matching
+  ChatGPT's chords, the prevailing muscle memory for AI-chat apps. The
+  bare-key set (?, j/k, Enter, p, a, r, #, y, e) is unchanged; the "?" help
+  overlay reflects the new chords.
 - `fleet update` systemd-unit drift check is now functional-diff-based and can
   adopt the shipped unit in one step. It compares `deploy/*.service` against the
   installed unit with comments and blank lines stripped, so a reworded header no

@@ -9,18 +9,25 @@ import (
 // Default model identifiers + context-window resolution (reconciled from chat
 // models.go + cutlass models.go/openrouter_models.go).
 //
-// Both repos pin Opus 4.8 as the advanced/max tier with an EXACT slug (never a
-// `~latest` floating alias — fantasy drops thinking signatures for alias slugs,
-// see isAliasModel). chat exported it as AdvancedModelSlug; cutlass as
-// DefaultMaxModel. Both names are kept (same value) so downstream code in either
-// mode resolves the same model.
+// Both repos pin the strong/max tier with an EXACT slug (never a `~latest`
+// floating alias — fantasy drops thinking signatures for alias slugs, see
+// isAliasModel). chat exported it as AdvancedModelSlug; cutlass as
+// DefaultMaxModel. Both names are kept (same value) so downstream code in
+// either mode resolves the same model.
 const (
-	// DefaultCoreModel is the cost-efficient primary (cutlass's default).
-	DefaultCoreModel = "moonshotai/kimi-k2.6"
-	// DefaultMaxModel is the advanced/fallback tier — Opus 4.8, 1M context via
-	// the Anthropic long-context beta. Pinned, never a `~latest` alias.
-	DefaultMaxModel = "anthropic/claude-opus-4.8"
-	// AdvancedModelSlug is chat's name for the same advanced tier. Kept in sync
+	// DefaultCoreModel is the cost-efficient primary (scheduled tasks + the
+	// Operations Center default). No :nitro variant: throughput-priority
+	// routing sprays requests across ~26 GLM providers, and prompt caches are
+	// per-upstream — so the implicit-cache discount (~80% on cached input)
+	// almost never hit. The plain slug is soft-pinned to the Z.AI upstream
+	// (see canonicalUpstream) for cache locality, verified live 2026-07-09:
+	// 3968/4018 prompt tokens served from cache on the second pinned call.
+	DefaultCoreModel = "z-ai/glm-5.2"
+	// DefaultMaxModel is the strong/fallback tier — the model escalation
+	// (suggest_advanced_model) and task fallback resolve to. Pinned, never a
+	// `~latest` alias.
+	DefaultMaxModel = "anthropic/claude-fable-5"
+	// AdvancedModelSlug is chat's name for the same strong tier. Kept in sync
 	// with DefaultMaxModel.
 	AdvancedModelSlug = DefaultMaxModel
 	// DefaultMaxCompletionTokens caps a single completion's output tokens.

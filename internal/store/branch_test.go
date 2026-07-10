@@ -44,7 +44,7 @@ func seedBranchConv(t *testing.T, s *Store, owner string) *Conversation {
 		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"q2"}`)},
 		{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"a2"}`)},
 	}
-	if err := s.AppendHistory(ctx, conv.ID, entries); err != nil {
+	if _, err := s.AppendHistory(ctx, conv.ID, entries); err != nil {
 		t.Fatalf("AppendHistory: %v", err)
 	}
 	return conv
@@ -97,7 +97,7 @@ func TestBranchConversation_RoundTrip(t *testing.T) {
 	}
 
 	// Continuing the branch does NOT affect the parent (messages are copied, not shared).
-	if err := s.AppendHistory(ctx, branch.ID, []agent.HistoryEntry{
+	if _, err := s.AppendHistory(ctx, branch.ID, []agent.HistoryEntry{
 		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"branch-only"}`)},
 	}); err != nil {
 		t.Fatalf("AppendHistory(branch): %v", err)

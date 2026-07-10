@@ -31,7 +31,7 @@ describe("ModelPicker", () => {
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
     await waitFor(() => {
-      expect(screen.getByText("Anthropic: Claude Opus 4.8")).toBeInTheDocument();
+      expect(screen.getByText("Anthropic: Claude Fable 5")).toBeInTheDocument();
     });
     expect(input).toHaveAttribute("aria-expanded", "true");
   });
@@ -40,28 +40,28 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("Anthropic: Claude Opus 4.8"));
-    fireEvent.change(input, { target: { value: "gemini" } });
+    await waitFor(() => screen.getByText("Anthropic: Claude Fable 5"));
+    fireEvent.change(input, { target: { value: "glm" } });
     await waitFor(() => {
-      expect(screen.getByText("Google: Gemini 3.5 Flash")).toBeInTheDocument();
+      expect(screen.getByText("Z.AI: GLM 5.2")).toBeInTheDocument();
     });
-    expect(screen.queryByText("Anthropic: Claude Opus 4.8")).not.toBeInTheDocument();
+    expect(screen.queryByText("Anthropic: Claude Fable 5")).not.toBeInTheDocument();
   });
 
   it("commits a clicked option into the input value", async () => {
     render(<Harness />);
     const input = screen.getByRole("combobox") as HTMLInputElement;
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("MoonshotAI: Kimi K2.6"));
-    fireEvent.click(screen.getByText("MoonshotAI: Kimi K2.6"));
-    expect(input.value).toBe("moonshotai/kimi-k2.6");
+    await waitFor(() => screen.getByText("Z.AI: GLM 5.2"));
+    fireEvent.click(screen.getByText("Z.AI: GLM 5.2"));
+    expect(input.value).toBe("z-ai/glm-5.2");
   });
 
   it("shows the 'type a custom slug' empty state for no matches", async () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("Anthropic: Claude Opus 4.8"));
+    await waitFor(() => screen.getByText("Anthropic: Claude Fable 5"));
     fireEvent.change(input, { target: { value: "zzz-nope" } });
     await waitFor(() => {
       expect(

@@ -51,19 +51,28 @@ func renderMOTD(ver, unit, svcState string, color bool) string {
 		bold = "1"
 		grn  = "32"
 		ylw  = "33"
+		wht  = "97"      // bright white — flag, yardarm & sail
+		brn  = "38;5;94" // 256-col brown — wooden hull, bow & oars
 	)
-	// A compact masted-ship mark — fleet is a fleet of ships. Kept small so it
-	// fits a login banner without dominating the terminal.
+	// A rowing galley — fleet is a fleet of ships, oars out. Kept small so it
+	// fits a login banner without dominating the terminal. The art is painted
+	// piece by piece rather than as one block: a white flag on the yardarm,
+	// a brown hull/bow/oars, and cyan water. Each piece is its own
+	// \x1b[…m…\x1b[0m span (the reset closes every span), so the colours never
+	// bleed into one another the way a single outer wrap would once an inner
+	// span reset it.
 	banner := strings.Join([]string{
-		`    .  .  .   `,
-		`  __|__|__|__   ` + paint(bold, "fleet") + "  " + paint(dim, ver),
-		`  \  fleet  /   ` + paint(dim, "self-hosted agent platform"),
-		`   \______/    `,
+		"     " + paint(wht, `__4___`),
+		"  " + paint(brn, "_") + "  " + paint(wht, `\ \ \ \`) + "      " + paint(bold, "fleet") + "  " + paint(dim, ver),
+		" " + paint(brn, `<'\`) + paint(wht, ` /_/_/_/`) + "      " + paint(dim, "self-hosted agent platform"),
+		"  " + paint(brn, `((____!___/)`),
+		"   " + paint(brn, `\0\0\0\0\/`),
+		"   " + paint(cyan, `~~~~~~~~~~`),
 	}, "\n")
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(paint(cyan, banner))
+	b.WriteString(banner)
 	b.WriteString("\n\n")
 
 	// Service state — green active / yellow otherwise / dim when there's no

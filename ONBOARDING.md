@@ -29,7 +29,7 @@ them so a local run agrees with the gate.
 
 | Tool | Version | Why |
 | --- | --- | --- |
-| **Go** | the version pinned in `go.mod` (currently **1.26.4**) | the backend; CI uses `go-version: 1.26.4` |
+| **Go** | the version pinned in `go.mod` (currently **1.26.5**) | the backend; CI uses `go-version: 1.26.5` |
 | **Node.js** | **22** + npm | the `web/` Next.js app; CI uses `node-version: 22` |
 | **golangci-lint** | **v2.12.2** | the lint gate (`.golangci.yml` is the v2 schema and is tuned to this version — keep them in sync) |
 | **Podman** (rootless) | recent | the execution sandbox; needed for the sandbox-backed tests / first chat turn. Most unit tests self-skip when podman is absent. |

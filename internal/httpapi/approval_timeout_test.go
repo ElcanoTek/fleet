@@ -95,9 +95,9 @@ func (f *sweepFakeStore) ClaimApproval(_ context.Context, _, approvalID, _, _ st
 	return f.claimOutcome[approvalID], nil
 }
 
-func (f *sweepFakeStore) AppendHistory(_ context.Context, convID string, _ []agent.HistoryEntry) error {
+func (f *sweepFakeStore) AppendHistory(_ context.Context, convID string, _ []agent.HistoryEntry) ([]int64, error) {
 	f.appendedCnv = append(f.appendedCnv, convID)
-	return nil
+	return nil, nil
 }
 
 // TestSweepExpiredApprovals_ClaimsAndAppends checks that the sweep auto-denies

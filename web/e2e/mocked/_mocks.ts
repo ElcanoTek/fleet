@@ -104,6 +104,16 @@ export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
   await page.route("**/api/model-rankings", (r: Route) => r.fulfill({ json: { rankings: [] } }));
   await page.route("**/api/model-catalog", (r: Route) => r.fulfill({ json: { models: [] } }));
   await page.route("**/api/model-check**", (r: Route) => r.fulfill({ json: { ok: true } }));
+  // The composer's /skill autocomplete roster. Left unmocked this 502s, and
+  // the Next dev-tools error badge that raises sits bottom-left — exactly
+  // over the collapsed rail's account button — swallowing test clicks.
+  await page.route("**/api/skills", (r: Route) => r.fulfill({ json: { skills: [] } }));
+  // Workspace-provider models + the catwalk catalog behind them: default to
+  // "none configured" so pickers exercise their catalog/seed paths.
+  await page.route("**/api/llm-provider-models", (r: Route) =>
+    r.fulfill({ json: { models: [], providers: [] } }),
+  );
+  await page.route("**/api/catwalk-models", (r: Route) => r.fulfill({ json: { providers: [] } }));
   // client-config is fail-open in the UI; default to neutral branding/cards so
   // the shell never 500s on the upstream-unreachable real route. Specs that
   // assert config-driven cards override this route afterward.

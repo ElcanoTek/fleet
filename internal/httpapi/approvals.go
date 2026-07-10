@@ -531,9 +531,13 @@ func summarizeScheduleTaskInput(toolName, rawInput string) map[string]any {
 		"tool":           toolName,
 		"name":           strings.TrimSpace(p.Name),
 		"prompt_preview": preview,
-		"model":          strings.TrimSpace(p.Model),
-		"allow_network":  p.AllowNetwork,
-		"tags":           p.Tags,
+		// Full prompt so the card's edit mode starts from the real text (the
+		// preview is rune-truncated; editing a truncated prompt would clobber
+		// the staged one on approve).
+		"prompt":        strings.TrimSpace(p.Prompt),
+		"model":         strings.TrimSpace(p.Model),
+		"allow_network": p.AllowNetwork,
+		"tags":          p.Tags,
 	}
 	cron := strings.TrimSpace(p.Cron)
 	switch {
@@ -836,6 +840,21 @@ type approvalRequest struct {
 	// Approved: approve+session pre-approves, !approve+session pre-denies.
 	Scope   string `json:"scope,omitempty"`
 	Pattern string `json:"pattern,omitempty"`
+	// Edits carries inline changes from the schedule_task approval card: the
+	// user reviews the staged proposal and may adjust name/prompt/cron before
+	// approving, instead of blindly accepting or starting over. nil field =
+	// keep the staged value. Ignored for every other tool kind.
+	Edits *scheduleTaskEdits `json:"edits,omitempty"`
+}
+
+// scheduleTaskEdits is the editable subset of a staged schedule_task call —
+// exactly the fields the approval card displays. Applied over the staged args
+// BEFORE re-validation, so an edited cron passes the same pure checks the gate
+// applied at stage time.
+type scheduleTaskEdits struct {
+	Name   *string `json:"name,omitempty"`
+	Prompt *string `json:"prompt,omitempty"`
+	Cron   *string `json:"cron,omitempty"`
 }
 
 // maybeRegisterSessionPolicy records a session-scoped pre-approval/denial (#300)
@@ -973,7 +992,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 	case approval.ToolName == tools.ScheduleTaskToolName:
 		// schedule_task creates an orchestrator task in-process via the injected
 		// seam (#239) — not an MCP send — so it gets its own one-shot path.
-		text, toolErr = s.runStagedScheduleTask(execCtx, approval)
+		text, toolErr = s.runStagedScheduleTask(execCtx, approval, req.Edits)
 	default:
 		text, toolErr = s.runStagedTool(execCtx, approval)
 	}
@@ -1322,13 +1341,26 @@ func takeStagedBashSandbox(ctx context.Context, pool stagedBashTaker, lockdown b
 // create_task seam; the human approval plus the box-wide cost/iteration ceilings
 // bound a misconfigured task.) A nil seam (feature unconfigured) is surfaced as a
 // clear error rather than silently succeeding.
-func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Approval) (string, error) {
+func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Approval, edits *scheduleTaskEdits) (string, error) {
 	if s.scheduleTask == nil {
 		return "", errors.New("scheduling from chat is not configured on this server")
 	}
 	var p tools.ScheduleTaskParams
 	if err := json.Unmarshal([]byte(approval.ArgsJSON), &p); err != nil {
 		return "", fmt.Errorf("parse schedule_task args: %w", err)
+	}
+	// The card's inline edits land BEFORE Validate, so a user-adjusted
+	// name/prompt/cron is held to exactly the checks the staged args passed.
+	if edits != nil {
+		if edits.Name != nil {
+			p.Name = *edits.Name
+		}
+		if edits.Prompt != nil {
+			p.Prompt = *edits.Prompt
+		}
+		if edits.Cron != nil {
+			p.Cron = *edits.Cron
+		}
 	}
 	if err := p.Validate(); err != nil {
 		return "", err
@@ -1431,7 +1463,7 @@ func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolNa
 		"is_err": isErr,
 	})
 	entry.Content = payload
-	if err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {
+	if _, err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {
 		log.Printf("AppendHistory (approval result): %v", err)
 	}
 }

@@ -112,7 +112,16 @@ func runMockTurn(ctx context.Context, st chatStore, conv *store.Conversation, us
 	if !emptyReply {
 		entries = append(entries, mustJSONEntry("assistant", "text", map[string]any{"text": reply}))
 	}
-	return st.AppendHistory(ctx, conv.ID, entries)
+	ids, err := st.AppendHistory(ctx, conv.ID, entries)
+	if err != nil {
+		return err
+	}
+	// Mirror the real turn's post-persist id notification (see runTurnAsync)
+	// so Playwright-mocked flows exercise the same Branch-button enablement.
+	sink.Emit("history.persisted", map[string]any{
+		"entries": historyPersistedEntries(entries, ids),
+	})
+	return nil
 }
 
 // shouldMockEmptyReply returns true when the prompt asks the mock turn to end

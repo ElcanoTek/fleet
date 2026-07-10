@@ -514,7 +514,7 @@ function ConversationKebab({
                 close();
               }}
             >
-              Copy share link
+              Share link…
             </MenuItem>
             <MenuItem
               icon={<ShareGlyph off className="size-4" />}

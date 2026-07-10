@@ -26,7 +26,7 @@ func seedSharedConv(t *testing.T, s *Store, owner string) *Conversation {
 		{Role: "tool", Type: "tool_result", Content: json.RawMessage(`{"text":"SECRET_TOOL_OUTPUT","name":"run_python"}`)},
 		{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"use sort.Slice"}`)},
 	}
-	if err := s.AppendHistory(ctx, conv.ID, entries); err != nil {
+	if _, err := s.AppendHistory(ctx, conv.ID, entries); err != nil {
 		t.Fatalf("AppendHistory: %v", err)
 	}
 	return conv

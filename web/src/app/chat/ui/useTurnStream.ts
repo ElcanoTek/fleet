@@ -550,6 +550,40 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       return;
     }
 
+    if (event.event === "history.persisted") {
+      // Post-persist id notification (server.go:runTurnAsync): the turn's
+      // history rows now exist in Postgres, and this carries their {id, role}
+      // pairs in insert order. Backfill Message.dbId on the just-streamed
+      // user + assistant messages so persisted-only affordances (the Branch
+      // button, #454) appear immediately instead of after a reload. Mirrors
+      // historyToMessages: a message's dbId is the MAX entry id it spans.
+      const p = payload as { entries?: Array<{ id?: number; role?: string }> };
+      let userMax = 0;
+      let assistantMax = 0;
+      for (const e of p.entries ?? []) {
+        const id = typeof e.id === "number" ? e.id : 0;
+        if (!id) continue;
+        if (e.role === "user") userMax = Math.max(userMax, id);
+        else if (e.role === "assistant") assistantMax = Math.max(assistantMax, id);
+      }
+      if (!userMax && !assistantMax) return;
+      setConvMessages(ctx.target, (current) => {
+        const next = current.slice();
+        const aIdx = next.findIndex((m) => m.id === ctx.assistantId);
+        if (aIdx >= 0 && assistantMax) {
+          next[aIdx] = { ...next[aIdx], dbId: Math.max(next[aIdx].dbId ?? 0, assistantMax) };
+        }
+        // The user message sits directly above its assistant slot; only fill a
+        // missing dbId (an edited/branched historical message keeps its own).
+        const uIdx = aIdx - 1;
+        if (userMax && uIdx >= 0 && next[uIdx].role === "user" && !next[uIdx].dbId) {
+          next[uIdx] = { ...next[uIdx], dbId: userMax };
+        }
+        return next;
+      });
+      return;
+    }
+
     if (event.event === "turn.completed") {
       ctx.sawTerminal = true;
       const p = payload as {

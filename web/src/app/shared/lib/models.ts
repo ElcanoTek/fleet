@@ -1,7 +1,14 @@
-// OpenRouter model catalog logic for the orchestrator task form's model
-// picker. Pure functions ported from moc's assets/js/model-picker.js — the
-// DOM/positioning machinery is rebuilt as a React component (ModelPicker.tsx);
-// this module is the testable filtering/affordability core.
+// Model catalog logic for the orchestrator task form's model picker. Pure
+// functions ported from moc's assets/js/model-picker.js — the DOM/positioning
+// machinery is rebuilt as a React component (ModelPicker.tsx); this module is
+// the testable filtering/ordering core.
+//
+// The OpenRouter catalog is fetched through the session-gated same-origin
+// proxy (/api/model-catalog) — NOT directly from openrouter.ai. The app's CSP
+// pins connect-src to 'self' (#590), so a direct browser fetch is blocked and
+// used to silently strand the picker on its two seed models.
+
+import { loadWorkspaceModels, _resetWorkspaceModelCacheForTests } from "./workspaceModels";
 
 export type PickerModel = {
   id: string;
@@ -9,69 +16,52 @@ export type PickerModel = {
   recommended: boolean;
   created?: number | null;
   priceCompletion?: number | null;
+  contextLength?: number | null;
   // True for models served by an admin-configured workspace provider
   // (Settings → Admin → Model providers) rather than the OpenRouter catalog.
   workspace?: boolean;
 };
 
-type RawModel = {
-  id?: unknown;
-  name?: unknown;
-  created?: unknown;
-  pricing?: { prompt?: unknown; completion?: unknown };
-  architecture?: { output_modalities?: unknown; modality?: unknown };
-};
-
-export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
-
-// Per-token price ceilings ($/token). 8e-6 = $8 per million tokens.
-const MAX_PROMPT_PRICE = 8e-6;
-const MAX_COMPLETION_PRICE = 30e-6;
+export const MODEL_CATALOG_URL = "/api/model-catalog";
 
 const REQUEST_TIMEOUT_MS = 8000;
 export const MAX_RESULTS = 50;
 
 // Hand-picked entries shown immediately and used as a fallback when the
-// OpenRouter fetch fails. Pinned release slugs (not floating `~` aliases).
+// catalog fetch fails. Pinned release slugs (not floating `~` aliases).
 export const SEED_MODELS: PickerModel[] = [
-  { id: "anthropic/claude-opus-4.8", name: "Anthropic: Claude Opus 4.8", recommended: true },
-  { id: "moonshotai/kimi-k2.6", name: "MoonshotAI: Kimi K2.6", recommended: true },
-  { id: "google/gemini-3.5-flash", name: "Google: Gemini 3.5 Flash", recommended: true },
+  { id: "z-ai/glm-5.2", name: "Z.AI: GLM 5.2", recommended: true },
+  { id: "anthropic/claude-fable-5", name: "Anthropic: Claude Fable 5", recommended: true },
 ];
 
-export function isAffordable(model: RawModel): boolean {
-  const prompt = Number.parseFloat(String(model?.pricing?.prompt ?? ""));
-  const completion = Number.parseFloat(String(model?.pricing?.completion ?? ""));
-  if (!Number.isFinite(prompt) || !Number.isFinite(completion)) return false;
-  return prompt <= MAX_PROMPT_PRICE && completion <= MAX_COMPLETION_PRICE;
+type RawCatalogModel = {
+  slug?: unknown;
+  name?: unknown;
+  created?: unknown;
+  context_length?: unknown;
+  price_completion?: unknown;
+};
+
+function parseFiniteNumber(raw: unknown): number | null {
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
 }
 
-export function isTextOutput(model: RawModel): boolean {
-  const arch = model?.architecture;
-  if (!arch) return false;
-  const outs = Array.isArray(arch.output_modalities) ? (arch.output_modalities as unknown[]) : null;
-  if (outs) return outs.includes("text");
-  const modality = String(arch.modality || "");
-  if (!modality) return false;
-  if (modality === "text") return true;
-  const arrowIdx = modality.indexOf("->");
-  if (arrowIdx === -1) return false;
-  const outputs = modality
-    .slice(arrowIdx + 2)
-    .split("+")
-    .map((s) => s.trim());
-  return outputs.includes("text");
-}
-
-export function normaliseModel(raw: RawModel): PickerModel | null {
-  const id = String(raw?.id ?? "").trim();
+// normaliseCatalogModel maps one /api/model-catalog entry to a PickerModel.
+// The proxy has already filtered to text-output models, so no modality
+// checks remain client-side.
+export function normaliseCatalogModel(raw: RawCatalogModel): PickerModel | null {
+  const id = String(raw?.slug ?? "").trim();
   if (!id) return null;
   const name = String(raw?.name ?? id).trim();
-  const created =
-    typeof raw?.created === "number" && Number.isFinite(raw.created) ? (raw.created as number) : null;
-  const completion = Number.parseFloat(String(raw?.pricing?.completion ?? ""));
-  const priceCompletion = Number.isFinite(completion) ? completion : null;
-  return { id, name, recommended: false, created, priceCompletion };
+  return {
+    id,
+    name,
+    recommended: false,
+    created: parseFiniteNumber(raw?.created),
+    priceCompletion: parseFiniteNumber(raw?.price_completion),
+    contextLength: parseFiniteNumber(raw?.context_length),
+  };
 }
 
 export function dedupeAndOrder(seedList: PickerModel[], fetchedList: PickerModel[]): PickerModel[] {
@@ -121,67 +111,45 @@ export function filterModels(models: PickerModel[], query: string): PickerModel[
     .map((entry) => entry.model);
 }
 
-async function fetchOpenRouterModels(): Promise<PickerModel[]> {
+async function fetchCatalogModels(): Promise<PickerModel[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(OPENROUTER_MODELS_URL, {
+    const response = await fetch(MODEL_CATALOG_URL, {
       signal: controller.signal,
       cache: "no-store",
-      credentials: "omit",
     });
     if (!response.ok) throw new Error(`status ${response.status}`);
     const payload = await response.json();
-    const data: RawModel[] = Array.isArray(payload?.data) ? payload.data : [];
-    return data
-      .filter(isAffordable)
-      .filter(isTextOutput)
-      .map(normaliseModel)
-      .filter((m): m is PickerModel => m !== null);
+    const data: RawCatalogModel[] = Array.isArray(payload?.models) ? payload.models : [];
+    return data.map(normaliseCatalogModel).filter((m): m is PickerModel => m !== null);
   } finally {
     clearTimeout(timer);
-  }
-}
-
-// fetchWorkspaceModels pulls the admin-configured providers' model slugs
-// ("<provider>/<model>", see the Go /llm-provider-models endpoint). Same-origin
-// session fetch; any failure (older backend, signed-out probe) degrades to an
-// empty list so the picker is never blocked on this call.
-async function fetchWorkspaceModels(): Promise<PickerModel[]> {
-  try {
-    const response = await fetch("/api/llm-provider-models", { cache: "no-store" });
-    if (!response.ok) return [];
-    const payload = await response.json();
-    const data: Array<{ id?: unknown; name?: unknown }> = Array.isArray(payload?.models)
-      ? payload.models
-      : [];
-    return data
-      .map((m): PickerModel | null => {
-        const id = String(m?.id ?? "").trim();
-        if (!id) return null;
-        return { id, name: String(m?.name ?? id).trim(), recommended: false, workspace: true };
-      })
-      .filter((m): m is PickerModel => m !== null);
-  } catch {
-    return [];
   }
 }
 
 let cachedModels: PickerModel[] | null = null;
 let inflight: Promise<PickerModel[]> | null = null;
 
-// Returns the merged (workspace + seed + OpenRouter) list, fetched once and
-// cached. Workspace-provider models come first so an admin-configured model is
-// immediately visible in browse mode; either fetch failing degrades to the
-// rest of the list, and the seeds alone are the floor.
+// Returns the merged (workspace + seed + OpenRouter-catalog) list, fetched
+// once and cached. Workspace-provider models come first so an
+// admin-configured model is immediately visible in browse mode; either fetch
+// failing degrades to the rest of the list, and the seeds alone are the floor.
 export async function loadModels(): Promise<PickerModel[]> {
   if (cachedModels) return cachedModels;
   if (inflight) return inflight;
   inflight = (async () => {
-    const [workspace, fetched] = await Promise.all([
-      fetchWorkspaceModels(),
-      fetchOpenRouterModels().catch(() => [] as PickerModel[]),
+    const [workspaceRaw, fetched] = await Promise.all([
+      loadWorkspaceModels(),
+      fetchCatalogModels().catch(() => [] as PickerModel[]),
     ]);
+    const workspace: PickerModel[] = workspaceRaw.map((m) => ({
+      id: m.id,
+      name: m.name,
+      recommended: false,
+      contextLength: m.contextLength ?? null,
+      workspace: true,
+    }));
     const base = fetched.length > 0 ? dedupeAndOrder(SEED_MODELS, fetched) : SEED_MODELS.slice();
     cachedModels = dedupeAndOrder(workspace, base);
     inflight = null;
@@ -195,4 +163,5 @@ export async function loadModels(): Promise<PickerModel[]> {
 export function _resetModelCacheForTests() {
   cachedModels = null;
   inflight = null;
+  _resetWorkspaceModelCacheForTests();
 }

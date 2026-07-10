@@ -28,9 +28,9 @@ describe("tierForModel", () => {
 });
 
 describe("labelForModel", () => {
-  it("returns the friendly alias for tier slots", () => {
-    expect(labelForModel(DEFAULT_MODEL)).toBe("default");
-    expect(labelForModel(ADVANCED_MODEL)).toBe("advanced");
+  it("returns the display name for pinned slots (never an alias)", () => {
+    expect(labelForModel(DEFAULT_MODEL)).toBe("Z.AI: GLM 5.2");
+    expect(labelForModel(ADVANCED_MODEL)).toBe("Anthropic: Claude Fable 5");
   });
 
   it("returns the raw slug for non-tier models", () => {
@@ -42,10 +42,10 @@ describe("labelForModel", () => {
 });
 
 describe("TIER_MODELS", () => {
-  it("lists default, advanced in that exact order", () => {
+  it("pins the recommended pick first, the strong tier second", () => {
     // The picker pins this order at the top of the dropdown; the
-    // sequence is product-meaningful (cheap everyday pick → strongest).
-    expect(TIER_MODELS.map((t) => t.label)).toEqual(["default", "advanced"]);
+    // sequence is product-meaningful (everyday pick → strongest).
+    expect(TIER_MODELS.map((t) => t.label)).toEqual(["Z.AI: GLM 5.2", "Anthropic: Claude Fable 5"]);
     expect(TIER_MODELS.map((t) => t.slug)).toEqual([DEFAULT_MODEL, ADVANCED_MODEL]);
   });
 });

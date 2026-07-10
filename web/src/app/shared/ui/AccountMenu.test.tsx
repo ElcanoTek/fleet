@@ -76,7 +76,7 @@ describe("AccountMenu", () => {
     expect(screen.queryByRole("menu", { name: "Account" })).toBeNull();
   });
 
-  it("navigates to Settings, Connections, Skills, and Admin from the menu (both surfaces)", () => {
+  it("navigates to Settings from the menu; Connections/Skills/Admin are not menu items", () => {
     // jsdom marks location.assign non-configurable; swap the whole location
     // object for a stub to observe navigations.
     const original = window.location;
@@ -88,20 +88,35 @@ describe("AccountMenu", () => {
     });
     try {
       render(<AccountMenu email="sam@elcanotek.com" onSignOut={() => {}} />);
-      const navigate = (item: string) => {
-        fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
-        fireEvent.click(screen.getByRole("menuitem", { name: item }));
-      };
-      navigate("Settings");
+      fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+      // Connections, Skills, and Admin live in the settings area's own
+      // sub-nav now (Admin only for admins) — the menu must not offer them.
+      // (Exact-name queries: the Settings item's accessible name includes its
+      // "Connections, skills & workspace settings" subtext.)
+      expect(screen.queryByRole("menuitem", { name: "Connections" })).toBeNull();
+      expect(screen.queryByRole("menuitem", { name: "Skills" })).toBeNull();
+      expect(screen.queryByRole("menuitem", { name: "Admin" })).toBeNull();
+      fireEvent.click(screen.getByRole("menuitem", { name: /Settings/ }));
       expect(assign).toHaveBeenCalledWith("/settings");
-      navigate("Connections");
-      expect(assign).toHaveBeenCalledWith("/settings/connections");
-      navigate("Skills");
-      expect(assign).toHaveBeenCalledWith("/settings/skills");
-      navigate("Admin");
-      expect(assign).toHaveBeenCalledWith("/admin");
     } finally {
       Object.defineProperty(window, "location", { value: original, configurable: true, writable: true });
     }
+  });
+
+  it("renders the Settings item's subtext line", () => {
+    render(<AccountMenu email="sam@elcanotek.com" onSignOut={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+    const item = screen.getByRole("menuitem", { name: /Settings/ });
+    expect(item).toHaveTextContent("Connections, skills & workspace settings");
+  });
+
+  it("tints the anchor and the Settings item on the settings surface", () => {
+    render(<AccountMenu email="sam@elcanotek.com" onSignOut={() => {}} current />);
+    const button = screen.getByRole("button", { name: "Account menu" });
+    expect(button.className).toContain("account-current");
+    fireEvent.click(button);
+    expect(screen.getByRole("menuitem", { name: /Settings/ }).className).toContain(
+      "menu-item-current",
+    );
   });
 });

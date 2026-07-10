@@ -54,6 +54,7 @@ import {
 } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
+import { loadWorkspaceModels } from "@/app/shared/lib/workspaceModels";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
 import { BulkDeleteConfirmModal } from "./BulkDeleteConfirmModal";
 import { Composer } from "./Composer";
@@ -68,6 +69,7 @@ import { useTurnStream, type TurnStreamDeps } from "./useTurnStream";
 // from "./chat-experience" — keep resolving unchanged.
 import { autoFenceRawHtmlDocument, renderAssistantContent } from "./AssistantContent";
 export { autoFenceRawHtmlDocument, renderAssistantContent };
+import { readChatSession, writeChatSession } from "./chatSessionStore";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -145,6 +147,10 @@ export type RankedModel = {
   // Drives the "✨ new" pill in the picker — entries within
   // NEW_MODEL_WINDOW_DAYS get the badge.
   created?: number;
+  // True for models served by an admin-configured workspace provider
+  // ("<provider>/<model>" explicit-routing slugs). Drives the picker's
+  // "workspace" pill.
+  workspace?: boolean;
 };
 
 // Optional MCP servers the user can toggle on per-conversation. The catalog
@@ -212,8 +218,8 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
     title: "Global",
     entries: [
       { chips: [{ mod: true }, { label: "K" }], description: "Open search" },
-      { chips: [{ mod: true }, { label: "N" }], description: "New conversation" },
-      { chips: [{ mod: true }, { label: "J" }], description: "Focus the message composer" },
+      { chips: [{ mod: true }, { shift: true }, { label: "O" }], description: "New conversation" },
+      { chips: [{ shift: true }, { label: "Esc" }], description: "Focus the message composer" },
       { chips: [{ label: "?" }], description: "Show this keyboard-shortcut help" },
       { chips: [{ label: "Esc" }], description: "Close search, help, or the sidebar" },
     ],
@@ -270,12 +276,29 @@ function isInteractiveTarget(el: Element | null): boolean {
 // share it with no React dependency.
 
 export function ChatExperience() {
+  // Cross-navigation rehydration. /chat and /settings are separate App Router
+  // route segments, so leaving chat fully unmounts this component. The module
+  // store (./chatSessionStore) keeps the conversation state alive across that
+  // unmount; `restoredSession` is its snapshot captured once at mount. Non-null
+  // means we're returning to chat with a warm cache and can paint instantly +
+  // revalidate in the background; null is a genuine cold start (or a hard
+  // reload) that runs the full blocking bootstrap below. Captured via a lazy
+  // useState initializer so the impure module read happens once, off the render
+  // path, and every state below can seed from the same stable value.
+  const [restoredSession] = useState(() => readChatSession());
   // Keep messages keyed by conversation id (plus the PENDING sentinel
   // for brand-new chats). This lets users navigate between chats during
   // an in-flight stream without losing the streaming UI state — the
   // stream events keep landing in the originating conv's slot whether
   // it's currently displayed or not.
-  const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>({});
+  const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>(
+    () => restoredSession?.messagesByConv ?? {},
+  );
+  // True once the initial bootstrap (cold start) or the rehydration (warm
+  // return) has established a snapshot worth persisting. Gates the mirror
+  // effect below so a mid-cold-start unmount never saves a half-empty snapshot
+  // that a return would mistake for a warm cache.
+  const [bootstrapped, setBootstrapped] = useState(() => restoredSession !== null);
   // Per-conversation composer state — drafts, queued attachments, attachment
   // errors, and in-flight upload marks — lives in usePerConvComposerState,
   // keyed by currentConvKey (real conv id or the PENDING sentinel for the
@@ -306,13 +329,19 @@ export function ChatExperience() {
   // slot. Instantiated below once currentConvKey is in scope. See
   // ./useTurnStreamState.
   const [crossfadingMessageIds, setCrossfadingMessageIds] = useState<number[]>([]);
-  const [userEmail, setUserEmail] = useState("");
-  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [userEmail, setUserEmail] = useState(() => restoredSession?.userEmail ?? "");
+  const [conversations, setConversations] = useState<ConversationSummary[]>(
+    () => restoredSession?.conversations ?? [],
+  );
   // Archived conversations (#282): fetched separately, shown in a collapsed
   // "Archived" section at the bottom of the sidebar.
-  const [archivedConversations, setArchivedConversations] = useState<ConversationSummary[]>([]);
+  const [archivedConversations, setArchivedConversations] = useState<ConversationSummary[]>(
+    () => restoredSession?.archivedConversations ?? [],
+  );
   const [showArchived, setShowArchived] = useState(false);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    () => restoredSession?.activeConversationId ?? null,
+  );
   // The slot identifier the rest of the UI hangs off of: the active
   // conv id when one is loaded, the PENDING sentinel when the user is
   // on the empty new-chat view, or a per-submission pending key during
@@ -380,7 +409,9 @@ export function ChatExperience() {
     key.startsWith(`${PENDING_CONV_KEY}:`);
   const realConvId = (key: string | null): string | null =>
     key && !isPendingKey(key) ? key : null;
-  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  // Cold start shows the full blocking spinner; a warm return (restoredSession
+  // present) paints the cached transcript immediately and never blocks.
+  const [isLoadingHistory, setIsLoadingHistory] = useState(() => restoredSession === null);
   const [pendingDeleteConversation, setPendingDeleteConversation] =
     useState<PendingDeleteConversation | null>(null);
   // Header title click-to-edit. Holds the draft string while the input is
@@ -400,8 +431,10 @@ export function ChatExperience() {
   const [selectMode, setSelectMode] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
-  const [personas, setPersonas] = useState<string[]>([]);
-  const [selectedPersona, setSelectedPersona] = useState<string>("");
+  const [personas, setPersonas] = useState<string[]>(() => restoredSession?.personas ?? []);
+  const [selectedPersona, setSelectedPersona] = useState<string>(
+    () => restoredSession?.selectedPersona ?? "",
+  );
   // Which empty-state protocol pill the user has opened into its form/intake
   // panel (null = show the card grid). Only meaningful on the empty new-chat
   // view; reset whenever we return to a clean slate.
@@ -417,9 +450,16 @@ export function ChatExperience() {
   // (DEFAULT_MODEL = fast tier, ADVANCED_MODEL = strong tier) live in
   // ../lib/modelAliases so other surfaces (nudge banners, tests) share a
   // single source of truth.
-  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
+  const [selectedModel, setSelectedModel] = useState<string>(
+    () => restoredSession?.selectedModel ?? DEFAULT_MODEL,
+  );
   const [rankedModels, setRankedModels] = useState<RankedModel[]>([]);
   const [catalogModels, setCatalogModels] = useState<RankedModel[]>([]);
+  // Admin-configured workspace-provider models (Settings → Admin → Model
+  // providers), "<provider>/<model>" slugs. Loaded once on mount via the
+  // shared lib (which also expands catch-all anthropic/openai providers from
+  // the catwalk catalog); empty when none are configured or the fetch fails.
+  const [workspaceModels, setWorkspaceModels] = useState<RankedModel[]>([]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [personaPickerOpen, setPersonaPickerOpen] = useState(false);
   const [modelSearchQuery, setModelSearchQuery] = useState<string>("");
@@ -438,17 +478,20 @@ export function ChatExperience() {
   const [mcpPickerOpen, setMcpPickerOpen] = useState(false);
   // Bundle skill roster for the composer "/" autocomplete (#513). Fetched
   // once at startup — the roster is bundle-owned and static for the session.
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>(() => restoredSession?.skills ?? []);
   // Server-exposed capability flags. Fetched once on mount from
   // /api/server-config. Drives the lockdown affordance: when
   // lockdownAvailable is false the +button stays a plain "+"
   // (matches the UI-as-it-is-now contract for operators who haven't
   // opted into lockdown opt-in mode).
-  const [serverConfig, setServerConfig] = useState<ServerConfig>({
-    lockdownAvailable: false,
-    lockdownOnly: false,
-    lockdownAllowedModels: [],
-  });
+  const [serverConfig, setServerConfig] = useState<ServerConfig>(
+    () =>
+      restoredSession?.serverConfig ?? {
+        lockdownAvailable: false,
+        lockdownOnly: false,
+        lockdownAllowedModels: [],
+      },
+  );
   // pendingLockdown is set when the user clicks "New lockdown chat"
   // and cleared once the conversation is actually created. The flag
   // rides along on the first /api/chat POST as `lockdown: true`.
@@ -552,8 +595,16 @@ export function ChatExperience() {
   const personaPickerRef = useRef<HTMLDivElement | null>(null);
   const mcpPickerRef = useRef<HTMLDivElement | null>(null);
   const fadeTimeoutsRef = useRef<number[]>([]);
-  const messagesByConvRef = useRef<Record<string, Message[]>>({});
-  const activeConversationIdRef = useRef<string | null>(null);
+  // Seeded from the rehydrated snapshot so closure reads on the very first
+  // render (streamTurn callbacks, the visibility-refresh listener) see the
+  // warm cache immediately, not empty values that the sync effects below only
+  // catch up to after the first commit.
+  const messagesByConvRef = useRef<Record<string, Message[]>>(
+    restoredSession?.messagesByConv ?? {},
+  );
+  const activeConversationIdRef = useRef<string | null>(
+    restoredSession?.activeConversationId ?? null,
+  );
   // Cache-bust drift flag. Set when /api/version reports a new build id.
   // We never reload the page automatically — instead we surface an
   // "Update available" button in the sidebar so the user chooses when
@@ -567,6 +618,40 @@ export function ChatExperience() {
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  // Mirror the cross-navigation slice of chat state into the module store on
+  // every change, so leaving /chat (which unmounts this component) always
+  // leaves a fresh snapshot for the next mount to rehydrate from. Gated on
+  // `bootstrapped` so a mid-cold-start unmount can't persist a half-empty
+  // snapshot that a return would then treat as a warm cache. See
+  // ./chatSessionStore.
+  useEffect(() => {
+    if (!bootstrapped) return;
+    writeChatSession({
+      messagesByConv,
+      conversations,
+      archivedConversations,
+      activeConversationId,
+      personas,
+      selectedPersona,
+      selectedModel,
+      skills,
+      serverConfig,
+      userEmail,
+    });
+  }, [
+    bootstrapped,
+    messagesByConv,
+    conversations,
+    archivedConversations,
+    activeConversationId,
+    personas,
+    selectedPersona,
+    selectedModel,
+    skills,
+    serverConfig,
+    userEmail,
+  ]);
 
   // Keyboard shortcuts are registered declaratively through the shared
   // useKeyboardShortcuts hook below (search the comment "shortcut catalog"),
@@ -717,8 +802,11 @@ export function ChatExperience() {
   const contextLength = useMemo(() => {
     const slug = selectedModel.trim();
     if (!slug) return undefined;
-    return catalogModels.find((m) => m.slug === slug)?.contextLength;
-  }, [catalogModels, selectedModel]);
+    return (
+      catalogModels.find((m) => m.slug === slug)?.contextLength ??
+      workspaceModels.find((m) => m.slug === slug)?.contextLength
+    );
+  }, [catalogModels, workspaceModels, selectedModel]);
   // Display label for the model chip: tier alias ("default"/"advanced") >
   // catalog/ranked display name > the raw slug (or in-progress typed text).
   // Keeps the chip showing the same string as the model's menu row rather
@@ -729,9 +817,11 @@ export function ChatExperience() {
     const slug = selectedModel.trim();
     if (!slug) return selectedModel;
     const known =
-      catalogModels.find((m) => m.slug === slug) ?? rankedModels.find((m) => m.slug === slug);
+      catalogModels.find((m) => m.slug === slug) ??
+      rankedModels.find((m) => m.slug === slug) ??
+      workspaceModels.find((m) => m.slug === slug);
     return known?.name ?? selectedModel;
-  }, [selectedModel, catalogModels, rankedModels]);
+  }, [selectedModel, catalogModels, rankedModels, workspaceModels]);
   const contextUsage = useMemo<ContextUsage | null>(
     () =>
       computeContextUsage({
@@ -1051,9 +1141,12 @@ export function ChatExperience() {
     }
 
     if (!query) {
+      // Browse order: pinned defaults, then workspace-provider models (the
+      // operator configured them deliberately — they outrank the generic
+      // rankings), then the ranked list.
       const seen = new Set<string>();
       const out: RankedModel[] = [];
-      for (const m of [...defaults, ...rankedModels]) {
+      for (const m of [...defaults, ...workspaceModels, ...rankedModels]) {
         if (seen.has(m.slug)) continue;
         seen.add(m.slug);
         out.push(m);
@@ -1065,7 +1158,8 @@ export function ChatExperience() {
       m.slug.toLowerCase().includes(query) || m.name.toLowerCase().includes(query);
     const seen = new Set<string>();
     const matches: RankedModel[] = [];
-    for (const d of defaults) {
+    for (const d of [...defaults, ...workspaceModels]) {
+      if (seen.has(d.slug)) continue;
       if (matchesQuery(d)) {
         seen.add(d.slug);
         matches.push(d);
@@ -1079,7 +1173,7 @@ export function ChatExperience() {
       if (matches.length >= MAX_SEARCH_RESULTS) break;
     }
     return matches;
-  }, [rankedModels, catalogModels, modelSearchQuery, isLockdown, serverConfig.lockdownAllowedModels]);
+  }, [rankedModels, catalogModels, workspaceModels, modelSearchQuery, isLockdown, serverConfig.lockdownAllowedModels]);
 
   const loadRankedModels = async () => {
     if (rankedModels.length > 0 || isLoadingRankedModels) return;
@@ -1167,7 +1261,7 @@ export function ChatExperience() {
           message?: string;
           models_url?: string;
         };
-        if (data.allowed === false && data.reason === "over_budget" && data.message) {
+        if (data.allowed === false && data.message) {
           setModelError({
             message: data.message,
             modelsUrl: data.models_url ?? "https://openrouter.ai/models",
@@ -1416,7 +1510,7 @@ export function ChatExperience() {
 
   const loadConversation = async (
     conversationId: string,
-    options: { preserveScroll?: boolean } = {},
+    options: { preserveScroll?: boolean; background?: boolean } = {},
   ) => {
     // If this conversation is currently streaming, the local in-memory
     // copy has the in-flight UI updates that the server hasn't
@@ -1434,7 +1528,10 @@ export function ChatExperience() {
       return;
     }
 
-    setIsLoadingHistory(true);
+    // background: a warm-return revalidation already has the cached transcript
+    // on screen, so it must NOT flash the blocking spinner — it swaps in the
+    // fresh server copy underneath the rendered messages.
+    if (!options.background) setIsLoadingHistory(true);
     try {
       const response = await fetch(`/api/conversations/${conversationId}`, { cache: "no-store" });
       if (!response.ok) throw new Error("Unable to load conversation.");
@@ -1533,7 +1630,7 @@ export function ChatExperience() {
       setConvMessages(data.conversation.id, next);
       setSidebarOpen(false);
     } finally {
-      setIsLoadingHistory(false);
+      if (!options.background) setIsLoadingHistory(false);
     }
 
     // After the DB-backed history is rendered, check whether a turn
@@ -1898,6 +1995,13 @@ export function ChatExperience() {
     }
   };
 
+  // The share dialog (#226 UX): opened whenever a share link is created or
+  // managed, so the user SEES the URL with an explicit Copy affordance instead
+  // of inferring success from a small sidebar icon. {id,token,title} of the
+  // conversation being shared; null = closed.
+  const [shareDialog, setShareDialog] = useState<{ id: string; token: string; title: string } | null>(null);
+  const [shareLinkCopied, setShareLinkCopied] = useState(false);
+
   // buildShareUrl turns a share token into the absolute, copy-paste link a
   // recipient opens. window.origin is the deployment origin the user is on (#226).
   const buildShareUrl = (token: string) =>
@@ -1931,6 +2035,10 @@ export function ChatExperience() {
     const token = data.token ?? "";
     patchShareToken(conversation.id, token);
     if (!token) return false;
+    // Show the link explicitly — the icon-only affordance was easy to miss and
+    // clipboard writes can be silently blocked; the dialog is the honest UX.
+    setShareLinkCopied(false);
+    setShareDialog({ id: conversation.id, token, title: conversation.title });
     try {
       await navigator.clipboard.writeText(buildShareUrl(token));
       return true;
@@ -1950,9 +2058,16 @@ export function ChatExperience() {
     }
   };
 
-  // copyShareLink re-copies an already-shared conversation's link (#226).
+  // copyShareLink surfaces an already-shared conversation's link (#226): opens
+  // the share dialog (URL + explicit Copy) and best-effort pre-copies.
   const copyShareLink = async (conversation: ConversationSummary): Promise<boolean> => {
     if (!conversation.share_token) return false;
+    setShareLinkCopied(false);
+    setShareDialog({
+      id: conversation.id,
+      token: conversation.share_token,
+      title: conversation.title,
+    });
     try {
       await navigator.clipboard.writeText(buildShareUrl(conversation.share_token));
       return true;
@@ -2249,25 +2364,29 @@ export function ChatExperience() {
         allowInInput: true,
         handler: () => setSearchOpen(true),
       },
+      // Bindings deliberately NOT taken, so core browser features keep working:
+      // ⌘/Ctrl+F (find-in-page — the natural way to search the visible
+      // transcript), ⌘/Ctrl+N (new window — reserved in Chrome, a page can't
+      // even intercept it, so a binding there silently fails AND pops a
+      // window), ⌘/Ctrl+J (downloads). The replacements below follow ChatGPT's
+      // chords, the closest muscle memory for an AI-chat app.
       {
-        // Cmd/Ctrl+F is an alternate binding for search, but NOT while typing —
-        // there it must fall through to the browser's in-page find.
-        key: "f",
+        // New conversation: ⌘/Ctrl+Shift+O (the ChatGPT "new chat" chord).
+        // Shadows the browser's rarely-used bookmarks-library chord, which is
+        // interceptable — unlike the reserved ⌘N this replaces.
+        key: "o",
         mod: true,
-        allowInInput: false,
-        handler: () => setSearchOpen(true),
-      },
-      {
-        key: "n",
-        mod: true,
-        shift: false,
+        shift: true,
         allowInInput: true,
         handler: () => clearConversation(),
       },
       {
-        // Focus the composer from anywhere (mirrors clicking into it).
-        key: "j",
-        mod: true,
+        // Focus the composer from anywhere: Shift+Esc (the ChatGPT chord —
+        // ⌘J collided with the browser's downloads shortcut). Declared before
+        // the bare-Escape binding; first match wins, and bare Escape sets
+        // shift:false so the two never both claim one keystroke.
+        key: "Escape",
+        shift: true,
         allowInInput: true,
         handler: () => promptRef.current?.focus(),
       },
@@ -2354,6 +2473,7 @@ export function ChatExperience() {
       },
       {
         key: "Escape",
+        shift: false,
         allowInInput: true,
         handler: closeOverlays,
       },
@@ -2502,6 +2622,30 @@ export function ChatExperience() {
     };
   }, [loadCatalogModels]);
 
+  // Load the workspace-provider models once on mount so the picker's browse
+  // view and the chip label can resolve them. The shared lib caches per page
+  // load and never rejects (failures resolve to []), so this is cheap and
+  // safe to fire unconditionally.
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      void loadWorkspaceModels().then((models) => {
+        if (cancelled || models.length === 0) return;
+        setWorkspaceModels(
+          models.map((m) => ({
+            slug: m.id,
+            name: m.name,
+            contextLength: m.contextLength,
+            workspace: true,
+          })),
+        );
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Refresh the active conversation when the tab/window becomes visible
   // again. The server now keeps generating after the SSE connection
   // drops, so a turn the user kicked off before locking their phone (or
@@ -2577,9 +2721,86 @@ export function ChatExperience() {
     // it keeps exhaustive-deps honest without changing the mount-once run.
   }, [attachedConvIdsRef]);
 
-  // Initial load: session, personas, conversations, most-recent conversation.
+  // Initial load: session, conversations, most-recent conversation.
+  //
+  // Only the three fetches the conversation render actually needs sit on the
+  // spinner's critical path — session, conversations, and loadConversation.
+  // The nice-to-haves (personas, skills, server-config, MCP catalog preview)
+  // fire concurrently and never gate `isLoadingHistory`, so returning to /chat
+  // from /settings paints the conversation as soon as its history arrives
+  // instead of after six serial round-trips.
   useEffect(() => {
     let cancelled = false;
+    // The personas fetch races the critical path. loadConversation sets the
+    // opened conversation's persona last, so if personas resolves afterwards
+    // its default-persona write would clobber it. We only seed the default
+    // when no conversation is being loaded, and flip this flag before awaiting
+    // loadConversation so a late personas resolution skips the write.
+    let willLoadConversation = false;
+    // Local pending-key check (mirrors the component's isPendingKey) so this
+    // mount-once effect keeps `[]` deps instead of depending on a per-render
+    // helper. PENDING_CONV_KEY is a module constant. A real conversation id is
+    // anything that isn't the empty-new-chat sentinel or a per-submission slot.
+    const isRealConvId = (id: string | null): id is string =>
+      id !== null && id !== PENDING_CONV_KEY && !id.startsWith(`${PENDING_CONV_KEY}:`);
+
+    // Personas — nice-to-have; the server falls back to default. Sets the
+    // roster always, but the default persona only when no conversation loads.
+    const loadPersonas = async () => {
+      try {
+        const pr = await fetch("/api/personas", { cache: "no-store" });
+        if (pr.ok) {
+          const pd = (await pr.json()) as PersonasResponse;
+          if (!cancelled) {
+            setPersonas(pd.personas);
+            if (!willLoadConversation) setSelectedPersona(pd.default);
+          }
+        }
+      } catch {
+        // Personas are nice-to-have; the server falls back to default.
+      }
+    };
+
+    // Bundle skill roster for the composer "/" autocomplete (#513).
+    // Best-effort: an older server without /skills just leaves the
+    // autocomplete empty.
+    const loadSkills = async () => {
+      try {
+        const sr = await fetch("/api/skills", { cache: "no-store" });
+        if (sr.ok) {
+          const sd = (await sr.json()) as { skills?: SkillInfo[] };
+          if (!cancelled) setSkills(sd.skills ?? []);
+        }
+      } catch {
+        // Optional nicety — plain "/text" messages still send fine.
+      }
+    };
+
+    // Capability fetch — currently just lockdown availability.
+    // Best-effort: a 404 / network error means the older server
+    // doesn't expose this endpoint, so we keep the feature off.
+    const loadServerConfig = async () => {
+      try {
+        const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
+        if (cfgRes.ok) {
+          const cfg = (await cfgRes.json()) as {
+            lockdown_available: boolean;
+            lockdown_only: boolean;
+            lockdown_allowed_models: string[] | null;
+          };
+          if (!cancelled) {
+            setServerConfig({
+              lockdownAvailable: cfg.lockdown_available === true,
+              lockdownOnly: cfg.lockdown_only === true,
+              lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
+            });
+          }
+        }
+      } catch {
+        // Optional capability — leave lockdown off when the server
+        // is too old to advertise it.
+      }
+    };
 
     const loadInitialState = async () => {
       try {
@@ -2591,63 +2812,6 @@ export function ChatExperience() {
         const sessionData = (await sessionResponse.json()) as { email: string };
         if (cancelled) return;
         setUserEmail(sessionData.email);
-
-        // Personas
-        try {
-          const pr = await fetch("/api/personas", { cache: "no-store" });
-          if (pr.ok) {
-            const pd = (await pr.json()) as PersonasResponse;
-            if (!cancelled) {
-              setPersonas(pd.personas);
-              setSelectedPersona(pd.default);
-            }
-          }
-        } catch {
-          // Personas are nice-to-have; the server falls back to default.
-        }
-
-        // Bundle skill roster for the composer "/" autocomplete (#513).
-        // Best-effort: an older server without /skills just leaves the
-        // autocomplete empty.
-        try {
-          const sr = await fetch("/api/skills", { cache: "no-store" });
-          if (sr.ok) {
-            const sd = (await sr.json()) as { skills?: SkillInfo[] };
-            if (!cancelled) setSkills(sd.skills ?? []);
-          }
-        } catch {
-          // Optional nicety — plain "/text" messages still send fine.
-        }
-
-        // Prime the Tools picker catalog so it renders for new chats too.
-        // loadConversation will overwrite with per-conversation enabled
-        // state once an existing conversation is opened. Called through a
-        // latest-ref so this mount-once bootstrap keeps `[]` deps.
-        if (!cancelled) void loadMcpServerCatalogPreviewRef.current();
-
-        // Capability fetch — currently just lockdown availability.
-        // Best-effort: a 404 / network error means the older server
-        // doesn't expose this endpoint, so we keep the feature off.
-        try {
-          const cfgRes = await fetch("/api/server-config", { cache: "no-store" });
-          if (cfgRes.ok) {
-            const cfg = (await cfgRes.json()) as {
-              lockdown_available: boolean;
-              lockdown_only: boolean;
-              lockdown_allowed_models: string[] | null;
-            };
-            if (!cancelled) {
-              setServerConfig({
-                lockdownAvailable: cfg.lockdown_available === true,
-                lockdownOnly: cfg.lockdown_only === true,
-                lockdownAllowedModels: cfg.lockdown_allowed_models ?? [],
-              });
-            }
-          }
-        } catch {
-          // Optional capability — leave lockdown off when the server
-          // is too old to advertise it.
-        }
 
         const conversationsResponse = await fetch("/api/conversations", { cache: "no-store" });
         if (!conversationsResponse.ok) {
@@ -2666,13 +2830,91 @@ export function ChatExperience() {
           setActiveConversationId(null);
           return;
         }
+        // Flip before awaiting so a personas fetch that resolves after this
+        // point does not overwrite the loaded conversation's persona.
+        willLoadConversation = true;
         await loadConversationRef.current(latest.id);
       } finally {
-        if (!cancelled) setIsLoadingHistory(false);
+        if (!cancelled) {
+          setIsLoadingHistory(false);
+          // Bootstrap done — start mirroring state into the module store so a
+          // later navigation to /settings leaves a warm snapshot to return to.
+          setBootstrapped(true);
+        }
       }
     };
 
-    void loadInitialState();
+    // Warm return from another route (e.g. /settings). State was already
+    // rehydrated from the module store via the lazy initializers above, so the
+    // transcript is on screen. Refresh everything in the background and
+    // reconcile — never toggling the blocking spinner — so nothing that landed
+    // while we were away (a completed turn, a new conversation, a persona
+    // change) is missed. See ./chatSessionStore.
+    const revalidateInBackground = async () => {
+      try {
+        const sessionResponse = await fetch("/api/session", { cache: "no-store" });
+        if (!sessionResponse.ok) {
+          window.location.href = "/login";
+          return;
+        }
+        const sessionData = (await sessionResponse.json()) as { email: string };
+        if (cancelled) return;
+        setUserEmail(sessionData.email);
+      } catch {
+        // Offline / transient: keep showing the cached session; the next
+        // return (or the visibility-refresh listener) will try again.
+        return;
+      }
+      // Refresh both sidebar lists (cheap, no chat repaint).
+      void refreshConversationsRef.current();
+      // Revalidate the conversation the user is looking at. preserveScroll so a
+      // reconcile doesn't yank them off wherever the initial rehydration snap
+      // (queued below) left them; background so it never flashes the spinner.
+      // loadConversation also re-attaches to any turn that is still in flight
+      // server-side, so a stream that was aborted on unmount resumes on return.
+      const activeId = activeConversationIdRef.current;
+      if (isRealConvId(activeId)) {
+        void loadConversationRef.current(activeId, { preserveScroll: true, background: true });
+      }
+    };
+
+    // Kick off the nice-to-haves concurrently — they set their own state when
+    // they resolve but never block the spinner. loadMcpServerCatalogPreview
+    // primes the Tools picker so it renders for new chats too; loadConversation
+    // overwrites it with per-conversation enabled state once an existing
+    // conversation opens. Both are called through their latest-refs so this
+    // mount-once bootstrap keeps `[]` deps.
+    // Read the module store directly (not the `restoredSession` state) so this
+    // effect keeps `[]` deps. On a warm return the mirror effect has already
+    // re-persisted the rehydrated snapshot, so this returns the same data the
+    // lazy initializers seeded from; on a cold start it's still null (the
+    // mirror effect is gated on `bootstrapped`, false until loadInitialState
+    // finishes).
+    const restored = readChatSession();
+    const warm = restored !== null;
+    // On a warm return the active conversation's persona is already restored;
+    // flip the guard so a late personas resolution doesn't clobber it with the
+    // default (mirrors the cold-start critical-path guard set in
+    // loadInitialState).
+    if (warm && restored?.activeConversationId) willLoadConversation = true;
+
+    void loadPersonas();
+    void loadSkills();
+    void loadServerConfig();
+    void loadMcpServerCatalogPreviewRef.current();
+
+    if (warm) {
+      // Snap the freshly-rehydrated transcript to the latest message on the
+      // first commit — returning to chat should land on the newest reply, the
+      // same "I just opened this chat" affordance a cold load gives.
+      const activeId = restored?.activeConversationId ?? null;
+      if (isRealConvId(activeId)) {
+        pendingHistoryScrollRef.current = activeId;
+      }
+      void revalidateInBackground();
+    } else {
+      void loadInitialState();
+    }
     return () => {
       cancelled = true;
     };
@@ -3124,6 +3366,68 @@ export function ChatExperience() {
                   }}
                 >
                   Compact
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {shareDialog ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <button
+              aria-label="Close share dialog"
+              className="absolute inset-0 bg-[var(--color-overlay-strong)] backdrop-blur-[2px]"
+              type="button"
+              onClick={() => setShareDialog(null)}
+            />
+            <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[28rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
+              <div className="mb-3 grid gap-2">
+                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Share link</h2>
+                <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
+                  Anyone with this link can view a <strong>read-only</strong> copy of{" "}
+                  <strong>&quot;{shareDialog.title}&quot;</strong>. Revoke it any time with{" "}
+                  <em>Stop sharing</em>.
+                </p>
+              </div>
+              <div className="mb-4 flex items-center gap-2">
+                <input
+                  readOnly
+                  aria-label="Share link URL"
+                  value={buildShareUrl(shareDialog.token)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-transparent px-2.5 py-1.5 font-mono text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard
+                      ?.writeText(buildShareUrl(shareDialog.token))
+                      .then(() => setShareLinkCopied(true))
+                      .catch(() => setShareLinkCopied(false));
+                  }}
+                  className="shrink-0 rounded-full border border-[var(--color-accent)] px-4 py-1.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)]"
+                >
+                  {shareLinkCopied ? "Copied ✓" : "Copy link"}
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const conv = conversations.find((c) => c.id === shareDialog.id);
+                    if (conv) void unshareConversation(conv);
+                    setShareDialog(null);
+                  }}
+                  className="rounded-full border border-[var(--color-danger-border)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-soft)]"
+                >
+                  Stop sharing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShareDialog(null)}
+                  className="rounded-full border border-[var(--color-border-strong)] px-4 py-2 text-[0.8125rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                >
+                  Done
                 </button>
               </div>
             </div>

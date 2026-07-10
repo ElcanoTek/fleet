@@ -373,9 +373,8 @@ deploy_web_tier() {
   # SSO), and a wholesale rewrite silently dropped them on every re-run.
   # Chat/orchestrator tokens mirror the backend env; APP_SESSION_SECRET is
   # generate-if-absent (rotating it logs everyone out).
-  local chat_token admin_token app_secret
+  local chat_token app_secret
   chat_token="$(grep '^FLEET_SERVER_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
-  admin_token="$(grep '^ADMIN_API_KEY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
   if [[ -f "$web_env" ]] && grep -q '^APP_SESSION_SECRET=' "$web_env"; then
     app_secret="$(grep '^APP_SESSION_SECRET=' "$web_env" | cut -d= -f2-)"
   else
@@ -384,7 +383,14 @@ deploy_web_tier() {
   upsert_env_file "$web_env" CHAT_SERVER_URL           "http://127.0.0.1:8080"
   upsert_env_file "$web_env" CHAT_SERVER_TOKEN         "$chat_token"
   upsert_env_file "$web_env" ORCHESTRATOR_SERVER_URL   "http://127.0.0.1:8000"
-  upsert_env_file "$web_env" ORCHESTRATOR_SERVER_TOKEN "$admin_token"
+  # ORCHESTRATOR_SERVER_TOKEN must be the SAME shared secret as
+  # CHAT_SERVER_TOKEN (FLEET_SERVER_TOKEN): the orchestrator's header-trust
+  # path (AdminOrUserAuthMiddleware) verifies X-Orchestrator-Server-Token
+  # against Config.SharedToken, fail-closed. This line used to write
+  # ADMIN_API_KEY here, which the middleware never accepts on that header —
+  # every bootstrap re-run then 403'd the whole Operations Center for
+  # cookie-authenticated users until the env file was hand-repaired.
+  upsert_env_file "$web_env" ORCHESTRATOR_SERVER_TOKEN "$chat_token"
   upsert_env_file "$web_env" APP_SESSION_SECRET        "$app_secret"
   upsert_env_file "$web_env" PORT                      "3000"
   upsert_env_file "$web_env" NODE_ENV                  "production"

@@ -119,6 +119,7 @@ const (
 	upstreamProviderAnthropic = "Anthropic"
 	upstreamProviderOpenAI    = "OpenAI"
 	upstreamProviderMoonshot  = "Moonshot AI"
+	upstreamProviderZAI       = "Z.AI"
 )
 
 // canonicalUpstream pins each model family to a single OpenRouter upstream so
@@ -135,6 +136,7 @@ var canonicalUpstream = []struct {
 	{"anthropic/", upstreamProviderAnthropic, false},
 	{"openai/", upstreamProviderOpenAI, false},
 	{"moonshotai/", upstreamProviderMoonshot, false},
+	{"z-ai/", upstreamProviderZAI, false},
 }
 
 // upstreamPinFor returns the OpenRouter provider routing policy for a model

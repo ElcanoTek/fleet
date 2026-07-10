@@ -43,11 +43,27 @@ configured from the client bundle's `providers:` block.
   all-or-nothing: a table that fails eager construction leaves the current one
   serving, and a DB overlay that fails at **boot** degrades to the bundle/env
   table with a loud log — a bad row can never take the box down.
-- **Model picker**: enabled providers' listed models are unioned into the
-  shared picker (chat + task form) as `<provider>/<model>` entries with a
-  "Workspace" badge (`web/src/app/shared/lib/models.ts`), ahead of the
-  OpenRouter catalog. Explicit prefix routing means a picked entry resolves
-  through its provider even when slugs overlap.
+- **Model picker**: enabled providers' listed models are unioned into BOTH
+  pickers — the task form (`web/src/app/shared/lib/models.ts`) and the chat
+  composer (`chat-experience.tsx`) — as `<provider>/<model>` entries with a
+  "Workspace"/"workspace" badge, ahead of the OpenRouter catalog. Explicit
+  prefix routing means a picked entry resolves through its provider even when
+  slugs overlap. The shared loader lives in
+  `web/src/app/shared/lib/workspaceModels.ts`.
+- **Catch-all expansion via catwalk**: `GET /llm-provider-models` also returns
+  the enabled provider roster (`providers: [{name, type, catch_all}]`, no
+  secrets). For catch-all rows of type `anthropic` or `openai` the web tier
+  expands a browsable model list from the
+  [catwalk](https://github.com/charmbracelet/catwalk) model database (the
+  no-auth catalog Crush uses) through the session-gated `/api/catwalk-models`
+  proxy (`web/src/app/lib/catwalkModels.ts`, 24 h server-side cache; the
+  browser never leaves the origin — CSP pins `connect-src 'self'`). Default
+  base is `https://catwalk.charm.land` (crush's default); `CATWALK_URL`
+  overrides it for air-gapped/self-hosted catwalk. Advisory only: an
+  unreachable catwalk just means no pre-listed rows — typed slugs still route,
+  and `openrouter`/`ollama` catch-alls are deliberately not expanded (the
+  OpenRouter catalog already covers the former; no public catalog can know a
+  local Ollama's pulled models).
 - **Test connection**: each row has a Test button →
   `POST /admin/llm-providers/{id}/test` (admin-gated) → one host-side probe
   against the provider's real endpoint (`internal/agentcore/provider_probe.go`):
@@ -88,12 +104,14 @@ configured from the client bundle's `providers:` block.
 
 ## What was deliberately deferred
 
-- **Catch-all providers aren't enumerated in the picker** — an empty models
-  list serves any slug but contributes no picker rows (nothing to enumerate);
-  users can still type any slug.
+- ~~**Catch-all providers aren't enumerated in the picker**~~ — shipped
+  2026-07-07: catch-all `anthropic`/`openai` rows are now expanded from the
+  catwalk catalog (see above). Catch-alls of other types still contribute no
+  rows; users can still type any slug.
 - **No per-model pricing/capability metadata for admin-provider models** —
-  picker entries carry name + slug only; the OpenRouter catalog keeps its
-  pricing-based filtering for its own entries.
+  picker entries carry name + slug (+ context window when catwalk knows it);
+  the OpenRouter catalog keeps its pricing-based filtering for its own
+  entries.
 - **The fake-LLM seam is untouched**: with no admin rows the resolver is
   byte-identical to before, and `OPENROUTER_BASE_URL` still reroutes the
   OpenRouter provider (tests and existing deployments are unchanged).
