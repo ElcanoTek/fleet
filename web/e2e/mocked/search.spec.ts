@@ -108,12 +108,13 @@ test("a query filters the Projects section and breadcrumbs message hits", async 
 
   await page.getByTestId("search-input").fill("python");
   // The matching project appears as a real tree row under the Projects
-  // section; the non-matching one is filtered out.
+  // section (split row: expand chevron + open-home name button); the
+  // non-matching one is filtered out.
   await expect(
-    page.getByRole("button", { name: /^Project Python migrations/ }),
+    page.getByRole("button", { name: "Open project Python migrations" }),
   ).toBeVisible({ timeout: 5_000 });
   await expect(
-    page.getByRole("button", { name: /^Project Ops runbooks/ }),
+    page.getByRole("button", { name: "Open project Ops runbooks" }),
   ).toBeHidden();
   // The message hit carries its path: Project › chat title, snippet below.
   const hit = page.getByTestId("search-result").first();

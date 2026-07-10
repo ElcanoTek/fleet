@@ -291,11 +291,12 @@ function ProjectPanel({
 }
 
 // ── Per-project kebab menu (rail Projects section) ───────────────────────────
-// Sits where the chat count used to be. "Edit project…" opens the full modal
-// editor (instructions/sharing/memories) and shows for everyone — members get
-// the modal's read-only view. Rename and Delete mutate the project itself, so
-// they render for the OWNER only (the store's owner-scoped statements would
-// reject anyone else anyway; hiding them is honest UI, not the enforcement).
+// Sits where the chat count used to be. "Project settings…" opens THIS
+// project's home with its settings dialog (the all-projects modal is
+// create-only now) and shows for everyone — members get the read-only home.
+// Rename and Delete mutate the project itself, so they render for the OWNER
+// only (the store's owner-scoped statements would reject anyone else anyway;
+// hiding them is honest UI, not the enforcement).
 function ProjectKebab({
   projectName,
   pinned,
@@ -357,7 +358,7 @@ function ProjectKebab({
             onEdit();
           }}
         >
-          Edit project…
+          Project settings…
         </MenuItem>
         {isOwner ? (
           <>
@@ -995,7 +996,7 @@ export function ConversationSidebar({
   searchShortcut,
   onOpenProjects,
   onCreateProject,
-  onEditProject,
+  onOpenProjectHome,
   onPinProject,
   onShareProject,
   onRenameProject,
@@ -1079,9 +1080,10 @@ export function ConversationSidebar({
   // Opens the modal straight into the new-project form (the section
   // header's + button).
   onCreateProject: () => void;
-  // Opens the modal with this project selected (the project kebab's
-  // "Edit project…" — full editor incl. instructions/sharing/memories).
-  onEditProject: (projectID: string) => void;
+  // Opens the project's HOME (title · chats · sources · instructions ·
+  // per-project settings) in the main pane — a project row's name click and
+  // the kebab's "Project settings…" (settings=true opens the dialog too).
+  onOpenProjectHome: (projectID: string, settings?: boolean) => void;
   // Pin/unpin a project (owner-only, from the project kebab): a pinned
   // project floats to the top of the rail's list in place — no separate
   // Pinned section like chats have.
@@ -1419,48 +1421,68 @@ export function ConversationSidebar({
                         : "",
                     ].join(" ")}
                   >
-                    <button
-                      type="button"
-                      aria-expanded={expanded}
-                      aria-label={`Project ${project.name} (${chats.length} chats)`}
+                    {/* Split row: the chevron toggles the inline tree; the
+                        name opens the project HOME (ChatGPT/Claude-desktop
+                        behavior). */}
+                    <div
                       className={[
-                        "flex w-full items-center gap-2 rounded-md py-1.5 pl-2 pr-9 text-[0.875rem] transition",
+                        "flex items-center rounded-md py-0.5 pl-1 pr-9 transition",
                         dropReady
                           ? "text-[var(--color-text-primary)]"
                           : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
                       ].join(" ")}
-                      onClick={() =>
-                        setExpandedProjects((s) => {
-                          const next = new Set(s);
-                          if (next.has(project.id)) next.delete(project.id);
-                          else next.add(project.id);
-                          return next;
-                        })
-                      }
                     >
-                      <Icon
-                        name="chevron-right"
-                        className={[
-                          "size-3 shrink-0 transition",
-                          expanded ? "rotate-90" : "",
-                        ].join(" ")}
-                      />
-                      {project.pinned ? (
+                      <button
+                        type="button"
+                        aria-expanded={expanded}
+                        aria-label={`${expanded ? "Collapse" : "Expand"} project ${project.name} (${chats.length} chats)`}
+                        className="inline-flex size-6 shrink-0 items-center justify-center rounded text-current transition hover:bg-[var(--color-overlay-strong)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                        onClick={() =>
+                          setExpandedProjects((s) => {
+                            const next = new Set(s);
+                            if (next.has(project.id)) next.delete(project.id);
+                            else next.add(project.id);
+                            return next;
+                          })
+                        }
+                      >
                         <Icon
-                          name="pin"
-                          className="size-3 shrink-0 text-[var(--color-accent)]"
+                          name="chevron-right"
+                          className={[
+                            "size-3 shrink-0 transition",
+                            expanded ? "rotate-90" : "",
+                          ].join(" ")}
                         />
-                      ) : null}
-                      <span className="min-w-0 flex-1 truncate text-left">
-                        {project.name}
-                      </span>
-                    </button>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Open project ${project.name}`}
+                        className="flex min-w-0 flex-1 items-center gap-2 rounded py-1 pl-1 text-left text-[0.875rem] text-current focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                        onClick={() => {
+                          setSidebarOpen(false);
+                          onOpenProjectHome(project.id);
+                        }}
+                      >
+                        {project.pinned ? (
+                          <Icon
+                            name="pin"
+                            className="size-3 shrink-0 text-[var(--color-accent)]"
+                          />
+                        ) : null}
+                        <span className="min-w-0 flex-1 truncate">
+                          {project.name}
+                        </span>
+                      </button>
+                    </div>
                     <div className="absolute inset-y-0 right-1 flex items-center">
                       <ProjectKebab
                         projectName={project.name}
                         pinned={Boolean(project.pinned)}
                         isOwner={project.owner_email === userEmail}
-                        onEdit={() => onEditProject(project.id)}
+                        onEdit={() => {
+                          setSidebarOpen(false);
+                          onOpenProjectHome(project.id, true);
+                        }}
                         onPin={() => onPinProject(project.id, !project.pinned)}
                         teamShared={Boolean(project.team_id)}
                         onShare={() =>
