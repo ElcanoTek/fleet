@@ -3,7 +3,6 @@ import {
   MAX_LABELS,
   addLabel,
   canAddLabel,
-  deriveFolders,
   deriveLabels,
   filterConversations,
   isFiltering,
@@ -60,22 +59,6 @@ describe("addLabel / removeLabel", () => {
   });
 });
 
-describe("deriveFolders", () => {
-  it("returns distinct non-empty folders with counts, sorted by name", () => {
-    const convs = [
-      conv({ folder: "Research" }),
-      conv({ folder: "Work Projects" }),
-      conv({ folder: "Work Projects" }),
-      conv({ folder: "" }),
-      conv({}),
-    ];
-    expect(deriveFolders(convs)).toEqual([
-      { name: "Research", count: 1 },
-      { name: "Work Projects", count: 2 },
-    ]);
-  });
-});
-
 describe("deriveLabels", () => {
   it("counts labels across conversations, sorted by name", () => {
     const convs = [
@@ -93,14 +76,10 @@ describe("deriveLabels", () => {
 
 describe("filterConversations", () => {
   const convs = [
-    conv({ title: "Acme renewal", folder: "Clients", labels: ["client", "urgent"] }),
-    conv({ title: "Omnicom pacing", folder: "Clients", labels: ["client"] }),
+    conv({ title: "Acme renewal", labels: ["client", "urgent"] }),
+    conv({ title: "Omnicom pacing", labels: ["client"] }),
     conv({ title: "Schema notes", labels: ["research"] }),
   ];
-
-  it("filters by folder (exact)", () => {
-    expect(filterConversations(convs, { folder: "Clients" })).toHaveLength(2);
-  });
 
   it("AND-filters by labels", () => {
     const res = filterConversations(convs, { labels: ["client", "urgent"] });
@@ -113,8 +92,8 @@ describe("filterConversations", () => {
     ]);
   });
 
-  it("combines folder + label + query", () => {
-    const res = filterConversations(convs, { folder: "Clients", labels: ["client"], query: "acme" });
+  it("combines label + query", () => {
+    const res = filterConversations(convs, { labels: ["client"], query: "acme" });
     expect(res.map((c) => c.title)).toEqual(["Acme renewal"]);
   });
 });
@@ -123,7 +102,6 @@ describe("isFiltering", () => {
   it("is false for an empty filter and true when any facet is set", () => {
     expect(isFiltering({})).toBe(false);
     expect(isFiltering({ query: "  " })).toBe(false);
-    expect(isFiltering({ folder: "Clients" })).toBe(true);
     expect(isFiltering({ labels: ["x"] })).toBe(true);
     expect(isFiltering({ query: "ac" })).toBe(true);
   });
@@ -132,12 +110,12 @@ describe("isFiltering", () => {
 describe("pinnedUnfiled / recentUnfiled", () => {
   const convs = [
     conv({ title: "Pinned loose", pinned: true }),
-    conv({ title: "Pinned filed", pinned: true, folder: "Work" }),
+    conv({ title: "Pinned project", pinned: true, project_id: "p1" }),
     conv({ title: "Recent loose", pinned: false }),
-    conv({ title: "Recent filed", pinned: false, folder: "Work" }),
+    conv({ title: "Recent project", pinned: false, project_id: "p1" }),
   ];
 
-  it("excludes filed conversations from both sections", () => {
+  it("excludes project conversations from both sections", () => {
     expect(pinnedUnfiled(convs).map((c) => c.title)).toEqual(["Pinned loose"]);
     expect(recentUnfiled(convs).map((c) => c.title)).toEqual(["Recent loose"]);
   });
@@ -148,7 +126,7 @@ describe("visibleConversationOrder", () => {
   // experience) and the sidebar's rendered rows — the two must never drift.
   const all = [
     conv({ title: "Pinned loose", pinned: true }),
-    conv({ title: "Filed", pinned: true, folder: "Work" }),
+    conv({ title: "Project chat", pinned: true, project_id: "p1" }),
     conv({ title: "Recent loose", pinned: false }),
   ];
 
@@ -159,16 +137,16 @@ describe("visibleConversationOrder", () => {
     ).toEqual(["Pinned loose", "Recent loose"]);
   });
 
-  it("excludes filed conversations from the unfiltered order", () => {
+  it("excludes project conversations from the unfiltered order", () => {
     const order = visibleConversationOrder({ all, filtered: all, filtering: false });
-    expect(order.map((c) => c.title)).not.toContain("Filed");
+    expect(order.map((c) => c.title)).not.toContain("Project chat");
   });
 
-  it("returns the filtered list verbatim (including filed rows) when filtering", () => {
-    const filtered = filterConversations(all, { folder: "Work" });
+  it("returns the filtered list verbatim (including project rows) when filtering", () => {
+    const filtered = filterConversations(all, { query: "project" });
     expect(
       visibleConversationOrder({ all, filtered, filtering: true }).map((c) => c.title),
-    ).toEqual(["Filed"]);
+    ).toEqual(["Project chat"]);
   });
 
   it("does not mutate its inputs", () => {
