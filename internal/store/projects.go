@@ -353,6 +353,24 @@ func (s *Store) DeleteProjectMemory(ctx context.Context, projectID, memoryID str
 	return nil
 }
 
+// ListProjectConversationsForUser returns the CALLER'S OWN live conversations
+// in the project, newest first. Deliberately owner-scoped even though project
+// members share the project definition: conversations stay private to their
+// creators (#237's rule), so a project surface must never enumerate another
+// member's chats — each member sees only their own slice.
+func (s *Store) ListProjectConversationsForUser(ctx context.Context, userEmail, projectID string) ([]Conversation, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+conversationListColumns+` FROM conversations
+		 WHERE user_email = $1 AND project_id = $2 AND deleted_at IS NULL AND archived_at IS NULL
+		 ORDER BY updated_at DESC, id DESC`,
+		userEmail, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanConversationRows(rows)
+}
+
 // ListProjectConversationIDs returns the ids of conversations currently in
 // the project — the runtime-state references the export endpoint reports.
 func (s *Store) ListProjectConversationIDs(ctx context.Context, projectID string) ([]string, error) {
