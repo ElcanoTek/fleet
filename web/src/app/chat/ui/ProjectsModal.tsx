@@ -34,19 +34,26 @@ export function ProjectsModal({
   userEmail,
   onClose,
   onStartChat,
+  initialCreate,
+  initialSelectedId,
 }: {
   userEmail: string;
   onClose: () => void;
   onStartChat: (projectID: string) => void;
+  // Open straight into the create form (the rail's + button). The modal
+  // mounts fresh per open, so useState initializers are enough.
+  initialCreate?: boolean;
+  // Open with this project pre-selected (the rail kebab's "Edit project…").
+  initialSelectedId?: string;
 }) {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
   const [memories, setMemories] = useState<ProjectMemory[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Draft form state (create or edit).
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(Boolean(initialCreate));
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
   const [teamShared, setTeamShared] = useState(false);
