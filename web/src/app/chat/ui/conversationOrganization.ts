@@ -143,13 +143,15 @@ export const MAX_RAIL_PROJECTS = 5;
 // ProjectLike is the structural slice of a Project the rail grouping needs
 // (the full type lives in ProjectsModal.tsx; a minimal shape keeps this
 // module React-free and unit-testable, like OrganizableConversation above).
-export type ProjectLike = { id: string; name: string; updated_at: number };
+export type ProjectLike = { id: string; name: string; updated_at: number; pinned?: boolean };
 
 export type ProjectGroup<T, P extends ProjectLike = ProjectLike> = { project: P; chats: T[] };
 
-// projectGroups returns the rail's project tree: the top `max` projects by
-// most-recent update, each with its conversations in the caller's list order
-// (the server already sorts by updated_at DESC). A project with no chats
+// projectGroups returns the rail's project tree: pinned projects first (in
+// place, no separate section), then the rest by most-recent update, cut to
+// the top `max`; each group's conversations keep the caller's list order
+// (the server already sorts by updated_at DESC). Because pinned sorts before
+// the cut, a pinned project always makes the rail. A project with no chats
 // still gets a group — a fresh project must exist in the rail to be a drag
 // target. Conversations whose project is NOT in the top slice stay hidden
 // from the main list (they're project chats) and are reachable via search,
@@ -161,7 +163,7 @@ export function projectGroups<T extends OrganizableConversation, P extends Proje
   max: number = MAX_RAIL_PROJECTS,
 ): ProjectGroup<T, P>[] {
   return [...projects]
-    .sort((a, b) => b.updated_at - a.updated_at)
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updated_at - a.updated_at)
     .slice(0, max)
     .map((project) => ({
       project,
