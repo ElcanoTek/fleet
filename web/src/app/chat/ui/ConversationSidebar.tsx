@@ -63,14 +63,35 @@ function ShareGlyph({ className, off }: { className?: string; off?: boolean }) {
 }
 
 // ── Sealed-chat button + explainer tooltip ───────────────────────────────────
-// The icon-only "new sealed chat" button next to New chat explains what a
-// sealed chat is on hover AND keyboard focus, using the design's .conv-tooltip
-// surface. The tooltip portals to <body> because the rail's
-// transform/backdrop-filter would otherwise capture its fixed positioning.
+// The icon-only "new sealed chat" lock lives in the Temporary section's
+// heading row (it starts a sealed chat, which lands in that list) and
+// explains what a sealed chat is on hover AND keyboard focus, using the
+// design's .conv-tooltip surface. The tooltip portals to <body> because the
+// rail's transform/backdrop-filter would otherwise capture its fixed
+// positioning.
 const SEALED_TOOLTIP_TEXT =
-  "Sealed chat — locked down and private. Your data and an approved model stay inside this sandbox; nothing leaves.";
+  "New sealed chat — locked down and private. Your data and an approved model stay inside this sandbox; nothing leaves.";
 
-function SealedNewChatButton({ onClick }: { onClick: () => void }) {
+// PortalTipIconButton is a small icon button whose hover/focus tooltip
+// portals to <body> — the rail's overflow containers and transform would
+// otherwise clip or capture it (a CSS data-tip's absolutely-positioned
+// ::after also OCCUPIES layout even at opacity 0, which put a horizontal
+// scrollbar on the projects scroller; the portal has no such footprint).
+function PortalTipIconButton({
+  tip,
+  ariaLabel,
+  icon,
+  iconClassName,
+  className,
+  onClick,
+}: {
+  tip: string;
+  ariaLabel: string;
+  icon: string;
+  iconClassName?: string;
+  className?: string;
+  onClick: () => void;
+}) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const show = (e: React.SyntheticEvent<HTMLElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
@@ -82,21 +103,19 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
-      className="inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-      aria-label="New sealed chat — sandboxed, vetted model, nothing leaves"
+      className={className}
+      aria-label={ariaLabel}
       onClick={onClick}
       onMouseEnter={show}
       onMouseLeave={hide}
       onFocus={show}
       onBlur={hide}
     >
-      {/* Inherits the button's text-primary (the design's .rail-lock), not
-          the accent the row indicators use. */}
-      <Icon name="lock" className="size-4" />
+      <Icon name={icon} className={iconClassName} />
       {pos && typeof document !== "undefined"
         ? createPortal(
             <span role="tooltip" className="conv-tooltip" style={{ top: pos.top, left: pos.left }}>
-              {SEALED_TOOLTIP_TEXT}
+              {tip}
             </span>,
             document.body,
           )
@@ -105,16 +124,29 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-// ── Recent-section info note ─────────────────────────────────────────────────
-// The ⓘ next to the "Recent" group header click-toggles the retention
+function SealedNewChatButton({ onClick }: { onClick: () => void }) {
+  return (
+    <PortalTipIconButton
+      tip={SEALED_TOOLTIP_TEXT}
+      ariaLabel="New sealed chat — sandboxed, vetted model, nothing leaves"
+      icon="lock"
+      iconClassName="size-3.5"
+      className="ml-auto inline-flex size-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+      onClick={onClick}
+    />
+  );
+}
+
+// ── Temporary-section info note ──────────────────────────────────────────────
+// The ⓘ next to the "Temporary" group header click-toggles the retention
 // explainer on the shared .conv-tooltip surface (portaled to <body> like the
 // sealed tooltip above, and for the same reason). Click-toggle rather than
 // hover-only so it works on touch; dismissed by clicking anywhere else or
 // pressing Escape. The copy states the server's default TTL
-// (CONVERSATION_TTL_DAYS, default 14); pinning is the one user action that
-// always exempts a chat from the sweep, so that is the action we name.
+// (CONVERSATION_TTL_DAYS, default 14) and the two keep actions — pinning and
+// filing into a project both exempt a chat from the sweep.
 const RECENT_INFO_TEXT =
-  "Unpinned chats are deleted after 14 days of inactivity. Pin a chat to keep it.";
+  "Chats here are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it.";
 
 function RecentInfoButton() {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -145,7 +177,7 @@ function RecentInfoButton() {
       <button
         ref={btnRef}
         type="button"
-        aria-label="About recent chats"
+        aria-label="About temporary chats"
         aria-expanded={pos !== null}
         className="hit-area inline-flex items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] aria-expanded:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         onClick={(e) => {
@@ -157,7 +189,7 @@ function RecentInfoButton() {
           );
         }}
       >
-        <Icon name="info" className="size-[0.9rem]" />
+        <Icon name="warning" className="size-[0.9rem]" />
       </button>
       {pos && typeof document !== "undefined"
         ? createPortal(
@@ -1246,15 +1278,14 @@ export function ConversationSidebar({
             onToggle={() => setProjectsSectionOpen((o) => !o)}
           />
         </div>
-        <button
-          type="button"
-          aria-label="Create project"
-          data-tip-top="Create project"
+        <PortalTipIconButton
+          tip="Create project"
+          ariaLabel="Create project"
+          icon="plus"
+          iconClassName="size-4"
           className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           onClick={onCreateProject}
-        >
-          <Icon name="plus" className="size-4" />
-        </button>
+        />
       </div>
       {projectsSectionOpen ? (
         projectTree.length === 0 ? (
@@ -1441,7 +1472,7 @@ export function ConversationSidebar({
           block). Wide-collapsed (≥sm) it hides with the rest of the wide-only
           content; the max-height guard keeps a deep expanded tree from
           pushing New chat and the list off-screen. */}
-      <div className={["max-h-[40vh] overflow-y-auto", railCollapsed ? "sm:hidden" : ""].join(" ")}>
+      <div className={["max-h-[40vh] overflow-y-auto overflow-x-hidden", railCollapsed ? "sm:hidden" : ""].join(" ")}>
         {projectsSection}
       </div>
 
@@ -1484,9 +1515,6 @@ export function ConversationSidebar({
             <span className={railCollapsed ? "sm:hidden" : ""}>New chat</span>
           </button>
         )}
-        {serverConfig.lockdownAvailable && !serverConfig.lockdownOnly ? (
-          <SealedNewChatButton onClick={() => clearConversation({ lockdown: true })} />
-        ) : null}
       </div>
 
       {/* Projects (#509) — in the expanded rail (and the <sm drawer) the
@@ -1622,8 +1650,14 @@ export function ConversationSidebar({
             {labelsSection}
             <div className="mb-1">
               <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
-                Chats
+                Temporary
                 <RecentInfoButton />
+                {/* Sealed-chat entry (moved from the New-chat row): a sealed
+                    chat is unpinned/unfiled, so it lands in this section —
+                    starting one from its heading keeps cause next to effect. */}
+                {serverConfig.lockdownAvailable && !serverConfig.lockdownOnly ? (
+                  <SealedNewChatButton onClick={() => clearConversation({ lockdown: true })} />
+                ) : null}
               </div>
               {recent.length === 0 ? (
                 <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">No saved chats yet.</p>
