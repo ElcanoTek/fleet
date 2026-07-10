@@ -2064,6 +2064,31 @@ export function ChatExperience() {
     }
   };
 
+  // pinProject floats a project to the top of the rail's list (owner-only —
+  // the kebab hides the item for non-owners and the store's owner-scoped
+  // UPDATE enforces it). Optimistic with revert; the PATCH carries only
+  // {pinned} so nothing else on the project is touched.
+  const pinProject = async (projectID: string, pinned: boolean) => {
+    const prev = projects;
+    setProjects((ps) => ps.map((p) => (p.id === projectID ? { ...p, pinned } : p)));
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(projectID)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned }),
+      });
+      if (!res.ok) {
+        console.error("pin project failed:", res.status, await res.text());
+        setProjects(prev);
+        return;
+      }
+      void loadProjects();
+    } catch (err) {
+      console.error("pin project error:", err);
+      setProjects(prev);
+    }
+  };
+
   const deleteProject = async (projectID: string) => {
     if (!window.confirm("Delete this project? Conversations are kept (detached); shared project memories are removed.")) return;
     try {
@@ -3153,6 +3178,7 @@ export function ChatExperience() {
           onOpenProjects={() => setProjectsModal({})}
           onCreateProject={() => setProjectsModal({ create: true })}
           onEditProject={(projectID) => setProjectsModal({ selectId: projectID })}
+          onPinProject={(projectID, pinned) => void pinProject(projectID, pinned)}
           onRenameProject={(projectID, name) => void renameProject(projectID, name)}
           onDeleteProject={(projectID) => void deleteProject(projectID)}
           projects={projects}
