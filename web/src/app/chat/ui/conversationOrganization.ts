@@ -1,15 +1,15 @@
-// Pure helpers for the rail's conversation organization — pinning, folders, and
-// labels (#258 contract, served live by the #279 bulk API). Kept free of React
-// so the section-derivation and label-validation rules are unit-tested in
-// isolation (see conversationOrganization.test.ts), the same way history.ts and
-// protocolPills.ts are.
+// Pure helpers for the rail's conversation organization — pinning, labels
+// (#258 contract, served live by the #279 bulk API), and projects (#509).
+// Kept free of React so the section-derivation and label-validation rules are
+// unit-tested in isolation (see conversationOrganization.test.ts), the same
+// way history.ts and protocolPills.ts are.
 //
-// Folders are flat, single-assignment, and *derived* — there is no folders
-// table; the set of folders is just the distinct non-empty `folder` values on
-// the user's conversations. Labels are multi (max 10, 32 chars each) and colored
-// by name-hash (see shared/lib/labelColors). Filing a conversation auto-pins it
-// (handled by the caller), and a filed conversation lives in its folder only —
-// it is intentionally excluded from the Pinned and Recent sections.
+// Folders (the old flat, single-assignment buckets) were superseded by
+// projects and their UI removed — the server still stores/serves the field,
+// but the rail ignores it, so previously-filed chats simply reappear in
+// Pinned/Temporary (filing used to auto-pin, so most land in Pinned). Labels
+// are multi (max 10, 32 chars each) and colored by name-hash (see
+// shared/lib/labelColors).
 
 export const MAX_LABELS = 10;
 export const MAX_LABEL_LEN = 32;
@@ -20,16 +20,14 @@ export const MAX_LABEL_LEN = 32;
 export type OrganizableConversation = {
   title: string;
   pinned: boolean;
-  folder?: string;
   labels?: string[];
-  // project_id binds the conversation to a project/space (#509). Like a
-  // filed conversation, a project conversation lives ONLY under its project
-  // in the rail — it is excluded from Pinned and Chats. (Folder/label
-  // filters and search still reach it: filters are explicit user actions.)
+  // project_id binds the conversation to a project/space (#509). A project
+  // conversation lives ONLY under its project in the rail — it is excluded
+  // from Pinned and Chats. (Label filters and search still reach it:
+  // filters are explicit user actions.)
   project_id?: string;
 };
 
-export type FolderSummary = { name: string; count: number };
 export type LabelSummary = { name: string; count: number };
 
 // normalizeLabel trims surrounding whitespace and clamps to the max length. The
@@ -61,21 +59,6 @@ export function removeLabel(existing: readonly string[], label: string): string[
   return existing.filter((l) => l !== label);
 }
 
-// deriveFolders materializes the folder list from the conversations themselves —
-// distinct non-empty folder names with their conversation counts, sorted
-// alphabetically (case-insensitive) for a stable order.
-export function deriveFolders(conversations: readonly OrganizableConversation[]): FolderSummary[] {
-  const counts = new Map<string, number>();
-  for (const c of conversations) {
-    const folder = c.folder?.trim();
-    if (!folder) continue;
-    counts.set(folder, (counts.get(folder) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-}
-
 // deriveLabels materializes the label list — distinct label names across all
 // conversations with counts, sorted alphabetically (case-insensitive).
 export function deriveLabels(conversations: readonly OrganizableConversation[]): LabelSummary[] {
@@ -91,20 +74,19 @@ export function deriveLabels(conversations: readonly OrganizableConversation[]):
 }
 
 export type ConversationFilter = {
-  folder?: string | null;
   labels?: readonly string[];
   query?: string;
 };
 
 // isFiltering reports whether any active filter is set, so callers can switch
-// between the sectioned view (Pinned/Folders/Labels/Recent) and a flat
+// between the sectioned view (Pinned/Labels/Temporary) and a flat
 // filtered-results view.
 export function isFiltering(filter: ConversationFilter): boolean {
-  return Boolean(filter.folder) || (filter.labels?.length ?? 0) > 0 || (filter.query?.trim().length ?? 0) > 0;
+  return (filter.labels?.length ?? 0) > 0 || (filter.query?.trim().length ?? 0) > 0;
 }
 
-// filterConversations applies folder (exact), labels (AND — every selected label
-// must be present), and a case-insensitive title substring query.
+// filterConversations applies labels (AND — every selected label must be
+// present) and a case-insensitive title substring query.
 export function filterConversations<T extends OrganizableConversation>(
   conversations: readonly T[],
   filter: ConversationFilter,
@@ -112,7 +94,6 @@ export function filterConversations<T extends OrganizableConversation>(
   const q = filter.query?.trim().toLowerCase() ?? "";
   const labels = filter.labels ?? [];
   return conversations.filter((c) => {
-    if (filter.folder && c.folder !== filter.folder) return false;
     if (labels.length > 0) {
       const own = c.labels ?? [];
       if (!labels.every((l) => own.includes(l))) return false;
@@ -122,16 +103,15 @@ export function filterConversations<T extends OrganizableConversation>(
   });
 }
 
-// pinnedUnfiled / recentUnfiled split the unsectioned conversations. A filed
-// conversation lives only in its folder and a project conversation only under
-// its project, so both sections exclude either kind; "Pinned" is the pinned
-// remainder and "Chats" the rest.
+// pinnedUnfiled / recentUnfiled split the unsectioned conversations. A
+// project conversation lives only under its project, so both sections
+// exclude it; "Pinned" is the pinned remainder and "Temporary" the rest.
 export function pinnedUnfiled<T extends OrganizableConversation>(conversations: readonly T[]): T[] {
-  return conversations.filter((c) => c.pinned && !c.folder && !c.project_id);
+  return conversations.filter((c) => c.pinned && !c.project_id);
 }
 
 export function recentUnfiled<T extends OrganizableConversation>(conversations: readonly T[]): T[] {
-  return conversations.filter((c) => !c.pinned && !c.folder && !c.project_id);
+  return conversations.filter((c) => !c.pinned && !c.project_id);
 }
 
 // ── Projects in the rail (#509 follow-up) ────────────────────────────────────
@@ -175,8 +155,8 @@ export function projectGroups<T extends OrganizableConversation, P extends Proje
 // bottom order the sidebar shows — so keyboard j/k navigation (in the parent)
 // and the rendered rows (in ConversationSidebar) can never drift. When a filter
 // is active the sidebar shows filteredConversations verbatim; otherwise it shows
-// pinned-unfiled then recent-unfiled (filed and project conversations live only
-// in their folder/project and are not keyboard-navigable from the main list).
+// pinned-unfiled then recent-unfiled (project conversations live only under
+// their project and are not keyboard-navigable from the main list).
 // Archived rows are a separate collapsible section and are intentionally
 // excluded.
 export function visibleConversationOrder<T extends OrganizableConversation>(args: {

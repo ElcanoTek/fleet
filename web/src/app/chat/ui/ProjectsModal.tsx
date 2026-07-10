@@ -243,7 +243,7 @@ export function ProjectsModal({
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
           {projects.length === 0 && !editing ? (
             <p className="rounded-[0.9rem] border border-dashed border-[var(--color-border)] px-3 py-4 text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
-              No projects yet. A project turns a folder into a shared team workspace.
+              No projects yet. A project is a shared workspace with its own instructions, memory, and chats.
             </p>
           ) : (
             <div className="grid gap-2">

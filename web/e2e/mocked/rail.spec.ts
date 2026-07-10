@@ -5,8 +5,8 @@ import { mockChatBoot } from "./_mocks";
 
 // Mocked e2e for the unified navigation rail (#169) + conversation organization
 // (#258/#279) + the collapsible rail / select mode (UI polish): the rail shows
-// the Chat/Operations Center nav with the active surface marked, derives
-// Folders/Labels sections from the conversation list, filters by folder,
+// the Chat/Operations Center nav with the active surface marked, derives the
+// Labels section from the conversation list, filters by label,
 // exposes the per-row kebab (whose "Select…" is the only way into select
 // mode), collapses to a 4.25rem icon strip with a persisted preference,
 // auto-collapses at ≤900px with an overlay+scrim expansion, explains the
@@ -15,8 +15,8 @@ import { mockChatBoot } from "./_mocks";
 // Sign out identically on both surfaces. All /api/* calls are intercepted.
 
 const CONVERSATIONS = [
-  { id: "c1", title: "Acme Renewal", persona: "default", model: "", pinned: true, updated_at: 40, folder: "Clients", labels: ["client", "urgent"] },
-  { id: "c2", title: "Omnicom Pacing", persona: "default", model: "", pinned: true, updated_at: 30, folder: "Clients", labels: ["client"] },
+  { id: "c1", title: "Acme Renewal", persona: "default", model: "", pinned: true, updated_at: 40, labels: ["client", "urgent"] },
+  { id: "c2", title: "Omnicom Pacing", persona: "default", model: "", pinned: true, updated_at: 30, labels: ["client"] },
   { id: "c3", title: "Schema Notes", persona: "default", model: "", pinned: false, updated_at: 20, labels: ["research"] },
   { id: "c4", title: "Loose Recent", persona: "default", model: "", pinned: false, updated_at: 10 },
   { id: "c5", title: "Sealed Deal", persona: "default", model: "", pinned: false, updated_at: 5, lockdown: true },
@@ -75,7 +75,7 @@ test("the account menu carries Settings (+subtext) + Theme + Sign out on chat", 
   await expect(page.getByRole("menuitem", { name: "Admin", exact: true })).toHaveCount(0);
 });
 
-test("the rail derives Folders + Labels sections and filters by folder", async ({ page }) => {
+test("the rail derives the Labels section and filters by label", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
   await page.goto("/chat");
@@ -83,15 +83,16 @@ test("the rail derives Folders + Labels sections and filters by folder", async (
 
   const bar = page.locator("aside").first();
 
-  // Folders + Labels sections materialize from the conversation list. Filed
-  // conversations live in their folder, so Recent shows only the loose ones.
-  await expect(bar.getByRole("button", { name: /Clients/ })).toBeVisible();
+  // The Labels section materializes from the conversation list; pinned chats
+  // (including previously folder-filed ones — folders are gone) show under
+  // Pinned, loose unpinned ones under Temporary.
+  await expect(bar.getByRole("button", { name: /client/ }).first()).toBeVisible();
   await expect(bar.getByText("Loose Recent", { exact: true })).toBeVisible();
-  await expect(bar.getByText("Acme Renewal", { exact: true })).toHaveCount(0);
+  await expect(bar.getByText("Acme Renewal", { exact: true })).toBeVisible();
 
-  // Filtering by the folder reveals its conversations and a removable filter chip.
-  await bar.getByRole("button", { name: /Clients/ }).first().click();
-  await expect(bar.getByText(/Folder:/)).toBeVisible();
+  // Filtering by a label reveals matches and a removable filter chip.
+  await bar.getByRole("button", { name: "client 2" }).click();
+  await expect(bar.getByText(/Label:/)).toBeVisible();
   await expect(bar.getByText("Acme Renewal", { exact: true })).toBeVisible();
   await expect(bar.getByText("Omnicom Pacing", { exact: true })).toBeVisible();
   await expect(bar.getByText("Loose Recent", { exact: true })).toHaveCount(0);
@@ -101,7 +102,7 @@ test("the rail derives Folders + Labels sections and filters by folder", async (
   await expect(bar.getByText("Loose Recent", { exact: true })).toBeVisible();
 });
 
-test("the per-row kebab exposes pin / rename / folder / labels / archive / delete", async ({ page }) => {
+test("the per-row kebab exposes pin / rename / labels / archive / delete", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
   await page.goto("/chat");
@@ -114,7 +115,6 @@ test("the per-row kebab exposes pin / rename / folder / labels / archive / delet
   // Exact set + order (#169 audit fix #3): plain verbs, no conversation title.
   await expect(menu.getByRole("menuitem", { name: "Pin", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Add to folder", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Labels", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Download as JSON", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Share", exact: true })).toBeVisible();
@@ -147,7 +147,7 @@ test("the per-row kebab exposes pin / rename / folder / labels / archive / delet
   }
 });
 
-test("the kebab folder/labels flyout opens beside the menu, both visible (#169 audit #4)", async ({
+test("the kebab labels flyout opens beside the menu, both visible (#169 audit #4)", async ({
   page,
 }) => {
   await mockChatBoot(page);
@@ -160,27 +160,19 @@ test("the kebab folder/labels flyout opens beside the menu, both visible (#169 a
   const menu = page.getByRole("menu", { name: "Options for Loose Recent" });
   await expect(menu).toBeVisible();
 
-  // "Add to folder" opens a flyout BESIDE the menu — the parent stays visible.
-  await menu.getByRole("menuitem", { name: "Add to folder", exact: true }).click();
-  const folderFlyout = page.getByRole("menu", { name: "Add to folder" });
-  await expect(folderFlyout).toBeVisible();
+  // "Labels" opens a flyout BESIDE the menu — the parent stays visible.
+  await menu.getByRole("menuitem", { name: "Labels", exact: true }).click();
+  const labelsFlyout = page.getByRole("menu", { name: "Labels" });
+  await expect(labelsFlyout).toBeVisible();
   await expect(menu).toBeVisible();
-  await expect(folderFlyout.getByRole("menuitem", { name: "Clients", exact: true })).toBeVisible();
-  await expect(folderFlyout.getByRole("menuitem", { name: /New folder/ })).toBeVisible();
   // The flyout sits to the side of the menu, not overlapping it.
   const menuBox = await menu.boundingBox();
-  const flyBox = await folderFlyout.boundingBox();
+  const flyBox = await labelsFlyout.boundingBox();
   expect(menuBox && flyBox).toBeTruthy();
   if (menuBox && flyBox) {
     const disjoint = flyBox.x >= menuBox.x + menuBox.width - 1 || flyBox.x + flyBox.width <= menuBox.x + 1;
     expect(disjoint).toBe(true);
   }
-
-  // Opening Labels closes the folder flyout and opens the labels flyout (one at a time).
-  await menu.getByRole("menuitem", { name: "Labels", exact: true }).click();
-  await expect(page.getByRole("menu", { name: "Add to folder" })).toHaveCount(0);
-  await expect(page.getByRole("menu", { name: "Labels" })).toBeVisible();
-  await expect(menu).toBeVisible();
 
   // Escape closes the flyout but leaves the main menu open.
   await page.keyboard.press("Escape");
@@ -261,20 +253,20 @@ test("Select… enters select mode with checkboxes + the bulk icon bar; Escape e
   await expect(deleteBtn).toBeDisabled();
   await expect(bar.getByRole("button", { name: "Exit selection" })).toBeEnabled();
 
-  // Move-to-folder opens ABOVE the bar and offers inline folder creation.
+  // Add-label opens ABOVE the bar (the bulk bar's remaining panel; the
+  // Move-to-folder action left with the folders UI).
   await bar.getByRole("button", { name: /Loose Recent/ }).click();
-  await bar.getByRole("button", { name: "Move to folder" }).click();
-  const folderMenu = page.getByRole("menu", { name: "Move selected to folder" });
-  await expect(folderMenu).toBeVisible();
-  await expect(folderMenu.getByRole("menuitem", { name: /New folder/ })).toBeVisible();
-  const anchorBox = await bar.getByRole("button", { name: "Move to folder" }).boundingBox();
-  const popBox = await folderMenu.boundingBox();
+  await bar.getByRole("button", { name: "Add label" }).click();
+  const labelsMenu = page.getByRole("menu", { name: "Add label to selected" });
+  await expect(labelsMenu).toBeVisible();
+  const anchorBox = await bar.getByRole("button", { name: "Add label" }).boundingBox();
+  const popBox = await labelsMenu.boundingBox();
   expect(anchorBox && popBox).toBeTruthy();
   if (anchorBox && popBox) expect(popBox.y + popBox.height).toBeLessThanOrEqual(anchorBox.y + 1);
 
   // Escape closes the popover; a second Escape exits select mode entirely.
   await page.keyboard.press("Escape");
-  await expect(folderMenu).toHaveCount(0);
+  await expect(labelsMenu).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(bar.getByText(/selected/)).toHaveCount(0);
   await expect(bar.getByRole("button", { name: "Conversation options for Loose Recent" })).toBeAttached();
