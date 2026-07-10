@@ -32,11 +32,13 @@ import {
   deriveLabels,
   isFiltering as computeIsFiltering,
   pinnedUnfiled,
+  projectGroups,
   recentUnfiled,
   type FolderSummary,
   type LabelSummary,
 } from "./conversationOrganization";
 import type { ConversationSummary, PendingDeleteConversation, ServerConfig } from "./chat-experience";
+import type { Project } from "./ProjectsModal";
 
 // ── Share glyph (#226) ───────────────────────────────────────────────────────
 // The chain-link icon used for share affordances; `off` adds the slash for the
@@ -272,6 +274,55 @@ function FolderPanel({
   );
 }
 
+// CONV_DRAG_MIME is the custom drag payload type for a conversation row —
+// namespaced so a project row only accepts our rows, never a stray text/file
+// drag from outside the app.
+const CONV_DRAG_MIME = "application/x-fleet-conversation";
+
+// ── Project picker panel (per-row kebab) ─────────────────────────────────────
+// The touch/keyboard counterpart of dragging a chat onto a rail project
+// (#509 follow-up): pick a project to re-file into, or unfile. Unlike
+// folders, projects are created in the Projects modal (they carry
+// instructions/membership), so there is no inline "New project…" here.
+function ProjectPanel({
+  projects,
+  currentProjectId,
+  onPick,
+  onRemove,
+}: {
+  projects: Project[];
+  currentProjectId?: string;
+  onPick: (projectID: string) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <>
+      {projects.map((p) => (
+        <MenuItem
+          key={p.id}
+          icon={
+            <Icon
+              name="check"
+              className={["size-4", currentProjectId === p.id ? "opacity-100 text-[var(--color-accent)]" : "opacity-0"].join(" ")}
+            />
+          }
+          onClick={() => onPick(p.id)}
+        >
+          {p.name}
+        </MenuItem>
+      ))}
+      {currentProjectId ? (
+        <>
+          {projects.length > 0 ? <MenuSeparator /> : null}
+          <MenuItem icon={<Icon name="close" className="size-4" />} onClick={onRemove}>
+            Remove from project
+          </MenuItem>
+        </>
+      ) : null}
+    </>
+  );
+}
+
 // ── Labels editor panel (shared by per-row kebab + bulk bar) ─────────────────
 function LabelsPanel({
   current,
@@ -339,12 +390,14 @@ function ConversationKebab({
   conversation,
   folders,
   allLabelNames,
+  projects,
   onPin,
   onRename,
   onDownload,
   onPromote,
   onSetFolder,
   onSetLabels,
+  onSetProject,
   onShare,
   onCopyLink,
   onUnshare,
@@ -356,12 +409,14 @@ function ConversationKebab({
   conversation: ConversationSummary;
   folders: FolderSummary[];
   allLabelNames: string[];
+  projects: Project[];
   onPin: () => void;
   onRename: () => void;
   onDownload: () => void;
   onPromote: () => void;
   onSetFolder: (folder: string | null) => void;
   onSetLabels: (labels: string[]) => void;
+  onSetProject: (projectID: string | null) => void;
   onShare: () => void;
   onCopyLink: () => void;
   onUnshare: () => void;
@@ -371,7 +426,7 @@ function ConversationKebab({
   onDelete: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [flyout, setFlyout] = useState<null | "folder" | "labels">(null);
+  const [flyout, setFlyout] = useState<null | "folder" | "labels" | "project">(null);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   // The menu item that opened the active flyout — the flyout anchors to it and
   // focus returns here on Escape. Captured from the click's currentTarget.
@@ -380,7 +435,7 @@ function ConversationKebab({
     setOpen(false);
     setFlyout(null);
   };
-  const toggleFlyout = (which: "folder" | "labels", el: HTMLElement) => {
+  const toggleFlyout = (which: "folder" | "labels" | "project", el: HTMLElement) => {
     flyoutAnchorRef.current = el;
     setFlyout((cur) => (cur === which ? null : which));
   };
@@ -401,6 +456,19 @@ function ConversationKebab({
         }}
         onRemove={() => {
           onSetFolder(null);
+          close();
+        }}
+      />
+    ) : flyout === "project" ? (
+      <ProjectPanel
+        projects={projects}
+        currentProjectId={conversation.project_id || undefined}
+        onPick={(projectID) => {
+          onSetProject(projectID);
+          close();
+        }}
+        onRemove={() => {
+          onSetProject(null);
           close();
         }}
       />
@@ -448,7 +516,7 @@ function ConversationKebab({
         flyoutOpen={flyout !== null}
         flyoutAnchorRef={flyoutAnchorRef}
         onFlyoutClose={() => setFlyout(null)}
-        flyoutLabel={flyout === "folder" ? "Add to folder" : "Labels"}
+        flyoutLabel={flyout === "folder" ? "Add to folder" : flyout === "project" ? "Move to project" : "Labels"}
       >
         <MenuItem
           icon={<Icon name="pin" className="size-4" />}
@@ -477,6 +545,17 @@ function ConversationKebab({
         >
           Add to folder
         </MenuItem>
+        {projects.length > 0 || conversation.project_id ? (
+          <MenuItem
+            icon={<Icon name="briefcase" className="size-4" />}
+            ariaHasPopup
+            ariaExpanded={flyout === "project"}
+            trailing={caret}
+            onClick={(e) => toggleFlyout("project", e.currentTarget)}
+          >
+            Move to project
+          </MenuItem>
+        ) : null}
         <MenuItem
           icon={<Icon name="tag" className="size-4" />}
           ariaHasPopup
@@ -601,6 +680,7 @@ function ConvRow({
   onCommitRename,
   onCancelRename,
   kebab,
+  onDragStart,
 }: {
   conversation: ConversationSummary;
   active: boolean;
@@ -617,6 +697,10 @@ function ConvRow({
   onCommitRename: (title: string) => void;
   onCancelRename: () => void;
   kebab: ReactNode;
+  // When set, the row is draggable (HTML5 DnD) — the rail's drag-a-chat-into-
+  // a-project affordance. Mouse only by nature; the kebab's "Move to project"
+  // is the touch/keyboard path to the same action.
+  onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
 }) {
   const labels = conversation.labels ?? [];
   const shown = labels.slice(0, 2);
@@ -626,6 +710,8 @@ function ConvRow({
     <div
       data-conversation-id={conversation.id}
       data-focused={focused ? "true" : undefined}
+      draggable={Boolean(onDragStart)}
+      onDragStart={onDragStart}
       className={[
         "group relative rounded-md transition",
         selecting && checked
@@ -814,6 +900,8 @@ export function ConversationSidebar({
   onBulkMoveFolder,
   onBulkAddLabel,
   onOpenProjects,
+  projects,
+  onMoveToProject,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: Dispatch<SetStateAction<boolean>>;
@@ -879,9 +967,25 @@ export function ConversationSidebar({
   // Opens the Projects modal (#509). Lives in the rail (like Claude/ChatGPT)
   // rather than the page header; ChatExperience owns the modal state.
   onOpenProjects: () => void;
+  // Projects for the rail's Projects section (#509 follow-up): the top few
+  // by recent update render as expandable groups + drag targets. The full
+  // list/management stays in the modal.
+  projects: Project[];
+  // Re-files a conversation into a project ("" = unfile) — drag-and-drop and
+  // the kebab's "Move to project" both land here; the parent owns the
+  // optimistic state + POST.
+  onMoveToProject: (conversationId: string, projectID: string) => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [foldersOpen, setFoldersOpen] = useState(true);
+  // Projects section (#509 follow-up): the section itself starts open (its
+  // presence is the affordance); each project starts collapsed and remembers
+  // its expansion for the session only, like Folders/Labels above.
+  const [projectsSectionOpen, setProjectsSectionOpen] = useState(true);
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  // The project row a conversation drag is currently hovering — drives the
+  // drop-target highlight.
+  const [dragOverProject, setDragOverProject] = useState<string | null>(null);
   const [labelsOpen, setLabelsOpen] = useState(true);
   const [bulkPanel, setBulkPanel] = useState<"none" | "folder" | "labels">("none");
   const bulkFolderRef = useRef<HTMLButtonElement | null>(null);
@@ -918,6 +1022,7 @@ export function ConversationSidebar({
   const allLabelNames = labelSummaries.map((l) => l.name);
   const pinned = pinnedUnfiled(conversations);
   const recent = recentUnfiled(conversations);
+  const projectTree = projectGroups(conversations, projects);
   const filtering = computeIsFiltering({ folder: filterFolder, labels: filterLabels, query: sidebarQuery });
   const searching = sidebarQuery.trim().length > 0;
 
@@ -944,12 +1049,14 @@ export function ConversationSidebar({
       conversation={conversation}
       folders={folders}
       allLabelNames={allLabelNames}
+      projects={projects}
       onPin={() => void togglePin(conversation)}
       onRename={() => setEditingId(conversation.id)}
       onDownload={() => void downloadConversation(conversation)}
       onPromote={() => void promoteConversation(conversation)}
       onSetFolder={(folder) => setConversationFolder(conversation.id, folder)}
       onSetLabels={(labels) => setConversationLabels(conversation.id, labels)}
+      onSetProject={(projectID) => onMoveToProject(conversation.id, projectID ?? "")}
       isShared={Boolean(conversation.share_token)}
       onShare={() => void shareConversation(conversation).then((ok) => ok && flashCopied(conversation.id))}
       onCopyLink={() => void copyShareLink(conversation).then((ok) => ok && flashCopied(conversation.id))}
@@ -976,6 +1083,14 @@ export function ConversationSidebar({
       onCommitRename={(title) => commitRename(conversation.id, title)}
       onCancelRename={() => setEditingId(null)}
       kebab={rowKebab(conversation)}
+      onDragStart={
+        selecting
+          ? undefined
+          : (e) => {
+              e.dataTransfer.setData(CONV_DRAG_MIME, conversation.id);
+              e.dataTransfer.effectAllowed = "move";
+            }
+      }
     />
   );
 
@@ -1006,6 +1121,109 @@ export function ConversationSidebar({
           : null}
       </div>
     ) : null;
+
+  // Projects section (#509 follow-up): the top MAX_RAIL_PROJECTS projects as
+  // expandable groups; each project row is also the drop target for a
+  // conversation drag. The header always renders — with no projects yet it
+  // offers creation, and the trailing ••• opens the modal for the full list
+  // and management either way.
+  const projectsSection = (
+    <div className="mb-1">
+      <div className="flex items-center gap-1">
+        <div className="min-w-0 flex-1">
+          <SectionToggle
+            icon="briefcase"
+            label="Projects"
+            open={projectsSectionOpen}
+            onToggle={() => setProjectsSectionOpen((o) => !o)}
+          />
+        </div>
+        <button
+          type="button"
+          aria-label="All projects"
+          title="All projects"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          onClick={onOpenProjects}
+        >
+          <Icon name="dots" className="size-4" />
+        </button>
+      </div>
+      {projectsSectionOpen ? (
+        projectTree.length === 0 ? (
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
+            onClick={onOpenProjects}
+          >
+            <Icon name="plus" className="size-3.5 shrink-0" />
+            New project…
+          </button>
+        ) : (
+          projectTree.map(({ project, chats }) => {
+            const expanded = expandedProjects.has(project.id);
+            const dropReady = dragOverProject === project.id;
+            return (
+              <div key={project.id}>
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  aria-label={`Project ${project.name} (${chats.length} chats)`}
+                  className={[
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.875rem] transition",
+                    dropReady
+                      ? "bg-[var(--rail-hover)] text-[var(--color-text-primary)] ring-1 ring-inset ring-[var(--color-accent)]"
+                      : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
+                  ].join(" ")}
+                  onClick={() =>
+                    setExpandedProjects((s) => {
+                      const next = new Set(s);
+                      if (next.has(project.id)) next.delete(project.id);
+                      else next.add(project.id);
+                      return next;
+                    })
+                  }
+                  onDragOver={(e) => {
+                    if (!e.dataTransfer.types.includes(CONV_DRAG_MIME)) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    setDragOverProject(project.id);
+                  }}
+                  onDragLeave={() => setDragOverProject((cur) => (cur === project.id ? null : cur))}
+                  onDrop={(e) => {
+                    setDragOverProject(null);
+                    const convID = e.dataTransfer.getData(CONV_DRAG_MIME);
+                    if (!convID) return;
+                    e.preventDefault();
+                    onMoveToProject(convID, project.id);
+                    // Reveal where the chat landed.
+                    setExpandedProjects((s) => new Set(s).add(project.id));
+                  }}
+                >
+                  <Icon
+                    name="chevron-right"
+                    className={["size-3 shrink-0 transition", expanded ? "rotate-90" : ""].join(" ")}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-left">{project.name}</span>
+                  <span className="font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">
+                    {chats.length}
+                  </span>
+                </button>
+                {expanded ? (
+                  chats.length === 0 ? (
+                    <p className="py-1 pl-7 pr-2 text-[0.78rem] text-[var(--color-text-muted)]">
+                      No chats yet — drag one here.
+                    </p>
+                  ) : (
+                    <div className="ml-3 border-l border-[var(--color-border)] pl-1">{chats.map(renderRow)}</div>
+                  )
+                ) : null}
+              </div>
+            );
+          })
+        )
+      ) : null}
+    </div>
+  );
 
   const labelsSection =
     labelSummaries.length > 0 ? (
@@ -1115,27 +1333,26 @@ export function ConversationSidebar({
         ) : null}
       </div>
 
-      {/* Projects (#509) — a rail nav row right under New chat, where Claude
-          and ChatGPT put theirs. Collapsed (≥sm) it becomes an icon-only
-          square with a data-tip, matching the New-chat row above. Opening the
-          modal also closes the <sm drawer so the modal isn't stacked on it. */}
-      <button
-        type="button"
-        className={[
-          "mt-1.5 flex w-full items-center gap-2 rounded-[var(--radius-md)] px-3 py-2 text-[0.8125rem] font-medium text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
-          railCollapsed ? "sm:size-10 sm:justify-center sm:gap-0 sm:p-0" : "",
-        ].join(" ")}
-        title="Projects"
-        aria-label="Projects"
-        data-tip={railCollapsed ? "Projects" : undefined}
-        onClick={() => {
-          setSidebarOpen(false);
-          onOpenProjects();
-        }}
-      >
-        <Icon name="briefcase" className="size-4" />
-        <span className={railCollapsed ? "sm:hidden" : ""}>Projects</span>
-      </button>
+      {/* Projects (#509) — in the expanded rail (and the <sm drawer) the
+          Projects SECTION in the list below is the entry point, so this
+          standalone row only exists for the collapsed (≥sm) icon strip,
+          where the list is hidden: an icon-only square with a data-tip,
+          matching the New-chat row above. */}
+      {railCollapsed ? (
+        <button
+          type="button"
+          className="mt-1.5 hidden w-full items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:flex sm:size-10 sm:justify-center sm:p-0"
+          title="Projects"
+          aria-label="Projects"
+          data-tip="Projects"
+          onClick={() => {
+            setSidebarOpen(false);
+            onOpenProjects();
+          }}
+        >
+          <Icon name="briefcase" className="size-4" />
+        </button>
+      ) : null}
 
       {/* Search filter — the design's .chat-search: leading magnifier icon and
           a custom clear button (type="text" so the native search clear never
@@ -1236,6 +1453,7 @@ export function ConversationSidebar({
           </>
         ) : (
           <>
+            {projectsSection}
             {pinned.length > 0 ? (
               <div className="mb-1">
                 <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
@@ -1249,7 +1467,7 @@ export function ConversationSidebar({
             {labelsSection}
             <div className="mb-1">
               <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
-                Recent
+                Chats
                 <RecentInfoButton />
               </div>
               {recent.length === 0 ? (
