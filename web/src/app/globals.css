@@ -2981,12 +2981,16 @@ tr.sla-row-fail {
   border-radius: 0.625rem;
   overflow: hidden;
 }
+/* FIXED row height (not min-height): a row must not grow when toggling on
+   swaps its purpose text for the tool count + account seat, or the whole
+   roster below jumps. The tallest content (the compact account select) is
+   sized to fit inside this height. */
 .mcp-server-picker__row {
   display: flex;
   align-items: center;
   gap: 0.625rem;
-  padding: 0.5rem 0.75rem;
-  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  height: 2.75rem;
 }
 .mcp-server-picker__row + .mcp-server-picker__row {
   border-top: 1px solid var(--color-border-subtle);
@@ -3037,13 +3041,18 @@ tr.sla-row-fail {
   font-size: 0.7rem;
   color: var(--color-text-muted);
 }
-.mcp-server-picker__account-select {
-  padding: 0.25rem 0.56rem;
+/* select.<class> ties the generic `.modal-lg select` sizing rule's (0,1,1)
+   specificity and wins by source order — without it the anchor's roomier
+   padding/font inflates enabled rows past the fixed row height above. */
+select.mcp-server-picker__account-select {
+  height: 1.875rem;
+  padding: 0 0.56rem;
   border-radius: 0.5rem;
   border: 1px solid var(--color-border);
   background: var(--color-surface-1);
   color: var(--color-text-primary);
   font-size: 0.76rem;
+  line-height: 1.75rem;
 }
 /* Connected remote servers (#443/#466): a read-only status pill, not a toggle. */
 .mcp-server-picker__connected {
