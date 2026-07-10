@@ -44,13 +44,17 @@ describe("McpServerPicker — identical rendering across modes", () => {
     expect(taskHtml).toBe(convHtml);
   });
 
-  it("exposes a toggle AND an account dropdown per server in BOTH modes", () => {
+  it("exposes a switch per server in BOTH modes; the account dropdown appears once enabled", () => {
     for (const mode of ["conversation", "task"] as const) {
-      render(<McpServerPicker mode={mode} servers={SERVERS} selection={[]} onChange={() => {}} />);
+      render(
+        <McpServerPicker mode={mode} servers={SERVERS} selection={[{ server: "xandr" }]} onChange={() => {}} />,
+      );
       expect(screen.getByTestId("mcp-toggle-xandr")).toBeInTheDocument();
-      expect(screen.getByTestId("mcp-account-xandr")).toBeInTheDocument();
       expect(screen.getByTestId("mcp-toggle-magnite")).toBeInTheDocument();
-      expect(screen.getByTestId("mcp-account-magnite")).toBeInTheDocument();
+      // Enabled → account seat picker; disabled → no dropdown (the row shows
+      // the server's purpose instead).
+      expect(screen.getByTestId("mcp-account-xandr")).toBeInTheDocument();
+      expect(screen.queryByTestId("mcp-account-magnite")).not.toBeInTheDocument();
       cleanup();
     }
   });
@@ -92,9 +96,9 @@ describe("McpServerPicker — enable/disable + account selection", () => {
     expect(onChange).toHaveBeenCalledWith([{ server: "xandr", account: "client_b" }]);
   });
 
-  it("account dropdown is disabled until the server is enabled", () => {
+  it("hides the account dropdown until the server is enabled", () => {
     render(<McpServerPicker mode="task" servers={SERVERS} selection={[]} onChange={() => {}} />);
-    expect(screen.getByTestId("mcp-account-xandr")).toBeDisabled();
+    expect(screen.queryByTestId("mcp-account-xandr")).not.toBeInTheDocument();
   });
 
   it("offers the configured account names plus a Default seat", () => {
@@ -110,6 +114,36 @@ describe("McpServerPicker — enable/disable + account selection", () => {
     const options = Array.from(select.options).map((o) => o.value);
     expect(options).toEqual(["", "client_a", "client_b"]);
   });
+
+  it("sorts enabled servers ahead of disabled ones (catalog order within each group)", () => {
+    render(
+      <McpServerPicker
+        mode="task"
+        servers={SERVERS}
+        selection={[{ server: "magnite" }]}
+        onChange={() => {}}
+      />,
+    );
+    const rows = Array.from(document.querySelectorAll("[data-server]")).map((r) =>
+      r.getAttribute("data-server"),
+    );
+    expect(rows).toEqual(["magnite", "xandr"]);
+  });
+
+  it("shows the tool count only on enabled rows and pluralizes it", () => {
+    const ONE_TOOL: McpServer[] = [{ name: "solo", description: "One-tool server", tool_count: 1, accounts: [] }];
+    const { rerender } = render(
+      <McpServerPicker mode="task" servers={ONE_TOOL} selection={[]} onChange={() => {}} />,
+    );
+    // Disabled → purpose text, no count.
+    expect(screen.queryByText(/1 tool/)).not.toBeInTheDocument();
+    expect(screen.getByText("One-tool server")).toBeInTheDocument();
+    rerender(
+      <McpServerPicker mode="task" servers={ONE_TOOL} selection={[{ server: "solo" }]} onChange={() => {}} />,
+    );
+    expect(screen.getByText("1 tool")).toBeInTheDocument();
+    expect(screen.queryByText("1 tools")).not.toBeInTheDocument();
+  });
 });
 
 describe("McpServerPicker — per-user remote (hosted) servers (#466)", () => {
@@ -118,25 +152,31 @@ describe("McpServerPicker — per-user remote (hosted) servers (#466)", () => {
     { name: "my-notion", description: "Remote MCP server you connected.", remote: true },
   ];
 
-  it("renders a connected remote server as a read-only, already-on row (no toggle, no account)", () => {
+  it("renders a connected remote server as a read-only row (no switch, no account)", () => {
     render(<McpServerPicker mode="task" servers={WITH_REMOTE} selection={[]} onChange={() => {}} />);
-    const remote = screen.getByTestId("mcp-remote-my-notion") as HTMLInputElement;
+    const remote = screen.getByTestId("mcp-remote-my-notion");
     expect(remote).toBeInTheDocument();
-    expect(remote).toBeChecked();
-    expect(remote).toBeDisabled();
+    expect(remote).toHaveTextContent("Connected");
     // It is NOT a per-task toggle and carries no credential-seat dropdown.
     expect(screen.queryByTestId("mcp-toggle-my-notion")).not.toBeInTheDocument();
     expect(screen.queryByTestId("mcp-account-my-notion")).not.toBeInTheDocument();
-    expect(screen.getByText(/auto-available/i)).toBeInTheDocument();
-    // Bundle servers are still ordinary toggles alongside it.
+    // Bundle servers are still ordinary switches alongside it.
     expect(screen.getByTestId("mcp-toggle-xandr")).toBeInTheDocument();
   });
 
   it("never adds a remote server to the per-task selection (the row has no live control)", () => {
     const onChange = vi.fn();
     render(<McpServerPicker mode="task" servers={WITH_REMOTE} selection={[]} onChange={onChange} />);
-    // The remote checkbox is disabled, so a click cannot mutate the selection.
+    // The remote row is a static pill, so a click cannot mutate the selection.
     fireEvent.click(screen.getByTestId("mcp-remote-my-notion"));
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("lists remote rows ahead of the toggleable roster", () => {
+    render(<McpServerPicker mode="task" servers={WITH_REMOTE} selection={[]} onChange={() => {}} />);
+    const rows = Array.from(document.querySelectorAll("[data-server]")).map((r) =>
+      r.getAttribute("data-server"),
+    );
+    expect(rows).toEqual(["my-notion", "xandr", "magnite"]);
   });
 });
