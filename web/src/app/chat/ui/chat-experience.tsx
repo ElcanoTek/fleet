@@ -46,7 +46,7 @@ import {
 } from "./history";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { Icon } from "./Icon";
-import { ProjectsModal } from "./ProjectsModal";
+import { ProjectsModal, type Project } from "./ProjectsModal";
 import { MemoryGraphView } from "./MemoryGraphView";
 import {
   ConversationTotalsChip,
@@ -112,6 +112,11 @@ export type ConversationSummary = {
   // not shared; non-empty = a 🔗 badge shows in the sidebar and the kebab offers
   // Copy link / Unshare. The owner's own GET /conversations carries it.
   share_token?: string;
+  // project_id binds the conversation to a project/space (#509). Set at
+  // creation or by re-filing (drag onto a rail project / kebab "Move to
+  // project"). In the rail a project conversation lives only under its
+  // project, not in Pinned/Chats.
+  project_id?: string;
 };
 
 export type ServerConfig = {
@@ -1995,6 +2000,63 @@ export function ChatExperience() {
     }
   };
 
+  // Projects for the rail section (#509 follow-up): the sidebar shows the
+  // top few most-recently-updated projects as drag targets / dropdowns. The
+  // ProjectsModal still owns its own fetching (it's self-contained); this
+  // list only feeds the rail, refreshed on boot and when the modal closes
+  // (the modal is where projects get created/renamed).
+  const [projects, setProjects] = useState<Project[]>([]);
+  const loadProjects = useCallback(async () => {
+    try {
+      const res = await fetch("/api/projects", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { projects?: Project[] };
+      setProjects(data.projects ?? []);
+    } catch {
+      // Rail projects are best-effort — a failed load keeps the previous list.
+    }
+  }, []);
+  // queueMicrotask pushes the fetch (and its setState) out of the effect's
+  // synchronous phase — the same pattern as the loadCatalogModels mount
+  // effect below; the guard skips the call if we unmount first.
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void loadProjects();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadProjects]);
+  const closeProjectsModal = () => {
+    setProjectsOpen(false);
+    void loadProjects();
+  };
+
+  // moveConversationToProject re-files a chat into a project ("" = unfile) —
+  // the drag-and-drop / kebab path (#509 follow-up). Optimistic: the row
+  // moves immediately; a failed POST restores the previous grouping.
+  const moveConversationToProject = async (conversationId: string, projectID: string) => {
+    const prev = conversations;
+    setConversations((cs) =>
+      cs.map((c) => (c.id === conversationId ? { ...c, project_id: projectID || undefined } : c)),
+    );
+    try {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}/project`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: projectID }),
+      });
+      if (!response.ok) {
+        console.error("move to project failed:", response.status, await response.text());
+        setConversations(prev);
+      }
+    } catch (err) {
+      console.error("move to project error:", err);
+      setConversations(prev);
+    }
+  };
+
   // The share dialog (#226 UX): opened whenever a share link is created or
   // managed, so the user SEES the URL with an explicit Copy affordance instead
   // of inferring success from a small sidebar icon. {id,token,title} of the
@@ -3043,6 +3105,8 @@ export function ChatExperience() {
             exitSelectMode();
           }}
           onOpenProjects={() => setProjectsOpen(true)}
+          projects={projects}
+          onMoveToProject={(conversationId, projectID) => void moveConversationToProject(conversationId, projectID)}
         />
 
         {searchOpen ? (
@@ -3120,7 +3184,7 @@ export function ChatExperience() {
         {projectsOpen ? (
           <ProjectsModal
             userEmail={userEmail}
-            onClose={() => setProjectsOpen(false)}
+            onClose={closeProjectsModal}
             onStartChat={(id) => void startProjectChat(id)}
           />
         ) : null}

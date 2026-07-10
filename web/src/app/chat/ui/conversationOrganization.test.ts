@@ -9,6 +9,7 @@ import {
   isFiltering,
   normalizeLabel,
   pinnedUnfiled,
+  projectGroups,
   recentUnfiled,
   removeLabel,
   visibleConversationOrder,
@@ -174,5 +175,44 @@ describe("visibleConversationOrder", () => {
     const order = visibleConversationOrder({ all, filtered: all, filtering: false });
     order.push(conv({ title: "extra" }));
     expect(all).toHaveLength(3);
+  });
+});
+
+describe("project grouping (#509 follow-up)", () => {
+  const proj = (id: string, updated_at: number) => ({ id, name: id, updated_at });
+
+  it("a project conversation lives only under its project — excluded from Pinned and Chats", () => {
+    const all = [
+      conv({ title: "p", pinned: true, project_id: "alpha" }),
+      conv({ title: "r", project_id: "alpha" }),
+      conv({ title: "plain" }),
+      conv({ title: "pinned-plain", pinned: true }),
+    ];
+    expect(pinnedUnfiled(all).map((c) => c.title)).toEqual(["pinned-plain"]);
+    expect(recentUnfiled(all).map((c) => c.title)).toEqual(["plain"]);
+    expect(visibleConversationOrder({ all, filtered: [], filtering: false }).map((c) => c.title)).toEqual([
+      "pinned-plain",
+      "plain",
+    ]);
+  });
+
+  it("projectGroups returns the top N projects by recent update, each with its chats in input order", () => {
+    const projects = [proj("old", 1), proj("newest", 9), proj("mid", 5)];
+    const all = [
+      conv({ title: "a", project_id: "newest" }),
+      conv({ title: "b", project_id: "old" }),
+      conv({ title: "c", project_id: "newest" }),
+    ];
+    const groups = projectGroups(all, projects, 2);
+    expect(groups.map((g) => g.project.id)).toEqual(["newest", "mid"]);
+    expect(groups[0].chats.map((c) => c.title)).toEqual(["a", "c"]);
+    // "mid" has no chats yet but still gets a group — it must exist in the
+    // rail to be a drag target.
+    expect(groups[1].chats).toEqual([]);
+  });
+
+  it("search still reaches project conversations (filters are explicit)", () => {
+    const all = [conv({ title: "quarterly report", project_id: "alpha" }), conv({ title: "misc" })];
+    expect(filterConversations(all, { query: "quarterly" }).map((c) => c.title)).toEqual(["quarterly report"]);
   });
 });
