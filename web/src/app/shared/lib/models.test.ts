@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   filterModels,
-  isAffordable,
-  isTextOutput,
   loadModels,
-  normaliseModel,
+  normaliseCatalogModel,
   scoreMatch,
   SEED_MODELS,
   _resetModelCacheForTests,
@@ -13,29 +11,10 @@ import {
 
 // Pure-logic tests for the ModelPicker's catalog core (ported from moc's
 // model-picker.js). The DOM/positioning is tested via the ModelPicker.test.tsx
-// component test; here we cover affordability, modality, ranking, and the
-// fetch-fallback-to-seeds behavior.
-
-describe("isAffordable", () => {
-  it("keeps models under the per-token ceilings", () => {
-    expect(isAffordable({ pricing: { prompt: "0.000003", completion: "0.000015" } })).toBe(true);
-  });
-  it("drops models over the ceilings or with missing pricing", () => {
-    expect(isAffordable({ pricing: { prompt: "0.00001", completion: "0.00005" } })).toBe(false);
-    expect(isAffordable({ pricing: {} })).toBe(false);
-  });
-});
-
-describe("isTextOutput", () => {
-  it("keeps text and vision (text-in/out) models", () => {
-    expect(isTextOutput({ architecture: { output_modalities: ["text"] } })).toBe(true);
-    expect(isTextOutput({ architecture: { modality: "text+image->text" } })).toBe(true);
-  });
-  it("drops image-output / unknown models", () => {
-    expect(isTextOutput({ architecture: { modality: "text->image" } })).toBe(false);
-    expect(isTextOutput({})).toBe(false);
-  });
-});
+// component test; here we cover ranking, normalisation, and the
+// fetch-fallback-to-seeds behavior. The catalog arrives via the same-origin
+// /api/model-catalog proxy (the CSP blocks a direct openrouter.ai fetch), so
+// the mocks speak that endpoint's {models: [...]} shape.
 
 describe("scoreMatch / filterModels", () => {
   const models: PickerModel[] = [
@@ -64,13 +43,23 @@ describe("scoreMatch / filterModels", () => {
   });
 });
 
-describe("normaliseModel", () => {
-  it("returns null for an id-less raw model", () => {
-    expect(normaliseModel({})).toBeNull();
+describe("normaliseCatalogModel", () => {
+  it("returns null for a slug-less raw model", () => {
+    expect(normaliseCatalogModel({})).toBeNull();
   });
   it("captures created + completion price for tie-breaking", () => {
-    const m = normaliseModel({ id: "a/b", created: 123, pricing: { completion: "0.000005" } });
-    expect(m).toMatchObject({ id: "a/b", created: 123, priceCompletion: 0.000005 });
+    const m = normaliseCatalogModel({
+      slug: "a/b",
+      created: 123,
+      price_completion: 0.000005,
+      context_length: 200000,
+    });
+    expect(m).toMatchObject({
+      id: "a/b",
+      created: 123,
+      priceCompletion: 0.000005,
+      contextLength: 200000,
+    });
   });
 });
 
@@ -83,25 +72,29 @@ describe("loadModels (fetch + fallback)", () => {
     _resetModelCacheForTests();
   });
 
-  it("merges seeds with the fetched catalog", async () => {
+  it("merges seeds with the proxied catalog", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          data: [
-            {
-              id: "deepseek/deepseek-v3.2",
-              name: "DeepSeek V3.2",
-              pricing: { prompt: "0.000001", completion: "0.000002" },
-              architecture: { output_modalities: ["text"] },
-            },
-          ],
-        }),
+      vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes("/api/model-catalog")) {
+          return {
+            ok: true,
+            json: async () => ({
+              models: [
+                {
+                  slug: "deepseek/deepseek-v3.2",
+                  name: "DeepSeek V3.2",
+                  price_completion: 0.000002,
+                },
+              ],
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ models: [], providers: [] }) };
       }),
     );
     const models = await loadModels();
-    expect(models.some((m) => m.id === "anthropic/claude-opus-4.8")).toBe(true);
+    expect(models.some((m) => m.id === "z-ai/glm-5.2")).toBe(true);
     expect(models.some((m) => m.id === "deepseek/deepseek-v3.2")).toBe(true);
   });
 
@@ -120,10 +113,11 @@ describe("loadModels (fetch + fallback)", () => {
             ok: true,
             json: async () => ({
               models: [{ id: "anthropic-direct/claude-opus-4-8", name: "anthropic-direct: claude-opus-4-8" }],
+              providers: [{ name: "anthropic-direct", type: "anthropic", catch_all: false }],
             }),
           };
         }
-        return { ok: true, json: async () => ({ data: [] }) };
+        return { ok: true, json: async () => ({ models: [] }) };
       }),
     );
     const models = await loadModels();
@@ -132,7 +126,49 @@ describe("loadModels (fetch + fallback)", () => {
       workspace: true,
     });
     // The catalog/seed entries still follow.
-    expect(models.some((m) => m.id === "anthropic/claude-opus-4.8")).toBe(true);
+    expect(models.some((m) => m.id === "z-ai/glm-5.2")).toBe(true);
+  });
+
+  it("expands a catch-all workspace provider from the catwalk catalog", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes("/api/llm-provider-models")) {
+          return {
+            ok: true,
+            json: async () => ({
+              models: [],
+              providers: [{ name: "my-anthropic", type: "anthropic", catch_all: true }],
+            }),
+          };
+        }
+        if (String(url).includes("/api/catwalk-models")) {
+          return {
+            ok: true,
+            json: async () => ({
+              providers: [
+                {
+                  id: "anthropic",
+                  name: "Anthropic",
+                  type: "anthropic",
+                  models: [
+                    { id: "claude-opus-4-8", name: "Claude Opus 4.8", context_window: 1000000 },
+                  ],
+                },
+              ],
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ models: [] }) };
+      }),
+    );
+    const models = await loadModels();
+    expect(models[0]).toMatchObject({
+      id: "my-anthropic/claude-opus-4-8",
+      name: "my-anthropic: Claude Opus 4.8",
+      workspace: true,
+      contextLength: 1000000,
+    });
   });
 
   it("ignores a failing workspace-models endpoint", async () => {
@@ -142,7 +178,7 @@ describe("loadModels (fetch + fallback)", () => {
         if (String(url).includes("/api/llm-provider-models")) {
           return { ok: false, json: async () => ({}) };
         }
-        return { ok: true, json: async () => ({ data: [] }) };
+        return { ok: true, json: async () => ({ models: [] }) };
       }),
     );
     const models = await loadModels();

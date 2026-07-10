@@ -19,8 +19,8 @@ import { CostForecastPanel } from "./CostForecastPanel";
 // <McpServerPicker mode="task"> (enable/disable per MCP + per-MCP credential
 // account dropdown).
 
-const DEFAULT_PRIMARY_MODEL = "anthropic/claude-opus-4.8";
-const DEFAULT_FALLBACK_MODEL = "moonshotai/kimi-k2.6";
+const DEFAULT_PRIMARY_MODEL = "z-ai/glm-5.2";
+const DEFAULT_FALLBACK_MODEL = "anthropic/claude-fable-5";
 
 const SCHEDULE_PRESETS = [
   { label: "Weekdays 9am", cron: "0 9 * * 1-5" },
@@ -158,7 +158,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
       setMaxIterSelect("");
       setMaxIterCustom("");
     }
-    if (t.recurrence || t.persona || t.allow_network || t.carry_context || t.instruction_self_improve) {
+    if (t.persona || t.allow_network || t.carry_context || t.instruction_self_improve) {
       setAdvancedOpen(true);
     }
   };
@@ -303,7 +303,12 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
     <div className="modal-overlay is-open" role="dialog" aria-modal="true" aria-label="Create New Task">
       <div className="modal modal-lg" ref={modalRef} tabIndex={-1}>
         <div className="modal-header">
-          <h3>Create New Task</h3>
+          <div className="modal-header-text">
+            <h3>Create New Task</h3>
+            <p className="modal-subtitle">
+              Define what runs, when it runs, and what it may touch.
+            </p>
+          </div>
           <button type="button" className="icon-action modal-close" aria-label="Close modal" onClick={onClose}>
             ×
           </button>
@@ -320,9 +325,9 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                 entirely when the bundle ships none. "Start from scratch" (the
                 blank form below) is always available. */}
             {templates.length > 0 ? (
-              <div className="form-group" data-testid="task-template-section">
-                <div className="form-label-row">
-                  <span className="form-label">Start from a template</span>
+              <section className="task-section" data-testid="task-template-section">
+                <div className="task-section-title">
+                  <span>Start from a template</span>
                   <span className="optional-badge">Optional</span>
                 </div>
                 <div className="template-card-grid" role="group" aria-label="Task templates">
@@ -348,82 +353,182 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                     </button>
                   ))}
                 </div>
-              </div>
+              </section>
             ) : null}
 
-            {/* Prompt */}
-            <div className="form-group">
-              <label htmlFor="promptTextarea">Prompt / Command</label>
-              <textarea
-                id="promptTextarea"
-                name="prompt"
-                required
-                maxLength={100000}
-                placeholder="Enter the command or prompt for the runner..."
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-              />
-              {errors.prompt ? (
-                <div className="validation-error" data-testid="error-prompt">
-                  {errors.prompt}
-                </div>
-              ) : null}
-            </div>
-
-            {/* Documentation (#281) — optional operator notes, collapsed by default */}
-            <div className="form-group">
-              <details>
-                <summary>Documentation (optional)</summary>
+            {/* ── Task ─────────────────────────────────────────────────── */}
+            <section className="task-section">
+              <div className="task-section-title">
+                <span>Task</span>
+              </div>
+              <div className="form-group">
+                <label htmlFor="promptTextarea">Prompt / Command</label>
                 <textarea
-                  id="descriptionTextarea"
-                  name="description"
-                  maxLength={10000}
-                  placeholder="Why this task exists, what it costs, side effects, the runbook if it fails, who owns it… (Markdown)"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
+                  id="promptTextarea"
+                  name="prompt"
+                  required
+                  maxLength={100000}
+                  placeholder="Enter the command or prompt for the runner..."
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
                 />
-                <label htmlFor="tagsInput">Tags (comma-separated)</label>
-                <input
-                  id="tagsInput"
-                  name="tags"
-                  type="text"
-                  placeholder="nightly, prod, data-pipeline"
-                  value={tagsInput}
-                  onChange={(e) => setTagsInput(e.target.value)}
-                />
-                <label htmlFor="personaInput">Persona (bundle persona name; blank = default)</label>
-                <input
-                  id="personaInput"
-                  name="persona"
-                  type="text"
-                  placeholder="security-auditor"
-                  value={persona}
-                  onChange={(e) => setPersona(e.target.value)}
-                />
-              </details>
-            </div>
+                {errors.prompt ? (
+                  <div className="validation-error" data-testid="error-prompt">
+                    {errors.prompt}
+                  </div>
+                ) : null}
+              </div>
 
-            {/* Email recipients */}
-            <div className="form-group">
-              <div className="form-label-row">
-                <span className="form-label">Email Results To</span>
+              {/* Documentation (#281) — optional operator notes, collapsed by default */}
+              <details className="form-details">
+                <summary>
+                  <span className="form-details-arrow" aria-hidden="true">
+                    ▸
+                  </span>
+                  Documentation, tags &amp; persona
+                  <span className="optional-badge">Optional</span>
+                </summary>
+                <div className="form-details-body">
+                  <div className="form-group">
+                    <label htmlFor="descriptionTextarea">Documentation</label>
+                    <textarea
+                      id="descriptionTextarea"
+                      name="description"
+                      maxLength={10000}
+                      placeholder="Why this task exists, what it costs, side effects, the runbook if it fails, who owns it… (Markdown)"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                    />
+                  </div>
+                  <div className="field-grid">
+                    <div className="form-group">
+                      <label htmlFor="tagsInput">Tags</label>
+                      <input
+                        id="tagsInput"
+                        name="tags"
+                        type="text"
+                        placeholder="nightly, prod, data-pipeline"
+                        value={tagsInput}
+                        onChange={(e) => setTagsInput(e.target.value)}
+                      />
+                      <div className="field-hint">Comma-separated; used for filtering.</div>
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="personaInput">Persona</label>
+                      <input
+                        id="personaInput"
+                        name="persona"
+                        type="text"
+                        placeholder="security-auditor"
+                        value={persona}
+                        onChange={(e) => setPersona(e.target.value)}
+                      />
+                      <div className="field-hint">Bundle persona name; blank = default.</div>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </section>
+
+            {/* ── Schedule ─────────────────────────────────────────────── */}
+            <section className="task-section">
+              <div className="task-section-title">
+                <span>Schedule</span>
                 <span className="optional-badge">Optional</span>
               </div>
-              <div className="chips-container" role="group" aria-label="Email recipients">
-                {emails.map((e) => (
-                  <span key={e} className="chip chip-email selected" data-email={e}>
-                    {e}
-                    <button
-                      type="button"
-                      className="chip-delete"
-                      aria-label={`Remove ${e}`}
-                      onClick={() => setEmails(emails.filter((x) => x !== e))}
-                    >
-                      ×
-                    </button>
-                  </span>
+              <div className="field-grid">
+                <div className="form-group">
+                  <label htmlFor="scheduledForDate">Run once</label>
+                  <div className="schedule-datetime-group">
+                    <input
+                      id="scheduledForDate"
+                      type="date"
+                      aria-label="Schedule date"
+                      value={scheduledDate}
+                      onChange={(e) => setScheduledDate(e.target.value)}
+                    />
+                    <label htmlFor="scheduledForTime" className="schedule-time-label">
+                      at
+                    </label>
+                    <input
+                      id="scheduledForTime"
+                      type="time"
+                      aria-label="Schedule time"
+                      value={scheduledTime}
+                      onChange={(e) => setScheduledTime(e.target.value)}
+                    />
+                  </div>
+                  <div className="field-hint">Blank = run immediately.</div>
+                  {errors.scheduled_for ? (
+                    <div className="validation-error" data-testid="error-scheduled">
+                      {errors.scheduled_for}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="form-group">
+                  <label htmlFor="recurrenceInput">Repeat (cron)</label>
+                  <input
+                    id="recurrenceInput"
+                    type="text"
+                    name="recurrence"
+                    maxLength={100}
+                    placeholder="e.g. 0 9 * * 1-5"
+                    value={recurrence}
+                    onChange={(e) => setRecurrence(e.target.value)}
+                  />
+                  {cronDescription ? (
+                    <div className="cron-description" aria-live="polite">
+                      {cronDescription}
+                    </div>
+                  ) : (
+                    <div className="field-hint">Type a cron expression or pick a preset below.</div>
+                  )}
+                  {errors.recurrence ? (
+                    <div className="validation-error" data-testid="error-recurrence">
+                      {errors.recurrence}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+              <div className="schedule-presets" role="radiogroup" aria-label="Schedule presets">
+                {SCHEDULE_PRESETS.map((p) => (
+                  <button
+                    key={p.cron}
+                    type="button"
+                    className={`preset-btn${recurrence === p.cron ? " active" : ""}`}
+                    data-cron={p.cron}
+                    onClick={() => setRecurrence(recurrence === p.cron ? "" : p.cron)}
+                  >
+                    <div className="preset-label">{p.label}</div>
+                    <div className="preset-cron">{p.cron}</div>
+                  </button>
                 ))}
               </div>
+            </section>
+
+            {/* ── Delivery ─────────────────────────────────────────────── */}
+            <section className="task-section">
+              <div className="task-section-title">
+                <span>Email results to</span>
+                <span className="optional-badge">Optional</span>
+              </div>
+              {emails.length > 0 ? (
+                <div className="chips-container" role="group" aria-label="Email recipients">
+                  {emails.map((e) => (
+                    <span key={e} className="chip chip-email selected" data-email={e}>
+                      {e}
+                      <button
+                        type="button"
+                        className="chip-delete"
+                        aria-label={`Remove ${e}`}
+                        onClick={() => setEmails(emails.filter((x) => x !== e))}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               <div className="custom-email-row">
                 <input
                   type="email"
@@ -443,90 +548,35 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                   Add
                 </button>
               </div>
-            </div>
+            </section>
 
-            {/* MCP servers — replaces the old Target Agent input */}
-            <div className="form-group" data-testid="task-mcp-section">
-              <div className="form-label-row">
-                <span className="form-label">MCP Servers</span>
+            {/* ── Tools & files ────────────────────────────────────────── */}
+            <section className="task-section">
+              <div className="task-section-title">
+                <span>Tools &amp; files</span>
                 <span className="optional-badge">Optional</span>
               </div>
-              <div className="advanced-setting-meta">
-                Enable the MCP servers this task may use, and pick the credential account for each.
-              </div>
-              <McpServerPicker
-                mode="task"
-                servers={servers}
-                selection={mcpSelection}
-                onChange={setMcpSelection}
-              />
-            </div>
-
-            {/* Upload */}
-            <div className="form-group">
-              <div className="form-label-row">
-                <label>Upload Documents</label>
-                <span className="optional-badge">Optional</span>
-              </div>
-              <FileUpload registerHandle={(h) => (fileHandle.current = h)} />
-            </div>
-
-            {/* Schedule date/time */}
-            <div className="form-group">
-              <div className="form-label-row">
-                <label htmlFor="scheduledForDate">Schedule Date</label>
-                <span className="optional-badge">Optional</span>
-              </div>
-              <div className="schedule-datetime-group">
-                <input
-                  id="scheduledForDate"
-                  type="date"
-                  aria-label="Schedule date"
-                  value={scheduledDate}
-                  onChange={(e) => setScheduledDate(e.target.value)}
-                />
-                <label htmlFor="scheduledForTime" className="schedule-time-label">
-                  at
-                </label>
-                <input
-                  id="scheduledForTime"
-                  type="time"
-                  aria-label="Schedule time"
-                  value={scheduledTime}
-                  onChange={(e) => setScheduledTime(e.target.value)}
-                />
-              </div>
-              {errors.scheduled_for ? (
-                <div className="validation-error" data-testid="error-scheduled">
-                  {errors.scheduled_for}
+              {/* MCP servers — replaces the old Target Agent input */}
+              <div className="form-group" data-testid="task-mcp-section">
+                <span className="form-label">MCP servers</span>
+                <div className="field-hint">
+                  Enable the MCP servers this task may use, and pick the credential account for each.
                 </div>
-              ) : null}
-            </div>
-
-            {/* Recurrence presets */}
-            <div className="form-group">
-              <div className="form-label-row">
-                <span className="form-label">Recurrence</span>
-                <span className="optional-badge">Optional</span>
+                <McpServerPicker
+                  mode="task"
+                  servers={servers}
+                  selection={mcpSelection}
+                  onChange={setMcpSelection}
+                />
               </div>
-              <div className="schedule-presets" role="radiogroup" aria-label="Schedule presets">
-                {SCHEDULE_PRESETS.map((p) => (
-                  <button
-                    key={p.cron}
-                    type="button"
-                    className={`preset-btn${recurrence === p.cron ? " active" : ""}`}
-                    data-cron={p.cron}
-                    onClick={() => setRecurrence(p.cron)}
-                  >
-                    <div className="preset-label">{p.label}</div>
-                    <div className="preset-cron">{p.cron}</div>
-                  </button>
-                ))}
+              <div className="form-group">
+                <span className="form-label">Upload documents</span>
+                <FileUpload registerHandle={(h) => (fileHandle.current = h)} />
               </div>
-            </div>
+            </section>
 
-            {/* Advanced settings */}
-            <div className="form-group task-advanced-settings">
+            {/* ── Advanced ─────────────────────────────────────────────── */}
+            <section className="task-section task-advanced-settings">
               <button
                 type="button"
                 className="advanced-toggle"
@@ -534,192 +584,177 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                 onClick={() => setAdvancedOpen((o) => !o)}
               >
                 <span className="arrow" aria-hidden="true">
-                  {advancedOpen ? "▼" : "▶"}
+                  {advancedOpen ? "▾" : "▸"}
                 </span>
-                <span>Advanced Task Settings</span>
+                <span>Advanced settings</span>
+                <span className="advanced-toggle-hint">model · limits · gates</span>
               </button>
 
               {advancedOpen ? (
-                <div data-testid="advanced-section">
-                  <div className="form-group advanced-section-group">
-                    <label htmlFor="recurrenceInput">Custom Cron Expression</label>
-                    <input
-                      id="recurrenceInput"
-                      type="text"
-                      name="recurrence"
-                      maxLength={100}
-                      placeholder="e.g. 0 9 * * 1-5 (Weekdays at 9am)"
-                      value={recurrence}
-                      onChange={(e) => setRecurrence(e.target.value)}
-                    />
-                    {cronDescription ? (
-                      <div className="cron-description" aria-live="polite">
-                        {cronDescription}
-                      </div>
-                    ) : null}
-                    {errors.recurrence ? (
-                      <div className="validation-error" data-testid="error-recurrence">
-                        {errors.recurrence}
-                      </div>
-                    ) : null}
+                <div data-testid="advanced-section" className="advanced-body">
+                  <div className="field-grid form-group">
+                    <div className="form-group">
+                      <label htmlFor="taskModelInput">Primary model</label>
+                      <ModelPicker
+                        id="taskModelInput"
+                        value={model}
+                        onChange={setModel}
+                        placeholder="anthropic/claude-opus-4.8"
+                      />
+                      {errors.model ? (
+                        <div className="validation-error" data-testid="error-model">
+                          {errors.model}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="taskFallbackModelInput">Fallback model</label>
+                      <ModelPicker
+                        id="taskFallbackModelInput"
+                        value={fallbackModel}
+                        onChange={setFallbackModel}
+                        placeholder="moonshotai/kimi-k2.6"
+                      />
+                      {errors.fallback_model ? (
+                        <div className="validation-error" data-testid="error-fallback-model">
+                          {errors.fallback_model}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
 
-                  <div className="form-group advanced-section-group">
-                    <label htmlFor="taskModelInput">Primary Model</label>
-                    <ModelPicker
-                      id="taskModelInput"
-                      value={model}
-                      onChange={setModel}
-                      placeholder="anthropic/claude-opus-4.8"
-                    />
-                    {errors.model ? (
-                      <div className="validation-error" data-testid="error-model">
-                        {errors.model}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="form-group advanced-section-group">
-                    <label htmlFor="taskFallbackModelInput">Fallback Model</label>
-                    <ModelPicker
-                      id="taskFallbackModelInput"
-                      value={fallbackModel}
-                      onChange={setFallbackModel}
-                      placeholder="moonshotai/kimi-k2.6"
-                    />
-                    {errors.fallback_model ? (
-                      <div className="validation-error" data-testid="error-fallback-model">
-                        {errors.fallback_model}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="form-group advanced-section-group">
-                    <label htmlFor="taskMaxIterationsSelect">Max Iterations</label>
-                    <select
-                      id="taskMaxIterationsSelect"
-                      value={maxIterSelect}
-                      onChange={(e) => setMaxIterSelect(e.target.value)}
-                    >
-                      {MAX_ITER_OPTIONS.map((o) => (
-                        <option key={o.value || "default"} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                    {maxIterSelect === "__custom__" ? (
+                  <div className="field-grid form-group">
+                    <div className="form-group">
+                      <label htmlFor="taskMaxIterationsSelect">Max iterations</label>
+                      <select
+                        id="taskMaxIterationsSelect"
+                        value={maxIterSelect}
+                        onChange={(e) => setMaxIterSelect(e.target.value)}
+                      >
+                        {MAX_ITER_OPTIONS.map((o) => (
+                          <option key={o.value || "default"} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                      {maxIterSelect === "__custom__" ? (
+                        <input
+                          type="number"
+                          min={1}
+                          max={10000}
+                          step={1}
+                          placeholder="Enter a custom iteration cap"
+                          aria-label="Custom max iterations"
+                          value={maxIterCustom}
+                          onChange={(e) => setMaxIterCustom(e.target.value)}
+                        />
+                      ) : null}
+                      {errors.max_iterations ? (
+                        <div className="validation-error" data-testid="error-max-iterations">
+                          {errors.max_iterations}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="taskExpectedDuration">Expected duration (min)</label>
                       <input
+                        id="taskExpectedDuration"
                         type="number"
                         min={1}
-                        max={10000}
                         step={1}
-                        placeholder="Enter a custom iteration cap"
-                        aria-label="Custom max iterations"
-                        value={maxIterCustom}
-                        onChange={(e) => setMaxIterCustom(e.target.value)}
+                        inputMode="numeric"
+                        placeholder="e.g. 15"
+                        value={expectedDuration}
+                        onChange={(e) => setExpectedDuration(e.target.value)}
                       />
-                    ) : null}
-                    {errors.max_iterations ? (
-                      <div className="validation-error" data-testid="error-max-iterations">
-                        {errors.max_iterations}
+                      <div className="field-hint">
+                        SLA expectation (#274): warns at 1.5×, breaches at 2×. Blank = no SLA.
                       </div>
-                    ) : null}
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="taskThinkingBudget">Thinking budget (tokens)</label>
+                      <input
+                        id="taskThinkingBudget"
+                        type="number"
+                        min={0}
+                        step={1024}
+                        inputMode="numeric"
+                        placeholder="inherit default"
+                        value={thinkingBudget}
+                        onChange={(e) => setThinkingBudget(e.target.value)}
+                      />
+                      <div className="field-hint">
+                        Extended thinking (#220, Claude models). Blank = inherit; 0 = off.
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="form-group advanced-section-group">
-                    <div className="advanced-switch-row">
-                      <label className="toggle-switch">
+                  <div className="switch-group form-group">
+                    <label className="switch-row">
+                      <span className="toggle-switch">
                         <input
                           type="checkbox"
                           checked={captainsLog}
                           onChange={(e) => setCaptainsLog(e.target.checked)}
                         />
-                        <span className="toggle-slider" />
-                      </label>
-                      <div className="advanced-setting-meta">
-                        Captain&apos;s Log — give this task persistent memory across runs. Its
-                        agent can save facts with <code>remember</code> and read them back with{" "}
-                        <code>recall</code>; saved facts are reloaded at the start of every future
-                        run. Stored in fleet&apos;s database, scoped to this task. Off = each run
-                        starts fresh (the default).
-                      </div>
-                    </div>
-                    <div className="advanced-switch-row">
-                      <label className="toggle-switch">
+                        <span className="toggle-slider" aria-hidden="true" />
+                      </span>
+                      <span className="switch-row-text">
+                        <span className="switch-row-title">Captain&apos;s Log</span>
+                        <span className="switch-row-desc">
+                          Persistent memory across runs: the agent saves facts with{" "}
+                          <code>remember</code> and reloads them at the start of every future run.
+                          Stored in fleet&apos;s database, scoped to this task. Off = each run
+                          starts fresh.
+                        </span>
+                      </span>
+                    </label>
+                    <label className="switch-row">
+                      <span className="toggle-switch">
                         <input
                           type="checkbox"
                           checked={allowNetwork}
                           onChange={(e) => setAllowNetwork(e.target.checked)}
                         />
-                        <span className="toggle-slider" />
-                      </label>
-                      <div className="advanced-setting-meta">
-                        Allow network egress — let this task&apos;s sandbox reach the internet (off = sealed, <code>--network=none</code>).
-                      </div>
-                    </div>
-                    <div className="advanced-switch-row">
-                      <label className="toggle-switch">
+                        <span className="toggle-slider" aria-hidden="true" />
+                      </span>
+                      <span className="switch-row-text">
+                        <span className="switch-row-title">Allow network egress</span>
+                        <span className="switch-row-desc">
+                          Let this task&apos;s sandbox reach the internet (off = sealed,{" "}
+                          <code>--network=none</code>).
+                        </span>
+                      </span>
+                    </label>
+                    <label className="switch-row">
+                      <span className="toggle-switch">
                         <input
                           type="checkbox"
                           checked={carryContext}
                           onChange={(e) => setCarryContext(e.target.checked)}
                         />
-                        <span className="toggle-slider" />
-                      </label>
-                      <div className="advanced-setting-meta">
-                        Carry context across runs — a recurring task&apos;s next run starts with a bounded summary of the previous run&apos;s output (off = each run starts fresh). Only affects recurring tasks.
-                      </div>
-                    </div>
-                    <div className="advanced-switch-row">
-                      <div className="advanced-setting-field">
-                        <label htmlFor="taskExpectedDuration">Expected duration (min)</label>
-                        <input
-                          id="taskExpectedDuration"
-                          type="number"
-                          min={1}
-                          step={1}
-                          className="filter-input"
-                          inputMode="numeric"
-                          placeholder="e.g. 15"
-                          value={expectedDuration}
-                          onChange={(e) => setExpectedDuration(e.target.value)}
-                        />
-                      </div>
-                      <div className="advanced-setting-meta">
-                        SLA expectation (#274). Blank = no SLA. The monitor warns at 1.5× and breaches at 2× (configurable per task via the API).
-                      </div>
-                    </div>
-                    <div className="advanced-setting">
-                      <div className="advanced-setting-row">
-                        <label htmlFor="taskThinkingBudget">Thinking budget (tokens)</label>
-                        <input
-                          id="taskThinkingBudget"
-                          type="number"
-                          min={0}
-                          step={1024}
-                          className="filter-input"
-                          inputMode="numeric"
-                          placeholder="inherit default"
-                          value={thinkingBudget}
-                          onChange={(e) => setThinkingBudget(e.target.value)}
-                        />
-                      </div>
-                      <div className="advanced-setting-meta">
-                        Extended thinking for this task (#220, Claude models). Blank = inherit the deployment default; 0 = off; a positive value sets this task&apos;s budget (clamped to the provider range at run time).
-                      </div>
-                    </div>
+                        <span className="toggle-slider" aria-hidden="true" />
+                      </span>
+                      <span className="switch-row-text">
+                        <span className="switch-row-title">Carry context across runs</span>
+                        <span className="switch-row-desc">
+                          A recurring task&apos;s next run starts with a bounded summary of the
+                          previous run&apos;s output. Only affects recurring tasks.
+                        </span>
+                      </span>
+                    </label>
                   </div>
 
-                  <div className="form-group advanced-section-group">
+                  <div className="form-group">
                     <div className="form-label-row">
                       <span className="form-label">Pre-run gate (run_if)</span>
                       <span className="optional-badge">Optional</span>
                     </div>
-                    <div className="advanced-setting-meta" style={{ marginBottom: "0.4rem" }}>
+                    <div className="field-hint">
                       A host-side shell command evaluated before the task is promoted. The task runs
                       only when the command exits with the expected code; otherwise the occurrence is
-                      skipped. Runs as the fleet process user with a restricted PATH — treat the command
-                      as trusted.
+                      skipped. Runs as the fleet process user with a restricted PATH — treat the
+                      command as trusted.
                     </div>
                     <input
                       id="runIfCommandInput"
@@ -731,9 +766,9 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                       onChange={(e) => setRunIfCommand(e.target.value)}
                       aria-label="Pre-run shell command"
                     />
-                    <div className="advanced-switch-row" style={{ marginTop: "0.4rem" }}>
-                      <label htmlFor="runIfTimeoutInput" className="advanced-setting-meta">
-                        Timeout (s):
+                    <div className="run-if-options">
+                      <label htmlFor="runIfTimeoutInput" className="run-if-option-label">
+                        Timeout (s)
                       </label>
                       <input
                         id="runIfTimeoutInput"
@@ -746,11 +781,10 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                           const n = Number.parseInt(e.target.value, 10);
                           if (!Number.isNaN(n)) setRunIfTimeout(n);
                         }}
-                        style={{ width: "5rem" }}
                         aria-label="Pre-run gate timeout seconds"
                       />
-                      <label htmlFor="runIfOnErrorSelect" className="advanced-setting-meta">
-                        On error:
+                      <label htmlFor="runIfOnErrorSelect" className="run-if-option-label">
+                        On error
                       </label>
                       <select
                         id="runIfOnErrorSelect"
@@ -769,7 +803,7 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
                   </div>
                 </div>
               ) : null}
-            </div>
+            </section>
 
             {forecast ? <CostForecastPanel forecast={forecast} /> : null}
           </form>
@@ -781,12 +815,20 @@ export function TaskCreateModal({ open, servers, onClose, onCreated }: TaskCreat
         <div className="modal-footer">
           <button
             type="button"
-            className="btn btn-secondary"
+            className="btn btn-secondary modal-footer-start"
             aria-label="Estimate cost"
             disabled={estimating}
             onClick={() => void estimate()}
           >
             {estimating ? "Estimating…" : "Estimate Cost"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            aria-label="Cancel"
+            onClick={onClose}
+          >
+            Cancel
           </button>
           <button
             type="submit"

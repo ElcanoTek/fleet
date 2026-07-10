@@ -22,7 +22,7 @@ func TestConversationBranch_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConversation: %v", err)
 	}
-	if err := st.AppendHistory(ctx, conv.ID, []agent.HistoryEntry{
+	if _, err := st.AppendHistory(ctx, conv.ID, []agent.HistoryEntry{
 		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"q1"}`)},
 		{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"a1"}`)},
 		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"q2"}`)},

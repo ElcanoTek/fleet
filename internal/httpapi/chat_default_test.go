@@ -146,12 +146,17 @@ func (s *fakeChatStore) LoadHistory(_ context.Context, convID string) ([]agent.H
 	return append([]agent.HistoryEntry(nil), s.history[convID]...), nil
 }
 
-func (s *fakeChatStore) AppendHistory(_ context.Context, convID string, entries []agent.HistoryEntry) error {
+func (s *fakeChatStore) AppendHistory(_ context.Context, convID string, entries []agent.HistoryEntry) ([]int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.appends++
 	s.history[convID] = append(s.history[convID], entries...)
-	return nil
+	// Synthetic ascending ids, mirroring the real RETURNING order.
+	ids := make([]int64, len(entries))
+	for i := range ids {
+		ids[i] = int64(len(s.history[convID]) - len(entries) + i + 1)
+	}
+	return ids, nil
 }
 
 func (s *fakeChatStore) ListMemories(context.Context, string) ([]store.Memory, error) {

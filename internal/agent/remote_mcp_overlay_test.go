@@ -112,6 +112,39 @@ func TestBuildRemoteMCPOverlayOptInFilter(t *testing.T) {
 	}
 }
 
+func TestBuildRemoteMCPOverlayOptInMatchesLowercased(t *testing.T) {
+	ctx := context.Background()
+	// The persisted opt-in list is canonically lowercase, but AddServer only
+	// trims a remote server's name — a user's "GitHub" must still pass the
+	// gate when the conversation enabled "github". Token fetch errors so the
+	// gate outcome is observable via asked/Skipped without any network dial.
+	r := &fakeResolver{
+		conns:    []RemoteMCPConn{{ID: "1", Name: "GitHub", URL: "https://gh.example.com"}},
+		tokenErr: map[string]error{"1": errors.New("x")},
+	}
+	ov, err := BuildRemoteMCPOverlay(ctx, r, "u@x.com", nil, map[string]bool{"github": true})
+	if err != nil {
+		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ov.Close()
+	if len(r.asked) != 1 || r.asked[0] != "1" {
+		t.Errorf("lowercased opt-in: AcquireToken asked for %v, want [1]", r.asked)
+	}
+	// A non-enabled server still doesn't pass just because of case games.
+	r2 := &fakeResolver{
+		conns:    []RemoteMCPConn{{ID: "1", Name: "GitHub", URL: "https://gh.example.com"}},
+		tokenErr: map[string]error{"1": errors.New("x")},
+	}
+	ov2, err := BuildRemoteMCPOverlay(ctx, r2, "u@x.com", nil, map[string]bool{"other": true})
+	if err != nil {
+		t.Fatalf("BuildRemoteMCPOverlay: %v", err)
+	}
+	defer ov2.Close()
+	if len(r2.asked) != 0 {
+		t.Errorf("non-enabled server passed the gate: asked=%v", r2.asked)
+	}
+}
+
 func TestApplyMCPOverlayNoopWhenInactive(t *testing.T) {
 	deps := agentcore.Deps{}
 	base := mcp.NewClient()

@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  MAX_COMPLETION_USD_PER_MILLION,
   MODELS_PAGE_URL,
   __resetCatalogForTests,
   __buildCatalogForTests,
   isTextCompletion,
-  isWithinBudget,
   listAllowed,
   listLatestPerLab,
   loadCatalog,
@@ -114,21 +112,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("isWithinBudget", () => {
-  it("accepts prices up to and including the ceiling", () => {
-    expect(isWithinBudget(cheapEntry)).toBe(true);
-    expect(isWithinBudget(atCeilingEntry)).toBe(true);
-  });
-
-  it("accepts the advanced tier (Opus 4.8, $25/M)", () => {
-    expect(isWithinBudget(opusLatestEntry)).toBe(true);
-  });
-
-  it("rejects prices above the ceiling", () => {
-    expect(isWithinBudget(expensiveEntry)).toBe(false);
-  });
-});
-
 describe("validateSlug", () => {
   it("rejects an empty slug", async () => {
     mockOpenRouter([cheapEntry]);
@@ -147,18 +130,11 @@ describe("validateSlug", () => {
     if (result.ok) expect(result.entry?.slug).toBe(cheapEntry.slug);
   });
 
-  it("rejects a slug that costs more than the ceiling with a helpful message", async () => {
+  it("accepts an expensive slug — there is no price ceiling", async () => {
     mockOpenRouter([expensiveEntry]);
     const result = await validateSlug(expensiveEntry.slug);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("over_budget");
-      expect(result.modelsUrl).toBe(MODELS_PAGE_URL);
-      expect(result.message).toContain(expensiveEntry.slug);
-      expect(result.message).toContain(String(MAX_COMPLETION_USD_PER_MILLION));
-      expect(result.message).toContain(MODELS_PAGE_URL);
-      expect(result.message).toContain("600.00");
-    }
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.entry?.slug).toBe(expensiveEntry.slug);
   });
 
   it("passes through unknown slugs so new models still work if the catalog is stale", async () => {
@@ -171,7 +147,8 @@ describe("validateSlug", () => {
   it("trims whitespace before lookup", async () => {
     mockOpenRouter([expensiveEntry]);
     const result = await validateSlug(`  ${expensiveEntry.slug}  `);
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.entry?.slug).toBe(expensiveEntry.slug);
   });
 });
 
@@ -302,7 +279,7 @@ describe("isTextCompletion", () => {
 });
 
 describe("listAllowed", () => {
-  it("includes only within-budget text-only entries, sorted by price desc", async () => {
+  it("includes every text-only entry regardless of price, sorted by price desc", async () => {
     mockOpenRouter([
       expensiveEntry,
       imageOnlyEntry,
@@ -314,10 +291,11 @@ describe("listAllowed", () => {
     ]);
     const catalog = await loadCatalog();
     const slugs = listAllowed(catalog).map((e) => e.slug);
-    // At-ceiling ($30/M) first, then legacy ($2/M), then cheap ($0.5/M).
-    // o1-pro (over budget), image-only, image+text, and text+audio
-    // are all excluded.
+    // Price desc: o1-pro ($600/M) first — no ceiling — then $30/M, $2/M,
+    // $0.5/M. Image-only, image+text, and text+audio are excluded
+    // (modality, not price).
     expect(slugs).toEqual([
+      expensiveEntry.slug,
       atCeilingEntry.slug,
       legacyNoModalitiesEntry.slug,
       cheapEntry.slug,
@@ -347,7 +325,7 @@ describe("resolveSlug", () => {
 });
 
 describe("validateSlug canonical-slug lookup", () => {
-  it("rejects an over-budget dated slug using its short-id price", async () => {
+  it("resolves a dated canonical slug to its short-id entry", async () => {
     mockOpenRouter([
       {
         ...expensiveEntry,
@@ -355,7 +333,8 @@ describe("validateSlug canonical-slug lookup", () => {
       },
     ]);
     const result = await validateSlug(`${expensiveEntry.slug}-20260101`);
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.entry?.slug).toBe(expensiveEntry.slug);
   });
 });
 
@@ -463,12 +442,31 @@ describe("listLatestPerLab", () => {
     expect(slugs).toEqual([anthropicOld.slug, openaiNew.slug]);
   });
 
-  it("skips over-budget and non-text-only models", async () => {
+  it("skips non-text-only models but never filters by price", async () => {
     mockOpenRouter([openaiOld, overBudgetOpenAI, imageGoogle, googleText]);
     const catalog = await loadCatalog();
     const slugs = listLatestPerLab(catalog).map((e) => e.slug);
-    // Over-budget GPT excluded, image-output Google excluded.
-    expect(slugs).toEqual([openaiOld.slug, googleText.slug]);
+    // o2-pro ($600/M) is the newest OpenAI text model and WINS the lab
+    // slot — there is no price ceiling. Image-output Google is excluded
+    // (modality, not price).
+    expect(slugs).toEqual([overBudgetOpenAI.slug, googleText.slug]);
+  });
+
+  it("excludes pinned models variant-insensitively (\":nitro\" pin vs base catalog slug)", async () => {
+    const glmBase: CatalogEntry = {
+      slug: "z-ai/glm-5.2",
+      name: "GLM 5.2",
+      completionPerToken: 0.000002,
+      promptPerToken: 0.0000005,
+      outputModalities: ["text"],
+      created: 1_760_000_000,
+    };
+    mockOpenRouter([glmBase, openaiOld]);
+    const catalog = await loadCatalog();
+    // A pinned slug may carry a ":variant" suffix while the catalog lists the
+    // base slug. The lab row must not duplicate the pinned model.
+    const slugs = listLatestPerLab(catalog, ["z-ai/glm-5.2:nitro"]).map((e) => e.slug);
+    expect(slugs).toEqual([openaiOld.slug]);
   });
 
   it("omits labs entirely when they have no qualifying entries", async () => {

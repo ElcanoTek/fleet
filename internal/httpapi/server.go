@@ -1135,6 +1135,46 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"servers": servers})
 }
 
+// optionalServerWhitelist returns the set of server names a conversation may
+// opt into, keyed lowercase (the canonical form of the persisted opt-in
+// list): the bundle Optional catalog (frozen at boot) merged with the remote
+// (hosted) MCP servers the caller can use — their own rows (#443) plus rows
+// shared with them (#443 follow-up). Without the remote legs, a usable
+// server's name is silently dropped by the opt-in intersection, so it can
+// never reach conv.OptionalMCPServersEnabled — and the overlay gate in
+// RunTurn then skips it on every turn, making the connection unusable in
+// chat. Remote rows are included regardless of status or connector prefs: a
+// needs_reauth or prefs-disabled server must stay valid so a full-set POST
+// from the Tools picker doesn't silently drop its enablement while the user
+// re-authorizes or re-enables it (the run-time filter in
+// ConnectedServersForUser still governs what actually reaches a turn).
+// Best-effort on the remote legs — a lookup failure degrades to whatever did
+// resolve rather than failing the caller's request.
+func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[string]bool {
+	catalog := s.agent.MCPServerCatalog()
+	valid := make(map[string]bool, len(catalog))
+	for _, info := range catalog {
+		valid[strings.ToLower(info.Name)] = true
+	}
+	if s.remoteMCP != nil && s.remoteMCP.Enabled() && user != "" {
+		if servers, err := s.remoteMCP.ListServers(ctx, user); err == nil {
+			for _, srv := range servers {
+				valid[strings.ToLower(srv.Name)] = true
+			}
+		} else {
+			log.Printf("mcp opt-in: remote server lookup failed for %s: %v", user, err)
+		}
+		if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
+			for _, srv := range shared {
+				valid[strings.ToLower(srv.Name)] = true
+			}
+		} else {
+			log.Printf("mcp opt-in: shared remote server lookup failed for %s: %v", user, err)
+		}
+	}
+	return valid
+}
+
 // ── /conversations ─────────────────────────────────────────────────────────
 
 type createConversationRequest struct {
@@ -1792,6 +1832,33 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 				"enabled_by_default": info.EnabledByDefault,
 			})
 		}
+		// Per-user remote (hosted) MCP servers (#443): merge the caller's
+		// connected servers so the per-conversation Tools picker can toggle
+		// them — mirroring the startup catalog (listMCPServerCatalog), which
+		// already lists them as toggleable. Without this merge an existing
+		// conversation had no way to enable a remote server at all. Enabled
+		// state is looked up lowercased: the persisted opt-in list is
+		// canonical lowercase while remote names keep the case the user
+		// typed. Best-effort — a lookup error never breaks the catalog.
+		if s.remoteMCP != nil && s.remoteMCP.Enabled() {
+			if conns, err := s.remoteMCP.ConnectedServersForUser(r.Context(), user); err == nil {
+				for _, c := range conns {
+					servers = append(servers, map[string]any{
+						"name":               c.Name,
+						"display_name":       c.Name,
+						"description":        "Remote MCP server you connected (" + c.URL + ").",
+						"tools":              []string{},
+						"tool_count":         0,
+						"enabled":            enabled[strings.ToLower(c.Name)],
+						"beta":               false,
+						"enabled_by_default": true,
+						"remote":             true,
+					})
+				}
+			} else {
+				log.Printf("mcp catalog: remote server lookup failed for %s: %v", user, err)
+			}
+		}
 		writeJSON(w, map[string]any{"servers": servers})
 	case sub == "mcp-servers" && r.Method == http.MethodPost:
 		// Body: { "enabled_optional": ["gamma", ...] } — full set,
@@ -1805,12 +1872,10 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		// Intersect with the known-optional catalog so a bad frontend
-		// can't persist garbage. Dedup + sort for a canonical payload.
-		valid := make(map[string]bool, len(s.agent.MCPServerCatalog()))
-		for _, info := range s.agent.MCPServerCatalog() {
-			valid[info.Name] = true
-		}
+		// Intersect with the known-optional whitelist (bundle catalog +
+		// the caller's remote servers) so a bad frontend can't persist
+		// garbage. Dedup + sort for a canonical payload.
+		valid := s.optionalServerWhitelist(r.Context(), user)
 		seen := make(map[string]bool, len(req.EnabledOptional))
 		clean := make([]string, 0, len(req.EnabledOptional))
 		for _, n := range req.EnabledOptional {
@@ -2076,13 +2141,12 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 		// Seed the optional MCP server opt-in list from the chat request
 		// so pre-chat Tools picker selections take effect on this first
-		// turn. Intersect with the catalog so a bad frontend can't
-		// persist garbage (mirrors POST /conversations/{id}/mcp-servers).
+		// turn. Intersect with the whitelist (bundle catalog + the caller's
+		// remote servers — the picker lists both as toggleable) so a bad
+		// frontend can't persist garbage (mirrors POST
+		// /conversations/{id}/mcp-servers).
 		if len(req.EnabledOptional) > 0 {
-			valid := make(map[string]bool, len(s.agent.MCPServerCatalog()))
-			for _, info := range s.agent.MCPServerCatalog() {
-				valid[info.Name] = true
-			}
+			valid := s.optionalServerWhitelist(r.Context(), user)
 			seen := make(map[string]bool, len(req.EnabledOptional))
 			clean := make([]string, 0, len(req.EnabledOptional))
 			for _, n := range req.EnabledOptional {
@@ -2358,8 +2422,19 @@ func (s *Server) runTurnAsync(
 	persistCtx, persistCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer persistCancel()
 
-	if err := s.store.AppendHistory(persistCtx, conv.ID, res.NewHistory); err != nil {
+	persistedIDs, err := s.store.AppendHistory(persistCtx, conv.ID, res.NewHistory)
+	if err != nil {
 		log.Printf("persist history error (user=%s conv=%s): %v", user, conv.ID, err)
+	} else {
+		// Tell the live stream which DB rows this turn's messages became, so
+		// the client can backfill Message.dbId without a reload — the Branch
+		// button (#454) only renders for persisted messages, and without this
+		// it stayed hidden until the conversation was re-opened. Emitted after
+		// turn.completed (ids exist only post-persist) and before finishTurn
+		// seals the buffer, so live AND replayed streams both carry it.
+		buf.Emit("history.persisted", map[string]any{
+			"entries": historyPersistedEntries(res.NewHistory, persistedIDs),
+		})
 	}
 
 	// Tool-call audit ledger (#224): derive one row per tool call from the same

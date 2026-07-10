@@ -49,7 +49,8 @@ func ThinkingConfigForBudget(budget int) *ThinkingConfig {
 }
 
 // supportsExtendedThinking reports whether slug is a Claude model that supports
-// extended thinking. Only the Claude 4 family (opus-4.x / sonnet-4.x) qualifies;
+// extended thinking. The Claude 4 family (opus-4.x / sonnet-4.x) and the
+// Fable 5 generation qualify;
 // a leading `~` floating alias is excluded because fantasy drops the thinking
 // signature for aliased slugs (mirroring upstreamPinFor's `~` handling), which
 // would make the provider reject the follow-up tool-use turn. Non-Claude models
@@ -60,5 +61,6 @@ func supportsExtendedThinking(slug string) bool {
 	if strings.HasPrefix(s, "~") {
 		return false
 	}
-	return strings.Contains(s, "claude-opus-4") || strings.Contains(s, "claude-sonnet-4")
+	return strings.Contains(s, "claude-opus-4") || strings.Contains(s, "claude-sonnet-4") ||
+		strings.Contains(s, "claude-fable")
 }

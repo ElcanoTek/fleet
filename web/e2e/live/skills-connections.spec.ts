@@ -4,6 +4,11 @@ import { creds, expect, test } from "./fixtures";
 // real Postgres rows behind the builder CRUD, the real merged bundle+builtin
 // skills roster, and real user_connector_prefs behind the availability
 // toggles. (The owner dislikes mocked-only coverage; this is the real thing.)
+//
+// Selectors follow the fleet-unified settings redesign: rows/cards are divs
+// carrying skill-row-* / dir-card-* / bundled-card-* testids, deletes are
+// two-click inline confirms (no window.confirm dialog), and the bundled
+// availability control is a switch + "Enabled for me"/"Disabled for me" label.
 
 const SKILL_NAME = "e2e-live-skill";
 
@@ -29,11 +34,11 @@ test("skills page: built-in pack renders and the builder round-trips a personal 
   await page.goto("/settings/skills");
 
   // The built-in pack is inherited by the default bundle and badged Built-in.
-  await expect(page.getByText("data-profiler")).toBeVisible();
+  const profilerRow = page.getByTestId("skill-row-data-profiler");
+  await expect(profilerRow).toBeVisible();
   await expect(page.getByText("Built-in").first()).toBeVisible();
 
   // Read view: the full SKILL.md body loads from the merged roster.
-  const profilerRow = page.locator("li", { hasText: "data-profiler" }).first();
   await profilerRow.getByRole("button", { name: "View" }).click();
   await expect(page.getByText("name: data-profiler")).toBeVisible();
 
@@ -46,30 +51,30 @@ test("skills page: built-in pack renders and the builder round-trips a personal 
   await page.getByPlaceholder(/1\. Read the attached/).fill("1. Do the e2e thing.\n2. Stop.");
   await page.getByRole("button", { name: "Create skill" }).click();
 
-  const mine = page.locator("li", { hasText: SKILL_NAME }).first();
+  const mine = page.getByTestId(`skill-row-${SKILL_NAME}`);
   await expect(mine).toBeVisible();
   await expect(mine.getByText("Active")).toBeVisible();
 
   // Survives a reload — it's a DB row, not client state.
   await page.reload();
-  await expect(page.locator("li", { hasText: SKILL_NAME }).first()).toBeVisible();
+  await expect(page.getByTestId(`skill-row-${SKILL_NAME}`)).toBeVisible();
 
   await page
-    .locator("li", { hasText: SKILL_NAME })
-    .first()
+    .getByTestId(`skill-row-${SKILL_NAME}`)
     .getByRole("button", { name: "Disable" })
     .click();
-  await expect(
-    page.locator("li", { hasText: SKILL_NAME }).first().getByText("Disabled"),
-  ).toBeVisible();
+  await expect(page.getByTestId(`skill-row-${SKILL_NAME}`).getByText("Disabled")).toBeVisible();
 
-  page.on("dialog", (d) => d.accept());
+  // Delete is a two-click inline confirm now — arm, then confirm.
   await page
-    .locator("li", { hasText: SKILL_NAME })
-    .first()
-    .getByRole("button", { name: "Delete" })
+    .getByTestId(`skill-row-${SKILL_NAME}`)
+    .getByRole("button", { name: "Delete", exact: true })
     .click();
-  await expect(page.locator("li", { hasText: SKILL_NAME })).toHaveCount(0);
+  await page
+    .getByTestId(`skill-row-${SKILL_NAME}`)
+    .getByRole("button", { name: "Confirm delete" })
+    .click();
+  await expect(page.getByTestId(`skill-row-${SKILL_NAME}`)).toHaveCount(0);
 });
 
 test("connections page: directory searches and an availability toggle persists", async ({
@@ -81,28 +86,30 @@ test("connections page: directory searches and an availability toggle persists",
 
   // The built-in hosted directory is inherited by the default bundle: search
   // narrows to Stripe with its Official badge and vet links.
-  const search = page.getByPlaceholder(/Search \d+ servers/);
+  const search = page.getByPlaceholder(/Search servers/);
   await expect(search).toBeVisible();
   await search.fill("stripe");
-  const stripeCard = page.locator("li", { hasText: "Stripe" }).first();
+  const stripeCard = page
+    .locator('[data-testid^="dir-card-"]', { hasText: "Stripe" })
+    .first();
   await expect(stripeCard).toBeVisible();
   await expect(stripeCard.getByText("Official")).toBeVisible();
   await expect(stripeCard.getByRole("link", { name: "docs" })).toBeVisible();
 
   // Availability layer: the synthetic image_generation connector is Optional
-  // in every deployment, so it always has a toggle. Disable → reload →
+  // in every deployment, so it always has a switch. Disable → reload →
   // still disabled (a real user_connector_prefs row) → reset to default.
-  const imgCard = page.locator("li", { hasText: "Image generation" }).first();
+  const imgCard = page.getByTestId("bundled-card-image_generation");
   await expect(imgCard).toBeVisible();
-  await imgCard.getByRole("button", { name: /Enabled for me|Disabled for you/ }).click();
-  await expect(imgCard.getByText("Disabled for you")).toBeVisible();
+  await imgCard.getByRole("switch", { name: /Enable Image generation for me/ }).click();
+  await expect(imgCard.getByText("Disabled for me")).toBeVisible();
 
   await page.reload();
-  const imgCardAfter = page.locator("li", { hasText: "Image generation" }).first();
-  await expect(imgCardAfter.getByText("Disabled for you")).toBeVisible();
+  const imgCardAfter = page.getByTestId("bundled-card-image_generation");
+  await expect(imgCardAfter.getByText("Disabled for me")).toBeVisible();
 
-  await imgCardAfter.getByRole("button", { name: "Reset to default" }).click();
-  await expect(imgCardAfter.getByText(/Enabled for me/)).toBeVisible();
+  await imgCardAfter.getByRole("button", { name: "Reset" }).click();
+  await expect(imgCardAfter.getByText("Enabled for me")).toBeVisible();
 });
 
 test("sharing: grantee sees a shared connection surface", async ({ page, login }) => {
@@ -112,7 +119,7 @@ test("sharing: grantee sees a shared connection surface", async ({ page, login }
   // unit-tested. Here we assert the surfaces exist and degrade correctly for
   // a user with no connections: no Shared-with-you section, no stray errors.
   await page.goto("/settings/connections");
-  await expect(page.getByText("Your servers")).toBeVisible();
+  await expect(page.getByText("Remote servers").first()).toBeVisible();
   await expect(page.getByText("Shared with you")).toHaveCount(0);
   await expect(page.getByText(/Authorization failed/)).toHaveCount(0);
   void creds; // fixture import kept for parity with sibling specs

@@ -368,7 +368,7 @@ Engagements don't shrink the repo: client-specific work lives in each client's
 config bundle, and platform improvements land here, in the open.
 
 [elcanotek.com](https://elcanotek.com) ·
-[brad@elcanotek.com](mailto:brad@elcanotek.com)
+[hello@elcanotek.com](mailto:hello@elcanotek.com)
 
 ## Contributing
 

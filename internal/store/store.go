@@ -392,7 +392,7 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 	); err != nil {
 		return nil, err
 	}
-	if err := s.appendHistoryTx(ctx, tx, id, entries); err != nil {
+	if _, err := s.appendHistoryTx(ctx, tx, id, entries); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1201,26 +1201,29 @@ func (s *Store) LoadHistory(ctx context.Context, convID string) ([]agent.History
 
 // AppendHistory writes every entry in turn order and bumps the conversation
 // updated_at. Done inside a single transaction so partial writes don't leave
-// torn state if the process dies mid-turn.
-func (s *Store) AppendHistory(ctx context.Context, convID string, entries []agent.HistoryEntry) error {
+// torn state if the process dies mid-turn. Returns the inserted message ids in
+// entry order, so the turn stream can tell the client which persisted rows its
+// in-flight messages became (the Branch button needs a dbId, #454).
+func (s *Store) AppendHistory(ctx context.Context, convID string, entries []agent.HistoryEntry) ([]int64, error) {
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.appendHistoryTx(ctx, tx, convID, entries); err != nil {
-		return err
+	ids, err := s.appendHistoryTx(ctx, tx, convID, entries)
+	if err != nil {
+		return nil, err
 	}
-	return tx.Commit()
+	return ids, tx.Commit()
 }
 
 // appendHistoryTx is AppendHistory's body against a caller-owned transaction,
 // so a multi-statement op (BranchConversation's row + copy, #597) can make the
 // message write part of its own atomic unit. The caller commits or rolls back.
-func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, entries []agent.HistoryEntry) error {
+func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, entries []agent.HistoryEntry) ([]int64, error) {
 	now := time.Now().Unix()
 
 	var b strings.Builder
@@ -1240,39 +1243,39 @@ func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, 
 	ids := make([]int64, 0, len(entries))
 	rows, err := tx.QueryContext(ctx, b.String(), args...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return err
+			return nil, err
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return err
+		return nil, err
 	}
 	// Close before the next statement on this tx (one active result set at a time).
 	_ = rows.Close()
 	if len(ids) != len(entries) {
-		return fmt.Errorf("AppendHistory: inserted %d messages but got %d ids", len(entries), len(ids))
+		return nil, fmt.Errorf("AppendHistory: inserted %d messages but got %d ids", len(entries), len(ids))
 	}
 
 	// Full-text search index maintenance (#308): extract searchable plaintext from
 	// the just-inserted messages into message_search_content, in the same tx.
 	if s.searchEnabled {
 		if err := insertSearchContent(ctx, tx, convID, now, entries, ids); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET updated_at = $1 WHERE id = $2`, now, convID); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return ids, nil
 }
 
 // ReplaceSummary deletes any prior `summary` messages on the conversation

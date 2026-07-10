@@ -35,7 +35,7 @@ func TestRunStagedScheduleTask(t *testing.T) {
 		ToolName: "schedule_task",
 		ArgsJSON: `{"name":"Weekly report","prompt":"Summarize the week's PRs","cron":"0 9 * * MON","model":"x","allow_network":true,"tags":["reports"]}`,
 	}
-	text, err := s.runStagedScheduleTask(context.Background(), approval)
+	text, err := s.runStagedScheduleTask(context.Background(), approval, nil)
 	if err != nil {
 		t.Fatalf("runStagedScheduleTask error: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestRunStagedScheduleTask_OneTimeRunAt(t *testing.T) {
 		ToolName: "schedule_task",
 		ArgsJSON: `{"prompt":"do it once","run_at":"2026-07-01T09:00:00Z"}`,
 	}
-	text, err := s.runStagedScheduleTask(context.Background(), approval)
+	text, err := s.runStagedScheduleTask(context.Background(), approval, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestRunStagedScheduleTask_RejectsInvalidArgs(t *testing.T) {
 		ToolName: "schedule_task",
 		ArgsJSON: `{"prompt":"x","cron":"0 9 * * *","run_at":"2026-07-01T09:00:00Z"}`,
 	}
-	if _, err := s.runStagedScheduleTask(context.Background(), approval); err == nil {
+	if _, err := s.runStagedScheduleTask(context.Background(), approval, nil); err == nil {
 		t.Fatal("expected validation error for both cron and run_at")
 	}
 }
@@ -103,7 +103,7 @@ func TestRunStagedScheduleTask_RejectsInvalidArgs(t *testing.T) {
 func TestRunStagedScheduleTask_NilSeam(t *testing.T) {
 	s := &Server{cfg: &config.Config{}} // scheduleTask nil → feature unconfigured
 	approval := &store.Approval{ToolName: "schedule_task", ArgsJSON: `{"prompt":"x"}`}
-	_, err := s.runStagedScheduleTask(context.Background(), approval)
+	_, err := s.runStagedScheduleTask(context.Background(), approval, nil)
 	if err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("nil seam: err=%v, want a 'not configured' error", err)
 	}
@@ -119,7 +119,7 @@ func TestRunStagedScheduleTask_SeamErrorPropagates(t *testing.T) {
 		},
 	}
 	approval := &store.Approval{ToolName: "schedule_task", ArgsJSON: `{"prompt":"x","name":"dup"}`}
-	_, err := s.runStagedScheduleTask(context.Background(), approval)
+	_, err := s.runStagedScheduleTask(context.Background(), approval, nil)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("expected the seam error to propagate, got %v", err)
 	}
@@ -221,5 +221,48 @@ func TestRejectionMessages(t *testing.T) {
 	claim, _ = rejectionMessages("mcp_sendgrid_send_email")
 	if !strings.Contains(claim, "send") {
 		t.Errorf("email rejection wording wrong: %q", claim)
+	}
+}
+
+// TestRunStagedScheduleTask_AppliesEdits checks the card's edit-before-approve
+// path: user-adjusted name/prompt/cron replace the staged values, and the
+// edited args pass the SAME validation the staged ones did (a bad cron edit is
+// rejected, nothing is created).
+func TestRunStagedScheduleTask_AppliesEdits(t *testing.T) {
+	var got TaskScheduleRequest
+	calls := 0
+	s := &Server{
+		cfg: &config.Config{},
+		scheduleTask: func(_ context.Context, req TaskScheduleRequest) (*TaskScheduleResult, error) {
+			calls++
+			got = req
+			return &TaskScheduleResult{ID: "id-1", Status: "scheduled"}, nil
+		},
+	}
+	approval := &store.Approval{
+		ToolName: "schedule_task",
+		ArgsJSON: `{"name":"Weekly report","prompt":"Summarize the week's PRs","cron":"0 9 * * MON"}`,
+	}
+
+	newName, newPrompt, newCron := "Daily report", "Summarize today's PRs in depth", "0 9 * * *"
+	if _, err := s.runStagedScheduleTask(context.Background(), approval, &scheduleTaskEdits{
+		Name: &newName, Prompt: &newPrompt, Cron: &newCron,
+	}); err != nil {
+		t.Fatalf("edited approve: %v", err)
+	}
+	if got.Name != newName || got.Prompt != newPrompt || got.Cron != newCron {
+		t.Fatalf("edits not applied: %+v", got)
+	}
+
+	// An edited cron flows to the seam VERBATIM — cron syntax is validated
+	// there (models.NewTask, the same single create path unedited args use;
+	// see the runStagedScheduleTask doc comment), so a seam rejection of a bad
+	// edited cron propagates exactly like any seam error.
+	bad := "not a cron"
+	if _, err := s.runStagedScheduleTask(context.Background(), approval, &scheduleTaskEdits{Cron: &bad}); err != nil {
+		t.Fatalf("edit pass-through: %v", err)
+	}
+	if calls != 2 || got.Cron != bad {
+		t.Fatalf("edited cron did not reach the seam: calls=%d cron=%q", calls, got.Cron)
 	}
 }
