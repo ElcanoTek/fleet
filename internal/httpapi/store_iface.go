@@ -114,6 +114,10 @@ type chatStore interface {
 	ListProjectMemories(ctx context.Context, projectID string) ([]store.Memory, error)
 	DeleteProjectMemory(ctx context.Context, projectID, memoryID string) error
 	ListProjectConversationIDs(ctx context.Context, projectID string) ([]string, error)
+	// ListProjectConversationsForUser is the project home's chat list —
+	// the CALLER'S OWN conversations only (chats stay private to their
+	// creators even inside a shared project).
+	ListProjectConversationsForUser(ctx context.Context, userEmail, projectID string) ([]store.Conversation, error)
 
 	// Memories + memory proposals.
 	ListMemories(ctx context.Context, userEmail string) ([]store.Memory, error)

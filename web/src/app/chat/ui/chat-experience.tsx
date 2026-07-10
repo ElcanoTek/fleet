@@ -46,6 +46,7 @@ import {
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { Icon } from "./Icon";
 import { ProjectsModal, type Project } from "./ProjectsModal";
+import { ProjectHome } from "./ProjectHome";
 import { MemoryGraphView } from "./MemoryGraphView";
 import { ConversationTotalsChip, type PendingAttachment } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
@@ -602,6 +603,15 @@ export function ChatExperience() {
     create?: boolean;
     selectId?: string;
   }>(null);
+  // Project home (#509 follow-up): the page a project's rail row opens —
+  // chats, sources, instructions, per-project settings. null = normal chat
+  // view. settings=true opens straight into the settings dialog (the rail
+  // kebab's "Project settings…").
+  const [projectHome, setProjectHome] = useState<null | {
+    id: string;
+    settings?: boolean;
+  }>(null);
+
   const [memoryDraft, setMemoryDraft] = useState("");
   const [memoryKindDraft, setMemoryKindDraft] = useState<string>("fact");
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
@@ -2201,6 +2211,10 @@ export function ChatExperience() {
       cancelled = true;
     };
   }, [loadProjects]);
+  const projectHomeProject = projectHome
+    ? (projects.find((p) => p.id === projectHome.id) ?? null)
+    : null;
+
   const closeProjectsModal = () => {
     setProjectsModal(null);
     void loadProjects();
@@ -2312,6 +2326,36 @@ export function ChatExperience() {
     } catch (err) {
       console.error("share project error:", err);
       showRailError("Couldn't update sharing — network error.");
+    }
+  };
+
+  // updateProject is the project home's mutation seam (instructions edits
+  // and the per-project settings dialog): a bare PATCH passthrough that
+  // reports success so the home keeps unsaved drafts on failure, refreshing
+  // the rail's list on success. Failures surface on the rail-error toast
+  // (the server's own message when it has one — e.g. the no-team guidance).
+  const updateProject = async (
+    projectID: string,
+    patch: { name?: string; instructions?: string; team_shared?: boolean },
+  ): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(projectID)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const detail = (await res.text()).trim();
+        console.error("update project failed:", res.status, detail);
+        showRailError(detail || `Couldn't update the project (HTTP ${res.status}).`);
+        return false;
+      }
+      await loadProjects();
+      return true;
+    } catch (err) {
+      console.error("update project error:", err);
+      showRailError("Couldn't update the project — network error.");
+      return false;
     }
   };
 
@@ -3512,8 +3556,8 @@ export function ChatExperience() {
           searchShortcut={searchShortcut}
           onOpenProjects={() => setProjectsModal({})}
           onCreateProject={() => setProjectsModal({ create: true })}
-          onEditProject={(projectID) =>
-            setProjectsModal({ selectId: projectID })
+          onOpenProjectHome={(projectID, settings) =>
+            setProjectHome({ id: projectID, settings })
           }
           onPinProject={(projectID, pinned) =>
             void pinProject(projectID, pinned)
@@ -4080,8 +4124,9 @@ export function ChatExperience() {
               content area, left-aligned to the "Chat" header label, carrying the
               existing rename-on-click affordance + the lockdown badge. A new/empty
               chat (no active conversation) shows no name — the empty-state hero in
-              the transcript stands in. */}
-          {activeConversationId ? (
+              the transcript stands in. Hidden while a project home is open (the
+              home has its own header; the chat underneath stays mounted). */}
+          {activeConversationId && !projectHomeProject ? (
             <div className="flex min-w-0 items-center gap-2 px-4 pt-3 sm:px-6">
               {renamingTitleDraft !== null ? (
                 <input
@@ -4139,11 +4184,45 @@ export function ChatExperience() {
             </div>
           ) : null}
 
+          {/* Project home replaces the chat content while open — the rail's
+              project rows and kebab land here. */}
+          {projectHomeProject ? (
+            <ProjectHome
+              key={projectHomeProject.id}
+              project={projectHomeProject}
+              chats={conversations.filter((c) => c.project_id === projectHomeProject.id)}
+              isOwner={projectHomeProject.owner_email === userEmail}
+              initialSettingsOpen={projectHome?.settings}
+              onBack={() => setProjectHome(null)}
+              onOpenChat={(conversationId) => {
+                setProjectHome(null);
+                void loadConversation(conversationId);
+              }}
+              onNewChat={() => {
+                setProjectHome(null);
+                void startProjectChat(projectHomeProject.id);
+              }}
+              onSaveInstructions={(instructions) =>
+                updateProject(projectHomeProject.id, { instructions })
+              }
+              onUpdateSettings={(patch) => updateProject(projectHomeProject.id, patch)}
+              onDelete={() => {
+                setProjectHome(null);
+                void deleteProject(projectHomeProject.id);
+              }}
+            />
+          ) : null}
+
           {/* Chat content — transcript scrolls, composer pins to the bottom.
               grid-cols-[minmax(0,1fr)] clamps the single column to the container
               width so rich content can't bleed past the right edge on mobile;
               min-w-0 descendants still scroll wide children internally. */}
-          <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] gap-2 overflow-hidden px-3 pb-3 pt-2 sm:gap-3 sm:px-6 sm:pb-5 lg:px-8 xl:px-10">
+          <div
+            className={[
+              "grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] gap-2 overflow-hidden px-3 pb-3 pt-2 sm:gap-3 sm:px-6 sm:pb-5 lg:px-8 xl:px-10",
+              projectHomeProject ? "hidden" : "",
+            ].join(" ")}
+          >
             <ChatTranscript
               conversationRef={conversationRef}
               streamEndRef={streamEndRef}
