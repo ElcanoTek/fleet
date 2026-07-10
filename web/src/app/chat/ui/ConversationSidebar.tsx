@@ -150,66 +150,42 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
 }
 
 // ── Temporary-section info note ──────────────────────────────────────────────
-// The ⓘ next to the "Temporary" group header click-toggles the retention
-// explainer on the shared .conv-tooltip surface (portaled to <body> like the
-// sealed tooltip above, and for the same reason). Click-toggle rather than
-// hover-only so it works on touch; dismissed by clicking anywhere else or
-// pressing Escape. The copy states the server's default TTL
-// (CONVERSATION_TTL_DAYS, default 14) and the two keep actions — pinning and
-// filing into a project both exempt a chat from the sweep.
+// The ⚠ next to the "Temporary" group header shows the retention explainer on
+// hover and keyboard focus, on the shared .conv-tooltip surface (portaled to
+// <body> like the sealed tooltip above, and for the same reason). On touch —
+// no hover — the focus a tap gives the button is what shows it. The copy
+// states the server's default TTL (CONVERSATION_TTL_DAYS, default 14) and the
+// two keep actions — pinning and filing into a project both exempt a chat
+// from the sweep.
 const RECENT_INFO_TEXT =
   "Chats here are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it.";
 
 function RecentInfoButton() {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const btnRef = useRef<HTMLButtonElement | null>(null);
-
-  useEffect(() => {
-    if (!pos) return;
-    // Clicks on the trigger itself are the toggle's job; everything else
-    // (including clicks inside the tooltip, which only carries static text)
-    // dismisses. Listeners attach only while open.
-    const onDocClick = (e: MouseEvent) => {
-      if (
-        btnRef.current &&
-        e.target instanceof Node &&
-        btnRef.current.contains(e.target)
-      )
-        return;
-      setPos(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setPos(null);
-    };
-    document.addEventListener("click", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("click", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [pos]);
+  // Hover AND keyboard focus show the explainer (the sealed-lock tooltip's
+  // exact mechanics — was click-toggle, which read as a broken button). The
+  // trade-off is touch: with no hover, a tap (focus) is what shows it.
+  const show = (e: React.SyntheticEvent<HTMLElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    // Same placement math as the sealed tooltip: below the trigger, shifted
+    // so the surface's arrow points back at the anchor.
+    setPos({
+      top: Math.round(r.bottom + 7),
+      left: Math.round(r.left + r.width / 2 - 17),
+    });
+  };
+  const hide = () => setPos(null);
 
   return (
     <span className="relative inline-flex">
       <button
-        ref={btnRef}
         type="button"
         aria-label="About temporary chats"
-        aria-expanded={pos !== null}
-        className="hit-area inline-flex items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] aria-expanded:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-        onClick={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          // Same placement math as the sealed tooltip: below the button,
-          // shifted so the surface's arrow points back at the anchor.
-          setPos(
-            pos
-              ? null
-              : {
-                  top: Math.round(r.bottom + 7),
-                  left: Math.round(r.left + r.width / 2 - 17),
-                },
-          );
-        }}
+        className="hit-area inline-flex items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
       >
         <Icon name="warning" className="size-[0.9rem]" />
       </button>
@@ -219,7 +195,6 @@ function RecentInfoButton() {
               role="tooltip"
               className="conv-tooltip"
               style={{ top: pos.top, left: pos.left }}
-              onClick={(e) => e.stopPropagation()}
             >
               {RECENT_INFO_TEXT}
             </span>,
@@ -1278,7 +1253,9 @@ export function ConversationSidebar({
   // over message content, 300ms debounce). null = no query / search
   // disabled server-side / fetch failed — the "In messages" group simply
   // doesn't render; the title filter still works.
-  const [contentResults, setContentResults] = useState<SearchResult[] | null>(null);
+  const [contentResults, setContentResults] = useState<SearchResult[] | null>(
+    null,
+  );
   useEffect(() => {
     const q = sidebarQuery.trim();
     let cancelled = false;
@@ -1293,17 +1270,21 @@ export function ConversationSidebar({
           return;
         }
         void (async () => {
-        try {
-          const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
-          if (!res.ok) {
+          try {
+            const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
+              cache: "no-store",
+            });
+            if (!res.ok) {
+              if (!cancelled) setContentResults(null);
+              return;
+            }
+            const data = (await res.json()) as {
+              results: SearchResult[] | null;
+            };
+            if (!cancelled) setContentResults(data.results ?? []);
+          } catch {
             if (!cancelled) setContentResults(null);
-            return;
           }
-          const data = (await res.json()) as { results: SearchResult[] | null };
-          if (!cancelled) setContentResults(data.results ?? []);
-        } catch {
-          if (!cancelled) setContentResults(null);
-        }
         })();
       },
       q.length < 2 ? 0 : 300,
@@ -1744,7 +1725,7 @@ export function ConversationSidebar({
         </div>
       }
     >
-        {/* Unified search — one bar for everything: a live client-side filter
+      {/* Unified search — one bar for everything: a live client-side filter
           over chat titles (project chats included), matching project names,
           and (debounced) Postgres full-text hits inside message content.
           Replaces the old top-right ⌘K palette; ⌘K now focuses this input. */}
@@ -1764,7 +1745,8 @@ export function ConversationSidebar({
           value={sidebarQuery}
           onChange={(e) => setSidebarQuery(e.target.value)}
           placeholder={`Search… (${searchShortcut})`}
-          aria-label="Search" data-testid="search-input"
+          aria-label="Search"
+          data-testid="search-input"
           className="search-input-no-native-clear min-h-[2.2rem] w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-[0.4rem] pl-[2.1rem] pr-8 text-[0.85rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
         />
         {sidebarQuery ? (
@@ -1889,7 +1871,6 @@ export function ConversationSidebar({
           </button>
         ) : null}
 
-
         {/* Active-filter chips */}
         {filterFolder || filterLabels.length > 0 ? (
           <div
@@ -2013,7 +1994,9 @@ export function ConversationSidebar({
                       </span>
                       <span
                         className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]"
-                        dangerouslySetInnerHTML={{ __html: renderPreview(r.match_preview) }}
+                        dangerouslySetInnerHTML={{
+                          __html: renderPreview(r.match_preview),
+                        }}
                       />
                     </button>
                   ))}
