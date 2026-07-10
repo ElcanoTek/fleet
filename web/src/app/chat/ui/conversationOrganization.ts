@@ -145,7 +145,7 @@ export const MAX_RAIL_PROJECTS = 5;
 // module React-free and unit-testable, like OrganizableConversation above).
 export type ProjectLike = { id: string; name: string; updated_at: number };
 
-export type ProjectGroup<T> = { project: ProjectLike; chats: T[] };
+export type ProjectGroup<T, P extends ProjectLike = ProjectLike> = { project: P; chats: T[] };
 
 // projectGroups returns the rail's project tree: the top `max` projects by
 // most-recent update, each with its conversations in the caller's list order
@@ -153,12 +153,13 @@ export type ProjectGroup<T> = { project: ProjectLike; chats: T[] };
 // still gets a group — a fresh project must exist in the rail to be a drag
 // target. Conversations whose project is NOT in the top slice stay hidden
 // from the main list (they're project chats) and are reachable via search,
-// filters, or the modal.
-export function projectGroups<T extends OrganizableConversation>(
+// filters, or the modal. Generic over the caller's project type so richer
+// fields (owner_email for the kebab's owner gate) survive the grouping.
+export function projectGroups<T extends OrganizableConversation, P extends ProjectLike>(
   conversations: readonly T[],
-  projects: readonly ProjectLike[],
+  projects: readonly P[],
   max: number = MAX_RAIL_PROJECTS,
-): ProjectGroup<T>[] {
+): ProjectGroup<T, P>[] {
   return [...projects]
     .sort((a, b) => b.updated_at - a.updated_at)
     .slice(0, max)
