@@ -43,6 +43,7 @@ import type {
   ServerConfig,
 } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
+import { renderPreview, type SearchResult } from "./SearchBar";
 
 // ── Share glyph (#226) ───────────────────────────────────────────────────────
 // The chain-link icon used for share affordances; `off` adds the slash for the
@@ -1135,6 +1136,7 @@ export function ConversationSidebar({
   onBulkPin,
   onBulkMoveFolder,
   onBulkAddLabel,
+  searchShortcut,
   onOpenProjects,
   onCreateProject,
   onEditProject,
@@ -1220,6 +1222,8 @@ export function ConversationSidebar({
   onBulkPin: () => void;
   onBulkMoveFolder: (folder: string) => void;
   onBulkAddLabel: (label: string) => void;
+  // Platform-appropriate hint for the unified search bar ("⌘K" / "Ctrl+K").
+  searchShortcut: string;
   // Opens the Projects modal (#509). Lives in the rail (like Claude/ChatGPT)
   // rather than the page header; ChatExperience owns the modal state.
   onOpenProjects: () => void;
@@ -1269,6 +1273,46 @@ export function ConversationSidebar({
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(
     null,
   );
+  // Unified search (#308 merged into the rail): alongside the client-side
+  // title filter, the same query hits GET /api/search (Postgres full-text
+  // over message content, 300ms debounce). null = no query / search
+  // disabled server-side / fetch failed — the "In messages" group simply
+  // doesn't render; the title filter still works.
+  const [contentResults, setContentResults] = useState<SearchResult[] | null>(null);
+  useEffect(() => {
+    const q = sidebarQuery.trim();
+    let cancelled = false;
+    // Every setState happens inside the timer callback, never synchronously
+    // in the effect body (the React compiler lint's cascading-render rule);
+    // a too-short query clears immediately via a 0ms timer for the same
+    // reason.
+    const handle = setTimeout(
+      () => {
+        if (q.length < 2) {
+          if (!cancelled) setContentResults(null);
+          return;
+        }
+        void (async () => {
+        try {
+          const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+          if (!res.ok) {
+            if (!cancelled) setContentResults(null);
+            return;
+          }
+          const data = (await res.json()) as { results: SearchResult[] | null };
+          if (!cancelled) setContentResults(data.results ?? []);
+        } catch {
+          if (!cancelled) setContentResults(null);
+        }
+        })();
+      },
+      q.length < 2 ? 0 : 300,
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [sidebarQuery]);
   // The project row a conversation drag is currently hovering — drives the
   // drop-target highlight.
   const [dragOverProject, setDragOverProject] = useState<string | null>(null);
@@ -1319,6 +1363,17 @@ export function ConversationSidebar({
     query: sidebarQuery,
   });
   const searching = sidebarQuery.trim().length > 0;
+  // Unified-search derivations: project names matching the query, and
+  // content hits deduped against conversations the title filter already
+  // shows (a chat matching both ways should appear once).
+  const queryLower = sidebarQuery.trim().toLowerCase();
+  const matchingProjects = searching
+    ? projects.filter((p) => p.name.toLowerCase().includes(queryLower))
+    : [];
+  const shownIds = new Set(filteredConversations.map((c) => c.id));
+  const messageHits = searching
+    ? (contentResults ?? []).filter((r) => !shownIds.has(r.conversation_id))
+    : [];
 
   const selecting = selectMode;
   const largeSelection = selectedIds.size > 50;
@@ -1689,6 +1744,41 @@ export function ConversationSidebar({
         </div>
       }
     >
+        {/* Unified search — one bar for everything: a live client-side filter
+          over chat titles (project chats included), matching project names,
+          and (debounced) Postgres full-text hits inside message content.
+          Replaces the old top-right ⌘K palette; ⌘K now focuses this input. */}
+      <div
+        className={[
+          "relative mb-1.5 flex items-center",
+          railCollapsed ? "sm:hidden" : "",
+        ].join(" ")}
+      >
+        <Icon
+          name="search"
+          className="pointer-events-none absolute left-[0.65rem] size-[0.95rem] text-[var(--color-text-muted)]"
+        />
+        <input
+          ref={searchRef}
+          type="search"
+          value={sidebarQuery}
+          onChange={(e) => setSidebarQuery(e.target.value)}
+          placeholder={`Search… (${searchShortcut})`}
+          aria-label="Search" data-testid="search-input"
+          className="search-input-no-native-clear min-h-[2.2rem] w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-[0.4rem] pl-[2.1rem] pr-8 text-[0.85rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+        />
+        {sidebarQuery ? (
+          <button
+            type="button"
+            aria-label="Clear search"
+            className="absolute right-[0.4rem] inline-flex size-6 items-center justify-center rounded-[var(--radius-pill)] text-[var(--color-text-muted)] transition before:absolute before:left-1/2 before:top-1/2 before:size-8 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+            onClick={() => setSidebarQuery("")}
+          >
+            <Icon name="close" className="size-[0.8rem]" />
+          </button>
+        ) : null}
+      </div>
+
       {/* Projects section — ABOVE the New-chat row (the rail's primary nav
           block). Wide-collapsed (≥sm) it hides with the rest of the wide-only
           content; the max-height guard keeps a deep expanded tree from
@@ -1711,12 +1801,10 @@ export function ConversationSidebar({
       />
 
       {/* Chats section header (mirrors the Projects header): a collapsible
-          heading over everything below — New chat, search, and the
-          conversation list. The trailing icons are quick paths to the two
-          affordances that (for now) also keep their full-size originals in
-          the section body: search focuses the inline input, + starts a chat
-          (sealed when the deployment is lockdown-only). Hidden in the ≥sm
-          collapsed strip, where the body renders as icons regardless. */}
+          heading over the conversation list. + is THE new-chat affordance
+          now (sealed automatically when the deployment is lockdown-only);
+          the lock starts a sealed chat where both modes exist. Hidden in
+          the ≥sm collapsed strip, where the body renders as icons. */}
       <div
         className={[
           "flex items-center gap-1",
@@ -1731,17 +1819,11 @@ export function ConversationSidebar({
             onToggle={() => setChatsSectionOpen((o) => !o)}
           />
         </div>
-        <PortalTipIconButton
-          tip="Search chats"
-          ariaLabel="Search chats"
-          icon="search"
-          iconClassName="size-4"
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-          onClick={() => {
-            setChatsSectionOpen(true);
-            requestAnimationFrame(() => searchRef.current?.focus());
-          }}
-        />
+        {serverConfig.lockdownAvailable && !serverConfig.lockdownOnly ? (
+          <SealedNewChatButton
+            onClick={() => clearConversation({ lockdown: true })}
+          />
+        ) : null}
         <PortalTipIconButton
           tip="New chat"
           ariaLabel="New chat"
@@ -1764,46 +1846,27 @@ export function ConversationSidebar({
           chatsSectionOpen ? "" : railCollapsed ? "hidden sm:flex" : "hidden",
         ].join(" ")}
       >
-        {/* New chat / sealed-chat row — collapsed (≥sm) it stacks as icon-only
-          2.5rem buttons with data-tip labels, per the design's .rail-new-row. */}
-        <div
-          className={[
-            "flex gap-1.5",
-            railCollapsed ? "sm:flex-col sm:items-center sm:gap-[0.4rem]" : "",
-          ].join(" ")}
-        >
-          {serverConfig.lockdownOnly ? (
-            <button
-              type="button"
-              className={[
-                "flex flex-1 items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]",
-                railCollapsed ? "sm:size-10 sm:flex-none sm:gap-0 sm:p-0" : "",
-              ].join(" ")}
-              title="New chat — every chat on this server is sealed (sandboxed, vetted model only)"
-              aria-label="New chat — every chat on this server is sealed (sandboxed, vetted model only)"
-              data-tip={railCollapsed ? "New chat" : undefined}
-              onClick={() => clearConversation({ lockdown: true })}
-            >
-              <Icon name="lock" className="size-4" />
-              <span className={railCollapsed ? "sm:hidden" : ""}>New chat</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              className={[
-                "flex flex-1 items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]",
-                railCollapsed ? "sm:size-10 sm:flex-none sm:gap-0 sm:p-0" : "",
-              ].join(" ")}
-              title="New chat"
-              aria-label="New chat"
-              data-tip={railCollapsed ? "New chat" : undefined}
-              onClick={() => clearConversation()}
-            >
-              <Icon name="plus" className="size-4" />
-              <span className={railCollapsed ? "sm:hidden" : ""}>New chat</span>
-            </button>
-          )}
-        </div>
+        {/* The full-size New-chat row is gone (the Chats heading's + owns it);
+            the ≥sm collapsed strip still needs an icon, like Projects below. */}
+        {railCollapsed ? (
+          <button
+            type="button"
+            className="hidden w-full items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:flex sm:size-10 sm:justify-center sm:p-0"
+            title="New chat"
+            aria-label="New chat"
+            data-tip="New chat"
+            onClick={() =>
+              clearConversation(
+                serverConfig.lockdownOnly ? { lockdown: true } : undefined,
+              )
+            }
+          >
+            <Icon
+              name={serverConfig.lockdownOnly ? "lock" : "plus"}
+              className="size-4"
+            />
+          </button>
+        ) : null}
 
         {/* Projects (#509) — in the expanded rail (and the <sm drawer) the
           Projects SECTION in the list below is the entry point, so this
@@ -1826,39 +1889,6 @@ export function ConversationSidebar({
           </button>
         ) : null}
 
-        {/* Search filter — the design's .chat-search: leading magnifier icon and
-          a custom clear button (type="text" so the native search clear never
-          doubles it). */}
-        <div
-          className={[
-            "relative mt-2 flex items-center",
-            railCollapsed ? "sm:hidden" : "",
-          ].join(" ")}
-        >
-          <Icon
-            name="search"
-            className="pointer-events-none absolute left-[0.65rem] size-[0.95rem] text-[var(--color-text-muted)]"
-          />
-          <input
-            ref={searchRef}
-            type="search"
-            value={sidebarQuery}
-            onChange={(e) => setSidebarQuery(e.target.value)}
-            placeholder="Search chats…"
-            aria-label="Search chats"
-            className="search-input-no-native-clear min-h-[2.2rem] w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-[0.4rem] pl-[2.1rem] pr-8 text-[0.85rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
-          />
-          {sidebarQuery ? (
-            <button
-              type="button"
-              aria-label="Clear search"
-              className="absolute right-[0.4rem] inline-flex size-6 items-center justify-center rounded-[var(--radius-pill)] text-[var(--color-text-muted)] transition before:absolute before:left-1/2 before:top-1/2 before:size-8 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-              onClick={() => setSidebarQuery("")}
-            >
-              <Icon name="close" className="size-[0.8rem]" />
-            </button>
-          ) : null}
-        </div>
 
         {/* Active-filter chips */}
         {filterFolder || filterLabels.length > 0 ? (
@@ -1926,15 +1956,69 @@ export function ConversationSidebar({
             </p>
           ) : filtering ? (
             <>
+              {/* Matching project names (unified search): clicking one clears
+                  the query and reveals that project expanded in the tree. */}
+              {searching && matchingProjects.length > 0 ? (
+                <div className="mb-1">
+                  <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
+                    Projects
+                  </p>
+                  {matchingProjects.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
+                      onClick={() => {
+                        setSidebarQuery("");
+                        setProjectsSectionOpen(true);
+                        setExpandedProjects((cur) => new Set(cur).add(p.id));
+                      }}
+                    >
+                      <Icon name="briefcase" className="size-3.5 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate text-left">
+                        {p.name}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               {filteredConversations.length === 0 ? (
-                <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
-                  {searching
-                    ? `No chats match “${sidebarQuery.trim()}”.`
-                    : "Nothing matches this filter."}
-                </p>
+                messageHits.length === 0 && matchingProjects.length === 0 ? (
+                  <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
+                    {searching
+                      ? `Nothing matches “${sidebarQuery.trim()}”.`
+                      : "Nothing matches this filter."}
+                  </p>
+                ) : null
               ) : (
                 filteredConversations.map(renderRow)
               )}
+              {/* Full-text hits inside message content (unified search) —
+                  deduped against the title matches above. */}
+              {messageHits.length > 0 ? (
+                <div className="mt-2">
+                  <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
+                    In messages
+                  </p>
+                  {messageHits.map((r) => (
+                    <button
+                      key={r.conversation_id}
+                      type="button"
+                      data-testid="search-result"
+                      className="block w-full rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--rail-hover)]"
+                      onClick={() => void loadConversation(r.conversation_id)}
+                    >
+                      <span className="block truncate text-[0.85rem] text-[var(--color-text-secondary)]">
+                        {r.title || "Untitled"}
+                      </span>
+                      <span
+                        className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]"
+                        dangerouslySetInnerHTML={{ __html: renderPreview(r.match_preview) }}
+                      />
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <div className="mt-3 border-t border-[var(--color-border)] pt-2 opacity-70 transition focus-within:opacity-100 hover:opacity-100">
                 <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
                   Refine
@@ -1948,11 +2032,11 @@ export function ConversationSidebar({
               {pinned.length > 0 ? (
                 <div className="mb-1">
                   <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
+                    Pinned
                     <Icon
                       name="pin"
                       className="size-3.5 shrink-0 text-[var(--color-accent)]"
                     />
-                    Pinned
                   </div>
                   {pinned.map(renderRow)}
                 </div>
@@ -1963,15 +2047,6 @@ export function ConversationSidebar({
                 <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
                   Temporary
                   <RecentInfoButton />
-                  {/* Sealed-chat entry (moved from the New-chat row): a sealed
-                    chat is unpinned/unfiled, so it lands in this section —
-                    starting one from its heading keeps cause next to effect. */}
-                  {serverConfig.lockdownAvailable &&
-                  !serverConfig.lockdownOnly ? (
-                    <SealedNewChatButton
-                      onClick={() => clearConversation({ lockdown: true })}
-                    />
-                  ) : null}
                 </div>
                 {recent.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
