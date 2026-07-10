@@ -56,7 +56,7 @@ test("Ctrl+K focuses the rail search; a query shows highlighted message hits", a
   await expect(page.getByTestId("search-result")).toHaveCount(0);
 });
 
-test("a query also surfaces matching project names", async ({ page }) => {
+test("a query filters the Projects section and breadcrumbs message hits", async ({ page }) => {
   await page.route("**/api/projects", (r: Route) =>
     r.fulfill({
       json: {
@@ -69,22 +69,57 @@ test("a query also surfaces matching project names", async ({ page }) => {
             created_at: 1719432000,
             updated_at: 1719432000,
           },
+          {
+            id: "p-ops",
+            owner_email: "e2e@example.com",
+            name: "Ops runbooks",
+            mcp_servers: [],
+            created_at: 1719432000,
+            updated_at: 1719432001,
+          },
         ],
       },
     }),
   );
-  await mockChatBoot(page);
-  await mockSearch(page);
+  await mockChatBoot(page, {
+    // The message hit's conversation lives in the matching project, so the
+    // result row shows the "Project › title" path.
+    conversations: [{ id: "conv-search-1", title: "Deploy notes", project_id: "p-python" }],
+  });
+  await page.route("**/api/search**", (r: Route) =>
+    r.fulfill({
+      json: {
+        results: [
+          {
+            conversation_id: "conv-search-1",
+            title: "Deploy notes",
+            match_preview: "the async <mark>python</mark> job",
+            matched_at: 1719432000,
+          },
+        ],
+        total: 1,
+      },
+    }),
+  );
   await page.goto("/chat");
   await page
     .getByRole("heading", { name: /what can i help with/i })
     .waitFor({ timeout: 15_000 });
 
   await page.getByTestId("search-input").fill("python");
-  // The matching project shows under a "Projects" group in the results.
+  // The matching project appears as a real tree row under the Projects
+  // section; the non-matching one is filtered out.
   await expect(
-    page.getByRole("button", { name: "Python migrations", exact: true }),
+    page.getByRole("button", { name: /^Project Python migrations/ }),
   ).toBeVisible({ timeout: 5_000 });
+  await expect(
+    page.getByRole("button", { name: /^Project Ops runbooks/ }),
+  ).toBeHidden();
+  // The message hit carries its path: Project › chat title, snippet below.
+  const hit = page.getByTestId("search-result").first();
+  await expect(hit).toContainText("Python migrations ›");
+  await expect(hit).toContainText("Deploy notes");
+  await expect(hit.locator("mark")).toHaveText("python");
 });
 
 test("clicking a message hit loads that conversation", async ({ page }) => {

@@ -1351,6 +1351,13 @@ export function ConversationSidebar({
   const matchingProjects = searching
     ? projects.filter((p) => p.name.toLowerCase().includes(queryLower))
     : [];
+  // While searching, the Projects SECTION shows name matches from ALL
+  // projects (not just the top-5 slice) as normal expandable tree rows —
+  // results live under their real heading, not in an ad-hoc group inside
+  // the Chats list.
+  const visibleProjectTree = searching
+    ? projectGroups(conversations, matchingProjects, Math.max(matchingProjects.length, 1))
+    : projectTree;
   const shownIds = new Set(filteredConversations.map((c) => c.id));
   const messageHits = searching
     ? (contentResults ?? []).filter((r) => !shownIds.has(r.conversation_id))
@@ -1505,17 +1512,23 @@ export function ConversationSidebar({
         />
       </div>
       {projectsSectionOpen ? (
-        projectTree.length === 0 ? (
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
-            onClick={onCreateProject}
-          >
-            <Icon name="plus" className="size-3.5 shrink-0" />
-            New project…
-          </button>
+        visibleProjectTree.length === 0 ? (
+          searching ? (
+            <p className="px-2 py-1.5 text-[0.78rem] text-[var(--color-text-muted)]">
+              No matching projects.
+            </p>
+          ) : (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
+              onClick={onCreateProject}
+            >
+              <Icon name="plus" className="size-3.5 shrink-0" />
+              New project…
+            </button>
+          )
         ) : (
-          projectTree.map(({ project, chats }) => {
+          visibleProjectTree.map(({ project, chats }) => {
             const expanded = expandedProjects.has(project.id);
             const dropReady = dragOverProject === project.id;
             return (
@@ -1937,32 +1950,6 @@ export function ConversationSidebar({
             </p>
           ) : filtering ? (
             <>
-              {/* Matching project names (unified search): clicking one clears
-                  the query and reveals that project expanded in the tree. */}
-              {searching && matchingProjects.length > 0 ? (
-                <div className="mb-1">
-                  <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-                    Projects
-                  </p>
-                  {matchingProjects.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
-                      onClick={() => {
-                        setSidebarQuery("");
-                        setProjectsSectionOpen(true);
-                        setExpandedProjects((cur) => new Set(cur).add(p.id));
-                      }}
-                    >
-                      <Icon name="briefcase" className="size-3.5 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate text-left">
-                        {p.name}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
               {filteredConversations.length === 0 ? (
                 messageHits.length === 0 && matchingProjects.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
@@ -1975,31 +1962,46 @@ export function ConversationSidebar({
                 filteredConversations.map(renderRow)
               )}
               {/* Full-text hits inside message content (unified search) —
-                  deduped against the title matches above. */}
+                  deduped against the title matches above. Each hit carries
+                  its path (Project › chat title when the chat is filed) with
+                  the matched prompt snippet beneath. */}
               {messageHits.length > 0 ? (
                 <div className="mt-2">
                   <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
                     In messages
                   </p>
-                  {messageHits.map((r) => (
-                    <button
-                      key={r.conversation_id}
-                      type="button"
-                      data-testid="search-result"
-                      className="block w-full rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--rail-hover)]"
-                      onClick={() => void loadConversation(r.conversation_id)}
-                    >
-                      <span className="block truncate text-[0.85rem] text-[var(--color-text-secondary)]">
-                        {r.title || "Untitled"}
-                      </span>
-                      <span
-                        className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]"
-                        dangerouslySetInnerHTML={{
-                          __html: renderPreview(r.match_preview),
-                        }}
-                      />
-                    </button>
-                  ))}
+                  {messageHits.map((r) => {
+                    const conv = conversations.find((c) => c.id === r.conversation_id);
+                    const proj = conv?.project_id
+                      ? projects.find((p) => p.id === conv.project_id)
+                      : undefined;
+                    return (
+                      <button
+                        key={r.conversation_id}
+                        type="button"
+                        data-testid="search-result"
+                        className="block w-full rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--rail-hover)]"
+                        onClick={() => void loadConversation(r.conversation_id)}
+                      >
+                        <span className="block truncate text-[0.85rem] text-[var(--color-text-secondary)]">
+                          {proj ? (
+                            <>
+                              <span className="text-[var(--color-text-muted)]">{proj.name} › </span>
+                              {r.title || "Untitled"}
+                            </>
+                          ) : (
+                            r.title || "Untitled"
+                          )}
+                        </span>
+                        <span
+                          className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]"
+                          dangerouslySetInnerHTML={{
+                            __html: renderPreview(r.match_preview),
+                          }}
+                        />
+                      </button>
+                    );
+                  })}
                 </div>
               ) : null}
               <div className="mt-3 border-t border-[var(--color-border)] pt-2 opacity-70 transition focus-within:opacity-100 hover:opacity-100">
