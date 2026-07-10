@@ -3042,6 +3042,7 @@ export function ChatExperience() {
             void bulkPatchConversations({ labels: [label] });
             exitSelectMode();
           }}
+          onOpenProjects={() => setProjectsOpen(true)}
         />
 
         {searchOpen ? (
@@ -3502,15 +3503,6 @@ export function ChatExperience() {
                   onClick={() => setShortcutsOpen(true)}
                 >
                   <Icon name="keyboard" className="size-5" />
-                </button>
-                <button
-                  aria-label="Projects"
-                  className="relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  title="Projects"
-                  type="button"
-                  onClick={() => setProjectsOpen(true)}
-                >
-                  <Icon name="briefcase" className="size-5" />
                 </button>
                 <button
                   aria-label="Manage memories"
