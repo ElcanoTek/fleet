@@ -18,6 +18,9 @@ export type Project = {
   default_persona?: string;
   default_model?: string;
   mcp_servers: string[];
+  // Pinned floats the project to the top of the rail's Projects section
+  // (owner-only toggle, from the rail's project kebab).
+  pinned?: boolean;
   created_at: number;
   updated_at: number;
 };

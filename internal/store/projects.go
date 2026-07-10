@@ -36,8 +36,12 @@ type Project struct {
 	// MCPServers is the curated optional-MCP enablement inherited by new
 	// conversations (names from the global catalog; credentials host-side).
 	MCPServers []string `json:"mcp_servers"`
-	CreatedAt  int64    `json:"created_at"`
-	UpdatedAt  int64    `json:"updated_at"`
+	// Pinned floats the project to the top of the rail's Projects section.
+	// Owner-only like every other project mutation; on a team-shared project
+	// the owner's pin orders the rail for all members.
+	Pinned    bool  `json:"pinned"`
+	CreatedAt int64 `json:"created_at"`
+	UpdatedAt int64 `json:"updated_at"`
 }
 
 // MemberOf reports whether the user (email + resolved team) can see/use the
@@ -55,7 +59,7 @@ const (
 	maxProjectInstructionsLen = 8000
 )
 
-const projectColumns = `id, owner_email, name, instructions, team_id, default_persona, default_model, mcp_servers, created_at, updated_at`
+const projectColumns = `id, owner_email, name, instructions, team_id, default_persona, default_model, mcp_servers, pinned, created_at, updated_at`
 
 func scanProject(scanner interface{ Scan(...any) error }) (*Project, error) {
 	var (
@@ -63,7 +67,7 @@ func scanProject(scanner interface{ Scan(...any) error }) (*Project, error) {
 		mcpsRaw []byte
 	)
 	if err := scanner.Scan(&p.ID, &p.OwnerEmail, &p.Name, &p.Instructions, &p.TeamID,
-		&p.DefaultPersona, &p.DefaultModel, &mcpsRaw, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&p.DefaultPersona, &p.DefaultModel, &mcpsRaw, &p.Pinned, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if len(mcpsRaw) > 0 {
@@ -156,6 +160,7 @@ type ProjectPatch struct {
 	DefaultPersona *string
 	DefaultModel   *string
 	MCPServers     []string // nil = untouched; empty slice = clear
+	Pinned         *bool
 }
 
 // UpdateProject applies a partial update, owner-only (the WHERE enforces it).
@@ -186,11 +191,12 @@ func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch 
 			default_persona = COALESCE($4::text, default_persona),
 			default_model   = COALESCE($5::text, default_model),
 			mcp_servers     = COALESCE($6::jsonb, mcp_servers),
-			updated_at      = $7
-		 WHERE id = $8 AND owner_email = $9
+			pinned          = COALESCE($7::boolean, pinned),
+			updated_at      = $8
+		 WHERE id = $9 AND owner_email = $10
 		 RETURNING `+projectColumns,
 		patch.Name, patch.Instructions, patch.TeamID, patch.DefaultPersona, patch.DefaultModel,
-		mcpsArg, time.Now().Unix(), id, normalizeEmail(ownerEmail),
+		mcpsArg, patch.Pinned, time.Now().Unix(), id, normalizeEmail(ownerEmail),
 	)
 	p, err := scanProject(row)
 	if err != nil {
@@ -264,14 +270,17 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 // owner-scoped WHERE keeps a caller from moving someone else's chat. Unlike
 // creation, re-filing inherits nothing (persona/model/connectors stay as they
 // are); it only binds the project's instructions + shared memory from the
-// next turn on. A soft-deleted conversation is not mutable (#596).
+// next turn on. Filing also clears the pin (mirroring SetArchived): a
+// project chat lives only under its project, so a stale pinned flag would
+// make the chat pop back into Pinned on a later unfile. A soft-deleted
+// conversation is not mutable (#596).
 func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, projectID string) error {
 	var pid any // NULL when unfiling, matching the column's created-without-project state
 	if projectID != "" {
 		pid = projectID
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET project_id = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		`UPDATE conversations SET project_id = $1, pinned = (CASE WHEN $1::text IS NULL THEN pinned ELSE FALSE END), updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
 		pid, time.Now().Unix(), convID, userEmail,
 	)
 	if err != nil {

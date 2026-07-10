@@ -211,6 +211,18 @@ describe("project grouping (#509 follow-up)", () => {
     expect(groups[1].chats).toEqual([]);
   });
 
+  it("pinned projects sort first in place and always make the cut", () => {
+    const projects = [
+      proj("recent-a", 9),
+      proj("recent-b", 8),
+      { ...proj("pinned-old", 1), pinned: true },
+    ];
+    const groups = projectGroups([], projects, 2);
+    // The pinned project beats both fresher ones for the top slot; the
+    // remaining slot goes to the freshest unpinned.
+    expect(groups.map((g) => g.project.id)).toEqual(["pinned-old", "recent-a"]);
+  });
+
   it("search still reaches project conversations (filters are explicit)", () => {
     const all = [conv({ title: "quarterly report", project_id: "alpha" }), conv({ title: "misc" })];
     expect(filterConversations(all, { query: "quarterly" }).map((c) => c.title)).toEqual(["quarterly report"]);
