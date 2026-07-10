@@ -363,14 +363,18 @@ function ProjectPanel({
 // reject anyone else anyway; hiding them is honest UI, not the enforcement).
 function ProjectKebab({
   projectName,
+  pinned,
   isOwner,
   onEdit,
+  onPin,
   onRename,
   onDelete,
 }: {
   projectName: string;
+  pinned: boolean;
   isOwner: boolean;
   onEdit: () => void;
+  onPin: () => void;
   onRename: () => void;
   onDelete: () => void;
 }) {
@@ -416,6 +420,15 @@ function ProjectKebab({
         </MenuItem>
         {isOwner ? (
           <>
+            <MenuItem
+              icon={<Icon name="pin" className="size-4" />}
+              onClick={() => {
+                close();
+                onPin();
+              }}
+            >
+              {pinned ? "Unpin" : "Pin"}
+            </MenuItem>
             <MenuItem
               icon={<Icon name="edit" className="size-4" />}
               onClick={() => {
@@ -638,15 +651,20 @@ function ConversationKebab({
         onFlyoutClose={() => setFlyout(null)}
         flyoutLabel={flyout === "folder" ? "Add to folder" : flyout === "project" ? "Move to project" : "Labels"}
       >
-        <MenuItem
-          icon={<Icon name="pin" className="size-4" />}
-          onClick={() => {
-            onPin();
-            close();
-          }}
-        >
-          {conversation.pinned ? "Unpin" : "Pin"}
-        </MenuItem>
+        {/* Pinning is meaningless for a project chat: it lives only under
+            its project (never in Pinned) and is already retention-exempt —
+            filing even clears the flag server-side. Hide rather than no-op. */}
+        {conversation.project_id ? null : (
+          <MenuItem
+            icon={<Icon name="pin" className="size-4" />}
+            onClick={() => {
+              onPin();
+              close();
+            }}
+          >
+            {conversation.pinned ? "Unpin" : "Pin"}
+          </MenuItem>
+        )}
         <MenuItem
           icon={<Icon name="edit" className="size-4" />}
           onClick={() => {
@@ -1022,6 +1040,7 @@ export function ConversationSidebar({
   onOpenProjects,
   onCreateProject,
   onEditProject,
+  onPinProject,
   onRenameProject,
   onDeleteProject,
   projects,
@@ -1097,6 +1116,10 @@ export function ConversationSidebar({
   // Opens the modal with this project selected (the project kebab's
   // "Edit project…" — full editor incl. instructions/sharing/memories).
   onEditProject: (projectID: string) => void;
+  // Pin/unpin a project (owner-only, from the project kebab): a pinned
+  // project floats to the top of the rail's list in place — no separate
+  // Pinned section like chats have.
+  onPinProject: (projectID: string, pinned: boolean) => void;
   // Inline rename from the rail (project kebab → Rename); the parent PATCHes
   // just the name.
   onRenameProject: (projectID: string, name: string) => void;
@@ -1374,13 +1397,18 @@ export function ConversationSidebar({
                         name="chevron-right"
                         className={["size-3 shrink-0 transition", expanded ? "rotate-90" : ""].join(" ")}
                       />
+                      {project.pinned ? (
+                        <Icon name="pin" className="size-3 shrink-0 text-[var(--color-accent)]" />
+                      ) : null}
                       <span className="min-w-0 flex-1 truncate text-left">{project.name}</span>
                     </button>
                     <div className="absolute inset-y-0 right-1 flex items-center">
                       <ProjectKebab
                         projectName={project.name}
+                        pinned={Boolean(project.pinned)}
                         isOwner={project.owner_email === userEmail}
                         onEdit={() => onEditProject(project.id)}
+                        onPin={() => onPinProject(project.id, !project.pinned)}
                         onRename={() => setRenamingProjectId(project.id)}
                         onDelete={() => onDeleteProject(project.id)}
                       />

@@ -48,6 +48,10 @@ type projectRequest struct {
 	// server resolves the team — a caller can never name an arbitrary team);
 	// false makes/keeps it personal.
 	TeamShared *bool `json:"team_shared"`
+	// Pinned floats the project to the top of the rail's Projects section
+	// (PATCH only; a new project starts unpinned). Owner-only, enforced by
+	// the store's owner-scoped UPDATE.
+	Pinned *bool `json:"pinned"`
 }
 
 // projects handles GET/POST /projects.
@@ -149,6 +153,7 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 			DefaultPersona: req.DefaultPersona,
 			DefaultModel:   req.DefaultModel,
 			MCPServers:     req.MCPServers,
+			Pinned:         req.Pinned,
 		}
 		if req.TeamShared != nil {
 			team := ""
