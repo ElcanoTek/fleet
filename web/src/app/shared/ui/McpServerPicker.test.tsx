@@ -115,7 +115,7 @@ describe("McpServerPicker — enable/disable + account selection", () => {
     expect(options).toEqual(["", "client_a", "client_b"]);
   });
 
-  it("sorts enabled servers ahead of disabled ones (catalog order within each group)", () => {
+  it("keeps catalog order regardless of enablement (a toggled row must not move)", () => {
     render(
       <McpServerPicker
         mode="task"
@@ -127,7 +127,7 @@ describe("McpServerPicker — enable/disable + account selection", () => {
     const rows = Array.from(document.querySelectorAll("[data-server]")).map((r) =>
       r.getAttribute("data-server"),
     );
-    expect(rows).toEqual(["magnite", "xandr"]);
+    expect(rows).toEqual(["xandr", "magnite"]);
   });
 
   it("shows the tool count only on enabled rows and pluralizes it", () => {

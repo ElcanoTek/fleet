@@ -22,9 +22,10 @@ import type { McpServer, MCPChoice } from "@/app/shared/lib/orchestratorApi";
 // when it appears in the list; its account is the chosen credential seat
 // (account === "" / undefined means the default/shared seat).
 //
-// Row order: connected remote servers first (read-only), then enabled servers,
-// then the rest — each group in catalog order — so the granted surface is
-// scannable at the top of the roster.
+// Row order: connected remote servers first (read-only), then the toggleable
+// roster in catalog order. Enabled rows tint in place — deliberately NOT
+// sorted first, so a row never moves (or resizes) under the pointer when
+// toggled.
 
 export type McpServerPickerMode = "conversation" | "task";
 
@@ -68,9 +69,8 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
     [selection, onChange],
   );
 
-  // Stable regrouping (remote → enabled → rest); ties keep catalog order.
-  const rank = (s: McpServer) => (s.remote ? 0 : findChoice(selection, s.name) ? 1 : 2);
-  const ordered = [...servers].sort((a, b) => rank(a) - rank(b));
+  // Stable regrouping (remote → rest); ties keep catalog order.
+  const ordered = [...servers].sort((a, b) => Number(b.remote ?? false) - Number(a.remote ?? false));
 
   return (
     <div

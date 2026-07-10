@@ -3220,6 +3220,27 @@ select.mcp-server-picker__account-select {
 .task-modal .mcp-server-picker__account-select {
   width: auto;
 }
+/* Select chevron inset: the native UA arrow hugs the control's right edge
+   (padding can't move it), so the modal's selects draw their own chevron —
+   same 10px stroke glyph as every other chevron in the design — at a real
+   0.6rem inset, with padding reserving its lane. The glyph color is the
+   muted-text token's value embedded per theme (a background SVG can't read
+   custom properties); nothing else about the controls changes. */
+.task-modal select.mcp-server-picker__account-select,
+.task-modal .task-gate-options select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23beb6cd' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 10px 10px;
+  background-color: var(--color-surface-1);
+  padding-right: 1.6rem;
+}
+:root[data-theme="light"] .task-modal select.mcp-server-picker__account-select,
+:root[data-theme="light"] .task-modal .task-gate-options select {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%235c6a87' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+}
 .task-modal .task-gate-command {
   margin-top: 0.625rem;
 }
