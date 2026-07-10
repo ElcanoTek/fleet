@@ -118,6 +118,9 @@ type chatStore interface {
 	// the CALLER'S OWN conversations only (chats stay private to their
 	// creators even inside a shared project).
 	ListProjectConversationsForUser(ctx context.Context, userEmail, projectID string) ([]store.Conversation, error)
+	// ListProjectConversationPreviews is the home's 1–2 line chat history:
+	// last text-message snippet per conversation, same caller scoping.
+	ListProjectConversationPreviews(ctx context.Context, userEmail, projectID string) (map[string]string, error)
 
 	// Memories + memory proposals.
 	ListMemories(ctx context.Context, userEmail string) ([]store.Memory, error)
