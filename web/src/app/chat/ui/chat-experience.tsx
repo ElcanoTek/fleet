@@ -100,9 +100,9 @@ export type ConversationSummary = {
   // archived ones (#282). Archived conversations live in the collapsed
   // "Archived" sidebar section, not the main list.
   archived_at?: number | null;
-  // folder is the single flat bucket this conversation is filed under (#279).
-  // Empty/undefined = unfiled. Folders are derived from these values in the
-  // rail — there is no folders table. Filing a conversation auto-pins it.
+  // folder is the old flat bucket (#279). The server still stores/serves the
+  // field, but the folders UI was removed (projects superseded them) — the
+  // rail ignores it now. Kept in the type because it's on the wire.
   folder?: string;
   // labels is the conversation's tag set (#279) — up to 10, 32 chars each,
   // colored by name-hash. Undefined/empty = unlabeled.
@@ -609,9 +609,8 @@ export function ChatExperience() {
   const [isLoadingMemories, setIsLoadingMemories] = useState(false);
   const [isSavingMemory, setIsSavingMemory] = useState(false);
   const [sidebarQuery, setSidebarQuery] = useState("");
-  // Rail organization filters (#258/#279): a single active folder and a set of
+  // Rail organization filters (#258/#279): a set of
   // labels (AND). Driving the sectioned-vs-filtered view in the rail.
-  const [filterFolder, setFilterFolder] = useState<string | null>(null);
   const [filterLabels, setFilterLabels] = useState<string[]>([]);
   // pendingAttachments holds files the user has picked but not yet sent.
   // We upload them to the server on submit, get back metadata with a
@@ -1155,16 +1154,15 @@ export function ChatExperience() {
   // (Initial-load mount effect moved below its callback dependencies — see
   // "mount effects, hoisted below their callback dependencies".)
 
-  // The flat filtered list (folder + labels + title query). When no filter is
+  // The flat filtered list (labels + title query). When no filter is
   // active this is the full active list, so "select all visible" stays correct.
   const filteredConversations = useMemo(
     () =>
       filterConversations(conversations, {
-        folder: filterFolder,
         labels: filterLabels,
         query: sidebarQuery,
       }),
-    [conversations, filterFolder, filterLabels, sidebarQuery],
+    [conversations, filterLabels, sidebarQuery],
   );
 
   // Keyboard list-navigation (#306). visibleOrder is the exact top-to-bottom
@@ -1196,18 +1194,9 @@ export function ChatExperience() {
       visibleConversationOrder({
         all: conversations,
         filtered: filteredConversations,
-        filtering:
-          Boolean(filterFolder) ||
-          filterLabels.length > 0 ||
-          sidebarQuery.trim().length > 0,
+        filtering: filterLabels.length > 0 || sidebarQuery.trim().length > 0,
       }),
-    [
-      conversations,
-      filteredConversations,
-      filterFolder,
-      filterLabels,
-      sidebarQuery,
-    ],
+    [conversations, filteredConversations, filterLabels, sidebarQuery],
   );
 
   // With no query, show "default" + "advanced" + the top-ranked list. As
@@ -1940,20 +1929,6 @@ export function ChatExperience() {
     folder?: string;
     labels?: string[];
   }) => patchConversationIds(Array.from(selectedIds), changes);
-
-  // setConversationFolder files (folder=name) or unfiles (folder=null) a single
-  // conversation from the rail's kebab. Filing auto-pins it — matching the rail's
-  // "filing pins it" model; unfiling clears the folder and leaves the pin alone.
-  const setConversationFolder = (
-    conversationId: string,
-    folder: string | null,
-  ) => {
-    const changes: { pinned?: boolean; folder?: string } = {
-      folder: folder ?? "",
-    };
-    if (folder) changes.pinned = true;
-    void patchConversationIds([conversationId], changes);
-  };
 
   // setConversationLabels replaces a single conversation's label set. The bulk
   // endpoint replaces (not appends), so the rail computes the next full set
@@ -3492,8 +3467,6 @@ export function ChatExperience() {
           sidebarQuery={sidebarQuery}
           setSidebarQuery={setSidebarQuery}
           searchRef={searchRef}
-          filterFolder={filterFolder}
-          setFilterFolder={setFilterFolder}
           filterLabels={filterLabels}
           setFilterLabels={setFilterLabels}
           isLoadingHistory={isLoadingHistory}
@@ -3510,7 +3483,6 @@ export function ChatExperience() {
           downloadConversation={downloadConversation}
           promoteConversation={promoteConversation}
           setPendingDeleteConversation={setPendingDeleteConversation}
-          setConversationFolder={setConversationFolder}
           setConversationLabels={setConversationLabels}
           shareConversation={shareConversation}
           unshareConversation={unshareConversation}
@@ -3530,11 +3502,6 @@ export function ChatExperience() {
             // Completing a bulk action exits select mode (the design's
             // behavior); bulkPatch snapshots the selection synchronously.
             void bulkPatchConversations({ pinned: true });
-            exitSelectMode();
-          }}
-          onBulkMoveFolder={(folder) => {
-            if (folder === "") return;
-            void bulkPatchConversations({ folder, pinned: true });
             exitSelectMode();
           }}
           onBulkAddLabel={(label) => {

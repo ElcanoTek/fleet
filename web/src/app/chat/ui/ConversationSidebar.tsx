@@ -2,9 +2,9 @@
 
 // Conversation rail (#169 unified shell, #258/#279 organization). This renders
 // the chat surface's content inside the shared NavRail: the new-chat / sealed
-// affordances, the search filter, the organized conversation list (Pinned ·
-// Folders · Labels · Recent) with a per-row kebab menu, folder/label filtering,
-// and the collapsible Archived section. The footer (update banner +
+// affordances, the unified search, the projects tree, the organized
+// conversation list (Pinned · Labels · Temporary) with a per-row kebab menu,
+// label filtering, and the collapsible Archived section. The footer (update banner +
 // delete-all-unpinned) is handed to NavRail; sign-out moved into the rail's
 // account menu.
 //
@@ -28,13 +28,11 @@ import {
   MAX_LABEL_LEN,
   addLabel as addLabelTo,
   canAddLabel,
-  deriveFolders,
   deriveLabels,
   isFiltering as computeIsFiltering,
   pinnedUnfiled,
   projectGroups,
   recentUnfiled,
-  type FolderSummary,
   type LabelSummary,
 } from "./conversationOrganization";
 import type {
@@ -150,66 +148,42 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
 }
 
 // ── Temporary-section info note ──────────────────────────────────────────────
-// The ⓘ next to the "Temporary" group header click-toggles the retention
-// explainer on the shared .conv-tooltip surface (portaled to <body> like the
-// sealed tooltip above, and for the same reason). Click-toggle rather than
-// hover-only so it works on touch; dismissed by clicking anywhere else or
-// pressing Escape. The copy states the server's default TTL
-// (CONVERSATION_TTL_DAYS, default 14) and the two keep actions — pinning and
-// filing into a project both exempt a chat from the sweep.
+// The ⚠ next to the "Temporary" group header shows the retention explainer on
+// hover and keyboard focus, on the shared .conv-tooltip surface (portaled to
+// <body> like the sealed tooltip above, and for the same reason). On touch —
+// no hover — the focus a tap gives the button is what shows it. The copy
+// states the server's default TTL (CONVERSATION_TTL_DAYS, default 14) and the
+// two keep actions — pinning and filing into a project both exempt a chat
+// from the sweep.
 const RECENT_INFO_TEXT =
   "Chats here are deleted after 14 days of inactivity. Pin a chat or move it into a project to keep it.";
 
 function RecentInfoButton() {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const btnRef = useRef<HTMLButtonElement | null>(null);
-
-  useEffect(() => {
-    if (!pos) return;
-    // Clicks on the trigger itself are the toggle's job; everything else
-    // (including clicks inside the tooltip, which only carries static text)
-    // dismisses. Listeners attach only while open.
-    const onDocClick = (e: MouseEvent) => {
-      if (
-        btnRef.current &&
-        e.target instanceof Node &&
-        btnRef.current.contains(e.target)
-      )
-        return;
-      setPos(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setPos(null);
-    };
-    document.addEventListener("click", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("click", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [pos]);
+  // Hover AND keyboard focus show the explainer (the sealed-lock tooltip's
+  // exact mechanics — was click-toggle, which read as a broken button). The
+  // trade-off is touch: with no hover, a tap (focus) is what shows it.
+  const show = (e: React.SyntheticEvent<HTMLElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    // Same placement math as the sealed tooltip: below the trigger, shifted
+    // so the surface's arrow points back at the anchor.
+    setPos({
+      top: Math.round(r.bottom + 7),
+      left: Math.round(r.left + r.width / 2 - 17),
+    });
+  };
+  const hide = () => setPos(null);
 
   return (
     <span className="relative inline-flex">
       <button
-        ref={btnRef}
         type="button"
         aria-label="About temporary chats"
-        aria-expanded={pos !== null}
-        className="hit-area inline-flex items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] aria-expanded:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-        onClick={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          // Same placement math as the sealed tooltip: below the button,
-          // shifted so the surface's arrow points back at the anchor.
-          setPos(
-            pos
-              ? null
-              : {
-                  top: Math.round(r.bottom + 7),
-                  left: Math.round(r.left + r.width / 2 - 17),
-                },
-          );
-        }}
+        className="hit-area inline-flex items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
       >
         <Icon name="warning" className="size-[0.9rem]" />
       </button>
@@ -219,7 +193,6 @@ function RecentInfoButton() {
               role="tooltip"
               className="conv-tooltip"
               style={{ top: pos.top, left: pos.left }}
-              onClick={(e) => e.stopPropagation()}
             >
               {RECENT_INFO_TEXT}
             </span>,
@@ -260,85 +233,6 @@ function LabelChip({
   );
 }
 
-// ── Folder picker panel (shared by per-row kebab + bulk bar) ─────────────────
-function FolderPanel({
-  folders,
-  currentFolder,
-  onPick,
-  onRemove,
-}: {
-  folders: FolderSummary[];
-  currentFolder?: string;
-  onPick: (name: string) => void;
-  onRemove?: () => void;
-}) {
-  const [creating, setCreating] = useState(false);
-  const [name, setName] = useState("");
-  const submit = () => {
-    const trimmed = name.trim();
-    if (trimmed) onPick(trimmed);
-  };
-  return (
-    <>
-      {folders.map((f) => (
-        <MenuItem
-          key={f.name}
-          icon={
-            <Icon
-              name="check"
-              className={[
-                "size-4",
-                currentFolder === f.name
-                  ? "opacity-100 text-[var(--color-accent)]"
-                  : "opacity-0",
-              ].join(" ")}
-            />
-          }
-          onClick={() => onPick(f.name)}
-        >
-          {f.name}
-        </MenuItem>
-      ))}
-      {folders.length > 0 ? <MenuSeparator /> : null}
-      {creating ? (
-        <input
-          autoFocus
-          className="mx-0.5 my-0.5 rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none"
-          placeholder="Folder name…"
-          maxLength={64}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              submit();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              setCreating(false);
-              setName("");
-            }
-          }}
-        />
-      ) : (
-        <MenuItem
-          icon={<Icon name="plus" className="size-4" />}
-          onClick={() => setCreating(true)}
-        >
-          New folder…
-        </MenuItem>
-      )}
-      {currentFolder && onRemove ? (
-        <MenuItem
-          icon={<Icon name="close" className="size-4" />}
-          onClick={onRemove}
-        >
-          Remove from folder
-        </MenuItem>
-      ) : null}
-    </>
-  );
-}
-
 // CONV_DRAG_MIME is the custom drag payload type for a conversation row —
 // namespaced so a project row only accepts our rows, never a stray text/file
 // drag from outside the app.
@@ -346,9 +240,9 @@ const CONV_DRAG_MIME = "application/x-fleet-conversation";
 
 // ── Project picker panel (per-row kebab) ─────────────────────────────────────
 // The touch/keyboard counterpart of dragging a chat onto a rail project
-// (#509 follow-up): pick a project to re-file into, or unfile. Unlike
-// folders, projects are created in the Projects modal (they carry
-// instructions/membership), so there is no inline "New project…" here.
+// (#509 follow-up): pick a project to re-file into, or unfile. Projects are
+// created in the Projects modal (they carry instructions/membership), so
+// there is no inline "New project…" here.
 function ProjectPanel({
   projects,
   currentProjectId,
@@ -588,14 +482,12 @@ function LabelsPanel({
 // ── Per-row kebab menu ───────────────────────────────────────────────────────
 function ConversationKebab({
   conversation,
-  folders,
   allLabelNames,
   projects,
   onPin,
   onRename,
   onDownload,
   onPromote,
-  onSetFolder,
   onSetLabels,
   onSetProject,
   onShare,
@@ -607,14 +499,12 @@ function ConversationKebab({
   onDelete,
 }: {
   conversation: ConversationSummary;
-  folders: FolderSummary[];
   allLabelNames: string[];
   projects: Project[];
   onPin: () => void;
   onRename: () => void;
   onDownload: () => void;
   onPromote: () => void;
-  onSetFolder: (folder: string | null) => void;
   onSetLabels: (labels: string[]) => void;
   onSetProject: (projectID: string | null) => void;
   onShare: () => void;
@@ -626,9 +516,7 @@ function ConversationKebab({
   onDelete: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [flyout, setFlyout] = useState<null | "folder" | "labels" | "project">(
-    null,
-  );
+  const [flyout, setFlyout] = useState<null | "labels" | "project">(null);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   // The menu item that opened the active flyout — the flyout anchors to it and
   // focus returns here on Escape. Captured from the click's currentTarget.
@@ -638,7 +526,7 @@ function ConversationKebab({
     setFlyout(null);
   };
   const toggleFlyout = (
-    which: "folder" | "labels" | "project",
+    which: "labels" | "project",
     el: HTMLElement,
   ) => {
     flyoutAnchorRef.current = el;
@@ -654,20 +542,7 @@ function ConversationKebab({
     </span>
   );
   const flyoutContent =
-    flyout === "folder" ? (
-      <FolderPanel
-        folders={folders}
-        currentFolder={conversation.folder || undefined}
-        onPick={(name) => {
-          onSetFolder(name);
-          close();
-        }}
-        onRemove={() => {
-          onSetFolder(null);
-          close();
-        }}
-      />
-    ) : flyout === "project" ? (
+    flyout === "project" ? (
       <ProjectPanel
         projects={projects}
         currentProjectId={conversation.project_id || undefined}
@@ -726,13 +601,7 @@ function ConversationKebab({
         flyoutOpen={flyout !== null}
         flyoutAnchorRef={flyoutAnchorRef}
         onFlyoutClose={() => setFlyout(null)}
-        flyoutLabel={
-          flyout === "folder"
-            ? "Add to folder"
-            : flyout === "project"
-              ? "Move to project"
-              : "Labels"
-        }
+        flyoutLabel={flyout === "project" ? "Move to project" : "Labels"}
       >
         {/* Pinning is meaningless for a project chat: it lives only under
             its project (never in Pinned) and is already retention-exempt —
@@ -756,15 +625,6 @@ function ConversationKebab({
           }}
         >
           Rename
-        </MenuItem>
-        <MenuItem
-          icon={<Icon name="folder" className="size-4" />}
-          ariaHasPopup
-          ariaExpanded={flyout === "folder"}
-          trailing={caret}
-          onClick={(e) => toggleFlyout("folder", e.currentTarget)}
-        >
-          Add to folder
         </MenuItem>
         {projects.length > 0 || conversation.project_id ? (
           <MenuItem
@@ -1099,8 +959,6 @@ export function ConversationSidebar({
   sidebarQuery,
   setSidebarQuery,
   searchRef,
-  filterFolder,
-  setFilterFolder,
   filterLabels,
   setFilterLabels,
   isLoadingHistory,
@@ -1117,7 +975,6 @@ export function ConversationSidebar({
   downloadConversation,
   promoteConversation,
   setPendingDeleteConversation,
-  setConversationFolder,
   setConversationLabels,
   shareConversation,
   unshareConversation,
@@ -1134,7 +991,6 @@ export function ConversationSidebar({
   onExitSelectMode,
   onBulkDelete,
   onBulkPin,
-  onBulkMoveFolder,
   onBulkAddLabel,
   searchShortcut,
   onOpenProjects,
@@ -1161,8 +1017,6 @@ export function ConversationSidebar({
   sidebarQuery: string;
   setSidebarQuery: Dispatch<SetStateAction<string>>;
   searchRef: RefObject<HTMLInputElement | null>;
-  filterFolder: string | null;
-  setFilterFolder: Dispatch<SetStateAction<string | null>>;
   filterLabels: string[];
   setFilterLabels: Dispatch<SetStateAction<string[]>>;
   isLoadingHistory: boolean;
@@ -1196,10 +1050,6 @@ export function ConversationSidebar({
   setPendingDeleteConversation: Dispatch<
     SetStateAction<PendingDeleteConversation | null>
   >;
-  setConversationFolder: (
-    conversationId: string,
-    folder: string | null,
-  ) => void;
   setConversationLabels: (conversationId: string, labels: string[]) => void;
   // Read-only sharing (#226): issue+copy a public link, revoke it, or re-copy.
   shareConversation: (conversation: ConversationSummary) => Promise<boolean>;
@@ -1220,7 +1070,6 @@ export function ConversationSidebar({
   onExitSelectMode: () => void;
   onBulkDelete: () => void;
   onBulkPin: () => void;
-  onBulkMoveFolder: (folder: string) => void;
   onBulkAddLabel: (label: string) => void;
   // Platform-appropriate hint for the unified search bar ("⌘K" / "Ctrl+K").
   searchShortcut: string;
@@ -1257,10 +1106,9 @@ export function ConversationSidebar({
   onMoveToProject: (conversationId: string, projectID: string) => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [foldersOpen, setFoldersOpen] = useState(true);
   // Projects section (#509 follow-up): the section itself starts open (its
   // presence is the affordance); each project starts collapsed and remembers
-  // its expansion for the session only, like Folders/Labels above.
+  // its expansion for the session only, like the Labels section.
   const [projectsSectionOpen, setProjectsSectionOpen] = useState(true);
   // Chats section (mirrors Projects): one heading over everything from the
   // New-chat row down to the conversation list, collapsible, default open.
@@ -1278,7 +1126,9 @@ export function ConversationSidebar({
   // over message content, 300ms debounce). null = no query / search
   // disabled server-side / fetch failed — the "In messages" group simply
   // doesn't render; the title filter still works.
-  const [contentResults, setContentResults] = useState<SearchResult[] | null>(null);
+  const [contentResults, setContentResults] = useState<SearchResult[] | null>(
+    null,
+  );
   useEffect(() => {
     const q = sidebarQuery.trim();
     let cancelled = false;
@@ -1293,17 +1143,21 @@ export function ConversationSidebar({
           return;
         }
         void (async () => {
-        try {
-          const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
-          if (!res.ok) {
+          try {
+            const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
+              cache: "no-store",
+            });
+            if (!res.ok) {
+              if (!cancelled) setContentResults(null);
+              return;
+            }
+            const data = (await res.json()) as {
+              results: SearchResult[] | null;
+            };
+            if (!cancelled) setContentResults(data.results ?? []);
+          } catch {
             if (!cancelled) setContentResults(null);
-            return;
           }
-          const data = (await res.json()) as { results: SearchResult[] | null };
-          if (!cancelled) setContentResults(data.results ?? []);
-        } catch {
-          if (!cancelled) setContentResults(null);
-        }
         })();
       },
       q.length < 2 ? 0 : 300,
@@ -1317,10 +1171,7 @@ export function ConversationSidebar({
   // drop-target highlight.
   const [dragOverProject, setDragOverProject] = useState<string | null>(null);
   const [labelsOpen, setLabelsOpen] = useState(true);
-  const [bulkPanel, setBulkPanel] = useState<"none" | "folder" | "labels">(
-    "none",
-  );
-  const bulkFolderRef = useRef<HTMLButtonElement | null>(null);
+  const [bulkPanel, setBulkPanel] = useState<"none" | "labels">("none");
   const bulkLabelsRef = useRef<HTMLButtonElement | null>(null);
   // Transient "copied" feedback for share/copy actions (#226), keyed by conv id.
   // The only effect just clears the pending timer on unmount — setState happens
@@ -1351,14 +1202,12 @@ export function ConversationSidebar({
     setEditingId(renameSignal.id);
   }
 
-  const folders = deriveFolders(conversations);
   const labelSummaries: LabelSummary[] = deriveLabels(conversations);
   const allLabelNames = labelSummaries.map((l) => l.name);
   const pinned = pinnedUnfiled(conversations);
   const recent = recentUnfiled(conversations);
   const projectTree = projectGroups(conversations, projects);
   const filtering = computeIsFiltering({
-    folder: filterFolder,
     labels: filterLabels,
     query: sidebarQuery,
   });
@@ -1370,6 +1219,13 @@ export function ConversationSidebar({
   const matchingProjects = searching
     ? projects.filter((p) => p.name.toLowerCase().includes(queryLower))
     : [];
+  // While searching, the Projects SECTION shows name matches from ALL
+  // projects (not just the top-5 slice) as normal expandable tree rows —
+  // results live under their real heading, not in an ad-hoc group inside
+  // the Chats list.
+  const visibleProjectTree = searching
+    ? projectGroups(conversations, matchingProjects, Math.max(matchingProjects.length, 1))
+    : projectTree;
   const shownIds = new Set(filteredConversations.map((c) => c.id));
   const messageHits = searching
     ? (contentResults ?? []).filter((r) => !shownIds.has(r.conversation_id))
@@ -1384,7 +1240,6 @@ export function ConversationSidebar({
       ls.includes(name) ? ls.filter((l) => l !== name) : [...ls, name],
     );
   const clearFilters = () => {
-    setFilterFolder(null);
     setFilterLabels([]);
     setSidebarQuery("");
   };
@@ -1398,14 +1253,12 @@ export function ConversationSidebar({
   const rowKebab = (conversation: ConversationSummary): ReactNode => (
     <ConversationKebab
       conversation={conversation}
-      folders={folders}
       allLabelNames={allLabelNames}
       projects={projects}
       onPin={() => void togglePin(conversation)}
       onRename={() => setEditingId(conversation.id)}
       onDownload={() => void downloadConversation(conversation)}
       onPromote={() => void promoteConversation(conversation)}
-      onSetFolder={(folder) => setConversationFolder(conversation.id, folder)}
       onSetLabels={(labels) => setConversationLabels(conversation.id, labels)}
       onSetProject={(projectID) =>
         onMoveToProject(conversation.id, projectID ?? "")
@@ -1460,43 +1313,6 @@ export function ConversationSidebar({
     />
   );
 
-  const foldersSection =
-    folders.length > 0 ? (
-      <div className="mb-1">
-        <SectionToggle
-          icon="folder"
-          label="Folders"
-          open={foldersOpen}
-          onToggle={() => setFoldersOpen((o) => !o)}
-        />
-        {foldersOpen
-          ? folders.map((f) => (
-              <button
-                key={f.name}
-                type="button"
-                aria-pressed={filterFolder === f.name}
-                onClick={() =>
-                  setFilterFolder(filterFolder === f.name ? null : f.name)
-                }
-                className={[
-                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.875rem] transition",
-                  filterFolder === f.name
-                    ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
-                    : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
-                ].join(" ")}
-              >
-                <span className="min-w-0 flex-1 truncate text-left">
-                  {f.name}
-                </span>
-                <span className="font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">
-                  {f.count}
-                </span>
-              </button>
-            ))
-          : null}
-      </div>
-    ) : null;
-
   // Projects section (#509 follow-up): the top MAX_RAIL_PROJECTS projects as
   // expandable groups; each project row is also the drop target for a
   // conversation drag. The header always renders — its + creates a project
@@ -1524,17 +1340,23 @@ export function ConversationSidebar({
         />
       </div>
       {projectsSectionOpen ? (
-        projectTree.length === 0 ? (
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
-            onClick={onCreateProject}
-          >
-            <Icon name="plus" className="size-3.5 shrink-0" />
-            New project…
-          </button>
+        visibleProjectTree.length === 0 ? (
+          searching ? (
+            <p className="px-2 py-1.5 text-[0.78rem] text-[var(--color-text-muted)]">
+              No matching projects.
+            </p>
+          ) : (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
+              onClick={onCreateProject}
+            >
+              <Icon name="plus" className="size-3.5 shrink-0" />
+              New project…
+            </button>
+          )
         ) : (
-          projectTree.map(({ project, chats }) => {
+          visibleProjectTree.map(({ project, chats }) => {
             const expanded = expandedProjects.has(project.id);
             const dropReady = dragOverProject === project.id;
             return (
@@ -1744,7 +1566,7 @@ export function ConversationSidebar({
         </div>
       }
     >
-        {/* Unified search — one bar for everything: a live client-side filter
+      {/* Unified search — one bar for everything: a live client-side filter
           over chat titles (project chats included), matching project names,
           and (debounced) Postgres full-text hits inside message content.
           Replaces the old top-right ⌘K palette; ⌘K now focuses this input. */}
@@ -1764,7 +1586,8 @@ export function ConversationSidebar({
           value={sidebarQuery}
           onChange={(e) => setSidebarQuery(e.target.value)}
           placeholder={`Search… (${searchShortcut})`}
-          aria-label="Search" data-testid="search-input"
+          aria-label="Search"
+          data-testid="search-input"
           className="search-input-no-native-clear min-h-[2.2rem] w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-[0.4rem] pl-[2.1rem] pr-8 text-[0.85rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
         />
         {sidebarQuery ? (
@@ -1889,9 +1712,8 @@ export function ConversationSidebar({
           </button>
         ) : null}
 
-
         {/* Active-filter chips */}
-        {filterFolder || filterLabels.length > 0 ? (
+        {filterLabels.length > 0 ? (
           <div
             className={[
               "mt-2 flex items-center gap-1.5 motion-safe:animate-[filter-in_var(--motion-fast)_ease_both]",
@@ -1899,22 +1721,6 @@ export function ConversationSidebar({
             ].join(" ")}
           >
             <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-              {filterFolder ? (
-                <span className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] py-0.5 pl-2 pr-1 text-[0.78rem] text-[var(--color-text-primary)]">
-                  <span className="text-[var(--color-text-muted)]">
-                    Folder:
-                  </span>{" "}
-                  {filterFolder}
-                  <button
-                    type="button"
-                    aria-label="Remove folder filter"
-                    className="hit-area inline-flex size-4 items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                    onClick={() => setFilterFolder(null)}
-                  >
-                    <Icon name="close" className="size-2.5" />
-                  </button>
-                </span>
-              ) : null}
               {filterLabels.map((l) => (
                 <span
                   key={l}
@@ -1956,32 +1762,6 @@ export function ConversationSidebar({
             </p>
           ) : filtering ? (
             <>
-              {/* Matching project names (unified search): clicking one clears
-                  the query and reveals that project expanded in the tree. */}
-              {searching && matchingProjects.length > 0 ? (
-                <div className="mb-1">
-                  <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-                    Projects
-                  </p>
-                  {matchingProjects.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.875rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
-                      onClick={() => {
-                        setSidebarQuery("");
-                        setProjectsSectionOpen(true);
-                        setExpandedProjects((cur) => new Set(cur).add(p.id));
-                      }}
-                    >
-                      <Icon name="briefcase" className="size-3.5 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate text-left">
-                        {p.name}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
               {filteredConversations.length === 0 ? (
                 messageHits.length === 0 && matchingProjects.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
@@ -1994,38 +1774,48 @@ export function ConversationSidebar({
                 filteredConversations.map(renderRow)
               )}
               {/* Full-text hits inside message content (unified search) —
-                  deduped against the title matches above. */}
+                  deduped against the title matches above. Each hit carries
+                  its path (Project › chat title when the chat is filed) with
+                  the matched prompt snippet beneath. */}
               {messageHits.length > 0 ? (
                 <div className="mt-2">
                   <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
                     In messages
                   </p>
-                  {messageHits.map((r) => (
-                    <button
-                      key={r.conversation_id}
-                      type="button"
-                      data-testid="search-result"
-                      className="block w-full rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--rail-hover)]"
-                      onClick={() => void loadConversation(r.conversation_id)}
-                    >
-                      <span className="block truncate text-[0.85rem] text-[var(--color-text-secondary)]">
-                        {r.title || "Untitled"}
-                      </span>
-                      <span
-                        className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]"
-                        dangerouslySetInnerHTML={{ __html: renderPreview(r.match_preview) }}
-                      />
-                    </button>
-                  ))}
+                  {messageHits.map((r) => {
+                    const conv = conversations.find((c) => c.id === r.conversation_id);
+                    const proj = conv?.project_id
+                      ? projects.find((p) => p.id === conv.project_id)
+                      : undefined;
+                    return (
+                      <button
+                        key={r.conversation_id}
+                        type="button"
+                        data-testid="search-result"
+                        className="block w-full rounded-md px-2 py-1.5 text-left transition hover:bg-[var(--rail-hover)]"
+                        onClick={() => void loadConversation(r.conversation_id)}
+                      >
+                        <span className="block truncate text-[0.85rem] text-[var(--color-text-secondary)]">
+                          {proj ? (
+                            <>
+                              <span className="text-[var(--color-text-muted)]">{proj.name} › </span>
+                              {r.title || "Untitled"}
+                            </>
+                          ) : (
+                            r.title || "Untitled"
+                          )}
+                        </span>
+                        <span
+                          className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]"
+                          dangerouslySetInnerHTML={{
+                            __html: renderPreview(r.match_preview),
+                          }}
+                        />
+                      </button>
+                    );
+                  })}
                 </div>
               ) : null}
-              <div className="mt-3 border-t border-[var(--color-border)] pt-2 opacity-70 transition focus-within:opacity-100 hover:opacity-100">
-                <p className="px-2 pb-1 text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-                  Refine
-                </p>
-                {foldersSection}
-                {labelsSection}
-              </div>
             </>
           ) : (
             <>
@@ -2041,7 +1831,6 @@ export function ConversationSidebar({
                   {pinned.map(renderRow)}
                 </div>
               ) : null}
-              {foldersSection}
               {labelsSection}
               <div className="mb-1">
                 <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
@@ -2159,21 +1948,6 @@ export function ConversationSidebar({
             </span>
             <div className="flex items-center gap-[0.15rem]">
               <button
-                ref={bulkFolderRef}
-                type="button"
-                aria-label="Move to folder"
-                aria-haspopup="menu"
-                aria-expanded={bulkPanel === "folder"}
-                data-tip-top="Move to folder"
-                disabled={selectedIds.size === 0}
-                className={BULK_BTN_CLASS}
-                onClick={() =>
-                  setBulkPanel((p) => (p === "folder" ? "none" : "folder"))
-                }
-              >
-                <Icon name="folder" className="size-[0.95rem]" />
-              </button>
-              <button
                 type="button"
                 aria-label="Pin selected"
                 data-tip-top="Pin"
@@ -2221,21 +1995,6 @@ export function ConversationSidebar({
                 <Icon name="close" className="size-[0.95rem]" />
               </button>
             </div>
-            <Menu
-              open={bulkPanel === "folder"}
-              onClose={() => setBulkPanel("none")}
-              anchorRef={bulkFolderRef}
-              placement="top-end"
-              label="Move selected to folder"
-            >
-              <FolderPanel
-                folders={folders}
-                onPick={(name) => {
-                  onBulkMoveFolder(name);
-                  setBulkPanel("none");
-                }}
-              />
-            </Menu>
             <Menu
               open={bulkPanel === "labels"}
               onClose={() => setBulkPanel("none")}
