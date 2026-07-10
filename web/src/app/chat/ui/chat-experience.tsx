@@ -532,7 +532,10 @@ export function ChatExperience() {
   // Memory-manager tab (#523): the flat record list (default) or the derived
   // knowledge-graph view.
   const [memoryView, setMemoryView] = useState<"list" | "graph">("list");
-  const [projectsOpen, setProjectsOpen] = useState(false);
+  // Projects modal state: null = closed; {} = open on the list; create opens
+  // straight into the new-project form (the rail's +); selectId opens with
+  // that project selected (the rail kebab's "Edit project…").
+  const [projectsModal, setProjectsModal] = useState<null | { create?: boolean; selectId?: string }>(null);
   const [memoryDraft, setMemoryDraft] = useState("");
   const [memoryKindDraft, setMemoryKindDraft] = useState<string>("fact");
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
@@ -1992,7 +1995,7 @@ export function ChatExperience() {
       }
       const conv = (await response.json()) as { id?: string };
       if (!conv.id) return;
-      setProjectsOpen(false);
+      setProjectsModal(null);
       await refreshConversations();
       await loadConversation(conv.id);
     } catch (err) {
@@ -2029,8 +2032,51 @@ export function ChatExperience() {
     };
   }, [loadProjects]);
   const closeProjectsModal = () => {
-    setProjectsOpen(false);
+    setProjectsModal(null);
     void loadProjects();
+  };
+
+  // Rail project management (#509 follow-up): rename inline (PATCH just the
+  // name — the API's pointer-field patch leaves everything else untouched)
+  // and delete with the same confirm + copy the modal uses. Both refresh the
+  // rail's project list; delete also refreshes conversations, since the
+  // server detaches the project's chats (they return to the main list).
+  const renameProject = async (projectID: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const prev = projects;
+    setProjects((ps) => ps.map((p) => (p.id === projectID ? { ...p, name: trimmed } : p)));
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(projectID)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (!res.ok) {
+        console.error("rename project failed:", res.status, await res.text());
+        setProjects(prev);
+        return;
+      }
+      void loadProjects();
+    } catch (err) {
+      console.error("rename project error:", err);
+      setProjects(prev);
+    }
+  };
+
+  const deleteProject = async (projectID: string) => {
+    if (!window.confirm("Delete this project? Conversations are kept (detached); shared project memories are removed.")) return;
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(projectID)}`, { method: "DELETE" });
+      if (!res.ok) {
+        console.error("delete project failed:", res.status, await res.text());
+        return;
+      }
+      await loadProjects();
+      await refreshConversations();
+    } catch (err) {
+      console.error("delete project error:", err);
+    }
   };
 
   // moveConversationToProject re-files a chat into a project ("" = unfile) —
@@ -3104,7 +3150,11 @@ export function ChatExperience() {
             void bulkPatchConversations({ labels: [label] });
             exitSelectMode();
           }}
-          onOpenProjects={() => setProjectsOpen(true)}
+          onOpenProjects={() => setProjectsModal({})}
+          onCreateProject={() => setProjectsModal({ create: true })}
+          onEditProject={(projectID) => setProjectsModal({ selectId: projectID })}
+          onRenameProject={(projectID, name) => void renameProject(projectID, name)}
+          onDeleteProject={(projectID) => void deleteProject(projectID)}
           projects={projects}
           onMoveToProject={(conversationId, projectID) => void moveConversationToProject(conversationId, projectID)}
         />
@@ -3181,11 +3231,13 @@ export function ChatExperience() {
           />
         ) : null}
 
-        {projectsOpen ? (
+        {projectsModal ? (
           <ProjectsModal
             userEmail={userEmail}
             onClose={closeProjectsModal}
             onStartChat={(id) => void startProjectChat(id)}
+            initialCreate={projectsModal.create}
+            initialSelectedId={projectsModal.selectId}
           />
         ) : null}
 

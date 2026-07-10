@@ -323,6 +323,94 @@ function ProjectPanel({
   );
 }
 
+// ── Per-project kebab menu (rail Projects section) ───────────────────────────
+// Sits where the chat count used to be. "Edit project…" opens the full modal
+// editor (instructions/sharing/memories) and shows for everyone — members get
+// the modal's read-only view. Rename and Delete mutate the project itself, so
+// they render for the OWNER only (the store's owner-scoped statements would
+// reject anyone else anyway; hiding them is honest UI, not the enforcement).
+function ProjectKebab({
+  projectName,
+  isOwner,
+  onEdit,
+  onRename,
+  onDelete,
+}: {
+  projectName: string;
+  isOwner: boolean;
+  onEdit: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
+  const close = () => setOpen(false);
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Project options for ${projectName}`}
+        title="Project options"
+        className={[
+          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+          open ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+        ].join(" ")}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+      >
+        <Icon name="dots" className="size-[1.1rem]" />
+      </button>
+      <Menu
+        open={open}
+        onClose={close}
+        anchorRef={anchorRef}
+        placement="bottom-end"
+        label={`Options for project ${projectName}`}
+        className="min-w-[11rem]"
+      >
+        <MenuItem
+          icon={<Icon name="briefcase" className="size-4" />}
+          onClick={() => {
+            close();
+            onEdit();
+          }}
+        >
+          Edit project…
+        </MenuItem>
+        {isOwner ? (
+          <>
+            <MenuItem
+              icon={<Icon name="edit" className="size-4" />}
+              onClick={() => {
+                close();
+                onRename();
+              }}
+            >
+              Rename
+            </MenuItem>
+            <MenuSeparator />
+            <MenuItem
+              danger
+              icon={<Icon name="trash" className="size-4" />}
+              onClick={() => {
+                close();
+                onDelete();
+              }}
+            >
+              Delete project
+            </MenuItem>
+          </>
+        ) : null}
+      </Menu>
+    </>
+  );
+}
+
 // ── Labels editor panel (shared by per-row kebab + bulk bar) ─────────────────
 function LabelsPanel({
   current,
@@ -900,6 +988,10 @@ export function ConversationSidebar({
   onBulkMoveFolder,
   onBulkAddLabel,
   onOpenProjects,
+  onCreateProject,
+  onEditProject,
+  onRenameProject,
+  onDeleteProject,
   projects,
   onMoveToProject,
 }: {
@@ -967,6 +1059,18 @@ export function ConversationSidebar({
   // Opens the Projects modal (#509). Lives in the rail (like Claude/ChatGPT)
   // rather than the page header; ChatExperience owns the modal state.
   onOpenProjects: () => void;
+  // Opens the modal straight into the new-project form (the section
+  // header's + button).
+  onCreateProject: () => void;
+  // Opens the modal with this project selected (the project kebab's
+  // "Edit project…" — full editor incl. instructions/sharing/memories).
+  onEditProject: (projectID: string) => void;
+  // Inline rename from the rail (project kebab → Rename); the parent PATCHes
+  // just the name.
+  onRenameProject: (projectID: string, name: string) => void;
+  // Delete from the rail (project kebab); the parent confirms + DELETEs —
+  // the server detaches the project's chats rather than deleting them.
+  onDeleteProject: (projectID: string) => void;
   // Projects for the rail's Projects section (#509 follow-up): the top few
   // by recent update render as expandable groups + drag targets. The full
   // list/management stays in the modal.
@@ -983,6 +1087,9 @@ export function ConversationSidebar({
   // its expansion for the session only, like Folders/Labels above.
   const [projectsSectionOpen, setProjectsSectionOpen] = useState(true);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  // The project being renamed inline (kebab → Rename), mirroring the chat
+  // rows' editingId.
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   // The project row a conversation drag is currently hovering — drives the
   // drop-target highlight.
   const [dragOverProject, setDragOverProject] = useState<string | null>(null);
@@ -1124,9 +1231,10 @@ export function ConversationSidebar({
 
   // Projects section (#509 follow-up): the top MAX_RAIL_PROJECTS projects as
   // expandable groups; each project row is also the drop target for a
-  // conversation drag. The header always renders — with no projects yet it
-  // offers creation, and the trailing ••• opens the modal for the full list
-  // and management either way.
+  // conversation drag. The header always renders — its + creates a project
+  // (opens the modal straight on the new-project form), and each row's kebab
+  // (where the chat count used to be) carries edit/rename/delete. The full
+  // list stays reachable via the empty-state row and the modal itself.
   const projectsSection = (
     <div className="mb-1">
       <div className="flex items-center gap-1">
@@ -1140,12 +1248,12 @@ export function ConversationSidebar({
         </div>
         <button
           type="button"
-          aria-label="All projects"
-          title="All projects"
+          aria-label="Create project"
+          data-tip-top="Create project"
           className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-          onClick={onOpenProjects}
+          onClick={onCreateProject}
         >
-          <Icon name="dots" className="size-4" />
+          <Icon name="plus" className="size-4" />
         </button>
       </div>
       {projectsSectionOpen ? (
@@ -1153,7 +1261,7 @@ export function ConversationSidebar({
           <button
             type="button"
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
-            onClick={onOpenProjects}
+            onClick={onCreateProject}
           >
             <Icon name="plus" className="size-3.5 shrink-0" />
             New project…
@@ -1164,50 +1272,90 @@ export function ConversationSidebar({
             const dropReady = dragOverProject === project.id;
             return (
               <div key={project.id}>
-                <button
-                  type="button"
-                  aria-expanded={expanded}
-                  aria-label={`Project ${project.name} (${chats.length} chats)`}
-                  className={[
-                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[0.875rem] transition",
-                    dropReady
-                      ? "bg-[var(--rail-hover)] text-[var(--color-text-primary)] ring-1 ring-inset ring-[var(--color-accent)]"
-                      : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
-                  ].join(" ")}
-                  onClick={() =>
-                    setExpandedProjects((s) => {
-                      const next = new Set(s);
-                      if (next.has(project.id)) next.delete(project.id);
-                      else next.add(project.id);
-                      return next;
-                    })
-                  }
-                  onDragOver={(e) => {
-                    if (!e.dataTransfer.types.includes(CONV_DRAG_MIME)) return;
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = "move";
-                    setDragOverProject(project.id);
-                  }}
-                  onDragLeave={() => setDragOverProject((cur) => (cur === project.id ? null : cur))}
-                  onDrop={(e) => {
-                    setDragOverProject(null);
-                    const convID = e.dataTransfer.getData(CONV_DRAG_MIME);
-                    if (!convID) return;
-                    e.preventDefault();
-                    onMoveToProject(convID, project.id);
-                    // Reveal where the chat landed.
-                    setExpandedProjects((s) => new Set(s).add(project.id));
-                  }}
-                >
-                  <Icon
-                    name="chevron-right"
-                    className={["size-3 shrink-0 transition", expanded ? "rotate-90" : ""].join(" ")}
+                {renamingProjectId === project.id ? (
+                  <input
+                    // Uncontrolled like the chat rows' rename input: mounts
+                    // only while renaming, so defaultValue tracks the live
+                    // name without a sync effect.
+                    autoFocus
+                    aria-label={`Rename project ${project.name}`}
+                    className="mx-[0.4rem] my-[0.32rem] w-[calc(100%-0.8rem)] rounded-[0.4rem] border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.875rem] text-[var(--color-text-primary)] outline-none"
+                    defaultValue={project.name}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onBlur={(e) => {
+                      onRenameProject(project.id, e.currentTarget.value);
+                      setRenamingProjectId(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        onRenameProject(project.id, e.currentTarget.value);
+                        setRenamingProjectId(null);
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        setRenamingProjectId(null);
+                      }
+                    }}
                   />
-                  <span className="min-w-0 flex-1 truncate text-left">{project.name}</span>
-                  <span className="font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">
-                    {chats.length}
-                  </span>
-                </button>
+                ) : (
+                  <div
+                    className={[
+                      "group relative rounded-md transition",
+                      dropReady ? "bg-[var(--rail-hover)] ring-1 ring-inset ring-[var(--color-accent)]" : "",
+                    ].join(" ")}
+                    onDragOver={(e) => {
+                      if (!e.dataTransfer.types.includes(CONV_DRAG_MIME)) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      setDragOverProject(project.id);
+                    }}
+                    onDragLeave={() => setDragOverProject((cur) => (cur === project.id ? null : cur))}
+                    onDrop={(e) => {
+                      setDragOverProject(null);
+                      const convID = e.dataTransfer.getData(CONV_DRAG_MIME);
+                      if (!convID) return;
+                      e.preventDefault();
+                      onMoveToProject(convID, project.id);
+                      // Reveal where the chat landed.
+                      setExpandedProjects((s) => new Set(s).add(project.id));
+                    }}
+                  >
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      aria-label={`Project ${project.name} (${chats.length} chats)`}
+                      className={[
+                        "flex w-full items-center gap-2 rounded-md py-1.5 pl-2 pr-9 text-[0.875rem] transition",
+                        dropReady
+                          ? "text-[var(--color-text-primary)]"
+                          : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
+                      ].join(" ")}
+                      onClick={() =>
+                        setExpandedProjects((s) => {
+                          const next = new Set(s);
+                          if (next.has(project.id)) next.delete(project.id);
+                          else next.add(project.id);
+                          return next;
+                        })
+                      }
+                    >
+                      <Icon
+                        name="chevron-right"
+                        className={["size-3 shrink-0 transition", expanded ? "rotate-90" : ""].join(" ")}
+                      />
+                      <span className="min-w-0 flex-1 truncate text-left">{project.name}</span>
+                    </button>
+                    <div className="absolute inset-y-0 right-1 flex items-center">
+                      <ProjectKebab
+                        projectName={project.name}
+                        isOwner={project.owner_email === userEmail}
+                        onEdit={() => onEditProject(project.id)}
+                        onRename={() => setRenamingProjectId(project.id)}
+                        onDelete={() => onDeleteProject(project.id)}
+                      />
+                    </div>
+                  </div>
+                )}
                 {expanded ? (
                   chats.length === 0 ? (
                     <p className="py-1 pl-7 pr-2 text-[0.78rem] text-[var(--color-text-muted)]">
@@ -1289,6 +1437,14 @@ export function ConversationSidebar({
         </div>
       }
     >
+      {/* Projects section — ABOVE the New-chat row (the rail's primary nav
+          block). Wide-collapsed (≥sm) it hides with the rest of the wide-only
+          content; the max-height guard keeps a deep expanded tree from
+          pushing New chat and the list off-screen. */}
+      <div className={["max-h-[40vh] overflow-y-auto", railCollapsed ? "sm:hidden" : ""].join(" ")}>
+        {projectsSection}
+      </div>
+
       {/* New chat / sealed-chat row — collapsed (≥sm) it stacks as icon-only
           2.5rem buttons with data-tip labels, per the design's .rail-new-row. */}
       <div
@@ -1453,7 +1609,6 @@ export function ConversationSidebar({
           </>
         ) : (
           <>
-            {projectsSection}
             {pinned.length > 0 ? (
               <div className="mb-1">
                 <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
