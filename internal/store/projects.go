@@ -258,6 +258,31 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 	}, nil
 }
 
+// SetConversationProject files an existing conversation into a project, or
+// unfiles it (projectID "" → NULL). The handler validates membership before
+// calling — this mirrors CreateProjectConversation's split, and the
+// owner-scoped WHERE keeps a caller from moving someone else's chat. Unlike
+// creation, re-filing inherits nothing (persona/model/connectors stay as they
+// are); it only binds the project's instructions + shared memory from the
+// next turn on. A soft-deleted conversation is not mutable (#596).
+func (s *Store) SetConversationProject(ctx context.Context, userEmail, convID, projectID string) error {
+	var pid any // NULL when unfiling, matching the column's created-without-project state
+	if projectID != "" {
+		pid = projectID
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET project_id = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		pid, time.Now().Unix(), convID, userEmail,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.New("conversation not found")
+	}
+	return nil
+}
+
 // ── project-scoped memory (#509 + #515 scope-awareness) ──
 
 // CreateProjectMemory adds a SHARED memory to the project. creatorEmail is

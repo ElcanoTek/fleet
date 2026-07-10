@@ -48,6 +48,9 @@ type chatStore interface {
 	BulkPatch(ctx context.Context, userEmail string, ids []string, pinned *bool, folder *string, labels []string) (int, error)
 	SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error
 	SetArchived(ctx context.Context, userEmail, convID string, archived bool) error
+	// SetConversationProject re-files a conversation into a project ("" =
+	// unfile); the handler validates membership first (#509 follow-up).
+	SetConversationProject(ctx context.Context, userEmail, convID, projectID string) error
 	SetModel(ctx context.Context, userEmail, convID, model string) error
 	SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error
 	SetThinkingConfig(ctx context.Context, userEmail, convID string, cfg *store.ThinkingConfig) error

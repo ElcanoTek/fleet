@@ -94,10 +94,11 @@ type Conversation struct {
 	// are gated by this list. Stored as JSONB in Postgres; marshalled
 	// as a JSON array over the wire. nil / empty = no opt-ins.
 	OptionalMCPServersEnabled []string `json:"optional_mcp_servers_enabled"`
-	// ProjectID scopes this conversation to a project/space (#509). Set once
-	// at creation; empty = no project. The turn path uses it to inject the
-	// project's standing instructions + shared memory and to inherit its
-	// curated connector selection.
+	// ProjectID scopes this conversation to a project/space (#509). Set at
+	// creation or re-filed later via SetConversationProject; empty = no
+	// project. The turn path uses it to inject the project's standing
+	// instructions + shared memory. Connector/persona/model inheritance
+	// happens only at creation — re-filing does not retro-apply them.
 	ProjectID string `json:"project_id,omitempty"`
 	// Lockdown is set at conversation creation and never changes. When
 	// true: the per-turn sandbox is cold-started fresh with
