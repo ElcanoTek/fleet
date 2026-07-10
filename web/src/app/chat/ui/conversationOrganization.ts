@@ -22,6 +22,11 @@ export type OrganizableConversation = {
   pinned: boolean;
   folder?: string;
   labels?: string[];
+  // project_id binds the conversation to a project/space (#509). Like a
+  // filed conversation, a project conversation lives ONLY under its project
+  // in the rail — it is excluded from Pinned and Chats. (Folder/label
+  // filters and search still reach it: filters are explicit user actions.)
+  project_id?: string;
 };
 
 export type FolderSummary = { name: string; count: number };
@@ -118,24 +123,59 @@ export function filterConversations<T extends OrganizableConversation>(
 }
 
 // pinnedUnfiled / recentUnfiled split the unsectioned conversations. A filed
-// conversation lives only in its folder, so both sections exclude any
-// conversation with a folder; "Pinned" is the pinned remainder and "Recent" the
-// rest.
+// conversation lives only in its folder and a project conversation only under
+// its project, so both sections exclude either kind; "Pinned" is the pinned
+// remainder and "Chats" the rest.
 export function pinnedUnfiled<T extends OrganizableConversation>(conversations: readonly T[]): T[] {
-  return conversations.filter((c) => c.pinned && !c.folder);
+  return conversations.filter((c) => c.pinned && !c.folder && !c.project_id);
 }
 
 export function recentUnfiled<T extends OrganizableConversation>(conversations: readonly T[]): T[] {
-  return conversations.filter((c) => !c.pinned && !c.folder);
+  return conversations.filter((c) => !c.pinned && !c.folder && !c.project_id);
+}
+
+// ── Projects in the rail (#509 follow-up) ────────────────────────────────────
+
+// MAX_RAIL_PROJECTS caps how many projects the rail section shows — the most
+// recently updated ones. The rest stay reachable through the Projects modal.
+export const MAX_RAIL_PROJECTS = 5;
+
+// ProjectLike is the structural slice of a Project the rail grouping needs
+// (the full type lives in ProjectsModal.tsx; a minimal shape keeps this
+// module React-free and unit-testable, like OrganizableConversation above).
+export type ProjectLike = { id: string; name: string; updated_at: number };
+
+export type ProjectGroup<T> = { project: ProjectLike; chats: T[] };
+
+// projectGroups returns the rail's project tree: the top `max` projects by
+// most-recent update, each with its conversations in the caller's list order
+// (the server already sorts by updated_at DESC). A project with no chats
+// still gets a group — a fresh project must exist in the rail to be a drag
+// target. Conversations whose project is NOT in the top slice stay hidden
+// from the main list (they're project chats) and are reachable via search,
+// filters, or the modal.
+export function projectGroups<T extends OrganizableConversation>(
+  conversations: readonly T[],
+  projects: readonly ProjectLike[],
+  max: number = MAX_RAIL_PROJECTS,
+): ProjectGroup<T>[] {
+  return [...projects]
+    .sort((a, b) => b.updated_at - a.updated_at)
+    .slice(0, max)
+    .map((project) => ({
+      project,
+      chats: conversations.filter((c) => c.project_id === project.id),
+    }));
 }
 
 // visibleConversationOrder is the SINGLE source of truth for the flat, top-to-
 // bottom order the sidebar shows — so keyboard j/k navigation (in the parent)
 // and the rendered rows (in ConversationSidebar) can never drift. When a filter
 // is active the sidebar shows filteredConversations verbatim; otherwise it shows
-// pinned-unfiled then recent-unfiled (filed conversations live only in their
-// folder and are not keyboard-navigable from the main list). Archived rows are
-// a separate collapsible section and are intentionally excluded.
+// pinned-unfiled then recent-unfiled (filed and project conversations live only
+// in their folder/project and are not keyboard-navigable from the main list).
+// Archived rows are a separate collapsible section and are intentionally
+// excluded.
 export function visibleConversationOrder<T extends OrganizableConversation>(args: {
   all: readonly T[];
   filtered: readonly T[];
