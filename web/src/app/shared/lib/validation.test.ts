@@ -4,6 +4,7 @@ import {
   validatePassword,
   validateEmail,
   validateCronExpression,
+  describeEmailError,
   validatePrompt,
   validateModel,
   validateMaxIterations,
@@ -152,5 +153,23 @@ describe("validateTaskForm", () => {
     // never produces an error key.
     const res = validateTaskForm({ prompt: "Run task" } as never);
     expect("target_node_name" in res.errors).toBe(false);
+  });
+});
+
+describe("cron + email error copy (task-modal redesign)", () => {
+  it("cron field-count error names the count it got", () => {
+    expect(validateCronExpression("0 9 * *").message).toBe(
+      "Cron needs 5 fields — got 4. Format: min · hour · day · month · weekday.",
+    );
+    expect(validateCronExpression("0 9 * * * * *").message).toContain("got 7");
+  });
+  it("describeEmailError names the specific problem", () => {
+    expect(describeEmailError("traders@elcanotek")).toBe(
+      'Not a valid email: "traders@elcanotek" — missing domain.',
+    );
+    expect(describeEmailError("traders")).toBe('Not a valid email: "traders" — missing @.');
+    expect(describeEmailError("@elcanotek.com")).toBe(
+      'Not a valid email: "@elcanotek.com" — missing the part before @.',
+    );
   });
 });

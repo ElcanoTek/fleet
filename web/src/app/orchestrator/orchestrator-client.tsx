@@ -55,7 +55,7 @@ function OrchestratorSlimHeader() {
 function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
   const session = useOrchestratorSession();
   const dashboard = useDashboardData(session.signedIn);
-  const { servers } = useMcpServers(session.signedIn);
+  const { servers, loading: serversLoading } = useMcpServers(session.signedIn);
   const { branding } = useClientConfig();
 
   const [statFilter, setStatFilter] = useState<StatFilter | null>(null);
@@ -266,6 +266,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
       <TaskCreateModal
         open={taskModalOpen}
         servers={servers}
+        serversLoading={serversLoading}
         onClose={() => setTaskModalOpen(false)}
         onCreated={() => void dashboard.reload()}
       />
