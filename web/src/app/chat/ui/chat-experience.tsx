@@ -23,7 +23,6 @@ import {
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
 import { parseSseChunk } from "@/app/lib/sse";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
-import { SearchBar } from "./SearchBar";
 import { useClientConfig } from "@/app/lib/useClientConfig";
 import {
   filterConversations,
@@ -228,7 +227,7 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
   {
     title: "Global",
     entries: [
-      { chips: [{ mod: true }, { label: "K" }], description: "Open search" },
+      { chips: [{ mod: true }, { label: "K" }], description: "Focus search" },
       {
         chips: [{ mod: true }, { shift: true }, { label: "O" }],
         description: "New conversation",
@@ -243,7 +242,7 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
       },
       {
         chips: [{ label: "Esc" }],
-        description: "Close search, help, or the sidebar",
+        description: "Close help or the sidebar",
       },
     ],
   },
@@ -367,8 +366,6 @@ export function ChatExperience() {
   // behavior. Owned here so the sidebar content and the select-mode exit
   // below share one source of truth.
   const railCollapse = useRailCollapse();
-  // searchOpen gates the Cmd/Ctrl+K full-text search palette (#308).
-  const [searchOpen, setSearchOpen] = useState(false);
   // shortcutsOpen gates the "?" keyboard-shortcut help overlay (#306).
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Theme bootstrap + toggle are owned by the shared shell: the <ThemeToggle/>
@@ -2730,7 +2727,6 @@ export function ChatExperience() {
     // shortcut overlays also carry their own focus-independent Escape listeners
     // (they're mounted-while-open), so this is the catch-all for the sidebar.
     setShortcutsOpen(false);
-    setSearchOpen(false);
     setSidebarOpen(false);
   }, []);
 
@@ -2808,7 +2804,7 @@ export function ChatExperience() {
         const tag = target?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable)
           return;
-        if (searchOpen || shortcutsOpen || pendingDeleteConversation) return;
+        if (shortcutsOpen || pendingDeleteConversation) return;
         e.preventDefault();
         setBulkDeleteConfirm(true);
       }
@@ -2818,7 +2814,6 @@ export function ChatExperience() {
   }, [
     selectMode,
     selectedIds.size,
-    searchOpen,
     shortcutsOpen,
     pendingDeleteConversation,
   ]);
@@ -2828,7 +2823,6 @@ export function ChatExperience() {
   // convention the multi-select handler above follows — so a bare key never
   // acts on a hidden conversation from behind an open overlay or dialog.
   const listNavActive =
-    !searchOpen &&
     !shortcutsOpen &&
     !pendingDeleteConversation &&
     !confirmBulkDelete &&
@@ -2841,7 +2835,12 @@ export function ChatExperience() {
         key: "k",
         mod: true,
         allowInInput: true,
-        handler: () => setSearchOpen(true),
+        // The #308 palette merged into the rail's unified search bar — ⌘K
+        // focuses it (opening the <sm drawer first so it's visible).
+        handler: () => {
+          setSidebarOpen(true);
+          requestAnimationFrame(() => searchRef.current?.focus());
+        },
       },
       // Bindings deliberately NOT taken, so core browser features keep working:
       // ⌘/Ctrl+F (find-in-page — the natural way to search the visible
@@ -3543,6 +3542,7 @@ export function ChatExperience() {
             void bulkPatchConversations({ labels: [label] });
             exitSelectMode();
           }}
+          searchShortcut={searchShortcut}
           onOpenProjects={() => setProjectsModal({})}
           onCreateProject={() => setProjectsModal({ create: true })}
           onEditProject={(projectID) =>
@@ -3563,16 +3563,6 @@ export function ChatExperience() {
             void moveConversationToProject(conversationId, projectID)
           }
         />
-
-        {searchOpen ? (
-          <SearchBar
-            onClose={() => setSearchOpen(false)}
-            onSelect={(conversationId) => {
-              setSearchOpen(false);
-              void loadConversation(conversationId);
-            }}
-          />
-        ) : null}
 
         {shortcutsOpen ? (
           <KeyboardShortcutsOverlay
@@ -4060,19 +4050,6 @@ export function ChatExperience() {
             onMenu={() => setSidebarOpen(true)}
             actions={
               <>
-                {/* Unified page-header search (#169): an icon-only button, inline
-                    with the other header icons, that opens the full-text search
-                    overlay (also bound to ⌘K). The rail's own "Search chats…" input
-                    is a separate local title filter — both are unchanged. */}
-                <button
-                  aria-label="Search conversations"
-                  className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  title={`Search conversations (${searchShortcut})`}
-                  type="button"
-                  onClick={() => setSearchOpen(true)}
-                >
-                  <Icon name="search" className="size-5" />
-                </button>
                 <button
                   aria-label="Keyboard shortcuts"
                   className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
