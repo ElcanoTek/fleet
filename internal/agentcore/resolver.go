@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,12 +23,20 @@ import (
 // resolver. It is the one exported entry point for "give me a
 // fantasy.LanguageModel for this slug".
 type ModelResolver struct {
-	providers []ProviderConfig            // routing table, in precedence order
-	built     map[string]fantasy.Provider // provider handle by name (eager)
+	providers         []ProviderConfig            // routing table, in precedence order
+	built             map[string]fantasy.Provider // provider handle by name (eager)
+	fallbackProviders []string                    // ordered provider names; empty = disabled
 
 	mu    sync.RWMutex
 	cache map[string]fantasy.LanguageModel // by ORIGINAL slug
 }
+
+type providerNamedModel struct {
+	fantasy.LanguageModel
+	providerName string
+}
+
+func (m *providerNamedModel) fleetProviderName() string { return m.providerName }
 
 // NewModelResolver builds a resolver backed by a single catch-all OpenRouter
 // provider — the historical, backward-compatible default. An empty API key is a
@@ -68,10 +77,23 @@ func NewModelResolverWithProviders(providers []ProviderConfig, headers ProviderH
 		}
 		built[name] = p
 	}
+	var fallbackProviders []string
+	for i := range providers {
+		if len(providers[i].FallbackProviders) > 0 {
+			fallbackProviders = append([]string(nil), providers[i].FallbackProviders...)
+			break
+		}
+	}
+	for i, name := range fallbackProviders {
+		if !seen[name] {
+			return nil, fmt.Errorf("fallback provider[%d] %q is not configured", i, name)
+		}
+	}
 	return &ModelResolver{
-		providers: append([]ProviderConfig(nil), providers...),
-		built:     built,
-		cache:     map[string]fantasy.LanguageModel{},
+		providers:         append([]ProviderConfig(nil), providers...),
+		built:             built,
+		fallbackProviders: fallbackProviders,
+		cache:             map[string]fantasy.LanguageModel{},
 	}, nil
 }
 
@@ -108,8 +130,91 @@ func (r *ModelResolver) Resolve(ctx context.Context, slug string) (fantasy.Langu
 		return nil, fmt.Errorf("load model %q via provider %q: %w", modelSlug, pc.Name, err)
 	}
 
+	mdl = &providerNamedModel{LanguageModel: mdl, providerName: pc.Name}
 	r.mu.Lock()
 	r.cache[slug] = mdl
+	r.mu.Unlock()
+	return mdl, nil
+}
+
+// ResolveWithFallback resolves the normal primary plus the next eligible
+// provider in the configured cross-provider chain. Explicit provider-prefixed
+// slugs are isolation pins and therefore never acquire an implicit fallback.
+func (r *ModelResolver) ResolveWithFallback(ctx context.Context, slug string) (fantasy.LanguageModel, fantasy.LanguageModel, error) {
+	primary, fallbacks, err := r.ResolveWithFallbacks(ctx, slug)
+	if err != nil || len(fallbacks) == 0 {
+		return primary, nil, err
+	}
+	return primary, fallbacks[0], nil
+}
+
+// ResolveWithFallbacks returns every eligible backend after the primary in
+// chain order. The resilience loop consumes them one at a time.
+func (r *ModelResolver) ResolveWithFallbacks(ctx context.Context, slug string) (fantasy.LanguageModel, []fantasy.LanguageModel, error) {
+	primary, err := r.Resolve(ctx, slug)
+	if err != nil {
+		return nil, nil, err
+	}
+	pc, modelSlug, err := selectProvider(r.providers, strings.TrimSpace(slug))
+	if err != nil {
+		return nil, nil, err
+	}
+	if name, rest, ok := strings.Cut(strings.TrimSpace(slug), "/"); ok && rest != "" {
+		for i := range r.providers {
+			if r.providers[i].Name == name {
+				return primary, nil, nil
+			}
+		}
+	}
+	start := -1
+	for i, name := range r.fallbackProviders {
+		if name == pc.Name {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return primary, nil, nil
+	}
+	var fallbacks []fantasy.LanguageModel
+	for _, name := range r.fallbackProviders[start+1:] {
+		var candidate *ProviderConfig
+		for i := range r.providers {
+			if r.providers[i].Name == name {
+				candidate = &r.providers[i]
+				break
+			}
+		}
+		if candidate == nil || (len(candidate.Models) > 0 && !slices.Contains(candidate.Models, modelSlug)) {
+			continue
+		}
+		fallback, loadErr := r.resolveProviderModel(ctx, *candidate, modelSlug)
+		if loadErr != nil {
+			return nil, nil, loadErr
+		}
+		fallbacks = append(fallbacks, fallback)
+	}
+	return primary, fallbacks, nil
+}
+
+func (r *ModelResolver) resolveProviderModel(ctx context.Context, pc ProviderConfig, modelSlug string) (fantasy.LanguageModel, error) {
+	key := pc.Name + "/" + modelSlug
+	r.mu.RLock()
+	if cached, ok := r.cache[key]; ok {
+		r.mu.RUnlock()
+		return cached, nil
+	}
+	r.mu.RUnlock()
+	provider := r.built[pc.Name]
+	loadCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	mdl, err := provider.LanguageModel(loadCtx, modelSlug)
+	if err != nil {
+		return nil, fmt.Errorf("load fallback model %q via provider %q: %w", modelSlug, pc.Name, err)
+	}
+	mdl = &providerNamedModel{LanguageModel: mdl, providerName: pc.Name}
+	r.mu.Lock()
+	r.cache[key] = mdl
 	r.mu.Unlock()
 	return mdl, nil
 }

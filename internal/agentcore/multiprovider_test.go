@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"context"
 	"testing"
 )
 
@@ -183,4 +184,37 @@ func TestNewModelResolverWithProviders(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestResolveWithFallbackChainAndExplicitPin(t *testing.T) {
+	providers := []ProviderConfig{
+		{Name: "primary", Type: ProviderTypeOpenAI, APIKey: "p", Models: []string{"gpt-test"}, FallbackProviders: []string{"primary", "secondary", "tertiary"}},
+		{Name: "secondary", Type: ProviderTypeOpenAI, APIKey: "s"},
+		{Name: "tertiary", Type: ProviderTypeOpenAI, APIKey: "t"},
+	}
+	r, err := NewModelResolverWithProviders(providers, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, fallback, err := r.ResolveWithFallback(context.Background(), "gpt-test")
+	if err != nil || primary == nil || fallback == nil {
+		t.Fatalf("primary=%v fallback=%v err=%v", primary, fallback, err)
+	}
+	_, fallbacks, err := r.ResolveWithFallbacks(context.Background(), "gpt-test")
+	if err != nil || len(fallbacks) != 2 {
+		t.Fatalf("fallback chain len=%d err=%v", len(fallbacks), err)
+	}
+	_, pinnedFallback, err := r.ResolveWithFallback(context.Background(), "primary/gpt-test")
+	if err != nil || pinnedFallback != nil {
+		t.Fatalf("explicit pin fallback=%v err=%v", pinnedFallback, err)
+	}
+}
+
+func TestResolverRejectsUnknownFallbackProvider(t *testing.T) {
+	_, err := NewModelResolverWithProviders([]ProviderConfig{{
+		Name: "primary", Type: ProviderTypeOpenAI, APIKey: "p", FallbackProviders: []string{"primary", "missing"},
+	}}, DefaultProviderHeaders)
+	if err == nil {
+		t.Fatal("expected unknown fallback provider error")
+	}
 }

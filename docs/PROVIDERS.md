@@ -37,6 +37,9 @@ providers:
     type: ollama
     base_url: http://localhost:11434/v1
     models: ["llama3.2", "qwen2.5-coder"]
+
+# Optional ordered availability chain. Each target must serve the same slug.
+fallback_providers: ["anthropic-direct", "openrouter"]
 ```
 
 Set the credentials in `.env` (each `api_key_env` name is auto-allowlisted from
@@ -89,6 +92,11 @@ So in the example above: `gpt-4o` → `openai-direct`; `claude-opus-4-8` →
   native runtime cost stays $0, **`FLEET_MAX_COST_USD` does not bound native
   runs** — only the token ceiling (`FLEET_MAX_TOTAL_TOKENS`) does. Add a pricing
   override to track native USD cost and re-enable the USD ceiling.
-- **No `fallback_providers` chain / per-task `preferred_provider` field** yet —
-  per-task pinning is available via the explicit `provider-name/model` slug form.
+- **Cross-provider failover.** `fallback_providers` retries the same model on the
+  next eligible provider after a transient failure, but only before any semantic
+  stream event is visible. Explicit `provider-name/model` slugs remain pinned and
+  never use the workspace chain. A scheduled task's explicit `fallback_model`
+  remains a separate model substitution and takes precedence.
+- **No per-task `preferred_provider` field.** Per-task pinning is available via
+  the explicit `provider-name/model` slug form.
 - A **misconfigured provider fails at boot**, not on first use.

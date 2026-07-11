@@ -121,6 +121,18 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Host-side prompt-injection guardrails (#702)**: optional workspace-wide
+  `off` / `observe` / `block` screening covers seed user/task messages and tool
+  output before it enters model context. Operators bring a local HTTP detector,
+  configure it live in Admin Features, and can test it with a synthetic sample;
+  block mode fails closed while observe mode reports outages without blocking.
+- **Cross-provider LLM failover (#703)**: client bundles can declare an ordered
+  `fallback_providers` chain. Retryable failures can promote the same model to
+  the next eligible backend before streaming begins; explicit provider pins stay
+  isolated, model-level `fallback_model` remains distinct, and Fleet suppresses
+  failover after any semantic event to prevent stream splicing or duplicate
+  side effects.
+
 - **Workspace-provider models in the chat picker**: models from
   admin-configured LLM providers (Settings → Admin → Model providers) now
   appear in the chat composer's model menu with a "workspace" pill — they

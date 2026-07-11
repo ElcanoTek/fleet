@@ -40,6 +40,20 @@ func TestValidateProviders(t *testing.T) {
 	}
 }
 
+func TestValidateFallbackProviders(t *testing.T) {
+	b := &Bundle{
+		Providers:         []ProviderDef{{Name: "a", Type: "ollama"}, {Name: "b", Type: "ollama"}},
+		FallbackProviders: []string{"a", "b"},
+	}
+	if err := b.validateProviders(); err != nil {
+		t.Fatal(err)
+	}
+	b.FallbackProviders = []string{"a", "missing"}
+	if err := b.validateProviders(); err == nil {
+		t.Fatal("expected unknown provider validation error")
+	}
+}
+
 // TestEnvVarNamesIncludesProviderKeys proves a provider's api_key_env survives the
 // .env-file allowlist (registered via EnvVarNames), the same as an MCP credential.
 func TestEnvVarNamesIncludesProviderKeys(t *testing.T) {

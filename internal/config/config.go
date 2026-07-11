@@ -303,6 +303,9 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_PII_REDACTION_MODE":                true,
 	"FLEET_PII_REDACTION_ENGINE":              true,
 	"FLEET_PII_RAMPART_URL":                   true,
+	"FLEET_GUARDRAIL_MODE":                    true,
+	"FLEET_GUARDRAIL_PROFILE":                 true,
+	"FLEET_GUARDRAIL_URL":                     true,
 	"FLEET_CONTEXT_HANDLES_ENABLED":           true,
 	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED": true,
 	"FLEET_BROWSER_ENABLED":                   true,
@@ -877,6 +880,13 @@ type Config struct {
 	// (FLEET_PII_RAMPART_URL), e.g. http://127.0.0.1:8787/v1/redact. Empty =
 	// the rampart engine cannot activate.
 	PIIRampartURL string
+	// GuardrailMode controls optional host-side prompt-injection screening at
+	// untrusted ingress: off (default), observe, or block.
+	GuardrailMode string
+	// GuardrailProfile is the detector profile, default "prompt-injection".
+	GuardrailProfile string
+	// GuardrailURL is the operator-deployed detector endpoint.
+	GuardrailURL string
 	// ContextHandlesEnabled gates inline composer context handles (#517): a chat
 	// message may contain `@url:<url>` (host-side SSRF-guarded fetch) and
 	// `@file:"path"` (read from the conversation workspace, path-gated) that the
@@ -1231,6 +1241,9 @@ func Load(envFile string) (*Config, error) {
 		PIIRedactionMode:    strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_MODE"))),
 		PIIRedactionEngine:  strings.ToLower(strings.TrimSpace(getenvFleet("PII_REDACTION_ENGINE"))),
 		PIIRampartURL:       strings.TrimSpace(getenvFleet("PII_RAMPART_URL")),
+		GuardrailMode:       strings.ToLower(strings.TrimSpace(getenvFleet("GUARDRAIL_MODE"))),
+		GuardrailProfile:    strings.TrimSpace(getenvFleet("GUARDRAIL_PROFILE")),
+		GuardrailURL:        strings.TrimSpace(getenvFleet("GUARDRAIL_URL")),
 
 		// Composer context handles (#517) — optional, default off.
 		ContextHandlesEnabled: getenvFleetBool("CONTEXT_HANDLES_ENABLED", false),
