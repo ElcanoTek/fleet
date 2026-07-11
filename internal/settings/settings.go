@@ -90,6 +90,11 @@ func Registry() []Spec {
 		{Key: "pii_redaction_engine", Kind: KindEnum,
 			Enum:   []string{"pattern", "rampart"},
 			EnvVar: "FLEET_PII_REDACTION_ENGINE"},
+		{Key: "guardrail_url", Kind: KindURL,
+			EnvVar: "FLEET_GUARDRAIL_URL"},
+		{Key: "guardrail_mode", Kind: KindEnum,
+			Enum:   []string{"off", "observe", "block"},
+			EnvVar: "FLEET_GUARDRAIL_MODE"},
 
 		// Agent runtime.
 		{Key: "tool_disclosure_threshold", Kind: KindInt, Min: 1, Max: 100000,

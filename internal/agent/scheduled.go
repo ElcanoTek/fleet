@@ -53,20 +53,21 @@ func personaLabel(persona string) string {
 // MCP client, the native tools, and the session log; Execute drives one task to
 // completion through agentcore.Run.
 type Agent struct {
-	config        *config.Config
-	model         fantasy.LanguageModel
-	fallbackModel fantasy.LanguageModel
-	mcpClient     *mcp.Client
-	overlay       *RemoteMCPOverlay
-	nativeTools   []fantasy.AgentTool
-	systemPrompt  string
-	persona       string
-	maxIterations int
-	logSession    *LogSession
-	sb            *sandbox.Sandbox
-	notesProvider agentcore.NotesProvider
-	noteProposer  agentcore.NoteProposer
-	skillProposer agentcore.SkillProposer
+	config         *config.Config
+	model          fantasy.LanguageModel
+	fallbackModel  fantasy.LanguageModel
+	fallbackModels []fantasy.LanguageModel
+	mcpClient      *mcp.Client
+	overlay        *RemoteMCPOverlay
+	nativeTools    []fantasy.AgentTool
+	systemPrompt   string
+	persona        string
+	maxIterations  int
+	logSession     *LogSession
+	sb             *sandbox.Sandbox
+	notesProvider  agentcore.NotesProvider
+	noteProposer   agentcore.NoteProposer
+	skillProposer  agentcore.SkillProposer
 
 	// ── agent self-improvement (#285), gated by the per-task Captain's Log opt-in
 	// (instruction_self_improve). The DRIVER (scheduledrun) leaves these nil unless
@@ -131,16 +132,17 @@ type Agent struct {
 
 // Options configure a scheduled Agent.
 type Options struct {
-	Config        *config.Config
-	Model         fantasy.LanguageModel
-	FallbackModel fantasy.LanguageModel
-	MCPClient     *mcp.Client
-	NativeTools   []fantasy.AgentTool
-	SystemPrompt  string
-	Persona       string
-	MaxIterations int
-	Sandbox       *sandbox.Sandbox
-	LogFile       string
+	Config         *config.Config
+	Model          fantasy.LanguageModel
+	FallbackModel  fantasy.LanguageModel
+	FallbackModels []fantasy.LanguageModel
+	MCPClient      *mcp.Client
+	NativeTools    []fantasy.AgentTool
+	SystemPrompt   string
+	Persona        string
+	MaxIterations  int
+	Sandbox        *sandbox.Sandbox
+	LogFile        string
 
 	// NotesProvider supplies the admin-curated knowledge base appended to the
 	// system prompt at run start (both modes inject the same notes). Nil = none.
@@ -264,6 +266,7 @@ func NewAgent(opts Options) *Agent {
 		config:              opts.Config,
 		model:               opts.Model,
 		fallbackModel:       opts.FallbackModel,
+		fallbackModels:      append([]fantasy.LanguageModel(nil), opts.FallbackModels...),
 		mcpClient:           opts.MCPClient,
 		overlay:             opts.Overlay,
 		nativeTools:         opts.NativeTools,
@@ -596,6 +599,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		Executor:        NewSandboxExecutor(a.sb),
 		Model:           a.model,
 		FallbackModel:   a.fallbackModel,
+		FallbackModels:  a.fallbackModels,
 		MCPClient:       a.mcpClient,
 		LogSession:      a.logSession,
 		MCPServersDirty: a.mcpDirty,

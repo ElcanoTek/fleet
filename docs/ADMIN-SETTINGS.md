@@ -60,6 +60,8 @@ needs a restart, ever.
 | `pii_redaction_mode` | `off`/`observe`/`redact`/`block` | `FLEET_PII_REDACTION_ENABLED` + `FLEET_PII_REDACTION_MODE` | Optional PII pass over tool output ([PII-REDACTION.md](PII-REDACTION.md)) |
 | `pii_redaction_engine` | `pattern`/`rampart` | `FLEET_PII_REDACTION_ENGINE` | Detector: built-in regexes or the Rampart ML service ([PII-REDACTION.md](PII-REDACTION.md)) |
 | `pii_rampart_url` | http(s) URL (or empty) | `FLEET_PII_RAMPART_URL` | Rampart detection service endpoint |
+| `guardrail_mode` | `off`/`observe`/`block` | `FLEET_GUARDRAIL_MODE` | Host-side untrusted-ingress screening ([GUARDRAILS.md](GUARDRAILS.md)) |
+| `guardrail_url` | http(s) URL (or empty) | `FLEET_GUARDRAIL_URL` | Prompt-injection detector endpoint |
 | `tool_disclosure_threshold` | int 1–100000 | `FLEET_TOOL_DISCLOSURE_THRESHOLD` | Roster size that triggers BM25 tool disclosure ([TOOL-DISCLOSURE.md](TOOL-DISCLOSURE.md)) |
 | `max_tool_output_bytes` | int 1024–16 MiB, or 0 = no ceiling | `FLEET_MAX_TOOL_OUTPUT_BYTES` | Per-tool-call output cap before the transcript (#199) |
 | `phone_a_friend_enabled` | bool | `FLEET_PHONE_A_FRIEND_ENABLED` | One-time super-LLM review of scheduled runs ([AGENT-RUNTIME.md](AGENT-RUNTIME.md)) |

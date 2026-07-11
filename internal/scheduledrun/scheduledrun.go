@@ -525,11 +525,11 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	if modelSlug == "" {
 		return nil, false, "", fmt.Errorf("no model configured for scheduled task (set CUTLASS_TASK_MODEL or the task's model)")
 	}
-	model, err := r.mgr.Resolve(ctx, modelSlug)
+	model, providerFallbacks, err := r.mgr.ResolveWithFallbacks(ctx, modelSlug)
 	if err != nil {
 		return nil, false, "", fmt.Errorf("resolve scheduled model %q: %w", modelSlug, err)
 	}
-	var fallback = model
+	var fallback fantasy.LanguageModel
 	if task.FallbackModel != nil && strings.TrimSpace(*task.FallbackModel) != "" {
 		if fb, ferr := r.mgr.Resolve(ctx, strings.TrimSpace(*task.FallbackModel)); ferr == nil {
 			fallback = fb
@@ -538,6 +538,9 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		if fb, ferr := r.mgr.Resolve(ctx, r.cfg.TaskFallbackModel); ferr == nil {
 			fallback = fb
 		}
+	}
+	if fallback != nil {
+		providerFallbacks = nil
 	}
 
 	// "Phone a friend" super-LLM reviewer (#175). Resolved only when the feature
@@ -711,18 +714,19 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	learnedInstruction := r.activeLearnedInstruction(ctx, task.ID)
 
 	a := agent.NewAgent(agent.Options{
-		Config:        r.cfg,
-		Model:         model,
-		FallbackModel: fallback,
-		MCPClient:     mcpClient,
-		NativeTools:   nativeTools,
-		SystemPrompt:  taskSystemPrompt,
-		Persona:       taskPersona,
-		MaxIterations: maxIter,
-		Sandbox:       sb,
-		NotesProvider: r.notesProvider,
-		NoteProposer:  r.noteProposer,
-		SkillProposer: r.taskSkillProposer(ownerSkillEmail),
+		Config:         r.cfg,
+		Model:          model,
+		FallbackModel:  fallback,
+		FallbackModels: providerFallbacks,
+		MCPClient:      mcpClient,
+		NativeTools:    nativeTools,
+		SystemPrompt:   taskSystemPrompt,
+		Persona:        taskPersona,
+		MaxIterations:  maxIter,
+		Sandbox:        sb,
+		NotesProvider:  r.notesProvider,
+		NoteProposer:   r.noteProposer,
+		SkillProposer:  r.taskSkillProposer(ownerSkillEmail),
 		// Captain's Log persistent memory (#285): nil unless the task opted in (above).
 		TaskMemory:          taskMemory,
 		TaskID:              task.ID,
