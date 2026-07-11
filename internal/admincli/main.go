@@ -13,17 +13,20 @@
 //	fleet update    [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run]
 //	fleet status    [--service <name>] [--no-sandbox]
 //	fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
-//	fleet restart|stop [--service <name>]
+//	fleet start|restart|stop [--service <name>]
 //	fleet logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
 //	fleet chat                                        (interactive agent TUI, #457; --message for one-shot)
 //	fleet admin add|list|rm                           (one-step full admin across both user planes)
 //	fleet config set-openrouter-key|set-auth-pubkey   (guided credential/env-file writes)
 //	fleet chat user add|update|role|del|list
 //	fleet sched user add|update|set-role|rename|del|list
-//	fleet sched apikey create|list|revoke|delete
-//	fleet sched task export|import|set-model|set-credentials|set-description|tag|estimate|batch-create
+//	fleet sched apikey create|list|revoke|rotate|delete
+//	fleet sched task list|export|import|set-model|set-credentials|set-description|tag|estimate|batch-create
+//	fleet sched trigger create|list|delete|rotate
+//	fleet sched dlq list|replay
 //	fleet task run <task.yaml>   (local one-shot through the governed runtime — dispatched by the fleet binary)
 //	fleet task export|import    (definition-only #238: portable JSON/YAML, name-based conflict resolution)
+//	fleet task memories list|clear|delete <task_id> [key]
 //	fleet mcp account set|list|del
 //	fleet notes set|get|list|rm
 //	fleet notes proposal publish|reject
@@ -69,6 +72,11 @@ func Run(argv []string) int {
 		return cmdStatus(argv[1:])
 	case "diagnose":
 		return cmdDiagnose(argv[1:])
+	case "start":
+		// `fleet start` starts the systemd unit (#722) — the counterpart to
+		// stop/restart. Distinct from `fleet serve`, which runs the daemon in
+		// the foreground of THIS process.
+		return cmdStart(argv[1:])
 	case "restart":
 		return cmdRestart(argv[1:])
 	case "stop":
@@ -133,6 +141,7 @@ Operator lifecycle (bootstrap → update → status):
   fleet status    [--service <name>] [--no-sandbox]    (a.k.a. doctor; non-zero exit if unhealthy)
   fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
                                                              (redacted support bundle: status + config names + DB versions + sandbox image → .tar.gz)
+  fleet start     [--service <name>]                   (systemctl start; needs root/sudo — distinct from "fleet serve", which runs the daemon in the foreground)
   fleet restart   [--service <name>]                   (systemctl restart; needs root/sudo)
   fleet stop      [--service <name>]                   (systemctl stop; needs root/sudo)
   fleet logs      [--service <name>] [-n 50] [-f]      (journalctl tail; -f follows; a.k.a. tail)
@@ -156,10 +165,12 @@ Users, credentials, notes:
   fleet sched user rename <username> <new-username>
   fleet sched user del <username>
   fleet sched user list
-  fleet sched apikey create <name> [--role admin]
+  fleet sched apikey create <name> [--type admin|task|webhook|readonly] [--rate-limit-per-minute N] [--trigger-slugs a,b] [--role admin]
   fleet sched apikey list
   fleet sched apikey revoke <key-id>
+  fleet sched apikey rotate <key-id> [--grace-hours 24]   (fresh secret, same type/scope; old key valid through the grace window)
   fleet sched apikey delete <key-id>
+  fleet sched task list [--status scheduled] [--limit 50] [--json]   (most recent first; the daily-driver read)
   fleet sched task export > tasks.json    (versioned JSON of scheduled tasks → stdout)
   fleet sched task import < tasks.json     (recreate tasks from stdin; upsert on id)
   fleet sched task batch-create --from-file <file> [--atomic]
@@ -169,7 +180,10 @@ Users, credentials, notes:
   fleet sched task set-description <task_id> <text>|-    (operator docs; - reads stdin, e.g. < TASK_README.md)
   fleet sched task tag <task_id> --add <tag> ... --remove <tag> ...   (organize tasks by label)
   fleet sched task estimate --model <slug> --prompt <text> [--max-iter N] [--mcp-tools N] [--max-cost USD] [--system-prompt <text>] [--json]   (pre-submission cost forecast; no DB, no model call)
+  fleet sched trigger create --task <task_id> --slug <slug> [--kind webhook|email] | list | rotate <trigger_id> | delete <trigger_id>   (event triggers; #177/#511)
+  fleet sched dlq list [--tag <tag>] [--limit N] [--json] | replay <task_id>   (dead-letter queue review/replay; #253)
   fleet task run <task.yaml> [--log FILE] [--workspace DIR]   (local one-shot through the governed runtime)
+  fleet task memories list|clear|delete <task_id> [key]   (inspect/reset a task's Captain's Log memory; #198)
   fleet task export [--ids uuid1,uuid2] [--format json|yaml] [--recurrence-only]   (definition-only export → stdout; #238)
   fleet task import [--from tasks.yaml] [--format json|yaml] [--dry-run] [--conflict error|skip|replace]   (definition-only import; #238)
   fleet mcp account set <server> <account> --secret KEY=-   (value via stdin)

@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -721,6 +722,11 @@ func run() error {
 	// that assembles the prompt at dispatch, so POST /tasks/estimate counts the
 	// exact system prompt a real run would send. Read-only; never dispatches.
 	h.SetSystemPromptProvider(taskRunner.SystemPromptForPersona)
+	// Wire the persona catalog (#720) so the task-create paths can reject an
+	// unknown persona with a 400 listing the valid names, instead of silently
+	// dispatching on the global default. Reads the bundle's personas dir live
+	// per call, so a bundle hot-reload is reflected without a restart.
+	h.SetPersonaCatalog(func() []string { return listBundlePersonas(personasDir) })
 	// Reclaim sandbox containers orphaned by a PRIOR crash before building the
 	// pool: they run `--detach --rm` under conmon, so a non-graceful exit leaves
 	// them holding host RAM/PIDs across systemd restarts. Best-effort — log and
@@ -1486,6 +1492,30 @@ func toAgentcorePricing(p clientconfig.PricingConfig) agentcore.PricingConfig {
 		}
 	}
 	return out
+}
+
+// listBundlePersonas returns the persona names (basenames of personas/*.yaml,
+// without the extension) currently on disk in the bundle's personas dir (#720).
+// Read live per call — personas hot-reload with the bundle, so caching here
+// would let the create-time existence check drift from what dispatch can load.
+// Errors (e.g. no personas dir in a bare deployment) return nil, which the
+// handlers treat as "the bundle declares no personas".
+func listBundlePersonas(personasDir string) []string {
+	entries, err := os.ReadDir(personasDir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if name, ok := strings.CutSuffix(e.Name(), ".yaml"); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // toAgentcorePersonaPolicies translates the bundle manifest's personas: block

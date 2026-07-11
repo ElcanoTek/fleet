@@ -43,7 +43,8 @@ func systemctlUnitInstalled(unit string) bool {
 	return exec.CommandContext(ctx, "systemctl", "cat", unit).Run() == nil
 }
 
-// cmdRestart / cmdStop run `systemctl <verb> <unit>` on the resolved unit.
+// cmdStart / cmdRestart / cmdStop run `systemctl <verb> <unit>` on the resolved unit.
+func cmdStart(argv []string) int   { return systemctlVerb("start", argv) }
 func cmdRestart(argv []string) int { return systemctlVerb("restart", argv) }
 func cmdStop(argv []string) int    { return systemctlVerb("stop", argv) }
 

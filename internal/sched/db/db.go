@@ -765,7 +765,10 @@ func taskInsertArgs(t *models.Task) []any {
 // taskInsertColumnsCount is the number of columns in taskInsertColumns. Kept as
 // a named const so the multi-row placeholder builder is self-documenting and
 // a future schema migration that adds a column forces a single touch point.
-const taskInsertColumnsCount = 60
+// (#710 added file_names without bumping this, breaking every multi-row
+// AddTaskBatch INSERT — caught only once the dev lane gained a Postgres
+// service, #723. TestTaskInsertColumnsCount now pins the count DB-free.)
+const taskInsertColumnsCount = 61
 
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an

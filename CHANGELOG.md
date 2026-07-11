@@ -52,6 +52,20 @@ prior versions are listed because none have shipped.
   provisioning for that pair — no CREATE, no ALTER, no password rotation — and
   take the operator-supplied DSN, validated with `SELECT 1`).
 
+- **Per-task wall-clock timeout** (#724): `FLEET_TASK_WALL_TIMEOUT` (default
+  4h, `0` disables) bounds a scheduled run's total elapsed time; on expiry the
+  run is cancelled and the task fails with a clear, deterministic timeout error
+  that never consumes the transient-retry budget. Documented in
+  `docs/AGENT-RUNTIME.md` alongside the other enforced ceilings.
+- **`fleet sched task list`** (#722): the daily-driver task listing (short id,
+  name/prompt excerpt, status, priority, recurrence/scheduled time, model) with
+  `--status`, `--limit`, and `--json`; plus `fleet start` alongside
+  stop/restart, and top-level help for the shipped-but-unlisted verbs
+  (sched trigger/dlq, apikey rotate, task memories).
+- **Scoped keys can upload** (#719): `POST /v1/upload` accepts a scoped API key
+  with create_task permission — external intake apps no longer need the
+  full-access admin key to attach files to a create. Admin key / bearer /
+  cookie paths unchanged; under-scoped typed keys get 403.
 - Scheduled task inputs support logical `file_names` paired with stored upload
   names. Dedicated MCP runs materialize them in `${FLEET_WORKSPACE}/inputs`,
   and bundles may use `${FLEET_TASK_ID}` for connector-side task attribution.
@@ -108,6 +122,35 @@ prior versions are listed because none have shipped.
   tool; batch tools returning per-record `results[]` discharge per succeeded
   record, idempotently, and never for record ids the audit did not approve.
 
+### Changed
+
+- **Unknown personas are rejected at task create** (#720): a non-empty
+  `persona` not present in the client bundle is now a 400 listing the valid
+  names, instead of silently dispatching on the global default persona. Tasks
+  whose persona disappears from the bundle after creation still fall back at
+  dispatch. `docs/openapi.yaml` TaskCreate now documents the previously-missing
+  `name`, `persona`, `credential_allowlist`, `tags`, `timezone`, `description`,
+  `max_retries`, and `carry_context` fields, and `/upload`'s security note
+  reflects the scoped-key change.
+- **`fleet sched apikey create --rate-limit-per-minute`** (#722) names the
+  rate-limit unit; `--rate-limit` remains a deprecated alias that warns (the
+  v1 tooling's flags were per hour — porting numbers 1:1 set a 60× stricter
+  cap). The dev fast lane (`dev-ci.yml`) now runs with a Postgres service so
+  DB-gated suites — including the `fleet import` tests — run on every dev push
+  (#723).
+
+### Fixed
+
+- **Batch task creation was broken on dev** (#710 regression): the `file_names`
+  column was added to the task insert without bumping
+  `taskInsertColumnsCount`, so every multi-row `POST /tasks/batch` INSERT
+  failed with "INSERT has more target columns than expressions". Caught the
+  moment the dev lane gained a Postgres service (#723); a DB-free test now
+  pins the column/arg/count triple.
+- **Chat usage tests no longer accumulate rows**: migration 038 dropped
+  `turn_metrics`' FK to conversations (so usage survives conversation
+  deletion), which silently removed it from the test-isolation
+  `TRUNCATE ... CASCADE`; it is now truncated explicitly.
 - **Remote MCP OAuth callbacks use the deployed Fleet domain**: web-enabled
   bootstrap runs now write the same computed public origin to the backend's
   `FLEET_PUBLIC_BASE_URL` and generate the token-encryption key once; normal
