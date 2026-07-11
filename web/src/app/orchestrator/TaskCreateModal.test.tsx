@@ -1,0 +1,238 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { TaskCreateModal } from "./TaskCreateModal";
+import type { McpServer } from "@/app/shared/lib/orchestratorApi";
+
+// Component tests for the redesigned New Task modal: schedule mode segment,
+// launch gating + footer reason, blur validation with the design's error copy,
+// the email chip field, the dirty-close guard (with form reset on discard),
+// and the create path.
+
+const taskTemplates = vi.fn();
+const createTask = vi.fn();
+const estimateTask = vi.fn();
+const uploadFile = vi.fn();
+
+vi.mock("@/app/shared/lib/orchestratorApi", () => ({
+  orchestratorApi: {
+    taskTemplates: (...args: unknown[]) => taskTemplates(...args),
+    createTask: (...args: unknown[]) => createTask(...args),
+    estimateTask: (...args: unknown[]) => estimateTask(...args),
+    uploadFile: (...args: unknown[]) => uploadFile(...args),
+  },
+}));
+
+const SERVERS: McpServer[] = [
+  { name: "xandr", description: "Xandr DSP", tool_count: 7, accounts: ["client_a"] },
+];
+
+function renderModal(overrides: Partial<Parameters<typeof TaskCreateModal>[0]> = {}) {
+  taskTemplates.mockResolvedValue([]);
+  const onClose = vi.fn();
+  const onCreated = vi.fn();
+  const utils = render(
+    <TaskCreateModal open servers={SERVERS} onClose={onClose} onCreated={onCreated} {...overrides} />,
+  );
+  return { ...utils, onClose, onCreated };
+}
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe("TaskCreateModal — launch gating", () => {
+  it("disables Launch with a visible reason only while the prompt is empty", () => {
+    renderModal();
+    const launch = screen.getByRole("button", { name: "Launch task" });
+    expect(launch).toBeDisabled();
+    expect(screen.getByText("Add a prompt to launch")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    expect(launch).toBeEnabled();
+    expect(screen.queryByText("Add a prompt to launch")).not.toBeInTheDocument();
+  });
+});
+
+describe("TaskCreateModal — schedule modes", () => {
+  it("defaults to Run now and swaps fields per mode (only one mode's fields exist)", () => {
+    renderModal();
+    expect(screen.getByRole("radio", { name: "Run now" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Runs immediately after launch.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Cron expression")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Schedule date")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
+    expect(screen.getByLabelText("Repeat frequency")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Cron expression")).not.toBeInTheDocument();
+    expect(screen.getByText(/Next run/)).toBeInTheDocument();
+    expect(screen.queryByText("Weekdays 9am")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Advanced cron" }));
+    expect(screen.getByText("Weekdays 9am")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Schedule date")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Run once" }));
+    expect(screen.getByLabelText("Schedule date")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Cron expression")).not.toBeInTheDocument();
+  });
+
+  it("validates cron on blur with the specific field-count copy and counts it in the footer", () => {
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Advanced cron" }));
+    const cron = screen.getByLabelText("Cron expression");
+    fireEvent.change(cron, { target: { value: "0 9 * *" } });
+    fireEvent.blur(cron);
+    expect(
+      screen.getByText("Cron needs 5 fields — got 4. Format: min · hour · day · month · weekday."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Fix 1 field above")).toBeInTheDocument();
+    // Launch stays ENABLED with field errors — only an empty prompt disables it.
+    expect(screen.getByRole("button", { name: "Launch task" })).toBeEnabled();
+
+    // A preset fixes the field and clears the error + echo returns.
+    fireEvent.click(screen.getByText("Weekdays 9am"));
+    expect(screen.queryByText(/Cron needs 5 fields/)).not.toBeInTheDocument();
+    expect(screen.getByText(/At 09:00, Monday through Friday/)).toBeInTheDocument();
+  });
+
+  it("builds a multi-day weekly cron schedule without requiring cron knowledge", async () => {
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
+    fireEvent.change(screen.getByLabelText("Repeat frequency"), { target: { value: "weekly" } });
+    const monday = screen.getByRole("button", { name: "Run on Monday" });
+    expect(monday).toHaveAttribute("aria-pressed", "true");
+    expect(monday).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Run on Wednesday" }));
+    expect(screen.getByRole("button", { name: "Run on Wednesday" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(monday).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Repeat time"), { target: { value: "13:30" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0]).toMatchObject({ recurrence: "30 13 * * 1,3" });
+  });
+
+  it("hydrates the friendly controls from a supported multi-day cron expression", () => {
+    renderModal();
+    fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Advanced cron" }));
+    fireEvent.change(screen.getByLabelText("Cron expression"), {
+      target: { value: "0 9 * * 1,4" },
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Simple schedule" }));
+
+    expect(screen.getByLabelText("Repeat frequency")).toHaveValue("weekly");
+    expect(screen.getByLabelText("Repeat time")).toHaveValue("09:00");
+    expect(screen.getByRole("button", { name: "Run on Monday" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Run on Thursday" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Run on Wednesday" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("requires a date in Run once mode at submit and focuses it", async () => {
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Run once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    expect(await screen.findByText("Pick a date and time.")).toBeInTheDocument();
+    expect(createTask).not.toHaveBeenCalled();
+  });
+});
+
+describe("TaskCreateModal — email chip field", () => {
+  it("adds valid emails as chips on Enter and names why an address is invalid", () => {
+    renderModal();
+    const input = screen.getByLabelText(/Email results/);
+    fireEvent.change(input, { target: { value: "traders@elcanotek" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(
+      screen.getByText('Not a valid email: "traders@elcanotek" — missing domain.'),
+    ).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "sam@elcanotek.com" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.queryByText(/Not a valid email/)).not.toBeInTheDocument();
+    expect(screen.getByText("sam@elcanotek.com")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove sam@elcanotek.com" }));
+    expect(screen.queryByText("sam@elcanotek.com")).not.toBeInTheDocument();
+  });
+});
+
+describe("TaskCreateModal — dirty-close guard", () => {
+  it("closes a clean form instantly, guards a dirty one, and resets on Discard", () => {
+    const { onClose, rerender } = renderModal();
+    // Clean: Cancel closes with no guard.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Discard this task?")).not.toBeInTheDocument();
+
+    // Dirty: the guard names what would be lost; Keep editing stays open.
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("Discard this task?")).toBeInTheDocument();
+    expect(screen.getByText(/the prompt will be lost if you close/)).toBeInTheDocument();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByText("Discard this task?")).not.toBeInTheDocument();
+
+    // Discard closes AND resets — reopening shows a fresh form.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(onClose).toHaveBeenCalledTimes(2);
+    rerender(
+      <TaskCreateModal open={false} servers={SERVERS} onClose={onClose} onCreated={() => {}} />,
+    );
+    rerender(<TaskCreateModal open servers={SERVERS} onClose={onClose} onCreated={() => {}} />);
+    expect((screen.getByLabelText("Prompt") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("Escape runs the same guard", () => {
+    const { onClose } = renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByText("Discard this task?")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("TaskCreateModal — create path", () => {
+  it("submits the typed prompt with mode-scoped schedule fields and resets after success", async () => {
+    createTask.mockResolvedValue({ id: "t-1" });
+    const { onClose, onCreated } = renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    const body = createTask.mock.calls[0][0] as Record<string, unknown>;
+    expect(body.prompt).toBe("Do the thing");
+    expect(body.recurrence).toBe("0 9 * * 1-5");
+    expect(body.scheduled_for).toBeUndefined();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onCreated).toHaveBeenCalled();
+  });
+
+  it("updates the Tools & files summary as servers are enabled", () => {
+    renderModal();
+    expect(screen.getByText("Sandbox only — no tools")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
+    fireEvent.click(screen.getByTestId("mcp-toggle-xandr"));
+    expect(screen.getByText("1 server")).toBeInTheDocument();
+  });
+});

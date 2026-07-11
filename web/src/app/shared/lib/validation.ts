@@ -111,10 +111,12 @@ export function validateCronExpression(cron: unknown): ValidationResult {
   if (trimmed === "") return { valid: true, message: "" };
 
   const parts = trimmed.split(/\s+/);
+  // 6-field expressions stay accepted (an existing power-user affordance); the
+  // guidance names the canonical 5-field shape.
   if (parts.length < 5 || parts.length > 6) {
     return {
       valid: false,
-      message: "Cron expression must have 5 or 6 fields (minute hour day month weekday [year])",
+      message: `Cron needs 5 fields — got ${parts.length}. Format: min · hour · day · month · weekday.`,
     };
   }
   const cronRegex = /^[0-9*\-,/]+$/;
@@ -122,11 +124,23 @@ export function validateCronExpression(cron: unknown): ValidationResult {
     if (!cronRegex.test(part)) {
       return {
         valid: false,
-        message: "Cron expression contains invalid characters. Use numbers, *, -, /, and ,",
+        message: "Cron has invalid characters — use numbers, *, commas, dashes, and slashes.",
       };
     }
   }
   return { valid: true, message: "" };
+}
+
+// describeEmailError names WHY an address is invalid so the form's inline error
+// is specific ("missing domain") rather than a generic rejection.
+export function describeEmailError(email: string): string {
+  const trimmed = email.trim();
+  let reason = "";
+  const at = trimmed.indexOf("@");
+  if (at < 0) reason = " — missing @.";
+  else if (at === 0) reason = " — missing the part before @.";
+  else if (!/\.[^\s@.]+$/.test(trimmed.slice(at + 1))) reason = " — missing domain.";
+  return `Not a valid email: "${trimmed}"${reason ? reason : "."}`;
 }
 
 export function validatePrompt(prompt: unknown): ValidationResult {

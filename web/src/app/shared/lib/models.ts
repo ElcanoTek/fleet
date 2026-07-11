@@ -31,7 +31,7 @@ export const MAX_RESULTS = 50;
 // catalog fetch fails. Pinned release slugs (not floating `~` aliases).
 export const SEED_MODELS: PickerModel[] = [
   { id: "z-ai/glm-5.2", name: "Z.AI: GLM 5.2", recommended: true },
-  { id: "anthropic/claude-fable-5", name: "Anthropic: Claude Fable 5", recommended: true },
+  { id: "openai/gpt-5.6-sol", name: "OpenAI: GPT-5.6 Sol", recommended: true },
 ];
 
 type RawCatalogModel = {

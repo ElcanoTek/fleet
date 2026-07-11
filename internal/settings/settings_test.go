@@ -53,6 +53,8 @@ func testDefaults() map[string]string {
 		"pii_redaction_mode":                "off",
 		"pii_redaction_engine":              "pattern",
 		"pii_rampart_url":                   "",
+		"guardrail_url":                     "",
+		"guardrail_mode":                    "off",
 		"tool_disclosure_threshold":         "128",
 		"max_tool_output_bytes":             "65536",
 		"phone_a_friend_enabled":            "false",

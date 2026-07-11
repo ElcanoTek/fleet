@@ -4,10 +4,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { validateFile } from "@/app/shared/lib/validation";
 import { formatFileSize, truncateFilename } from "@/app/shared/lib/format";
 
-// FileUpload — drag-and-drop multi-file picker for the task form. React port of
-// moc's file-upload.js. Owns local file-entry state; the parent calls
-// uploadAll() (passed an uploader) at submit time to get back the server-side
-// filenames. Validation reuses shared/lib/validation.
+// FileUpload — compact multi-file attach row for the task form. Owns local
+// file-entry state; the parent calls uploadAll() (passed an uploader) at submit
+// time to get back the server-side filenames. Validation reuses
+// shared/lib/validation.
+//
+// The picker itself is a single "Attach files" row (button + drag hint) that
+// grows a file list — the parent dialog is the drag target, forwarding drops
+// through handle.addFiles() so files can be dropped anywhere on the modal, not
+// just on this row. Limit violations are VISIBLE: an over-the-cap batch adds
+// nothing beyond the cap and says so inline (the old dropzone rejected the
+// whole batch silently).
 
 const MAX_FILE_SIZE = 250 * 1024 * 1024;
 const MAX_FILES = 10;
@@ -23,6 +30,9 @@ export type FileEntry = {
 
 export type FileUploadHandle = {
   hasFiles: () => boolean;
+  // addFiles lets the parent forward files from its own drag-and-drop surface
+  // (the New Task modal accepts drops anywhere on the dialog).
+  addFiles: (files: FileList | File[]) => void;
   uploadAll: (uploader: (file: File) => Promise<{ filename: string }>) => Promise<string[]>;
   reset: () => void;
 };
@@ -40,7 +50,8 @@ function genId(): string {
 
 export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps) {
   const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [dragOver, setDragOver] = useState(false);
+  // A batch-level problem (too many files) — adjacent to the row, not a toast.
+  const [limitError, setLimitError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Mirror entries into a ref via effect (not during render) so the imperative
@@ -64,11 +75,18 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
       const incoming = Array.from(files);
       const current = entriesRef.current;
       const currentValid = current.filter((e) => e.status !== "invalid").length;
-      if (currentValid + incoming.length > MAX_FILES) {
-        return;
-      }
+      // Accept what fits under the cap and NAME the overflow instead of
+      // silently dropping the batch.
+      const room = Math.max(0, MAX_FILES - currentValid);
+      const accepted = incoming.slice(0, room);
+      const overflow = incoming.length - accepted.length;
+      setLimitError(
+        overflow > 0
+          ? `Up to ${MAX_FILES} files per task — ${overflow} ${overflow === 1 ? "file was" : "files were"} not added.`
+          : "",
+      );
       const added: FileEntry[] = [];
-      for (const file of incoming) {
+      for (const file of accepted) {
         const dup = current.some(
           (e) =>
             e.file.name === file.name &&
@@ -85,13 +103,14 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
           error: v.valid ? "" : v.message,
         });
       }
-      update([...current, ...added]);
+      if (added.length > 0) update([...current, ...added]);
     },
     [update],
   );
 
   const removeFile = useCallback(
     (id: string) => {
+      setLimitError("");
       update(entriesRef.current.filter((e) => e.id !== id));
     },
     [update],
@@ -102,12 +121,20 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
   useEffect(() => {
     updateRef.current = update;
   }, [update]);
+  const addFilesRef = useRef(addFiles);
+  useEffect(() => {
+    addFilesRef.current = addFiles;
+  }, [addFiles]);
   useEffect(() => {
     if (!registerHandle) return;
     registerHandle({
       hasFiles: () =>
         entriesRef.current.some((e) => e.status === "pending" || e.status === "uploaded"),
-      reset: () => updateRef.current([]),
+      addFiles: (files) => addFilesRef.current(files),
+      reset: () => {
+        setLimitError("");
+        updateRef.current([]);
+      },
       uploadAll: async (uploader) => {
         const current = entriesRef.current;
         const pending = current.filter((e) => e.status === "pending");
@@ -140,43 +167,30 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
   }, [registerHandle]);
 
   return (
-    <div className="file-upload-area" role="region" aria-label="File upload area">
-      <div
-        className={`file-upload-dropzone${dragOver ? " drag-over" : ""}`}
-        tabIndex={0}
-        onDragEnter={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            inputRef.current?.click();
-          }
-        }}
-      >
-        <div className="dropzone-content">
-          <p className="dropzone-text">Drag &amp; drop files here</p>
-          <p className="dropzone-subtext">or</p>
-          <button
-            type="button"
-            className="btn btn-secondary dropzone-browse-btn"
-            onClick={() => inputRef.current?.click()}
+    <div className="file-upload-area" role="region" aria-label="File attachments">
+      <div className="file-attach-row">
+        <button
+          type="button"
+          className="file-attach-btn"
+          onClick={() => inputRef.current?.click()}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            aria-hidden="true"
           >
-            Browse Files
-          </button>
-          <p className="dropzone-limit">Max 250 MB per file · Up to 10 files</p>
-        </div>
+            <path d="M21.4 11.1l-8.5 8.5a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 1 1 5.7 5.7l-9.2 9.1a2 2 0 1 1-2.8-2.8l8.5-8.5" />
+          </svg>
+          Attach files
+        </button>
+        <span className="file-attach-hint">
+          or drag anywhere onto this dialog — 250 MB per file, up to 10 files
+        </span>
         <input
           ref={inputRef}
           type="file"
@@ -190,33 +204,40 @@ export function FileUpload({ onEntriesChange, registerHandle }: FileUploadProps)
           }}
         />
       </div>
+      {limitError ? (
+        <p className="file-upload-error" role="alert">
+          {limitError}
+        </p>
+      ) : null}
       <div className="file-list" aria-live="polite">
         {entries.map((entry) => (
           <div key={entry.id} className={`file-item ${entry.status}`} data-entry-id={entry.id}>
-            <div className="file-item-info">
-              <span className="file-item-name" title={entry.file.name}>
-                {truncateFilename(entry.file.name)}
+            <span className="file-item-name" title={entry.file.name}>
+              {truncateFilename(entry.file.name)}
+            </span>
+            <span className="file-item-size">{formatFileSize(entry.file.size)}</span>
+            {entry.error ? <span className="file-item-error-text">{entry.error}</span> : null}
+            <span className="file-item-spacer" />
+            {entry.status === "uploading" ? (
+              <span className="file-item-status-icon" aria-label="Uploading">
+                …
               </span>
-              <span className="file-item-size">{formatFileSize(entry.file.size)}</span>
-              {entry.error ? <span className="file-item-error-text">{entry.error}</span> : null}
-            </div>
-            <div className="file-item-actions">
-              {entry.status === "uploaded" ? (
-                <span className="file-item-status-icon uploaded-icon" aria-label="Uploaded">
-                  ✓
-                </span>
-              ) : null}
-              {entry.status !== "uploading" ? (
-                <button
-                  type="button"
-                  className="file-item-remove"
-                  aria-label={`Remove ${entry.file.name}`}
-                  onClick={() => removeFile(entry.id)}
-                >
-                  ×
-                </button>
-              ) : null}
-            </div>
+            ) : null}
+            {entry.status === "uploaded" ? (
+              <span className="file-item-status-icon uploaded-icon" aria-label="Uploaded">
+                ✓
+              </span>
+            ) : null}
+            {entry.status !== "uploading" ? (
+              <button
+                type="button"
+                className="file-item-remove"
+                aria-label={`Remove ${entry.file.name}`}
+                onClick={() => removeFile(entry.id)}
+              >
+                ×
+              </button>
+            ) : null}
           </div>
         ))}
       </div>

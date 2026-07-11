@@ -374,7 +374,7 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -425,8 +425,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
 			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
-			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60)
+			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens,
+			file_names, serialization_key
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
@@ -485,7 +486,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			output_json = EXCLUDED.output_json,
 			carry_context = EXCLUDED.carry_context,
 			allow_event_triggers = EXCLUDED.allow_event_triggers,
-			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens`,
+			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens,
+			file_names = EXCLUDED.file_names,
+			serialization_key = EXCLUDED.serialization_key`,
 		// effective_priority is deliberately OMITTED from the upsert: it is set
 		// once on INSERT and thereafter mutated ONLY by the anti-starvation sweep
 		// (#230). UpdateTask delegates here, so including it would let a status
@@ -553,8 +556,26 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.CarryContext,
 		task.AllowEventTriggers,
 		thinkingBudgetValue(task.ThinkingBudgetTokens),
+		marshalJSON(task.FileNames),
+		serializationKeyValue(task.SerializationKey),
 	)
 	return err
+}
+
+// serializationKeyValue maps the optional mutual-exclusion key (#709) to a
+// nullable column value: nil/empty/whitespace-only → SQL NULL (unserialized),
+// else the trimmed key. NewTask already normalizes, but re-normalizing here
+// defends the claim gate against a directly-constructed Task (internal caller
+// or test seed) that bypassed it — a NULL column can never serialize on "".
+func serializationKeyValue(p *string) any {
+	if p == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*p)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }
 
 // thinkingBudgetValue maps the optional per-task thinking budget (#220) to a
@@ -670,7 +691,9 @@ const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
 			output_json = EXCLUDED.output_json,
 			carry_context = EXCLUDED.carry_context,
 			allow_event_triggers = EXCLUDED.allow_event_triggers,
-			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens`
+			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens,
+			file_names = EXCLUDED.file_names,
+			serialization_key = EXCLUDED.serialization_key`
 
 // taskInsertColumns is the ordered column list for the tasks INSERT, kept in
 // sync with AddTask / AddTaskBatch / AddTaskTx. Extracted as a constant so the
@@ -684,9 +707,9 @@ const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iteratio
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
-			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens`
+			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key`
 
-// taskInsertArgs returns the 57 positional INSERT values for a task, in the
+// taskInsertArgs returns the positional INSERT values for a task, in the
 // exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
 // the single-row and multi-row paths can never disagree on argument ordering.
 // It derives actual_duration_seconds (#274) up front so the batch/tx paths
@@ -754,21 +777,27 @@ func taskInsertArgs(t *models.Task) []any {
 		t.CarryContext,
 		t.AllowEventTriggers,
 		thinkingBudgetValue(t.ThinkingBudgetTokens),
+		marshalJSON(t.FileNames),
+		serializationKeyValue(t.SerializationKey),
 	}
 }
 
 // taskInsertColumnsCount is the number of columns in taskInsertColumns. Kept as
 // a named const so the multi-row placeholder builder is self-documenting and
 // a future schema migration that adds a column forces a single touch point.
-const taskInsertColumnsCount = 60
+// (#710 added file_names without bumping this, breaking every multi-row
+// AddTaskBatch INSERT — caught only once the dev lane gained a Postgres
+// service, #723. 62 = those 61 columns plus serialization_key (#709).
+// TestTaskInsertColumnsCount pins the count DB-free.)
+const taskInsertColumnsCount = 62
 
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an
 // explicit transaction — callers that need atomicity wrap the call in BeginTx /
 // Commit (see Storage.AddTaskBatch). An empty slice is a no-op.
 //
-// Each row carries the SAME 53 columns as AddTask (via the shared
-// taskInsertArgs helper), so a row inserted through the batch path is
+// Each row carries the SAME taskInsertColumnsCount columns as AddTask (via the
+// shared taskInsertArgs helper), so a row inserted through the batch path is
 // byte-identical to one inserted through the single-row path.
 func (db *Database) AddTaskBatch(ctx context.Context, tasks []*models.Task) error {
 	return db.AddTaskBatchTx(ctx, nil, tasks)
@@ -1077,7 +1106,7 @@ func nullableString(s string) *string {
 	return &s
 }
 
-func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*models.Task, error) {
+func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*models.Task, error) { //nolint:gocyclo // one ordered SQL row scanner; splitting risks column drift.
 	var (
 		id                     uuid.UUID
 		name                   string
@@ -1143,6 +1172,8 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		allowEventTriggers     bool
 		errorAnalysis          sql.NullString
 		artifacts              sql.NullString
+		fileNames              sql.NullString
+		serializationKey       sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -1157,7 +1188,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
 		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis, &artifacts,
-		&pendingQuestion, &pendingAnswer, &carryContext, &allowEventTriggers, &thinkingBudget,
+		&pendingQuestion, &pendingAnswer, &carryContext, &allowEventTriggers, &thinkingBudget, &fileNames, &serializationKey,
 	)
 	if err != nil {
 		return nil, err
@@ -1256,6 +1287,15 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	if files.Valid {
 		task.Files = unmarshalStringSlice(files.String)
 	}
+	if fileNames.Valid {
+		task.FileNames = unmarshalStringSlice(fileNames.String)
+	}
+	// serialization_key (#709): NULL = unserialized. The write path normalizes
+	// ""/whitespace to NULL (serializationKeyValue), so a Valid value is always
+	// a real key.
+	if serializationKey.Valid {
+		task.SerializationKey = &serializationKey.String
+	}
 	// tags is NOT NULL DEFAULT '[]', so it's always present; assign independently
 	// of files (unmarshalStringSlice maps ""/"null" → empty slice safely).
 	task.Tags = unmarshalStringSlice(tags.String)
@@ -1327,6 +1367,17 @@ func (db *Database) rowsToTasks(rows *sql.Rows) ([]*models.Task, error) {
 func (db *Database) GetTask(ctx context.Context, taskID uuid.UUID) (*models.Task, error) {
 	row := db.conn.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = $1", taskID)
 	return db.scanTask(row)
+}
+
+// TaskExists reports whether a task row with the given id exists. Used by the
+// legacy importer (docs/LEGACY-IMPORT.md) to make re-runs skip-by-default: a
+// UUID already present in fleet is never overwritten unless the operator
+// passes --overwrite, so a re-run can't revert live task state (#713).
+func (db *Database) TaskExists(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM tasks WHERE id = $1)", taskID).Scan(&exists)
+	return exists, err
 }
 
 // GetAllTasks gets all tasks.
@@ -1530,6 +1581,68 @@ func (db *Database) GetPendingTasks(ctx context.Context) ([]*models.Task, error)
 	return db.rowsToTasks(rows)
 }
 
+// taskActiveStatuses are the statuses that HOLD a serialization key (#709): the
+// task is (about to be) executing, so a same-key pending task must not start.
+// Mirrors GetRunningTasks' definition of "in flight". paused_awaiting_input is
+// deliberately NOT active: a paused run has stopped executing (its lease is
+// released), and a resume re-queues the task as pending, which re-passes this
+// gate before it can run again.
+func taskActiveStatuses() []any {
+	return []any{
+		string(models.TaskStatusLeased),
+		string(models.TaskStatusRunning),
+		string(models.TaskStatusAnalyzing),
+	}
+}
+
+// serializationNotBlockedSQL filters out pending tasks whose serialization key
+// is currently held by an active task, so a blocked task does not consume the
+// claim's single candidate slot (the claim query is LIMIT 1 — without this, a
+// blocked task at the head of the queue would starve every task behind it).
+// This filter is best-effort VISIBILITY only; the correctness guarantee is the
+// advisory-lock re-check in ClaimNextPendingTask, which runs under the per-key
+// lock at claim time. $2–$4 are the active statuses (taskActiveStatuses).
+const serializationNotBlockedSQL = `(
+			tasks.serialization_key IS NULL
+			OR NOT EXISTS (
+				SELECT 1 FROM tasks blocked
+				WHERE blocked.serialization_key = tasks.serialization_key
+				AND blocked.id <> tasks.id
+				AND blocked.status IN ($2, $3, $4)
+			)
+		)`
+
+// acquireSerializationLockTx takes a transaction-scoped advisory lock on the
+// given serialization key (#709). It serializes concurrent same-key claim
+// attempts DB-wide: two transactions claiming tasks with the same key execute
+// their active-task existence check strictly one after the other, so both
+// cannot pass it simultaneously. Released automatically at commit/rollback
+// (pg_advisory_xact_lock), so callers never unlock explicitly. hashtext
+// collisions across distinct keys are possible and harmless: they only make
+// two unrelated claims briefly serialize, never interleave.
+func acquireSerializationLockTx(ctx context.Context, tx *sql.Tx, key string) error {
+	_, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", key)
+	return err
+}
+
+// hasActiveTaskWithSerializationKeyTx reports whether any task other than
+// excludeTaskID holds the given serialization key in an active state. Must be
+// called within a transaction, after acquireSerializationLockTx, for the
+// answer to be race-free.
+func hasActiveTaskWithSerializationKeyTx(ctx context.Context, tx *sql.Tx, key string, excludeTaskID uuid.UUID) (bool, error) {
+	var exists bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM tasks
+			WHERE serialization_key = $1
+			AND id <> $2
+			AND status IN ($3, $4, $5)
+		)`,
+		append([]any{key, excludeTaskID}, taskActiveStatuses()...)...,
+	).Scan(&exists)
+	return exists, err
+}
+
 // ClaimNextPendingTask atomically claims the next pending task for the given
 // lease owner using FOR UPDATE SKIP LOCKED, so two concurrent workers never
 // claim the same row and a row another worker holds is skipped rather than
@@ -1540,6 +1653,18 @@ func (db *Database) GetPendingTasks(ctx context.Context) ([]*models.Task, error)
 // This is the in-process worker's claim path. It replaces moc's
 // node-targeted AssignTaskToNode for the runner: there is one synthetic
 // in-box lease owner, no node routing, no glob matching.
+//
+// Serialization gate (#709, moc#442 parity): at most one task per
+// serialization_key may be active (leased/running/analyzing) at a time. The
+// candidate SELECT filters out visibly-blocked tasks (best-effort, so a
+// blocked head-of-queue task never starves the tasks behind it), and a
+// candidate that DOES carry a key is re-checked under a transaction-scoped
+// per-key advisory lock before the lease is written — that locked re-check is
+// the correctness guarantee against two same-key claims racing each other. A
+// blocked candidate is declined (nil, nil), stays pending untouched, and is
+// retried on a later claim pass — skipped, never failed. This claim is the
+// ONLY pending→active transition (requeue/recovery/resume all re-queue to
+// pending), so every path to execution re-passes this gate.
 func (db *Database) ClaimNextPendingTask(ctx context.Context, leaseOwner string, leaseDuration time.Duration) (*models.Task, error) {
 	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -1556,16 +1681,37 @@ func (db *Database) ClaimNextPendingTask(ctx context.Context, leaseOwner string,
 	row := tx.QueryRowContext(ctx, `
 		SELECT `+taskColumns+` FROM tasks
 		WHERE status = $1
+		AND `+serializationNotBlockedSQL+`
 		ORDER BY effective_priority ASC, created_at ASC
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED`,
-		string(models.TaskStatusPending))
+		append([]any{string(models.TaskStatusPending)}, taskActiveStatuses()...)...)
 	task, err := db.scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	// Locked re-check for serialized tasks: the visibility filter above ran
+	// without the per-key lock, so two same-key candidates claimed by two
+	// concurrent transactions could both have passed it. Under the advisory
+	// lock the existence check is race-free: the loser blocks until the winner
+	// commits its lease, then sees the now-active row and declines.
+	if task.SerializationKey != nil {
+		if err := acquireSerializationLockTx(ctx, tx, *task.SerializationKey); err != nil {
+			return nil, err
+		}
+		blocked, err := hasActiveTaskWithSerializationKeyTx(ctx, tx, *task.SerializationKey, task.ID)
+		if err != nil {
+			return nil, err
+		}
+		if blocked {
+			// Another same-key task is active: decline the claim. The rollback
+			// releases the row lock and the task stays pending for a later pass.
+			return nil, nil
+		}
 	}
 
 	now := time.Now().UTC()
@@ -2089,6 +2235,15 @@ func (db *Database) AddLogRaw(ctx context.Context, taskID uuid.UUID, sessionJSON
 	return err
 }
 
+// LogExists reports whether a run-log row exists for the task. Used by the
+// legacy importer's skip-by-default re-run posture (#713), mirroring TaskExists.
+func (db *Database) LogExists(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	var exists bool
+	err := db.conn.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM logs WHERE task_id = $1)", taskID).Scan(&exists)
+	return exists, err
+}
+
 // decodeLogRow turns one logs row into JSON bytes, transparently inflating (and
 // decrypting, when a key is configured) an archived payload (#272). Exactly one
 // of sessionData / gz is populated: a live row carries plaintext in sessionData
@@ -2432,7 +2587,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			output_schema = $52,
 			output_json = $53,
 			artifacts = $54,
-			thinking_budget_tokens = $55
+			thinking_budget_tokens = $55,
+			file_names = $56
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -2489,6 +2645,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		marshalRawJSON(task.OutputJSON),
 		marshalRawJSON(task.Artifacts),
 		thinkingBudgetValue(task.ThinkingBudgetTokens),
+		marshalJSON(task.FileNames),
 	)
 	return err
 }

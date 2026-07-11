@@ -181,10 +181,31 @@ components:
       type: object
       properties:
         prompt: { type: string }
+        name: { type: string, description: "Optional, human-readable label; the identity key for the definition import/export endpoints (#238). A non-empty name must be unique across tasks. Never injected into the agent prompt." }
         model: { type: string }
         fallback_model: { type: string }
         max_iterations: { type: integer }
         mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
+        credential_allowlist:
+          type: array
+          description: >-
+            Per-task least-privilege credential scoping (#184): which
+            (server, account) MCP pairs this task may call. Omitted/null
+            inherits the global credential policy; an explicit list narrows it.
+            Every entry must name a server; account is optional (empty = the
+            default/shared seat).
+          items:
+            type: object
+            properties:
+              server: { type: string }
+              account: { type: string }
+            required: [server]
+        persona: { type: string, description: "Per-task persona override (#221): a bundle persona name (personas/<name>.yaml, named without the extension). Empty = the global default persona. An unknown name is rejected with 400 at create time listing the bundle's valid personas (#720); a task whose persona later disappears from the bundle still dispatches on the global default." }
+        tags: { type: array, items: { type: string }, description: "User-defined labels for organizing/filtering tasks (#212): lowercase alphanumeric plus '-'/'.', ≤64 chars each, ≤20 per task (normalized at create)." }
+        timezone: { type: string, description: "IANA timezone name (e.g. America/New_York) recurrence is evaluated in. Empty falls back to the server default (then UTC) at create time; the stored scheduled_for instant is always UTC." }
+        description: { type: string, description: "Optional operator documentation (Markdown: why the task exists, runbook, owner). Never injected into agent prompts; capped at 10000 characters." }
+        max_retries: { type: integer, description: "ADDITIONAL whole-task attempts after the first when a run fails with a retryable class (0 = no retries, the default)." }
+        carry_context: { type: boolean, default: false, description: "Recurring runs carry a bounded handoff from the prior run (#504). Default false = each run starts fresh." }
         priority: { type: integer }
         instruction_self_improve: { type: boolean, default: false, description: "Captain's Log: give this scheduled task persistent memory across runs (the remember/recall tools + run-start injection, stored in fleet's DB and scoped to this task). Default false = each run starts fresh. Never touches the operator-owned config bundle." }
         allow_network: { type: boolean, default: false, description: "Allow this scheduled task's execution sandbox outbound network egress. Default false seals it with --network=none, matching the interactive lockdown path." }
@@ -193,6 +214,8 @@ components:
         scheduled_for: { type: string, format: date-time }
         recurrence: { type: string, description: "5-field cron expression" }
         files: { type: array, items: { type: string } }
+        file_names: { type: array, items: { type: string }, description: "Optional logical names paired 1:1 with files. Inputs are materialized under these prompt-visible basenames in the dedicated connector workspace." }
+        serialization_key: { type: string, description: "Opaque mutual-exclusion token (#709). Fleet guarantees at most one task per key is ACTIVE (leased/running) at a time: a queued task whose key matches an active task is skipped at claim time — it stays queued and is retried on a later pass, never failed. Fleet never interprets the key's contents; its meaning is owned by the intake caller (e.g. \"client:<id>\"). Recurring occurrences inherit the key, so successive runs stay mutually exclusive with same-key tasks. Absent/empty/whitespace-only = unserialized (the default, and the behavior of every pre-existing task). Immutable after creation." }
       required: [prompt]
     Task:
       type: object
@@ -212,6 +235,8 @@ components:
         result: { type: string }
         error_message: { type: string }
         files: { type: array, items: { type: string } }
+        file_names: { type: array, items: { type: string } }
+        serialization_key: { type: string, description: "Opaque mutual-exclusion token: at most one task per key is active at a time. Absent = unserialized. See TaskCreate.serialization_key." }
         created_by: { type: string, format: uuid }
         workspace_path: { type: string, description: "Host filesystem path of the per-run workspace directory the agent wrote into (#287). Present once the run begins; absent for tasks that never ran." }
         allow_task_creation: { type: boolean, description: "Whether this task's scheduled runs may enqueue follow-up tasks via create_task (default false)." }
@@ -2167,8 +2192,13 @@ paths:
   /upload:
     post:
       summary: Upload a file for a task's workspace.
-      description: Authenticated in-handler — accepts an admin key, a user bearer token, or the Elcano cookie (NOT a scoped API key).
-      security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      description: >-
+        Authenticated in-handler — accepts an admin key, a scoped API key
+        carrying create_task permission (#719: an uploaded file is only usable
+        via a subsequent task create, so the same keys that may create tasks may
+        stage uploads; a valid readonly/webhook key gets a definitive 403), a
+        user bearer token, or the Elcano cookie.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       requestBody:
         content:
           multipart/form-data:
@@ -2179,6 +2209,7 @@ paths:
       responses:
         "200": { description: Uploaded }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /files/{filename}:
     parameters:
       - name: filename

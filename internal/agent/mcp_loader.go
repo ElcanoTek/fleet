@@ -155,8 +155,16 @@ func (a *Agent) loadMCPServers(ctx context.Context, names []string, account stri
 			continue
 		}
 
+		// ${FLEET_WORKSPACE}: load-on-demand spawns land on a client that may be
+		// shared beyond this run, so they get the stable per-deployment dir (the
+		// same one the boot-time catalog uses), resolved lazily so a token-free
+		// server creates nothing on disk.
+		workdir := ""
+		if agentcore.EnvReferencesWorkspace(sc.Env) {
+			workdir = agentcore.SharedMCPWorkspaceDir()
+		}
 		sel := agentcore.MCPSelection{{Server: name, Account: account}}
-		registered, err := agentcore.BindMCPSelection(ctx, a.mcpClient, sel, bases)
+		registered, err := agentcore.BindMCPSelection(ctx, a.mcpClient, sel, bases, workdir)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%q: %v", name, err))
 			continue
@@ -199,6 +207,7 @@ func (a *Agent) mcpBases() map[string]agentcore.MCPServerBase {
 			Args:        sc.Args,
 			Dir:         sc.Dir,
 			HTTPHeaders: sc.Headers,
+			IdentityEnv: sc.IdentityEnv,
 		}
 		if sc.Type == "http" {
 			base.HTTPURL = sc.URL

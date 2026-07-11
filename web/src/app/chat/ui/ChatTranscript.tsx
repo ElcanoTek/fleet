@@ -202,6 +202,11 @@ export function ChatTranscript({
   loadRankedModels,
   loadCatalogModels,
 }: ChatTranscriptProps) {
+  "use no memo";
+  // TanStack Virtual returns imperative functions whose identities cannot be
+  // safely memoized by React Compiler. Keep this component opted out until the
+  // library exposes a compiler-compatible API; its own virtualizer still
+  // provides the transcript's intended rendering optimization.
   // Flatten the message list (plus the leading summarize card/error and the
   // compaction expander) into the explicit, stable-indexed row model the
   // virtualizer consumes. This reproduces the former inline map's control flow:
@@ -262,6 +267,7 @@ export function ChatTranscript({
   // the streamEndRef sentinel still sits at the very bottom. Rows are
   // dynamically measured (variable-height markdown/code) via measureElement;
   // unmeasured rows use a running average around this estimate.
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual is intentionally isolated in this no-memo component.
   const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
     count: rows.length,
     getScrollElement: () => conversationRef.current,

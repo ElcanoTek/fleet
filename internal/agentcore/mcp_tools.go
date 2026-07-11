@@ -111,7 +111,9 @@ func buildFantasyTools(
 	// Pre-gated tools own their policy handling (BeforeToolCall +
 	// RecordToolResult), exactly like the built-in mcpTool, so they register
 	// VERBATIM — wrapping them would double the gate and drop RecordToolResult.
-	allTools = append(allTools, cfg.preGatedTools...)
+	for _, t := range cfg.preGatedTools {
+		allTools = append(allTools, &guardrailOnlyTool{inner: t})
+	}
 
 	// The MCP tools that pass gates 1+2 — these are the DEFERRABLE set (#506):
 	// registered directly when the roster fits, or hidden behind the disclosure
@@ -239,6 +241,30 @@ type policyGuardedTool struct {
 	policy Policy
 }
 
+// guardrailOnlyTool screens pre-gated tools without re-running their Policy
+// hooks. Those tools deliberately own BeforeToolCall/RecordToolResult, but they
+// still share the host-side untrusted-output boundary.
+type guardrailOnlyTool struct{ inner fantasy.AgentTool }
+
+func (g *guardrailOnlyTool) Info() fantasy.ToolInfo { return g.inner.Info() }
+func (g *guardrailOnlyTool) ProviderOptions() fantasy.ProviderOptions {
+	return g.inner.ProviderOptions()
+}
+func (g *guardrailOnlyTool) SetProviderOptions(opts fantasy.ProviderOptions) {
+	g.inner.SetProviderOptions(opts)
+}
+func (g *guardrailOnlyTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	resp, err := g.inner.Run(ctx, params)
+	if resp.Content != "" {
+		var blocked bool
+		resp.Content, blocked = screenToolOutput(ctx, g.inner.Info().Name, resp.Content)
+		if blocked {
+			resp.IsError = true
+		}
+	}
+	return resp, err
+}
+
 func (g *policyGuardedTool) Info() fantasy.ToolInfo { return g.inner.Info() }
 func (g *policyGuardedTool) ProviderOptions() fantasy.ProviderOptions {
 	return g.inner.ProviderOptions()
@@ -266,6 +292,11 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 		var piiBlocked bool
 		resp.Content, piiBlocked = redactPII(name, resp.Content)
 		if piiBlocked {
+			resp.IsError = true
+		}
+		var guardrailBlocked bool
+		resp.Content, guardrailBlocked = screenToolOutput(ctx, name, resp.Content)
+		if guardrailBlocked {
 			resp.IsError = true
 		}
 	}
@@ -411,6 +442,8 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	// treated as an error (isErr) so the raw value never reaches the model.
 	var piiBlocked bool
 	resultText, piiBlocked = redactPII(toolName, resultText)
+	var guardrailBlocked bool
+	resultText, guardrailBlocked = screenToolOutput(callCtx, toolName, resultText)
 	// Output ceiling (#199): the direct-registration path must cap oversized
 	// results exactly like policyGuardedTool.Run does, or the SAME MCP call would
 	// be truncated above the tool-disclosure threshold (where it dispatches via
@@ -429,7 +462,7 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	// know the call failed (per MCP 2025-06-18 spec, tool-level errors arrive as
 	// a successful JSON-RPC response with isError=true). The fast.io guard above
 	// also surfaces through this path (it returns isError=true with the hint text).
-	if isErr || piiBlocked {
+	if isErr || piiBlocked || guardrailBlocked {
 		errText := resultText
 		if errText == "" {
 			errText = fmt.Sprintf("MCP tool %s returned isError=true with no text content", toolName)

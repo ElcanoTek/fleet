@@ -13,6 +13,8 @@ import (
 
 	"charm.land/fantasy"
 	"golang.org/x/net/http2"
+
+	"github.com/ElcanoTek/fleet/internal/metrics"
 )
 
 // Stream resilience (cutlass resilience.go is the richer superset; taken whole).
@@ -48,6 +50,7 @@ var (
 	// ErrStreamBlipPersisted: a mid-stream transport blip survived the in-place
 	// retry and there was no fallback to swap to — also transient.
 	ErrStreamBlipPersisted = errors.New("stream blip persisted")
+	ErrFirstChunkTimeout   = errors.New("provider first-chunk timeout")
 )
 
 const (
@@ -62,7 +65,8 @@ const (
 	maxInnerEscalations = 3
 	// streamBlipRetryDelay is the wait before retrying the same model after a
 	// transient mid-stream error.
-	streamBlipRetryDelay = 3 * time.Second
+	streamBlipRetryDelay      = 3 * time.Second
+	providerFirstChunkTimeout = 30 * time.Second
 )
 
 // resilienceConfig is resolved once at engine construction.
@@ -132,6 +136,9 @@ func (c streamErrorClass) String() string {
 func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 	if err == nil {
 		return streamErrorNone, nil
+	}
+	if errors.Is(err, ErrFirstChunkTimeout) {
+		return streamErrorStreamBlip, nil
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return streamErrorCancelled, nil
@@ -400,6 +407,28 @@ func streamErrorDesc(providerErr *fantasy.ProviderError) string {
 	return "provider error"
 }
 
+func emitProviderFailover(sink *streamSink, from, to fantasy.LanguageModel, reason streamErrorClass, providerErr *fantasy.ProviderError) {
+	metrics.RecordProviderFailover(fleetProviderName(from), fleetProviderName(to), reason.String())
+	if sink == nil {
+		return
+	}
+	sink.emit("fleet.provider_failover", map[string]any{
+		"from_provider": fleetProviderName(from),
+		"to_provider":   fleetProviderName(to),
+		"from_model":    from.Model(),
+		"to_model":      to.Model(),
+		"reason":        reason.String(),
+		"status":        providerErrStatus(providerErr),
+	})
+}
+
+func fleetProviderName(model fantasy.LanguageModel) string {
+	if named, ok := model.(interface{ fleetProviderName() string }); ok {
+		return named.fleetProviderName()
+	}
+	return model.Provider()
+}
+
 // streamRoundOutcome bundles everything the loop needs back after a resilient
 // stream attempt, including state mutated during recovery.
 type streamRoundOutcome struct {
@@ -448,12 +477,21 @@ func (e *engine) streamRoundWithResilience(
 	// deliberately NOT skipped — that state exists to send exactly one probe.
 	if e != nil && !swappedToFallback && e.healthRegistry.State(activeModel.Model()) == CircuitOpen && canSwapFallback(e, activeModel, swappedToFallback) {
 		log.Printf("⚡ circuit open for %s; routing to fallback %s without a primary attempt", activeModel.Model(), e.fallbackModel.Model())
-		activeModel = e.fallbackModel
+		emitProviderFailover(sink, activeModel, e.fallbackModel, streamErrorRetryExhausted, nil)
+		activeModel = e.takeFallback()
 		currentAgent = buildAgent(activeModel)
 		swappedToFallback = true
 	}
 
-	for attempt := 0; attempt < maxInnerEscalations; attempt++ {
+	recoveryLimit := maxInnerEscalations
+	if e != nil {
+		recoveryLimit += len(e.fallbackModels)
+	}
+	for attempt := 0; attempt < recoveryLimit; attempt++ {
+		semanticBefore := 0
+		if sink != nil {
+			semanticBefore = sink.semanticEventCount()
+		}
 		rs := newRoundState(e, orch, maxTokens)
 		rs.sink = sink
 		result, err := rs.stream(ctx, currentAgent, activeModel, messages)
@@ -494,6 +532,13 @@ func (e *engine) streamRoundWithResilience(
 		lastErr = err
 
 		class, providerErr := classifyStreamError(err)
+		// Never splice providers (or repeat a tool side effect) after any semantic
+		// output from this attempt became observable. Provider failover is safe only
+		// before the first text/reasoning/tool event.
+		if sink != nil && sink.semanticEventCount() > semanticBefore &&
+			(class == streamErrorRetryExhausted || class == streamErrorStreamBlip) {
+			return streamRoundOutcome{}, fmt.Errorf("provider failed after streaming began; failover suppressed: %w", err)
+		}
 		// Feed genuine provider failures into the circuit breaker (#267) so error
 		// frequency accumulates across runs. Cancellation, the cost ceiling, and
 		// prompt-too-large are not provider-health signals, so they don't count.
@@ -522,7 +567,8 @@ func (e *engine) streamRoundWithResilience(
 			}
 			if canSwapFallback(e, activeModel, swappedToFallback) {
 				e.logFallbackSwap(class, providerErr)
-				activeModel = e.fallbackModel
+				emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
+				activeModel = e.takeFallback()
 				currentAgent = buildAgent(activeModel)
 				swappedToFallback = true
 				messages = dropTrailingAssistant(messages)
@@ -534,7 +580,8 @@ func (e *engine) streamRoundWithResilience(
 				return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (retry budget exhausted): %w: %w", ErrRetryBudgetExhausted, err)
 			}
 			e.logFallbackSwap(class, providerErr)
-			activeModel = e.fallbackModel
+			emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
+			activeModel = e.takeFallback()
 			currentAgent = buildAgent(activeModel)
 			swappedToFallback = true
 			messages = dropTrailingAssistant(messages)
@@ -557,7 +604,8 @@ func (e *engine) streamRoundWithResilience(
 				return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (stream blip persisted, no fallback available): %w: %w", ErrStreamBlipPersisted, err)
 			}
 			e.logFallbackSwap(class, providerErr)
-			activeModel = e.fallbackModel
+			emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
+			activeModel = e.takeFallback()
 			currentAgent = buildAgent(activeModel)
 			swappedToFallback = true
 			messages = dropTrailingAssistant(messages)
@@ -566,5 +614,5 @@ func (e *engine) streamRoundWithResilience(
 			return streamRoundOutcome{}, fmt.Errorf("fantasy agent error: %w", err)
 		}
 	}
-	return streamRoundOutcome{}, fmt.Errorf("fantasy agent error after %d recovery attempts: %w", maxInnerEscalations, lastErr)
+	return streamRoundOutcome{}, fmt.Errorf("fantasy agent error after %d recovery attempts: %w", recoveryLimit, lastErr)
 }

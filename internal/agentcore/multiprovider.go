@@ -57,6 +57,9 @@ type ProviderConfig struct {
 	APIKey  string
 	BaseURL string
 	Models  []string
+	// FallbackProviders is the workspace's ordered provider failover chain.
+	// cmd/fleet attaches the same immutable slice to bundle-backed entries.
+	FallbackProviders []string
 }
 
 // selectProvider picks the provider that serves slug and returns it plus the

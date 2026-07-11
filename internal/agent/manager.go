@@ -223,7 +223,16 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 		case spec.URL != "":
 			addErr = client.AddHTTPServerWithOptions(ctx, name, spec.URL, mcp.HTTPServerOptions{Headers: spec.Headers, TLS: spec.TLS})
 		case spec.Command != "":
-			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, spec.Env, spec.Dir)
+			// Substitute the reserved ${FLEET_WORKSPACE} manifest-env token with
+			// the stable per-deployment MCP workspace dir: this is a SHARED
+			// (process-lifetime) spawn, so every run sees the same directory
+			// (managed-run detection + a cross-run ledger window). Resolved
+			// lazily so token-free catalogs create nothing on disk.
+			env := spec.Env
+			if agentcore.EnvReferencesWorkspace(env) {
+				env = agentcore.ExpandWorkspaceEnv(env, agentcore.SharedMCPWorkspaceDir())
+			}
+			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env, spec.Dir)
 		default:
 			addErr = fmt.Errorf("spec has neither Command nor URL")
 		}
@@ -530,6 +539,14 @@ func (m *Manager) Resolve(ctx context.Context, slug string) (fantasy.LanguageMod
 	return m.modelResolver().Resolve(ctx, slug)
 }
 
+func (m *Manager) ResolveWithFallback(ctx context.Context, slug string) (fantasy.LanguageModel, fantasy.LanguageModel, error) {
+	return m.modelResolver().ResolveWithFallback(ctx, slug)
+}
+
+func (m *Manager) ResolveWithFallbacks(ctx context.Context, slug string) (fantasy.LanguageModel, []fantasy.LanguageModel, error) {
+	return m.modelResolver().ResolveWithFallbacks(ctx, slug)
+}
+
 // modelResolver returns the current resolver snapshot. The resolver is
 // hot-swappable (SetLLMProviders), so runtime reads take the RLock; the
 // returned pointer is safe to use lock-free (a swap installs a fresh resolver,
@@ -821,7 +838,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		Lockdown: in.Lockdown,
 	}))
 
-	model, err := m.modelResolver().Resolve(ctx, in.Model)
+	model, providerFallbacks, err := m.modelResolver().ResolveWithFallbacks(ctx, in.Model)
 	if err != nil {
 		return nil, fmt.Errorf("resolve model: %w", err)
 	}
@@ -904,6 +921,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		Messages:        messages,
 		Label:           in.ConversationID,
 		Model:           model,
+		FallbackModels:  providerFallbacks,
 		Temperature:     m.config.LiveTemperature(),
 		MaxTokens:       maxTokens,
 		MaxIterations:   m.config.LiveMaxIterations(),
@@ -935,6 +953,10 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		// user can fix by choosing another model.
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctxErr, sink), nil
+		}
+		if errors.Is(runErr, agentcore.ErrGuardrailBlocked) {
+			sink.Emit("turn.policy_blocked", map[string]any{"policy": "prompt-injection"})
+			return nil, runErr
 		}
 		reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
 		log.Printf("RunTurn stream failed (reason=%s model=%s status=%d): %v", reason, modelSlug, status, runErr)

@@ -249,9 +249,17 @@ func (s *Store) Close() error {
 // TruncateAllForTest wipes every data row. Test-only helper — never
 // call from production code. schema_migrations is preserved so Open()
 // after a truncate is still a no-op on the second run.
+//
+// Every table must be reachable from this list via an FK CASCADE or named
+// explicitly. turn_metrics is named because migration 038 deliberately
+// dropped its conversations FK (usage history outlives conversation
+// deletion), so it stopped cascading — which quietly made the usage-analytics
+// tests non-rerunnable (rows accumulated across suite runs). projects,
+// user_connector_prefs, and user_skills have no FK into any truncated table
+// and are named for the same reason.
 func (s *Store) TruncateAllForTest(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, memories, memory_entities, users, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings RESTART IDENTITY CASCADE`)
+		`TRUNCATE TABLE conversations, memories, memory_entities, users, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, turn_metrics, projects, user_connector_prefs, user_skills RESTART IDENTITY CASCADE`)
 	return err
 }
 
@@ -773,7 +781,9 @@ func (s *Store) AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int,
 	return int(n), nil
 }
 
-// Delete removes a conversation and (via FK cascade) its messages. When
+// Delete removes a conversation and (via FK cascade) its content rows. Usage
+// metrics deliberately survive hard deletion: they are accounting records and
+// retain no transcript content (migration 038). When
 // FLEET_CONVERSATION_SOFT_DELETE=true it instead tombstones the row
 // (deleted_at = NOW()) so a future restore can undelete it; the hard DELETE
 // is deferred to the 30-day sweeper in SweepExpired.

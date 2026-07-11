@@ -9,11 +9,13 @@ import (
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -31,12 +33,14 @@ type taskExportEnvelope struct {
 	Tasks   []*models.Task `json:"tasks"`
 }
 
-// cmdSchedTask dispatches `fleet-admin sched task export|import|set-model|set-credentials|set-description`.
+// cmdSchedTask dispatches `fleet-admin sched task list|export|import|set-model|set-credentials|set-description`.
 func cmdSchedTask(argv []string) int {
 	if len(argv) < 1 {
-		return errf(1, "usage: fleet sched task export|import|set-model|set-credentials|set-description|tag|estimate|batch-create")
+		return errf(1, "usage: fleet sched task list|export|import|set-model|set-credentials|set-description|tag|estimate|batch-create")
 	}
 	switch argv[0] {
+	case "list", "ls":
+		return schedTaskList(argv[1:])
 	case "export":
 		return schedTaskExport(argv[1:])
 	case "import":
@@ -54,8 +58,146 @@ func cmdSchedTask(argv []string) int {
 	case "batch-create":
 		return schedTaskBatchCreate(argv[1:])
 	default:
-		return errf(1, "unknown sched task subcommand %q (want export|import|set-model|set-credentials|set-description|tag|estimate|batch-create)", argv[0])
+		return errf(1, "unknown sched task subcommand %q (want list|export|import|set-model|set-credentials|set-description|tag|estimate|batch-create)", argv[0])
 	}
+}
+
+// taskListStore is the storage subset `sched task list` needs — narrow so the
+// rendering is testable without a live DB. *storage.Storage satisfies it.
+type taskListStore interface {
+	GetTasksFiltered(filter db.TaskFilter, limit, offset int) ([]*models.Task, int, error)
+}
+
+var _ taskListStore = (*storage.Storage)(nil)
+
+// schedTaskList implements `fleet sched task list` (#722) — the daily-driver
+// read the v1 operator tooling had and fleet lacked (the workaround was
+// `task export | jq` or the web UI):
+//
+//	fleet sched task list [--status scheduled] [--limit 50] [--json]
+//
+// Tasks print most-recent-first (created_at DESC, matching the dashboard).
+func schedTaskList(argv []string) int {
+	fs := flag.NewFlagSet("sched task list", flag.ContinueOnError)
+	dbURL := fs.String("database-url", "", "sched Postgres DSN")
+	status := fs.String("status", "", "filter by status: scheduled|pending|leased|running|analyzing|success|error|cancelled|dead_lettered|paused_awaiting_input")
+	limit := fs.Int("limit", 50, "maximum tasks to print (most recent first)")
+	asJSON := fs.Bool("json", false, "emit the tasks as a JSON array")
+	if err := fs.Parse(argv); err != nil {
+		return 1
+	}
+	if *limit < 1 {
+		return errf(1, "--limit must be positive")
+	}
+	if s := strings.TrimSpace(*status); s != "" && !validTaskStatusFilter(s) {
+		return errf(1, "unknown --status %q (want scheduled|pending|leased|running|analyzing|success|error|cancelled|dead_lettered|paused_awaiting_input)", s)
+	}
+
+	st, code := openSchedStorage(*dbURL)
+	if st == nil {
+		return code
+	}
+	defer st.Close()
+
+	if err := listTasks(st, os.Stdout, strings.TrimSpace(*status), *limit, *asJSON); err != nil {
+		return errf(5, "list tasks: %v", err)
+	}
+	return 0
+}
+
+// listTasks fetches + renders the task list. Split from schedTaskList so the
+// output shape is unit-testable against a fake store.
+func listTasks(st taskListStore, w io.Writer, status string, limit int, asJSON bool) error {
+	filter := db.TaskFilter{}
+	if status != "" {
+		filter.Status = &status
+	}
+	tasks, total, err := st.GetTasksFiltered(filter, limit, 0)
+	if err != nil {
+		return err
+	}
+
+	if asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(tasks)
+	}
+
+	if len(tasks) == 0 {
+		fmt.Fprintln(os.Stderr, "no tasks match")
+		return nil
+	}
+	tw := tabwriter.NewWriter(w, 2, 8, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tNAME/PROMPT\tSTATUS\tPRI\tSCHEDULE\tMODEL")
+	for _, t := range tasks {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n",
+			shortID(t.ID), taskLabel(t), t.Status, t.Priority, taskSchedule(t), taskModel(t))
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if total > len(tasks) {
+		fmt.Fprintf(os.Stderr, "showing %d of %d task(s); raise --limit or add --status to narrow\n", len(tasks), total)
+	}
+	return nil
+}
+
+// validTaskStatusFilter guards --status against typos so a misspelled filter
+// errors instead of silently printing nothing. Mirrors the models.TaskStatus
+// constants (which have no all-statuses validator to reuse).
+func validTaskStatusFilter(s string) bool {
+	switch models.TaskStatus(s) {
+	case models.TaskStatusScheduled, models.TaskStatusPending, models.TaskStatusLeased,
+		models.TaskStatusRunning, models.TaskStatusAnalyzing, models.TaskStatusSuccess,
+		models.TaskStatusError, models.TaskStatusCancelled, models.TaskStatusDeadLettered,
+		models.TaskStatusPausedAwaitingInput:
+		return true
+	default:
+		return false
+	}
+}
+
+// shortID is the first UUID group — unambiguous enough for a terminal listing
+// and paste-completable via the web UI / export when the full ID is needed.
+func shortID(id uuid.UUID) string { return id.String()[:8] }
+
+// taskLabel prefers the operator-assigned name, falling back to a one-line
+// prompt excerpt so unnamed tasks are still recognizable.
+func taskLabel(t *models.Task) string {
+	if t.Name != "" {
+		return excerpt(t.Name, 40)
+	}
+	return excerpt(t.Prompt, 40)
+}
+
+// excerpt collapses whitespace/newlines and truncates to max runes with an
+// ellipsis, so multi-line prompts can't break the table.
+func excerpt(s string, maxRunes int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes-1]) + "…"
+}
+
+// taskSchedule renders the cadence column: the cron recurrence when set,
+// otherwise the one-shot scheduled_for instant, otherwise "-".
+func taskSchedule(t *models.Task) string {
+	if t.Recurrence != "" {
+		return t.Recurrence
+	}
+	if t.ScheduledFor != nil {
+		return t.ScheduledFor.UTC().Format("2006-01-02 15:04Z")
+	}
+	return "-"
+}
+
+func taskModel(t *models.Task) string {
+	if t.Model != nil && *t.Model != "" {
+		return *t.Model
+	}
+	return "-"
 }
 
 // schedTaskEstimate prints a pre-submission cost forecast for a would-be task

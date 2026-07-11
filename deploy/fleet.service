@@ -31,7 +31,7 @@
 #   FLEET_SCHED_DATABASE_URL=postgres://sched:...@127.0.0.1:5432/sched?sslmode=disable
 #   FLEET_ENV_FILE=/etc/fleet/fleet.env          # so config.Load reads the same file
 #   # plus the client bundle's MCP connector credentials (the env vars its
-#   # manifest references, e.g. SENDGRID_API_KEY=..., XANDR_USERNAME=...).
+#   # manifest references, e.g. EXAMPLE_API_KEY=..., EXAMPLE_USERNAME=...).
 #   # optional:
 #   # FLEET_SERVER_ADDR=127.0.0.1:8080           # chat listener  (default 127.0.0.1:8080)
 #   # FLEET_ORCHESTRATOR_ADDR=127.0.0.1:8000     # orchestrator listener (default 127.0.0.1:8000)
@@ -83,8 +83,13 @@
 [Unit]
 Description=fleet (chat + orchestrator + scheduler + worker pool)
 Documentation=https://github.com/ElcanoTek/fleet
+# Wants= (not Requires=) postgresql.service: on a --postgres=local box it pulls
+# the cluster up with fleet after a reboot (After= alone only ORDERS the units —
+# it never starts Postgres); on an external-Postgres box the missing unit is
+# ignored. fleet still retries its DB connections, so this is belt-and-braces,
+# not a hard dependency.
 After=network-online.target postgresql.service
-Wants=network-online.target
+Wants=network-online.target postgresql.service
 
 [Service]
 # Type=notify: fleet emits sd_notify READY=1 once both listeners are bound (so

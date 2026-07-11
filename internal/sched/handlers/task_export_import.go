@@ -315,6 +315,7 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	existing.Recurrence = tc.Recurrence
 	existing.Timezone = tc.Timezone
 	existing.Files = tc.Files
+	existing.FileNames = tc.FileNames
 	existing.Tags = tc.Tags
 	if tc.MaxRetries != nil {
 		existing.MaxRetries = *tc.MaxRetries
@@ -325,6 +326,15 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	existing.TriggerType = tc.TriggerType
 	existing.AllowTaskCreation = tc.AllowTaskCreation
 	existing.AllowRecurringTaskCreation = tc.AllowRecurringTaskCreation
+	// Serialization key (#709): normalized the same way NewTask does, so a
+	// replaced definition can never carry a whitespace-only key the claim gate
+	// would treat as a real key.
+	existing.SerializationKey = nil
+	if tc.SerializationKey != nil {
+		if trimmed := strings.TrimSpace(*tc.SerializationKey); trimmed != "" {
+			existing.SerializationKey = &trimmed
+		}
+	}
 	if _, err := h.storage.UpdateTask(existing); err != nil {
 		return uuid.Nil, err
 	}

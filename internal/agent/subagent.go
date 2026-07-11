@@ -612,17 +612,18 @@ func (a *Agent) buildChild(model fantasy.LanguageModel, allowlist agentcore.Cred
 	}
 
 	child := NewAgent(Options{
-		Config:        a.config,
-		Model:         model,
-		FallbackModel: a.fallbackModel,
-		MCPClient:     a.mcpClient,
-		NativeTools:   a.nativeTools,
-		SystemPrompt:  a.systemPrompt,
-		Persona:       a.persona,
-		MaxIterations: childIter,
-		Sandbox:       a.sb,
-		NotesProvider: a.notesProvider,
-		NoteProposer:  a.noteProposer,
+		Config:         a.config,
+		Model:          model,
+		FallbackModel:  a.fallbackModel,
+		FallbackModels: a.fallbackModels,
+		MCPClient:      a.mcpClient,
+		NativeTools:    a.nativeTools,
+		SystemPrompt:   a.systemPrompt,
+		Persona:        a.persona,
+		MaxIterations:  childIter,
+		Sandbox:        a.sb,
+		NotesProvider:  a.notesProvider,
+		NoteProposer:   a.noteProposer,
 		// Persistent task memory (#285) is inherited from the parent so a child of a
 		// Captain's Log task shares the same task-scoped memory; nil for a
 		// non-opted-in parent (unchanged default).

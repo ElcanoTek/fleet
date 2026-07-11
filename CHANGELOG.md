@@ -1,5 +1,9 @@
 # Changelog
 
+- Align the recommended model lineup across Fleet, Chat, and MOC: new work
+  defaults to `z-ai/glm-5.2`, while advanced escalation and task fallback use
+  OpenRouter's exact `openai/gpt-5.6-sol` slug.
+
 All notable changes to fleet are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -13,7 +17,208 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **Public-repo hygiene (#721)**: untracked the runtime `fleet.pid` file (now
+  gitignored along with `/workspace/`), removed the dead
+  `web/scripts/smoke-mcp-reporting.py` (bundle repos own their smoke tests),
+  and replaced deployment-specific strings in generic content — private bundle
+  paths/repo names, internal hostnames in handler tests, personal emails in
+  webhook examples, and vendor credential names in `deploy/fleet.service` —
+  with `example.com`-style placeholders. The out-of-repo bundle sanity test is
+  now `internal/clientconfig/bundle_sanity_test.go`, opt-in via
+  `FLEET_SANITY_BUNDLE_DIR` (skips cleanly when unset) and deployment-neutral.
+  A README naming note clarifies that the v1 names (chat/moc/gig/cutlass)
+  refer to the internal predecessor stack this project replaces.
+
+### Added
+
+- **v1 → fleet cutover runbook** (`docs/CUTOVER.md`, #718): the ordered
+  operational sequence for a box already live on the legacy chat + moc stack —
+  backups, stopping **and disabling** the legacy units (and the runner daemon
+  on worker boxes), exporting with the correct env sourcing, bootstrapping
+  with an explicit DB decision, importing, copying the non-DB state (moc task
+  files and the legacy chat attachment dir), port/Caddy coexistence, minting
+  fleet API keys for external intake callers, DNS, and post-cutover cleanup.
+  Linked from `DEPLOYMENT.md` and `LEGACY-IMPORT.md`; `LEGACY-IMPORT.md`'s
+  runbook now disables (not just stops) the legacy units, sources
+  `/etc/fleet/fleet.env` on systemd deploys, and covers the chat data dir;
+  `BACKUP_RESTORE.md` now names the on-disk state (attachments, task uploads,
+  workspaces) that `fleet backup`'s DB dumps do not capture.
+
+- `bootstrap.sh` DB flags (#718): `--chat-db-name`/`--chat-db-user`/
+  `--sched-db-name`/`--sched-db-user` (fresh names that dodge a legacy
+  collision) and `--adopt-existing-chat-db`/`--adopt-existing-sched-db` (skip
+  provisioning for that pair — no CREATE, no ALTER, no password rotation — and
+  take the operator-supplied DSN, validated with `SELECT 1`).
+
+- **Per-task wall-clock timeout** (#724): `FLEET_TASK_WALL_TIMEOUT` (default
+  4h, `0` disables) bounds a scheduled run's total elapsed time; on expiry the
+  run is cancelled and the task fails with a clear, deterministic timeout error
+  that never consumes the transient-retry budget. Documented in
+  `docs/AGENT-RUNTIME.md` alongside the other enforced ceilings.
+- **`fleet sched task list`** (#722): the daily-driver task listing (short id,
+  name/prompt excerpt, status, priority, recurrence/scheduled time, model) with
+  `--status`, `--limit`, and `--json`; plus `fleet start` alongside
+  stop/restart, and top-level help for the shipped-but-unlisted verbs
+  (sched trigger/dlq, apikey rotate, task memories).
+- **Scoped keys can upload** (#719): `POST /v1/upload` accepts a scoped API key
+  with create_task permission — external intake apps no longer need the
+  full-access admin key to attach files to a create. Admin key / bearer /
+  cookie paths unchanged; under-scoped typed keys get 403.
+- **Task serialization** (#709): `TaskCreate` accepts an optional opaque
+  `serialization_key`; fleet guarantees at most one task per key is active
+  (leased/running) at a time, enforced by an advisory-locked re-check at the
+  scheduler's claim gate plus a best-effort queue-visibility filter. A blocked
+  task is skipped (stays queued), never failed. Recurring occurrences inherit
+  the key. See `docs/TASK-SERIALIZATION.md`.
+- The legacy migration bundle carries `serialization_key` on sched tasks
+  (#712), and `fleet import` gained `--overwrite` for the restore-from-bundle
+  use case.
+- Scheduled task inputs support logical `file_names` paired with stored upload
+  names. Dedicated MCP runs materialize them in `${FLEET_WORKSPACE}/inputs`,
+  and bundles may use `${FLEET_TASK_ID}` for connector-side task attribution.
+
+- **Start-of-run create reconciliation** (#717): a scheduled run whose resolved
+  MCP workspace holds unresolved pre-POST markers in the bundle servers'
+  cross-run create ledger (`creates.jsonl`) gets the v1-byte-compatible
+  reconciliation block appended to its task prompt, so a retried/resumed task
+  verifies whether creates landed before issuing any new create. Appended to
+  the task (user) portion only — the cached system prefix stays byte-stable.
+  See [ADR-0034](docs/adr/0034-audit-gate-commitment-binding.md).
+
 ### Fixed
+
+- **`bootstrap.sh` can no longer hijack a legacy database or truncate a
+  foreign Caddyfile** (#718). Local-mode provisioning refuses when a
+  role/database matching the configured names already exists on the cluster
+  but is not recorded in fleet's env file by a previous run — previously the
+  unconditional `ALTER ROLE … PASSWORD` silently rotated the legacy `chat`
+  role's password (locking out the still-installed legacy server and any later
+  `chat-admin export`) and fleet's migrations then ran on the legacy database.
+  The password-converging `ALTER` now provably applies only to roles the
+  script itself provisioned. Likewise `--enable-web --domain` refuses to
+  overwrite an `/etc/caddy/Caddyfile` it did not write; `--force-caddy`
+  overrides with a timestamped backup (`Caddyfile.fleet-backup.<ts>`) and a
+  loud merge warning.
+
+- `deploy/fleet.service` gained `Wants=postgresql.service` alongside the
+  existing `After=` (#718): `After=` only orders units and never starts
+  Postgres, so on a `--postgres=local` box whose cluster unit was not enabled,
+  a reboot brought fleet up against a down database (`Restart=always` churn
+  until someone started Postgres by hand). `Wants=` (not `Requires=`) is
+  ignored when the unit is absent, so external-Postgres deploys are unchanged.
+- **Audit-gate commitments bind to the full tool name, record ids, and values
+  digest** (#715): a typed `confirm_audit` `critical_actions` entry now
+  registers a commitment keyed by the full server-qualified MCP tool name plus
+  its optional `deal_id`/`deal_ids` record binding and `values_digest`.
+  Suffix-count matching had let one approval authorize — and be silently
+  discharged by — a same-suffix tool on a different server, variant, or record;
+  batches carried no id/digest binding at all. Typed audits now fail closed:
+  zero resolved commitments authorizes nothing — refused outright when an
+  entry named a critical suffix without its full server-qualified name, and
+  accepted-but-empty (every critical call still blocked) for explicit no-op
+  declarations. The bare-suffix path survives only as the legacy fallback for
+  untyped audits and can never approve a server-side batch.
+  See [ADR-0034](docs/adr/0034-audit-gate-commitment-binding.md).
+
+- **Payload-level MCP failures no longer discharge critical-action
+  commitments** (#716): a critical tool result whose payload reports failure
+  (`{"success": false}` or a non-empty top-level `"error"`) over a clean
+  transport now counts as a FAILED execution — it discharges nothing, counts
+  against the retry budget, and keeps finish enforcement armed. This
+  generalizes the previous `send_email`-only payload check to every critical
+  tool; batch tools returning per-record `results[]` discharge per succeeded
+  record, idempotently, and never for record ids the audit did not approve.
+
+### Changed
+
+- **Unknown personas are rejected at task create** (#720): a non-empty
+  `persona` not present in the client bundle is now a 400 listing the valid
+  names, instead of silently dispatching on the global default persona. Tasks
+  whose persona disappears from the bundle after creation still fall back at
+  dispatch. `docs/openapi.yaml` TaskCreate now documents the previously-missing
+  `name`, `persona`, `credential_allowlist`, `tags`, `timezone`, `description`,
+  `max_retries`, and `carry_context` fields, and `/upload`'s security note
+  reflects the scoped-key change.
+- **`fleet sched apikey create --rate-limit-per-minute`** (#722) names the
+  rate-limit unit; `--rate-limit` remains a deprecated alias that warns (the
+  v1 tooling's flags were per hour — porting numbers 1:1 set a 60× stricter
+  cap). The dev fast lane (`dev-ci.yml`) now runs with a Postgres service so
+  DB-gated suites — including the `fleet import` tests — run on every dev push
+  (#723).
+
+### Fixed
+
+- **Batch task creation was broken on dev** (#710 regression): the `file_names`
+  column was added to the task insert without bumping
+  `taskInsertColumnsCount`, so every multi-row `POST /tasks/batch` INSERT
+  failed with "INSERT has more target columns than expressions". Caught the
+  moment the dev lane gained a Postgres service (#723); a DB-free test now
+  pins the column/arg/count triple.
+- **Chat usage tests no longer accumulate rows**: migration 038 dropped
+  `turn_metrics`' FK to conversations (so usage survives conversation
+  deletion), which silently removed it from the test-isolation
+  `TRUNCATE ... CASCADE`; it is now truncated explicitly.
+- **`fleet import` re-runs no longer revert live task state** (#713): sched
+  tasks and run logs whose UUID already exists in fleet are skipped by default
+  (previously upserted — a completed one-shot flipped back to pending and ran
+  again, and fleet-side run history was replaced). Import validation and
+  dry-run parity were tightened alongside (#714): warnings for MCP
+  opt-ins/personas missing from the loaded bundle and for inert
+  scheduled-without-schedule tasks, the same-database guard now covers
+  single-section bundles on the shared `DATABASE_URL` fallback, dry-run
+  memory/orphan-log checks match the real run, `--live-only` skips are no
+  longer mislabeled "already present", flags may precede the bundle path, and
+  a chat memory lookup failure no longer aborts the section mid-run.
+- The task batch/tx insert paths bound one more argument than their
+  placeholder count after the `file_names` column landed
+  (`taskInsertColumnsCount` stayed at 60 for 61 columns); the constant is now
+  pinned by a drift test.
+- Test-suite portability: the chat store's test truncation now clears
+  `turn_metrics` (its conversations FK was dropped by migration 038, so it
+  stopped cascading and the usage-analytics tests accumulated rows across
+  runs), `projects`, `user_connector_prefs`, and `user_skills`; the path
+  traversal test no longer assumes the checkout lives outside `os.TempDir()`;
+  and `update.sh` accepts a git-worktree checkout (`.git` pointer file).
+- **Remote MCP OAuth callbacks use the deployed Fleet domain**: web-enabled
+  bootstrap runs now write the same computed public origin to the backend's
+  `FLEET_PUBLIC_BASE_URL` and generate the token-encryption key once; normal
+  `fleet update` runs also reconcile existing installs from the deployed web
+  origin before restarting. A
+  `--domain` deployment therefore registers `https://<domain>/api/oauth/mcp/callback`
+  instead of retaining a localhost callback.
+
+- **Open-access hosted MCPs no longer get forced through OAuth discovery**:
+  one-click catalog adds now preserve the entry's authentication mode. Servers
+  such as AWS Knowledge are stored ready to use without a bearer header, so an
+  intentional GET redirect to provider documentation no longer fails setup.
+  Redirects remain disabled for remote MCP traffic and OAuth discovery.
+
+- **The bundled MCP directory no longer advertises a nonexistent hosted X API
+  server**: `https://api.x.com/mcp` returns 404 and X documents its API-capable
+  XMCP as self-hosted. The valid open-access X Docs MCP remains available at
+  `https://docs.x.com/mcp`, while operators can still add a separately hosted
+  XMCP deployment as a bundle-authored connector.
+
+- **Weekly task schedules support multiple days**: the Create New Task modal's
+  simple repeat editor now accepts combinations such as Monday and Wednesday.
+  Supported cron weekday lists also hydrate the same selected-day UI when
+  switching back from Advanced cron.
+
+- **Deleting chats no longer resets user usage totals**: chat cost and token
+  metrics now survive conversation deletion and retention cleanup. Transcript
+  content is still deleted; only the existing non-content accounting row is
+  retained, with unavailable model/project attribution grouped as unknown.
+
+- **Task scheduling controls fit cleanly on mobile**: the Create New Task modal
+  now contains its date and time pickers with consistent labels and padding,
+  and its Repeat tab defaults to a plain-language daily/weekday/weekly builder.
+  Advanced cron remains available without an overlapping clock icon.
+
+- **Chat labels remain editable with mobile keyboards**: viewport resizes caused
+  by opening a software keyboard no longer dismiss the conversation menu while
+  its label input has focus. Ordinary viewport resizes still close open menus.
 
 - **Default core tier drops `:nitro` for cache locality**: the default
   `z-ai/glm-5.2:nitro` slug asked OpenRouter for throughput-priority
@@ -81,6 +286,32 @@ prior versions are listed because none have shipped.
   breakpoint.
 
 ### Added
+
+- **MCP bundle env contract for the cutlass-family servers**
+  (docs/MCP-BUNDLE-ENV.md): the reserved `${FLEET_WORKSPACE}` manifest-env
+  token substitutes a fleet-provided writable workdir at MCP subprocess launch
+  (per-run for a scheduled task's dedicated client, a stable per-deployment
+  dir for shared spawns; token-bearing keys are dropped when no dir is
+  offered), so bundles can wire `CUTLASS_RUN_WORKDIR`-style vars without
+  hardcoding paths. Account-variant spawns now inject
+  `MCP_VARIANT_CLIENT=<account>` (cutlass mcp_loader parity), and the new
+  per-server `identity_env` manifest list refuses a partially-suffixed named
+  account whose identity-routing vars would silently inherit the default
+  seat. Bundle-declared `agent_policy.critical_tools` suffixes are now staged
+  through the interactive approval-card UX too (previously scheduled-mode
+  audit gating only), honoring session pre-approvals and the #225 per-tool
+  timeout chain.
+- **Host-side prompt-injection guardrails (#702)**: optional workspace-wide
+  `off` / `observe` / `block` screening covers seed user/task messages and tool
+  output before it enters model context. Operators bring a local HTTP detector,
+  configure it live in Admin Features, and can test it with a synthetic sample;
+  block mode fails closed while observe mode reports outages without blocking.
+- **Cross-provider LLM failover (#703)**: client bundles can declare an ordered
+  `fallback_providers` chain. Retryable failures can promote the same model to
+  the next eligible backend before streaming begins; explicit provider pins stay
+  isolated, model-level `fallback_model` remains distinct, and Fleet suppresses
+  failover after any semantic event to prevent stream splicing or duplicate
+  side effects.
 
 - **Workspace-provider models in the chat picker**: models from
   admin-configured LLM providers (Settings → Admin → Model providers) now

@@ -19,6 +19,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
 const maxUploadSize = 250 * 1024 * 1024 // 250MB
@@ -35,6 +37,25 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if h.verifyAdminKey(r) {
 		isAuthed = true
 	} else {
+		// 1b. Scoped API key carrying create_task permission (#719): an uploaded
+		// file is only usable via a subsequent task create, so the SAME scoped
+		// keys that may create tasks may stage uploads — an external intake app
+		// no longer needs the full-access admin key just to attach a brief.
+		// ValidateKey consumes one rate-limit token, matching the create paths.
+		// A valid-but-under-scoped typed key (readonly/webhook) gets the same
+		// definitive 403 as the create paths (#190 semantics), so the caller
+		// sees "wrong scope", not "bad credentials".
+		if h.scopedKeyCannotCreate(r) {
+			writeError(w, http.StatusForbidden, "insufficient key scope: this key type cannot upload task files")
+			return
+		}
+		if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+			perm := models.PermissionCreateTask
+			if valid, key, _ := h.apiKeys.ValidateKey(apiKey, &perm, nil, nil, nil); valid && key != nil {
+				isAuthed = true
+			}
+		}
+
 		// 2. User Token
 		authHeader := r.Header.Get("Authorization")
 		if authHeader != "" {

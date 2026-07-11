@@ -505,7 +505,7 @@ func TestSplitLockdownModels_DefaultsWhenEmpty(t *testing.T) {
 	}
 	wantContains := []string{
 		"z-ai/glm-5.2",
-		"anthropic/claude-fable-5",
+		"openai/gpt-5.6-sol",
 	}
 	for _, w := range wantContains {
 		found := false

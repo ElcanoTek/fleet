@@ -6,12 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -30,8 +32,13 @@ import (
 //	fleet import moc-bundle.json --live-only
 //
 // Every write is keyed on the source identity (email / conversation UUID /
-// memory UUID / sched username / task UUID / log task UUID) and either skips
-// or idempotently upserts — re-running an import never duplicates data.
+// memory UUID / sched username / task UUID / log task UUID) and SKIPPED when
+// that identity already exists in fleet — re-running an import never
+// duplicates data and never reverts state fleet has since written (#713: a
+// task that already ran in fleet must not flip back to pending, a leased task
+// must not lose its lease, fleet-side run history must not be replaced).
+// --overwrite restores the old upsert behavior for the restore-from-bundle
+// use case, replacing already-present sched tasks and run logs in place.
 
 // migrationBundleFormat / migrationBundleVersion pin the envelope contract.
 // Import rejects an unknown format or version rather than guessing.
@@ -101,6 +108,13 @@ type bundleTask struct {
 	Timezone               string     `json:"timezone,omitempty"`
 	CreatedBy              *uuid.UUID `json:"created_by,omitempty"`
 	Files                  []string   `json:"files,omitempty"`
+	FileNames              []string   `json:"file_names,omitempty"`
+	// SerializationKey is the opaque per-task mutual-exclusion token (#709,
+	// #712): at most one task per key is active at a time, enforced at fleet's
+	// claim gate exactly as the legacy scheduler enforced it. Carried verbatim
+	// so a live recurring task keeps its serialization guarantee across the
+	// migration instead of silently losing it.
+	SerializationKey *string `json:"serialization_key,omitempty"`
 }
 
 type bundleLog struct {
@@ -112,17 +126,26 @@ type bundleLog struct {
 type importStats struct {
 	created map[string]int
 	skipped map[string]int
-	errors  int
+	// filtered counts records excluded by an operator FILTER (--live-only),
+	// kept apart from skipped so the summary never mislabels a deliberate
+	// exclusion as "already present".
+	filtered map[string]int
+	errors   int
 	// warnings are non-fatal per-record notes (clamped role, dropped
 	// conversation reference, unparseable terminal-task cron, …).
 	warnings []string
 	// tasksWithFiles counts imported tasks referencing attachment files — the
 	// operator must copy those from the legacy DATA_DIR (see the runbook).
 	tasksWithFiles int
+	// liveTasksImported counts live (pending/scheduled) tasks written, which
+	// arrive with fleet's runtime defaults (sandbox egress OFF, no MCP
+	// selection) rather than the legacy scheduler's — the summary tells the
+	// operator to re-scope them (#714).
+	liveTasksImported int
 }
 
 func newImportStats() *importStats {
-	return &importStats{created: map[string]int{}, skipped: map[string]int{}}
+	return &importStats{created: map[string]int{}, skipped: map[string]int{}, filtered: map[string]int{}}
 }
 
 func (st *importStats) warnf(format string, a ...any) {
@@ -140,12 +163,18 @@ func cmdImport(argv []string) int {
 	schedDB := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL, then DATABASE_URL)")
 	dryRun := fs.Bool("dry-run", false, "validate and print the plan without writing")
 	liveOnly := fs.Bool("live-only", false, "sched section: import only live (pending/scheduled) tasks; skip terminal tasks and run logs")
-	file, flagArgs := splitPositional(argv)
+	overwrite := fs.Bool("overwrite", false, "restore mode: replace sched tasks and run logs whose UUID already exists in fleet (default is to skip them, so a re-run never reverts live state)")
+	// The flag set mixes value flags (--*-database-url) and boolean flags, and
+	// the bundle path may come before OR after them — splitPositionalMixed is
+	// the only splitter that parses both orders correctly (#714).
+	file, flagArgs := splitPositionalMixed(argv, map[string]bool{
+		"dry-run": true, "live-only": true, "overwrite": true,
+	})
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1
 	}
 	if strings.TrimSpace(file) == "" {
-		return errf(1, "usage: fleet import <bundle.json> [--dry-run] [--live-only]")
+		return errf(1, "usage: fleet import <bundle.json> [--dry-run] [--live-only] [--overwrite]")
 	}
 
 	//nolint:gosec // G304: the bundle path is an operator-supplied CLI positional (like backup/restore's dump paths), never request or LLM input.
@@ -168,14 +197,25 @@ func cmdImport(argv []string) int {
 	}
 
 	// The chat and sched stores are DISTINCT databases (cmd/fleet asserts the
-	// same at serve time). Both DSN resolvers fall back to DATABASE_URL, so a
-	// dual-section bundle with only DATABASE_URL set would silently write both
-	// sections into one database — refuse instead.
-	if bundle.Chat != nil && bundle.Sched != nil {
+	// same at serve time). Both DSN resolvers fall back to the generic
+	// DATABASE_URL, so a setup with only DATABASE_URL set would silently write
+	// both stores' schemas into ONE database — via a dual-section bundle in a
+	// single run, or via the documented runbook's two single-section bundles
+	// across two runs (#714). Refuse both shapes. For a single-section bundle
+	// the guard fires only when that section's DSN came from the generic
+	// fallback: an explicit --*-database-url flag or FLEET_*_DATABASE_URL var
+	// names the target unambiguously and is honored (a genuinely sched-only
+	// deployment may point DATABASE_URL at its one database).
+	{
 		cdsn, cerr := chatDSN(*chatDB)
 		sdsn, serr := schedDSN(*schedDB)
 		if cerr == nil && serr == nil && cdsn == sdsn {
-			return errf(1, "chat and sched DSNs resolve to the same database — set FLEET_CHAT_DATABASE_URL and FLEET_SCHED_DATABASE_URL (or the --*-database-url flags) to distinct databases")
+			sameDB := (bundle.Chat != nil && bundle.Sched != nil) ||
+				(bundle.Chat != nil && dsnFromGenericFallback(*chatDB, "FLEET_CHAT_DATABASE_URL")) ||
+				(bundle.Sched != nil && dsnFromGenericFallback(*schedDB, "FLEET_SCHED_DATABASE_URL"))
+			if sameDB {
+				return errf(1, "chat and sched DSNs resolve to the same database, which would mix the two stores' schemas in one DB — set FLEET_CHAT_DATABASE_URL and FLEET_SCHED_DATABASE_URL (or the --*-database-url flags) to distinct databases")
+			}
 		}
 	}
 
@@ -209,7 +249,11 @@ func cmdImport(argv []string) int {
 		if st == nil {
 			return code
 		}
-		importSchedSection(ctx, st, bundle.Sched, *dryRun, *liveOnly, stats)
+		importSchedSection(ctx, st, bundle.Sched, schedImportOpts{
+			dryRun:    *dryRun,
+			liveOnly:  *liveOnly,
+			overwrite: *overwrite,
+		}, stats)
 		_ = st.Close()
 	}
 
@@ -220,9 +264,62 @@ func cmdImport(argv []string) int {
 	return 0
 }
 
+// dsnFromGenericFallback reports whether a section's DSN resolution reached the
+// generic DATABASE_URL fallback: no explicit --*-database-url flag and no
+// section-specific FLEET_*_DATABASE_URL var. Used by the same-DSN guard — a
+// fallback-resolved target is ambiguous between the two stores, an explicit
+// one is operator intent.
+func dsnFromGenericFallback(explicit, sectionEnv string) bool {
+	return strings.TrimSpace(explicit) == "" && strings.TrimSpace(os.Getenv(sectionEnv)) == ""
+}
+
+// chatCatalog is the loaded client-config bundle's MCP-server and persona name
+// sets, used to WARN (never fail) when an imported conversation references a
+// name the target deployment doesn't know: an unknown optional_mcp_servers_enabled
+// entry silently never matches the runtime catalog (the opt-in goes dead), and
+// a non-empty unknown persona hard-errors every turn of that conversation
+// (#714). Best-effort — when no bundle loads, validation is skipped with one
+// warning rather than blocking the migration.
+type chatCatalog struct {
+	loaded   bool
+	servers  map[string]bool
+	personas map[string]bool
+}
+
+// loadChatCatalog reads the client-config bundle (FLEET_CLIENT_CONFIG_DIR,
+// else the baked-in default dir): server names from the MCP catalog plus the
+// curated remote-MCP catalog (the two namespaces conversation opt-ins can
+// name), persona names from personas/*.yaml basenames (the namespace
+// conversation.persona resolves against at prompt-build time).
+func loadChatCatalog(stats *importStats) chatCatalog {
+	b, err := clientconfig.Load("")
+	if err != nil {
+		stats.warnf("client-config bundle not loadable (%v) — skipped MCP opt-in / persona validation; verify imported conversations' opt-ins and personas against the deployed bundle manually", err)
+		return chatCatalog{}
+	}
+	cat := chatCatalog{loaded: true, servers: map[string]bool{}, personas: map[string]bool{}}
+	for i := range b.MCPCatalog {
+		cat.servers[b.MCPCatalog[i].Name] = true
+	}
+	for i := range b.RemoteMCPCatalog {
+		cat.servers[b.RemoteMCPCatalog[i].Name] = true
+	}
+	if entries, err := os.ReadDir(b.PersonasDir); err == nil {
+		for _, e := range entries {
+			name := e.Name()
+			lower := strings.ToLower(name)
+			if strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") {
+				cat.personas[name[:strings.LastIndex(name, ".")]] = true
+			}
+		}
+	}
+	return cat
+}
+
 // importChatSection applies users → conversations → memories, in that order
 // (memories consult which conversations exist). Order within a kind doesn't
-// matter — every record is independent.
+// matter — every record is independent, and failures are per-record
+// (accumulated in stats) so one bad row never aborts the section mid-run.
 func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSection, dryRun bool, stats *importStats) error {
 	for _, u := range sec.Users {
 		if dryRun {
@@ -241,8 +338,29 @@ func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSec
 		bump(stats, "chat users", created)
 	}
 
+	// Aggregate catalog mismatches per NAME (not per conversation) so a legacy
+	// deployment with hundreds of conversations opted into one renamed server
+	// yields one actionable warning, not hundreds.
+	cat := loadChatCatalog(stats)
+	unknownServers := map[string]int{}
+	unknownPersonas := map[string]int{}
+	noteCatalogMismatches := func(c store.ImportedConversation) {
+		if !cat.loaded {
+			return
+		}
+		for _, name := range c.OptionalMCPServersEnabled {
+			if !cat.servers[name] {
+				unknownServers[name]++
+			}
+		}
+		if p := strings.TrimSpace(c.Persona); p != "" && !cat.personas[p] {
+			unknownPersonas[p]++
+		}
+	}
+
 	imported := make(map[string]bool, len(sec.Conversations))
 	for _, c := range sec.Conversations {
+		noteCatalogMismatches(c)
 		if dryRun {
 			exists, err := chatStore.HasConversation(ctx, c.ID)
 			if err != nil {
@@ -279,7 +397,11 @@ func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSec
 				var err error
 				convExists, err = chatStore.HasConversation(ctx, m.ConversationID)
 				if err != nil {
-					return fmt.Errorf("check conversation %s: %w", m.ConversationID, err)
+					// Per-record, matching the sched section's posture: one
+					// failed lookup must not abort the section after users and
+					// conversations were already written (#714).
+					stats.errorf("memory %s: check conversation %s: %v", m.ID, m.ConversationID, err)
+					continue
 				}
 			}
 			if !convExists {
@@ -287,7 +409,15 @@ func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSec
 			}
 		}
 		if dryRun {
-			bump(stats, "memories", true) // exact skip count needs a write attempt; plan optimistically
+			// Existence check so the plan's created/skipped split matches what
+			// the real run will do (#714) — previously every memory was counted
+			// "created" even when already present.
+			exists, err := chatStore.HasMemory(ctx, m.ID)
+			if err != nil {
+				stats.errorf("memory %s: %v", m.ID, err)
+				continue
+			}
+			bump(stats, "memories", !exists)
 			continue
 		}
 		created, err := chatStore.ImportMemory(ctx, m, convExists)
@@ -296,6 +426,18 @@ func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSec
 			continue
 		}
 		bump(stats, "memories", created)
+	}
+
+	// Catalog-mismatch warnings (#714), one per distinct name (sorted for a
+	// stable summary). Opt-ins go silently dead (the stored name never matches
+	// the runtime catalog — legacy chat stored un-suffixed names while bundles
+	// use *_mcp); an unknown persona is worse, hard-erroring every turn on that
+	// conversation until reassigned.
+	for _, name := range sortedKeys(unknownServers) {
+		stats.warnf("optional MCP server %q (enabled on %d conversation(s)) is not in the loaded catalog — the opt-in will be inert until a catalog server with that exact name exists", name, unknownServers[name])
+	}
+	for _, name := range sortedKeys(unknownPersonas) {
+		stats.warnf("persona %q (set on %d conversation(s)) is not in the loaded bundle's personas/ — every turn on those conversations will fail until the persona is added or reassigned", name, unknownPersonas[name])
 	}
 
 	// Make migrated history searchable. BackfillSearchContent pages the whole
@@ -330,11 +472,24 @@ func validSchedTaskStatus(s models.TaskStatus) bool {
 	}
 }
 
+// schedImportOpts carries the operator switches for the sched section.
+type schedImportOpts struct {
+	dryRun bool
+	// liveOnly imports only live (pending/scheduled) tasks, dropping terminal
+	// history and run logs.
+	liveOnly bool
+	// overwrite replaces tasks/logs whose UUID already exists in fleet (restore
+	// mode). Default false: already-present rows are skipped so a re-run can
+	// never revert live task state or replace fleet-side run history (#713).
+	overwrite bool
+}
+
 // importSchedSection applies users → tasks → logs. Users first so task
 // created_by remapping can consult them; logs last so they attach to imported
-// task ids. Unlike the chat section, every failure here is per-record
-// (accumulated in stats) — nothing aborts the section.
-func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSection, dryRun, liveOnly bool, stats *importStats) {
+// task ids. Every failure here is per-record (accumulated in stats) — nothing
+// aborts the section.
+func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSection, opts schedImportOpts, stats *importStats) {
+	dryRun := opts.dryRun
 	// Users: matched by username. An existing account (e.g. the bootstrap
 	// admin) wins and imported tasks are re-attributed to its UUID; a new
 	// username is inserted with its source UUID + hash so logins keep working.
@@ -373,16 +528,36 @@ func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSect
 		bump(stats, "sched users", true)
 	}
 
-	importedTasks := make(map[uuid.UUID]bool, len(sec.Tasks))
+	// presentTasks tracks every task UUID that exists (or will exist after this
+	// run) in fleet, so the log pass can reject an orphan log — one whose task
+	// is neither in the bundle nor in fleet — identically in dry-run and real
+	// runs, instead of dry-run passing what the real run's FK would fail (#714).
+	presentTasks := make(map[uuid.UUID]bool, len(sec.Tasks))
 	for _, bt := range sec.Tasks {
 		task, live, err := buildImportedTask(st, bt, remap, stats)
 		if err != nil {
 			stats.errorf("task %s: %v", bt.ID, err)
 			continue
 		}
-		if liveOnly && !live {
-			bump(stats, "tasks", false)
+		if opts.liveOnly && !live {
+			stats.filtered["tasks"]++
 			continue
+		}
+		exists, err := st.TaskExists(ctx, bt.ID)
+		if err != nil {
+			stats.errorf("task %s: %v", bt.ID, err)
+			continue
+		}
+		if exists {
+			presentTasks[bt.ID] = true
+			if !opts.overwrite {
+				// Skip-by-default (#713): fleet's row may have progressed (run,
+				// been leased, been cancelled) since the last import — writing
+				// the bundle's snapshot over it would flip a completed one-shot
+				// back to pending (double execution) or null an active lease.
+				bump(stats, "tasks", false)
+				continue
+			}
 		}
 		if len(bt.Files) > 0 {
 			stats.tasksWithFiles++
@@ -393,19 +568,49 @@ func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSect
 				continue
 			}
 		}
-		importedTasks[bt.ID] = true
+		presentTasks[bt.ID] = true
+		if live {
+			stats.liveTasksImported++
+		}
 		bump(stats, "tasks", true)
 	}
 
-	if liveOnly {
+	if opts.liveOnly {
 		if n := len(sec.Logs); n > 0 {
-			stats.warnf("--live-only: skipped %d run log(s)", n)
+			stats.filtered["run logs"] += n
 		}
 		return
 	}
 	for _, l := range sec.Logs {
 		if l.TaskID == uuid.Nil || len(l.SessionData) == 0 || !json.Valid(l.SessionData) {
 			stats.errorf("log %s: task_id and valid session_data JSON required", l.TaskID)
+			continue
+		}
+		// Orphan check, identical in dry-run and real runs: a log whose task is
+		// neither in the bundle nor already in fleet would fail the logs→tasks
+		// FK on write (#714).
+		present := presentTasks[l.TaskID]
+		if !present {
+			var err error
+			present, err = st.TaskExists(ctx, l.TaskID)
+			if err != nil {
+				stats.errorf("log %s: %v", l.TaskID, err)
+				continue
+			}
+		}
+		if !present {
+			stats.errorf("log %s: no matching task in the bundle or in fleet — run log not importable", l.TaskID)
+			continue
+		}
+		exists, err := st.LogExists(ctx, l.TaskID)
+		if err != nil {
+			stats.errorf("log %s: %v", l.TaskID, err)
+			continue
+		}
+		if exists && !opts.overwrite {
+			// Skip-by-default (#713): fleet may have re-run the task since the
+			// last import; its run history must survive a re-import.
+			bump(stats, "run logs", false)
 			continue
 		}
 		if !dryRun {
@@ -467,6 +672,11 @@ func buildImportedTask(st *storage.Storage, bt bundleTask, remap map[uuid.UUID]u
 		Recurrence:             bt.Recurrence,
 		Timezone:               tz,
 		Files:                  bt.Files,
+		FileNames:              bt.FileNames,
+		// SerializationKey (#712): carried verbatim (NewTask normalizes
+		// empty/whitespace to nil) so a live recurring task keeps its ≤1-active
+		// per-key guarantee across the migration.
+		SerializationKey: bt.SerializationKey,
 	})
 
 	// Overlay the preserved source identity + runtime state.
@@ -500,7 +710,26 @@ func buildImportedTask(st *storage.Storage, bt bundleTask, remap map[uuid.UUID]u
 		task.ScheduledFor = &next
 		task.Status = models.TaskStatusScheduled
 	}
+
+	// Inert-task check (#714): status "scheduled" with no recurrence and no
+	// scheduled_for passes every validation but never fires — the scheduler's
+	// due query requires a non-NULL scheduled_for. Keep the row (normalizing to
+	// pending would surprise the operator by running it immediately) but say so.
+	if task.Status == models.TaskStatusScheduled && task.ScheduledFor == nil && bt.Recurrence == "" {
+		stats.warnf("task %s: status \"scheduled\" with no recurrence and no scheduled_for — it will never fire; reschedule or cancel it after import", bt.ID)
+	}
 	return task, live, nil
+}
+
+// sortedKeys returns a map's keys in ascending order, so aggregated warnings
+// print deterministically.
+func sortedKeys(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func bump(stats *importStats, kind string, created bool) {
@@ -520,19 +749,26 @@ func printImportSummary(stats *importStats, dryRun bool) {
 	}
 	order := []string{"chat users", "conversations", "messages", "memories", "sched users", "tasks", "run logs"}
 	for _, kind := range order {
-		c, s := stats.created[kind], stats.skipped[kind]
-		if c == 0 && s == 0 {
+		c, s, f := stats.created[kind], stats.skipped[kind], stats.filtered[kind]
+		if c == 0 && s == 0 && f == 0 {
 			continue
 		}
-		fmt.Printf("%-12s %s %d, skipped %d (already present)\n", kind+":", verb, c, s)
+		line := fmt.Sprintf("%-12s %s %d, skipped %d (already present)", kind+":", verb, c, s)
+		if f > 0 {
+			line += fmt.Sprintf(", skipped %d (--live-only)", f)
+		}
+		fmt.Println(line)
 	}
 	if stats.tasksWithFiles > 0 {
 		fmt.Printf("note: %d task(s) reference attachment files — copy them from the legacy DATA_DIR (docs/LEGACY-IMPORT.md step 4)\n", stats.tasksWithFiles)
+	}
+	if stats.liveTasksImported > 0 {
+		fmt.Printf("note: %d live task(s) imported with fleet's runtime defaults — sandbox egress OFF (allow_network=false) and no MCP server selection. v1 runs had full egress and prompt-driven MCP loading, so re-scope tasks that need network or connectors before their next run (docs/LEGACY-IMPORT.md).\n", stats.liveTasksImported)
 	}
 	for _, w := range stats.warnings {
 		fmt.Printf("warning: %s\n", w)
 	}
 	if stats.errors > 0 {
-		fmt.Printf("%d record(s) failed — fix and re-run; completed records are skipped on re-import\n", stats.errors)
+		fmt.Printf("%d record(s) failed — fix and re-run; records already present in fleet are skipped on re-import (pass --overwrite to replace them)\n", stats.errors)
 	}
 }

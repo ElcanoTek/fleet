@@ -31,13 +31,14 @@ func repoRootFromTest(t *testing.T) string {
 	}
 }
 
-// runScriptDryRun executes a repo script with --dry-run and returns combined
-// output. It fails the test on a non-zero exit (a dry-run must never touch the
-// box, so it should always succeed). Skips when bash is unavailable.
-func runScriptDryRun(t *testing.T, script string, args ...string) string {
+// runScript executes a repo script and returns combined output + error. Callers
+// asserting success use runScriptDryRun; callers asserting a refusal path use
+// the error directly. Skips when bash is unavailable. extraEnv entries are
+// appended after the baseline env (so they win).
+func runScript(t *testing.T, extraEnv []string, script string, args ...string) (string, error) {
 	t.Helper()
 	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("bash not available; skipping operator-script dry-run smoke test")
+		t.Skip("bash not available; skipping operator-script smoke test")
 	}
 	root := repoRootFromTest(t)
 	full := append([]string{filepath.Join(root, "scripts", script)}, args...)
@@ -49,11 +50,21 @@ func runScriptDryRun(t *testing.T, script string, args ...string) string {
 		"FLEET_CLIENT_CONFIG_DIR="+filepath.Join(root, "config", "default"),
 		"TERM=dumb",
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// runScriptDryRun executes a repo script with --dry-run and returns combined
+// output. It fails the test on a non-zero exit (a dry-run must never touch the
+// box, so it should always succeed). Skips when bash is unavailable.
+func runScriptDryRun(t *testing.T, script string, args ...string) string {
+	t.Helper()
+	out, err := runScript(t, nil, script, args...)
 	if err != nil {
 		t.Fatalf("%s %v exited non-zero: %v\n--- output ---\n%s", script, args, err, out)
 	}
-	return string(out)
+	return out
 }
 
 // TestBootstrapDryRunSmoke is the regression guard for #91 (operator-script
@@ -75,6 +86,181 @@ func TestBootstrapDryRunSmoke(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("bootstrap --dry-run plan missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+}
+
+// TestBootstrapFreshDBNameFlags — #718: --chat-db-name/--chat-db-user (and the
+// sched twins) must override the colliding legacy defaults, and the planned SQL
+// must provision exactly the overridden names.
+func TestBootstrapFreshDBNameFlags(t *testing.T) {
+	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local",
+		"--chat-db-name", "fleet_chat", "--chat-db-user", "fleet_chat_user",
+		"--sched-db-name", "fleet_sched", "--sched-db-user", "fleet_sched_user")
+	for _, want := range []string{
+		"CREATE ROLE fleet_chat_user",
+		"CREATE DATABASE fleet_chat OWNER fleet_chat_user",
+		"CREATE ROLE fleet_sched_user",
+		"CREATE DATABASE fleet_sched OWNER fleet_sched_user",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bootstrap --dry-run plan missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+}
+
+// TestBootstrapRejectsUnsafeDBIdentifier — the names are interpolated into the
+// provisioning SQL, so anything beyond a plain identifier must die up front.
+func TestBootstrapRejectsUnsafeDBIdentifier(t *testing.T) {
+	out, err := runScript(t, nil, "bootstrap.sh", "--dry-run", "--postgres=local",
+		"--chat-db-name", "bad-name;drop")
+	if err == nil {
+		t.Fatalf("bootstrap accepted an unsafe DB identifier\n--- output ---\n%s", out)
+	}
+	if !strings.Contains(out, "plain identifier") {
+		t.Errorf("expected the identifier-validation error, got:\n%s", out)
+	}
+}
+
+// TestBootstrapAdoptExistingDBFlags — #718: adoption must skip provisioning for
+// that pair (no CREATE, no ALTER — a pre-existing role's password is never
+// rotated) and validate the operator-supplied DSN instead.
+func TestBootstrapAdoptExistingDBFlags(t *testing.T) {
+	env := []string{
+		// An isolated env file so a developer's real .env.local can't leak DSNs in.
+		"FLEET_ENV_FILE=" + filepath.Join(t.TempDir(), "fleet.env"),
+		"FLEET_CHAT_DATABASE_URL=postgres://legacychat:pw@127.0.0.1:5432/legacychat?sslmode=disable",
+		"FLEET_SCHED_DATABASE_URL=postgres://legacysched:pw@127.0.0.1:5432/legacysched?sslmode=disable",
+	}
+	out, err := runScript(t, env, "bootstrap.sh", "--dry-run", "--postgres=local",
+		"--adopt-existing-chat-db", "--adopt-existing-sched-db")
+	if err != nil {
+		t.Fatalf("adopt dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	for _, want := range []string{
+		"--adopt-existing-chat-db — skipping role/database provisioning",
+		"--adopt-existing-sched-db — skipping role/database provisioning",
+		"both databases adopted — nothing to provision",
+		"would validate the adopted chat DSN",
+		"would validate the adopted sched DSN",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("adopt dry-run plan missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+	// The adopted pair must never appear in provisioning SQL.
+	for _, forbid := range []string{"CREATE ROLE", "ALTER ROLE"} {
+		if strings.Contains(out, forbid) {
+			t.Errorf("adopt dry-run plan still provisions roles (%q present)\n--- output ---\n%s", forbid, out)
+		}
+	}
+}
+
+// TestBootstrapAdoptRequiresDSN — adoption without the operator's DSN must fail
+// fast (before any provisioning work), never guess a password.
+func TestBootstrapAdoptRequiresDSN(t *testing.T) {
+	env := []string{"FLEET_ENV_FILE=" + filepath.Join(t.TempDir(), "fleet.env")}
+	out, err := runScript(t, env, "bootstrap.sh", "--dry-run", "--postgres=local",
+		"--adopt-existing-chat-db")
+	if err == nil {
+		t.Fatalf("bootstrap accepted --adopt-existing-chat-db without a DSN\n--- output ---\n%s", out)
+	}
+	if !strings.Contains(out, "--adopt-existing-chat-db needs the existing database's working DSN") {
+		t.Errorf("expected the missing-DSN error, got:\n%s", out)
+	}
+}
+
+// TestBootstrapAdoptRejectsExternalMode — external mode already takes the
+// operator's DSNs verbatim; combining it with adopt flags is a config error.
+func TestBootstrapAdoptRejectsExternalMode(t *testing.T) {
+	out, err := runScript(t, nil, "bootstrap.sh", "--dry-run", "--postgres=external",
+		"--adopt-existing-chat-db")
+	if err == nil {
+		t.Fatalf("bootstrap accepted adopt flags with --postgres=external\n--- output ---\n%s", out)
+	}
+	if !strings.Contains(out, "applies to --postgres=local") {
+		t.Errorf("expected the external-mode rejection, got:\n%s", out)
+	}
+}
+
+// TestBootstrapDBGuardAndCaddyProtectionPresent — #718: the load-bearing safety
+// strings must stay in the script. The guard refuses to provision over a
+// pre-existing role/db this script did not record in its env file (the ALTER
+// ROLE therefore only ever converges roles the script itself provisioned), and
+// the Caddy path refuses to overwrite a foreign /etc/caddy/Caddyfile without
+// --force-caddy (and then keeps a timestamped backup).
+func TestBootstrapDBGuardAndCaddyProtectionPresent(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		"guard_preexisting chat",
+		"guard_preexisting sched",
+		"--adopt-existing-chat-db",
+		"--adopt-existing-sched-db",
+		"--force-caddy",
+		"/etc/caddy/Caddyfile.fleet-backup.",
+		"caddyfile_is_foreign",
+		`CADDY_MARKER="# Managed by fleet (scripts/bootstrap.sh)`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("bootstrap must contain %q", want)
+		}
+	}
+}
+
+// TestFleetServiceWantsPostgres — #718: After= only orders units; Wants= is
+// what pulls the local cluster up with fleet after a reboot.
+func TestFleetServiceWantsPostgres(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "deploy", "fleet.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unit := string(body)
+	for _, want := range []string{
+		"After=network-online.target postgresql.service",
+		"Wants=network-online.target postgresql.service",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("deploy/fleet.service must contain %q", want)
+		}
+	}
+}
+
+func TestBootstrapWiresRemoteMCPPublicOrigin(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`upsert_env FLEET_PUBLIC_BASE_URL "$origin"`,
+		`ensure_env_b64_key FLEET_MCP_OAUTH_ENCRYPTION_KEY 32`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("bootstrap must contain %q", want)
+		}
+	}
+}
+
+func TestUpdateReconcilesRemoteMCPPublicOrigin(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`upsert_env_file "$backend_env_file" FLEET_PUBLIC_BASE_URL "$web_origin"`,
+		`upsert_env_file "$backend_env_file" FLEET_MCP_OAUTH_ENCRYPTION_KEY`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update must contain %q", want)
 		}
 	}
 }

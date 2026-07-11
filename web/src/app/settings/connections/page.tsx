@@ -545,13 +545,17 @@ export default function ConnectionsPage() {
     fetch("/api/remote-mcp-servers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: entry.name, url: entry.url }),
+      body: JSON.stringify({ name: entry.name, url: entry.url, auth: entry.auth }),
     })
       .then(async (res) => {
         if (!res.ok) {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
-        setNotice(`${entry.display_name} added. Click Connect to sign in.`);
+        setNotice(
+          entry.auth === "open"
+            ? `${entry.display_name} added and ready to use.`
+            : `${entry.display_name} added. Click Connect to sign in.`,
+        );
         refresh();
       })
       .catch((err: unknown) => setError(errMessage(err)))

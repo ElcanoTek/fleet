@@ -15,11 +15,15 @@ import (
 // orchestration.go + the confirm_audit tool in fantasy.go).
 //
 // Critical tools (send_email, deal-creation across SSPs, presentation
-// generation) are blocked until a confirm_audit passes. Batch audits register
-// per-suffix commitment counts so a single audit can cover N deals; the audit
-// token consumes only when every committed action is discharged. This whole
-// subsystem is inert in interactive mode (no critical tools registered, the
-// Policy's CanFinish returns true on round 1 so checkFinishEnforcement is
+// generation) are blocked until a confirm_audit passes. A TYPED audit (the
+// structured critical_actions field) binds each approval to the full
+// server-qualified tool name plus optional record ids / values digest, and
+// fails closed when it resolves to zero commitments — see audit_commitment.go
+// (#715). An UNTYPED audit falls back to the legacy per-suffix commitment
+// counts below, so a single audit can still cover N same-suffix actions; the
+// audit token consumes only when every committed action is discharged. This
+// whole subsystem is inert in interactive mode (no critical tools registered,
+// the Policy's CanFinish returns true on round 1 so checkFinishEnforcement is
 // never consulted).
 
 const toolNameConfirmAudit = "confirm_audit"
@@ -99,15 +103,33 @@ func matchCriticalSuffix(declared string) string {
 }
 
 // registerCommittedActions records the critical suffixes declared in a
-// successful confirm_audit, incrementing per-suffix commitment counts. Callers
+// successful UNTYPED confirm_audit (the legacy free-text fallback — typed
+// declarations go through registerCommittedActionsTyped in
+// audit_commitment.go), incrementing per-suffix commitment counts. Callers
 // must hold o.mu (or call before concurrent access begins, as the tests do).
 func (o *orchestrationState) registerCommittedActions(declared []string) {
 	if o.committedCriticalActions == nil {
 		o.committedCriticalActions = make(map[string]int)
 	}
+	// A fresh audit envelope REPLACES all batch-approval state (see
+	// registerCommittedActionsTyped). The legacy free-text path can never
+	// register deal_ids, so any surviving approvedDealIDs/approvedDigest would
+	// be stale prior-envelope state — clear it fail-closed. But do so ONLY
+	// when this audit actually registers something (lazy, on the first
+	// matched suffix): a legacy audit whose free text matches ZERO suffixes
+	// leaves auditConfirmed=true and any prior commitment outstanding, so
+	// wiping the approvals would false-block the legitimately-approved
+	// in-flight batch. A zero-match audit must stay a no-op for batch
+	// approvals.
 	registered := 0
 	for _, decl := range declared {
 		if suffix := matchCriticalSuffix(decl); suffix != "" {
+			if registered == 0 {
+				o.resetBatchApprovals()
+			}
+			// Fresh audit envelope for this suffix → clear any per-record
+			// discharge ledger left over from a prior batch on the same suffix.
+			delete(o.dischargedDeals, suffix)
 			o.committedCriticalActions[suffix]++
 			log.Printf("Enforcement: registered committed critical action %q (from %q); %d outstanding",
 				suffix, decl, o.committedCriticalActions[suffix])
@@ -125,42 +147,53 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 	}
 }
 
-// markCommittedExecuted decrements the commitment count for the first suffix
-// that matches toolName (direct match first, then allowed substitute).
-func (o *orchestrationState) markCommittedExecuted(toolName string) {
-	for suffix, remaining := range o.committedCriticalActions {
-		if remaining <= 0 {
-			continue
-		}
-		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
-			o.committedCriticalActions[suffix] = remaining - 1
-			log.Printf("Enforcement: committed %q discharged via %q (%d remaining)",
-				suffix, toolName, o.committedCriticalActions[suffix])
-			return
-		}
+// markCommittedExecuted discharges one outstanding commitment for a
+// successfully executed critical call targeting dealID ("" when the call
+// names no record). Safe to call for non-critical tools or for tools whose
+// action wasn't pre-committed (no-op in either case).
+//
+// Match priority (#715):
+//  1. Typed commitments (markTypedExecuted): FULL-name matches with
+//     record-binding compatibility. Cross-server / cross-variant /
+//     cross-record discharge is REFUSED — a call on one server must never
+//     discharge another server's commitment that shares its bare suffix.
+//  2. Legacy (free-text) suffix commitments, direct match — but only within
+//     legacy HEADROOM (aggregate count minus what typed commitments own), so
+//     a call that failed typed matching can never eat a typed commitment.
+//  3. Allowed substitute via the bundle's critical_tool_substitutes (e.g. a
+//     committed high-level execute tool discharged by its documented
+//     lower-level create fallback), again within legacy headroom; same-server
+//     typed substitutes are handled in pass 1.
+func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest string) {
+	// Pass 1: typed full-name-bound commitments.
+	if o.markTypedExecuted(toolName, dealID, callDigest) {
+		return
 	}
-	executedSuffix := ""
-	policyMu.RLock()
-	for _, suffix := range activeCriticalSuffixes {
-		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
-			executedSuffix = suffix
-			break
-		}
-	}
-	policyMu.RUnlock()
+	executedSuffix := criticalSuffixFor(toolName)
 	if executedSuffix == "" {
 		return
 	}
-	for suffix, remaining := range o.committedCriticalActions {
-		if remaining <= 0 {
-			continue
-		}
-		if substituteSatisfies(suffix, executedSuffix) {
-			o.committedCriticalActions[suffix] = remaining - 1
+	// Pass 2: direct legacy suffix match within headroom.
+	if o.legacyHeadroomFor(executedSuffix) > 0 {
+		o.committedCriticalActions[executedSuffix]--
+		log.Printf("Enforcement: committed %q discharged via %q (%d remaining)",
+			executedSuffix, toolName, o.committedCriticalActions[executedSuffix])
+		return
+	}
+	// Pass 3: discharge a legacy substitute if the executed tool is an
+	// allowed fallback for an outstanding free-text commitment.
+	for suffix := range o.committedCriticalActions {
+		if substituteSatisfies(suffix, executedSuffix) && o.legacyHeadroomFor(suffix) > 0 {
+			o.committedCriticalActions[suffix]--
 			log.Printf("Enforcement: committed %q discharged via substitute %q (%d remaining)",
 				suffix, toolName, o.committedCriticalActions[suffix])
 			return
 		}
+	}
+	if len(o.typedCommitments) > 0 && !o.allCommitmentsExhausted() {
+		log.Printf("Enforcement: REFUSED to discharge any commitment via %s (record %q) — no outstanding "+
+			"commitment matches this server/variant/record; cross-server discharge is not allowed (#715)",
+			toolName, dealID)
 	}
 }
 
@@ -239,6 +272,40 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 			toolName, toolName)
 	}
 
+	if isCriticalTool(toolName) && o.auditConfirmed {
+		// Batch binding (#715): a call carrying deal_ids may only target the
+		// records (and, when declared, the exact value-set digest) the audit
+		// approved. Legacy audits never register batch approvals, so under
+		// them every server-side batch fails closed until a typed re-audit
+		// declares its ids.
+		if blocked, msg := o.checkBatchBinding(toolName, rawInput); blocked {
+			return true, msg
+		}
+		// Commitment binding (#715): the audit token is NOT a bearer token —
+		// every critical call must map to an outstanding commitment. Without
+		// this, one successful confirm_audit let a drifted (or
+		// prompt-injected) agent immediately execute ANY critical tool — a
+		// different MCP server, a different client variant's seat, a
+		// different record — while the approved commitment stayed open, or
+		// worse, was silently discharged by the wrong-server call's shared
+		// bare suffix.
+		//
+		// The gate engages when a TYPED audit is active (typedAuditActive),
+		// OR while any commitment is outstanding. Keying on typedAuditActive
+		// — not merely on the ledger being non-empty — is the fail-closed
+		// half: a typed audit that resolved to zero commitments (refused up
+		// front in confirm_audit) must still find NO outstanding commitment
+		// for any call, never leaking the legacy one-shot token. Legacy
+		// audits that declared NO critical_actions at all leave
+		// typedAuditActive false and keep one-shot semantics: the gate only
+		// engages while their declared suffix commitments remain outstanding.
+		if o.typedAuditActive || !o.allCommitmentsExhausted() {
+			if allowed, msg := o.commitmentAuthorizes(toolName, rawInput); !allowed {
+				return true, msg
+			}
+		}
+	}
+
 	return false, ""
 }
 
@@ -292,9 +359,18 @@ func (o *orchestrationState) checkFinishEnforcement() (bool, []string) {
 
 // ── confirm_audit tool ──
 
+// criticalActionStruct is a typed entry in confirm_audit's preferred
+// structured `critical_actions` field. Each entry names a literal MCP tool
+// the audit unlocks, optionally bound to specific record id(s) and a
+// value-set digest. The JSON field names (deal_id / deal_ids / values_digest)
+// are the wire contract the client bundles' protocols emit — keep them
+// verbatim even though fleet treats the values as opaque record identifiers.
 type criticalActionStruct struct {
-	Tool       string `json:"tool" description:"Literal MCP tool name being unblocked, e.g. \"mcp_myserver_create_record\". Copy verbatim from the tool list — substring matching against the orchestration's known suffixes will fail on paraphrased names."`
-	Identifier string `json:"identifier,omitempty" description:"Optional human-readable tag distinguishing this action (deal name, recipient address, etc.). Used only for audit logging — not for matching."`
+	Tool         string   `json:"tool" description:"Literal MCP tool name being unblocked, e.g. \"mcp_myserver_create_record\". Copy verbatim from the tool list — a bare suffix or paraphrased name is refused. Execution is BOUND to this exact name (server and client-variant prefix included): a same-suffix call on a different server or variant is blocked and cannot discharge this commitment."`
+	Identifier   string   `json:"identifier,omitempty" description:"Optional human-readable tag distinguishing this action (record name, recipient address, etc.). Used only for audit logging — not for matching; bind a single-record mutation with deal_id instead."`
+	DealID       string   `json:"deal_id,omitempty" description:"For a SINGLE-record mutation on one existing record: the exact record id this audit authorizes — the value the call will pass as its record-id argument (deal_id or a sibling key). The orchestration BINDS the unblocked call to it — a same-tool call targeting any other record is blocked and discharges nothing. Omit for creation tools and non-record actions; use deal_ids for server-side batches."`
+	DealIDs      []string `json:"deal_ids,omitempty" description:"For a server-side BATCH mutation (a tool call that carries a deal_ids array): the EXACT record ids this audit authorizes, as strings. The orchestration registers one commitment per id and BINDS the batch — a call targeting any unlisted record is blocked. Omit for single-record actions."`
+	ValuesDigest string   `json:"values_digest,omitempty" description:"For a by-reference batch mutation: the sha256 of the value file (sha256sum output). When supplied, a batch call whose values_sha256 differs is blocked — proving the audit approved this exact value list."`
 }
 
 type confirmAuditInput struct {
@@ -308,22 +384,6 @@ type confirmAuditInput struct {
 	AttachmentsChecked            []string               `json:"attachments_checked" description:"Attachment paths checked."`
 	RemainingRisks                []string               `json:"remaining_risks" description:"Remaining known risks."`
 	UserVisibleSummary            string                 `json:"user_visible_summary,omitempty" description:"When success=false, a concise final summary."`
-}
-
-// criticalActionToolNames returns the literal tool names declared in the audit,
-// preferring the typed CriticalActions field.
-func criticalActionToolNames(input confirmAuditInput) []string {
-	if len(input.CriticalActions) > 0 {
-		out := make([]string, 0, len(input.CriticalActions))
-		for _, a := range input.CriticalActions {
-			if a.Tool == "" {
-				continue
-			}
-			out = append(out, a.Tool)
-		}
-		return out
-	}
-	return input.CriticalActionsBeingUnblocked
 }
 
 func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
@@ -351,11 +411,49 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 					return fantasy.NewTextResponse("Audit already confirmed. Finish now without further tool calls."), nil
 				}
 
+				// Register commitments BEFORE granting the token so a
+				// malformed/injected typed declaration can fail the audit
+				// closed (#715). A typed audit that resolves to ZERO
+				// commitments (e.g. only paraphrases, or bare suffixes dropped
+				// fail-closed) must NOT grant the one-shot token — doing so
+				// would authorize one arbitrary critical mutation on any
+				// server/record. registerCommittedActionsTyped adds nothing
+				// when it returns 0, so returning here leaves state ungranted.
+				// An UNTYPED audit keeps the legacy suffix-scoped fallback.
+				typedProvided := len(input.CriticalActions) > 0
+				if typedProvided {
+					if registered := orch.registerCommittedActionsTyped(input.CriticalActions); registered == 0 {
+						// Distinguish a MALFORMED critical declaration from an
+						// explicit no-op. An entry whose text names (or
+						// paraphrases) a known critical suffix meant to unlock
+						// a real tool but failed the full-name requirement —
+						// refuse it so the agent fixes the name rather than
+						// believing the action is unlocked. An entry with no
+						// critical-tool reference at all ("none" — the shape
+						// the schema forces on tasks with no critical work)
+						// declares that nothing needs unlocking: accept the
+						// audit for completion, and let the EMPTY typed gate
+						// below make it authorize nothing (fail closed).
+						for _, a := range input.CriticalActions {
+							if matchCriticalSuffix(a.Tool) == "" {
+								continue
+							}
+							return fantasy.NewTextErrorResponse(
+								"Audit Rejected: the typed critical_actions named no full server-qualified critical MCP " +
+									"tool. Each entry's `tool` MUST be the literal tool name copied verbatim (e.g. " +
+									"\"mcp_myserver_create_record\") — a bare suffix or paraphrase is refused so the " +
+									"audit cannot silently unlock an unbound mutation. Fix the tool names and re-run " +
+									"confirm_audit. See protocols/self-audit.md."), nil
+						}
+					}
+				} else {
+					orch.registerCommittedActions(input.CriticalActionsBeingUnblocked)
+				}
 				orch.auditTerminalFailure = false
 				orch.selfAuditConfirmedOnce = true
 				orch.auditConfirmed = true
+				orch.typedAuditActive = typedProvided
 				orch.lastSuccessfulAuditFP = fp
-				orch.registerCommittedActions(criticalActionToolNames(input))
 				evidence := summarizeConfirmAuditEvidence(args)
 				numPending := len(orch.pendingCriticalActions)
 				numCompleted := len(orch.completedCriticalActions)
@@ -521,8 +619,51 @@ type confirmAuditFingerprint struct {
 	RemainingRisks          []string `json:"remaining_risks"`
 }
 
+// criticalActionFingerprints renders each typed critical_actions entry as a
+// stable string carrying its record binding (deal_id / deal_ids /
+// values_digest), so an audit re-approving the SAME tool over DIFFERENT
+// records or values hashes differently and is not swallowed by the
+// "already confirmed" shortcut.
+func criticalActionFingerprints(args map[string]interface{}) []string {
+	raw, ok := args["critical_actions"]
+	if !ok {
+		return nil
+	}
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		obj, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		entry := strings.TrimSpace(fmt.Sprint(obj["tool"]))
+		if entry == "" || entry == nilStringValue {
+			continue
+		}
+		if id := strings.TrimSpace(fmt.Sprint(obj["deal_id"])); id != "" && id != nilStringValue {
+			entry += "#single:" + id
+		}
+		if ids, ok := obj["deal_ids"].([]interface{}); ok && len(ids) > 0 {
+			parts := make([]string, 0, len(ids))
+			for _, v := range ids {
+				parts = append(parts, strings.TrimSpace(fmt.Sprint(v)))
+			}
+			sort.Strings(parts)
+			entry += "#batch:" + strings.Join(parts, ",")
+		}
+		if d := strings.TrimSpace(fmt.Sprint(obj["values_digest"])); d != "" && d != nilStringValue {
+			entry += "#digest:" + strings.ToLower(d)
+		}
+		result = append(result, entry)
+	}
+	return result
+}
+
 func fingerprintConfirmAuditArgs(args map[string]interface{}) string {
-	criticalActions := criticalActionToolsArg(args, "critical_actions")
+	criticalActions := criticalActionFingerprints(args)
 	if len(criticalActions) == 0 {
 		criticalActions = stringSliceArg(args, criticalActionsBeingUnblockedField)
 	}

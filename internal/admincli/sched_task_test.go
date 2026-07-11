@@ -3,6 +3,8 @@ package admincli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,5 +235,91 @@ func TestExportImportRoundTrip_DB(t *testing.T) {
 	if got[0].ID != seed.ID || got[0].Prompt != seed.Prompt || got[0].Recurrence != seed.Recurrence ||
 		got[0].Priority != seed.Priority || *got[0].Model != *seed.Model {
 		t.Fatalf("DB round-trip did not preserve fields: %+v", got[0])
+	}
+}
+
+// fakeTaskListStore is an in-memory taskListStore for DB-free tests of the
+// `sched task list` output (#722).
+type fakeTaskListStore struct {
+	tasks     []*models.Task
+	total     int
+	gotFilter db.TaskFilter
+	gotLimit  int
+	gotOffset int
+}
+
+func (f *fakeTaskListStore) GetTasksFiltered(filter db.TaskFilter, limit, offset int) ([]*models.Task, int, error) {
+	f.gotFilter, f.gotLimit, f.gotOffset = filter, limit, offset
+	return f.tasks, f.total, nil
+}
+
+func TestListTasks_TableOutput(t *testing.T) {
+	when := time.Date(2026, 7, 11, 9, 30, 0, 0, time.UTC)
+	id1 := uuid.MustParse("aaaaaaaa-1111-2222-3333-444444444444")
+	id2 := uuid.MustParse("bbbbbbbb-1111-2222-3333-444444444444")
+	st := &fakeTaskListStore{
+		tasks: []*models.Task{
+			{ID: id1, Name: "nightly-report", Prompt: "long prompt", Status: models.TaskStatusScheduled,
+				Priority: 50, Recurrence: "0 9 * * *", Model: ptr("z-ai/glm-5.2")},
+			{ID: id2, Prompt: "summarize the\nweekly issues   backlog for the whole team please and thanks",
+				Status: models.TaskStatusPending, Priority: 30, ScheduledFor: &when},
+		},
+		total: 2,
+	}
+	var buf bytes.Buffer
+	if err := listTasks(st, &buf, "", 50, false); err != nil {
+		t.Fatalf("listTasks: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"ID", "NAME/PROMPT", "STATUS", "PRI", "SCHEDULE", "MODEL",
+		"aaaaaaaa", "nightly-report", "scheduled", "0 9 * * *", "z-ai/glm-5.2",
+		"bbbbbbbb", "summarize the weekly issues backlog", "pending", "2026-07-11 09:30Z",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q; got:\n%s", want, out)
+		}
+	}
+	// The prompt excerpt must be collapsed to one line and truncated.
+	if strings.Contains(out, "\nweekly") || strings.Contains(out, "please and thanks") {
+		t.Errorf("prompt should be collapsed + truncated; got:\n%s", out)
+	}
+	if st.gotLimit != 50 || st.gotOffset != 0 || st.gotFilter.Status != nil {
+		t.Errorf("unexpected query: filter=%+v limit=%d offset=%d", st.gotFilter, st.gotLimit, st.gotOffset)
+	}
+}
+
+func TestListTasks_StatusFilterAndJSON(t *testing.T) {
+	id := uuid.New()
+	st := &fakeTaskListStore{
+		tasks: []*models.Task{{ID: id, Prompt: "p", Status: models.TaskStatusRunning, Priority: 10}},
+		total: 1,
+	}
+	var buf bytes.Buffer
+	if err := listTasks(st, &buf, "running", 5, true); err != nil {
+		t.Fatalf("listTasks: %v", err)
+	}
+	if st.gotFilter.Status == nil || *st.gotFilter.Status != "running" || st.gotLimit != 5 {
+		t.Errorf("filter not threaded: %+v limit=%d", st.gotFilter, st.gotLimit)
+	}
+	var decoded []*models.Task
+	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+		t.Fatalf("json output should decode as a task array: %v\n%s", err, buf.String())
+	}
+	if len(decoded) != 1 || decoded[0].ID != id {
+		t.Errorf("json output mismatch: %+v", decoded)
+	}
+}
+
+func TestValidTaskStatusFilter(t *testing.T) {
+	for _, ok := range []string{"scheduled", "pending", "running", "success", "error", "cancelled", "dead_lettered", "paused_awaiting_input"} {
+		if !validTaskStatusFilter(ok) {
+			t.Errorf("%q should be a valid status filter", ok)
+		}
+	}
+	for _, bad := range []string{"complete", "SCHEDULED", "queued", "deadletter"} {
+		if validTaskStatusFilter(bad) {
+			t.Errorf("%q should be rejected", bad)
+		}
 	}
 }

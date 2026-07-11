@@ -348,6 +348,25 @@ func TestBuiltinRemoteCatalog(t *testing.T) {
 	if len(categories) < 8 {
 		t.Errorf("builtin catalog should span many categories, got %d: %v", len(categories), categories)
 	}
+
+	// X documents its API-capable XMCP as self-hosted; api.x.com/mcp is not a
+	// hosted MCP endpoint. Keep only X's documented hosted Docs MCP so the
+	// connection UI never sends users into OAuth discovery for a nonexistent
+	// service.
+	byName := make(map[string]RemoteMCPCatalogEntry, len(entries))
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+	if _, ok := byName["x"]; ok {
+		t.Error("builtin catalog must not advertise the nonexistent hosted X API MCP")
+	}
+	xDocs, ok := byName["x-docs"]
+	if !ok {
+		t.Fatal("builtin catalog should include X's hosted Docs MCP")
+	}
+	if xDocs.URL != "https://docs.x.com/mcp" || xDocs.Auth != "open" {
+		t.Errorf("x-docs = %+v, want the documented open hosted endpoint", xDocs)
+	}
 }
 
 // TestMergeRemoteCatalog exercises the inheritance rules against a fabricated

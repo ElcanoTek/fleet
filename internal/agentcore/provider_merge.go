@@ -21,6 +21,13 @@ import "strings"
 // callers keep the existing "OPENROUTER_API_KEY required" boot error for that.
 func MergeLLMProviders(base []ProviderConfig, admin []ProviderConfig, openRouterKey string) []ProviderConfig {
 	merged := make([]ProviderConfig, 0, len(base)+len(admin)+1)
+	var fallbackProviders []string
+	for i := range base {
+		if len(base[i].FallbackProviders) > 0 {
+			fallbackProviders = append([]string(nil), base[i].FallbackProviders...)
+			break
+		}
+	}
 	if len(base) > 0 {
 		merged = append(merged, base...)
 	} else if strings.TrimSpace(openRouterKey) != "" {
@@ -42,6 +49,9 @@ func MergeLLMProviders(base []ProviderConfig, admin []ProviderConfig, openRouter
 		if !replaced {
 			merged = append(merged, a)
 		}
+	}
+	for i := range merged {
+		merged[i].FallbackProviders = append([]string(nil), fallbackProviders...)
 	}
 	return merged
 }

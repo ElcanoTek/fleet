@@ -28,7 +28,7 @@ func TestCSRFMiddlewareOrigin(t *testing.T) {
 	do := func(method, path string, setup func(*http.Request)) *httptest.ResponseRecorder {
 		reached = false
 		req := httptest.NewRequest(method, path, nil)
-		req.Host = "moc.elcanotek.com"
+		req.Host = "orchestrator.example.com"
 		if setup != nil {
 			setup(req)
 		}
@@ -41,7 +41,7 @@ func TestCSRFMiddlewareOrigin(t *testing.T) {
 
 	t.Run("same-origin POST passes", func(t *testing.T) {
 		rr := do("POST", "/tasks", func(r *http.Request) {
-			r.Header.Set("Origin", "https://moc.elcanotek.com")
+			r.Header.Set("Origin", "https://orchestrator.example.com")
 		})
 		if rr.Code != http.StatusOK || !reached {
 			t.Fatalf("same-origin POST should pass: code=%d reached=%v", rr.Code, reached)
@@ -85,8 +85,8 @@ func TestCSRFMiddlewareOrigin(t *testing.T) {
 	t.Run("Origin matching X-Forwarded-Host passes (behind proxy)", func(t *testing.T) {
 		rr := do("POST", "/tasks", func(r *http.Request) {
 			r.Host = "127.0.0.1:8000" // what the server sees behind Caddy
-			r.Header.Set("X-Forwarded-Host", "moc.elcanotek.com")
-			r.Header.Set("Origin", "https://moc.elcanotek.com")
+			r.Header.Set("X-Forwarded-Host", "orchestrator.example.com")
+			r.Header.Set("Origin", "https://orchestrator.example.com")
 		})
 		if rr.Code != http.StatusOK || !reached {
 			t.Fatalf("Origin matching X-Forwarded-Host should pass: code=%d", rr.Code)
@@ -95,7 +95,7 @@ func TestCSRFMiddlewareOrigin(t *testing.T) {
 
 	t.Run("host comparison is case-insensitive", func(t *testing.T) {
 		rr := do("POST", "/tasks", func(r *http.Request) {
-			r.Header.Set("Origin", "https://MOC.Elcanotek.com")
+			r.Header.Set("Origin", "https://ORCHESTRATOR.Example.com")
 		})
 		if rr.Code != http.StatusOK || !reached {
 			t.Fatalf("case-insensitive host should pass: code=%d", rr.Code)

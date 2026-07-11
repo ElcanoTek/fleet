@@ -153,6 +153,26 @@ warn() { printf '%s! %s%s\n' "$c_yellow" "$*" "$c_reset" >&2; }
 info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_reset" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
+# upsert_env_file FILE KEY VALUE — update one key without sourcing the secrets
+# file or disturbing operator-managed entries.
+upsert_env_file() {
+  local file="$1" key="$2" value="$3" tmp
+  [[ -f "$file" ]] || install -D -m 0600 /dev/null "$file"
+  tmp="$(mktemp "${file}.XXXXXX")"
+  KEY="$key" VALUE="$value" awk '
+    BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
+    {
+      eq = index($0, "=")
+      if (!done && eq > 0 && substr($0, 1, eq - 1) == k) {
+        print k "=" v; done = 1; next
+      }
+      print
+    }
+    END { if (!done) print k "=" v }
+  ' "$file" > "$tmp"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$file"
+}
 # Print a unit diff indented under the warning, capped so a pathological
 # divergence can't flood the terminal (functional bodies are tiny in practice).
 show_unit_diff() {
@@ -164,7 +184,11 @@ show_unit_diff() {
 # so cosmetic header churn between releases is not mistaken for a real change.
 unit_functional_body() { grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null || true; }
 
-[[ -d "$SRC_DIR/.git" ]] || die "no fleet source checkout at $SRC_DIR (run scripts/bootstrap.sh first)"
+# -e, not -d: in a git WORKTREE .git is a pointer file, not a directory, and
+# the dry-run smoke test (TestUpdateDryRunSmoke) runs from agent worktrees per
+# the scripts/test-db-setup.sh workflow. Either shape is a valid checkout for
+# the `git -C` operations below.
+[[ -e "$SRC_DIR/.git" ]] || die "no fleet source checkout at $SRC_DIR (run scripts/bootstrap.sh first)"
 
 if [[ "$REEXEC" == "1" ]]; then
   step "fleet update (src=${SRC_DIR}, client=${CLIENT_DIR}, service=${SERVICE_NAME}, post-self-update re-exec, dry-run=${DRY_RUN})"
@@ -315,6 +339,29 @@ cf_prev="absent"
 
 # ── 3. build the fleet binary + the web app ───────────────────────────────
 step "3/5  Building the fleet binary + web app"
+# Reconcile the backend's OAuth callback origin from the public, non-secret web
+# build stamp bootstrap persisted. This repairs existing installations during a
+# normal update and keeps both tiers byte-identical without trusting request
+# headers. The encryption key is generated once when absent.
+web_env_file="/etc/fleet/fleet-web.env"
+backend_env_file="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
+web_origin=""; web_app_name=""
+if [[ -r "$web_env_file" ]]; then
+  web_origin="$(grep '^NEXT_PUBLIC_PUBLIC_ORIGIN=' "$web_env_file" | cut -d= -f2- || true)"
+  web_app_name="$(grep '^NEXT_PUBLIC_APP_NAME=' "$web_env_file" | cut -d= -f2- || true)"
+fi
+if [[ -n "$web_origin" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would reconcile FLEET_PUBLIC_BASE_URL + MCP encryption key in ${backend_env_file}"
+  else
+    upsert_env_file "$backend_env_file" FLEET_PUBLIC_BASE_URL "$web_origin"
+    if ! grep -q '^FLEET_MCP_OAUTH_ENCRYPTION_KEY=' "$backend_env_file"; then
+      upsert_env_file "$backend_env_file" FLEET_MCP_OAUTH_ENCRYPTION_KEY \
+        "$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+    fi
+    ok "remote-MCP callback origin reconciled → ${web_origin}"
+  fi
+fi
 if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] would run: (cd ${SRC_DIR} && make build)  → ${SRC_DIR}/fleet + fleet-admin"
   info "[dry-run] would install fleet + fleet-admin → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
@@ -360,12 +407,6 @@ else
     # by definition, so grepping just those keys from the 0600 web env file
     # leaks no secret — the file is still never sourced. The build id needs
     # no stamp: next.config.ts derives it from the checkout's git SHA.
-    web_env_file="/etc/fleet/fleet-web.env"
-    web_origin=""; web_app_name=""
-    if [[ -r "$web_env_file" ]]; then
-      web_origin="$(grep '^NEXT_PUBLIC_PUBLIC_ORIGIN=' "$web_env_file" | cut -d= -f2- || true)"
-      web_app_name="$(grep '^NEXT_PUBLIC_APP_NAME=' "$web_env_file" | cut -d= -f2- || true)"
-    fi
     ( cd "$SRC_DIR/web" \
         && export NEXT_PUBLIC_PUBLIC_ORIGIN="$web_origin" NEXT_PUBLIC_APP_NAME="$web_app_name" \
         && npm ci && npm run build ) || die "web build failed"

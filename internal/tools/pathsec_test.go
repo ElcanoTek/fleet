@@ -179,6 +179,16 @@ func TestValidatePath(t *testing.T) {
 	tempDir := os.TempDir()
 	absTemp, _ := filepath.Abs(tempDir)
 
+	// A relative traversal that lands EXACTLY at /etc/passwd regardless of how
+	// deep the checkout sits. The old hardcoded "../../../../etc/passwd" only
+	// escaped four levels, so from a checkout nested under os.TempDir() (e.g. a
+	// /tmp worktree) it resolved to a path still INSIDE the allowed temp dir and
+	// ValidatePath correctly accepted it — a test-portability bug, not a
+	// product one.
+	sep := string(filepath.Separator)
+	cwdDepth := len(strings.Split(strings.Trim(absCwd, sep), sep))
+	escapeToRoot := strings.Repeat(".."+sep, cwdDepth+2) + filepath.Join("etc", "passwd")
+
 	tests := []struct {
 		name          string
 		path          string
@@ -190,7 +200,7 @@ func TestValidatePath(t *testing.T) {
 		{"valid path in temp", filepath.Join(absTemp, "test.txt"), "", filepath.Join(absTemp, "test.txt")},
 		{"relative path in cwd", "test.txt", "", filepath.Join(absCwd, "test.txt")},
 		{"path outside allowed", "/etc/passwd", "path is outside allowed directories", ""},
-		{"path traversal attempt escaping cwd", "../../../../etc/passwd", "path is outside allowed directories", ""},
+		{"path traversal attempt escaping cwd", escapeToRoot, "path is outside allowed directories", ""},
 		{"path traversal staying inside cwd", filepath.Join(absCwd, "dir", "..", "test.txt"), "", filepath.Join(absCwd, "test.txt")},
 	}
 

@@ -93,6 +93,7 @@ type RemoteMCPServerInput struct {
 	ClientID              string
 	ClientSecret          string // plaintext; encrypted before insert ("" → NULL)
 	RegistrationToken     string // plaintext RFC 7592 token; encrypted ("" → NULL)
+	Status                string // empty defaults to login_required; open servers use connected
 }
 
 // RemoteMCPTokens is a decrypted token pair plus its expiry (unix seconds).
@@ -149,6 +150,10 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 	}
 	id := uuid.NewString()
 	now := time.Now().Unix()
+	status := in.Status
+	if status == "" {
+		status = RemoteMCPStatusLoginRequired
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO remote_mcp_servers (
 			id, user_email, name, url, transport, status, status_detail,
@@ -156,7 +161,7 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 			scopes, auth_methods, client_id, client_secret_enc, registration_access_token_enc,
 			created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)`,
-		id, email, in.Name, in.URL, in.Transport, RemoteMCPStatusLoginRequired,
+		id, email, in.Name, in.URL, in.Transport, status,
 		in.Issuer, in.AuthorizationEndpoint, in.TokenEndpoint, in.RegistrationEndpoint, in.RevocationEndpoint,
 		in.Scopes, in.AuthMethods, in.ClientID, secretEnc, regEnc, now)
 	if err != nil {

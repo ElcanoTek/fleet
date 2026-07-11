@@ -117,6 +117,9 @@ type Deps struct {
 	// Model + FallbackModel are the resolved fantasy language models.
 	Model         fantasy.LanguageModel
 	FallbackModel fantasy.LanguageModel
+	// FallbackModels is an ordered same-model cross-provider chain. An explicit
+	// FallbackModel takes precedence and suppresses this chain.
+	FallbackModels []fantasy.LanguageModel
 
 	// MCPClient holds the registered (and credential-bound) MCP servers — the
 	// merged P1 client. May be nil when a run registers no MCP servers (a fresh
@@ -244,25 +247,17 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		logSession = NewLogSession()
 	}
 
-	eng := &engine{
-		model:                  deps.Model,
-		fallbackModel:          deps.FallbackModel,
-		resilience:             loadResilienceConfigFor(cfg.EnvPrefix),
-		logSession:             logSession,
-		onRetry:                newRetryLogger(logSession),
-		temperature:            cfg.Temperature,
-		envPrefix:              cfg.EnvPrefix,
-		compactionSummarizer:   deps.CompactionSummarizer,
-		usageReporter:          deps.UsageReporter,
-		maxIterations:          cfg.MaxIterations,
-		healthRegistry:         deps.HealthRegistry,
-		requireCompactionOptIn: cfg.RequireCompactionOptIn,
-		thinkingConfig:         cfg.ThinkingConfig,
-	}
+	eng := newRunEngine(cfg, deps, logSession)
 
 	systemPrompt, messages, label, err := deps.Input.Prompt(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("input source: %w", err)
+	}
+	// Host-enforced ingress guardrail (#702): screen variable user/task content
+	// before the first provider call. The system prefix is deliberately excluded
+	// to preserve the prompt-cache contract and because it is operator-trusted.
+	if err := screenSeedMessages(ctx, messages); err != nil {
+		return Result{}, err
 	}
 
 	maxTokens := int64(DefaultMaxCompletionTokens)
@@ -494,6 +489,36 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	}
 
 	return Result{Label: label}, fmt.Errorf("max enforcement rounds (%d) exceeded without task completion", maxEnforcementRounds)
+}
+
+func runFallbackModels(deps Deps) []fantasy.LanguageModel {
+	if deps.FallbackModel != nil {
+		return []fantasy.LanguageModel{deps.FallbackModel}
+	}
+	return append([]fantasy.LanguageModel(nil), deps.FallbackModels...)
+}
+
+func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
+	fallbackModels := runFallbackModels(deps)
+	eng := &engine{
+		model:                  deps.Model,
+		fallbackModels:         fallbackModels,
+		resilience:             loadResilienceConfigFor(cfg.EnvPrefix),
+		logSession:             logSession,
+		onRetry:                newRetryLogger(logSession),
+		temperature:            cfg.Temperature,
+		envPrefix:              cfg.EnvPrefix,
+		compactionSummarizer:   deps.CompactionSummarizer,
+		usageReporter:          deps.UsageReporter,
+		maxIterations:          cfg.MaxIterations,
+		healthRegistry:         deps.HealthRegistry,
+		requireCompactionOptIn: cfg.RequireCompactionOptIn,
+		thinkingConfig:         cfg.ThinkingConfig,
+	}
+	if len(fallbackModels) > 0 {
+		eng.fallbackModel = fallbackModels[0]
+	}
+	return eng
 }
 
 // cancelledResult builds the partial Result returned when the run's ctx was

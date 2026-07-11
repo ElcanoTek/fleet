@@ -21,7 +21,7 @@ import (
 // wiring gap, so passing construction proves full coverage of the registry.
 func TestBuildWorkspaceSettingsCoversRegistry(t *testing.T) {
 	cfg := &config.Config{ErrorAnalysisEnabled: true, AutoTitle: true}
-	if _, _, err := buildWorkspaceSettings(cfg, nil); err != nil {
+	if _, _, _, err := buildWorkspaceSettings(cfg, nil); err != nil {
 		t.Fatalf("buildWorkspaceSettings should cover every registry key: %v", err)
 	}
 }
