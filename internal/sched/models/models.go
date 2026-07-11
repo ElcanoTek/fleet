@@ -914,6 +914,16 @@ type TaskCreate struct {
 	// (#274), populated server-side on the terminal transition. nil until the
 	// task reaches a terminal status (or if StartedAt was never recorded).
 	ActualDurationSeconds *int `json:"actual_duration_seconds,omitempty"`
+	// SerializationKey is an opaque mutual-exclusion token supplied by the
+	// intake caller (#709). Fleet guarantees at most one task per key is in an
+	// ACTIVE state (leased/running/analyzing) at a time: a pending task whose
+	// key matches an active task is not claimable and waits for a later claim
+	// pass — it is skipped, never failed. Fleet NEVER interprets the key's
+	// contents (coupling doctrine: the key's meaning is owned by the intake
+	// side, e.g. "client:<id>"). nil / empty / whitespace-only = unserialized,
+	// the historical behavior. Normalized (trimmed, empty → nil) in NewTask;
+	// immutable after creation.
+	SerializationKey *string `json:"serialization_key,omitempty"`
 }
 
 // SLA monitoring defaults (#274). Applied in NewTask when a task carries an
@@ -1101,6 +1111,9 @@ type Task struct {
 	// ActualDurationSeconds is completed_at - started_at in whole seconds
 	// (#274), populated server-side on the terminal transition. nil until then.
 	ActualDurationSeconds *int `json:"actual_duration_seconds,omitempty"`
+	// SerializationKey is the opaque mutual-exclusion token (#709). nil means
+	// the task is not serialized. See TaskCreate.SerializationKey.
+	SerializationKey *string `json:"serialization_key,omitempty"`
 }
 
 // NewTask creates a new Task with defaults.
@@ -1147,6 +1160,16 @@ func NewTask(tc TaskCreate) *Task {
 	// the anti-starvation sweep is the only thing that later lowers it.
 	priority := NormalizePriority(tc.Priority)
 
+	// Normalize the serialization key (#709): an empty or whitespace-only key
+	// must behave exactly like no key at all, so the claim gate never
+	// serializes on "" and the column stores NULL for unserialized tasks.
+	var serializationKey *string
+	if tc.SerializationKey != nil {
+		if trimmed := strings.TrimSpace(*tc.SerializationKey); trimmed != "" {
+			serializationKey = &trimmed
+		}
+	}
+
 	return &Task{
 		ID:                         uuid.New(),
 		Name:                       tc.Name,
@@ -1188,6 +1211,7 @@ func NewTask(tc TaskCreate) *Task {
 		ThinkingBudgetTokens:       tc.ThinkingBudgetTokens,
 		SLAWarnMultiplier:          warnMul,
 		SLAFailMultiplier:          failMul,
+		SerializationKey:           serializationKey,
 	}
 }
 
@@ -1320,6 +1344,10 @@ func TaskToCreate(t *Task) TaskCreate {
 		ThinkingBudgetTokens:    t.ThinkingBudgetTokens,
 		SLAWarnMultiplier:       t.SLAWarnMultiplier,
 		SLAFailMultiplier:       t.SLAFailMultiplier,
+		// SerializationKey (#709) is part of the recipe so a recurrence keeps
+		// successive occurrences mutually exclusive with same-key tasks, and a
+		// re-run/clone keeps the caller's serialization intent.
+		SerializationKey: t.SerializationKey,
 	}
 }
 
@@ -1373,6 +1401,10 @@ type TaskExportRecord struct {
 	ExpectedDurationMinutes *int    `json:"expected_duration_minutes,omitempty" yaml:"expected_duration_minutes,omitempty"`
 	SLAWarnMultiplier       float64 `json:"sla_warn_multiplier,omitempty"       yaml:"sla_warn_multiplier,omitempty"`
 	SLAFailMultiplier       float64 `json:"sla_fail_multiplier,omitempty"       yaml:"sla_fail_multiplier,omitempty"`
+	// SerializationKey is the opaque mutual-exclusion token (#709), part of the
+	// portable definition so an exported task keeps its serialization posture on
+	// reimport. It maps to TaskCreate.SerializationKey.
+	SerializationKey *string `json:"serialization_key,omitempty" yaml:"serialization_key,omitempty"`
 }
 
 // TaskExportVersion is the current envelope schema version. Bump only on an
@@ -1484,6 +1516,7 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		ExpectedDurationMinutes: rec.ExpectedDurationMinutes,
 		SLAWarnMultiplier:       rec.SLAWarnMultiplier,
 		SLAFailMultiplier:       rec.SLAFailMultiplier,
+		SerializationKey:        rec.SerializationKey,
 	}
 }
 
@@ -1532,6 +1565,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		TriggerType:                t.TriggerType,
 		AllowTaskCreation:          t.AllowTaskCreation,
 		AllowRecurringTaskCreation: t.AllowRecurringTaskCreation,
+		SerializationKey:           t.SerializationKey,
 	}
 	// SLA config (#274) only travels with an expected duration: the multipliers
 	// are meaningless without one, and a NOT NULL column default (1.5/2.0) would

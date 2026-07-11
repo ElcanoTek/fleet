@@ -66,6 +66,15 @@ prior versions are listed because none have shipped.
   with create_task permission — external intake apps no longer need the
   full-access admin key to attach files to a create. Admin key / bearer /
   cookie paths unchanged; under-scoped typed keys get 403.
+- **Task serialization** (#709): `TaskCreate` accepts an optional opaque
+  `serialization_key`; fleet guarantees at most one task per key is active
+  (leased/running) at a time, enforced by an advisory-locked re-check at the
+  scheduler's claim gate plus a best-effort queue-visibility filter. A blocked
+  task is skipped (stays queued), never failed. Recurring occurrences inherit
+  the key. See `docs/TASK-SERIALIZATION.md`.
+- The legacy migration bundle carries `serialization_key` on sched tasks
+  (#712), and `fleet import` gained `--overwrite` for the restore-from-bundle
+  use case.
 - Scheduled task inputs support logical `file_names` paired with stored upload
   names. Dedicated MCP runs materialize them in `${FLEET_WORKSPACE}/inputs`,
   and bundles may use `${FLEET_TASK_ID}` for connector-side task attribution.
@@ -151,6 +160,27 @@ prior versions are listed because none have shipped.
   `turn_metrics`' FK to conversations (so usage survives conversation
   deletion), which silently removed it from the test-isolation
   `TRUNCATE ... CASCADE`; it is now truncated explicitly.
+- **`fleet import` re-runs no longer revert live task state** (#713): sched
+  tasks and run logs whose UUID already exists in fleet are skipped by default
+  (previously upserted — a completed one-shot flipped back to pending and ran
+  again, and fleet-side run history was replaced). Import validation and
+  dry-run parity were tightened alongside (#714): warnings for MCP
+  opt-ins/personas missing from the loaded bundle and for inert
+  scheduled-without-schedule tasks, the same-database guard now covers
+  single-section bundles on the shared `DATABASE_URL` fallback, dry-run
+  memory/orphan-log checks match the real run, `--live-only` skips are no
+  longer mislabeled "already present", flags may precede the bundle path, and
+  a chat memory lookup failure no longer aborts the section mid-run.
+- The task batch/tx insert paths bound one more argument than their
+  placeholder count after the `file_names` column landed
+  (`taskInsertColumnsCount` stayed at 60 for 61 columns); the constant is now
+  pinned by a drift test.
+- Test-suite portability: the chat store's test truncation now clears
+  `turn_metrics` (its conversations FK was dropped by migration 038, so it
+  stopped cascading and the usage-analytics tests accumulated rows across
+  runs), `projects`, `user_connector_prefs`, and `user_skills`; the path
+  traversal test no longer assumes the checkout lives outside `os.TempDir()`;
+  and `update.sh` accepts a git-worktree checkout (`.git` pointer file).
 - **Remote MCP OAuth callbacks use the deployed Fleet domain**: web-enabled
   bootstrap runs now write the same computed public origin to the backend's
   `FLEET_PUBLIC_BASE_URL` and generate the token-encryption key once; normal

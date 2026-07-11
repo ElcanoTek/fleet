@@ -10,7 +10,7 @@ consume the bundle.
 
 - chat repo: `chat-admin export` (operator wrapper: `chat export`)
 - moc repo:  `moc -export-fleet <file>` (operator wrapper: `moc export`)
-- fleet:     `fleet import <bundle.json> [--dry-run]`
+- fleet:     `fleet import <bundle.json> [--dry-run] [--live-only] [--overwrite]`
 
 Both exporters emit the same envelope with different sections populated: chat
 fills `chat`, moc fills `sched`. `fleet import` routes each section to the
@@ -72,7 +72,23 @@ sudo sh -c 'set -a && . /etc/fleet/fleet.env && set +a && \
 
 Re-running an import is safe: every write is keyed on the source identity
 (chat user email, conversation UUID, memory UUID, sched user username, task
-UUID, log task UUID) and either skips or idempotently upserts — no duplicates.
+UUID, log task UUID) and any identity already present in fleet is **skipped**
+— no duplicates, and nothing fleet has since written is reverted. In
+particular, a sched task that already ran in fleet keeps its terminal
+status/result (it will not flip back to pending and run again), a leased task
+keeps its lease, and fleet-side run history is never replaced. If you
+genuinely want the bundle's snapshot to win — restoring a wiped database from
+a bundle — pass `--overwrite`, which replaces already-present sched tasks and
+run logs in place.
+
+Both DSN resolvers fall back to the generic `DATABASE_URL`. Because the chat
+and sched stores must live in **distinct** databases (fleet serve refuses to
+start otherwise), `fleet import` refuses to write a section whose DSN reached
+that shared fallback while the other store's DSN resolves to the same
+database — set `FLEET_CHAT_DATABASE_URL` and `FLEET_SCHED_DATABASE_URL` (or
+pass the `--*-database-url` flags) so each section lands in its own DB. This
+applies to single-section bundles too: the runbook's two imports would
+otherwise mix both schemas into one `DATABASE_URL` database.
 
 ## Bundle format: `fleet-migration-bundle` version 1
 
@@ -122,8 +138,11 @@ UUID, log task UUID) and either skips or idempotently upserts — no duplicates.
         "name": "", "description": "",                  // optional
         "model": "slug", "fallback_model": "slug",      // optional
         "max_iterations": 30,                           // optional
+        // priority uses FLEET's scale: 0–100, LOWER = more urgent, 0 = unset
+        // (normalized to Normal/50 on import). The legacy scheduler's scale
+        // was higher-is-more-urgent — the exporter owns that mapping.
         "priority": 5, "instruction_self_improve": false,
-        "status": "pending|scheduled|success|error|cancelled",
+        "status": "pending|scheduled|success|error|cancelled|dead_lettered",
         "created_at": "…", "started_at": "…", "completed_at": "…", // RFC3339
         "result": "…", "error_message": "…",            // optional, terminal tasks
         "agent_session_id": "…",                        // optional
@@ -131,7 +150,9 @@ UUID, log task UUID) and either skips or idempotently upserts — no duplicates.
         "recurrence": "0 9 * * 1-5",                    // 5-field cron, optional
         "timezone": "America/New_York",                 // IANA, empty → UTC
         "created_by": "<uuid>",                         // sched users id, optional
-        "files": ["…"] }                                // optional
+        "serialization_key": "client:acme",             // optional, opaque (#709)
+        "files": ["…"],                                 // optional
+        "file_names": ["…"] }                           // optional, pairs 1:1 with files
     ],
     "logs": [
       { "task_id": "<uuid>", "session_data": { } }      // raw JSON, verbatim
@@ -156,6 +177,12 @@ chat section:
   conversation row and all messages are written in one transaction, preserving
   ids and timestamps. After the section is applied, the FTS side-table is
   backfilled (`BackfillSearchContent`) so migrated history is searchable.
+  Import warns (never fails) when a conversation's
+  `optional_mcp_servers_enabled` entry or non-empty `persona` doesn't exist in
+  the loaded client-config bundle: an unknown server opt-in is silently inert
+  (legacy chat stored un-suffixed names; fleet bundles typically use `*_mcp`),
+  and an unknown persona hard-errors every turn on that conversation until it
+  is reassigned.
 - **memories** — insert-if-absent by UUID; `learned_at` is backfilled from
   `created_at`, `kind` defaults to `fact` (matching migration 026's backfill).
   A `conversation_id` referencing a conversation that didn't make it over is
@@ -167,17 +194,34 @@ sched section:
   (e.g. the bootstrap admin), the existing account wins and imported tasks'
   `created_by` is remapped to its UUID; otherwise the user is inserted with its
   original UUID, hash, role, and scopes preserved.
-- **tasks** — upserted by UUID (idempotent re-runs). Live tasks
-  (`pending`/`scheduled`) get scheduling normalized: a recurring task whose
-  `scheduled_for` is in the past (or absent) has its next run recomputed from
-  the cron spec in the task's timezone; a one-shot with a past `scheduled_for`
-  fires shortly after import (same behavior moc's own importer had). Terminal
-  tasks (`success`/`error`/`cancelled`) are preserved verbatim as history.
-  Unknown statuses or an unparseable cron on a live task fail that record
-  (counted + reported), never the whole import. `--live-only` skips terminal
-  tasks and logs entirely if you don't want history.
-- **logs** — run-history transcripts, upserted by task UUID with the JSON
-  payload passed through byte-for-byte.
+- **tasks** — inserted by UUID; a UUID already present in fleet is skipped so
+  a re-run never reverts state fleet has since written (`--overwrite` replaces
+  it instead — restore mode). Live tasks (`pending`/`scheduled`) get
+  scheduling normalized: a recurring task whose `scheduled_for` is in the past
+  (or absent) has its next run recomputed from the cron spec in the task's
+  timezone; a one-shot with a past `scheduled_for` fires shortly after import
+  (same behavior moc's own importer had). A `scheduled` task with no
+  recurrence and no `scheduled_for` is kept but warned about — it never fires
+  until rescheduled. Terminal tasks (`success`/`error`/`cancelled`/
+  `dead_lettered`) are preserved verbatim as history. Unknown statuses or an
+  unparseable cron on a live task fail that record (counted + reported),
+  never the whole import. `--live-only` skips terminal tasks and logs
+  entirely if you don't want history. The optional `serialization_key`
+  travels verbatim, so a live recurring task keeps its ≤1-active-per-key
+  mutual exclusion in fleet's scheduler (#709).
+
+  **Runtime defaults change on migrated live tasks:** fleet mints imported
+  tasks with `allow_network=false` (the execution sandbox is sealed with
+  `--network=none`) and no MCP server selection, whereas v1 runs had full
+  egress and prompt-driven MCP loading. A live recurring task that needs
+  network or connectors WILL fail or degrade on its first post-cutover run —
+  the import summary counts these tasks; re-scope them (task edit:
+  `allow_network`, `mcp_selection`) before their next fire.
+- **logs** — run-history transcripts, keyed by task UUID with the JSON
+  payload passed through byte-for-byte. A task UUID that already has a log in
+  fleet is skipped (`--overwrite` replaces it); a log whose task exists
+  neither in the bundle nor in fleet fails that record (it would violate the
+  logs→tasks foreign key), in dry-run and real runs alike.
 
 What intentionally does NOT migrate: chat approvals / turn metrics / turn
 events (ephemeral operational data), chat/moc session tokens (users just log
