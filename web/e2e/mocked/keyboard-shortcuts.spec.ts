@@ -22,7 +22,7 @@ test('"?" opens the shortcuts help overlay and Escape closes it', async ({ page 
   await expect(page.getByTestId("shortcuts-overlay")).toBeVisible();
   // It documents the global actions, grouped.
   await expect(page.getByTestId("shortcuts-list")).toContainText("New conversation");
-  await expect(page.getByTestId("shortcuts-list")).toContainText("Open search");
+  await expect(page.getByTestId("shortcuts-list")).toContainText("Focus search");
   expect(await page.getByTestId("shortcut-row").count()).toBeGreaterThan(0);
 
   await page.keyboard.press("Escape");

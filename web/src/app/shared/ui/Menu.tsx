@@ -243,14 +243,25 @@ export function Menu({
       if (anchorRef.current?.contains(target)) return;
       onClose();
     };
-    const onScrollOrResize = () => onClose();
+    const onResize = () => onClose();
+    // Close on scroll ONLY when the scrolling container contains the anchor —
+    // that's the scroll that moves the button the menu is positioned against.
+    // The capture-phase window listener sees every element's scroll, so an
+    // unrelated scroller (the transcript's snap-to-bottom when a background
+    // conversation load lands) must not yank a just-opened menu away.
+    const onScroll = (e: Event) => {
+      const t = e.target;
+      const anchor = anchorRef.current;
+      if (anchor && t instanceof Node && !t.contains(anchor)) return;
+      onClose();
+    };
     document.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("resize", onScrollOrResize);
-    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("resize", onScrollOrResize);
-      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [open, onClose, anchorRef]);
 
