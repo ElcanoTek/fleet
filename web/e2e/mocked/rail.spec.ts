@@ -109,14 +109,18 @@ test("the per-row kebab exposes pin / rename / labels / archive / delete", async
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
   const bar = page.locator("aside").first();
-  // Boot settle: the shell auto-loads the most-recent conversation; its
-  // re-render mid-click makes Playwright retry the click, double-toggling
-  // the menu shut (deterministic under CI load). Wait for the loaded
-  // conversation's title header before interacting.
+  // Boot settle, then open the kebab with a self-healing retry: under heavy
+  // CI load a late boot re-render can swallow the click's state toggle (the
+  // pointer events dispatch, but the row subtree remounts mid-click and the
+  // menu never opens). toPass() re-clicks until the menu is actually there —
+  // each attempt is click→verify, so it converges regardless of which side
+  // of the race an attempt lands on.
   await expect(page.locator("main").getByText("Acme Renewal")).toBeVisible();
-  await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
   const menu = page.getByRole("menu", { name: "Options for Loose Recent" });
-  await expect(menu).toBeVisible();
+  await expect(async () => {
+    await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
+    await expect(menu).toBeVisible({ timeout: 1500 });
+  }).toPass({ timeout: 15_000 });
   // Exact set + order (#169 audit fix #3): plain verbs, no conversation title.
   await expect(menu.getByRole("menuitem", { name: "Pin", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
@@ -162,9 +166,12 @@ test("the kebab labels flyout opens beside the menu, both visible (#169 audit #4
 
   const bar = page.locator("aside").first();
   await expect(page.locator("main").getByText("Acme Renewal")).toBeVisible();
-  await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
   const menu = page.getByRole("menu", { name: "Options for Loose Recent" });
-  await expect(menu).toBeVisible();
+  // Self-healing open (see the kebab test above for why).
+  await expect(async () => {
+    await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
+    await expect(menu).toBeVisible({ timeout: 1500 });
+  }).toPass({ timeout: 15_000 });
 
   // "Labels" opens a flyout BESIDE the menu — the parent stays visible.
   await menu.getByRole("menuitem", { name: "Labels", exact: true }).click();
@@ -238,7 +245,13 @@ test("Select… enters select mode with checkboxes + the bulk icon bar; Escape e
 
   const bar = page.locator("aside").first();
   await expect(page.locator("main").getByText("Acme Renewal")).toBeVisible();
-  await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
+  // Self-healing open (see the kebab test above for why).
+  await expect(async () => {
+    await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
+    await expect(
+      page.getByRole("menu", { name: "Options for Loose Recent" }),
+    ).toBeVisible({ timeout: 1500 });
+  }).toPass({ timeout: 15_000 });
   await page
     .getByRole("menu", { name: "Options for Loose Recent" })
     .getByRole("menuitem", { name: "Select…", exact: true })
