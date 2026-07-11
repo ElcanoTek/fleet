@@ -19,11 +19,50 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **v1 → fleet cutover runbook** (`docs/CUTOVER.md`, #718): the ordered
+  operational sequence for a box already live on the legacy chat + moc stack —
+  backups, stopping **and disabling** the legacy units (and the runner daemon
+  on worker boxes), exporting with the correct env sourcing, bootstrapping
+  with an explicit DB decision, importing, copying the non-DB state (moc task
+  files and the legacy chat attachment dir), port/Caddy coexistence, minting
+  fleet API keys for external intake callers, DNS, and post-cutover cleanup.
+  Linked from `DEPLOYMENT.md` and `LEGACY-IMPORT.md`; `LEGACY-IMPORT.md`'s
+  runbook now disables (not just stops) the legacy units, sources
+  `/etc/fleet/fleet.env` on systemd deploys, and covers the chat data dir;
+  `BACKUP_RESTORE.md` now names the on-disk state (attachments, task uploads,
+  workspaces) that `fleet backup`'s DB dumps do not capture.
+
+- `bootstrap.sh` DB flags (#718): `--chat-db-name`/`--chat-db-user`/
+  `--sched-db-name`/`--sched-db-user` (fresh names that dodge a legacy
+  collision) and `--adopt-existing-chat-db`/`--adopt-existing-sched-db` (skip
+  provisioning for that pair — no CREATE, no ALTER, no password rotation — and
+  take the operator-supplied DSN, validated with `SELECT 1`).
+
 - Scheduled task inputs support logical `file_names` paired with stored upload
   names. Dedicated MCP runs materialize them in `${FLEET_WORKSPACE}/inputs`,
   and bundles may use `${FLEET_TASK_ID}` for connector-side task attribution.
 
 ### Fixed
+
+- **`bootstrap.sh` can no longer hijack a legacy database or truncate a
+  foreign Caddyfile** (#718). Local-mode provisioning refuses when a
+  role/database matching the configured names already exists on the cluster
+  but is not recorded in fleet's env file by a previous run — previously the
+  unconditional `ALTER ROLE … PASSWORD` silently rotated the legacy `chat`
+  role's password (locking out the still-installed legacy server and any later
+  `chat-admin export`) and fleet's migrations then ran on the legacy database.
+  The password-converging `ALTER` now provably applies only to roles the
+  script itself provisioned. Likewise `--enable-web --domain` refuses to
+  overwrite an `/etc/caddy/Caddyfile` it did not write; `--force-caddy`
+  overrides with a timestamped backup (`Caddyfile.fleet-backup.<ts>`) and a
+  loud merge warning.
+
+- `deploy/fleet.service` gained `Wants=postgresql.service` alongside the
+  existing `After=` (#718): `After=` only orders units and never starts
+  Postgres, so on a `--postgres=local` box whose cluster unit was not enabled,
+  a reboot brought fleet up against a down database (`Restart=always` churn
+  until someone started Postgres by hand). `Wants=` (not `Requires=`) is
+  ignored when the unit is absent, so external-Postgres deploys are unchanged.
 
 - **Remote MCP OAuth callbacks use the deployed Fleet domain**: web-enabled
   bootstrap runs now write the same computed public origin to the backend's
