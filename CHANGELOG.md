@@ -15,6 +15,11 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Task scheduling controls fit cleanly on mobile**: the Create New Task modal
+  now contains its date and time pickers with consistent labels and padding,
+  and its Repeat tab defaults to a plain-language daily/weekday/weekly builder.
+  Advanced cron remains available without an overlapping clock icon.
+
 - **Chat labels remain editable with mobile keyboards**: viewport resizes caused
   by opening a software keyboard no longer dismiss the conversation menu while
   its label input has focus. Ordinary viewport resizes still close open menus.

@@ -46,6 +46,24 @@ const SCHEDULE_PRESETS = [
 ];
 
 type ScheduleMode = "now" | "once" | "repeat";
+type RepeatEditor = "simple" | "cron";
+type SimpleFrequency = "daily" | "weekdays" | "weekly";
+
+const WEEKDAYS = [
+  { value: "1", label: "Monday" },
+  { value: "2", label: "Tuesday" },
+  { value: "3", label: "Wednesday" },
+  { value: "4", label: "Thursday" },
+  { value: "5", label: "Friday" },
+  { value: "6", label: "Saturday" },
+  { value: "0", label: "Sunday" },
+];
+
+function simpleScheduleCron(frequency: SimpleFrequency, time: string, weekday: string): string {
+  const [hour = "9", minute = "0"] = (time || "09:00").split(":");
+  const day = frequency === "weekdays" ? "1-5" : frequency === "weekly" ? weekday : "*";
+  return `${Number(minute)} ${Number(hour)} * * ${day}`;
+}
 
 const SCHEDULE_MODES: Array<{ id: ScheduleMode; label: string }> = [
   { id: "now", label: "Run now" },
@@ -154,6 +172,10 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
   const [scheduledDate, setScheduledDate] = useState("");
   const [scheduledTime, setScheduledTime] = useState("09:00");
   const [recurrence, setRecurrence] = useState("");
+  const [repeatEditor, setRepeatEditor] = useState<RepeatEditor>("simple");
+  const [simpleFrequency, setSimpleFrequency] = useState<SimpleFrequency>("weekdays");
+  const [simpleTime, setSimpleTime] = useState("09:00");
+  const [simpleWeekday, setSimpleWeekday] = useState("1");
 
   const [contextOpen, setContextOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -269,6 +291,10 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
     setScheduledDate("");
     setScheduledTime("09:00");
     setRecurrence("");
+    setRepeatEditor("simple");
+    setSimpleFrequency("weekdays");
+    setSimpleTime("09:00");
+    setSimpleWeekday("1");
     setContextOpen(false);
     setToolsOpen(false);
     setAdvancedOpen(false);
@@ -349,6 +375,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
     setTagsInput((t.tags ?? []).join(", "));
     setPersona(t.persona ?? "");
     setRecurrence(t.recurrence ?? "");
+    setRepeatEditor(t.recurrence ? "cron" : "simple");
     setScheduleMode(t.recurrence ? "repeat" : "now");
     setScheduledDate("");
     setModel(t.model ?? DEFAULT_PRIMARY_MODEL);
@@ -654,6 +681,9 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
 
   const changeScheduleMode = (mode: ScheduleMode) => {
     setScheduleMode(mode);
+    if (mode === "repeat" && !recurrence.trim()) {
+      setRecurrence(simpleScheduleCron(simpleFrequency, simpleTime, simpleWeekday));
+    }
     setErrors((prev) => {
       const next = { ...prev };
       delete next.recurrence;
@@ -927,29 +957,32 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
                 {scheduleMode === "once" ? (
                   <div className="task-schedule-once">
                     <div className="schedule-datetime-group">
-                      <input
-                        id="scheduledForDate"
-                        type="date"
-                        aria-label="Schedule date"
-                        className={errors.scheduled_for ? "has-error" : ""}
-                        value={scheduledDate}
-                        onChange={(e) => {
-                          setScheduledDate(e.target.value);
-                          if (e.target.value) setFieldError("scheduled_for", "");
-                        }}
-                        onBlur={blurValidateScheduled}
-                      />
-                      <label htmlFor="scheduledForTime" className="schedule-time-label">
-                        at
+                      <label className="task-schedule-field" htmlFor="scheduledForDate">
+                        <span>Date</span>
+                        <input
+                          id="scheduledForDate"
+                          type="date"
+                          aria-label="Schedule date"
+                          className={errors.scheduled_for ? "has-error" : ""}
+                          value={scheduledDate}
+                          onChange={(e) => {
+                            setScheduledDate(e.target.value);
+                            if (e.target.value) setFieldError("scheduled_for", "");
+                          }}
+                          onBlur={blurValidateScheduled}
+                        />
                       </label>
-                      <input
-                        id="scheduledForTime"
-                        type="time"
-                        aria-label="Schedule time"
-                        value={scheduledTime}
-                        onChange={(e) => setScheduledTime(e.target.value)}
-                        onBlur={blurValidateScheduled}
-                      />
+                      <label className="task-schedule-field" htmlFor="scheduledForTime">
+                        <span>Time</span>
+                        <input
+                          id="scheduledForTime"
+                          type="time"
+                          aria-label="Schedule time"
+                          value={scheduledTime}
+                          onChange={(e) => setScheduledTime(e.target.value)}
+                          onBlur={blurValidateScheduled}
+                        />
+                      </label>
                     </div>
                     {errors.scheduled_for ? (
                       <div className="task-inline-error" data-testid="error-scheduled">
@@ -978,40 +1011,70 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
 
                 {scheduleMode === "repeat" ? (
                   <div className="task-schedule-repeat">
-                    <div className="task-cron-wrap">
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        aria-hidden="true"
-                      >
-                        <circle cx="12" cy="12" r="9" />
-                        <path d="M12 7v5l3 2" />
-                      </svg>
-                      <input
-                        id="recurrenceInput"
-                        type="text"
-                        name="recurrence"
-                        className={`task-cron-input${errors.recurrence ? " has-error" : ""}`}
-                        maxLength={100}
-                        placeholder="0 9 * * 1-5"
-                        aria-label="Cron expression"
-                        aria-describedby={errors.recurrence ? "recurrence-error" : "recurrence-echo"}
-                        value={recurrence}
-                        onChange={(e) => {
-                          setRecurrence(e.target.value);
-                          if (errors.recurrence) {
-                            const v = validateCronExpression(e.target.value);
-                            if (v.valid && e.target.value.trim()) setFieldError("recurrence", "");
-                          }
-                        }}
-                        onBlur={blurValidateCron}
-                      />
+                    <div className="repeat-editor-tabs" role="tablist" aria-label="Repeat input method">
+                      <button type="button" role="tab" aria-selected={repeatEditor === "simple"} className={repeatEditor === "simple" ? "is-active" : ""} onClick={() => setRepeatEditor("simple")}>
+                        Simple schedule
+                      </button>
+                      <button type="button" role="tab" aria-selected={repeatEditor === "cron"} className={repeatEditor === "cron" ? "is-active" : ""} onClick={() => setRepeatEditor("cron")}>
+                        Advanced cron
+                      </button>
                     </div>
+                    {repeatEditor === "simple" ? (
+                      <div className="simple-schedule-grid" role="tabpanel">
+                        <label className="task-schedule-field">
+                          <span>Repeat</span>
+                          <select
+                            aria-label="Repeat frequency"
+                            value={simpleFrequency}
+                            onChange={(e) => {
+                              const frequency = e.target.value as SimpleFrequency;
+                              setSimpleFrequency(frequency);
+                              setRecurrence(simpleScheduleCron(frequency, simpleTime, simpleWeekday));
+                              setFieldError("recurrence", "");
+                            }}
+                          >
+                            <option value="daily">Every day</option>
+                            <option value="weekdays">Every weekday</option>
+                            <option value="weekly">Every week</option>
+                          </select>
+                        </label>
+                        {simpleFrequency === "weekly" ? (
+                          <label className="task-schedule-field">
+                            <span>On</span>
+                            <select aria-label="Repeat weekday" value={simpleWeekday} onChange={(e) => { setSimpleWeekday(e.target.value); setRecurrence(simpleScheduleCron(simpleFrequency, simpleTime, e.target.value)); }}>
+                              {WEEKDAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
+                            </select>
+                          </label>
+                        ) : null}
+                        <label className="task-schedule-field">
+                          <span>At</span>
+                          <input type="time" aria-label="Repeat time" value={simpleTime} onChange={(e) => { setSimpleTime(e.target.value); setRecurrence(simpleScheduleCron(simpleFrequency, e.target.value, simpleWeekday)); setFieldError("recurrence", ""); }} />
+                        </label>
+                      </div>
+                    ) : (
+                      <label className="task-schedule-field task-cron-field" role="tabpanel" htmlFor="recurrenceInput">
+                        <span>Cron expression</span>
+                        <input
+                          id="recurrenceInput"
+                          type="text"
+                          name="recurrence"
+                          className={`task-cron-input${errors.recurrence ? " has-error" : ""}`}
+                          maxLength={100}
+                          placeholder="0 9 * * 1-5"
+                          aria-label="Cron expression"
+                          aria-describedby={errors.recurrence ? "recurrence-error" : "recurrence-echo"}
+                          value={recurrence}
+                          onChange={(e) => {
+                            setRecurrence(e.target.value);
+                            if (errors.recurrence) {
+                              const v = validateCronExpression(e.target.value);
+                              if (v.valid && e.target.value.trim()) setFieldError("recurrence", "");
+                            }
+                          }}
+                          onBlur={blurValidateCron}
+                        />
+                      </label>
+                    )}
                     {errors.recurrence ? (
                       <div
                         className="task-inline-error"
@@ -1034,24 +1097,26 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
                         {errors.recurrence}
                       </div>
                     ) : null}
-                    <div className="schedule-presets" role="group" aria-label="Schedule presets">
-                      {SCHEDULE_PRESETS.map((p) => (
-                        <button
-                          key={p.cron}
-                          type="button"
-                          className={`preset-btn${recurrence === p.cron ? " active" : ""}`}
-                          aria-pressed={recurrence === p.cron}
-                          data-cron={p.cron}
-                          onClick={() => {
-                            setRecurrence(recurrence === p.cron ? "" : p.cron);
-                            setFieldError("recurrence", "");
-                          }}
-                        >
-                          <span className="preset-label">{p.label}</span>
-                          <span className="preset-cron">{p.cron}</span>
-                        </button>
-                      ))}
-                    </div>
+                    {repeatEditor === "cron" ? (
+                      <div className="schedule-presets" role="group" aria-label="Schedule presets">
+                        {SCHEDULE_PRESETS.map((p) => (
+                          <button
+                            key={p.cron}
+                            type="button"
+                            className={`preset-btn${recurrence === p.cron ? " active" : ""}`}
+                            aria-pressed={recurrence === p.cron}
+                            data-cron={p.cron}
+                            onClick={() => {
+                              setRecurrence(recurrence === p.cron ? "" : p.cron);
+                              setFieldError("recurrence", "");
+                            }}
+                          >
+                            <span className="preset-label">{p.label}</span>
+                            <span className="preset-cron">{p.cron}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                     {!errors.recurrence && cronDescription ? (
                       <div className="task-cron-echo" id="recurrence-echo" aria-live="polite">
                         <svg
@@ -1068,14 +1133,14 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
                           <path d="M5 12l5 5L20 6" />
                         </svg>
                         <span>
-                          {cronDescription}
-                          {cronNext ? ` — next run ${formatNextRun(cronNext)}` : ""}
+                          <strong>{cronNext ? `Next run ${formatNextRun(cronNext)}` : "Schedule ready"}</strong>
+                          <span>{cronDescription} · local time</span>
                         </span>
                       </div>
                     ) : null}
                     {!errors.recurrence && !cronDescription ? (
                       <p className="field-hint" id="recurrence-echo">
-                        Type a cron expression or pick a preset.
+                        Choose a schedule above or enter an advanced cron expression.
                       </p>
                     ) : null}
                   </div>
