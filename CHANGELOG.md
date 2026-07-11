@@ -15,6 +15,11 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Deleting chats no longer resets user usage totals**: chat cost and token
+  metrics now survive conversation deletion and retention cleanup. Transcript
+  content is still deleted; only the existing non-content accounting row is
+  retained, with unavailable model/project attribution grouped as unknown.
+
 - **Task scheduling controls fit cleanly on mobile**: the Create New Task modal
   now contains its date and time pickers with consistent labels and padding,
   and its Repeat tab defaults to a plain-language daily/weekday/weekly builder.

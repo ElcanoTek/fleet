@@ -122,6 +122,43 @@ func TestUsageSummaryGroupByPrincipal(t *testing.T) {
 	})
 }
 
+// TestUsageSummarySurvivesConversationDeletion protects the accounting/content
+// boundary: deleting chat content must not erase the cost and tokens already
+// spent. Migration 038 intentionally removes turn_metrics' cascade for this.
+func TestUsageSummarySurvivesConversationDeletion(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	s.softDelete = false
+
+	conv, err := s.CreateConversation(ctx, "admin@example.com", "temporary", "", "model-x", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	metric := TurnMetric{
+		ConversationID:   conv.ID,
+		UserEmail:        "admin@example.com",
+		CompletedAt:      time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC).Unix(),
+		CostUSD:          1.25,
+		PromptTokens:     120,
+		CompletionTokens: 30,
+	}
+	if err := s.RecordTurn(ctx, metric); err != nil {
+		t.Fatalf("RecordTurn: %v", err)
+	}
+	if err := s.Delete(ctx, "admin@example.com", conv.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	rows, err := s.UsageSummary(ctx, chatUsageFrom, chatUsageTo, "user")
+	if err != nil {
+		t.Fatalf("UsageSummary: %v", err)
+	}
+	got := usageRowMap(rows)["admin@example.com"]
+	if !usageAlmostEqual(got.CostUSD, 1.25) || got.PromptTokens != 120 || got.CompletionTokens != 30 || got.Turns != 1 {
+		t.Fatalf("usage after conversation deletion = %+v, want preserved metric", got)
+	}
+}
+
 // TestUsageSummaryGroupByDimensions covers the what/when dimensions: model,
 // key (which chat doesn't have), day/week time bucketing, and the closed-set
 // group_by validation.
