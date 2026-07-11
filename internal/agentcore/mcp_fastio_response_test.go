@@ -194,9 +194,9 @@ func TestTrimFastIOResponse_DetailsStripsAISummaryAndVirusAndOrigin(t *testing.T
 		"- **long:**",
 		"upload_session_id",
 		"EXCO_GUM_PMP_DEMO_OLV", // body of summary.long
-		"unscanned",              // virus.status
-		"scan not run",           // virus.reason
-		"2947763503651577469",    // origin.creator
+		"unscanned",             // virus.status
+		"scan not run",          // virus.reason
+		"2947763503651577469",   // origin.creator
 	} {
 		if strings.Contains(got, must) {
 			t.Errorf("trimmed output still contains %q\n--- output ---\n%s", must, got)
