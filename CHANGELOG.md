@@ -15,6 +15,10 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Chat labels remain editable with mobile keyboards**: viewport resizes caused
+  by opening a software keyboard no longer dismiss the conversation menu while
+  its label input has focus. Ordinary viewport resizes still close open menus.
+
 - **Default core tier drops `:nitro` for cache locality**: the default
   `z-ai/glm-5.2:nitro` slug asked OpenRouter for throughput-priority
   routing, spraying requests across the ~26 providers serving GLM-5.2 —
