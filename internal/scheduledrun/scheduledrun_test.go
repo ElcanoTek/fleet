@@ -71,7 +71,7 @@ func callWhoami(t *testing.T, r *Runner, sel models.MCPSelection, serverName str
 	defer cancel()
 
 	task := &models.Task{MCPSelection: sel}
-	client, cleanup, err := r.bindTaskMCP(ctx, task)
+	client, cleanup, _, err := r.bindTaskMCP(ctx, task)
 	if err != nil {
 		cleanup()
 		t.Fatalf("bindTaskMCP(%+v): %v", sel, err)
@@ -150,7 +150,7 @@ func TestScheduledRunner_RefusesAccountWithoutCreds(t *testing.T) {
 	defer cancel()
 
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "acct", Account: "client_c"}}}
-	client, cleanup, err := r.bindTaskMCP(ctx, task)
+	client, cleanup, _, err := r.bindTaskMCP(ctx, task)
 	defer cleanup()
 	if err == nil {
 		t.Fatalf("expected refusal binding an account with no <VAR>_CLIENT_C creds, got client=%v", client)
@@ -169,7 +169,7 @@ func TestScheduledRunner_PerRunClientClosedReapsSubprocess(t *testing.T) {
 	defer cancel()
 
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "acct", Account: "client_a"}}}
-	client, cleanup, err := r.bindTaskMCP(ctx, task)
+	client, cleanup, _, err := r.bindTaskMCP(ctx, task)
 	if err != nil {
 		cleanup()
 		t.Fatalf("bindTaskMCP: %v", err)
@@ -190,7 +190,7 @@ func TestScheduledRunner_UnknownServerFailsFast(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	task := &models.Task{MCPSelection: models.MCPSelection{{Server: "nope"}}}
-	_, cleanup, err := r.bindTaskMCP(ctx, task)
+	_, cleanup, _, err := r.bindTaskMCP(ctx, task)
 	defer cleanup()
 	if err == nil {
 		t.Fatalf("expected unknown-server error for selection referencing an unconfigured server")

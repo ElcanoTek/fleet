@@ -56,6 +56,14 @@ prior versions are listed because none have shipped.
   names. Dedicated MCP runs materialize them in `${FLEET_WORKSPACE}/inputs`,
   and bundles may use `${FLEET_TASK_ID}` for connector-side task attribution.
 
+- **Start-of-run create reconciliation** (#717): a scheduled run whose resolved
+  MCP workspace holds unresolved pre-POST markers in the bundle servers'
+  cross-run create ledger (`creates.jsonl`) gets the v1-byte-compatible
+  reconciliation block appended to its task prompt, so a retried/resumed task
+  verifies whether creates landed before issuing any new create. Appended to
+  the task (user) portion only — the cached system prefix stays byte-stable.
+  See [ADR-0034](docs/adr/0034-audit-gate-commitment-binding.md).
+
 ### Fixed
 
 - **`bootstrap.sh` can no longer hijack a legacy database or truncate a
@@ -77,6 +85,28 @@ prior versions are listed because none have shipped.
   a reboot brought fleet up against a down database (`Restart=always` churn
   until someone started Postgres by hand). `Wants=` (not `Requires=`) is
   ignored when the unit is absent, so external-Postgres deploys are unchanged.
+- **Audit-gate commitments bind to the full tool name, record ids, and values
+  digest** (#715): a typed `confirm_audit` `critical_actions` entry now
+  registers a commitment keyed by the full server-qualified MCP tool name plus
+  its optional `deal_id`/`deal_ids` record binding and `values_digest`.
+  Suffix-count matching had let one approval authorize — and be silently
+  discharged by — a same-suffix tool on a different server, variant, or record;
+  batches carried no id/digest binding at all. Typed audits now fail closed:
+  zero resolved commitments authorizes nothing — refused outright when an
+  entry named a critical suffix without its full server-qualified name, and
+  accepted-but-empty (every critical call still blocked) for explicit no-op
+  declarations. The bare-suffix path survives only as the legacy fallback for
+  untyped audits and can never approve a server-side batch.
+  See [ADR-0034](docs/adr/0034-audit-gate-commitment-binding.md).
+
+- **Payload-level MCP failures no longer discharge critical-action
+  commitments** (#716): a critical tool result whose payload reports failure
+  (`{"success": false}` or a non-empty top-level `"error"`) over a clean
+  transport now counts as a FAILED execution — it discharges nothing, counts
+  against the retry budget, and keeps finish enforcement armed. This
+  generalizes the previous `send_email`-only payload check to every critical
+  tool; batch tools returning per-record `results[]` discharge per succeeded
+  record, idempotently, and never for record ids the audit did not approve.
 
 - **Remote MCP OAuth callbacks use the deployed Fleet domain**: web-enabled
   bootstrap runs now write the same computed public origin to the backend's
