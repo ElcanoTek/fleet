@@ -336,6 +336,7 @@ func replaceTaskDefinitionCLI(ctx context.Context, st definitionStore, rec model
 	existing.Recurrence = tc.Recurrence
 	existing.Timezone = tc.Timezone
 	existing.Files = tc.Files
+	existing.FileNames = tc.FileNames
 	existing.Tags = tc.Tags
 	if tc.MaxRetries != nil {
 		existing.MaxRetries = *tc.MaxRetries

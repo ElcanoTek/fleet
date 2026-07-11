@@ -101,6 +101,7 @@ type bundleTask struct {
 	Timezone               string     `json:"timezone,omitempty"`
 	CreatedBy              *uuid.UUID `json:"created_by,omitempty"`
 	Files                  []string   `json:"files,omitempty"`
+	FileNames              []string   `json:"file_names,omitempty"`
 }
 
 type bundleLog struct {
@@ -467,6 +468,7 @@ func buildImportedTask(st *storage.Storage, bt bundleTask, remap map[uuid.UUID]u
 		Recurrence:             bt.Recurrence,
 		Timezone:               tz,
 		Files:                  bt.Files,
+		FileNames:              bt.FileNames,
 	})
 
 	// Overlay the preserved source identity + runtime state.

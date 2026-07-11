@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -889,11 +890,21 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Clien
 	// (per-run ledger, managed-run detection). Minted lazily: a catalog that
 	// never uses the token creates nothing on disk.
 	bases := r.mcpBases()
+	for name, base := range bases {
+		base.BaseEnv = agentcore.ExpandTaskIDEnv(base.BaseEnv, task.ID.String())
+		bases[name] = base
+	}
 	workdir := ""
 	for _, c := range selection {
 		if base, ok := bases[c.Server]; ok && agentcore.EnvReferencesWorkspace(base.BaseEnv) {
 			workdir = agentcore.PerRunMCPWorkspaceDir("task-" + task.ID.String() + "-")
 			break
+		}
+	}
+	if workdir != "" {
+		if err := r.stageTaskInputs(task, filepath.Join(workdir, "inputs")); err != nil {
+			cleanup()
+			return nil, noop, fmt.Errorf("stage task inputs: %w", err)
 		}
 	}
 
@@ -911,6 +922,51 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Clien
 	}
 	log.Printf("scheduled task %s: bound %d MCP server(s) on per-run client: %v", task.ID, len(registered), registered)
 	return client, cleanup, nil
+}
+
+// stageTaskInputs copies collision-safe upload objects into the dedicated MCP
+// workspace under the logical names referenced by the prompt. Source paths are
+// server-owned names previously validated by the task-create handler; aliases
+// are single path components and pair positionally with Files.
+func (r *Runner) stageTaskInputs(task *models.Task, inputDir string) error {
+	if len(task.Files) == 0 {
+		return nil
+	}
+	if len(task.FileNames) > 0 && len(task.FileNames) != len(task.Files) {
+		return fmt.Errorf("file_names must pair 1:1 with files")
+	}
+	if err := os.MkdirAll(inputDir, 0o750); err != nil {
+		return err
+	}
+	for i, stored := range task.Files {
+		logical := stored
+		if len(task.FileNames) > 0 {
+			logical = task.FileNames[i]
+		}
+		if logical == "" || logical != filepath.Base(logical) || !filepath.IsLocal(logical) {
+			return fmt.Errorf("invalid logical file name %q", logical)
+		}
+		srcPath := filepath.Join(r.cfg.DataDir, "temp_uploads", stored)
+		src, err := os.Open(srcPath) //nolint:gosec // stored names were validated at task creation.
+		if err != nil {
+			return fmt.Errorf("open %s: %w", stored, err)
+		}
+		dstPath := filepath.Join(inputDir, logical)
+		dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // logical is a validated local basename.
+		if err != nil {
+			_ = src.Close()
+			return fmt.Errorf("create %s: %w", logical, err)
+		}
+		_, copyErr := io.Copy(dst, src)
+		closeErr := errors.Join(src.Close(), dst.Close())
+		if copyErr != nil {
+			return fmt.Errorf("copy %s: %w", logical, copyErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close %s: %w", logical, closeErr)
+		}
+	}
+	return nil
 }
 
 // mcpBases maps each configured server name to the spawn spec + base env the

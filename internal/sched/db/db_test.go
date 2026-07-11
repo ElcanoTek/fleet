@@ -919,3 +919,22 @@ func TestCarryContextRoundTrip(t *testing.T) {
 		t.Fatal("carry_context lost through the batch insert")
 	}
 }
+
+func TestTaskFileNamesRoundTrip(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	task := &models.Task{
+		ID: uuid.New(), Prompt: "use domains.csv", Status: models.TaskStatusPending,
+		CreatedAt: time.Now().UTC(), Files: []string{"domains_deadbeef.csv"}, FileNames: []string{"domains.csv"},
+	}
+	if err := db.AddTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.FileNames) != 1 || got.FileNames[0] != "domains.csv" {
+		t.Fatalf("file_names = %v", got.FileNames)
+	}
+}

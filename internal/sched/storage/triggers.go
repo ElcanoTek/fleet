@@ -94,6 +94,7 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 		AllowDelegation:        template.AllowDelegation,
 		ThinkingBudgetTokens:   template.ThinkingBudgetTokens,
 		Files:                  template.Files,
+		FileNames:              template.FileNames,
 		MaxRetries:             &template.MaxRetries,
 		Timezone:               template.Timezone,
 	}

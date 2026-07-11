@@ -809,6 +809,11 @@ type TaskCreate struct {
 	ScheduledFor           *time.Time      `json:"scheduled_for,omitempty"`
 	Recurrence             string          `json:"recurrence,omitempty"`
 	Files                  []string        `json:"files,omitempty"`
+	// FileNames optionally supplies the logical, prompt-visible name for each
+	// stored file in Files. When present it must pair 1:1 with Files. The runner
+	// materializes inputs under these names in the per-run connector workspace
+	// while retaining collision-safe upload storage names.
+	FileNames []string `json:"file_names,omitempty"`
 	// Tags are user-defined labels for organizing and filtering tasks (#212):
 	// lowercase alphanumeric + '-'/'.', ≤64 chars each, ≤20 per task. Normalized
 	// and validated at create/edit. nil/empty = untagged.
@@ -1026,6 +1031,7 @@ type Task struct {
 	NextRunAtLocal *string    `json:"next_run_at_local,omitempty"`
 	CreatedBy      *uuid.UUID `json:"created_by,omitempty"`
 	Files          []string   `json:"files,omitempty"`
+	FileNames      []string   `json:"file_names,omitempty"`
 	// Tags are user-defined organizing labels (#212). See TaskCreate.Tags.
 	Tags           []string   `json:"tags,omitempty"`
 	LeaseOwner     *string    `json:"lease_owner,omitempty"`
@@ -1169,6 +1175,7 @@ func NewTask(tc TaskCreate) *Task {
 		Recurrence:                 tc.Recurrence,
 		Timezone:                   tz,
 		Files:                      tc.Files,
+		FileNames:                  tc.FileNames,
 		Tags:                       tc.Tags,
 		MaxRetries:                 derefOr(tc.MaxRetries, 0),
 		RetryPolicy:                tc.RetryPolicy,
@@ -1293,6 +1300,7 @@ func TaskToCreate(t *Task) TaskCreate {
 		Recurrence:   t.Recurrence,
 		Timezone:     t.Timezone,
 		Files:        t.Files,
+		FileNames:    t.FileNames,
 		MaxRetries:   &maxRetries,
 		TriggerType:  t.TriggerType,
 		// Capability flags are part of the create-recipe so a re-run/clone keeps
@@ -1349,6 +1357,7 @@ type TaskExportRecord struct {
 	Recurrence                 string              `json:"recurrence,omitempty"                 yaml:"recurrence,omitempty"`
 	Timezone                   string              `json:"timezone,omitempty"                   yaml:"timezone,omitempty"`
 	Files                      []string            `json:"files,omitempty"                      yaml:"files,omitempty"`
+	FileNames                  []string            `json:"file_names,omitempty"                 yaml:"file_names,omitempty"`
 	Tags                       []string            `json:"tags,omitempty"                       yaml:"tags,omitempty"`
 	MaxRetries                 *int                `json:"max_retries,omitempty"                yaml:"max_retries,omitempty"`
 	RetryPolicy                *RetryPolicy        `json:"retry_policy,omitempty"               yaml:"retry_policy,omitempty"`
@@ -1461,6 +1470,7 @@ func ExportRecordToTaskCreate(rec TaskExportRecord) TaskCreate {
 		Recurrence:                 rec.Recurrence,
 		Timezone:                   rec.Timezone,
 		Files:                      rec.Files,
+		FileNames:                  rec.FileNames,
 		Tags:                       rec.Tags,
 		MaxRetries:                 maxRetries,
 		RetryPolicy:                rec.RetryPolicy,
@@ -1515,6 +1525,7 @@ func TaskToExportRecord(t *Task) TaskExportRecord {
 		Recurrence:                 t.Recurrence,
 		Timezone:                   t.Timezone,
 		Files:                      t.Files,
+		FileNames:                  t.FileNames,
 		Tags:                       t.Tags,
 		MaxRetries:                 maxRetries,
 		RetryPolicy:                t.RetryPolicy,
@@ -1582,6 +1593,7 @@ type TaskAssignment struct {
 	InstructionSelfImprove bool                `json:"instruction_self_improve,omitempty"`
 	OrchestratorURL        string              `json:"orchestrator_url"`
 	Files                  []string            `json:"files,omitempty"`
+	FileNames              []string            `json:"file_names,omitempty"`
 	FileChecksums          []string            `json:"file_checksums,omitempty"`
 }
 

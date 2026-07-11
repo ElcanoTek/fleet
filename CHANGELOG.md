@@ -13,6 +13,12 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- Scheduled task inputs support logical `file_names` paired with stored upload
+  names. Dedicated MCP runs materialize them in `${FLEET_WORKSPACE}/inputs`,
+  and bundles may use `${FLEET_TASK_ID}` for connector-side task attribution.
+
 ### Fixed
 
 - **Remote MCP OAuth callbacks use the deployed Fleet domain**: web-enabled

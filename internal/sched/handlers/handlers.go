@@ -781,7 +781,7 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 	return nil
 }
 
-func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
+func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:gocyclo // centralized fail-fast validation keeps every create path identical.
 	tc.Prompt = strings.TrimSpace(tc.Prompt)
 	if tc.Prompt == "" {
 		return fmt.Errorf("prompt is required")
@@ -858,6 +858,20 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 	}
 
 	if len(tc.Files) > 0 {
+		if len(tc.FileNames) > 0 && len(tc.FileNames) != len(tc.Files) {
+			return fmt.Errorf("file_names must pair 1:1 with files")
+		}
+		logicalNames := make(map[string]struct{}, len(tc.FileNames))
+		for _, name := range tc.FileNames {
+			trimmed := strings.TrimSpace(name)
+			if trimmed == "" || trimmed != filepath.Base(trimmed) || !filepath.IsLocal(trimmed) || strings.ContainsAny(trimmed, `/\\`) {
+				return fmt.Errorf("invalid logical file name")
+			}
+			if _, exists := logicalNames[trimmed]; exists {
+				return fmt.Errorf("duplicate logical file name: %s", trimmed)
+			}
+			logicalNames[trimmed] = struct{}{}
+		}
 		// Deduplicate filenames to avoid redundant I/O
 		uniqueFiles := make(map[string]struct{})
 		for _, file := range tc.Files {
@@ -927,6 +941,9 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error {
 		if err := <-errChan; err != nil {
 			return err
 		}
+	}
+	if len(tc.Files) == 0 && len(tc.FileNames) > 0 {
+		return fmt.Errorf("file_names requires files")
 	}
 
 	return nil
@@ -1610,6 +1627,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		Recurrence:             tc.Recurrence,
 		Timezone:               tc.Timezone,
 		Files:                  tc.Files,
+		FileNames:              tc.FileNames,
 		SetFiles:               tc.Files != nil,
 		Tags:                   tc.Tags,
 		SetTags:                tc.Tags != nil,
