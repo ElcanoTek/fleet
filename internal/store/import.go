@@ -206,3 +206,14 @@ func (s *Store) HasConversation(ctx context.Context, id string) (bool, error) {
 	}
 	return err == nil, err
 }
+
+// HasMemory reports whether a memory id exists (used by the importer's dry-run
+// so its created/skipped plan matches what a real run would do).
+func (s *Store) HasMemory(ctx context.Context, id string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM memories WHERE id = $1`, id).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}

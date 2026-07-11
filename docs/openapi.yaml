@@ -215,6 +215,7 @@ components:
         recurrence: { type: string, description: "5-field cron expression" }
         files: { type: array, items: { type: string } }
         file_names: { type: array, items: { type: string }, description: "Optional logical names paired 1:1 with files. Inputs are materialized under these prompt-visible basenames in the dedicated connector workspace." }
+        serialization_key: { type: string, description: "Opaque mutual-exclusion token (#709). Fleet guarantees at most one task per key is ACTIVE (leased/running) at a time: a queued task whose key matches an active task is skipped at claim time — it stays queued and is retried on a later pass, never failed. Fleet never interprets the key's contents; its meaning is owned by the intake caller (e.g. \"client:<id>\"). Recurring occurrences inherit the key, so successive runs stay mutually exclusive with same-key tasks. Absent/empty/whitespace-only = unserialized (the default, and the behavior of every pre-existing task). Immutable after creation." }
       required: [prompt]
     Task:
       type: object
@@ -235,6 +236,7 @@ components:
         error_message: { type: string }
         files: { type: array, items: { type: string } }
         file_names: { type: array, items: { type: string } }
+        serialization_key: { type: string, description: "Opaque mutual-exclusion token: at most one task per key is active at a time. Absent = unserialized. See TaskCreate.serialization_key." }
         created_by: { type: string, format: uuid }
         workspace_path: { type: string, description: "Host filesystem path of the per-run workspace directory the agent wrote into (#287). Present once the run begins; absent for tasks that never ran." }
         allow_task_creation: { type: boolean, description: "Whether this task's scheduled runs may enqueue follow-up tasks via create_task (default false)." }

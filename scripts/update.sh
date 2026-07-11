@@ -184,7 +184,11 @@ show_unit_diff() {
 # so cosmetic header churn between releases is not mistaken for a real change.
 unit_functional_body() { grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null || true; }
 
-[[ -d "$SRC_DIR/.git" ]] || die "no fleet source checkout at $SRC_DIR (run scripts/bootstrap.sh first)"
+# -e, not -d: in a git WORKTREE .git is a pointer file, not a directory, and
+# the dry-run smoke test (TestUpdateDryRunSmoke) runs from agent worktrees per
+# the scripts/test-db-setup.sh workflow. Either shape is a valid checkout for
+# the `git -C` operations below.
+[[ -e "$SRC_DIR/.git" ]] || die "no fleet source checkout at $SRC_DIR (run scripts/bootstrap.sh first)"
 
 if [[ "$REEXEC" == "1" ]]; then
   step "fleet update (src=${SRC_DIR}, client=${CLIENT_DIR}, service=${SERVICE_NAME}, post-self-update re-exec, dry-run=${DRY_RUN})"
