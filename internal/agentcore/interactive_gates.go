@@ -54,6 +54,55 @@ func (o *orchestrationState) checkBashSafety(toolName, toolCallID, rawInput stri
 	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s — staged for user approval (approval_id=%s). Do NOT retry. Summarize intent and wait for the user to click Approve.", reason, id)
 }
 
+// checkCriticalToolApproval stages bundle-declared critical tools (the
+// manifest's agent_policy.critical_tools suffixes, e.g. SSP deal-creation and
+// deal-mutation tools) for explicit user approval in INTERACTIVE mode. It is
+// the interactive counterpart of the scheduled confirm_audit gate
+// (checkCriticalTool): scheduled runs self-audit because no human is present;
+// interactive turns have a human, so the same suffixes route through the
+// approval-card UX that already gates send_email and risky bash. Without this
+// gate a suffix a bundle marked critical would execute un-gated in chat —
+// contradicting the manifest contract ("critical tools require audit gating
+// before execution") and leaving agent_policy.critical_tool_timeouts dead for
+// those tools.
+//
+// Exemptions keep single ownership of the tailored flows that run EARLIER in
+// the interactive gate chain: outbound-email tools stay with checkEmailSafety
+// (rate-limit + dedup + staging), and the natively-gated tool names keep their
+// dedicated gates. Inert when no approval sink is wired (mirrors
+// checkBashSafety: a transport with no approval UI cannot stage a card, and
+// hard-blocking would brick those tools without offering a decision path).
+func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, rawInput string) (bool, string) {
+	if !isCriticalTool(toolName) {
+		return false, ""
+	}
+	if isEmailSendTool(toolName) {
+		return false, "" // checkEmailSafety owns send_email end-to-end
+	}
+	switch toolName {
+	case toolNameBash, toolNamePreviewEmail, toolNameScheduleTask, toolNameSuggestAdvancedModel:
+		return false, "" // dedicated gates own these
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.approvalSink == nil {
+		return false, ""
+	}
+	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	if err != nil {
+		log.Printf("approval stage failed (%s): %v", toolName, err)
+		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s is a critical action. Could not stage it for user approval (%v). Ask the user what to do.", toolName, err)
+	}
+	switch id {
+	case PreApprovedSentinel:
+		// Session pre-approval (#300): run the tool without a card.
+		return false, ""
+	case PreDeniedSentinel:
+		return true, fmt.Sprintf("APPROVAL_DENIED: the user pre-denied %s for this conversation (session policy). Do NOT retry; tell the user it was blocked by their own pre-approval setting.", toolName)
+	}
+	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s is a critical action and has been staged for explicit user approval (approval_id=%s). Do NOT retry. Summarize what the action would do and wait for the user to click Approve.", toolName, id)
+}
+
 // checkPreviewEmailSafety always stages a preview_email call for display (the
 // approval card is the feature; the tool has no execution path).
 func (o *orchestrationState) checkPreviewEmailSafety(toolName, toolCallID, rawInput string) (bool, string) {
