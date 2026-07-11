@@ -41,10 +41,13 @@ func (f *fakeStore) CreateRemoteMCPServer(_ context.Context, in store.RemoteMCPS
 	id := "srv-" + string(rune('a'+f.nextID))
 	srv := &store.RemoteMCPServer{
 		ID: id, UserEmail: strings.ToLower(in.UserEmail), Name: in.Name, URL: in.URL,
-		Transport: in.Transport, Status: store.RemoteMCPStatusLoginRequired,
+		Transport: in.Transport, Status: in.Status,
 		Issuer: in.Issuer, AuthorizationEndpoint: in.AuthorizationEndpoint, TokenEndpoint: in.TokenEndpoint,
 		RegistrationEndpoint: in.RegistrationEndpoint, RevocationEndpoint: in.RevocationEndpoint,
 		Scopes: in.Scopes, AuthMethods: in.AuthMethods, ClientID: in.ClientID,
+	}
+	if srv.Status == "" {
+		srv.Status = store.RemoteMCPStatusLoginRequired
 	}
 	f.servers[id] = srv
 	cp := *srv
@@ -340,6 +343,35 @@ func TestServiceAddAuthorizeComplete(t *testing.T) {
 	}
 	if fs.tokens[server.ID].AccessToken != "at-init" {
 		t.Errorf("stored access token = %q", fs.tokens[server.ID].AccessToken)
+	}
+}
+
+func TestServiceAddOpenServerSkipsOAuthDiscovery(t *testing.T) {
+	fs := newFakeStore()
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Location", "https://example.com/docs")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	svc := newTestService(t, fs, srv)
+
+	server, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "aws-knowledge", URL: srv.URL, AuthMode: "open",
+	})
+	if err != nil {
+		t.Fatalf("AddServer(open): %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("open server add made %d discovery requests, want none", requests)
+	}
+	if server.Status != store.RemoteMCPStatusConnected || server.Issuer != "" {
+		t.Errorf("open server = %+v, want connected without an OAuth issuer", server)
+	}
+	bearer, err := svc.AcquireTokenByID(context.Background(), "u@x.com", server.ID)
+	if err != nil || bearer != "" {
+		t.Errorf("AcquireTokenByID(open) = %q, %v; want empty bearer, nil", bearer, err)
 	}
 }
 

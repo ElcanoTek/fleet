@@ -28,8 +28,9 @@ func (s *Server) remoteMCPReady(w http.ResponseWriter) bool {
 }
 
 type addRemoteMCPRequest struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	AuthMode string `json:"auth,omitempty"`
 	// Optional manual client credentials for an AS without dynamic registration.
 	ClientID     string `json:"client_id,omitempty"`
 	ClientSecret string `json:"client_secret,omitempty"`
@@ -83,6 +84,7 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 			Email:        user,
 			Name:         req.Name,
 			URL:          req.URL,
+			AuthMode:     req.AuthMode,
 			ClientID:     req.ClientID,
 			ClientSecret: req.ClientSecret,
 		})

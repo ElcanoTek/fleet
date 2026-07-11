@@ -141,9 +141,9 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			overlay.Skipped = append(overlay.Skipped, conn.Name)
 			continue
 		}
-		opts := mcp.HTTPServerOptions{
-			Headers:    map[string]string{"Authorization": "Bearer " + bearer},
-			HTTPClient: httpClient,
+		opts := mcp.HTTPServerOptions{HTTPClient: httpClient}
+		if bearer != "" {
+			opts.Headers = map[string]string{"Authorization": "Bearer " + bearer}
 		}
 		if aerr := client.AddHTTPServerWithOptions(ctx, conn.Name, conn.URL, opts); aerr != nil {
 			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %v", conn.Name, email, aerr)

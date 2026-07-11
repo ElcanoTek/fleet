@@ -137,6 +137,9 @@ type AddServerInput struct {
 	Email string
 	Name  string
 	URL   string
+	// AuthMode is "open" only for servers that require no Authorization header.
+	// Empty and "oauth" retain the discovery + authorization flow.
+	AuthMode string
 	// Optional manual client credentials for an authorization server without DCR.
 	ClientID     string
 	ClientSecret string
@@ -156,6 +159,16 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		return nil, errors.New("a name is required")
+	}
+	if in.AuthMode == "open" {
+		return s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+			UserEmail: in.Email, Name: name, URL: canonURL,
+			Transport: store.RemoteMCPTransportStreamableHTTP,
+			Status:    store.RemoteMCPStatusConnected,
+		})
+	}
+	if in.AuthMode != "" && in.AuthMode != "oauth" {
+		return nil, fmt.Errorf("unsupported remote MCP auth mode %q", in.AuthMode)
 	}
 
 	disco, err := mcpoauth.Discover(ctx, s.httpClient, canonURL)

@@ -15,6 +15,12 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Open-access hosted MCPs no longer get forced through OAuth discovery**:
+  one-click catalog adds now preserve the entry's authentication mode. Servers
+  such as AWS Knowledge are stored ready to use without a bearer header, so an
+  intentional GET redirect to provider documentation no longer fails setup.
+  Redirects remain disabled for remote MCP traffic and OAuth discovery.
+
 - **The bundled MCP directory no longer advertises a nonexistent hosted X API
   server**: `https://api.x.com/mcp` returns 404 and X documents its API-capable
   XMCP as self-hosted. The valid open-access X Docs MCP remains available at
