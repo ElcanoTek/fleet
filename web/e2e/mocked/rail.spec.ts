@@ -109,6 +109,11 @@ test("the per-row kebab exposes pin / rename / labels / archive / delete", async
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
   const bar = page.locator("aside").first();
+  // Boot settle: the shell auto-loads the most-recent conversation; its
+  // re-render mid-click makes Playwright retry the click, double-toggling
+  // the menu shut (deterministic under CI load). Wait for the loaded
+  // conversation's title header before interacting.
+  await expect(page.locator("main").getByText("Acme Renewal")).toBeVisible();
   await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
   const menu = page.getByRole("menu", { name: "Options for Loose Recent" });
   await expect(menu).toBeVisible();
@@ -156,6 +161,7 @@ test("the kebab labels flyout opens beside the menu, both visible (#169 audit #4
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
   const bar = page.locator("aside").first();
+  await expect(page.locator("main").getByText("Acme Renewal")).toBeVisible();
   await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
   const menu = page.getByRole("menu", { name: "Options for Loose Recent" });
   await expect(menu).toBeVisible();
@@ -187,12 +193,12 @@ test("the rail collapses to an icon strip, persists, and repositions the account
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
   const rail = page.locator("aside").first();
-  await expect(page.getByRole("searchbox", { name: "Search chats" })).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Search", exact: true })).toBeVisible();
 
   // Collapse: a 4.25rem (68px) icon strip; wide-only content hides.
   await page.getByRole("button", { name: "Collapse sidebar" }).click();
   await expect.poll(async () => (await rail.boundingBox())?.width ?? 0).toBeLessThan(80);
-  await expect(page.getByRole("searchbox", { name: "Search chats" })).toBeHidden();
+  await expect(page.getByRole("searchbox", { name: "Search", exact: true })).toBeHidden();
 
   // The account menu still opens — avatar-only anchor; the menu takes the
   // design's 15rem base width, growing to its content (the Theme segmented
@@ -221,7 +227,7 @@ test("the rail collapses to an icon strip, persists, and repositions the account
 
   // Expand restores the full rail.
   await page.getByRole("button", { name: "Expand sidebar" }).click();
-  await expect(page.getByRole("searchbox", { name: "Search chats" })).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Search", exact: true })).toBeVisible();
 });
 
 test("Select… enters select mode with checkboxes + the bulk icon bar; Escape exits", async ({ page }) => {
@@ -231,6 +237,7 @@ test("Select… enters select mode with checkboxes + the bulk icon bar; Escape e
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
   const bar = page.locator("aside").first();
+  await expect(page.locator("main").getByText("Acme Renewal")).toBeVisible();
   await bar.getByRole("button", { name: "Conversation options for Loose Recent" }).click();
   await page
     .getByRole("menu", { name: "Options for Loose Recent" })

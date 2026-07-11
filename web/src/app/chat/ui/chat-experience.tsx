@@ -1328,8 +1328,18 @@ export function ChatExperience() {
   // hoisted mount effect lists it as a dependency, so a fresh-every-render
   // identity would re-fire that effect each render. The early-return guard
   // makes any re-fire after the first successful load a no-op.
+  //
+  // catalogAttemptedRef makes it once-per-session regardless of OUTCOME: with
+  // only the length/loading guards, an EMPTY or failing catalog left length
+  // at 0 while isLoadingCatalog's flip cycled the callback identity — the
+  // mount effect re-fired in a tight loop and the client hammered
+  // /api/model-catalog indefinitely (thousands of requests in seconds,
+  // starving the UI; found via a Playwright trace in the mocked suite, but
+  // any deployment whose catalog errors would self-DDoS the same way).
+  const catalogAttemptedRef = useRef(false);
   const loadCatalogModels = useCallback(async () => {
-    if (catalogModels.length > 0 || isLoadingCatalog) return;
+    if (catalogAttemptedRef.current || catalogModels.length > 0 || isLoadingCatalog) return;
+    catalogAttemptedRef.current = true;
     setIsLoadingCatalog(true);
     try {
       const response = await fetch("/api/model-catalog", { cache: "no-store" });
