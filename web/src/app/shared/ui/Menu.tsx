@@ -56,6 +56,15 @@ function focusableItems(container: HTMLElement): HTMLElement[] {
   );
 }
 
+function isEditableControl(element: Element | null): boolean {
+  return (
+    element instanceof HTMLInputElement ||
+    element instanceof HTMLTextAreaElement ||
+    element instanceof HTMLSelectElement ||
+    (element instanceof HTMLElement && element.isContentEditable)
+  );
+}
+
 // handleMenuKeys provides the shared keyboard contract for a popover surface:
 // Escape (delegated to onEscape), arrow/Home/End navigation, and a Tab focus
 // trap, all scoped to the given container's focusable items.
@@ -243,7 +252,18 @@ export function Menu({
       if (anchorRef.current?.contains(target)) return;
       onClose();
     };
-    const onResize = () => onClose();
+    const onResize = () => {
+      // Mobile browsers resize the viewport when the software keyboard opens.
+      // Dismissing here makes inputs hosted by a menu (such as the chat label
+      // editor) disappear as soon as they receive focus. Keep the surface open
+      // while one of its editable controls owns focus; normal viewport resizes
+      // still dismiss it.
+      const active = document.activeElement;
+      const editingInMenu =
+        isEditableControl(active) &&
+        (menuRef.current?.contains(active) || flyoutRef.current?.contains(active));
+      if (!editingInMenu) onClose();
+    };
     // Close on scroll ONLY when the scrolling container contains the anchor —
     // that's the scroll that moves the button the menu is positioned against.
     // The capture-phase window listener sees every element's scroll, so an
