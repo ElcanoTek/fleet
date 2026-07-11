@@ -1486,8 +1486,8 @@ func splitLockdownModels(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return []string{
-			"z-ai/glm-5.2",             // recommended default
-			"anthropic/claude-fable-5", // strong tier
+			"z-ai/glm-5.2",       // recommended default
+			"openai/gpt-5.6-sol", // strong tier
 		}
 	}
 	parts := strings.Split(raw, ",")

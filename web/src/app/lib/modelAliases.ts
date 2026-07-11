@@ -34,8 +34,8 @@
 export const DEFAULT_MODEL = "z-ai/glm-5.2";
 export const DEFAULT_MODEL_LABEL = "Z.AI: GLM 5.2";
 
-export const ADVANCED_MODEL = "anthropic/claude-fable-5";
-export const ADVANCED_MODEL_LABEL = "Anthropic: Claude Fable 5";
+export const ADVANCED_MODEL = "openai/gpt-5.6-sol";
+export const ADVANCED_MODEL_LABEL = "OpenAI: GPT-5.6 Sol";
 
 // TIER_MODELS is the ordered list the picker pins to the top of the
 // dropdown when no search query is active. Rows render their display

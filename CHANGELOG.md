@@ -1,5 +1,9 @@
 # Changelog
 
+- Align the recommended model lineup across Fleet, Chat, and MOC: new work
+  defaults to `z-ai/glm-5.2`, while advanced escalation and task fallback use
+  OpenRouter's exact `openai/gpt-5.6-sol` slug.
+
 All notable changes to fleet are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

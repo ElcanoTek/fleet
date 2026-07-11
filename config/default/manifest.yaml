@@ -372,7 +372,7 @@ task_templates:
     icon: "🔍"
     task:
       prompt: "Review the latest git changes in {repo_path} for correctness bugs and security issues. Summarize findings by severity."
-      model: "anthropic/claude-opus-4.8"
+      model: "z-ai/glm-5.2"
       fallback_model: "anthropic/claude-sonnet-4-6"
       max_iterations: 25
       tags: ["review", "code"]
@@ -390,7 +390,7 @@ task_templates:
     icon: "🔐"
     task:
       prompt: "Audit {repo_path} for dependency vulnerabilities and risky configuration. List each finding with its severity and a recommended fix."
-      model: "anthropic/claude-opus-4.8"
+      model: "z-ai/glm-5.2"
       max_iterations: 30
       tags: ["security", "audit"]
   - name: "Test Generation"
@@ -398,7 +398,7 @@ task_templates:
     icon: "🧪"
     task:
       prompt: "Generate unit tests for {target} covering the untested paths. Match the project's existing test style and keep each test focused."
-      model: "anthropic/claude-opus-4.8"
+      model: "z-ai/glm-5.2"
       fallback_model: "anthropic/claude-sonnet-4-6"
       max_iterations: 25
       tags: ["tests"]
