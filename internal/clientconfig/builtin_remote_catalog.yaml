@@ -3944,19 +3944,6 @@ servers:
     tags: [forms, surveys, contacts, insights, lead-capture]
     provenance: official
     auth: oauth
-  - name: x
-    display_name: X (Twitter)
-    description: >-
-      200+ X API endpoints — post search and lookup, user lookups, bookmarks,
-      trends, news, and article drafting (read-focused; no Write API posting).
-    url: "https://api.x.com/mcp"
-    vendor: X Corp.
-    docs_url: "https://docs.x.com/tools/mcp"
-    category: marketing-social
-    tags: [twitter, social, posts, trends]
-    provenance: official
-    auth: oauth
-
   # ── knowledge-docs ──────────────────────────────────────────────
   - name: aws-knowledge
     display_name: AWS Knowledge
