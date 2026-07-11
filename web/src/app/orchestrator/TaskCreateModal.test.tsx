@@ -97,18 +97,51 @@ describe("TaskCreateModal — schedule modes", () => {
     expect(screen.getByText(/At 09:00, Monday through Friday/)).toBeInTheDocument();
   });
 
-  it("builds a weekly cron schedule without requiring cron knowledge", async () => {
+  it("builds a multi-day weekly cron schedule without requiring cron knowledge", async () => {
     createTask.mockResolvedValue({ id: "t-1" });
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
     fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
     fireEvent.change(screen.getByLabelText("Repeat frequency"), { target: { value: "weekly" } });
-    fireEvent.change(screen.getByLabelText("Repeat weekday"), { target: { value: "4" } });
+    const monday = screen.getByRole("button", { name: "Run on Monday" });
+    expect(monday).toHaveAttribute("aria-pressed", "true");
+    expect(monday).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Run on Wednesday" }));
+    expect(screen.getByRole("button", { name: "Run on Wednesday" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(monday).toBeEnabled();
     fireEvent.change(screen.getByLabelText("Repeat time"), { target: { value: "13:30" } });
     fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
-    expect(createTask.mock.calls[0][0]).toMatchObject({ recurrence: "30 13 * * 4" });
+    expect(createTask.mock.calls[0][0]).toMatchObject({ recurrence: "30 13 * * 1,3" });
+  });
+
+  it("hydrates the friendly controls from a supported multi-day cron expression", () => {
+    renderModal();
+    fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Advanced cron" }));
+    fireEvent.change(screen.getByLabelText("Cron expression"), {
+      target: { value: "0 9 * * 1,4" },
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Simple schedule" }));
+
+    expect(screen.getByLabelText("Repeat frequency")).toHaveValue("weekly");
+    expect(screen.getByLabelText("Repeat time")).toHaveValue("09:00");
+    expect(screen.getByRole("button", { name: "Run on Monday" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Run on Thursday" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Run on Wednesday" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   it("requires a date in Run once mode at submit and focuses it", async () => {

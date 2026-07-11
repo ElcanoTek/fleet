@@ -15,6 +15,11 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Weekly task schedules support multiple days**: the Create New Task modal's
+  simple repeat editor now accepts combinations such as Monday and Wednesday.
+  Supported cron weekday lists also hydrate the same selected-day UI when
+  switching back from Advanced cron.
+
 - **Deleting chats no longer resets user usage totals**: chat cost and token
   metrics now survive conversation deletion and retention cleanup. Transcript
   content is still deleted; only the existing non-content accounting row is

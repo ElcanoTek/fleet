@@ -2745,12 +2745,59 @@ tr.sla-row-fail {
   grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
   gap: 0.75rem;
 }
+.weekly-days {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.weekly-days legend {
+  margin-bottom: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+.weekly-days > div {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(2.5rem, 1fr));
+  gap: 0.35rem;
+}
+.weekly-days button {
+  min-width: 0;
+  padding: 0.45rem 0.3rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.weekly-days button:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background: var(--rail-hover);
+}
+.weekly-days button.is-selected {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.weekly-days button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.weekly-days button:disabled {
+  cursor: not-allowed;
+}
 .task-cron-field {
   width: 100%;
 }
 @media (max-width: 480px) {
   .schedule-datetime-group {
     grid-template-columns: 1fr;
+  }
+  .weekly-days > div {
+    grid-template-columns: repeat(4, minmax(2.75rem, 1fr));
   }
 }
 .schedule-presets {

@@ -31,7 +31,6 @@ import {
   ADVANCED_MODEL,
   ADVANCED_MODEL_LABEL,
   DEFAULT_MODEL,
-  DEFAULT_MODEL_LABEL,
   tierForModel,
 } from "@/app/lib/modelAliases";
 import type { ContextUsage } from "@/app/lib/contextUsage";
