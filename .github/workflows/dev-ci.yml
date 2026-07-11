@@ -1,12 +1,14 @@
 # Fast CI lane for the `dev` integration branch — quick signal, not the full
-# gate. Direct pushes to dev run ONLY: Go compile+vet+lint+test (no Postgres
-# service — the DB-backed tests self-skip; no -race lane), the migration DDL
-# lint, and the gitleaks secret scan (the no-secrets invariant is never
-# weakened, on any branch). Deliberately skipped here and deferred to the
-# dev→main PR, which runs the full ci.yml gate: the -race lane, govulncheck,
-# the Grype image scan, web lint/test/build, both Playwright suites, and
-# CodeQL. ci.yml does not fire on dev at all (its push/pull_request triggers
-# filter to main), so this file is dev's only automated signal.
+# gate. Direct pushes to dev run: Go compile+vet+lint+test WITH a Postgres
+# service (#723 — so the DB-gated suites, including the entire `fleet import`
+# suite, are exercised on dev instead of first firing at the dev→main
+# promotion; no -race lane), the migration DDL lint, and the gitleaks secret
+# scan (the no-secrets invariant is never weakened, on any branch).
+# Deliberately skipped here and deferred to the dev→main PR, which runs the
+# full ci.yml gate: the -race lane, govulncheck, the Grype image scan, web
+# lint/test/build, both Playwright suites, and CodeQL. ci.yml does not fire on
+# dev at all (its push/pull_request triggers filter to main), so this file is
+# dev's only automated signal.
 #
 # `Dev gate` is the single aggregate job (same pattern as ci.yml's `CI gate`):
 # when the dev branch is protected, require just that one check.
@@ -29,6 +31,35 @@ jobs:
   go:
     name: Go compile / vet / lint / test (fast)
     runs-on: ubuntu-latest
+
+    # Postgres service mirroring ci.yml's full-lane Go job (#723), so the
+    # DB-gated suites — internal/store, internal/httpapi, internal/sched/*,
+    # internal/runner, and the migration-critical `fleet import` tests — run on
+    # every dev push instead of self-skipping until the dev→main promotion.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: fleet
+          POSTGRES_PASSWORD: fleet
+          POSTGRES_DB: fleet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fleet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Same DSN split as ci.yml: the chat and sched migration systems both use
+      # a table named schema_migrations with INCOMPATIBLE schemas, so they MUST
+      # point at separate databases. Both suites auto-migrate from an empty DB.
+      FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
+      CHAT_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
+      DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable
+      FLEET_CLIENT_CONFIG_DIR: ${{ github.workspace }}/config/default
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -38,6 +69,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Create test databases
+        run: |
+          PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
+            -c 'CREATE DATABASE fleet_chat_test;' \
+            -c 'CREATE DATABASE fleet_sched_test;'
 
       - name: Compile
         run: go build ./...
@@ -71,7 +108,7 @@ jobs:
           fi
           echo "podman is not on PATH (container sandbox tests will skip)"
 
-      - name: Test (no -race; DB tests self-skip without a Postgres service)
+      - name: Test (no -race; DB suites run against the Postgres service, #723)
         # Same tag as make test / ci.yml — internal/sandbox's host tests only
         # compile with it.
         run: go test -p 1 -tags fleet_host_executor ./...

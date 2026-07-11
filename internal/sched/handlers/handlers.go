@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -164,6 +165,17 @@ type Handlers struct {
 	// counts only the task prompt + tool schemas (the system-prompt token line
 	// reads 0). See estimate.go.
 	systemPromptForPersona func(persona string) string
+
+	// personaCatalog returns the persona names currently loadable from the
+	// client bundle (basenames of personas/*.yaml, without the extension).
+	// Wired by cmd/fleet via SetPersonaCatalog so the create paths can reject
+	// an unknown persona with a clear 400 listing the valid names, instead of
+	// silently dispatching on the global default (#720). nil (tests / embedders
+	// without a bundle) → no existence check, only the path-safety validation.
+	// The dispatch-time fallback in the scheduled runner is unchanged: a bundle
+	// can drop a persona AFTER a task was created (personas hot-reload), and
+	// such a task still runs on the global default rather than failing.
+	personaCatalog func() []string
 
 	// datasetRunner starts/pauses dataset runs (#514) — injected via
 	// SetDatasetRunner so handlers stay decoupled from the agent graph.
@@ -764,11 +776,25 @@ func (h *Handlers) validateTaskRouting(tc *models.TaskCreate) error {
 	}
 	// Persona (#221): a per-task persona override must be a single bundle filename
 	// component (no path separators / traversal) so it resolves to
-	// personas/<name>.yaml. An unknown-but-safe name falls back to the global
-	// persona at dispatch.
+	// personas/<name>.yaml.
 	if persona := strings.TrimSpace(tc.Persona); persona != "" {
 		if strings.ContainsAny(persona, `/\`) || strings.Contains(persona, "..") || filepath.Base(persona) != persona {
 			return fmt.Errorf("persona must be a bundle persona name without a path (got %q)", persona)
+		}
+		// Existence check (#720): when the persona catalog is wired, an unknown
+		// name is a fail-fast 400 listing the valid names — a persona typo used
+		// to silently dispatch on the global default, producing wrong-persona
+		// runs with no error. The dispatch-time fallback stays for tasks whose
+		// persona disappears from the bundle AFTER creation (bundles hot-reload).
+		if h.personaCatalog != nil {
+			names := h.personaCatalog()
+			if !slices.Contains(names, persona) {
+				if len(names) == 0 {
+					return fmt.Errorf("persona %q is not in the loaded client bundle (the bundle declares no personas)", persona)
+				}
+				return fmt.Errorf("persona %q is not in the loaded client bundle (valid personas: %s)",
+					persona, strings.Join(names, ", "))
+			}
 		}
 	}
 	// RunIf pre-run gate (#269): nil = the legacy unconditional promotion path.

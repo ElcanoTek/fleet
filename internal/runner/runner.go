@@ -62,7 +62,20 @@ const (
 	// defaultLeaseRenewInterval renews active leases well inside the 5-minute
 	// lease window (storage.LeaseDuration) since heartbeats are gone.
 	defaultLeaseRenewInterval = 90 * time.Second
+
+	// DefaultTaskWallClockTimeout bounds one scheduled run's TOTAL wall-clock
+	// time when FLEET_TASK_WALL_TIMEOUT is unset (#724). The iteration cap and
+	// cost/token ceilings bound loop *progress*, but a single hung tool call
+	// inside an iteration used to hold its pool slot until an operator
+	// intervened; this is the hard ceiling that frees it. 4h matches the v1
+	// runner's wall-clock kill.
+	DefaultTaskWallClockTimeout = 4 * time.Hour
 )
+
+// errTaskWallTimeout is the cancellation cause installed by the per-task
+// wall-clock deadline (#724), so executeTask can tell a wall-timeout expiry
+// apart from a shutdown/ForceCancel cancellation of the same context.
+var errTaskWallTimeout = errors.New("task wall-clock timeout exceeded")
 
 // TaskRunner executes one claimed task in-process. The production impl
 // constructs an agent.Agent (Mode=Scheduled) from config + the task's
@@ -124,6 +137,13 @@ type Config struct {
 	// disables reply-back — the fire path is a cheap no-op. Fired from a detached,
 	// time-bounded goroutine; its errors NEVER affect task status (mirrors Notifier).
 	EmailReplier EmailReplier
+	// WallClockTimeout bounds one scheduled run's total wall-clock time (#724):
+	// on expiry the run's context is cancelled and the task fails with a clear,
+	// DETERMINISTIC timeout error (never retried, never dead-letter-replayed as
+	// transient). 0 → read FLEET_TASK_WALL_TIMEOUT (a Go duration; default 4h,
+	// "0" disables). Negative → disabled (no per-run deadline), for tests and
+	// embedders that manage their own bounds.
+	WallClockTimeout time.Duration
 }
 
 // ErrorAnalyzer produces a structured post-failure diagnosis for a terminally
@@ -217,6 +237,10 @@ type Pool struct {
 	// email-spawned run succeeds (#511 reply-back). nil = reply-back off (the fire
 	// path is a no-op). Fired off-thread, time-bounded; never affects task status.
 	emailReplier EmailReplier
+
+	// wallTimeout is the resolved per-run wall-clock ceiling (#724). 0 = disabled
+	// (no per-run deadline). See Config.WallClockTimeout.
+	wallTimeout time.Duration
 }
 
 // defaultDrainGrace bounds the shutdown wait for in-flight tasks when Config
@@ -249,6 +273,15 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 	if grace == 0 {
 		grace = defaultDrainGrace
 	}
+	// Wall-clock ceiling (#724): 0 → the FLEET_TASK_WALL_TIMEOUT env knob
+	// (default 4h, "0" disables); negative → disabled.
+	wall := cfg.WallClockTimeout
+	if wall == 0 {
+		wall = wallTimeoutFromEnv()
+	}
+	if wall < 0 {
+		wall = 0
+	}
 	return &Pool{
 		store:              store,
 		runner:             runner,
@@ -265,7 +298,29 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		publicURLBase:      strings.TrimRight(cfg.PublicURLBase, "/"),
 		errorAnalyzer:      cfg.ErrorAnalyzer,
 		emailReplier:       cfg.EmailReplier,
+		wallTimeout:        wall,
 	}
+}
+
+// wallTimeoutFromEnv reads FLEET_TASK_WALL_TIMEOUT (#724) as a Go duration
+// (e.g. "4h", "90m"). Unset → DefaultTaskWallClockTimeout; "0" → disabled;
+// invalid or negative → warn and keep the default, so a typo can never mean
+// "unbounded".
+func wallTimeoutFromEnv() time.Duration {
+	v := strings.TrimSpace(os.Getenv("FLEET_TASK_WALL_TIMEOUT"))
+	if v == "" {
+		return DefaultTaskWallClockTimeout
+	}
+	if v == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		//nolint:gosec // G706 false positive: v is rendered with %q (escapes CR/LF) and is an operator-set env var, not request input.
+		log.Printf("⚠ Ignoring invalid FLEET_TASK_WALL_TIMEOUT=%q; using default %s", v, DefaultTaskWallClockTimeout)
+		return DefaultTaskWallClockTimeout
+	}
+	return d
 }
 
 // StreamRegistry returns the pool's live per-task SSE stream registry (#200). The
@@ -311,6 +366,12 @@ func (p *Pool) Run(ctx context.Context) {
 	p.mu.Lock()
 	p.taskCancel = taskCancel
 	p.mu.Unlock()
+
+	if p.wallTimeout > 0 {
+		log.Printf("runner: per-task wall-clock timeout ON (%s; FLEET_TASK_WALL_TIMEOUT, 0 disables)", p.wallTimeout)
+	} else {
+		log.Printf("runner: per-task wall-clock timeout OFF (FLEET_TASK_WALL_TIMEOUT=0)")
+	}
 
 	renewTicker := time.NewTicker(p.leaseRenewInterval)
 	defer renewTicker.Stop()
@@ -526,6 +587,15 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uuid.UUID) {
 	start := time.Now()
 
+	// Per-task wall-clock ceiling (#724): bound this run's TOTAL elapsed time.
+	// The iteration cap and cost/token ceilings bound loop progress, but a
+	// single hung tool call inside an iteration observes neither — this
+	// deadline cancels the run's context so the slot is always reclaimed. The
+	// distinct cause lets the terminal switch below tell "wall timeout" apart
+	// from a shutdown cancellation of the same context.
+	taskCtx, cancelWall := p.withWallDeadline(taskCtx)
+	defer cancelWall()
+
 	// Sentry breadcrumb (#193): the task-start trail so a captured panic's
 	// event in the Sentry UI shows what the runner did immediately before the
 	// crash. No-op when FLEET_SENTRY_DSN is unset (the SDK checks internally).
@@ -695,7 +765,15 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// interrupted; re-running a completed task is safer than trusting a
 	// possibly-truncated "success".)
 	interrupted := taskCtx.Err() != nil
+	// Wall-clock ceiling expiry (#724) is a DETERMINISTIC terminal failure: it
+	// must be classified BEFORE the interrupted/retry cases (its cancellation
+	// also sets taskCtx.Err()) and it never enters the transient-retry or
+	// retry-exhausted branches — a run that hit the ceiling once would hit it
+	// again, so retrying would only burn another full timeout window.
+	wallExpired := errors.Is(context.Cause(taskCtx), errTaskWallTimeout)
 	switch {
+	case wallExpired:
+		p.failWallTimeout(task, session, start)
 	case interrupted:
 		msg := "Task interrupted: server shutdown (grace period expired)"
 		p.clearPendingQA(task)
@@ -808,6 +886,41 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 			// the result. Off-thread, no-op unless the run came from an email trigger.
 			p.maybeReplyToEmailEvent(task, session)
 		}
+	}
+}
+
+// withWallDeadline derives the per-run wall-clock deadline context (#724) from
+// the per-task context. Disabled (wallTimeout == 0) → the context is returned
+// unchanged with a no-op cancel. The errTaskWallTimeout cause is what lets
+// executeTask distinguish a wall-timeout expiry from a shutdown/ForceCancel
+// cancellation of the same context.
+func (p *Pool) withWallDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if p.wallTimeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeoutCause(ctx, p.wallTimeout, errTaskWallTimeout)
+}
+
+// failWallTimeout records the deterministic terminal failure for a run that
+// exceeded the wall-clock ceiling (#724): a clear timeout error on the task
+// row, the partial transcript persisted, and the failure notification fired —
+// but NEVER the transient-retry/dead-letter machinery (a run that hit the
+// ceiling once would hit it again; retrying would only burn another window).
+func (p *Pool) failWallTimeout(task *models.Task, session *models.LogSession, start time.Time) {
+	msg := fmt.Sprintf("Task failed: exceeded the wall-clock timeout of %s (FLEET_TASK_WALL_TIMEOUT); the run was cancelled", p.wallTimeout)
+	p.clearPendingQA(task)
+	landed := true
+	if _, err := p.reportStatus(task.ID, models.TaskStatusError, msg); err != nil {
+		landed = false
+		log.Printf("runner: failed to report wall-clock timeout for task %s: %v", task.ID, err)
+	}
+	p.submitLog(task, session, msg)
+	log.Printf("runner: task %s exceeded the wall-clock timeout (%s); failed after %v",
+		task.ID, p.wallTimeout, time.Since(start).Round(time.Second))
+	// Terminal failure: fire the outbound notification off-thread (#208) — only
+	// when the terminal write landed (#580), matching every other branch.
+	if landed {
+		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 	}
 }
 

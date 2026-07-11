@@ -161,6 +161,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_APPROVAL_TIMEOUT_SECONDS":       true,
 	"FLEET_AUTO_APPROVE_IN_TEST":           true,
 	"FLEET_MAX_CONCURRENT_AGENTS":          true,
+	"FLEET_TASK_WALL_TIMEOUT":              true,
 	"FLEET_RUN_LOG_RETENTION_DAYS":         true,
 	"FLEET_KEEP_RUNS_PER_TASK":             true,
 	"FLEET_TASK_MEMORY_MAX_KEYS":           true,

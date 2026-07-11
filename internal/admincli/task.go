@@ -34,6 +34,13 @@ func cmdTask(argv []string) int {
 		return taskImport(argv[1:])
 	case "memories", "memory":
 		return taskMemories(argv[1:])
+	case "run":
+		// `task run` needs the full agent runtime and is dispatched by the
+		// unified `fleet` binary BEFORE admincli (see cmd/fleet
+		// classifyInvocation). Reaching this case means the caller came through
+		// the deprecated fleet-admin shim, which cannot run it — say so plainly
+		// instead of the generic unknown-subcommand error (#722).
+		return errf(1, "`task run` is dispatched by the unified fleet binary; run `fleet task run <task.yaml>` (the deprecated fleet-admin shim cannot dispatch it)")
 	default:
 		return errf(1, "unknown task subcommand %q (want export|import|memories)", argv[0])
 	}
