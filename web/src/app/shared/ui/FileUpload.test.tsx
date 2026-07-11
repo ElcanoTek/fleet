@@ -65,4 +65,30 @@ describe("FileUpload", () => {
     expect(uploader).toHaveBeenCalledTimes(1);
     expect(names).toEqual(["stored-data.json"]);
   });
+
+  it("names the overflow visibly when a batch exceeds the 10-file cap (adds what fits)", async () => {
+    const { container } = render(<Harness />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const twelve = Array.from({ length: 12 }, (_, i) => makeFile(`f${i}.txt`, 10));
+    fireEvent.change(input, { target: { files: twelve } });
+    await waitFor(() => screen.getByText("f9.txt"));
+    // The first 10 landed; the 2 over the cap are named in an adjacent error.
+    expect(screen.queryByText("f10.txt")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Up to 10 files per task — 2 files were not added."),
+    ).toBeInTheDocument();
+    // Removing a file clears the batch error.
+    fireEvent.click(screen.getByLabelText("Remove f0.txt"));
+    await waitFor(() =>
+      expect(screen.queryByText(/were not added/)).not.toBeInTheDocument(),
+    );
+  });
+
+  it("handle.addFiles() accepts files forwarded from the dialog's drop target", async () => {
+    let handle: FileUploadHandle | null = null;
+    render(<Harness onHandle={(h) => (handle = h)} />);
+    handle!.addFiles([makeFile("dropped.csv", 20)]);
+    await waitFor(() => expect(screen.getByText("dropped.csv")).toBeInTheDocument());
+    expect(handle!.hasFiles()).toBe(true);
+  });
 });

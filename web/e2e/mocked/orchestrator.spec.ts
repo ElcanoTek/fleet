@@ -123,14 +123,17 @@ test("create a task via the MCP picker (enable a server + select an account); ta
   await page.getByTestId("new-task-btn").click();
   await expect(page.getByRole("dialog", { name: "Create New Task" })).toBeVisible();
 
-  // The MCP picker section exists where the legacy Target Agent / node-name
-  // input used to be — and that legacy input is gone entirely.
+  await page.getByLabel("Prompt", { exact: true }).fill("Pull yesterday's deal report");
+
+  // The MCP picker lives in the collapsed "Tools & files" reveal, where the
+  // legacy Target Agent / node-name input used to be — and that legacy input
+  // is gone entirely.
+  await page.getByRole("button", { name: /tools & files/i }).click();
   await expect(page.getByTestId("task-mcp-section")).toBeVisible();
   await expect(page.getByLabel(/target node|target agent/i)).toHaveCount(0);
 
-  await page.getByLabel("Prompt / Command").fill("Pull yesterday's deal report");
-
-  // Enable the xandr MCP server and pick the client_a credential account.
+  // Enable the xandr MCP server and pick the client_a credential account (the
+  // account seat renders once the server is enabled).
   await page.getByTestId("mcp-toggle-xandr").check();
   await page.getByTestId("mcp-account-xandr").selectOption("client_a");
 
