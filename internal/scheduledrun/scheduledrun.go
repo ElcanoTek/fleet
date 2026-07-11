@@ -884,7 +884,20 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Clien
 		}
 	}
 
-	registered, err := agentcore.BindMCPSelection(ctx, client, selection, r.mcpBases())
+	// ${FLEET_WORKSPACE} (the reserved manifest-env token): a run with its OWN
+	// client gets a fresh per-run workdir — cutlass-parity managed-run semantics
+	// (per-run ledger, managed-run detection). Minted lazily: a catalog that
+	// never uses the token creates nothing on disk.
+	bases := r.mcpBases()
+	workdir := ""
+	for _, c := range selection {
+		if base, ok := bases[c.Server]; ok && agentcore.EnvReferencesWorkspace(base.BaseEnv) {
+			workdir = agentcore.PerRunMCPWorkspaceDir("task-" + task.ID.String() + "-")
+			break
+		}
+	}
+
+	registered, err := agentcore.BindMCPSelection(ctx, client, selection, bases, workdir)
 	if err != nil {
 		cleanup() // reap any subprocesses bound before the failure
 		return nil, noop, fmt.Errorf("bind task mcp selection: %w", err)
@@ -916,6 +929,7 @@ func (r *Runner) mcpBases() map[string]agentcore.MCPServerBase {
 			Args:        sc.Args,
 			Dir:         sc.Dir,
 			HTTPHeaders: sc.Headers,
+			IdentityEnv: sc.IdentityEnv,
 		}
 		if sc.Type == "http" {
 			base.HTTPURL = sc.URL

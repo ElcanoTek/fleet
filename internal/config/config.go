@@ -1011,6 +1011,12 @@ type MCPServerConfig struct {
 	// model-facing roster so a task/agent can discover valid account names.
 	AccountVars []string
 
+	// IdentityEnv names the env keys (of Env) that route identity or money
+	// (manifest identity_env). A named-account variant spawn is refused when any
+	// of these keeps its default-seat value un-overridden by the account suffix
+	// — agentcore's inherited-routing-identity guard (see MCPServerBase).
+	IdentityEnv []string
+
 	// Optional-server metadata, carried from the bundle manifest (#205-adjacent
 	// fix): Optional gates a server out of every turn unless the conversation
 	// opted in (chat's Optional-server semantics); the rest drive the settings-UI
