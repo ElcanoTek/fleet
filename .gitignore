@@ -66,6 +66,8 @@ web/.e2e-live.env
 /fleet-bench
 /cutlass
 fleet-session.json
+*.pid
+/workspace/
 
 # Server runtime data directory (attachments, audit logs, task-run workspaces)
 /data/

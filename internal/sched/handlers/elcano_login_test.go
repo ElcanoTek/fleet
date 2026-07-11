@@ -27,8 +27,8 @@ func TestElcanoLogin(t *testing.T) {
 	t.Run("pubkey configured -> 303 to auth login with return_to", func(t *testing.T) {
 		h := &Handlers{config: Config{
 			ElcanoPubKey:    pub,
-			AuthLoginURL:    "https://auth.elcanotek.com",
-			OrchestratorURL: "https://moc.elcanotek.com",
+			AuthLoginURL:    "https://auth.example.com",
+			OrchestratorURL: "https://orchestrator.example.com",
 		}}
 		req := httptest.NewRequest(http.MethodGet, "/auth/elcano-login", nil)
 		rr := httptest.NewRecorder()
@@ -38,16 +38,16 @@ func TestElcanoLogin(t *testing.T) {
 			t.Fatalf("status = %d, want 303", rr.Code)
 		}
 		loc := rr.Header().Get("Location")
-		if !strings.HasPrefix(loc, "https://auth.elcanotek.com/?return_to=") {
+		if !strings.HasPrefix(loc, "https://auth.example.com/?return_to=") {
 			t.Fatalf("Location = %q, want auth login with return_to", loc)
 		}
-		if !strings.Contains(loc, url.QueryEscape("https://moc.elcanotek.com/")) {
+		if !strings.Contains(loc, url.QueryEscape("https://orchestrator.example.com/")) {
 			t.Errorf("return_to should be the escaped orchestrator URL, got %q", loc)
 		}
 	})
 
 	t.Run("pubkey unset -> 303 back to dashboard with flag", func(t *testing.T) {
-		h := &Handlers{config: Config{ElcanoPubKey: nil, AuthLoginURL: "https://auth.elcanotek.com"}}
+		h := &Handlers{config: Config{ElcanoPubKey: nil, AuthLoginURL: "https://auth.example.com"}}
 		req := httptest.NewRequest(http.MethodGet, "/auth/elcano-login", nil)
 		rr := httptest.NewRecorder()
 		h.ElcanoLogin(rr, req)
@@ -65,17 +65,17 @@ func TestElcanoLogin(t *testing.T) {
 // configured ORCHESTRATOR_URL (production) and the request-host fallback (dev).
 func TestMocPublicURL(t *testing.T) {
 	t.Run("uses configured OrchestratorURL", func(t *testing.T) {
-		h := &Handlers{config: Config{OrchestratorURL: "https://moc.elcanotek.com"}}
+		h := &Handlers{config: Config{OrchestratorURL: "https://orchestrator.example.com"}}
 		req := httptest.NewRequest(http.MethodGet, "/auth/elcano-login", nil)
-		if got := h.mocPublicURL(req); got != "https://moc.elcanotek.com/" {
-			t.Errorf("mocPublicURL = %q, want https://moc.elcanotek.com/", got)
+		if got := h.mocPublicURL(req); got != "https://orchestrator.example.com/" {
+			t.Errorf("mocPublicURL = %q, want https://orchestrator.example.com/", got)
 		}
 	})
 
 	t.Run("trailing slash on OrchestratorURL is normalized", func(t *testing.T) {
-		h := &Handlers{config: Config{OrchestratorURL: "https://moc.elcanotek.com/"}}
+		h := &Handlers{config: Config{OrchestratorURL: "https://orchestrator.example.com/"}}
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		if got := h.mocPublicURL(req); got != "https://moc.elcanotek.com/" {
+		if got := h.mocPublicURL(req); got != "https://orchestrator.example.com/" {
 			t.Errorf("mocPublicURL = %q, want a single trailing slash", got)
 		}
 	})
@@ -97,7 +97,7 @@ func TestGetCurrentUser(t *testing.T) {
 	h := &Handlers{}
 
 	t.Run("user in context -> identity returned", func(t *testing.T) {
-		user := &models.User{Username: "alice@elcanotek.com", Role: "client"}
+		user := &models.User{Username: "alice@example.com", Role: "client"}
 		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 		req = req.WithContext(context.WithValue(req.Context(), userContextKey, user))
 		rr := httptest.NewRecorder()
@@ -110,7 +110,7 @@ func TestGetCurrentUser(t *testing.T) {
 		if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if body["authenticated"] != true || body["username"] != "alice@elcanotek.com" || body["role"] != "client" {
+		if body["authenticated"] != true || body["username"] != "alice@example.com" || body["role"] != "client" {
 			t.Errorf("body = %+v, want authenticated alice/client", body)
 		}
 	})

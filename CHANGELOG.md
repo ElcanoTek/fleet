@@ -17,6 +17,20 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **Public-repo hygiene (#721)**: untracked the runtime `fleet.pid` file (now
+  gitignored along with `/workspace/`), removed the dead
+  `web/scripts/smoke-mcp-reporting.py` (bundle repos own their smoke tests),
+  and replaced deployment-specific strings in generic content — private bundle
+  paths/repo names, internal hostnames in handler tests, personal emails in
+  webhook examples, and vendor credential names in `deploy/fleet.service` —
+  with `example.com`-style placeholders. The out-of-repo bundle sanity test is
+  now `internal/clientconfig/bundle_sanity_test.go`, opt-in via
+  `FLEET_SANITY_BUNDLE_DIR` (skips cleanly when unset) and deployment-neutral.
+  A README naming note clarifies that the v1 names (chat/moc/gig/cutlass)
+  refer to the internal predecessor stack this project replaces.
+
 ### Added
 
 - Scheduled task inputs support logical `file_names` paired with stored upload
