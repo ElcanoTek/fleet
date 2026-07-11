@@ -15,6 +15,11 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Task scheduling controls fit cleanly on mobile**: the Create New Task modal
+  now contains its date and time pickers with consistent labels and padding,
+  and its Repeat tab defaults to a plain-language daily/weekday/weekly builder.
+  Advanced cron remains available without an overlapping clock icon.
+
 - **Default core tier drops `:nitro` for cache locality**: the default
   `z-ai/glm-5.2:nitro` slug asked OpenRouter for throughput-priority
   routing, spraying requests across the ~26 providers serving GLM-5.2 —

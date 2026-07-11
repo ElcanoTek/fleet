@@ -2661,54 +2661,97 @@ tr.sla-row-fail {
 .task-schedule-repeat {
   margin-top: 0.625rem;
 }
-/* Cron input: inset clock icon + mono value. */
-.task-cron-wrap {
-  position: relative;
-}
-.task-cron-wrap > svg {
-  position: absolute;
-  left: 0.75rem;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--color-text-muted);
-  pointer-events: none;
-}
+/* Cron stays available as an explicitly advanced input; the default repeat
+   editor uses plain-language controls and emits the same backend value. */
 .task-modal .task-cron-input {
-  padding-left: 2.125rem;
   font-family: var(--font-code-ui);
   font-size: 0.8rem;
 }
 /* Plain-language echo of the parsed expression (+ previewed next run). */
 .task-cron-echo {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.44rem;
   margin-top: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  background: var(--color-overlay-soft);
   font-size: 0.78rem;
   color: var(--color-text-secondary);
 }
+.task-cron-echo > span {
+  display: grid;
+  gap: 0.1rem;
+}
+.task-cron-echo strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
 .task-cron-echo svg {
   flex: 0 0 auto;
+  margin-top: 0.12rem;
   color: var(--color-success);
 }
 .schedule-datetime-group {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  width: 100%;
 }
-.modal-lg .schedule-datetime-group input[type="date"] {
-  flex: 1 1 auto;
-  width: auto;
-  min-width: 0;
-}
+.modal-lg .schedule-datetime-group input[type="date"],
 .modal-lg .schedule-datetime-group input[type="time"] {
-  flex: 0 0 auto;
-  width: auto;
-  min-width: 6.75rem;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
-.schedule-time-label {
+.task-schedule-field {
+  display: grid;
+  min-width: 0;
+  gap: 0.35rem;
+}
+.task-schedule-field > span {
   font-size: 0.78rem;
   color: var(--color-text-muted);
+}
+.repeat-editor-tabs {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  margin-bottom: 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--color-overlay-soft);
+}
+.repeat-editor-tabs button {
+  border: 0;
+  border-radius: 0.4rem;
+  padding: 0.35rem 0.65rem;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.repeat-editor-tabs button.is-active {
+  background: var(--color-surface-2);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-sm);
+}
+.repeat-editor-tabs button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.simple-schedule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.75rem;
+}
+.task-cron-field {
+  width: 100%;
+}
+@media (max-width: 480px) {
+  .schedule-datetime-group {
+    grid-template-columns: 1fr;
+  }
 }
 .schedule-presets {
   display: flex;

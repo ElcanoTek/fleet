@@ -63,7 +63,11 @@ describe("TaskCreateModal — schedule modes", () => {
     expect(screen.queryByLabelText("Schedule date")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
-    expect(screen.getByLabelText("Cron expression")).toBeInTheDocument();
+    expect(screen.getByLabelText("Repeat frequency")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Cron expression")).not.toBeInTheDocument();
+    expect(screen.getByText(/Next run/)).toBeInTheDocument();
+    expect(screen.queryByText("Weekdays 9am")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Advanced cron" }));
     expect(screen.getByText("Weekdays 9am")).toBeInTheDocument();
     expect(screen.queryByLabelText("Schedule date")).not.toBeInTheDocument();
 
@@ -76,6 +80,7 @@ describe("TaskCreateModal — schedule modes", () => {
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
     fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Advanced cron" }));
     const cron = screen.getByLabelText("Cron expression");
     fireEvent.change(cron, { target: { value: "0 9 * *" } });
     fireEvent.blur(cron);
@@ -90,6 +95,20 @@ describe("TaskCreateModal — schedule modes", () => {
     fireEvent.click(screen.getByText("Weekdays 9am"));
     expect(screen.queryByText(/Cron needs 5 fields/)).not.toBeInTheDocument();
     expect(screen.getByText(/At 09:00, Monday through Friday/)).toBeInTheDocument();
+  });
+
+  it("builds a weekly cron schedule without requiring cron knowledge", async () => {
+    createTask.mockResolvedValue({ id: "t-1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
+    fireEvent.change(screen.getByLabelText("Repeat frequency"), { target: { value: "weekly" } });
+    fireEvent.change(screen.getByLabelText("Repeat weekday"), { target: { value: "4" } });
+    fireEvent.change(screen.getByLabelText("Repeat time"), { target: { value: "13:30" } });
+    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    expect(createTask.mock.calls[0][0]).toMatchObject({ recurrence: "30 13 * * 4" });
   });
 
   it("requires a date in Run once mode at submit and focuses it", async () => {
@@ -165,7 +184,6 @@ describe("TaskCreateModal — create path", () => {
     const { onClose, onCreated } = renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
     fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
-    fireEvent.click(screen.getByText("Weekdays 9am"));
     fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
