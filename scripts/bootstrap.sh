@@ -12,6 +12,15 @@
 # created only when missing via \gexec; the env file is refreshed in place; the
 # sandbox image is rebuilt; the client bundle checkout is updated or left as-is).
 #
+# It REFUSES to touch a Postgres role/database it did not provision: a role or
+# database matching the configured names that already exists on the cluster —
+# and is not recorded in this script's env file from a previous run — is treated
+# as someone else's (e.g. a legacy chat/moc install) and the script stops with
+# instructions. The operator must choose explicitly: fresh names
+# (--chat-db-name/--chat-db-user/...) or adoption (--adopt-existing-chat-db /
+# --adopt-existing-sched-db, which NEVER creates or alters the role — no
+# password rotation — and requires the operator to supply a working DSN).
+#
 # Usage:
 #   scripts/bootstrap.sh                             # INTERACTIVE on a terminal: prompts for the
 #                                                    # systemd-service / web-UI / domain choices, then
@@ -65,6 +74,29 @@
 #                              both accept the `auth pubkey` output line
 #                              verbatim). Validated as a 32-byte Ed25519 key.
 #                              Interactive --enable-web runs are prompted.
+#   --chat-db-name <name>      chat database name (default chat; same as env
+#                              CHAT_DB_NAME — the flag wins). Use a fresh name
+#                              (e.g. fleet_chat) when a legacy app already owns
+#                              the default.
+#   --chat-db-user <name>      chat owner role (default chat; = CHAT_DB_USER).
+#   --sched-db-name <name>     sched database name (default sched; = SCHED_DB_NAME).
+#   --sched-db-user <name>     sched owner role (default sched; = SCHED_DB_USER).
+#   --adopt-existing-chat-db   local mode: do NOT create/alter the chat role or
+#                              database (no password rotation, ever). Use the
+#                              DSN the operator supplies in FLEET_CHAT_DATABASE_URL
+#                              (env or already in the env file) verbatim; it is
+#                              validated with SELECT 1. fleet will run ITS OWN
+#                              migrations on that database at first start — only
+#                              adopt a database that is (or is meant to become)
+#                              fleet's. The supported legacy-data path is
+#                              export → import (docs/LEGACY-IMPORT.md).
+#   --adopt-existing-sched-db  same, for the sched database
+#                              (FLEET_SCHED_DATABASE_URL).
+#   --force-caddy              with --enable-web --domain: allow overwriting an
+#                              /etc/caddy/Caddyfile this script did not write.
+#                              A timestamped backup is kept and a merge warning
+#                              printed. Without it the script refuses rather
+#                              than truncating an existing Caddy config.
 #   --dry-run                  print the plan; touch nothing.
 #
 # Env knobs (all optional; sensible local defaults):
@@ -86,8 +118,10 @@
 #   SCHED_DB_NAME           sched database name (default sched)
 #   SCHED_DB_USER           sched owner role (default sched)
 #   SCHED_DB_PASSWORD       sched role password (local: generated if unset)
-#   FLEET_CHAT_DATABASE_URL external chat DSN (external mode)
-#   FLEET_SCHED_DATABASE_URL external sched DSN (external mode)
+#   FLEET_CHAT_DATABASE_URL external chat DSN (external mode; also the adopted
+#                           DSN under --adopt-existing-chat-db)
+#   FLEET_SCHED_DATABASE_URL external sched DSN (external mode; also the adopted
+#                           DSN under --adopt-existing-sched-db)
 #   FLEET_DB_SUPERUSER_URL  external superuser DSN for opt-in role/db creation
 #   FLEET_WEB_APP_NAME      web UI app name (--enable-web; default Fleet)
 #   FLEET_ACME_EMAIL        Let's Encrypt account email for Caddy (--domain; optional)
@@ -112,6 +146,18 @@ ADMIN_EMAILS_ARG=""
 # web tier — a value or @file, both accepting the `auth pubkey` output line
 # verbatim. Interactive --enable-web runs are prompted when unset.
 AUTH_PUBKEY_ARG=""
+# DB safety knobs (see the header): adoption skips provisioning for that pair
+# (no CREATE, no ALTER — a pre-existing role's password is NEVER rotated) and
+# takes the operator's DSN verbatim; the *_ARG name/user flags override the
+# CHAT_DB_*/SCHED_DB_* env defaults so a colliding legacy name can be dodged
+# without env archaeology.
+ADOPT_CHAT_DB=0
+ADOPT_SCHED_DB=0
+FORCE_CADDY=0
+CHAT_DB_NAME_ARG=""
+CHAT_DB_USER_ARG=""
+SCHED_DB_NAME_ARG=""
+SCHED_DB_USER_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -128,9 +174,20 @@ while [[ $# -gt 0 ]]; do
     --admin=*)           ADMIN_EMAILS_ARG="${1#*=}" ;;
     --auth-pubkey)       shift; [[ $# -gt 0 ]] || { echo "error: --auth-pubkey needs a value or @file" >&2; exit 1; }; AUTH_PUBKEY_ARG="$1" ;;
     --auth-pubkey=*)     AUTH_PUBKEY_ARG="${1#*=}" ;;
+    --chat-db-name)      shift; [[ $# -gt 0 ]] || { echo "error: --chat-db-name needs a name" >&2; exit 1; }; CHAT_DB_NAME_ARG="$1" ;;
+    --chat-db-name=*)    CHAT_DB_NAME_ARG="${1#*=}" ;;
+    --chat-db-user)      shift; [[ $# -gt 0 ]] || { echo "error: --chat-db-user needs a name" >&2; exit 1; }; CHAT_DB_USER_ARG="$1" ;;
+    --chat-db-user=*)    CHAT_DB_USER_ARG="${1#*=}" ;;
+    --sched-db-name)     shift; [[ $# -gt 0 ]] || { echo "error: --sched-db-name needs a name" >&2; exit 1; }; SCHED_DB_NAME_ARG="$1" ;;
+    --sched-db-name=*)   SCHED_DB_NAME_ARG="${1#*=}" ;;
+    --sched-db-user)     shift; [[ $# -gt 0 ]] || { echo "error: --sched-db-user needs a name" >&2; exit 1; }; SCHED_DB_USER_ARG="$1" ;;
+    --sched-db-user=*)   SCHED_DB_USER_ARG="${1#*=}" ;;
+    --adopt-existing-chat-db)  ADOPT_CHAT_DB=1 ;;
+    --adopt-existing-sched-db) ADOPT_SCHED_DB=1 ;;
+    --force-caddy)       FORCE_CADDY=1 ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
-      sed -n '2,93p' "$0"; exit 0 ;;
+      sed -n '2,127p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -198,12 +255,60 @@ if [[ "$CLIENT_CONFIG_DIR" != /* ]]; then
   CLIENT_CONFIG_DIR="$(cd "$CLIENT_CONFIG_DIR" 2>/dev/null && pwd || printf '%s/%s' "$REPO_ROOT" "$CLIENT_CONFIG_DIR")"
 fi
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
-CHAT_DB_NAME="${CHAT_DB_NAME:-chat}"
-CHAT_DB_USER="${CHAT_DB_USER:-chat}"
-SCHED_DB_NAME="${SCHED_DB_NAME:-sched}"
-SCHED_DB_USER="${SCHED_DB_USER:-sched}"
+# DB names/roles: flag > env > default. The values are interpolated into the
+# provisioning SQL below, so restrict them to plain identifiers.
+CHAT_DB_NAME="${CHAT_DB_NAME_ARG:-${CHAT_DB_NAME:-chat}}"
+CHAT_DB_USER="${CHAT_DB_USER_ARG:-${CHAT_DB_USER:-chat}}"
+SCHED_DB_NAME="${SCHED_DB_NAME_ARG:-${SCHED_DB_NAME:-sched}}"
+SCHED_DB_USER="${SCHED_DB_USER_ARG:-${SCHED_DB_USER:-sched}}"
+for _ident in "$CHAT_DB_NAME" "$CHAT_DB_USER" "$SCHED_DB_NAME" "$SCHED_DB_USER"; do
+  [[ "$_ident" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+    || die "database/role name '${_ident}' must be a plain identifier ([A-Za-z_][A-Za-z0-9_]*)"
+done
+unset _ident
+# Adoption only makes sense against the locally provisioned cluster; external
+# mode ALREADY takes the operator's DSNs verbatim and never creates or alters
+# roles (opt-in FLEET_DB_SUPERUSER_URL creates missing DATABASES only).
+if [[ "$POSTGRES_MODE" == "external" && ( "$ADOPT_CHAT_DB" == "1" || "$ADOPT_SCHED_DB" == "1" ) ]]; then
+  die "--adopt-existing-*-db applies to --postgres=local; external mode always uses your DSNs and never touches roles"
+fi
+# Adoption needs the operator's DSN up front (process env, or already recorded
+# in the env file). Fail in the first second, not after a multi-minute install.
+ADOPTED_CHAT_URL=""
+ADOPTED_SCHED_URL=""
+if [[ "$ADOPT_CHAT_DB" == "1" ]]; then
+  ADOPTED_CHAT_URL="${FLEET_CHAT_DATABASE_URL:-$(grep '^FLEET_CHAT_DATABASE_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)}"
+  [[ -n "$ADOPTED_CHAT_URL" ]] \
+    || die "--adopt-existing-chat-db needs the existing database's working DSN: set FLEET_CHAT_DATABASE_URL (env, or already present in ${ENV_FILE}). This script never creates or alters an adopted role — supply its CURRENT password."
+fi
+if [[ "$ADOPT_SCHED_DB" == "1" ]]; then
+  ADOPTED_SCHED_URL="${FLEET_SCHED_DATABASE_URL:-$(grep '^FLEET_SCHED_DATABASE_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)}"
+  [[ -n "$ADOPTED_SCHED_URL" ]] \
+    || die "--adopt-existing-sched-db needs the existing database's working DSN: set FLEET_SCHED_DATABASE_URL (env, or already present in ${ENV_FILE}). This script never creates or alters an adopted role — supply its CURRENT password."
+fi
 
 gen_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
+
+# ── Caddyfile ownership marker ──
+# The Caddyfile this script writes carries this marker as its first line. An
+# existing /etc/caddy/Caddyfile WITHOUT it belongs to someone else (a legacy
+# chat/moc deploy, a hand-rolled config) — overwriting it would silently
+# destroy their vhosts, so we refuse unless --force-caddy, and even then keep a
+# timestamped backup. Checked fail-fast here (before any provisioning work) and
+# again at write time inside deploy_web_tier.
+CADDY_MARKER="# Managed by fleet (scripts/bootstrap.sh) — re-runs overwrite this file."
+caddyfile_is_foreign() { [[ -s /etc/caddy/Caddyfile ]] && ! grep -qF "$CADDY_MARKER" /etc/caddy/Caddyfile; }
+if [[ "$ENABLE_WEB" == "1" && -n "$WEB_DOMAIN" && "$FORCE_CADDY" != "1" ]] && caddyfile_is_foreign; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    warn "/etc/caddy/Caddyfile exists and was not written by this script — a real run would REFUSE here."
+    warn "merge your existing Caddy config manually, or re-run with --force-caddy (a timestamped backup is kept)."
+  else
+    die "refusing to overwrite /etc/caddy/Caddyfile: it exists and was not written by this script.
+  It likely carries another app's vhosts (e.g. a legacy chat/moc deploy) — overwriting would take them down.
+  Either merge the fleet site into it yourself (see deploy/Caddyfile), or re-run with --force-caddy
+  to overwrite it (the previous file is saved as /etc/caddy/Caddyfile.fleet-backup.<timestamp>)."
+  fi
+fi
 
 # upsert_env_file FILE KEY VALUE — idempotently set KEY=VALUE in FILE, replacing
 # an existing KEY= line in place and preserving comments/unrelated lines (mirrors
@@ -466,7 +571,21 @@ deploy_web_tier() {
   fi
   command -v caddy >/dev/null 2>&1 || { warn "caddy not found — skipping TLS front (web still on :3000)."; return; }
   install -d /etc/caddy
+  # Never truncate a Caddyfile this script did not write (the fail-fast check
+  # at the top already covers the common path; this write-time guard also
+  # covers a file that appeared mid-run, e.g. dropped by `dnf install caddy`).
+  if caddyfile_is_foreign; then
+    if [[ "$FORCE_CADDY" != "1" ]]; then
+      die "refusing to overwrite /etc/caddy/Caddyfile (not written by this script) — merge manually or re-run with --force-caddy"
+    fi
+    local caddy_backup
+    caddy_backup="/etc/caddy/Caddyfile.fleet-backup.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -p /etc/caddy/Caddyfile "$caddy_backup" || die "could not back up /etc/caddy/Caddyfile to ${caddy_backup}"
+    warn "--force-caddy: OVERWRITING /etc/caddy/Caddyfile — previous config saved to ${caddy_backup}"
+    warn "any other sites/vhosts it served are DOWN until you merge them back in and reload caddy."
+  fi
   {
+    printf '%s\n' "$CADDY_MARKER"
     [[ -n "${FLEET_ACME_EMAIL:-}" ]] && printf '{\n\temail %s\n}\n\n' "$FLEET_ACME_EMAIL"
     # Security headers mirror the Go backends' securityHeadersMiddleware
     # (cmd/fleet/tls.go) so the whole origin carries one policy; keep this
@@ -775,6 +894,88 @@ env_dsn_password() {
   fi
 }
 
+# pg_exists role|db NAME — probe the LOCAL cluster (as postgres) for an
+# existing role/database. Echoes yes|no|unknown; unknown = the probe could not
+# run at all (no runuser/postgres user, cluster not up — e.g. a --dry-run on a
+# box whose cluster was never initialized).
+pg_exists() {
+  local q out
+  case "$1" in
+    role) q="SELECT 1 FROM pg_roles WHERE rolname='$2'" ;;
+    db)   q="SELECT 1 FROM pg_database WHERE datname='$2'" ;;
+    *)    echo unknown; return ;;
+  esac
+  if ! command -v runuser >/dev/null 2>&1 || ! id postgres >/dev/null 2>&1; then
+    echo unknown; return
+  fi
+  if out="$(runuser -u postgres -- psql -tAc "$q" 2>/dev/null)"; then
+    if [[ "$out" == "1" ]]; then echo yes; else echo no; fi
+  else
+    echo unknown
+  fi
+}
+
+# env_file_records KEY USER DB — true when the env file already carries KEY= a
+# DSN for USER@…/DB, i.e. a PREVIOUS run of this script provisioned that pair;
+# re-using its password and converging the role is the normal idempotent path.
+env_file_records() {
+  local url re
+  url="$(grep "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+  re="^postgres(ql)?://$2:[^@]*@[^/]+/$3(\?.*)?$"
+  [[ "$url" =~ $re ]]
+}
+
+# guard_preexisting LABEL ROLE DB ENVKEY ADOPTFLAG NAMEFLAG — refuse to
+# provision over a role/database that already exists on the local cluster but
+# is NOT recorded in the env file by a previous run of this script. Without
+# this, defaults colliding with a legacy install (role/db "chat") would
+# silently ALTER the legacy role's password — locking out the still-installed
+# legacy server and any later legacy export — and then run fleet's migrations
+# on the legacy database. The operator must choose: adopt it explicitly, or
+# pick fresh names.
+guard_preexisting() {
+  local label="$1" role="$2" db="$3" envkey="$4" adoptflag="$5" nameflag="$6"
+  if env_file_records "$envkey" "$role" "$db"; then
+    info "${label}: ${envkey} in ${ENV_FILE} already records ${role}@…/${db} (provisioned by a previous run) — converging as usual."
+    return 0
+  fi
+  local role_exists db_exists
+  role_exists="$(pg_exists role "$role")"
+  db_exists="$(pg_exists db "$db")"
+  if [[ "$role_exists" != "yes" && "$db_exists" != "yes" ]]; then
+    if [[ "$role_exists" == "unknown" || "$db_exists" == "unknown" ]]; then
+      if [[ "$DRY_RUN" == "1" ]]; then
+        info "${label}: cluster not probeable yet — a real run re-checks for a pre-existing role/db after starting it."
+      else
+        warn "${label}: could not probe the cluster for a pre-existing role/db — provisioning below will fail if it is unreachable."
+      fi
+    fi
+    return 0
+  fi
+  local found=""
+  [[ "$role_exists" == "yes" ]] && found="role '${role}'"
+  if [[ "$db_exists" == "yes" ]]; then
+    [[ -n "$found" ]] && found+=" and "
+    found+="database '${db}'"
+  fi
+  local msg
+  msg="$(printf '%s\n' \
+    "Postgres ${found} already exist(s) on this cluster but was NOT provisioned by this script" \
+    "  (no matching ${envkey} DSN in ${ENV_FILE}). It likely belongs to something else — e.g. a" \
+    "  legacy chat/moc install. Proceeding would rotate that role's password (locking out whatever" \
+    "  still uses it, including a later legacy export) and run fleet's migrations on that database." \
+    "  Choose explicitly, then re-run:" \
+    "    fresh names:  ${nameflag} fleet_${label} (and the matching --${label}-db-user; any unused names)" \
+    "    adopt it:     ${adoptflag} with ${envkey}=<working DSN> (never creates/alters the role)" \
+    "  Migrating legacy data? Use fresh names + export/import — see docs/CUTOVER.md.")"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    warn "${label}: a real run would REFUSE here:"
+    printf '%s\n' "$msg" | sed 's/^/    /' >&2
+    return 0
+  fi
+  die "$msg"
+}
+
 if [[ "$POSTGRES_MODE" == "local" ]]; then
   SSLMODE="disable"
   CHAT_DB_PASSWORD="${CHAT_DB_PASSWORD:-$(env_dsn_password FLEET_CHAT_DATABASE_URL)}"
@@ -825,16 +1026,35 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
   fi
 
   step "Creating roles + databases idempotently (chat + sched)"
-  # CREATE-if-missing, then ALTER unconditionally: the ALTER converges an
-  # existing role to the resolved password (reused from the env file, or the
-  # operator's pre-set CHAT_DB_PASSWORD/SCHED_DB_PASSWORD), so the cluster and
-  # the env file always agree after every run.
-  PSQL_SQL=$(cat <<SQL
+  # Refuse to touch a pre-existing role/db this script did not provision (a
+  # legacy chat/moc install owning the default names is exactly the trap).
+  # Adopted pairs skip both the guard and provisioning entirely.
+  [[ "$ADOPT_CHAT_DB"  == "1" ]] || guard_preexisting chat  "$CHAT_DB_USER"  "$CHAT_DB_NAME"  FLEET_CHAT_DATABASE_URL  --adopt-existing-chat-db  --chat-db-name
+  [[ "$ADOPT_SCHED_DB" == "1" ]] || guard_preexisting sched "$SCHED_DB_USER" "$SCHED_DB_NAME" FLEET_SCHED_DATABASE_URL --adopt-existing-sched-db --sched-db-name
+  # CREATE-if-missing, then ALTER to converge the password: safe because the
+  # guard above guarantees any role reaching this point either does not exist
+  # yet (we create it) or was created by a previous run of this script (its DSN
+  # is recorded in the env file, whose password we reuse). The ALTER therefore
+  # only ever applies to roles this script itself provisioned — it can never
+  # rotate a pre-existing (e.g. legacy) role's password.
+  PSQL_SQL=""
+  if [[ "$ADOPT_CHAT_DB" == "1" ]]; then
+    info "chat: --adopt-existing-chat-db — skipping role/database provisioning (no CREATE, no ALTER, no password change)."
+  else
+    PSQL_SQL+=$(cat <<SQL
 SELECT 'CREATE ROLE ${CHAT_DB_USER} LOGIN PASSWORD ''${CHAT_DB_PASSWORD}'''
  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${CHAT_DB_USER}')\gexec
 ALTER ROLE ${CHAT_DB_USER} WITH LOGIN PASSWORD '${CHAT_DB_PASSWORD}';
 SELECT 'CREATE DATABASE ${CHAT_DB_NAME} OWNER ${CHAT_DB_USER}'
  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${CHAT_DB_NAME}')\gexec
+SQL
+)
+    PSQL_SQL+=$'\n'
+  fi
+  if [[ "$ADOPT_SCHED_DB" == "1" ]]; then
+    info "sched: --adopt-existing-sched-db — skipping role/database provisioning (no CREATE, no ALTER, no password change)."
+  else
+    PSQL_SQL+=$(cat <<SQL
 SELECT 'CREATE ROLE ${SCHED_DB_USER} LOGIN PASSWORD ''${SCHED_DB_PASSWORD}'''
  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${SCHED_DB_USER}')\gexec
 ALTER ROLE ${SCHED_DB_USER} WITH LOGIN PASSWORD '${SCHED_DB_PASSWORD}';
@@ -842,7 +1062,11 @@ SELECT 'CREATE DATABASE ${SCHED_DB_NAME} OWNER ${SCHED_DB_USER}'
  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${SCHED_DB_NAME}')\gexec
 SQL
 )
-  if [[ "$DRY_RUN" == "1" ]]; then
+    PSQL_SQL+=$'\n'
+  fi
+  if [[ -z "$PSQL_SQL" ]]; then
+    info "both databases adopted — nothing to provision."
+  elif [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would run as postgres:"
     printf '%s\n' "$PSQL_SQL" | sed 's/^/    /'
   else
@@ -850,10 +1074,35 @@ SQL
       || die "role/database provisioning failed"
   fi
 
-  CHAT_URL="postgres://${CHAT_DB_USER}:${CHAT_DB_PASSWORD}@127.0.0.1:5432/${CHAT_DB_NAME}?sslmode=${SSLMODE}"
-  SCHED_URL="postgres://${SCHED_DB_USER}:${SCHED_DB_PASSWORD}@127.0.0.1:5432/${SCHED_DB_NAME}?sslmode=${SSLMODE}"
-  ok "chat DB:  ${CHAT_DB_NAME} (owner ${CHAT_DB_USER}), sslmode=${SSLMODE}"
-  ok "sched DB: ${SCHED_DB_NAME} (owner ${SCHED_DB_USER}), sslmode=${SSLMODE}"
+  # Resolve the DSNs: an adopted pair keeps the operator's DSN verbatim
+  # (validated with SELECT 1 — with the role's CURRENT password, since we never
+  # touch it); a provisioned pair gets the loopback DSN we just converged.
+  if [[ "$ADOPT_CHAT_DB" == "1" ]]; then
+    CHAT_URL="$ADOPTED_CHAT_URL"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would validate the adopted chat DSN with: psql '<chat dsn>' -c 'SELECT 1'"
+    else
+      psql -v ON_ERROR_STOP=1 "$CHAT_URL" -c "SELECT 1" >/dev/null \
+        || die "adopted chat DSN failed SELECT 1 — supply the existing role's working DSN in FLEET_CHAT_DATABASE_URL (this script never rotates its password)"
+      ok "chat DB adopted (existing role/database, SELECT 1 ok; password untouched)"
+    fi
+  else
+    CHAT_URL="postgres://${CHAT_DB_USER}:${CHAT_DB_PASSWORD}@127.0.0.1:5432/${CHAT_DB_NAME}?sslmode=${SSLMODE}"
+    ok "chat DB:  ${CHAT_DB_NAME} (owner ${CHAT_DB_USER}), sslmode=${SSLMODE}"
+  fi
+  if [[ "$ADOPT_SCHED_DB" == "1" ]]; then
+    SCHED_URL="$ADOPTED_SCHED_URL"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would validate the adopted sched DSN with: psql '<sched dsn>' -c 'SELECT 1'"
+    else
+      psql -v ON_ERROR_STOP=1 "$SCHED_URL" -c "SELECT 1" >/dev/null \
+        || die "adopted sched DSN failed SELECT 1 — supply the existing role's working DSN in FLEET_SCHED_DATABASE_URL (this script never rotates its password)"
+      ok "sched DB adopted (existing role/database, SELECT 1 ok; password untouched)"
+    fi
+  else
+    SCHED_URL="postgres://${SCHED_DB_USER}:${SCHED_DB_PASSWORD}@127.0.0.1:5432/${SCHED_DB_NAME}?sslmode=${SSLMODE}"
+    ok "sched DB: ${SCHED_DB_NAME} (owner ${SCHED_DB_USER}), sslmode=${SSLMODE}"
+  fi
 
 else
   SSLMODE="require"

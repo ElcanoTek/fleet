@@ -8,6 +8,18 @@ fleet runs **one Postgres cluster with two logical databases**:
 Losing the chat DB loses every conversation; losing the sched DB loses every
 scheduled task. There is no other copy. Back both up.
 
+The databases are **not** the whole state, though: fleet also persists plain
+files on disk that `fleet backup` does **not** capture — attachment/upload
+files (`<data dir>/attachments`, whose paths conversation history references
+for image replay), task upload files (`<data dir>/temp_uploads`), and the
+per-conversation workspaces (`./workspace`). On a systemd deploy these all
+live under `/var/lib/fleet` (the unit's `StateDirectory`); a box migrated from
+the legacy chat app may additionally serve attachment files from the legacy
+data dir at its original path (see [`CUTOVER.md`](CUTOVER.md) step 6). Include
+those directories in your file-level backups alongside the DB dumps —
+restoring the DBs alone brings back the conversations and tasks but not the
+files they reference (history replay silently drops a missing file).
+
 `fleet backup` / `fleet restore` wrap `pg_dump -Fc` (PostgreSQL
 custom format) and `pg_restore`. (These are operator-CLI verbs of the unified
 `fleet` binary; `fleet-admin backup`/`restore` still works but is deprecated and

@@ -18,9 +18,19 @@ matching database (chat store / sched store) and ignores absent sections.
 
 ## Migration runbook (single box, both apps → one fleet)
 
+> **Cutting over a box that is live on the legacy stack?** This section covers
+> the data moves only. The full operational sequence — backups, disabling (not
+> just stopping) the legacy units, bootstrap's DB-collision guard, Caddy/port
+> coexistence, re-pointing external intake callers, decommissioning — is
+> [`docs/CUTOVER.md`](CUTOVER.md). Read it first.
+
 ```sh
-# 1. Stop the legacy services so no writes race the export.
-sudo systemctl stop chat.target moc.service
+# 1. Stop AND disable the legacy services: no writes racing the export, and no
+#    reboot resurrecting them (all legacy units are WantedBy=multi-user.target)
+#    to fight fleet over ports 8080/8000/3000 or double-fire migrated tasks.
+sudo systemctl disable --now chat.target chat-server.service chat-web.service
+sudo systemctl disable --now moc.service
+#    (Worker boxes: also disable the legacy gig runner daemon there.)
 
 # 2. Export. Each command reads the app's own env for its DB DSN.
 sudo -u chat sh -c 'cd /opt/chat && set -a && . ./.env.local && set +a && \
@@ -29,16 +39,31 @@ sudo -u moc  sh -c 'cd /opt/moc  && set -a && . ./.env      && set +a && \
     ./moc -export-fleet /opt/moc/data/moc-bundle.json'
 
 # 3. Import into fleet (dry-run first). DSNs come from FLEET_CHAT_DATABASE_URL /
-#    FLEET_SCHED_DATABASE_URL (fleet's .env.local), or --chat-database-url /
-#    --sched-database-url flags.
-fleet import /opt/chat/data/chat-bundle.json --dry-run
-fleet import /opt/chat/data/chat-bundle.json
-fleet import /opt/moc/data/moc-bundle.json  --dry-run
-fleet import /opt/moc/data/moc-bundle.json
+#    FLEET_SCHED_DATABASE_URL, or --chat-database-url / --sched-database-url
+#    flags. On a systemd deploy the DSNs live in /etc/fleet/fleet.env (0600,
+#    root-only) — NOT a .env.local — so source it explicitly:
+sudo sh -c 'set -a && . /etc/fleet/fleet.env && set +a && \
+    fleet import /opt/chat/data/chat-bundle.json --dry-run'
+sudo sh -c 'set -a && . /etc/fleet/fleet.env && set +a && \
+    fleet import /opt/chat/data/chat-bundle.json'
+sudo sh -c 'set -a && . /etc/fleet/fleet.env && set +a && \
+    fleet import /opt/moc/data/moc-bundle.json --dry-run'
+sudo sh -c 'set -a && . /etc/fleet/fleet.env && set +a && \
+    fleet import /opt/moc/data/moc-bundle.json'
+#    (A dev deploy with the DSNs in .env.local can call `fleet import` directly.)
 
-# 4. Task attachment files (moc tasks[].files) reference paths under moc's
-#    DATA_DIR; copy them into fleet's data dir if any task carries files —
-#    the import summary prints the count of tasks with file references.
+# 4. Non-DB state — the bundles carry database rows only:
+#    a. moc task attachment files (tasks[].files) live under moc's DATA_DIR
+#       (<data>/temp_uploads); copy them into fleet's data dir
+#       (/var/lib/fleet/data/temp_uploads on a systemd deploy) if any task
+#       carries files — the import summary prints the count.
+#    b. the legacy chat data dir (email attachments + uploaded images):
+#       migrated message history references these by their ABSOLUTE paths on
+#       the legacy box (e.g. /opt/chat/data/attachments/...). fleet re-reads
+#       those exact paths on conversation replay and silently drops missing/
+#       unreadable files — so leave the files at their original path and make
+#       them readable by the fleet service user (e.g.
+#       `chown -R fleet:fleet /opt/chat/data`). See CUTOVER.md step 6.
 
 # 5. Restart fleet; verify. Users keep their old passwords (bcrypt hashes
 #    migrate verbatim). moc API keys (file-based api_keys.json) are NOT

@@ -2,6 +2,12 @@
 
 > Deep deployment reference: host sizing, the one-command web+TLS stack, and every option. Part of the [fleet README](../README.md).
 
+> **Cutting over a box that already runs the legacy chat + moc stack?** This
+> page assumes a fresh host. fleet's defaults (ports 8080/8000/3000, the `chat`
+> DB role/name, `/etc/caddy/Caddyfile`) collide with a live legacy install —
+> follow the ordered runbook in [`docs/CUTOVER.md`](CUTOVER.md) instead, then
+> come back here for the reference material.
+
 
 fleet runs as **one** `fleet` process on a **single host** (one well-sized
 server or VM). The browser only ever talks to the Next.js web app; the web app
@@ -232,7 +238,11 @@ each piece yourself):
    > `/etc/fleet/fleet-web.env` (generating `APP_SESSION_SECRET` and mirroring
    > `CHAT_SERVER_TOKEN`/`ORCHESTRATOR_SERVER_TOKEN` from the backend env), enables
    > `fleet-web`, and with `--domain` installs Caddy + opens 80/443 for automatic
-   > TLS. The manual steps below are the by-hand equivalent.
+   > TLS. It **refuses to overwrite an `/etc/caddy/Caddyfile` it did not write**
+   > (another app's vhosts may live there — e.g. a legacy deploy); pass
+   > `--force-caddy` to overwrite anyway, which keeps a timestamped backup at
+   > `/etc/caddy/Caddyfile.fleet-backup.<timestamp>` and warns you to merge the
+   > old sites back in. The manual steps below are the by-hand equivalent.
    >
    > **Login model.** The web app authenticates three ways, all minting the same
    > HMAC session cookie (signed with `APP_SESSION_SECRET`) so everything
