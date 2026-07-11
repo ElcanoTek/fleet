@@ -31,7 +31,7 @@ describe("ModelPicker", () => {
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
     await waitFor(() => {
-      expect(screen.getByText("Anthropic: Claude Fable 5")).toBeInTheDocument();
+      expect(screen.getByText("OpenAI: GPT-5.6 Sol")).toBeInTheDocument();
     });
     expect(input).toHaveAttribute("aria-expanded", "true");
   });
@@ -40,12 +40,12 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("Anthropic: Claude Fable 5"));
+    await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Sol"));
     fireEvent.change(input, { target: { value: "glm" } });
     await waitFor(() => {
       expect(screen.getByText("Z.AI: GLM 5.2")).toBeInTheDocument();
     });
-    expect(screen.queryByText("Anthropic: Claude Fable 5")).not.toBeInTheDocument();
+    expect(screen.queryByText("OpenAI: GPT-5.6 Sol")).not.toBeInTheDocument();
   });
 
   it("commits a clicked option into the input value", async () => {
@@ -61,7 +61,7 @@ describe("ModelPicker", () => {
     render(<Harness />);
     const input = screen.getByRole("combobox");
     fireEvent.focus(input);
-    await waitFor(() => screen.getByText("Anthropic: Claude Fable 5"));
+    await waitFor(() => screen.getByText("OpenAI: GPT-5.6 Sol"));
     fireEvent.change(input, { target: { value: "zzz-nope" } });
     await waitFor(() => {
       expect(

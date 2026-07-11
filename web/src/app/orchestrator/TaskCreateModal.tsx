@@ -36,7 +36,7 @@ import { CostForecastPanel } from "./CostForecastPanel";
 //    what's blocking.
 
 const DEFAULT_PRIMARY_MODEL = "z-ai/glm-5.2";
-const DEFAULT_FALLBACK_MODEL = "anthropic/claude-fable-5";
+const DEFAULT_FALLBACK_MODEL = "openai/gpt-5.6-sol";
 
 const SCHEDULE_PRESETS = [
   { label: "Weekdays 9am", cron: "0 9 * * 1-5" },
@@ -1388,7 +1388,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
                           id="taskModelInput"
                           value={model}
                           onChange={setModel}
-                          placeholder="anthropic/claude-opus-4.8"
+                          placeholder="z-ai/glm-5.2"
                         />
                         {errors.model ? (
                           <div className="validation-error" data-testid="error-model">

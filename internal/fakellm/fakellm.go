@@ -140,6 +140,7 @@ func New() *Server {
 		models: []string{
 			"z-ai/glm-5.2",
 			"anthropic/claude-fable-5",
+			"openai/gpt-5.6-sol",
 			"anthropic/claude-opus-4.8",
 			"anthropic/claude-sonnet-4.6",
 			"moonshotai/kimi-k2.6",
