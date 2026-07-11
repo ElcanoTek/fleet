@@ -54,7 +54,8 @@ branding:
 
 # No client MCP servers in the generic bundle: the catalog is empty so fleet
 # runs without any credentialed connectors. A client bundle declares its own
-# mcp_servers[] here (see /root/elcano-config/manifest.yaml for a full example).
+# mcp_servers[] here (see your out-of-repo client bundle's manifest.yaml for a
+# full example).
 mcp_servers: []
 
 # Hosted third-party MCP server directory (#538). Fleet ships a large curated
@@ -193,14 +194,14 @@ remote_mcp_catalog: []
 #       A pull request was opened: {{.payload.pull_request.title}}
 #       URL: {{.payload.pull_request.html_url}}
 #       Review it for correctness, security issues, and code quality.
-#     notify_user: "brad@elcanotek.com"        # required: whose conversation this creates
+#     notify_user: "admin@example.com"         # required: whose conversation this creates
 #
 #   - slug: "slack-requests"
 #     description: "Triggered by a message in #fleet-requests"
 #     token_secret_env: SLACK_SIGNING_SECRET   # Slack v0 signing secret (mutually exclusive with hmac_secret_env)
 #     persona: "assistant"
 #     prompt_template: "{{.payload.event.user}} asks: {{.payload.event.text}}"
-#     notify_user: "brad@elcanotek.com"
+#     notify_user: "admin@example.com"
 
 # LLM provider routing (issue #289). By default fleet routes EVERY model through
 # OpenRouter (set OPENROUTER_API_KEY and you're done — no providers: block needed).

@@ -26,14 +26,14 @@ webhook_triggers:
       A pull request was opened: {{.payload.pull_request.title}}
       URL: {{.payload.pull_request.html_url}}
       Please review it for correctness, security, and code quality.
-    notify_user: "brad@elcanotek.com"        # required: whose conversation this creates
+    notify_user: "admin@example.com"         # required: whose conversation this creates
 
   - slug: "slack-requests"
     description: "Triggered by a message in #fleet-requests"
     token_secret_env: SLACK_SIGNING_SECRET   # Slack v0 signing secret (mutually exclusive with hmac_secret_env)
     persona: "assistant"
     prompt_template: "{{.payload.event.user}} asks: {{.payload.event.text}}"
-    notify_user: "brad@elcanotek.com"
+    notify_user: "admin@example.com"
 ```
 
 Set the secret in your `.env` (its name is auto-allowlisted from the manifest):

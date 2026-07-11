@@ -1,9 +1,9 @@
 # MCP bundle env contract: `${FLEET_WORKSPACE}`, `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
 
-Design note for the fleet-side support the cutlass-family Python MCP servers
-(carried by client bundles such as elcano-config / zeta-config) need from the
-platform. Canonical server code lives in ElcanoTek/cutlass `mcp/`; bundles
-mirror it (see cutlass `mcp/docs/CONSUMER_SYNC.md`). Everything here is
+Design note for the fleet-side support that bundle-provided Python MCP servers
+(carried by out-of-repo client bundles) need from the platform. Canonical
+server code lives in each bundle's upstream source repo; bundles mirror it and
+sync from there rather than patching locally. Everything here is
 client-agnostic mechanism — the client-specific names/values stay in the
 bundle manifest.
 
