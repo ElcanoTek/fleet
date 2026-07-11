@@ -76,6 +76,9 @@ func (s *Service) AcquireTokenByID(ctx context.Context, email, serverID string) 
 	if err != nil {
 		return "", err
 	}
+	if server.Issuer == "" {
+		return "", nil
+	}
 	return s.AcquireToken(ctx, server)
 }
 

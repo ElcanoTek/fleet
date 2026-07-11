@@ -6,9 +6,9 @@ import { verifyOrigin } from "@/app/lib/csrf";
 export const runtime = "nodejs";
 
 // GET /api/remote-mcp-servers — list the user's connected remote (hosted) MCP
-// servers (#443). No secrets are returned. POST adds a new one {name, url}; the
-// backend performs OAuth discovery + dynamic client registration synchronously
-// and returns the server in status "login_required".
+// servers (#443). No secrets are returned. POST adds {name, url, auth}; OAuth
+// servers run discovery + dynamic client registration synchronously, while an
+// explicitly open server is stored connected without inventing a login flow.
 export async function GET() {
   const session = await getServerSession();
   if (!session) {
