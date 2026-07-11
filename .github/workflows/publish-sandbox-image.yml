@@ -1,7 +1,7 @@
 name: Publish sandbox image (reusable)
 
 # Per-client sandbox image publisher (#195). This is the REGISTRY-PUBLISH
-# opt-in path: a client config repo (zeta-config, …) calls this reusable
+# opt-in path: a client config repo (e.g. acme-config) calls this reusable
 # workflow to build its bundle's sandbox image, push it to GHCR, and open a PR
 # setting `sandbox.image` in its manifest — after which fleet deployments
 # `podman pull` the prebuilt image (clientconfig.Sandbox().ResolvedImageRef())

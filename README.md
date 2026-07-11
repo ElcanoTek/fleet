@@ -213,6 +213,12 @@ docs/             architecture & operator docs; docs/adr/ records the load-beari
                   Architecture Decision Records behind the invariants
 ```
 
+> **Naming note (v1 glossary):** `chat`, `moc`, `gig`, and `cutlass` — which
+> appear in code comments, env-var prefixes (`CUTLASS_*`), docs, and the
+> CHANGELOG — are the names of the internal predecessor stack that fleet
+> consolidates and replaces. They are historical aliases inside this repo, not
+> separate public projects.
+
 ## The client-config bundle
 
 fleet ships **no** client-specific content. It loads a **client-config bundle**
