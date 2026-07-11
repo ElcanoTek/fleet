@@ -23,6 +23,20 @@ async function mockProjectHome(page: Page) {
   await page.route("**/api/projects", (r: Route) =>
     r.fulfill({ json: { projects: [PROJECT] } }),
   );
+  await page.route("**/api/projects/p-growth/conversations", (r: Route) =>
+    r.fulfill({
+      json: {
+        conversations: [
+          {
+            id: "c1",
+            title: "Landing page A/B",
+            updated_at: 1_700_000_400,
+            preview: "You: what did variant B do to signups?",
+          },
+        ],
+      },
+    }),
+  );
   await page.route("**/api/projects/p-growth/files", (r: Route) =>
     r.fulfill({
       json: {
@@ -70,9 +84,13 @@ test("project name opens the home: chats, sources, instructions", async ({
     home.getByRole("heading", { name: "Growth experiments" }),
   ).toBeVisible();
 
-  // This member's chats in the project — and only those.
+  // This member's chats in the project — and only those — each with its
+  // 1–2 line history preview.
   await expect(
     home.getByRole("button", { name: /Landing page A\/B/ }),
+  ).toBeVisible();
+  await expect(
+    home.getByText("You: what did variant B do to signups?"),
   ).toBeVisible();
   await expect(home.getByText("Unrelated chat")).toHaveCount(0);
 

@@ -206,10 +206,23 @@ func (s *Server) projectConversations(w http.ResponseWriter, r *http.Request, p 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if list == nil {
-		list = []store.Conversation{}
+	// Previews are display sugar — a failure degrades to titles-only rather
+	// than failing the home.
+	previews, err := s.store.ListProjectConversationPreviews(r.Context(), user, p.ID)
+	if err != nil {
+		previews = nil
 	}
-	writeJSON(w, map[string]any{"conversations": list})
+	type convWithPreview struct {
+		store.Conversation
+		// Preview is the last text message's snippet ("You: …" when the
+		// user spoke last) — the home's 1–2 line history per chat.
+		Preview string `json:"preview,omitempty"`
+	}
+	out := make([]convWithPreview, 0, len(list))
+	for _, c := range list {
+		out = append(out, convWithPreview{Conversation: c, Preview: previews[c.ID]})
+	}
+	writeJSON(w, map[string]any{"conversations": out})
 }
 
 // projectFile is one entry in the project home's Sources list.

@@ -1421,60 +1421,60 @@ export function ConversationSidebar({
                         : "",
                     ].join(" ")}
                   >
-                    {/* Split row: the chevron toggles the inline tree; the
-                        name opens the project HOME (ChatGPT/Claude-desktop
-                        behavior). */}
-                    <div
+                    {/* Row click = expand/collapse (the pre-home behavior);
+                        opening the HOME lives on the hover-revealed arrow
+                        beside the kebab, plus the kebab itself. */}
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      aria-label={`Project ${project.name} (${chats.length} chats)`}
                       className={[
-                        "flex items-center rounded-md py-0.5 pl-1 pr-9 transition",
+                        "flex w-full items-center gap-2 rounded-md py-1.5 pl-2 pr-16 text-[0.875rem] transition",
                         dropReady
                           ? "text-[var(--color-text-primary)]"
                           : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
                       ].join(" ")}
+                      onClick={() =>
+                        setExpandedProjects((s) => {
+                          const next = new Set(s);
+                          if (next.has(project.id)) next.delete(project.id);
+                          else next.add(project.id);
+                          return next;
+                        })
+                      }
                     >
-                      <button
-                        type="button"
-                        aria-expanded={expanded}
-                        aria-label={`${expanded ? "Collapse" : "Expand"} project ${project.name} (${chats.length} chats)`}
-                        className="inline-flex size-6 shrink-0 items-center justify-center rounded text-current transition hover:bg-[var(--color-overlay-strong)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                        onClick={() =>
-                          setExpandedProjects((s) => {
-                            const next = new Set(s);
-                            if (next.has(project.id)) next.delete(project.id);
-                            else next.add(project.id);
-                            return next;
-                          })
-                        }
-                      >
+                      <Icon
+                        name="chevron-right"
+                        className={[
+                          "size-3 shrink-0 transition",
+                          expanded ? "rotate-90" : "",
+                        ].join(" ")}
+                      />
+                      {project.pinned ? (
                         <Icon
-                          name="chevron-right"
-                          className={[
-                            "size-3 shrink-0 transition",
-                            expanded ? "rotate-90" : "",
-                          ].join(" ")}
+                          name="pin"
+                          className="size-3 shrink-0 text-[var(--color-accent)]"
                         />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Open project ${project.name}`}
-                        className="flex min-w-0 flex-1 items-center gap-2 rounded py-1 pl-1 text-left text-[0.875rem] text-current focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                      ) : null}
+                      <span className="min-w-0 flex-1 truncate text-left">
+                        {project.name}
+                      </span>
+                    </button>
+                    <div className="absolute inset-y-0 right-1 flex items-center gap-0.5">
+                      <PortalTipIconButton
+                        tip="Open project"
+                        ariaLabel={`Open project ${project.name}`}
+                        icon="arrow-right"
+                        iconClassName="size-3.5"
+                        className={[
+                          "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
+                          "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+                        ].join(" ")}
                         onClick={() => {
                           setSidebarOpen(false);
                           onOpenProjectHome(project.id);
                         }}
-                      >
-                        {project.pinned ? (
-                          <Icon
-                            name="pin"
-                            className="size-3 shrink-0 text-[var(--color-accent)]"
-                          />
-                        ) : null}
-                        <span className="min-w-0 flex-1 truncate">
-                          {project.name}
-                        </span>
-                      </button>
-                    </div>
-                    <div className="absolute inset-y-0 right-1 flex items-center">
+                      />
                       <ProjectKebab
                         projectName={project.name}
                         pinned={Boolean(project.pinned)}

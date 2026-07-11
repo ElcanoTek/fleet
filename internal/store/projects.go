@@ -371,6 +371,55 @@ func (s *Store) ListProjectConversationsForUser(ctx context.Context, userEmail, 
 	return scanConversationRows(rows)
 }
 
+// ListProjectConversationPreviews returns, per conversation id, a short
+// plaintext snippet of the LAST text message in each of the caller's own
+// conversations in the project — the project home's 1–2 line chat history.
+// One lateral-join query, not N; the same owner scoping as
+// ListProjectConversationsForUser. Conversations with no text messages yet
+// are simply absent from the map.
+func (s *Store) ListProjectConversationPreviews(ctx context.Context, userEmail, projectID string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT c.id, m.role, m.content FROM conversations c
+		 JOIN LATERAL (
+		   SELECT role, content FROM messages
+		   WHERE conversation_id = c.id AND type = 'text'
+		   ORDER BY id DESC LIMIT 1
+		 ) m ON true
+		 WHERE c.user_email = $1 AND c.project_id = $2 AND c.deleted_at IS NULL AND c.archived_at IS NULL`,
+		userEmail, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, role string
+		var raw []byte
+		if err := rows.Scan(&id, &role, &raw); err != nil {
+			return nil, err
+		}
+		var c struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(raw, &c); err != nil {
+			continue
+		}
+		text := strings.Join(strings.Fields(c.Text), " ") // collapse newlines/runs
+		if text == "" {
+			continue
+		}
+		const maxPreview = 200
+		if r := []rune(text); len(r) > maxPreview {
+			text = string(r[:maxPreview]) + "…"
+		}
+		if role == "user" {
+			text = "You: " + text
+		}
+		out[id] = text
+	}
+	return out, rows.Err()
+}
+
 // ListProjectConversationIDs returns the ids of conversations currently in
 // the project — the runtime-state references the export endpoint reports.
 func (s *Store) ListProjectConversationIDs(ctx context.Context, projectID string) ([]string, error) {

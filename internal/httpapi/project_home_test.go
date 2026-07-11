@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -74,14 +75,25 @@ func TestProjectHome_ConversationsAndFilesAreCallerScoped(t *testing.T) {
 		}
 	}
 
-	// Chat list: only the caller's conversation.
+	// Seed a short exchange so the listing carries a preview (the home's
+	// 1–2 line history). The LAST text message wins — the assistant's here.
+	if _, err := st.AppendHistory(ctx, mine.ID, []agent.HistoryEntry{
+		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"run the numbers"}`)},
+		{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"Revenue is up\n12% week over week."}`)},
+	}); err != nil {
+		t.Fatalf("AppendHistory: %v", err)
+	}
+
+	// Chat list: only the caller's conversation, with its preview (newlines
+	// collapsed, no "You:" prefix — the assistant spoke last).
 	w := getProjectSub(t, srv, owner, proj.ID, "conversations")
 	if w.Code != 200 {
 		t.Fatalf("conversations: status %d body %s", w.Code, w.Body.String())
 	}
 	var convResp struct {
 		Conversations []struct {
-			ID string `json:"id"`
+			ID      string `json:"id"`
+			Preview string `json:"preview"`
 		} `json:"conversations"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &convResp); err != nil {
@@ -89,6 +101,9 @@ func TestProjectHome_ConversationsAndFilesAreCallerScoped(t *testing.T) {
 	}
 	if len(convResp.Conversations) != 1 || convResp.Conversations[0].ID != mine.ID {
 		t.Errorf("conversations = %+v, want only %s", convResp.Conversations, mine.ID)
+	}
+	if got := convResp.Conversations[0].Preview; got != "Revenue is up 12% week over week." {
+		t.Errorf("preview = %q, want the assistant's last text with newlines collapsed", got)
 	}
 
 	// Sources: only the caller's file, with the fields the UI needs.

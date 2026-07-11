@@ -1678,8 +1678,15 @@ export function ChatExperience() {
 
   const loadConversation = async (
     conversationId: string,
-    options: { preserveScroll?: boolean; background?: boolean } = {},
+    options: { preserveScroll?: boolean; background?: boolean; restore?: boolean } = {},
   ) => {
+    // Opening a conversation dismisses a project home overlaying the chat
+    // pane — every USER entry point (rail rows, search hits, keyboard nav)
+    // funnels through here. Non-navigations leave the home alone: background
+    // (SSE reattach) and restore (boot's auto-load of the latest chat,
+    // tab-return staleness refetch) — otherwise the boot load resolving a
+    // beat after the user opens a project home would silently close it.
+    if (!options.background && !options.restore) setProjectHome(null);
     // If this conversation is currently streaming, the local in-memory
     // copy has the in-flight UI updates that the server hasn't
     // persisted yet. Re-fetching would replace those with whatever's
@@ -2676,6 +2683,8 @@ export function ChatExperience() {
   };
 
   const clearConversation = (opts?: { lockdown?: boolean }) => {
+    // Starting a new chat likewise dismisses an open project home.
+    setProjectHome(null);
     // The slot the user is staring at. Only tear it down when it's
     // idle — if a turn is in flight (including the brief window before
     // a per-submission pending key is promoted to a real conv id),
@@ -3206,7 +3215,10 @@ export function ChatExperience() {
       // away), snap-to-bottom on tab return is jarring — keep their
       // scroll position and let the live "follow along" auto-scroll
       // handle anything they were already at the bottom of.
-      void loadConversationRef.current(convId, { preserveScroll: true });
+      void loadConversationRef.current(convId, {
+        preserveScroll: true,
+        restore: true,
+      });
     };
     const handle = () => {
       void refreshIfStale();
@@ -3347,7 +3359,7 @@ export function ChatExperience() {
         // Flip before awaiting so a personas fetch that resolves after this
         // point does not overwrite the loaded conversation's persona.
         willLoadConversation = true;
-        await loadConversationRef.current(latest.id);
+        await loadConversationRef.current(latest.id, { restore: true });
       } finally {
         if (!cancelled) {
           setIsLoadingHistory(false);

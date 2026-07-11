@@ -17,6 +17,15 @@ import { formatBytes } from "./formatters";
 // only. A team-shared project shares its definition (instructions, memory),
 // never the members' private chats — the backend enforces the same rule.
 
+type ProjectChatEntry = {
+  id: string;
+  title: string;
+  updated_at: number;
+  // Last text message's snippet ("You: …" when the user spoke last) — the
+  // 1–2 line history under each chat title.
+  preview?: string;
+};
+
 type ProjectFileEntry = {
   conversation_id: string;
   conversation_title: string;
@@ -69,6 +78,9 @@ export function ProjectHome({
   onDelete: () => void;
 }) {
   const [files, setFiles] = useState<ProjectFileEntry[] | null>(null);
+  // Server-side chat list with previews; the prop list (already in client
+  // state) renders instantly while this loads, then the previews fill in.
+  const [fetchedChats, setFetchedChats] = useState<ProjectChatEntry[] | null>(null);
   const [filesTruncated, setFilesTruncated] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(
     Boolean(initialSettingsOpen),
@@ -100,6 +112,31 @@ export function ProjectHome({
     setNameDraft(project.name);
     setSharedDraft(Boolean(project.team_id));
   }
+
+  // Chat list with previews — best-effort; failure keeps the prop list.
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/projects/${encodeURIComponent(project.id)}/conversations`,
+            { cache: "no-store" },
+          );
+          if (!res.ok) return;
+          const data = (await res.json()) as {
+            conversations?: ProjectChatEntry[];
+          };
+          if (!cancelled) setFetchedChats(data.conversations ?? null);
+        } catch {
+          // keep the prop list
+        }
+      })();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
 
   // Sources — fetched per open; best-effort (a failure shows the empty state).
   useEffect(() => {
@@ -159,6 +196,9 @@ export function ProjectHome({
     setSavingSettings(false);
     if (ok) setSettingsOpen(false);
   };
+
+  // Fetched list (with previews) once it lands; the prop list until then.
+  const chatList: ProjectChatEntry[] = fetchedChats ?? chats;
 
   const cardClass =
     "rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4";
@@ -225,26 +265,33 @@ export function ProjectHome({
             <p className="px-1 pb-1 text-[0.65rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
               Chats
             </p>
-            {chats.length === 0 ? (
+            {chatList.length === 0 ? (
               <p className="px-1 py-2 text-[0.85rem] text-[var(--color-text-muted)]">
                 No chats yet — start one above or drag a chat onto the project
                 in the sidebar.
               </p>
             ) : (
               <div className="flex flex-col gap-0.5">
-                {chats.map((c) => (
+                {chatList.map((c) => (
                   <button
                     key={c.id}
                     type="button"
-                    className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                    className="flex w-full items-start gap-3 rounded-md px-3 py-2.5 text-left transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                     onClick={() => onOpenChat(c.id)}
                   >
                     <Icon
                       name="message"
-                      className="size-4 shrink-0 text-[var(--color-text-muted)]"
+                      className="mt-0.5 size-4 shrink-0 text-[var(--color-text-muted)]"
                     />
-                    <span className="min-w-0 flex-1 truncate text-[0.9rem] text-[var(--color-text-primary)]">
-                      {c.title || "Untitled"}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[0.9rem] text-[var(--color-text-primary)]">
+                        {c.title || "Untitled"}
+                      </span>
+                      {c.preview ? (
+                        <span className="mt-0.5 line-clamp-2 block text-[0.78rem] leading-snug text-[var(--color-text-muted)]">
+                          {c.preview}
+                        </span>
+                      ) : null}
                     </span>
                     <span className="shrink-0 font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">
                       {formatDay(c.updated_at)}
