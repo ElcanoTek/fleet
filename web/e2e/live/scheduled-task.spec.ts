@@ -44,7 +44,7 @@ test.describe("live scheduled task → real worker pool + sandbox", () => {
     const prompt = `${tag} run scheduled sandbox task [[scenario:sched-task]]`;
     await page.getByTestId("new-task-btn").click();
     await expect(page.getByRole("dialog", { name: "Create New Task" })).toBeVisible();
-    await page.getByLabel("Prompt / Command").fill(prompt);
+    await page.getByLabel("Prompt", { exact: true }).fill(prompt);
     await page.getByRole("button", { name: /launch task/i }).click();
 
     // The new task appears in the list, matched on the unique leading tag.

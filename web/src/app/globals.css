@@ -2003,28 +2003,67 @@ tr.sla-row-fail {
   margin-bottom: 0.45rem;
 }
 
-/* ── Task-form sections ─────────────────────────────────────────────────────
-   The create-task form is grouped into titled sections (Task · Schedule ·
-   Email · Tools & files · Advanced) separated by hairlines, so the eye gets
-   an anchor per concern instead of one undifferentiated column. */
-.task-section {
-  padding: 1.35rem 0;
-  border-bottom: 1px solid var(--color-border);
+/* ── Task-form groups (New Task redesign) ───────────────────────────────────
+   The form is ONE grid with a uniform 22px rhythm (no hairline sections): a
+   labeled group per concern — Prompt · Context reveal · Schedule · Email ·
+   Tools & files reveal · Advanced reveal. The fieldset carries the grid so
+   the whole form can be disabled in one move while submitting. */
+.task-form {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: grid;
+  gap: 1.375rem;
 }
-.task-section:last-of-type {
-  border-bottom: none;
-  padding-bottom: 0.5rem;
-}
-.task-section-title {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  margin-bottom: 0.95rem;
-  font-size: 0.7rem;
+.task-group-label {
+  font-size: 0.85rem;
   font-weight: 600;
-  letter-spacing: 0.09em;
+  color: var(--color-text-primary);
+  margin-bottom: 0.6rem;
+}
+.task-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.45rem;
+}
+.task-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.task-required-badge {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--color-text-muted);
+}
+.task-field-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.4rem;
+}
+.task-hint-tight {
+  margin-top: 0.15rem;
+  margin-bottom: 0.625rem;
+}
+/* Inline field error: danger icon + specific, recoverable message adjacent to
+   the field it names. */
+.task-inline-error {
+  display: flex;
+  align-items: center;
+  gap: 0.44rem;
+  margin-top: 0.55rem;
+  font-size: 0.76rem;
+  color: var(--color-danger);
+}
+.task-inline-error svg {
+  flex: 0 0 auto;
 }
 
 /* Two-up (auto-fitting) field rows: date+cron, model pickers, numeric caps.
@@ -2049,148 +2088,252 @@ tr.sla-row-fail {
   color: var(--color-text-muted);
 }
 
-/* Collapsed "Documentation, tags & persona" disclosure. */
-.form-details {
+/* ── Reveal — the ONE disclosure anatomy every collapsible group shares:
+   chevron (rotates 90° on open) + label + muted contents hint + a right slot
+   for the live summary / filled-count chip. The body animates 140ms height +
+   fade via the 0fr→1fr grid-row trick (the global reduced-motion block zeroes
+   the transition, so it snaps). */
+.task-reveal {
   border: 1px solid var(--color-border);
-  border-radius: 0.6rem;
+  border-radius: 0.75rem;
   background: var(--color-overlay-soft);
 }
-.form-details summary {
+.task-reveal-header {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.6rem 0.85rem;
-  font-size: 0.83rem;
-  font-weight: 500;
-  color: var(--color-text-secondary);
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.7rem 0.875rem;
+  background: transparent;
+  border: none;
+  border-radius: 0.75rem;
   cursor: pointer;
-  list-style: none;
-  border-radius: 0.6rem;
+  text-align: left;
 }
-.form-details summary::-webkit-details-marker {
-  display: none;
-}
-.form-details summary:focus-visible {
+.task-reveal-header:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
-.form-details-arrow {
-  font-size: 0.7rem;
+.task-reveal-chevron {
+  flex: 0 0 auto;
   color: var(--color-text-muted);
-  transition: transform var(--motion-fast, 0.12s) ease;
+  transform: rotate(-90deg);
+  transition: transform var(--motion-fast) ease, color var(--motion-fast) ease;
 }
-.form-details[open] .form-details-arrow {
-  transform: rotate(90deg);
+.task-reveal.is-open .task-reveal-chevron {
+  transform: rotate(0deg);
+  color: var(--color-text-secondary);
 }
-.form-details-body {
-  padding: 0.85rem 0.85rem 1rem;
-  border-top: 1px solid var(--color-border);
+.task-reveal-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.task-reveal.is-open .task-reveal-label {
+  color: var(--color-text-primary);
+}
+.task-reveal-hint {
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-reveal-spacer {
+  flex: 1;
+}
+.task-reveal-summary {
+  font-size: 0.76rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.task-count-chip {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  border-radius: var(--radius-pill);
+  padding: 0.125rem 0.56rem;
+  white-space: nowrap;
+}
+.task-reveal-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows var(--motion-fast) ease, opacity var(--motion-fast) ease;
+}
+.task-reveal.is-open .task-reveal-body {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.task-reveal-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.task-reveal-content {
+  padding: 0.875rem;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
-/* Toggle switches (Captain's Log / network egress / carry context). The
-   whole row is the <label>, so clicking the text flips the checkbox too. */
-.switch-group {
-  border: 1px solid var(--color-border);
-  border-radius: 0.6rem;
-  overflow: hidden;
+/* ── Mini-switch (ui-switch) — the checkbox itself IS the 34×19 pill track
+   (appearance:none), so it stays a real, visible checkbox for tests and
+   assistive tech while matching the design's switch. The 140ms fill rides the
+   shared motion token. The track tint derives from --color-primary (the
+   design's switch-off shade is a 32% primary wash). */
+.ui-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 2.125rem;
+  height: 1.1875rem;
+  margin: 0.0625rem 0 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-primary) 32%, transparent);
+  position: relative;
+  cursor: pointer;
+  transition: background var(--motion-fast) ease;
 }
+.ui-switch::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0.16rem;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  transform: translateY(-50%);
+  transition: left var(--motion-fast) ease, background var(--motion-fast) ease;
+}
+.ui-switch:checked {
+  background: var(--color-primary);
+}
+.ui-switch:checked::before {
+  left: calc(100% - 1.03rem);
+  background: var(--color-white);
+}
+.ui-switch:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Behavior switch rows (Captain's Log / network egress / carry context). The
+   whole row is the <label>, so clicking the text flips the switch too; rows
+   separate with hairlines, flush with the sub-cluster (no box). */
 .switch-row {
   display: flex;
   align-items: flex-start;
-  gap: 0.8rem;
-  padding: 0.75rem 0.9rem;
+  gap: 0.75rem;
+  padding: 0.625rem 0;
   cursor: pointer;
 }
 .switch-row + .switch-row {
-  border-top: 1px solid var(--color-border);
-}
-.switch-row:hover {
-  background: var(--rail-hover);
+  border-top: 1px solid var(--color-border-subtle);
 }
 .switch-row-text {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.19rem;
   min-width: 0;
 }
 .switch-row-title {
-  font-size: 0.85rem;
-  font-weight: 500;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.switch-row:has(.ui-switch:checked) .switch-row-title {
   color: var(--color-text-primary);
 }
 .switch-row-desc {
-  font-size: 0.74rem;
+  font-size: 0.76rem;
   line-height: 1.5;
   color: var(--color-text-muted);
 }
-.toggle-switch {
-  position: relative;
-  display: inline-block;
-  flex-shrink: 0;
-  width: 2.15rem;
-  height: 1.25rem;
-  margin-top: 0.05rem;
+
+/* ── Advanced sub-clusters: uppercase mono eyebrows over Model / Limits /
+   Behavior, then the caution-tinted pre-run gate card. */
+.task-advanced {
+  display: grid;
+  gap: 1.25rem;
 }
-.toggle-switch input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
+.task-eyebrow {
+  font-family: var(--font-code-ui);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: 0.56rem;
 }
-.toggle-slider {
-  position: absolute;
-  inset: 0;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-overlay-strong);
-  transition: background var(--motion-fast, 0.12s) ease, border-color var(--motion-fast, 0.12s) ease;
-  pointer-events: none;
+/* Aligned limits stack: label · input · helper on one baseline per row, so
+   "unset" reads the same way on every field (default as placeholder, blank
+   helper convention). */
+.task-limits-grid {
+  display: grid;
+  grid-template-columns: 9.375rem 8.75rem 1fr;
+  gap: 0.625rem 0.875rem;
+  align-items: center;
 }
-.toggle-slider::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 0.17rem;
-  width: 0.85rem;
-  height: 0.85rem;
-  border-radius: 50%;
-  background: var(--color-text-muted);
-  transform: translateY(-50%);
-  transition: left var(--motion-fast, 0.12s) ease, background var(--motion-fast, 0.12s) ease;
+.task-limit-label {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
 }
-.toggle-switch input:checked + .toggle-slider {
-  background: var(--color-primary);
-  border-color: var(--color-primary);
+.task-limit-help {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--color-text-muted);
 }
-.toggle-switch input:checked + .toggle-slider::before {
-  left: calc(100% - 1.02rem);
-  background: var(--color-white);
-}
-.toggle-switch input:focus-visible + .toggle-slider {
-  box-shadow: var(--focus-ring);
+.task-limits-error {
+  grid-column: 2 / -1;
+  margin-top: -0.25rem;
 }
 
-/* Pre-run gate inline options (timeout + on-error). */
-.run-if-options {
+/* Pre-run gate (run_if, #269): the one host-side, security-sensitive field —
+   caution-tinted so it can't be mistaken for a benign input. */
+.task-gate {
+  border: 1px solid color-mix(in srgb, var(--color-warning) 45%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 7%, transparent);
+  border-radius: 0.75rem;
+  padding: 0.8rem 0.875rem;
+}
+.task-gate-head {
+  display: flex;
+  align-items: center;
+  gap: 0.56rem;
+}
+.task-gate-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.task-gate-chip {
+  font-family: var(--font-code-ui);
+  font-size: 0.66rem;
+  color: var(--color-text-secondary);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 45%, transparent);
+  border-radius: 0.375rem;
+  padding: 0.06rem 0.44rem;
+}
+.task-gate-warning {
+  margin: 0.44rem 0 0;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--color-warning);
+}
+.task-gate-options {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-top: 0.6rem;
+  margin-top: 0.625rem;
 }
-.run-if-option-label {
-  font-size: 0.75rem;
+.task-gate-option-label {
+  font-size: 0.76rem;
   color: var(--color-text-muted);
 }
-/* ID selectors so these beat the generic .modal-lg filled-field width. */
-.modal-lg #runIfTimeoutInput {
-  width: 5.5rem;
-}
-.modal-lg #runIfOnErrorSelect {
-  width: auto;
+.task-gate-option-gap {
+  width: 0.875rem;
 }
 /* One consistent input-label typography across both modals: a single size +
    medium weight for every field label (bare <label>, .form-label, and the
@@ -2277,10 +2420,104 @@ tr.sla-row-fail {
 .modal-footer .btn {
   padding: 0.55rem 1.15rem;
 }
-/* Pushes the remaining footer actions to the right (Estimate Cost sits at the
-   start edge, Cancel/Launch cluster at the end). */
-.modal-footer-start {
-  margin-right: auto;
+/* ── Task-modal footer: Estimate Cost (ghost) + inline result hugged left,
+   status text + Cancel + Launch hugged right. */
+.task-footer {
+  justify-content: flex-start;
+  padding: 0.8rem 1.25rem;
+  position: relative;
+  z-index: 2;
+  transition: box-shadow var(--motion-fast) ease;
+}
+.task-footer.is-scrolled {
+  box-shadow: 0 -8px 18px var(--color-overlay-strong);
+}
+.task-footer-spacer {
+  flex: 1;
+}
+.task-footer-status {
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.task-footer-status--error {
+  color: var(--color-danger);
+}
+.task-estimate-btn {
+  font-size: 0.8rem;
+}
+.task-estimate-slot {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.task-estimate-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.44rem;
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  border-radius: 0.3rem;
+}
+.task-estimate-value:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.task-estimate-note {
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+}
+.task-estimate-ceiling {
+  color: var(--color-warning);
+}
+/* The inline figure dims once the schedule/model it was computed against
+   changes — stale until Estimate is run again. */
+.task-estimate-result {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+.task-estimate-result.is-stale .task-estimate-value {
+  opacity: 0.45;
+}
+/* Full forecast detail (token breakdown, range, ceiling, note) on hover/focus
+   of the inline figure. */
+.task-estimate-popover {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 0.6rem);
+  left: 0;
+  width: 24rem;
+  max-width: 70vw;
+  z-index: 20;
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-md);
+  padding: 0.875rem;
+}
+.task-estimate-result:hover .task-estimate-popover,
+.task-estimate-result:focus-within .task-estimate-popover {
+  display: block;
+  animation: pop-up var(--motion-fast) ease both;
+}
+.task-estimate-stale-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+.task-spinner {
+  animation: task-spin 0.8s linear infinite;
+}
+@keyframes task-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.task-launch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 .settings-divider {
   height: 1px;
@@ -2361,17 +2598,16 @@ tr.sla-row-fail {
   color: var(--color-text-primary);
   font-size: 0.875rem;
 }
-.optional-badge {
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-  border: 1px solid var(--color-border);
-  border-radius: 0.3rem;
-  padding: 0.05rem 0.3rem;
+/* Prompt textarea: auto-grows via JS (3 → ~8 lines), no native resize grip. */
+.task-modal .task-prompt-input {
+  min-height: 4.875rem;
+  max-height: 15rem;
+  resize: none;
+  line-height: 1.55;
 }
-#promptTextarea {
-  min-height: 6rem;
-  resize: vertical;
+.task-modal .task-doc-input {
+  resize: none;
+  line-height: 1.55;
 }
 .advanced-setting-meta,
 .cron-description {
@@ -2384,43 +2620,76 @@ tr.sla-row-fail {
   font-size: 0.75rem;
   margin-top: 0.3rem;
 }
-.advanced-toggle {
-  display: flex;
-  align-items: baseline;
-  gap: 0.55rem;
-  width: 100%;
+/* ── Schedule: segmented Run now · Run once · Repeat mode — only one mode's
+   fields exist at a time (the old both-fields-filled state is
+   unrepresentable). Active fill rides the 140ms motion token; the focus ring
+   is inset so the pill's clipped corners don't cut it. */
+.task-segment {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.task-segment-btn {
+  padding: 0.375rem 1rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
   background: transparent;
   border: none;
-  color: var(--color-text-muted);
   cursor: pointer;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  padding: 0;
+  transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
 }
-.advanced-toggle:hover {
+.task-segment-btn:hover {
   color: var(--color-text-secondary);
 }
-.advanced-toggle:focus-visible {
+.task-segment-btn.is-active {
+  background: var(--color-primary);
+  color: var(--color-white);
+  font-weight: 600;
+}
+.task-segment-btn:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: 0.3rem;
+  box-shadow: inset 0 0 0 2px var(--color-accent);
 }
-.advanced-toggle .arrow {
-  font-size: 0.65rem;
-}
-.advanced-toggle-hint {
-  margin-left: auto;
-  font-weight: 400;
-  letter-spacing: 0.03em;
-  text-transform: none;
-  font-size: 0.7rem;
+.task-schedule-caption {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
   color: var(--color-text-muted);
-  opacity: 0.8;
 }
-.advanced-body {
-  margin-top: 1rem;
+.task-schedule-once,
+.task-schedule-repeat {
+  margin-top: 0.625rem;
+}
+/* Cron input: inset clock icon + mono value. */
+.task-cron-wrap {
+  position: relative;
+}
+.task-cron-wrap > svg {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+.task-modal .task-cron-input {
+  padding-left: 2.125rem;
+  font-family: var(--font-code-ui);
+  font-size: 0.8rem;
+}
+/* Plain-language echo of the parsed expression (+ previewed next run). */
+.task-cron-echo {
+  display: flex;
+  align-items: center;
+  gap: 0.44rem;
+  margin-top: 0.625rem;
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+}
+.task-cron-echo svg {
+  flex: 0 0 auto;
+  color: var(--color-success);
 }
 .schedule-datetime-group {
   display: flex;
@@ -2448,11 +2717,13 @@ tr.sla-row-fail {
   margin-top: 1rem;
 }
 .preset-btn {
+  display: grid;
+  gap: 0.125rem;
   border: 1px solid var(--color-border);
-  border-radius: 0.55rem;
+  border-radius: 0.5rem;
   background: transparent;
   color: var(--color-text-secondary);
-  padding: 0.45rem 0.7rem;
+  padding: 0.375rem 0.7rem;
   cursor: pointer;
   text-align: left;
   transition: border-color var(--motion-fast, 0.12s) ease, background var(--motion-fast, 0.12s) ease;
@@ -2466,17 +2737,19 @@ tr.sla-row-fail {
   box-shadow: var(--focus-ring);
 }
 .preset-btn.active {
-  border-color: var(--color-primary);
-  background: color-mix(in srgb, var(--color-primary) 16%, transparent);
-  color: var(--color-text-primary);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
 .preset-label {
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   font-weight: 500;
 }
+.preset-btn.active .preset-label {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
 .preset-cron {
-  margin-top: 0.1rem;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   font-family: var(--font-code-ui);
   color: var(--color-text-muted);
 }
@@ -2528,140 +2801,270 @@ tr.sla-row-fail {
   color: var(--color-text-muted);
 }
 
-/* Email chips */
-.chips-container {
+/* ── Email results: a chip FIELD — chips + the add-input live inside one
+   bordered control (type, Enter adds, ✕ removes; the field itself carries the
+   focus ring + error border). */
+.task-chipfield {
+  min-height: 2.375rem;
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-bottom: 0.4rem;
+  gap: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.625rem;
+  background: var(--color-overlay-soft);
+  cursor: text;
+  transition: border-color var(--motion-fast) ease;
 }
-.chip {
+.task-chipfield:focus-within {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--focus-ring);
+}
+.task-chipfield.has-error {
+  border-color: var(--color-danger);
+}
+.task-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: 0.4rem;
+  gap: 0.375rem;
   border: 1px solid var(--color-border);
-  font-size: 0.8rem;
+  border-radius: var(--radius-pill);
+  padding: 0.19rem 0.5rem 0.19rem 0.625rem;
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-1);
 }
-.chip.selected {
-  border-color: var(--color-primary);
-}
-.chip-delete {
+.task-chip-delete {
+  display: inline-flex;
+  align-items: center;
   background: transparent;
   border: none;
+  padding: 0;
   color: var(--color-text-muted);
   cursor: pointer;
-  /* Enlarged hit area (see .hit-area): the glyph is ~13px on its own. */
+  /* Enlarged hit area: the glyph is ~10px on its own. */
   position: relative;
 }
-.chip-delete::before {
+.task-chip-delete::before {
   content: "";
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 2rem;
-  height: 2rem;
+  width: 1.75rem;
+  height: 1.75rem;
   transform: translate(-50%, -50%);
 }
-.chip-delete:focus-visible {
+.task-chip-delete:hover {
+  color: var(--color-text-primary);
+}
+.task-chip-delete:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
   border-radius: 0.25rem;
 }
-.custom-email-row {
-  display: flex;
-  gap: 0.5rem;
-}
 
-/* File upload */
-.file-upload-dropzone {
-  border: 1px dashed var(--color-border);
-  border-radius: 0.6rem;
-  padding: 1rem;
-  text-align: center;
+/* ── Attachments: compact attach row that grows a file list. */
+.file-attach-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
 }
-.file-upload-dropzone.drag-over {
-  border-color: var(--color-primary);
+.file-attach-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.44rem;
+  flex: 0 0 auto;
+  border: 1px solid var(--color-border);
+  border-radius: 0.625rem;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 0.375rem 0.75rem;
+  cursor: pointer;
+  transition: border-color var(--motion-fast) ease, background var(--motion-fast) ease;
+}
+.file-attach-btn:hover {
+  border-color: var(--color-border-strong);
+  background: var(--rail-hover);
+}
+.file-attach-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.file-attach-hint {
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+}
+.file-upload-error {
+  margin: 0.5rem 0 0;
+  font-size: 0.76rem;
+  color: var(--color-danger);
 }
 .file-input-hidden {
   display: none;
 }
 .file-list {
   display: grid;
-  gap: 0.4rem;
+  gap: 0.5rem;
   margin-top: 0.5rem;
 }
 .file-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.4rem 0.6rem;
-  border: 1px solid var(--color-border);
+  padding: 0.44rem 0.625rem;
+  border: 1px solid var(--color-border-subtle);
   border-radius: 0.5rem;
 }
-.file-item.invalid {
+.file-item-name {
+  font-family: var(--font-code-ui);
+  font-size: 0.76rem;
+  color: var(--color-text-secondary);
+}
+.file-item-size {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+.file-item-spacer {
+  flex: 1;
+}
+.file-item.invalid,
+.file-item.error {
   border-color: var(--color-danger, #e08080);
 }
 .file-item-error-text {
   color: var(--color-danger, #e08080);
   font-size: 0.7rem;
 }
+.file-item-status-icon {
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+}
+.file-item-status-icon.uploaded-icon {
+  color: var(--color-success);
+}
 .file-item-remove {
   background: transparent;
   border: none;
   color: var(--color-text-muted);
   cursor: pointer;
+  position: relative;
+}
+.file-item-remove::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1.75rem;
+  height: 1.75rem;
+  transform: translate(-50%, -50%);
+}
+.file-item-remove:hover {
+  color: var(--color-text-primary);
+}
+.file-item-remove:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 0.25rem;
 }
 
-/* MCP server picker (shared component) */
+/* MCP server picker (shared component) — compact single-line rows in one
+   bordered roster: switch + mono name + purpose (disabled) or tool count +
+   account seat (enabled). Enabled rows tint so the granted surface scans. */
 .mcp-server-picker__list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: grid;
-  gap: 0.6rem;
-}
-.mcp-server-picker__row {
   border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
-  padding: 0.6rem;
+  border-radius: 0.625rem;
+  overflow: hidden;
+}
+/* FIXED row height (not min-height): a row must not grow when toggling on
+   swaps its purpose text for the tool count + account seat, or the whole
+   roster below jumps. The tallest content (the compact account select) is
+   sized to fit inside this height. */
+.mcp-server-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0 0.75rem;
+  height: 2.75rem;
+}
+.mcp-server-picker__row + .mcp-server-picker__row {
+  border-top: 1px solid var(--color-border-subtle);
+}
+.mcp-server-picker__row--enabled {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
 .mcp-server-picker__toggle {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.625rem;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
 }
 .mcp-server-picker__name {
-  font-weight: 500;
+  font-family: var(--font-code-ui);
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.mcp-server-picker__row--enabled .mcp-server-picker__name {
   color: var(--color-text-primary);
 }
 .mcp-server-picker__count {
-  font-size: 0.7rem;
+  font-family: var(--font-code-ui);
+  font-size: 0.66rem;
   color: var(--color-text-muted);
+  white-space: nowrap;
 }
 .mcp-server-picker__desc {
-  font-size: 0.75rem;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.76rem;
   color: var(--color-text-muted);
-  margin: 0.3rem 0;
+  margin: 0;
 }
 .mcp-server-picker__account {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-top: 0.4rem;
+  flex: 0 0 auto;
 }
 .mcp-server-picker__account-label {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   color: var(--color-text-muted);
 }
-.mcp-server-picker__account-select {
-  padding: 0.3rem 0.5rem;
-  border-radius: 0.4rem;
+/* select.<class> ties the generic `.modal-lg select` sizing rule's (0,1,1)
+   specificity and wins by source order — without it the anchor's roomier
+   padding/font inflates enabled rows past the fixed row height above. */
+select.mcp-server-picker__account-select {
+  height: 1.875rem;
+  padding: 0 0.56rem;
+  border-radius: 0.5rem;
   border: 1px solid var(--color-border);
-  background: transparent;
+  background: var(--color-surface-1);
   color: var(--color-text-primary);
+  font-size: 0.76rem;
+  line-height: 1.75rem;
+}
+/* Connected remote servers (#443/#466): a read-only status pill, not a toggle. */
+.mcp-server-picker__connected {
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-success);
+  border: 1px solid var(--color-success-border);
+  border-radius: var(--radius-pill);
+  padding: 0.125rem 0.5rem;
 }
 
 /* Model picker dropdown */
@@ -2718,6 +3121,199 @@ tr.sla-row-fail {
   padding: 0.6rem 0.7rem;
   color: var(--color-text-muted);
   font-size: 0.8rem;
+}
+
+/* ── New Task modal (task-modal) — metrics + lifecycle chrome on top of the
+   shared .modal/.modal-lg primitives. Scoped to .task-modal so the other
+   dialogs (LogViewer, ConfirmDialog, Datasets) keep their existing look.
+   These rules sit AFTER the .modal-lg field anchor so equal-specificity
+   overrides (input widths etc.) resolve this way. */
+.task-modal {
+  max-width: 720px;
+  position: relative;
+}
+.task-modal .modal-header {
+  position: relative;
+  z-index: 2;
+  padding: 1rem 1.25rem 0.875rem;
+  background: var(--color-surface-1);
+  transition: box-shadow var(--motion-fast) ease, opacity var(--motion-fast) ease;
+}
+.task-modal .modal-header.is-scrolled {
+  box-shadow: 0 8px 18px var(--color-overlay-strong);
+}
+.task-modal .modal-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: normal;
+}
+.task-modal .modal-subtitle {
+  margin-top: 0.19rem;
+  font-size: 0.78rem;
+}
+.task-modal .modal-close {
+  width: 1.75rem;
+  height: 1.75rem;
+  margin: 0;
+  border-radius: 0.5rem;
+}
+.task-modal .modal-close:hover {
+  background: var(--color-overlay-soft);
+  color: var(--color-text-primary);
+}
+.task-modal .modal-body {
+  padding: 1.25rem 1.25rem 1.5rem;
+  transition: opacity var(--motion-fast) ease;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+.task-modal .modal-body::-webkit-scrollbar {
+  width: 10px;
+}
+.task-modal .modal-body::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+/* Submitting: the form is inert — header + body dim, footer side-actions lock
+   (their :disabled opacity), the primary shows the spinner. */
+.task-modal .modal-header.is-dimmed,
+.task-modal .modal-body.is-dimmed {
+  opacity: 0.6;
+}
+.task-modal .btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.task-modal .modal-footer .btn {
+  border-radius: 0.625rem;
+}
+/* Equal-specificity width overrides for the compact inline controls — must
+   beat the .modal-lg "every field is 100% wide" anchor by order. */
+.task-modal .task-chipfield input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 9rem;
+  border: none;
+  background: transparent;
+  padding: 0.125rem;
+  font-size: 0.8rem;
+}
+.task-modal .task-chipfield input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus-visible {
+  outline: none;
+  border: none;
+  box-shadow: none;
+}
+.task-modal .task-gate-options input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
+  width: 3.5rem;
+  padding: 0.31rem 0.56rem;
+  font-size: 0.78rem;
+}
+.task-modal .task-gate-options select {
+  width: auto;
+  padding: 0.31rem 0.625rem;
+  font-size: 0.76rem;
+  background: var(--color-surface-1);
+  border-radius: 0.5rem;
+}
+.task-modal .mcp-server-picker__account-select {
+  width: auto;
+}
+/* Select chevron inset: the native UA arrow hugs the control's right edge
+   (padding can't move it), so the modal's selects draw their own chevron —
+   same 10px stroke glyph as every other chevron in the design — at a real
+   0.6rem inset, with padding reserving its lane. The glyph color is the
+   muted-text token's value embedded per theme (a background SVG can't read
+   custom properties); nothing else about the controls changes. */
+.task-modal select.mcp-server-picker__account-select,
+.task-modal .task-gate-options select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23beb6cd' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 10px 10px;
+  background-color: var(--color-surface-1);
+  padding-right: 1.6rem;
+}
+:root[data-theme="light"] .task-modal select.mcp-server-picker__account-select,
+:root[data-theme="light"] .task-modal .task-gate-options select {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%235c6a87' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+}
+.task-modal .task-gate-command {
+  margin-top: 0.625rem;
+}
+.task-modal .task-limits-grid input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
+  min-height: 2.125rem;
+  padding: 0.44rem 0.7rem;
+  font-size: 0.8rem;
+}
+/* Error fields: danger border always; when focused, the ring goes danger too
+   (the design's first-error treatment). Keyed on :focus, not :focus-visible —
+   submit moves focus onto the first error programmatically, which Chromium
+   doesn't count as focus-visible after a mouse click. */
+.task-modal .has-error {
+  border-color: var(--color-danger);
+}
+/* The :not chain mirrors the .modal-lg field anchor so this outranks its
+   accent :focus-visible ring (text inputs always match focus-visible). */
+.task-modal input.has-error:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus,
+.task-modal textarea.has-error:focus {
+  outline: none;
+  border-color: var(--color-danger);
+  box-shadow: 0 0 0 2px var(--color-surface-1), 0 0 0 4px var(--color-danger);
+}
+
+/* Dirty-close guard: an in-modal scrim + confirm card ("Discard this task?").
+   The card names what would be lost; Discard is the destructive action. */
+.task-discard-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: var(--color-overlay-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  animation: set-fade var(--motion-fast) ease both;
+}
+.task-discard-card {
+  width: 21.25rem;
+  max-width: 100%;
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-md);
+  padding: 1rem 1.125rem;
+  animation: pop-up var(--motion-base) ease both;
+}
+.task-discard-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.task-discard-message {
+  margin-top: 0.44rem;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+}
+.task-discard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.875rem;
+}
+.task-discard-confirm {
+  background: var(--color-danger);
+  /* Theme-flipped label: near-black on the light-red dark-theme danger, near-
+     white on the deep-red light-theme danger — both straight from tokens. */
+  color: var(--color-bg);
+  font-weight: 600;
+}
+.task-discard-confirm:hover {
+  filter: brightness(1.06);
 }
 
 /* Credential-account admin + concurrency cap */
