@@ -10,7 +10,7 @@
 
 # fake: fabricated "sk-or-v1-..."-shaped string fed to redactSecrets() in
 # TestRedactSecretsInLog (asserts the value gets redacted).
-internal/agentcore/orchestration_test.go:generic-api-key:739
+internal/agentcore/orchestration_test.go:generic-api-key:695
 
 # fake: fabricated JWT in the fakeFastIODownloadResponse test fixture
 # (download_token); the comment in the source marks it "TEST FIXTURE ONLY".
