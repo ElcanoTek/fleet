@@ -15,6 +15,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Remote MCP OAuth callbacks use the deployed Fleet domain**: web-enabled
+  bootstrap runs now write the same computed public origin to the backend's
+  `FLEET_PUBLIC_BASE_URL` and generate the token-encryption key once; normal
+  `fleet update` runs also reconcile existing installs from the deployed web
+  origin before restarting. A
+  `--domain` deployment therefore registers `https://<domain>/api/oauth/mcp/callback`
+  instead of retaining a localhost callback.
+
 - **Open-access hosted MCPs no longer get forced through OAuth discovery**:
   one-click catalog adds now preserve the entry's authentication mode. Servers
   such as AWS Knowledge are stored ready to use without a bearer header, so an
