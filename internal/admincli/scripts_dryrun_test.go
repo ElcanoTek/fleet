@@ -79,6 +79,40 @@ func TestBootstrapDryRunSmoke(t *testing.T) {
 	}
 }
 
+func TestBootstrapWiresRemoteMCPPublicOrigin(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`upsert_env FLEET_PUBLIC_BASE_URL "$origin"`,
+		`ensure_env_b64_key FLEET_MCP_OAUTH_ENCRYPTION_KEY 32`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("bootstrap must contain %q", want)
+		}
+	}
+}
+
+func TestUpdateReconcilesRemoteMCPPublicOrigin(t *testing.T) {
+	root := repoRootFromTest(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`upsert_env_file "$backend_env_file" FLEET_PUBLIC_BASE_URL "$web_origin"`,
+		`upsert_env_file "$backend_env_file" FLEET_MCP_OAUTH_ENCRYPTION_KEY`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("update must contain %q", want)
+		}
+	}
+}
+
 // TestUpdateDryRunSmoke is the regression guard for #91: `update.sh
 // --dry-run --no-pull` must succeed and its plan must include the binary
 // build + the install-to-deploy-path step (#71 — without which an update is a

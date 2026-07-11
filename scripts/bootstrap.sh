@@ -303,6 +303,15 @@ ensure_env_secret() {
   upsert_env "$key" "$(gen_secret "$len")"
 }
 
+# ensure_env_b64_key KEY BYTES — generate a standard-base64 binary key once.
+# Unlike gen_secret (an alphanumeric application token), encryption settings
+# are decoded by fleet and therefore need an exact decoded byte length.
+ensure_env_b64_key() {
+  local key="$1" bytes="${2:-32}"
+  [[ -f "$ENV_FILE" ]] && grep -q "^${key}=" "$ENV_FILE" && return 0
+  upsert_env "$key" "$(head -c "$bytes" /dev/urandom | base64 | tr -d '\n')"
+}
+
 # normalize_auth_pubkey VALUE — echo the bare base64 AUTH_SIGNING_PUBKEY, or fail.
 # Accepts the `auth pubkey` output line (AUTH_SIGNING_PUBKEY=<b64>) or the bare
 # key, strips quotes/whitespace, and requires the decode to be exactly 32 bytes
@@ -339,6 +348,11 @@ deploy_web_tier() {
   step "Web tier: ensuring shared secrets in ${ENV_FILE} + reloading backend"
   ensure_env_secret FLEET_SERVER_TOKEN 32
   ensure_env_secret ADMIN_API_KEY 32
+  # Remote-MCP OAuth callbacks are registered by the backend, not Next.js. Keep
+  # its stable callback origin identical to the public origin compiled into the
+  # web tier; otherwise --domain deployments can accidentally retain localhost.
+  upsert_env FLEET_PUBLIC_BASE_URL "$origin"
+  ensure_env_b64_key FLEET_MCP_OAUTH_ENCRYPTION_KEY 32
   systemctl try-restart "$SERVICE_NAME" >/dev/null 2>&1 || true
 
   step "Web tier: building the Next.js app (origin=${origin})"

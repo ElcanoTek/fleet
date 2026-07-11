@@ -252,6 +252,10 @@ The feature is **off until configured** and fails closed:
   (e.g. `https://fleet.example.com`). The OAuth redirect URI is derived from it
   (`<base>/api/oauth/mcp/callback`) and must be byte-stable; it is **never**
   reconstructed from request headers. Required.
+  `scripts/bootstrap.sh --enable-web --domain fleet.example.com` writes this
+  value and the encryption key into the backend environment automatically;
+  `fleet update` reconciles existing installs from the web tier's persisted
+  public-origin stamp before restarting the backend.
 - `FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP` — dev only; permits `http://` servers.
   Default false (https required).
 
