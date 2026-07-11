@@ -38,6 +38,27 @@ mcp_servers:
 	}
 }
 
+func TestReservedTaskIDTokenSurvivesLoad(t *testing.T) {
+	t.Setenv("FLEET_TASK_ID", "must-not-resolve-at-bundle-load")
+	dir := writeManifest(t, `
+mcp_servers:
+  - name: callback
+    type: stdio
+    command: python3
+    args: ["server.py"]
+    always: true
+    env:
+      LEGACY_TASK_ID: "${FLEET_TASK_ID}"
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.MCPServerConfigs()["callback"].Env["LEGACY_TASK_ID"]; got != "${FLEET_TASK_ID}" {
+		t.Fatalf("task id token resolved during bundle load: %q", got)
+	}
+}
+
 // TestReservedWorkspaceTokenNotDroppedByOptionalEnv pins that a token-bearing
 // key survives optional_env (its resolved value is non-empty — the token), so
 // the spawn-time substitution still sees it.

@@ -9,6 +9,19 @@ bundle manifest.
 
 ## What shipped
 
+### Scheduled task inputs and `${FLEET_TASK_ID}`
+
+`POST /v1/tasks` accepts optional `file_names` paired 1:1 with `files`.
+Fleet keeps the uploaded storage names collision-safe, then copies each input
+into the dedicated run's `${FLEET_WORKSPACE}/inputs` directory under its
+logical name before MCP subprocesses start. Bundle env maps such as
+`CUTLASS_INPUT_DIR: "${FLEET_WORKSPACE}/inputs"` therefore agree with filenames
+referenced in an intake-generated prompt.
+
+Bundles may also reference the reserved `${FLEET_TASK_ID}` token in an MCP env
+value. It is preserved at bundle load and replaced with the scheduled task UUID
+only for that dedicated run; shared/interactive spawns drop token-bearing keys.
+
 ### 1. Reserved `${FLEET_WORKSPACE}` manifest-env token
 
 The servers key several behaviors on writable directories passed via env:

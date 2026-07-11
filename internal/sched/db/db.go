@@ -374,7 +374,7 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -425,8 +425,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
 			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
-			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60)
+			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens,
+			file_names
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
@@ -485,7 +486,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			output_json = EXCLUDED.output_json,
 			carry_context = EXCLUDED.carry_context,
 			allow_event_triggers = EXCLUDED.allow_event_triggers,
-			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens`,
+			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens,
+			file_names = EXCLUDED.file_names`,
 		// effective_priority is deliberately OMITTED from the upsert: it is set
 		// once on INSERT and thereafter mutated ONLY by the anti-starvation sweep
 		// (#230). UpdateTask delegates here, so including it would let a status
@@ -553,6 +555,7 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		task.CarryContext,
 		task.AllowEventTriggers,
 		thinkingBudgetValue(task.ThinkingBudgetTokens),
+		marshalJSON(task.FileNames),
 	)
 	return err
 }
@@ -670,7 +673,8 @@ const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
 			output_json = EXCLUDED.output_json,
 			carry_context = EXCLUDED.carry_context,
 			allow_event_triggers = EXCLUDED.allow_event_triggers,
-			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens`
+			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens,
+			file_names = EXCLUDED.file_names`
 
 // taskInsertColumns is the ordered column list for the tasks INSERT, kept in
 // sync with AddTask / AddTaskBatch / AddTaskTx. Extracted as a constant so the
@@ -684,9 +688,9 @@ const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iteratio
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
-			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens`
+			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens, file_names`
 
-// taskInsertArgs returns the 57 positional INSERT values for a task, in the
+// taskInsertArgs returns the positional INSERT values for a task, in the
 // exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
 // the single-row and multi-row paths can never disagree on argument ordering.
 // It derives actual_duration_seconds (#274) up front so the batch/tx paths
@@ -754,6 +758,7 @@ func taskInsertArgs(t *models.Task) []any {
 		t.CarryContext,
 		t.AllowEventTriggers,
 		thinkingBudgetValue(t.ThinkingBudgetTokens),
+		marshalJSON(t.FileNames),
 	}
 }
 
@@ -1077,7 +1082,7 @@ func nullableString(s string) *string {
 	return &s
 }
 
-func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*models.Task, error) {
+func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*models.Task, error) { //nolint:gocyclo // one ordered SQL row scanner; splitting risks column drift.
 	var (
 		id                     uuid.UUID
 		name                   string
@@ -1143,6 +1148,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		allowEventTriggers     bool
 		errorAnalysis          sql.NullString
 		artifacts              sql.NullString
+		fileNames              sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -1157,7 +1163,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
 		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis, &artifacts,
-		&pendingQuestion, &pendingAnswer, &carryContext, &allowEventTriggers, &thinkingBudget,
+		&pendingQuestion, &pendingAnswer, &carryContext, &allowEventTriggers, &thinkingBudget, &fileNames,
 	)
 	if err != nil {
 		return nil, err
@@ -1255,6 +1261,9 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	}
 	if files.Valid {
 		task.Files = unmarshalStringSlice(files.String)
+	}
+	if fileNames.Valid {
+		task.FileNames = unmarshalStringSlice(fileNames.String)
 	}
 	// tags is NOT NULL DEFAULT '[]', so it's always present; assign independently
 	// of files (unmarshalStringSlice maps ""/"null" → empty slice safely).
@@ -2432,7 +2441,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			output_schema = $52,
 			output_json = $53,
 			artifacts = $54,
-			thinking_budget_tokens = $55
+			thinking_budget_tokens = $55,
+			file_names = $56
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -2489,6 +2499,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		marshalRawJSON(task.OutputJSON),
 		marshalRawJSON(task.Artifacts),
 		thinkingBudgetValue(task.ThinkingBudgetTokens),
+		marshalJSON(task.FileNames),
 	)
 	return err
 }

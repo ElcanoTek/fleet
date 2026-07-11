@@ -1891,7 +1891,14 @@ type expandResult struct {
 // never resolved from the process env (even if an operator exports a var of
 // that name) and never blanked. Only the bare ${FLEET_WORKSPACE} spelling is
 // reserved; :-/:? forms are not supported for it.
-const reservedWorkspaceVar = "FLEET_WORKSPACE"
+const (
+	reservedWorkspaceVar = "FLEET_WORKSPACE"
+	reservedTaskIDVar    = "FLEET_TASK_ID"
+)
+
+func reservedRuntimeVar(name string) bool {
+	return name == reservedWorkspaceVar || name == reservedTaskIDVar
+}
 
 // expandExpr resolves the body of a single ${...} expression (the text between
 // the braces) into a replacement, implementing the ${VAR}, ${VAR:-default} and
@@ -1924,7 +1931,7 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 		// hence deferred) rather than silently mangling it.
 	}
 	name := strings.TrimSpace(expr)
-	if name == reservedWorkspaceVar {
+	if reservedRuntimeVar(name) {
 		// Reserved spawn-time token: always deferred, never read from the
 		// process env (an operator-exported FLEET_WORKSPACE must not hijack it).
 		return expandResult{deferred: true}, nil
@@ -1989,7 +1996,7 @@ func interpolate(v string) string {
 			break
 		}
 		name := v[start+2 : start+end]
-		if strings.TrimSpace(name) == reservedWorkspaceVar {
+		if reservedRuntimeVar(strings.TrimSpace(name)) {
 			sb.WriteString(v[start : start+end+1]) // preserve the reserved token verbatim
 		} else {
 			sb.WriteString(strings.TrimSpace(os.Getenv(name)))

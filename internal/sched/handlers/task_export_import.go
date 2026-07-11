@@ -315,6 +315,7 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	existing.Recurrence = tc.Recurrence
 	existing.Timezone = tc.Timezone
 	existing.Files = tc.Files
+	existing.FileNames = tc.FileNames
 	existing.Tags = tc.Tags
 	if tc.MaxRetries != nil {
 		existing.MaxRetries = *tc.MaxRetries

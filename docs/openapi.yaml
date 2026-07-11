@@ -193,6 +193,7 @@ components:
         scheduled_for: { type: string, format: date-time }
         recurrence: { type: string, description: "5-field cron expression" }
         files: { type: array, items: { type: string } }
+        file_names: { type: array, items: { type: string }, description: "Optional logical names paired 1:1 with files. Inputs are materialized under these prompt-visible basenames in the dedicated connector workspace." }
       required: [prompt]
     Task:
       type: object
@@ -212,6 +213,7 @@ components:
         result: { type: string }
         error_message: { type: string }
         files: { type: array, items: { type: string } }
+        file_names: { type: array, items: { type: string } }
         created_by: { type: string, format: uuid }
         workspace_path: { type: string, description: "Host filesystem path of the per-run workspace directory the agent wrote into (#287). Present once the run begins; absent for tasks that never ran." }
         allow_task_creation: { type: boolean, description: "Whether this task's scheduled runs may enqueue follow-up tasks via create_task (default false)." }
