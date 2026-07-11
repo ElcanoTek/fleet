@@ -59,10 +59,43 @@ const WEEKDAYS = [
   { value: "0", label: "Sunday" },
 ];
 
-function simpleScheduleCron(frequency: SimpleFrequency, time: string, weekday: string): string {
+type SimpleSchedule = { frequency: SimpleFrequency; time: string; weekdays: string[] };
+
+function simpleScheduleCron(frequency: SimpleFrequency, time: string, weekdays: string[]): string {
   const [hour = "9", minute = "0"] = (time || "09:00").split(":");
-  const day = frequency === "weekdays" ? "1-5" : frequency === "weekly" ? weekday : "*";
+  const day = frequency === "weekdays" ? "1-5" : frequency === "weekly" ? weekdays.join(",") : "*";
   return `${Number(minute)} ${Number(hour)} * * ${day}`;
+}
+
+// parseSimpleSchedule hydrates the friendly editor from the subset it can
+// represent. Anything more complex stays in Advanced cron rather than being
+// shown inaccurately by simpler controls.
+function parseSimpleSchedule(raw: string): SimpleSchedule | null {
+  const [minuteRaw, hourRaw, monthDay, month, weekDay, ...rest] = raw.trim().split(/\s+/);
+  const minute = Number(minuteRaw);
+  const hour = Number(hourRaw);
+  if (
+    rest.length > 0 ||
+    !Number.isInteger(minute) ||
+    minute < 0 ||
+    minute > 59 ||
+    !Number.isInteger(hour) ||
+    hour < 0 ||
+    hour > 23 ||
+    monthDay !== "*" ||
+    month !== "*"
+  ) {
+    return null;
+  }
+  const time = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  if (weekDay === "*") return { frequency: "daily", time, weekdays: ["1"] };
+  if (weekDay === "1-5") return { frequency: "weekdays", time, weekdays: ["1"] };
+  if (!weekDay) return null;
+  const requested = weekDay.split(",");
+  if (requested.length === 0 || requested.some((day) => !/^[0-6]$/.test(day))) return null;
+  const weekdays = WEEKDAYS.map((day) => day.value).filter((day) => requested.includes(day));
+  if (weekdays.length !== new Set(requested).size) return null;
+  return { frequency: "weekly", time, weekdays };
 }
 
 const SCHEDULE_MODES: Array<{ id: ScheduleMode; label: string }> = [
@@ -175,7 +208,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
   const [repeatEditor, setRepeatEditor] = useState<RepeatEditor>("simple");
   const [simpleFrequency, setSimpleFrequency] = useState<SimpleFrequency>("weekdays");
   const [simpleTime, setSimpleTime] = useState("09:00");
-  const [simpleWeekday, setSimpleWeekday] = useState("1");
+  const [simpleWeekdays, setSimpleWeekdays] = useState<string[]>(["1"]);
 
   const [contextOpen, setContextOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -294,7 +327,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
     setRepeatEditor("simple");
     setSimpleFrequency("weekdays");
     setSimpleTime("09:00");
-    setSimpleWeekday("1");
+    setSimpleWeekdays(["1"]);
     setContextOpen(false);
     setToolsOpen(false);
     setAdvancedOpen(false);
@@ -374,8 +407,15 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
     setDescription(t.description ?? "");
     setTagsInput((t.tags ?? []).join(", "));
     setPersona(t.persona ?? "");
-    setRecurrence(t.recurrence ?? "");
-    setRepeatEditor(t.recurrence ? "cron" : "simple");
+    const templateRecurrence = t.recurrence ?? "";
+    const parsedSchedule = parseSimpleSchedule(templateRecurrence);
+    setRecurrence(templateRecurrence);
+    setRepeatEditor(templateRecurrence && !parsedSchedule ? "cron" : "simple");
+    if (parsedSchedule) {
+      setSimpleFrequency(parsedSchedule.frequency);
+      setSimpleTime(parsedSchedule.time);
+      setSimpleWeekdays(parsedSchedule.weekdays);
+    }
     setScheduleMode(t.recurrence ? "repeat" : "now");
     setScheduledDate("");
     setModel(t.model ?? DEFAULT_PRIMARY_MODEL);
@@ -682,7 +722,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
   const changeScheduleMode = (mode: ScheduleMode) => {
     setScheduleMode(mode);
     if (mode === "repeat" && !recurrence.trim()) {
-      setRecurrence(simpleScheduleCron(simpleFrequency, simpleTime, simpleWeekday));
+      setRecurrence(simpleScheduleCron(simpleFrequency, simpleTime, simpleWeekdays));
     }
     setErrors((prev) => {
       const next = { ...prev };
@@ -690,6 +730,15 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
       delete next.scheduled_for;
       return next;
     });
+  };
+
+  const showSimpleRepeatEditor = () => {
+    const parsed = parseSimpleSchedule(recurrence);
+    if (!parsed) return;
+    setSimpleFrequency(parsed.frequency);
+    setSimpleTime(parsed.time);
+    setSimpleWeekdays(parsed.weekdays);
+    setRepeatEditor("simple");
   };
 
   const autoGrowPrompt = (el: HTMLTextAreaElement) => {
@@ -1012,7 +1061,19 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
                 {scheduleMode === "repeat" ? (
                   <div className="task-schedule-repeat">
                     <div className="repeat-editor-tabs" role="tablist" aria-label="Repeat input method">
-                      <button type="button" role="tab" aria-selected={repeatEditor === "simple"} className={repeatEditor === "simple" ? "is-active" : ""} onClick={() => setRepeatEditor("simple")}>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={repeatEditor === "simple"}
+                        className={repeatEditor === "simple" ? "is-active" : ""}
+                        disabled={repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null}
+                        title={
+                          repeatEditor === "cron" && parseSimpleSchedule(recurrence) === null
+                            ? "This cron schedule is too complex for the simple editor"
+                            : undefined
+                        }
+                        onClick={showSimpleRepeatEditor}
+                      >
                         Simple schedule
                       </button>
                       <button type="button" role="tab" aria-selected={repeatEditor === "cron"} className={repeatEditor === "cron" ? "is-active" : ""} onClick={() => setRepeatEditor("cron")}>
@@ -1029,7 +1090,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
                             onChange={(e) => {
                               const frequency = e.target.value as SimpleFrequency;
                               setSimpleFrequency(frequency);
-                              setRecurrence(simpleScheduleCron(frequency, simpleTime, simpleWeekday));
+                              setRecurrence(simpleScheduleCron(frequency, simpleTime, simpleWeekdays));
                               setFieldError("recurrence", "");
                             }}
                           >
@@ -1039,16 +1100,51 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
                           </select>
                         </label>
                         {simpleFrequency === "weekly" ? (
-                          <label className="task-schedule-field">
-                            <span>On</span>
-                            <select aria-label="Repeat weekday" value={simpleWeekday} onChange={(e) => { setSimpleWeekday(e.target.value); setRecurrence(simpleScheduleCron(simpleFrequency, simpleTime, e.target.value)); }}>
-                              {WEEKDAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
-                            </select>
-                          </label>
+                          <fieldset className="weekly-days">
+                            <legend>On</legend>
+                            <div role="group" aria-label="Repeat weekdays">
+                              {WEEKDAYS.map((day) => {
+                                const selected = simpleWeekdays.includes(day.value);
+                                return (
+                                  <button
+                                    key={day.value}
+                                    type="button"
+                                    aria-label={`Run on ${day.label}`}
+                                    aria-pressed={selected}
+                                    disabled={selected && simpleWeekdays.length === 1}
+                                    className={selected ? "is-selected" : ""}
+                                    onClick={() => {
+                                      const weekdays = selected
+                                        ? simpleWeekdays.filter((value) => value !== day.value)
+                                        : WEEKDAYS.map((item) => item.value).filter(
+                                            (value) => value === day.value || simpleWeekdays.includes(value),
+                                          );
+                                      setSimpleWeekdays(weekdays);
+                                      setRecurrence(simpleScheduleCron(simpleFrequency, simpleTime, weekdays));
+                                      setFieldError("recurrence", "");
+                                    }}
+                                  >
+                                    {day.label.slice(0, 3)}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </fieldset>
                         ) : null}
                         <label className="task-schedule-field">
                           <span>At</span>
-                          <input type="time" aria-label="Repeat time" value={simpleTime} onChange={(e) => { setSimpleTime(e.target.value); setRecurrence(simpleScheduleCron(simpleFrequency, e.target.value, simpleWeekday)); setFieldError("recurrence", ""); }} />
+                          <input
+                            type="time"
+                            aria-label="Repeat time"
+                            value={simpleTime}
+                            onChange={(e) => {
+                              setSimpleTime(e.target.value);
+                              setRecurrence(
+                                simpleScheduleCron(simpleFrequency, e.target.value, simpleWeekdays),
+                              );
+                              setFieldError("recurrence", "");
+                            }}
+                          />
                         </label>
                       </div>
                     ) : (
