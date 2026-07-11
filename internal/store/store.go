@@ -773,7 +773,9 @@ func (s *Store) AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int,
 	return int(n), nil
 }
 
-// Delete removes a conversation and (via FK cascade) its messages. When
+// Delete removes a conversation and (via FK cascade) its content rows. Usage
+// metrics deliberately survive hard deletion: they are accounting records and
+// retain no transcript content (migration 038). When
 // FLEET_CONVERSATION_SOFT_DELETE=true it instead tombstones the row
 // (deleted_at = NOW()) so a future restore can undelete it; the hard DELETE
 // is deferred to the 30-day sweeper in SweepExpired.

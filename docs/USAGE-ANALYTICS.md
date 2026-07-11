@@ -30,6 +30,11 @@ Aggregation happens strictly over rows the governed core already writes:
   closed `group_by` set, so caller input never reaches SQL.
 - Failed/cancelled iterations and cancelled chat turns **count** — the cost was
   still spent.
+- Chat usage survives conversation deletion. `turn_metrics` intentionally has
+  no cascading conversation foreign key (chat migration 038): deleting or
+  expiring transcript content must not erase already-incurred accounting.
+  Model/project attribution falls into the documented empty bucket once the
+  joined conversation is gone; user, cost, token, and time meters remain.
 
 The two sources live in **separate databases**, so the merge happens in the
 handler (`internal/sched/handlers/usage.go`), keyed on the bucket key, with
