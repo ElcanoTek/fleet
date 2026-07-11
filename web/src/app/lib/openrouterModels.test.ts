@@ -137,6 +137,13 @@ describe("validateSlug", () => {
     if (result.ok) expect(result.entry?.slug).toBe(expensiveEntry.slug);
   });
 
+  it("accepts the advanced Opus tier at its catalog price", async () => {
+    mockOpenRouter([opusLatestEntry]);
+    const result = await validateSlug(opusLatestEntry.slug);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.entry?.slug).toBe(opusLatestEntry.slug);
+  });
+
   it("passes through unknown slugs so new models still work if the catalog is stale", async () => {
     mockOpenRouter([cheapEntry]);
     const result = await validateSlug("someone/brand-new-model");
