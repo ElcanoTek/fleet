@@ -26,7 +26,7 @@ const (
 	// DefaultMaxModel is the strong/fallback tier — the model escalation
 	// (suggest_advanced_model) and task fallback resolve to. Pinned, never a
 	// `~latest` alias.
-	DefaultMaxModel = "anthropic/claude-fable-5"
+	DefaultMaxModel = "openai/gpt-5.6-sol"
 	// AdvancedModelSlug is chat's name for the same strong tier. Kept in sync
 	// with DefaultMaxModel.
 	AdvancedModelSlug = DefaultMaxModel

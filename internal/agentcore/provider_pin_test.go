@@ -15,7 +15,7 @@ func TestUpstreamPinFor(t *testing.T) {
 		{DefaultCoreModel, "Z.AI", false},
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
-		{DefaultMaxModel, "Anthropic", false},
+		{DefaultMaxModel, "OpenAI", false},
 		{"google/gemini-3-flash-preview", "Google", true},
 		{"deepseek/deepseek-v3.1", "", false},
 		{"x-ai/grok-4", "", false}, // "x-ai/" must not collide with "z-ai/"
