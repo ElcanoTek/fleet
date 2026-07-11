@@ -163,3 +163,35 @@ same PR.
   scorers + LLM-judge, `fleet eval` CLI):
   [`docs/EVALS.md`](docs/EVALS.md) + [`docs/adr/0018-self-hosted-eval-harness.md`](docs/adr/0018-self-hosted-eval-harness.md)
 - **Reporting a vulnerability:** [`SECURITY.md`](SECURITY.md)
+
+## Repo Boundaries & Coupling Doctrine (owner direction, 2026-07-11)
+
+fleet is an **engine**: a client-agnostic harness. Everything customer- or
+deployment-specific arrives as a *bundle* (`FLEET_CLIENT_CONFIG_DIR`) — never
+as fleet code. To keep the v2 consolidation from becoming a maintenance
+tarpit:
+
+1. **Bundles are data, fleet is engine.** Per-customer MCP servers, personas,
+   protocols, env/tool contracts, and critical-tool lists live in the
+   *-config repos. A new customer is a new bundle, not a fleet change. The
+   bundle `manifest.yaml` is the complete contract for what a server needs
+   (env keys, tool allowlist, `critical_tools`, `identity_env`) — if fleet
+   can't express something a server needs, extend the schema here (as with
+   `${FLEET_WORKSPACE}`), don't special-case a customer.
+2. **Engines never depend on intake apps.** fleet MUST NOT import, clone, or
+   gate CI on manifest (or any future front door). Intake apps integrate by
+   calling fleet's API and receiving webhooks — one create seam in, one
+   outcome callback out — and they own their contract checks as data
+   fixtures in their own repos.
+3. **MCP source of truth.** While v1 (cutlass/moc/gig) is live, the SSP MCP
+   servers are authored in cutlass and synced byte-identically into the
+   bundles (cutlass `scripts/mcp_sync_consumers.py`). Never patch a synced
+   server inside a bundle; fix it upstream and re-sync. After the v2 flip
+   the bundles become the only per-customer home.
+4. **Identity/credentials are harness-side.** Host-side broker + suffixed
+   account vars + `identity_env` refusal; servers read plain env and stay
+   customer-agnostic. Bundle manifests name the *variables*, never values.
+5. **Additive-first schema evolution.** New `ServerDef` fields must fail
+   loud on old manifests only when actually used (strict decoding is the
+   backstop); bundles adopt new fields only after the fleet release that
+   understands them ships.
