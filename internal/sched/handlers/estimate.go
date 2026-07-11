@@ -23,6 +23,15 @@ func (h *Handlers) SetSystemPromptProvider(p func(persona string) string) {
 	h.systemPromptForPersona = p
 }
 
+// SetPersonaCatalog wires the list of persona names loadable from the client
+// bundle (#720), read live per call so a bundle hot-reload is reflected without
+// a restart. cmd/fleet injects a closure over the bundle's personas dir; nil
+// (the default) disables the create-time existence check, keeping the handlers
+// package decoupled from clientconfig exactly like SetSystemPromptProvider.
+func (h *Handlers) SetPersonaCatalog(p func() []string) {
+	h.personaCatalog = p
+}
+
 // authorizeTaskCreate enforces the SAME authorization as CreateTask: an admin
 // API key, a scoped key carrying PermissionCreateTask, a user bearer token, or
 // the Elcano scoped-tier cookie (which must resolve to a provisioned member).

@@ -99,6 +99,18 @@ a runaway loop costs a capped turn, not an open-ended invoice. The observer
 events persist as a per-turn audit trail answering "what did this agent do, and
 what did it cost?".
 
+Scheduled runs additionally carry a **per-task wall-clock timeout** (#724):
+`FLEET_TASK_WALL_TIMEOUT` (a Go duration; default **4h**, `0` disables) bounds
+one run's total elapsed time, enforced by the worker pool around the run
+invocation. The iteration cap and cost/token ceilings bound loop *progress*,
+but a single hung tool call inside an iteration observes neither — the
+wall-clock deadline cancels the run's context so the pool slot is always
+reclaimed. Expiry is a **deterministic terminal failure** with a clear timeout
+error: it never consumes the task's transient-retry budget (a run that hit the
+ceiling once would hit it again). It is a global operator knob, not a per-task
+column — per-task expectations stay in `expected_duration_minutes` (SLA
+monitoring, advisory) and a loop task's `time_budget_seconds`.
+
 ---
 
 ## Approval timeouts: default-deny on no answer (#225)
