@@ -43,3 +43,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0015](0015-remote-mcp-tls-pinning-mtls.md) | TLS pinning and mTLS for remote MCP servers | Accepted |
 | [0032](0032-host-side-ingress-guardrails.md) | Host-side untrusted-ingress guardrails | Accepted |
 | [0033](0033-cross-provider-failover.md) | Cross-provider failover before stream commitment | Accepted |
+| [0034](0034-audit-gate-commitment-binding.md) | Audit-gate commitment binding, payload-level failure, and create reconciliation | Accepted |

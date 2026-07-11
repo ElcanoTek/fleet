@@ -43,8 +43,51 @@ type orchestrationState struct {
 	// committedCriticalActions counts outstanding critical-tool commitments per
 	// tool suffix declared in the most recent successful confirm_audit. Finish
 	// is refused while any count is > 0. Counting (not a bool) enables batch
-	// flows like multi-deal creation.
+	// flows like multi-record creation.
 	committedCriticalActions map[string]int
+
+	// typedCommitments is the full-fidelity ledger of commitments registered
+	// from the TYPED critical_actions field, in declaration order (#715).
+	// Unlike the suffix-count map above (which several MCP servers can share
+	// when their tool names end in the same critical suffix), each entry is
+	// keyed by the FULL tool name the audit declared (server + client-variant
+	// prefix included) plus its optional record-id binding. While any
+	// commitment is outstanding, checkCriticalTool refuses critical calls that
+	// match no outstanding commitment, and markCommittedExecuted refuses to
+	// discharge across servers/variants/records. Empty when the audit used
+	// only the legacy free-text path — those commitments stay suffix-scoped.
+	typedCommitments []*typedCommitment
+
+	// typedAuditActive records that the most recent successful confirm_audit
+	// supplied the TYPED critical_actions field (as opposed to the legacy
+	// free-text path). When set, the commitment-binding gate engages for EVERY
+	// critical call regardless of whether the ledger currently holds
+	// outstanding commitments — so a typed audit that resolved to zero
+	// commitments authorizes NOTHING (fail closed) rather than leaking the
+	// legacy one-shot token (#715). A legacy (untyped) audit clears this and
+	// keeps the one-shot semantics.
+	typedAuditActive bool
+
+	// approvedDealIDs / approvedDigest bind a BATCH confirm_audit to the exact
+	// record ids (and value-set digest) the audit approved, keyed by
+	// critical-tool suffix. When a tool call carries deal_ids (a server-side
+	// batch), every id MUST be in approvedDealIDs[suffix]; and when the audit
+	// declared a digest, the call's values_sha256 MUST equal
+	// approvedDigest[suffix] — otherwise the call is blocked. Empty/absent =>
+	// no batch binding, i.e. single-record flows behave exactly as before.
+	// This is what stops one audit approval from silently authorizing a batch
+	// over records the approver never saw.
+	approvedDealIDs map[string]map[string]bool
+	approvedDigest  map[string]string
+
+	// dischargedDeals tracks, per critical-tool suffix, the record ids whose
+	// commitment has ALREADY been discharged by a successful per-record batch
+	// result. Discharge is therefore idempotent across resumes: a re-run where
+	// already-done records report success again (idempotent skip) does NOT
+	// double-discharge them, so the outstanding count reflects only the
+	// records that still genuinely need work. Reset per audit envelope
+	// (registerCommitted*).
+	dischargedDeals map[string]map[string]bool
 
 	// criticalToolFailureAttempts counts unsuccessful executions per
 	// (toolName + argsHash) so a deterministically-broken critical call can't
@@ -141,6 +184,9 @@ func newOrchestrationState(logSession *LogSession, _ int) *orchestrationState {
 	return &orchestrationState{
 		sentEmailFingerprints:       make(map[string]struct{}),
 		committedCriticalActions:    make(map[string]int),
+		approvedDealIDs:             make(map[string]map[string]bool),
+		approvedDigest:              make(map[string]string),
+		dischargedDeals:             make(map[string]map[string]bool),
 		criticalToolFailureAttempts: make(map[string]int),
 		logSession:                  logSession,
 		repeatGuardNoun:             repeatGuardNounFinishTask,
@@ -548,11 +594,34 @@ func (o *orchestrationState) updateUsage(modelSlug string, usage fantasy.Usage, 
 	}
 }
 
+// markPendingCriticalDone moves the first pending critical action matching
+// (toolName, argsHash) to completed, if present. Audited-upfront calls (never
+// blocked) are not in the pending list, so this is a no-op for them. Callers
+// must hold o.mu.
+func (o *orchestrationState) markPendingCriticalDone(toolName, argsHash string) {
+	for i, p := range o.pendingCriticalActions {
+		if p.toolName == toolName && p.argsHash == argsHash {
+			o.completedCriticalActions = append(o.completedCriticalActions, toolName)
+			o.pendingCriticalActions = append(o.pendingCriticalActions[:i], o.pendingCriticalActions[i+1:]...)
+			return
+		}
+	}
+}
+
 // recordToolResult updates tracking state after a tool call completes. Handles
 // both interactive email accounting and scheduled critical-action discharge.
 func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText string, succeeded bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+
+	// A tool can return with no transport error yet REPORT failure in its
+	// payload ({"success": false, ...} or a top-level "error") — e.g. an
+	// upstream 400 flattened into a clean MCP response (#716). For a tool that
+	// does NOT return a per-record results[] that is a FAILED execution: it
+	// must not discharge a commitment and counts against the retry budget.
+	// Batch tools that DO return results[] are accounted per-record below
+	// (parseDealOutcomes), not via this flag.
+	effectiveSucceeded := succeeded && !mcpReportedFailure(resultText)
 
 	if isEmailTool(toolName) && succeeded {
 		if sendEmailSucceeded(strings.TrimSpace(resultText)) {
@@ -564,29 +633,89 @@ func (o *orchestrationState) recordToolResult(toolName, rawInput, resultText str
 
 	if isCriticalTool(toolName) {
 		argsHash := hashString(rawInput)
-		if succeeded {
-			delete(o.criticalToolFailureAttempts, retryBudgetKey(toolName, argsHash))
-			for i, p := range o.pendingCriticalActions {
-				if p.toolName == toolName && p.argsHash == argsHash {
-					log.Printf("Critical action succeeded: %s", toolName)
-					o.completedCriticalActions = append(o.completedCriticalActions, toolName)
-					o.pendingCriticalActions = append(o.pendingCriticalActions[:i], o.pendingCriticalActions[i+1:]...)
-					break
+		key := retryBudgetKey(toolName, argsHash)
+		if o.criticalToolFailureAttempts == nil {
+			o.criticalToolFailureAttempts = make(map[string]int)
+		}
+
+		if outcomes, ok := parseDealOutcomes(resultText); ok {
+			// Batch result: discharge one commitment per SUCCEEDED record,
+			// idempotently. dischargedDeals dedups by record id, so a resume
+			// that idempotently skips already-done records (reporting them
+			// success again) does NOT double-discharge — the outstanding count
+			// tracks only the records that still genuinely need work. Forward
+			// progress (>=1 newly discharged record) resets the retry budget;
+			// an attempt with failures and no new progress counts against it.
+			// This lets a partial batch resume to completion without wedging
+			// the budget on the unchanged full-batch args.
+			suffix := criticalSuffixFor(toolName)
+			done := o.dischargedDeals[suffix]
+			if done == nil {
+				done = make(map[string]bool)
+				o.dischargedDeals[suffix] = done
+			}
+			// When the audit batch-bound an approved record set for this
+			// suffix, ONLY a record in that set may discharge a commitment. A
+			// success reported for an id the audit never approved — a server
+			// results[] echoing an unexpected id, or any future path that
+			// bypassed the input batch-binding gate — must NOT discharge a
+			// DIFFERENT approved record's commitment (which would silently
+			// mark an un-done approved record as complete and let the audit
+			// auto-lock early). With no approved set (non-batch / legacy
+			// audit) behavior is unchanged: discharge per succeeded record by
+			// suffix.
+			approved := o.approvedDealIDs[suffix]
+			callDigest := valuesDigestArg(rawInput)
+			newly, failed := 0, 0
+			for _, oc := range outcomes {
+				if len(approved) > 0 && oc.success && !approved[strings.TrimSpace(oc.dealID)] {
+					log.Printf("Enforcement: ignoring batch result for unapproved record id %q on %q (not in the audit's approved set)",
+						oc.dealID, toolName)
+					continue
+				}
+				switch {
+				case oc.success && !done[oc.dealID]:
+					done[oc.dealID] = true
+					o.markCommittedExecuted(toolName, oc.dealID, callDigest)
+					newly++
+				case !oc.success:
+					failed++
 				}
 			}
+			if newly > 0 {
+				delete(o.criticalToolFailureAttempts, key)
+				o.markPendingCriticalDone(toolName, argsHash)
+				if len(o.pendingCriticalActions) == 0 {
+					o.selfAuditRequested = true
+				}
+				log.Printf("Critical batch %s: discharged %d new record(s), %d failed", toolName, newly, failed)
+			} else if failed > 0 {
+				o.criticalToolFailureAttempts[key]++
+				log.Printf("Critical batch %s made no forward progress (%d failed); attempt %d/%d",
+					toolName, failed, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
+			}
+		} else if effectiveSucceeded {
+			// Single-call critical tool (no per-record results[]).
+			delete(o.criticalToolFailureAttempts, key)
+			o.markPendingCriticalDone(toolName, argsHash)
 			if len(o.pendingCriticalActions) == 0 {
 				o.selfAuditRequested = true
 			}
-			o.markCommittedExecuted(toolName)
+			log.Printf("Critical action succeeded: %s", toolName)
+			o.markCommittedExecuted(toolName, callDealID(rawInput), valuesDigestArg(rawInput))
 		} else {
-			if o.criticalToolFailureAttempts == nil {
-				o.criticalToolFailureAttempts = make(map[string]int)
-			}
-			key := retryBudgetKey(toolName, argsHash)
+			// Ran but reported failure (transport-level, resp.IsError, or a
+			// payload-level failure per mcpReportedFailure) → counts against
+			// the per-(tool,args) retry budget and discharges NOTHING.
 			o.criticalToolFailureAttempts[key]++
 			log.Printf("Critical action failed: %s (attempt %d/%d for these args)",
 				toolName, o.criticalToolFailureAttempts[key], maxAttemptsPerCriticalAction)
 		}
+
+		// Consume the audit token only when no committed work remains. With no
+		// commitments registered this matches legacy behavior (consume on the
+		// first critical execution); with a batch audit it stays valid until
+		// the last committed record is discharged, then auto-locks.
 		if o.allCommitmentsExhausted() {
 			o.auditConfirmed = false
 		}

@@ -388,53 +388,6 @@ func TestRegisterCommittedActions_NoWarningOnEmptyInput(t *testing.T) {
 	}
 }
 
-func TestCriticalActionToolNames_PrefersStructuredOverLegacy(t *testing.T) {
-	input := confirmAuditInput{
-		CriticalActions: []criticalActionStruct{
-			{Tool: "mcp_openx_mcp_ox_create_prepared_deal", Identifier: "AdGreetings_PG_25"},
-			{Tool: "mcp_sendgrid_send_email", Identifier: "trader@example.com"},
-		},
-		CriticalActionsBeingUnblocked: []string{"create the OpenX deal and send the report"},
-	}
-	got := criticalActionToolNames(input)
-	want := []string{"mcp_openx_mcp_ox_create_prepared_deal", "mcp_sendgrid_send_email"}
-	if len(got) != len(want) {
-		t.Fatalf("expected %d tool names, got %d (%v)", len(want), len(got), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("tool[%d]: want %q, got %q", i, want[i], got[i])
-		}
-	}
-}
-
-func TestCriticalActionToolNames_FallsBackToLegacy(t *testing.T) {
-	input := confirmAuditInput{
-		CriticalActionsBeingUnblocked: []string{
-			"mcp_openx_mcp_ox_create_prepared_deal: AdGreetings_PG_25",
-			"mcp_sendgrid_send_email: trader@example.com",
-		},
-	}
-	got := criticalActionToolNames(input)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 entries from legacy form, got %d (%v)", len(got), got)
-	}
-}
-
-func TestCriticalActionToolNames_DropsEmptyTools(t *testing.T) {
-	input := confirmAuditInput{
-		CriticalActions: []criticalActionStruct{
-			{Tool: "mcp_openx_mcp_ox_create_prepared_deal"},
-			{Tool: "", Identifier: "no tool here"},
-			{Tool: "mcp_sendgrid_send_email"},
-		},
-	}
-	got := criticalActionToolNames(input)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 non-empty tool names, got %d (%v)", len(got), got)
-	}
-}
-
 func TestStructuredAuditEndToEnd(t *testing.T) {
 	o := newOrchStateForTest()
 
@@ -444,7 +397,9 @@ func TestStructuredAuditEndToEnd(t *testing.T) {
 			{Tool: "mcp_sendgrid_send_email", Identifier: "trader@example.com"},
 		},
 	}
-	o.registerCommittedActions(criticalActionToolNames(input))
+	if got := o.registerCommittedActionsTyped(input.CriticalActions); got != 2 {
+		t.Fatalf("expected 2 typed commitments registered, got %d", got)
+	}
 
 	if got := o.committedCriticalActions["create_prepared_deal"]; got != 1 {
 		t.Fatalf("expected 1 create_prepared_deal commitment, got %d", got)
@@ -454,6 +409,7 @@ func TestStructuredAuditEndToEnd(t *testing.T) {
 	}
 
 	o.auditConfirmed = true
+	o.typedAuditActive = true
 	o.recordToolResult("mcp_openx_mcp_ox_create_prepared_deal", "{}", "ok", true)
 	if !o.auditConfirmed {
 		t.Fatal("audit should remain valid after create — email commitment outstanding")

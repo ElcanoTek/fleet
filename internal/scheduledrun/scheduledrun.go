@@ -643,7 +643,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// accounts, bind its account-variant subprocesses onto a DEDICATED per-run
 	// client and Close them at run end so credentials never leak across runs or to
 	// a concurrent task. A default-only / empty selection reuses the shared client.
-	mcpClient, mcpCleanup, err := r.bindTaskMCP(ctx, task)
+	mcpClient, mcpCleanup, mcpWorkdir, err := r.bindTaskMCP(ctx, task)
 	if err != nil {
 		return nil, false, "", err
 	}
@@ -791,6 +791,13 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 				"diagnose why it failed and produce a corrected result:\n---\n%s",
 			prompt, extraPrompt)
 	}
+	// Start-of-run create reconciliation (#717): if the run's resolved MCP
+	// workspace holds unresolved pre-POST create markers (a prior process died
+	// between submitting a create and recording its outcome), append the
+	// mandatory reconciliation sweep so this run verifies before it re-creates.
+	// Appended to the TASK prompt, never the cached system prefix
+	// (docs/PROMPT-CACHE-CONTRACT.md).
+	prompt = agentcore.AugmentTaskWithCreateReconciliation(prompt, mcpWorkdir)
 	runErr := a.Execute(ctx, prompt)
 	session := convertLogSession(task, a.LogSession())
 	if runErr != nil {
@@ -867,10 +874,29 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 //     across runs or into a concurrent task's client. A named account with no
 //     matching <VAR>_<ACCOUNT> creds is REFUSED by BindMCPSelection rather than
 //     silently inheriting the default seat.
-func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Client, func(), error) {
+//
+// The third return is the resolved ${FLEET_WORKSPACE} directory the run's MCP
+// servers write their cross-run ledgers into ("" when no configured server
+// references the token). The caller replays unresolved create-ledger markers
+// from it into the task prompt at run start (#717,
+// agentcore.AugmentTaskWithCreateReconciliation).
+func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Client, func(), string, error) {
 	noop := func() {}
 	if len(task.MCPSelection) == 0 {
-		return r.mgr.MCPClient(), noop, nil
+		// The shared client's workspace-armed servers were spawned against the
+		// stable per-deployment dir at boot (see mcp_workspace.go), so that is
+		// where their ledgers live. Resolve it only when a configured server
+		// actually opted into the token — SharedMCPWorkspaceDir creates the
+		// directory, and a catalog that never uses the token should create
+		// nothing on disk.
+		workdir := ""
+		for _, base := range r.mcpBases() {
+			if agentcore.EnvReferencesWorkspace(base.BaseEnv) {
+				workdir = agentcore.SharedMCPWorkspaceDir()
+				break
+			}
+		}
+		return r.mgr.MCPClient(), noop, workdir, nil
 	}
 
 	selection := make(agentcore.MCPSelection, 0, len(task.MCPSelection))
@@ -904,14 +930,14 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Clien
 	if workdir != "" {
 		if err := r.stageTaskInputs(task, filepath.Join(workdir, "inputs")); err != nil {
 			cleanup()
-			return nil, noop, fmt.Errorf("stage task inputs: %w", err)
+			return nil, noop, "", fmt.Errorf("stage task inputs: %w", err)
 		}
 	}
 
 	registered, err := agentcore.BindMCPSelection(ctx, client, selection, bases, workdir)
 	if err != nil {
 		cleanup() // reap any subprocesses bound before the failure
-		return nil, noop, fmt.Errorf("bind task mcp selection: %w", err)
+		return nil, noop, "", fmt.Errorf("bind task mcp selection: %w", err)
 	}
 	// Inline http_tools (issue #261) are global manifest tools with no per-task
 	// selection (like a non-optional server), so register them on this per-run
@@ -921,7 +947,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Clien
 		agent.RegisterHTTPTools(client, r.cfg.HTTPTools)
 	}
 	log.Printf("scheduled task %s: bound %d MCP server(s) on per-run client: %v", task.ID, len(registered), registered)
-	return client, cleanup, nil
+	return client, cleanup, workdir, nil
 }
 
 // stageTaskInputs copies collision-safe upload objects into the dedicated MCP
