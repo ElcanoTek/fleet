@@ -42,6 +42,10 @@ const (
 	// are not supported.
 	//nolint:gosec // G101 false positive: an interpolation placeholder name, not a credential.
 	WorkspaceEnvToken = "${FLEET_WORKSPACE}"
+	// TaskIDEnvToken is replaced for dedicated scheduled-task MCP clients with
+	// the current task UUID. Bundles map it to whatever compatibility variable
+	// their connector consumes; fleet itself remains connector-agnostic.
+	TaskIDEnvToken = "${FLEET_TASK_ID}" //nolint:gosec // interpolation placeholder, not a credential.
 
 	// sharedMCPWorkspaceSubdir is the stable per-deployment directory (under
 	// the workspace root) substituted for shared, process-lifetime spawns.
@@ -61,6 +65,30 @@ func EnvReferencesWorkspace(env map[string]string) bool {
 		}
 	}
 	return false
+}
+
+// ExpandTaskIDEnv resolves the reserved scheduled-task identity token. Shared
+// or interactive spawns pass an empty taskID and therefore drop token-bearing
+// keys instead of leaking a literal placeholder to a connector.
+func ExpandTaskIDEnv(env map[string]string, taskID string) map[string]string {
+	found := false
+	for _, v := range env {
+		found = found || strings.Contains(v, TaskIDEnvToken)
+	}
+	if !found {
+		return env
+	}
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		if !strings.Contains(v, TaskIDEnvToken) {
+			out[k] = v
+			continue
+		}
+		if strings.TrimSpace(taskID) != "" {
+			out[k] = strings.ReplaceAll(v, TaskIDEnvToken, taskID)
+		}
+	}
+	return out
 }
 
 // ExpandWorkspaceEnv returns a copy of env with every ${FLEET_WORKSPACE}

@@ -1,0 +1,2 @@
+ALTER TABLE tasks
+    ADD COLUMN IF NOT EXISTS file_names JSONB NOT NULL DEFAULT '[]'::jsonb;

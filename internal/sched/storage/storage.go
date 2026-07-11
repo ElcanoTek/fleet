@@ -679,8 +679,9 @@ type TaskEdit struct {
 	// Timezone is the IANA timezone the cron Recurrence is evaluated in. The edit
 	// handler pre-fills it from the existing task when the caller omits it, so it
 	// is always a valid name here.
-	Timezone string
-	Files    []string
+	Timezone  string
+	Files     []string
+	FileNames []string
 	// SetFiles distinguishes "leave files unchanged" from "replace with Files".
 	SetFiles bool
 	// Tags + SetTags mirror Files/SetFiles: the flag distinguishes "leave tags
@@ -769,6 +770,7 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	}
 	if edit.SetFiles {
 		task.Files = edit.Files
+		task.FileNames = edit.FileNames
 	}
 	if edit.SetTags {
 		task.Tags = edit.Tags
