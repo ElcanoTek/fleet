@@ -26,6 +26,25 @@ function Harness({ onClose }: { onClose?: () => void }) {
   );
 }
 
+function InputHarness({ onClose }: { onClose?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
+  const close = () => {
+    setOpen(false);
+    onClose?.();
+  };
+  return (
+    <>
+      <button ref={anchorRef} type="button" onClick={() => setOpen(true)}>
+        Open input
+      </button>
+      <Menu open={open} onClose={close} anchorRef={anchorRef} label="Input test">
+        <input aria-label="Label name" />
+      </Menu>
+    </>
+  );
+}
+
 describe("Menu", () => {
   it("focuses the first item on open", () => {
     render(<Harness />);
@@ -56,5 +75,27 @@ describe("Menu", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu", { name: "Test" })).toBeNull();
     expect(document.activeElement).toBe(anchor);
+  });
+
+  it("stays open when a mobile keyboard resize occurs while editing", () => {
+    const onClose = vi.fn();
+    render(<InputHarness onClose={onClose} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open input" }));
+
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Label name" }));
+    fireEvent(window, new Event("resize"));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu", { name: "Input test" })).toBeInTheDocument();
+  });
+
+  it("still closes on resize when an editable control is not focused", () => {
+    const onClose = vi.fn();
+    render(<Harness onClose={onClose} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    fireEvent(window, new Event("resize"));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu", { name: "Test" })).toBeNull();
   });
 });
