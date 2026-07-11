@@ -508,6 +508,16 @@ type ServerDef struct {
 	// actual overlay reads Env's keys.
 	AccountVars []string `yaml:"account_vars"`
 
+	// IdentityEnv names the env KEYS (must be keys of Env) that route identity
+	// or money — owner/member/marketplace-account ids, seat-routing tokens. A
+	// named-account variant spawn is REFUSED when any of these has a non-empty
+	// default-seat value that the account's <VAR>_<ACCOUNT> overlay did not
+	// override (agentcore's inherited-routing-identity guard, mirroring the
+	// cutlass mcp_loader): suffixing the API key but not the owner id would
+	// otherwise transact in the DEFAULT client's seat under the named account's
+	// label. Optional; an absent list keeps the overrides>0 guard only.
+	IdentityEnv []string `yaml:"identity_env"`
+
 	// Optional marks a server users must opt into per conversation (chat's
 	// Optional-server semantics). DisplayName/Description/Beta/EnabledByDefault
 	// drive the settings-UI catalog rendering.
@@ -999,6 +1009,22 @@ func (b *Bundle) validate() error {
 		if err := validateServerTLS(s.Name, s.Type, s.URL, s.TLS); err != nil {
 			return err
 		}
+		// identity_env entries must name keys of THIS server's env map (and the
+		// account overlay is stdio-only): a typo'd identity var would otherwise
+		// silently never guard anything — for a wrong-seat/wrong-revenue guard
+		// that is the dangerous direction, so fail loud at startup instead.
+		for _, v := range s.IdentityEnv {
+			trimmed := strings.TrimSpace(v)
+			if trimmed == "" {
+				return fmt.Errorf("mcp_servers[%q]: identity_env entries must be non-empty", s.Name)
+			}
+			if s.Type != "stdio" {
+				return fmt.Errorf("mcp_servers[%q]: identity_env is only valid on a stdio server (accounts are env-suffixed; http servers reject account variants)", s.Name)
+			}
+			if _, ok := s.Env[trimmed]; !ok {
+				return fmt.Errorf("mcp_servers[%q]: identity_env var %q is not a key of the server's env map", s.Name, trimmed)
+			}
+		}
 	}
 	if err := b.validateHTTPTools(seen); err != nil {
 		return err
@@ -1435,6 +1461,7 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 			sc.Args = append([]string(nil), s.Args...)
 			sc.Env = resolveEnvMap(s.Env, s.OptionalEnv)
 			sc.Dir = bundleDir
+			sc.IdentityEnv = append([]string(nil), s.IdentityEnv...)
 		}
 		out[s.Name] = sc
 	}
@@ -1632,6 +1659,12 @@ func (b *Bundle) EnvVarNames() []string {
 			}
 		}
 		for _, v := range s.AccountVars {
+			add(v)
+		}
+		// identity_env keys must survive the .env allowlist: the variant guard
+		// reads their <VAR>_<ACCOUNT> forms from the process env (suffix
+		// admission requires the BASE name to be registered).
+		for _, v := range s.IdentityEnv {
 			add(v)
 		}
 		for _, v := range s.Env {
@@ -1848,6 +1881,18 @@ type expandResult struct {
 	deferred bool   // true => leave the literal ${VAR} token in place (unset bare ref)
 }
 
+// reservedWorkspaceVar is the RESERVED spawn-time token name a bundle may use
+// in an mcp_servers[].env value: ${FLEET_WORKSPACE} is substituted by the MCP
+// spawn paths with a fleet-provided writable directory (per-run for a run's
+// dedicated client, a stable per-deployment dir for shared spawns — see
+// internal/agentcore's WorkspaceEnvToken, the consuming side of this
+// contract; the name is inlined here to keep clientconfig dependency-free of
+// agentcore). Both interpolation passes leave the bare token INTACT — it is
+// never resolved from the process env (even if an operator exports a var of
+// that name) and never blanked. Only the bare ${FLEET_WORKSPACE} spelling is
+// reserved; :-/:? forms are not supported for it.
+const reservedWorkspaceVar = "FLEET_WORKSPACE"
+
 // expandExpr resolves the body of a single ${...} expression (the text between
 // the braces) into a replacement, implementing the ${VAR}, ${VAR:-default} and
 // ${VAR:?message} forms.
@@ -1879,6 +1924,11 @@ func expandExpr(expr, manifestPath string) (expandResult, error) {
 		// hence deferred) rather than silently mangling it.
 	}
 	name := strings.TrimSpace(expr)
+	if name == reservedWorkspaceVar {
+		// Reserved spawn-time token: always deferred, never read from the
+		// process env (an operator-exported FLEET_WORKSPACE must not hijack it).
+		return expandResult{deferred: true}, nil
+	}
 	if v, ok := lookupNonEmpty(name); ok {
 		return expandResult{text: v}, nil
 	}
@@ -1918,6 +1968,9 @@ func matchBrace(s string, open int) (int, bool) {
 
 // interpolate replaces ${VAR} occurrences with the process-env value (empty
 // when unset). A bare "${VAR}" with no surrounding text is the common case.
+// The reserved ${FLEET_WORKSPACE} token is left INTACT (never env-resolved,
+// never blanked) for the MCP spawn paths to substitute — see
+// reservedWorkspaceVar.
 func interpolate(v string) string {
 	if !strings.Contains(v, "${") {
 		return v
@@ -1936,7 +1989,11 @@ func interpolate(v string) string {
 			break
 		}
 		name := v[start+2 : start+end]
-		sb.WriteString(strings.TrimSpace(os.Getenv(name)))
+		if strings.TrimSpace(name) == reservedWorkspaceVar {
+			sb.WriteString(v[start : start+end+1]) // preserve the reserved token verbatim
+		} else {
+			sb.WriteString(strings.TrimSpace(os.Getenv(name)))
+		}
 		v = v[start+end+1:]
 	}
 	return sb.String()

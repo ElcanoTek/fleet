@@ -49,9 +49,9 @@ func (p *InteractivePolicy) SetSkillProposer(sp SkillProposer) { p.orch.setSkill
 // BeforeToolCall runs the interactive gate chain: ceilings → repeat-call guard →
 // email safety (rate-limit/dedup/approval staging) → risky-bash approval →
 // preview_email staging → schedule_task staging → suggest_advanced_model staging →
-// memory proposal → note proposal. The bash/preview/schedule/suggest gates are
-// inert when no approval sink is wired; the proposal gates are inert when no
-// proposer is.
+// bundle critical-tool approval staging → memory proposal → note proposal. The
+// bash/preview/schedule/suggest/critical gates are inert when no approval sink
+// is wired; the proposal gates are inert when no proposer is.
 func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string) (bool, string) {
 	if blocked, msg := p.orch.checkCeilings(); blocked {
 		return true, msg
@@ -72,6 +72,12 @@ func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string
 		return true, msg
 	}
 	if blocked, msg := p.orch.checkSuggestAdvancedSafety(toolName, rawInput); blocked {
+		return true, msg
+	}
+	// Bundle-declared critical tools (agent_policy.critical_tools) route through
+	// the same approval-card UX in interactive mode. Runs AFTER the tailored
+	// gates above so each of those keeps single ownership of its flow.
+	if blocked, msg := p.orch.checkCriticalToolApproval(toolName, toolCallID, rawInput); blocked {
 		return true, msg
 	}
 	if blocked, msg := p.orch.checkMemoryProposal(toolName, rawInput); blocked {

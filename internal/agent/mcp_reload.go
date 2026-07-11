@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -39,7 +40,16 @@ func specsToServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 		case spec.URL != "":
 			defs = append(defs, mcp.ServerDef{Name: name, URL: spec.URL, Headers: spec.Headers, TLS: spec.TLS})
 		case spec.Command != "":
-			defs = append(defs, mcp.ServerDef{Name: name, Command: spec.Command, Args: spec.Args, Env: spec.Env, Dir: spec.Dir})
+			// Expand the reserved ${FLEET_WORKSPACE} token exactly as
+			// BuildMCPClient's spawn did (same shared dir), so the reload diff
+			// compares like with like — a raw token here against the live
+			// server's expanded env would force a spurious restart on every
+			// reload. Resolved lazily: token-free catalogs touch no disk.
+			env := spec.Env
+			if agentcore.EnvReferencesWorkspace(env) {
+				env = agentcore.ExpandWorkspaceEnv(env, agentcore.SharedMCPWorkspaceDir())
+			}
+			defs = append(defs, mcp.ServerDef{Name: name, Command: spec.Command, Args: spec.Args, Env: env, Dir: spec.Dir})
 		}
 	}
 	return defs

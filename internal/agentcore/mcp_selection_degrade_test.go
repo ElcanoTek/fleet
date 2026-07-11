@@ -22,7 +22,7 @@ func TestBindMCPSelection_BestEffortSkipsFailure(t *testing.T) {
 	}
 	selection := MCPSelection{{Server: "flaky"}, {Server: "flaky2"}}
 
-	registered, err := BindMCPSelection(context.Background(), client, selection, bases)
+	registered, err := BindMCPSelection(context.Background(), client, selection, bases, "")
 	if err != nil {
 		t.Fatalf("best-effort failures must NOT abort: got err %v", err)
 	}
@@ -40,7 +40,7 @@ func TestBindMCPSelection_RequiredFailureAborts(t *testing.T) {
 	}
 	selection := MCPSelection{{Server: "loadbearing"}}
 
-	if _, err := BindMCPSelection(context.Background(), client, selection, bases); err == nil {
+	if _, err := BindMCPSelection(context.Background(), client, selection, bases, ""); err == nil {
 		t.Fatal("a Required server failing to register must abort (return an error)")
 	}
 }
@@ -50,7 +50,7 @@ func TestBindMCPSelection_RequiredFailureAborts(t *testing.T) {
 // degradation covers runtime start failures, not misconfiguration.
 func TestBindMCPSelection_UnknownServerStillAborts(t *testing.T) {
 	client := mcp.NewClient()
-	if _, err := BindMCPSelection(context.Background(), client, MCPSelection{{Server: "ghost"}}, map[string]MCPServerBase{}); err == nil {
+	if _, err := BindMCPSelection(context.Background(), client, MCPSelection{{Server: "ghost"}}, map[string]MCPServerBase{}, ""); err == nil {
 		t.Fatal("an unknown/uncataloged server must remain a fatal config error")
 	}
 }
