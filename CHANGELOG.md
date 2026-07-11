@@ -121,6 +121,20 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **MCP bundle env contract for the cutlass-family servers**
+  (docs/MCP-BUNDLE-ENV.md): the reserved `${FLEET_WORKSPACE}` manifest-env
+  token substitutes a fleet-provided writable workdir at MCP subprocess launch
+  (per-run for a scheduled task's dedicated client, a stable per-deployment
+  dir for shared spawns; token-bearing keys are dropped when no dir is
+  offered), so bundles can wire `CUTLASS_RUN_WORKDIR`-style vars without
+  hardcoding paths. Account-variant spawns now inject
+  `MCP_VARIANT_CLIENT=<account>` (cutlass mcp_loader parity), and the new
+  per-server `identity_env` manifest list refuses a partially-suffixed named
+  account whose identity-routing vars would silently inherit the default
+  seat. Bundle-declared `agent_policy.critical_tools` suffixes are now staged
+  through the interactive approval-card UX too (previously scheduled-mode
+  audit gating only), honoring session pre-approvals and the #225 per-tool
+  timeout chain.
 - **Host-side prompt-injection guardrails (#702)**: optional workspace-wide
   `off` / `observe` / `block` screening covers seed user/task messages and tool
   output before it enters model context. Operators bring a local HTTP detector,
