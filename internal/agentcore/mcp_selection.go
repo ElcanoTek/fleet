@@ -4,10 +4,23 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
+
+// MCPVariantClientEnvVar is injected into every ACCOUNT-VARIANT stdio
+// subprocess as the lowercased canonical account name (and never into the
+// default seat). It mirrors the cutlass mcp_loader `client=...` convention:
+// the cutlass-family Python servers read MCP_VARIANT_CLIENT to (a) require
+// variant-scoped identity config instead of silently inheriting the default
+// seat's, and (b) derive client-facing labels (e.g. an SSP fee-partner /
+// fee-recipient name) — so omitting it would route revenue-bearing fields to
+// the DEFAULT client's identity under a named account. Values are data, not
+// secrets.
+const MCPVariantClientEnvVar = "MCP_VARIANT_CLIENT"
 
 // MCP selection → per-run credentialed wiring (plan §6.1, §6.3).
 //
@@ -67,6 +80,14 @@ type MCPServerBase struct {
 	// aborts. Best-effort servers (the default, Required=false) are skipped with a
 	// warning so one flaky server can't kill an otherwise-healthy run (#182).
 	Required bool
+	// IdentityEnv names the env KEYS (from BaseEnv) that route identity or
+	// money — owner/member/account ids, seat-routing tokens (the manifest's
+	// per-server identity_env list). A named-account spawn is REFUSED when any
+	// of these has a non-empty default-seat value that the account's
+	// <VAR>_<ACCOUNT> overlay did NOT override: suffixing the API key but not
+	// the owner id would otherwise transact in the DEFAULT client's seat under
+	// the named account's label (the cutlass inherited-routing-identity guard).
+	IdentityEnv []string
 }
 
 // resolveMCPVariant computes the per-run registration name + credentialed env
@@ -101,7 +122,27 @@ func resolveMCPVariant(server string, base MCPServerBase, account string) (name 
 
 	name = server
 	if account != "" {
+		// Inherited-routing-identity guard: a partially-suffixed account (API
+		// key overridden, owner/member id not) must be refused, not spawned —
+		// it would transact in the DEFAULT seat's identity under the named
+		// account's label. Mirrors the cutlass mcp_loader guard.
+		suffix := "_" + upperAccount(account)
+		for _, v := range base.IdentityEnv {
+			if strings.TrimSpace(base.BaseEnv[v]) == "" {
+				continue // identity var unset on the default seat: nothing to inherit
+			}
+			if strings.TrimSpace(os.Getenv(v+suffix)) != "" {
+				continue // overridden for this account
+			}
+			return "", nil, fmt.Errorf(
+				"refusing to spawn server %q under account %q: identity-routing var %s has a default-seat value but no %s%s override — the variant would inherit the default seat's identity",
+				server, account, v, v, suffix)
+		}
 		name = server + "_" + account
+		// Tell the server which client variant it is running as (the cutlass
+		// mcp_loader convention): lowercased canonical account name, injected
+		// only for named-account variants — the default seat never carries it.
+		variantEnv[MCPVariantClientEnvVar] = strings.ToLower(account)
 	}
 	return name, variantEnv, nil
 }
@@ -118,9 +159,15 @@ func resolveMCPVariant(server string, base MCPServerBase, account string) (name 
 //     client.AddStdioServer, which sets variantEnv on cmd.Env (credentials are
 //     never on argv and never enter the sandbox). HTTP servers reject variants.
 //
+// workdir is the writable directory substituted for the reserved
+// ${FLEET_WORKSPACE} manifest-env token (see mcp_workspace.go): a per-run dir
+// for a run's dedicated client, the shared per-deployment dir for spawns onto a
+// shared client. Empty drops token-bearing env keys (fail-safe unset). Catalogs
+// that never use the token are unaffected regardless of the value.
+//
 // Returns the list of registered server names (the keys the agent dispatches
 // against) so the caller can scope per-run cleanup.
-func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSelection, bases map[string]MCPServerBase) ([]string, error) {
+func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSelection, bases map[string]MCPServerBase, workdir string) ([]string, error) {
 	var registered []string
 	for _, choice := range selection {
 		base, ok := bases[choice.Server]
@@ -164,6 +211,7 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 		// (transport error, bad command, init timeout) is logged and SKIPPED so the
 		// rest of the selection still registers and the run proceeds with the tools
 		// that did come up. A Required server still aborts the run.
+		variantEnv = ExpandWorkspaceEnv(variantEnv, workdir)
 		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv, base.Dir); err != nil {
 			if base.Required {
 				return registered, fmt.Errorf("register server %q: %w", name, err)

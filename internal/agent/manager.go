@@ -223,7 +223,16 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 		case spec.URL != "":
 			addErr = client.AddHTTPServerWithOptions(ctx, name, spec.URL, mcp.HTTPServerOptions{Headers: spec.Headers, TLS: spec.TLS})
 		case spec.Command != "":
-			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, spec.Env, spec.Dir)
+			// Substitute the reserved ${FLEET_WORKSPACE} manifest-env token with
+			// the stable per-deployment MCP workspace dir: this is a SHARED
+			// (process-lifetime) spawn, so every run sees the same directory
+			// (managed-run detection + a cross-run ledger window). Resolved
+			// lazily so token-free catalogs create nothing on disk.
+			env := spec.Env
+			if agentcore.EnvReferencesWorkspace(env) {
+				env = agentcore.ExpandWorkspaceEnv(env, agentcore.SharedMCPWorkspaceDir())
+			}
+			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env, spec.Dir)
 		default:
 			addErr = fmt.Errorf("spec has neither Command nor URL")
 		}
