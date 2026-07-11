@@ -80,7 +80,8 @@ type Server struct {
 
 	// piiProbe backs the Features panel's PII "Test detection" button
 	// (WithPIIRedactionProbe). nil in tests/mock mode: the endpoint answers 501.
-	piiProbe func(ctx context.Context) PIIProbeResult
+	piiProbe       func(ctx context.Context) PIIProbeResult
+	guardrailProbe func(ctx context.Context) GuardrailProbeResult
 
 	// piiInstaller backs the one-click Rampart service install
 	// (WithPIIRampartInstaller). nil: the endpoints answer 501.
@@ -732,6 +733,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/notify-settings/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminNotifySettingsTest)))))
 	// PII redaction probe: run the live redactor over a synthetic sample.
 	mux.Handle("/admin/pii-redaction/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminPIIProbe)))))
+	mux.Handle("/admin/guardrail/test", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminGuardrailProbe)))))
 	// One-click Rampart service install (build + run + supervise via podman).
 	mux.Handle("/admin/pii-redaction/install", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminPIIInstall)))))
 	// ipFilterMiddleware (#314) is the outermost application-layer filter: it sits

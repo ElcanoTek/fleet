@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -214,16 +215,24 @@ func TestCanSwapFallback(t *testing.T) {
 			t.Error("expected false when active is nil")
 		}
 	})
-	t.Run("already swapped cannot swap again", func(t *testing.T) {
+	t.Run("already swapped can continue an explicit chain", func(t *testing.T) {
 		e := &engine{fallbackModel: fallback}
-		if canSwapFallback(e, primary, true) {
-			t.Error("expected false when already swapped")
+		if !canSwapFallback(e, primary, true) {
+			t.Error("expected another queued fallback to remain eligible")
 		}
 	})
 	t.Run("same slug cannot swap", func(t *testing.T) {
 		e := &engine{fallbackModel: primary}
 		if canSwapFallback(e, primary, false) {
 			t.Error("expected false when fallback slug matches active slug")
+		}
+	})
+	t.Run("same slug on different configured provider can swap", func(t *testing.T) {
+		active := &providerNamedModel{LanguageModel: primary, providerName: "direct"}
+		other := &providerNamedModel{LanguageModel: primary, providerName: "gateway"}
+		e := &engine{fallbackModel: other}
+		if !canSwapFallback(e, active, false) {
+			t.Error("expected same-model cross-provider fallback")
 		}
 	})
 	t.Run("different slug can swap", func(t *testing.T) {
@@ -528,6 +537,51 @@ func TestStreamRoundSwapsToFallbackOnRetryExhaustion(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&fallbackCalls); got != 1 {
 		t.Errorf("fallback called %d times, want 1", got)
+	}
+}
+
+func TestCrossProviderSameModelFailover(t *testing.T) {
+	primaryCalls := int32(0)
+	primaryBase := &namedMockModel{mockModel: mockModel{streamFunc: func(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
+		atomic.AddInt32(&primaryCalls, 1)
+		return nil, &fantasy.ProviderError{StatusCode: http.StatusTooManyRequests, Message: "capacity"}
+	}}, name: "same-model"}
+	secondaryCalls := int32(0)
+	secondaryBase := &namedMockModel{mockModel: mockModel{streamFunc: func(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
+		atomic.AddInt32(&secondaryCalls, 1)
+		return nil, &fantasy.ProviderError{StatusCode: http.StatusServiceUnavailable, Message: "capacity"}
+	}}, name: "same-model"}
+	tertiaryCalls := int32(0)
+	tertiaryBase := &namedMockModel{mockModel: mockModel{streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+		atomic.AddInt32(&tertiaryCalls, 1)
+		return streamStop()(nil, call)
+	}}, name: "same-model"}
+	primary := &providerNamedModel{LanguageModel: primaryBase, providerName: "direct"}
+	secondary := &providerNamedModel{LanguageModel: secondaryBase, providerName: "gateway-a"}
+	tertiary := &providerNamedModel{LanguageModel: tertiaryBase, providerName: "gateway-b"}
+	e := newMockEngine(t, primary)
+	e.model = primary
+	e.fallbackModel = secondary
+	e.fallbackModels = []fantasy.LanguageModel{secondary, tertiary}
+	e.resilience = resilienceConfig{maxAttempts: 0}
+	obs := &captureObserver{}
+	sink := newStreamSink(obs)
+	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
+		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
+	}
+	outcome, err := e.streamRoundWithResilience(context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+		[]fantasy.Message{fantasy.NewUserMessage("task")}, buildAgent(primary), primary, false, buildAgent)
+	if err != nil {
+		t.Fatalf("failover: %v", err)
+	}
+	if !outcome.swappedToFallback || fleetProviderName(outcome.activeModel) != "gateway-b" {
+		t.Fatalf("outcome=%+v provider=%s", outcome, fleetProviderName(outcome.activeModel))
+	}
+	if atomic.LoadInt32(&primaryCalls) != 1 || atomic.LoadInt32(&secondaryCalls) != 1 || atomic.LoadInt32(&tertiaryCalls) != 1 {
+		t.Fatalf("calls primary=%d secondary=%d tertiary=%d", primaryCalls, secondaryCalls, tertiaryCalls)
+	}
+	if !slices.Contains(obs.events, "fleet.provider_failover") {
+		t.Fatalf("events=%v", obs.events)
 	}
 }
 

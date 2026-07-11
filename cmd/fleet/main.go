@@ -51,6 +51,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/datasets"
+	"github.com/ElcanoTek/fleet/internal/guardrail"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -312,6 +313,7 @@ func run() error {
 	// FLEET_PII_REDACTION_ENABLED is set. Default off = nil redactor = the tool-
 	// output pass is a byte-for-byte no-op.
 	configurePIIRedaction(cfg)
+	configureGuardrail(cfg)
 
 	personasDir := bundle.PersonasDir
 	protocolsDir := bundle.ProtocolsDir
@@ -1533,11 +1535,12 @@ func toAgentcoreProviders(bundle *clientconfig.Bundle) []agentcore.ProviderConfi
 			key = os.Getenv(env)
 		}
 		out = append(out, agentcore.ProviderConfig{
-			Name:    strings.TrimSpace(p.Name),
-			Type:    agentcore.ProviderType(strings.TrimSpace(p.Type)),
-			APIKey:  key,
-			BaseURL: strings.TrimSpace(p.BaseURL),
-			Models:  p.Models,
+			Name:              strings.TrimSpace(p.Name),
+			Type:              agentcore.ProviderType(strings.TrimSpace(p.Type)),
+			APIKey:            key,
+			BaseURL:           strings.TrimSpace(p.BaseURL),
+			Models:            p.Models,
+			FallbackProviders: append([]string(nil), bundle.FallbackProviders...),
 		})
 	}
 	return out
@@ -1831,6 +1834,26 @@ func configurePIIRedaction(cfg *config.Config) {
 		// Both values are validated constants, never raw env input.
 		//nolint:gosec // G706: mode/engine are validated constants (observe/redact/block × pattern/rampart), never raw input.
 		log.Printf("PII redaction: enabled (mode=%s, engine=%s)", st.mode, st.engine)
+	}
+}
+
+func configureGuardrail(cfg *config.Config) {
+	g := newGuardrailState(cfg)
+	g.mu.Lock()
+	err := g.rebuildLocked()
+	g.mu.Unlock()
+	if err != nil {
+		log.Printf("content guardrail: not installed: %v", err)
+		mode, _ := guardrail.ParseMode(g.mode)
+		// Preserve the configured fail semantics even when the URL is missing:
+		// block mode rejects ingress, while observe mode records the detector
+		// outage on each boundary. The admin panel remains available to repair it.
+		agentcore.SetGuardrail(true, mode == guardrail.ModeBlock, string(mode), g.profile,
+			guardrail.UnavailableDetector{Err: err})
+		return
+	}
+	if g.mode != string(guardrail.ModeOff) {
+		log.Printf("content guardrail: enabled")
 	}
 }
 

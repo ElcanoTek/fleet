@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openrouter"
@@ -23,8 +26,9 @@ import (
 // is set, forceCompactMessageHistory falls back to a deterministic placeholder
 // summary so the context-too-large recovery path is still structurally sound.
 type engine struct {
-	model         fantasy.LanguageModel
-	fallbackModel fantasy.LanguageModel
+	model          fantasy.LanguageModel
+	fallbackModel  fantasy.LanguageModel
+	fallbackModels []fantasy.LanguageModel
 
 	resilience resilienceConfig
 	logSession *LogSession
@@ -373,16 +377,31 @@ func dropTrailingAssistant(messages []fantasy.Message) []fantasy.Message {
 }
 
 // canSwapFallback reports whether the fallback model is a meaningful alternative
-// to the currently active model. Compared by slug to avoid panicking on
-// unhashable interface values.
+// to the currently active model. Provider identity participates so the same
+// model slug on a different configured backend is a valid #703 failover.
 func canSwapFallback(e *engine, activeModel fantasy.LanguageModel, alreadySwapped bool) bool {
-	if alreadySwapped {
-		return false
-	}
+	_ = alreadySwapped // retained for call-site compatibility; the queue is authoritative.
 	if e == nil || e.fallbackModel == nil || activeModel == nil {
 		return false
 	}
-	return e.fallbackModel.Model() != activeModel.Model()
+	return e.fallbackModel.Model() != activeModel.Model() ||
+		fleetProviderName(e.fallbackModel) != fleetProviderName(activeModel)
+}
+
+func (e *engine) takeFallback() fantasy.LanguageModel {
+	if e == nil || e.fallbackModel == nil {
+		return nil
+	}
+	next := e.fallbackModel
+	if len(e.fallbackModels) > 0 {
+		e.fallbackModels = e.fallbackModels[1:]
+	}
+	if len(e.fallbackModels) > 0 {
+		e.fallbackModel = e.fallbackModels[0]
+	} else {
+		e.fallbackModel = nil
+	}
+	return next
 }
 
 // roundState carries the per-round streaming accumulators. Lean compared to
@@ -461,12 +480,25 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	}
 	r.activeModelSlug = modelSlug
 	sink := r.sink
+	// A provider that accepts the request but never produces a semantic event
+	// must not monopolize the run deadline. Once the first event arrives the timer
+	// is disarmed and the original context remains authoritative.
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	var first sync.Once
+	var firstTimedOut atomic.Bool
+	timer := time.AfterFunc(providerFirstChunkTimeout, func() {
+		firstTimedOut.Store(true)
+		cancelStream()
+	})
+	defer timer.Stop()
+	markFirst := func() { first.Do(func() { timer.Stop() }) }
 	// Sentry breadcrumb (#193): the LLM request trail so a captured exception's
 	// event shows which model the agent was driving immediately before the
 	// crash. The prompt itself is NEVER attached — only the model slug. No-op
 	// when FLEET_SENTRY_DSN is unset (the SDK checks internally).
 	observability.AddBreadcrumb(ctx, "llm", "llm request: "+modelSlug, nil)
-	return ag.Stream(ctx, fantasy.AgentStreamCall{
+	result, err := ag.Stream(streamCtx, fantasy.AgentStreamCall{
 		Messages:        messages,
 		MaxOutputTokens: &r.maxTokens,
 		Temperature:     &temp,
@@ -475,12 +507,14 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		StopWhen:        stepStopConditions(r.engine.maxIterations),
 		OnRetry:         r.engine.onRetry,
 		OnTextDelta: func(_, text string) error {
+			markFirst()
 			if sink != nil {
 				sink.onTextDelta(text)
 			}
 			return nil
 		},
 		OnReasoningStart: func(id string, content fantasy.ReasoningContent) error {
+			markFirst()
 			if sink != nil {
 				sink.onReasoningStart(id, content.Text)
 			}
@@ -499,12 +533,14 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			return nil
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
+			markFirst()
 			if sink != nil {
 				sink.onToolCall(tc.ToolCallID, tc.ToolName, tc.Input)
 			}
 			return nil
 		},
 		OnToolResult: func(tr fantasy.ToolResultContent) error {
+			markFirst()
 			if sink != nil {
 				text, isErr := toolResultText(tr)
 				sink.onToolResult(tr.ToolCallID, tr.ToolName, text, isErr)
@@ -528,4 +564,8 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			WithCompactionSummaryBreakpoint(nil),
 		)),
 	})
+	if err != nil && firstTimedOut.Load() && ctx.Err() == nil {
+		return nil, fmt.Errorf("%w after %s: %w", ErrFirstChunkTimeout, providerFirstChunkTimeout, err)
+	}
+	return result, err
 }

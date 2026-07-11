@@ -92,7 +92,8 @@ type streamSink struct {
 	// the loop can recover it for the finalize hook + the Result.
 	finalText strings.Builder
 	// reasoningBufs buffers reasoning deltas per id; committed on End.
-	reasoningBufs map[string]*strings.Builder
+	reasoningBufs  map[string]*strings.Builder
+	semanticEvents int
 }
 
 func newStreamSink(obs Observer) *streamSink {
@@ -112,6 +113,7 @@ func (s *streamSink) emit(eventType string, payload map[string]any) {
 // onTextDelta forwards a text chunk to the Observer and accumulates it.
 func (s *streamSink) onTextDelta(text string) {
 	s.mu.Lock()
+	s.semanticEvents++
 	s.finalText.WriteString(text)
 	s.mu.Unlock()
 	s.emit("text.delta", map[string]any{evtFieldText: text})
@@ -121,6 +123,7 @@ func (s *streamSink) onTextDelta(text string) {
 // block on the start event (Gemini), others stream deltas — capture both.
 func (s *streamSink) onReasoningStart(id, text string) {
 	s.mu.Lock()
+	s.semanticEvents++
 	b := &strings.Builder{}
 	if text != "" {
 		b.WriteString(text)
@@ -160,6 +163,7 @@ func (s *streamSink) onReasoningEnd(id, content string) {
 // onToolCall forwards + records an assistant tool call.
 func (s *streamSink) onToolCall(id, name, input string) {
 	s.mu.Lock()
+	s.semanticEvents++
 	s.entries = append(s.entries, RunEntry{
 		Role: roleAssistant, Type: "tool_call",
 		ToolCallID: id, ToolName: name, ToolInput: input,
@@ -176,6 +180,7 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 	// streamed to the browser, or persisted to turn_events.
 	text = toolRedactor().Redact(text)
 	s.mu.Lock()
+	s.semanticEvents++
 	s.entries = append(s.entries, RunEntry{
 		Role: roleTool, Type: "tool_result",
 		ToolCallID: id, ToolName: name, Text: text, IsErr: isErr,
@@ -187,6 +192,12 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 		evtFieldText:  truncate(text, toolResultMaxStreamBytes),
 		evtFieldIsErr: isErr,
 	})
+}
+
+func (s *streamSink) semanticEventCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.semanticEvents
 }
 
 // snapshot returns a copy of the accumulated entries plus the accumulated final

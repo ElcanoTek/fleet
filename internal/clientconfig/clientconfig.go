@@ -144,6 +144,8 @@ type Bundle struct {
 	// into an agentcore.ProviderConfig (resolving the API-key env host-side) and
 	// hands them to the model resolver. See ProviderDef.
 	Providers []ProviderDef
+	// FallbackProviders is an ordered cross-provider retry chain (#703).
+	FallbackProviders []string
 
 	// PricingConfig carries the bundle's optional custom model-pricing overrides
 	// (#297). Empty in the generic bundle. cmd/fleet translates it into
@@ -741,15 +743,16 @@ type manifest struct {
 	// SkillsBuiltin toggles inheriting fleet's embedded Agent Skills pack
 	// (default TRUE); SkillsHidden tombstones individual built-in skills. The
 	// skills analogues of the remote_mcp_catalog knobs — see builtin_skills.go.
-	SkillsBuiltin *bool            `yaml:"skills_builtin"`
-	SkillsHidden  []string         `yaml:"skills_hidden"`
-	Providers     []ProviderDef    `yaml:"providers"`
-	EmptyState    EmptyState       `yaml:"empty_state"`
-	TaskTemplates []TaskTemplate   `yaml:"task_templates"`
-	AgentPolicy   AgentPolicy      `yaml:"agent_policy"`
-	Personas      []PersonaDef     `yaml:"personas"`
-	Pricing       PricingConfig    `yaml:"pricing"`
-	Sandbox       *sandboxManifest `yaml:"sandbox"`
+	SkillsBuiltin     *bool            `yaml:"skills_builtin"`
+	SkillsHidden      []string         `yaml:"skills_hidden"`
+	Providers         []ProviderDef    `yaml:"providers"`
+	FallbackProviders []string         `yaml:"fallback_providers"`
+	EmptyState        EmptyState       `yaml:"empty_state"`
+	TaskTemplates     []TaskTemplate   `yaml:"task_templates"`
+	AgentPolicy       AgentPolicy      `yaml:"agent_policy"`
+	Personas          []PersonaDef     `yaml:"personas"`
+	Pricing           PricingConfig    `yaml:"pricing"`
+	Sandbox           *sandboxManifest `yaml:"sandbox"`
 }
 
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
@@ -816,6 +819,7 @@ func Load(dir string) (*Bundle, error) {
 		WebhookTriggers:   m.WebhookTriggers,
 		RemoteMCPCatalog:  m.RemoteMCPs,
 		Providers:         m.Providers,
+		FallbackProviders: m.FallbackProviders,
 		AgentPolicyConfig: m.AgentPolicy,
 		Personas:          m.Personas,
 		PricingConfig:     m.Pricing,
@@ -1206,6 +1210,21 @@ func (b *Bundle) validateProviders() error {
 		if typ != "ollama" && strings.TrimSpace(p.APIKeyEnv) == "" {
 			return fmt.Errorf("providers[%q]: api_key_env is required for a %q provider", name, typ)
 		}
+	}
+	chainSeen := map[string]bool{}
+	for i, raw := range b.FallbackProviders {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			return fmt.Errorf("fallback_providers[%d]: provider name is required", i)
+		}
+		if !seen[name] {
+			return fmt.Errorf("fallback_providers[%d]: unknown provider %q", i, name)
+		}
+		if chainSeen[name] {
+			return fmt.Errorf("fallback_providers: duplicate provider %q", name)
+		}
+		chainSeen[name] = true
+		b.FallbackProviders[i] = name
 	}
 	return nil
 }

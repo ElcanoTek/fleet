@@ -37,10 +37,11 @@ type TurnConfig struct {
 	Messages []fantasy.Message
 	Label    string
 
-	Model         fantasy.LanguageModel
-	FallbackModel fantasy.LanguageModel
-	Temperature   float64
-	MaxTokens     int
+	Model          fantasy.LanguageModel
+	FallbackModel  fantasy.LanguageModel
+	FallbackModels []fantasy.LanguageModel
+	Temperature    float64
+	MaxTokens      int
 	// HealthRegistry is the cross-turn provider circuit breaker (#267), owned by
 	// the Manager and passed on every turn so error frequency accumulates. nil
 	// disables the breaker (tests).
@@ -151,6 +152,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		Executor:             NewSandboxExecutor(tc.Sandbox),
 		Model:                tc.Model,
 		FallbackModel:        tc.FallbackModel,
+		FallbackModels:       tc.FallbackModels,
 		MCPClient:            tc.MCPClient,
 		Finalize:             buildInteractiveFinalize(tc),
 		CompactionSummarizer: buildInteractiveCompactionSummarizer(tc),

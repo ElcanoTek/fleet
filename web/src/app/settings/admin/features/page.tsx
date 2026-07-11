@@ -97,6 +97,21 @@ const META: Record<string, SettingMeta> = {
     description:
       "Endpoint of your Rampart detection service (e.g. http://127.0.0.1:8787/v1/redact). Deploy it from scripts/rampart-service in the fleet repo. Leave empty when using the pattern engine.",
   },
+  guardrail_mode: {
+    label: "Prompt-injection guardrail",
+    description:
+      "Host-side screening of user/task input and tool output before it enters the model context. The detector is probabilistic and complements, never replaces, Fleet's sandbox and approvals.",
+    optionHelp: {
+      off: "Off (default): no detector calls and existing behavior is unchanged.",
+      observe: "Record verdicts and detector outages without blocking content.",
+      block: "Withhold flagged content; detector outages fail closed.",
+    },
+  },
+  guardrail_url: {
+    label: "Guardrail detector URL",
+    description:
+      "HTTP endpoint for the operator-deployed detector. Fleet sends profile, source, and text and expects a flagged verdict. Keep it on loopback or a private network.",
+  },
   tool_disclosure_threshold: {
     label: "Tool disclosure threshold",
     description:
@@ -149,7 +164,7 @@ const PRIVACY_GROUP = "Privacy & data protection";
 const GROUPS: { title: string; keys: string[] }[] = [
   {
     title: PRIVACY_GROUP,
-    keys: ["pii_redaction_mode", "pii_redaction_engine", "pii_rampart_url"],
+    keys: ["pii_redaction_mode", "pii_redaction_engine", "pii_rampart_url", "guardrail_mode", "guardrail_url"],
   },
   {
     title: "Agent runtime",
@@ -352,7 +367,12 @@ function FeaturesAdmin() {
                     onReset={() => void reset(s.key)}
                   />
                 ))}
-                {group.actions ? <RampartActions /> : null}
+                {group.actions ? (
+                  <>
+                    <RampartActions />
+                    <GuardrailActions />
+                  </>
+                ) : null}
               </ConnPanel>
             </ConnGroup>
           ))
@@ -690,6 +710,65 @@ function RampartActions() {
         </div>
       ) : null}
       <PIIInstallLine />
+    </div>
+  );
+}
+
+type GuardrailProbeResult = {
+  ok: boolean;
+  mode: string;
+  profile: string;
+  flagged: boolean;
+  score?: number;
+  detail?: string;
+  latency_ms: number;
+};
+
+function GuardrailActions() {
+  const [probe, setProbe] = useState<"idle" | "running" | GuardrailProbeResult>("idle");
+  const runProbe = async () => {
+    setProbe("running");
+    try {
+      const response = await fetch("/api/admin/guardrail/test", { method: "POST" });
+      if (!response.ok) throw new Error((await response.text()).trim() || `Probe failed: ${response.status}`);
+      setProbe((await response.json()) as GuardrailProbeResult);
+    } catch (err) {
+      setProbe({
+        ok: false,
+        mode: "",
+        profile: "",
+        flagged: false,
+        detail: err instanceof Error ? err.message : "Probe failed.",
+        latency_ms: 0,
+      });
+    }
+  };
+  return (
+    <div className="grid gap-[0.55rem] px-[0.1rem] py-[0.95rem]" data-testid="guardrail-probe">
+      <div className="flex flex-wrap items-center gap-[0.65rem]">
+        <button
+          type="button"
+          onClick={() => void runProbe()}
+          disabled={probe === "running"}
+          data-testid="guardrail-probe-run"
+          className={btnClass({ sm: true, reveal: true })}
+        >
+          Test prompt-injection guardrail
+        </button>
+        {probe === "running" ? (
+          <ActStatus state="running">Checking the live detector…</ActStatus>
+        ) : probe === "idle" ? (
+          <ActNote>uses a fixed synthetic injection sample — save the URL and mode first</ActNote>
+        ) : null}
+      </div>
+      {probe !== "idle" && probe !== "running" ? (
+        <ActStatus state={probe.ok ? "ok" : "err"}>
+          {probe.ok ? "✓" : "✕"} {probe.profile ? `${probe.profile} (${probe.mode})` : ""}
+          {probe.ok ? ` — ${probe.flagged ? "flagged" : "not flagged"}` : ""}
+          {probe.detail ? ` — ${probe.detail}` : ""}
+          {probe.latency_ms > 0 ? ` (${probe.latency_ms} ms)` : ""}
+        </ActStatus>
+      ) : null}
     </div>
   );
 }

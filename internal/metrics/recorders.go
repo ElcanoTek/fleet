@@ -178,6 +178,16 @@ func RecordTurnTimeout(kind string) {
 	incCounter(nameTurnTimeouts, "Turn timeout events by kind.", []string{"kind"}, []string{kind}, 1)
 }
 
+func RecordProviderFailover(from, to, reason string) {
+	incCounter("fleet_provider_failovers_total", "Cross-provider LLM failover attempts by configured provider and reason.",
+		[]string{"from", "to", "reason"}, []string{from, to, reason}, 1)
+}
+
+func RecordGuardrailVerdict(source, mode, outcome string) {
+	incCounter("fleet_guardrail_checks_total", "Host-side content guardrail checks by source, mode, and outcome.",
+		[]string{"source", "mode", "outcome"}, []string{source, mode, outcome}, 1)
+}
+
 // RegisterActiveAgents wires the pull-at-scrape gauge for in-flight turns.
 // interactive/scheduled are evaluated each scrape so the value is always live.
 func RegisterActiveAgents(interactive, scheduled func() int) {
