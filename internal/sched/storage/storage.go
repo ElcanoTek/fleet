@@ -281,6 +281,11 @@ func (s *Storage) GetTask(taskID uuid.UUID) (*models.Task, error) {
 	return s.db.GetTask(context.Background(), taskID)
 }
 
+// TaskExists reports whether a task row with the given id exists (#713).
+func (s *Storage) TaskExists(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	return s.db.TaskExists(ctx, taskID)
+}
+
 // AddTaskIteration upserts a per-iteration telemetry row for a looped task (#179).
 func (s *Storage) AddTaskIteration(ctx context.Context, it *models.TaskIteration) error {
 	return s.db.AddTaskIteration(ctx, it)
@@ -463,9 +468,16 @@ func (s *Storage) AddLogWithContext(ctx context.Context, taskID uuid.UUID, sessi
 
 // ImportLogRaw upserts a pre-serialized log session verbatim (legacy import,
 // docs/LEGACY-IMPORT.md). See db.AddLogRaw for why the payload is not
-// round-tripped through models.LogSession.
+// round-tripped through models.LogSession. The importer decides skip-vs-write
+// via LogExists BEFORE calling this (#713), so the upsert only ever replaces a
+// row the operator explicitly asked to overwrite.
 func (s *Storage) ImportLogRaw(ctx context.Context, taskID uuid.UUID, sessionJSON []byte) error {
 	return s.db.AddLogRaw(ctx, taskID, sessionJSON)
+}
+
+// LogExists reports whether a run-log row exists for the task (#713).
+func (s *Storage) LogExists(ctx context.Context, taskID uuid.UUID) (bool, error) {
+	return s.db.LogExists(ctx, taskID)
 }
 
 // GetLog gets the log session for a task.

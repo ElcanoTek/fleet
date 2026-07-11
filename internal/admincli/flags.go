@@ -147,3 +147,42 @@ func splitPositionalValueFlags(argv []string) (first string, flagArgs []string) 
 	}
 	return first, flagArgs
 }
+
+// splitPositionalMixed lifts the first true positional out of argv for flag
+// sets that MIX boolean and value flags. A dash token naming a flag in
+// boolFlags (bare name, no dashes — e.g. "dry-run") never consumes the next
+// token; any other dash token without an embedded "=" consumes the following
+// token as its value. This is what lets
+// `fleet import --sched-database-url X bundle.json` and
+// `fleet import bundle.json --dry-run` both bind bundle.json as the positional
+// (#714): splitPositional would misread a value flag's argument as the
+// positional, and splitPositionalValueFlags would let a boolean flag swallow
+// the bundle path.
+func splitPositionalMixed(argv []string, boolFlags map[string]bool) (first string, flagArgs []string) {
+	i := 0
+	for i < len(argv) {
+		a := argv[i]
+		if len(a) > 1 && a[0] == '-' {
+			flagArgs = append(flagArgs, a)
+			name := strings.TrimLeft(a, "-")
+			if strings.Contains(name, "=") {
+				i++ // "--flag=value" is self-contained
+				continue
+			}
+			if !boolFlags[name] && i+1 < len(argv) {
+				flagArgs = append(flagArgs, argv[i+1]) // value flag: bind the next token
+				i += 2
+				continue
+			}
+			i++
+			continue
+		}
+		if first == "" {
+			first = a
+		} else {
+			flagArgs = append(flagArgs, a)
+		}
+		i++
+	}
+	return first, flagArgs
+}

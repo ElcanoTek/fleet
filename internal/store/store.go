@@ -250,14 +250,16 @@ func (s *Store) Close() error {
 // call from production code. schema_migrations is preserved so Open()
 // after a truncate is still a no-op on the second run.
 //
-// turn_metrics must be listed EXPLICITLY: migration 038 dropped its FK to
-// conversations so usage accounting survives conversation deletion (#601),
-// which also means TRUNCATE conversations CASCADE no longer reaches it — the
-// usage tests then accumulate rows across tests and fail (first caught when
-// the dev CI lane gained a Postgres service, #723).
+// Every table must be reachable from this list via an FK CASCADE or named
+// explicitly. turn_metrics is named because migration 038 deliberately
+// dropped its conversations FK (usage history outlives conversation
+// deletion), so it stopped cascading — which quietly made the usage-analytics
+// tests non-rerunnable (rows accumulated across suite runs). projects,
+// user_connector_prefs, and user_skills have no FK into any truncated table
+// and are named for the same reason.
 func (s *Store) TruncateAllForTest(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, turn_metrics, memories, memory_entities, users, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings RESTART IDENTITY CASCADE`)
+		`TRUNCATE TABLE conversations, memories, memory_entities, users, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, turn_metrics, projects, user_connector_prefs, user_skills RESTART IDENTITY CASCADE`)
 	return err
 }
 
