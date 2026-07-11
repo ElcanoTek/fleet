@@ -15,6 +15,12 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **The bundled MCP directory no longer advertises a nonexistent hosted X API
+  server**: `https://api.x.com/mcp` returns 404 and X documents its API-capable
+  XMCP as self-hosted. The valid open-access X Docs MCP remains available at
+  `https://docs.x.com/mcp`, while operators can still add a separately hosted
+  XMCP deployment as a bundle-authored connector.
+
 - **Weekly task schedules support multiple days**: the Create New Task modal's
   simple repeat editor now accepts combinations such as Monday and Wednesday.
   Supported cron weekday lists also hydrate the same selected-day UI when
