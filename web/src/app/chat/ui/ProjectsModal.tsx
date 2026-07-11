@@ -18,6 +18,9 @@ export type Project = {
   default_persona?: string;
   default_model?: string;
   mcp_servers: string[];
+  // Pinned floats the project to the top of the rail's Projects section
+  // (owner-only toggle, from the rail's project kebab).
+  pinned?: boolean;
   created_at: number;
   updated_at: number;
 };
@@ -34,19 +37,26 @@ export function ProjectsModal({
   userEmail,
   onClose,
   onStartChat,
+  initialCreate,
+  initialSelectedId,
 }: {
   userEmail: string;
   onClose: () => void;
   onStartChat: (projectID: string) => void;
+  // Open straight into the create form (the rail's + button). The modal
+  // mounts fresh per open, so useState initializers are enough.
+  initialCreate?: boolean;
+  // Open with this project pre-selected (the rail kebab's "Edit project…").
+  initialSelectedId?: string;
 }) {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
   const [memories, setMemories] = useState<ProjectMemory[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Draft form state (create or edit).
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(Boolean(initialCreate));
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
   const [teamShared, setTeamShared] = useState(false);
@@ -233,7 +243,7 @@ export function ProjectsModal({
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
           {projects.length === 0 && !editing ? (
             <p className="rounded-[0.9rem] border border-dashed border-[var(--color-border)] px-3 py-4 text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
-              No projects yet. A project turns a folder into a shared team workspace.
+              No projects yet. A project is a shared workspace with its own instructions, memory, and chats.
             </p>
           ) : (
             <div className="grid gap-2">

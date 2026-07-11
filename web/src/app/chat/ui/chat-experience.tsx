@@ -20,15 +20,14 @@ import {
   DEFAULT_MODEL_LABEL,
   labelForModel,
 } from "@/app/lib/modelAliases";
-import {
-  computeContextUsage,
-  type ContextUsage,
-} from "@/app/lib/contextUsage";
+import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
 import { parseSseChunk } from "@/app/lib/sse";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
-import { SearchBar } from "./SearchBar";
 import { useClientConfig } from "@/app/lib/useClientConfig";
-import { filterConversations, visibleConversationOrder } from "./conversationOrganization";
+import {
+  filterConversations,
+  visibleConversationOrder,
+} from "./conversationOrganization";
 import {
   useKeyboardShortcuts,
   type KeyboardShortcut,
@@ -46,12 +45,10 @@ import {
 } from "./history";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { Icon } from "./Icon";
-import { ProjectsModal } from "./ProjectsModal";
+import { ProjectsModal, type Project } from "./ProjectsModal";
+import { ProjectHome } from "./ProjectHome";
 import { MemoryGraphView } from "./MemoryGraphView";
-import {
-  ConversationTotalsChip,
-  type PendingAttachment,
-} from "./ChatChips";
+import { ConversationTotalsChip, type PendingAttachment } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModels } from "@/app/shared/lib/workspaceModels";
@@ -67,7 +64,10 @@ import { useTurnStream, type TurnStreamDeps } from "./useTurnStream";
 // the public API so existing import paths — including the markdown unit
 // tests that import { autoFenceRawHtmlDocument, renderAssistantContent }
 // from "./chat-experience" — keep resolving unchanged.
-import { autoFenceRawHtmlDocument, renderAssistantContent } from "./AssistantContent";
+import {
+  autoFenceRawHtmlDocument,
+  renderAssistantContent,
+} from "./AssistantContent";
 export { autoFenceRawHtmlDocument, renderAssistantContent };
 import { readChatSession, writeChatSession } from "./chatSessionStore";
 
@@ -101,9 +101,9 @@ export type ConversationSummary = {
   // archived ones (#282). Archived conversations live in the collapsed
   // "Archived" sidebar section, not the main list.
   archived_at?: number | null;
-  // folder is the single flat bucket this conversation is filed under (#279).
-  // Empty/undefined = unfiled. Folders are derived from these values in the
-  // rail — there is no folders table. Filing a conversation auto-pins it.
+  // folder is the old flat bucket (#279). The server still stores/serves the
+  // field, but the folders UI was removed (projects superseded them) — the
+  // rail ignores it now. Kept in the type because it's on the wire.
   folder?: string;
   // labels is the conversation's tag set (#279) — up to 10, 32 chars each,
   // colored by name-hash. Undefined/empty = unlabeled.
@@ -112,6 +112,11 @@ export type ConversationSummary = {
   // not shared; non-empty = a 🔗 badge shows in the sidebar and the kebab offers
   // Copy link / Unshare. The owner's own GET /conversations carries it.
   share_token?: string;
+  // project_id binds the conversation to a project/space (#509). Set at
+  // creation or by re-filing (drag onto a rail project / kebab "Move to
+  // project"). In the rail a project conversation lives only under its
+  // project, not in Pinned/Chats.
+  project_id?: string;
 };
 
 export type ServerConfig = {
@@ -195,7 +200,13 @@ type UserMemory = {
   updated_at: number;
 };
 
-const MEMORY_KINDS = ["fact", "preference", "identity", "constraint", "context"] as const;
+const MEMORY_KINDS = [
+  "fact",
+  "preference",
+  "identity",
+  "constraint",
+  "context",
+] as const;
 
 // ── streaming helpers ────────────────────────────────────────────────────
 // minimumThinkingMs / streamIdleTimeoutMs moved into ./useTurnStream alongside
@@ -217,11 +228,23 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
   {
     title: "Global",
     entries: [
-      { chips: [{ mod: true }, { label: "K" }], description: "Open search" },
-      { chips: [{ mod: true }, { shift: true }, { label: "O" }], description: "New conversation" },
-      { chips: [{ shift: true }, { label: "Esc" }], description: "Focus the message composer" },
-      { chips: [{ label: "?" }], description: "Show this keyboard-shortcut help" },
-      { chips: [{ label: "Esc" }], description: "Close search, help, or the sidebar" },
+      { chips: [{ mod: true }, { label: "K" }], description: "Focus search" },
+      {
+        chips: [{ mod: true }, { shift: true }, { label: "O" }],
+        description: "New conversation",
+      },
+      {
+        chips: [{ shift: true }, { label: "Esc" }],
+        description: "Focus the message composer",
+      },
+      {
+        chips: [{ label: "?" }],
+        description: "Show this keyboard-shortcut help",
+      },
+      {
+        chips: [{ label: "Esc" }],
+        description: "Close help or the sidebar",
+      },
     ],
   },
   {
@@ -229,19 +252,40 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
     entries: [
       { chips: [{ label: "J" }], description: "Focus next conversation" },
       { chips: [{ label: "K" }], description: "Focus previous conversation" },
-      { chips: [{ label: "Enter" }], description: "Open the focused conversation" },
-      { chips: [{ label: "P" }], description: "Pin / unpin the focused conversation" },
-      { chips: [{ label: "A" }], description: "Archive the focused conversation" },
-      { chips: [{ label: "R" }], description: "Rename the focused conversation" },
-      { chips: [{ label: "#" }], description: "Delete the focused conversation" },
+      {
+        chips: [{ label: "Enter" }],
+        description: "Open the focused conversation",
+      },
+      {
+        chips: [{ label: "P" }],
+        description: "Pin / unpin the focused conversation",
+      },
+      {
+        chips: [{ label: "A" }],
+        description: "Archive the focused conversation",
+      },
+      {
+        chips: [{ label: "R" }],
+        description: "Rename the focused conversation",
+      },
+      {
+        chips: [{ label: "#" }],
+        description: "Delete the focused conversation",
+      },
     ],
   },
   {
     title: "Composer",
     entries: [
       { chips: [{ label: "Enter" }], description: "Send the message" },
-      { chips: [{ mod: true }, { label: "Enter" }], description: "Send the message" },
-      { chips: [{ shift: true }, { label: "Enter" }], description: "Insert a newline" },
+      {
+        chips: [{ mod: true }, { label: "Enter" }],
+        description: "Send the message",
+      },
+      {
+        chips: [{ shift: true }, { label: "Enter" }],
+        description: "Insert a newline",
+      },
     ],
   },
   {
@@ -259,11 +303,23 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
 function isInteractiveTarget(el: Element | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
   const tag = el.tagName;
-  if (tag === "BUTTON" || tag === "A" || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+  if (
+    tag === "BUTTON" ||
+    tag === "A" ||
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT"
+  ) {
     return true;
   }
   const role = el.getAttribute("role");
-  return role === "button" || role === "link" || role === "menuitem" || role === "option" || role === "tab";
+  return (
+    role === "button" ||
+    role === "link" ||
+    role === "menuitem" ||
+    role === "option" ||
+    role === "tab"
+  );
 }
 
 // ── component ────────────────────────────────────────────────────────────
@@ -291,14 +347,16 @@ export function ChatExperience() {
   // an in-flight stream without losing the streaming UI state — the
   // stream events keep landing in the originating conv's slot whether
   // it's currently displayed or not.
-  const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>(
-    () => restoredSession?.messagesByConv ?? {},
-  );
+  const [messagesByConv, setMessagesByConv] = useState<
+    Record<string, Message[]>
+  >(() => restoredSession?.messagesByConv ?? {});
   // True once the initial bootstrap (cold start) or the rehydration (warm
   // return) has established a snapshot worth persisting. Gates the mirror
   // effect below so a mid-cold-start unmount never saves a half-empty snapshot
   // that a return would mistake for a warm cache.
-  const [bootstrapped, setBootstrapped] = useState(() => restoredSession !== null);
+  const [bootstrapped, setBootstrapped] = useState(
+    () => restoredSession !== null,
+  );
   // Per-conversation composer state — drafts, queued attachments, attachment
   // errors, and in-flight upload marks — lives in usePerConvComposerState,
   // keyed by currentConvKey (real conv id or the PENDING sentinel for the
@@ -309,8 +367,6 @@ export function ChatExperience() {
   // behavior. Owned here so the sidebar content and the select-mode exit
   // below share one source of truth.
   const railCollapse = useRailCollapse();
-  // searchOpen gates the Cmd/Ctrl+K full-text search palette (#308).
-  const [searchOpen, setSearchOpen] = useState(false);
   // shortcutsOpen gates the "?" keyboard-shortcut help overlay (#306).
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Theme bootstrap + toggle are owned by the shared shell: the <ThemeToggle/>
@@ -328,20 +384,24 @@ export function ChatExperience() {
   // the SSE dedup counters — lives in useTurnStreamState, keyed by conv
   // slot. Instantiated below once currentConvKey is in scope. See
   // ./useTurnStreamState.
-  const [crossfadingMessageIds, setCrossfadingMessageIds] = useState<number[]>([]);
-  const [userEmail, setUserEmail] = useState(() => restoredSession?.userEmail ?? "");
+  const [crossfadingMessageIds, setCrossfadingMessageIds] = useState<number[]>(
+    [],
+  );
+  const [userEmail, setUserEmail] = useState(
+    () => restoredSession?.userEmail ?? "",
+  );
   const [conversations, setConversations] = useState<ConversationSummary[]>(
     () => restoredSession?.conversations ?? [],
   );
   // Archived conversations (#282): fetched separately, shown in a collapsed
   // "Archived" section at the bottom of the sidebar.
-  const [archivedConversations, setArchivedConversations] = useState<ConversationSummary[]>(
-    () => restoredSession?.archivedConversations ?? [],
-  );
+  const [archivedConversations, setArchivedConversations] = useState<
+    ConversationSummary[]
+  >(() => restoredSession?.archivedConversations ?? []);
   const [showArchived, setShowArchived] = useState(false);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(
-    () => restoredSession?.activeConversationId ?? null,
-  );
+  const [activeConversationId, setActiveConversationId] = useState<
+    string | null
+  >(() => restoredSession?.activeConversationId ?? null);
   // The slot identifier the rest of the UI hangs off of: the active
   // conv id when one is loaded, the PENDING sentinel when the user is
   // on the empty new-chat view, or a per-submission pending key during
@@ -411,12 +471,16 @@ export function ChatExperience() {
     key && !isPendingKey(key) ? key : null;
   // Cold start shows the full blocking spinner; a warm return (restoredSession
   // present) paints the cached transcript immediately and never blocks.
-  const [isLoadingHistory, setIsLoadingHistory] = useState(() => restoredSession === null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(
+    () => restoredSession === null,
+  );
   const [pendingDeleteConversation, setPendingDeleteConversation] =
     useState<PendingDeleteConversation | null>(null);
   // Header title click-to-edit. Holds the draft string while the input is
   // open; null means the static label is shown.
-  const [renamingTitleDraft, setRenamingTitleDraft] = useState<string | null>(null);
+  const [renamingTitleDraft, setRenamingTitleDraft] = useState<string | null>(
+    null,
+  );
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [confirmSummarize, setConfirmSummarize] = useState(false);
@@ -431,7 +495,9 @@ export function ChatExperience() {
   const [selectMode, setSelectMode] = useState(false);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
-  const [personas, setPersonas] = useState<string[]>(() => restoredSession?.personas ?? []);
+  const [personas, setPersonas] = useState<string[]>(
+    () => restoredSession?.personas ?? [],
+  );
   const [selectedPersona, setSelectedPersona] = useState<string>(
     () => restoredSession?.selectedPersona ?? "",
   );
@@ -468,9 +534,10 @@ export function ChatExperience() {
   // modelError is set when the custom slug in the model input is rejected
   // by /api/model-check (currently: completion price > $30/M). When set,
   // submitPrompt refuses to send and the composer shows the error.
-  const [modelError, setModelError] = useState<{ message: string; modelsUrl: string } | null>(
-    null,
-  );
+  const [modelError, setModelError] = useState<{
+    message: string;
+    modelsUrl: string;
+  } | null>(null);
   // Optional MCP servers the user can toggle on per-conversation. The
   // MCPServerInfo shape is declared at module scope (and exported) so the
   // extracted Composer can type its prop against it.
@@ -478,7 +545,9 @@ export function ChatExperience() {
   const [mcpPickerOpen, setMcpPickerOpen] = useState(false);
   // Bundle skill roster for the composer "/" autocomplete (#513). Fetched
   // once at startup — the roster is bundle-owned and static for the session.
-  const [skills, setSkills] = useState<SkillInfo[]>(() => restoredSession?.skills ?? []);
+  const [skills, setSkills] = useState<SkillInfo[]>(
+    () => restoredSession?.skills ?? [],
+  );
   // Server-exposed capability flags. Fetched once on mount from
   // /api/server-config. Drives the lockdown affordance: when
   // lockdownAvailable is false the +button stays a plain "+"
@@ -527,7 +596,22 @@ export function ChatExperience() {
   // Memory-manager tab (#523): the flat record list (default) or the derived
   // knowledge-graph view.
   const [memoryView, setMemoryView] = useState<"list" | "graph">("list");
-  const [projectsOpen, setProjectsOpen] = useState(false);
+  // Projects modal state: null = closed; {} = open on the list; create opens
+  // straight into the new-project form (the rail's +); selectId opens with
+  // that project selected (the rail kebab's "Edit project…").
+  const [projectsModal, setProjectsModal] = useState<null | {
+    create?: boolean;
+    selectId?: string;
+  }>(null);
+  // Project home (#509 follow-up): the page a project's rail row opens —
+  // chats, sources, instructions, per-project settings. null = normal chat
+  // view. settings=true opens straight into the settings dialog (the rail
+  // kebab's "Project settings…").
+  const [projectHome, setProjectHome] = useState<null | {
+    id: string;
+    settings?: boolean;
+  }>(null);
+
   const [memoryDraft, setMemoryDraft] = useState("");
   const [memoryKindDraft, setMemoryKindDraft] = useState<string>("fact");
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
@@ -535,9 +619,8 @@ export function ChatExperience() {
   const [isLoadingMemories, setIsLoadingMemories] = useState(false);
   const [isSavingMemory, setIsSavingMemory] = useState(false);
   const [sidebarQuery, setSidebarQuery] = useState("");
-  // Rail organization filters (#258/#279): a single active folder and a set of
+  // Rail organization filters (#258/#279): a set of
   // labels (AND). Driving the sectioned-vs-filtered view in the rail.
-  const [filterFolder, setFilterFolder] = useState<string | null>(null);
   const [filterLabels, setFilterLabels] = useState<string[]>([]);
   // pendingAttachments holds files the user has picked but not yet sent.
   // We upload them to the server on submit, get back metadata with a
@@ -550,7 +633,8 @@ export function ChatExperience() {
   // banner that appears when a heavy .xlsx is queued on the default
   // model. Cleared automatically when the attachment list empties so
   // the next upload re-arms the suggestion.
-  const [spreadsheetNudgeDismissed, setSpreadsheetNudgeDismissed] = useState(false);
+  const [spreadsheetNudgeDismissed, setSpreadsheetNudgeDismissed] =
+    useState(false);
   // Compaction state. isSummarizing gates the Summarize button (and
   // disables it while the network call is in flight). summarizeStream
   // accumulates the streaming summary text as the model generates it
@@ -562,12 +646,17 @@ export function ChatExperience() {
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [summarizeError, setSummarizeError] = useState<string | null>(null);
   const [summarizeStream, setSummarizeStream] = useState("");
-  const [summarizeStartedAt, setSummarizeStartedAt] = useState<number | null>(null);
+  const [summarizeStartedAt, setSummarizeStartedAt] = useState<number | null>(
+    null,
+  );
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const spreadsheetNudge = useMemo(
     () =>
       decideSpreadsheetNudge({
-        attachments: pendingAttachments.map((a) => ({ name: a.name, size: a.size })),
+        attachments: pendingAttachments.map((a) => ({
+          name: a.name,
+          size: a.size,
+        })),
         selectedModel,
         dismissed: spreadsheetNudgeDismissed,
       }),
@@ -838,7 +927,10 @@ export function ChatExperience() {
   // the way. Switching conversations resets the latch without firing
   // so loading an already-full chat doesn't blast a toast.
   const [compactToastVisible, setCompactToastVisible] = useState(false);
-  const compactToastStateRef = useRef<{ severity: string; convId: string | null }>({
+  const compactToastStateRef = useRef<{
+    severity: string;
+    convId: string | null;
+  }>({
     severity: "ok",
     convId: null,
   });
@@ -846,7 +938,10 @@ export function ChatExperience() {
     const currentSeverity = contextUsage?.severity ?? "ok";
     const currentConvId = activeConversationId;
     const prev = compactToastStateRef.current;
-    compactToastStateRef.current = { severity: currentSeverity, convId: currentConvId };
+    compactToastStateRef.current = {
+      severity: currentSeverity,
+      convId: currentConvId,
+    };
 
     // Conversation just changed → snapshot the new state without
     // firing. Otherwise opening a long chat that's already at 95%
@@ -908,7 +1003,10 @@ export function ChatExperience() {
       setShowJumpToLatest(false);
       return;
     }
-    const distanceFromBottom = scrollParent.scrollHeight - scrollParent.scrollTop - scrollParent.clientHeight;
+    const distanceFromBottom =
+      scrollParent.scrollHeight -
+      scrollParent.scrollTop -
+      scrollParent.clientHeight;
     setShowJumpToLatest(distanceFromBottom > 240);
   };
 
@@ -918,22 +1016,32 @@ export function ChatExperience() {
     if (!el) return;
     const scrollParent = conversationRef.current;
     if (!scrollParent) {
-      el.scrollIntoView({ block: "end", behavior: isStreaming ? "auto" : "smooth" });
+      el.scrollIntoView({
+        block: "end",
+        behavior: isStreaming ? "auto" : "smooth",
+      });
       return;
     }
     const { scrollTop, scrollHeight, clientHeight } = scrollParent;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
     if (isStreaming) {
-      if (distanceFromBottom < 240) el.scrollIntoView({ block: "end", behavior: "auto" });
+      if (distanceFromBottom < 240)
+        el.scrollIntoView({ block: "end", behavior: "auto" });
       return;
     }
-    if (distanceFromBottom < 160) el.scrollIntoView({ block: "end", behavior: "smooth" });
+    if (distanceFromBottom < 160)
+      el.scrollIntoView({ block: "end", behavior: "smooth" });
     updateJumpToLatestVisibility();
   }, [messages, isStreaming]);
 
   useEffect(() => {
     const conversationId = activeConversationId;
-    if (!conversationId || pendingHistoryScrollRef.current !== conversationId || isLoadingHistory) return;
+    if (
+      !conversationId ||
+      pendingHistoryScrollRef.current !== conversationId ||
+      isLoadingHistory
+    )
+      return;
 
     let frameId = 0;
     let timeoutId: number | null = null;
@@ -1022,7 +1130,9 @@ export function ChatExperience() {
       try {
         const res = await fetch("/api/version", { cache: "no-store" });
         if (!res.ok) return;
-        const { buildId: serverBuildId } = (await res.json()) as { buildId: string };
+        const { buildId: serverBuildId } = (await res.json()) as {
+          buildId: string;
+        };
         if (cancelled) return;
         if (serverBuildId && serverBuildId !== clientBuildId) {
           setUpdateAvailable(true);
@@ -1054,16 +1164,15 @@ export function ChatExperience() {
   // (Initial-load mount effect moved below its callback dependencies — see
   // "mount effects, hoisted below their callback dependencies".)
 
-  // The flat filtered list (folder + labels + title query). When no filter is
+  // The flat filtered list (labels + title query). When no filter is
   // active this is the full active list, so "select all visible" stays correct.
   const filteredConversations = useMemo(
     () =>
       filterConversations(conversations, {
-        folder: filterFolder,
         labels: filterLabels,
         query: sidebarQuery,
       }),
-    [conversations, filterFolder, filterLabels, sidebarQuery],
+    [conversations, filterLabels, sidebarQuery],
   );
 
   // Keyboard list-navigation (#306). visibleOrder is the exact top-to-bottom
@@ -1072,24 +1181,32 @@ export function ChatExperience() {
   // recent-unfiled. j/k move `focusedConversationId` through this list; Enter
   // opens it; p/a/#/r act on it. The cursor is separate from
   // activeConversationId (the open conversation).
-  const [focusedConversationId, setFocusedConversationId] = useState<string | null>(null);
+  const [focusedConversationId, setFocusedConversationId] = useState<
+    string | null
+  >(null);
   // Rename request to the sidebar (it owns the inline-edit state). The `r`
   // shortcut bumps the nonce; the sidebar opens its editor for that id.
-  const [renameSignal, setRenameSignal] = useState<{ id: string; nonce: number } | null>(null);
+  const [renameSignal, setRenameSignal] = useState<{
+    id: string;
+    nonce: number;
+  } | null>(null);
   // Edit-last-user-message request to the transcript (it owns the edit state).
   // The `e` shortcut bumps the nonce paired with the target message id. Pairing
   // with the id (rather than a bare counter) means a message that merely
   // *becomes* the last user turn later — e.g. after a rollback — never
   // spuriously enters edit mode: only an explicit request for its id does.
-  const [editLastUserSignal, setEditLastUserSignal] = useState<{ id: number; nonce: number } | null>(null);
+  const [editLastUserSignal, setEditLastUserSignal] = useState<{
+    id: number;
+    nonce: number;
+  } | null>(null);
   const visibleOrder = useMemo(
     () =>
       visibleConversationOrder({
         all: conversations,
         filtered: filteredConversations,
-        filtering: Boolean(filterFolder) || filterLabels.length > 0 || sidebarQuery.trim().length > 0,
+        filtering: filterLabels.length > 0 || sidebarQuery.trim().length > 0,
       }),
-    [conversations, filteredConversations, filterFolder, filterLabels, sidebarQuery],
+    [conversations, filteredConversations, filterLabels, sidebarQuery],
   );
 
   // With no query, show "default" + "advanced" + the top-ranked list. As
@@ -1155,7 +1272,8 @@ export function ChatExperience() {
     }
     const source = catalogModels.length > 0 ? catalogModels : rankedModels;
     const matchesQuery = (m: RankedModel) =>
-      m.slug.toLowerCase().includes(query) || m.name.toLowerCase().includes(query);
+      m.slug.toLowerCase().includes(query) ||
+      m.name.toLowerCase().includes(query);
     const seen = new Set<string>();
     const matches: RankedModel[] = [];
     for (const d of [...defaults, ...workspaceModels]) {
@@ -1173,15 +1291,24 @@ export function ChatExperience() {
       if (matches.length >= MAX_SEARCH_RESULTS) break;
     }
     return matches;
-  }, [rankedModels, catalogModels, workspaceModels, modelSearchQuery, isLockdown, serverConfig.lockdownAllowedModels]);
+  }, [
+    rankedModels,
+    catalogModels,
+    workspaceModels,
+    modelSearchQuery,
+    isLockdown,
+    serverConfig.lockdownAllowedModels,
+  ]);
 
   const loadRankedModels = async () => {
     if (rankedModels.length > 0 || isLoadingRankedModels) return;
     setIsLoadingRankedModels(true);
     try {
-      const response = await fetch("/api/model-rankings", { cache: "no-store" });
+      const response = await fetch("/api/model-rankings", {
+        cache: "no-store",
+      });
       if (!response.ok) return;
-      const data = await response.json() as { models?: RankedModel[] };
+      const data = (await response.json()) as { models?: RankedModel[] };
       setRankedModels(data.models ?? []);
     } catch {
       /* optional enhancement only */
@@ -1201,14 +1328,29 @@ export function ChatExperience() {
   // hoisted mount effect lists it as a dependency, so a fresh-every-render
   // identity would re-fire that effect each render. The early-return guard
   // makes any re-fire after the first successful load a no-op.
+  //
+  // catalogAttemptedRef makes it once-per-session regardless of OUTCOME: with
+  // only the length/loading guards, an EMPTY or failing catalog left length
+  // at 0 while isLoadingCatalog's flip cycled the callback identity — the
+  // mount effect re-fired in a tight loop and the client hammered
+  // /api/model-catalog indefinitely (thousands of requests in seconds,
+  // starving the UI; found via a Playwright trace in the mocked suite, but
+  // any deployment whose catalog errors would self-DDoS the same way).
+  const catalogAttemptedRef = useRef(false);
   const loadCatalogModels = useCallback(async () => {
-    if (catalogModels.length > 0 || isLoadingCatalog) return;
+    if (catalogAttemptedRef.current || catalogModels.length > 0 || isLoadingCatalog) return;
+    catalogAttemptedRef.current = true;
     setIsLoadingCatalog(true);
     try {
       const response = await fetch("/api/model-catalog", { cache: "no-store" });
       if (!response.ok) return;
       const data = (await response.json()) as {
-        models?: Array<{ slug: string; name: string; context_length?: number; created?: number }>;
+        models?: Array<{
+          slug: string;
+          name: string;
+          context_length?: number;
+          created?: number;
+        }>;
       };
       const normalized: RankedModel[] = (data.models ?? []).map((m) => ({
         slug: m.slug,
@@ -1247,10 +1389,13 @@ export function ChatExperience() {
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       try {
-        const res = await fetch(`/api/model-check?slug=${encodeURIComponent(slug)}`, {
-          cache: "no-store",
-          signal: controller.signal,
-        });
+        const res = await fetch(
+          `/api/model-check?slug=${encodeURIComponent(slug)}`,
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
         if (!res.ok) {
           setModelError(null);
           return;
@@ -1329,12 +1474,19 @@ export function ChatExperience() {
   // conversationId === null is the pre-chat case: no row exists yet, so
   // we skip the POST and keep the toggles in local state. They get
   // flushed to the server as part of the first POST /chat body.
-  const toggleMcpServer = async (conversationId: string | null, name: string) => {
+  const toggleMcpServer = async (
+    conversationId: string | null,
+    name: string,
+  ) => {
     const prev = mcpServers;
-    const nextServers = prev.map((s) => (s.name === name ? { ...s, enabled: !s.enabled } : s));
+    const nextServers = prev.map((s) =>
+      s.name === name ? { ...s, enabled: !s.enabled } : s,
+    );
     setMcpServers(nextServers);
     if (!conversationId) return;
-    const enabledOptional = nextServers.filter((s) => s.enabled).map((s) => s.name);
+    const enabledOptional = nextServers
+      .filter((s) => s.enabled)
+      .map((s) => s.name);
     try {
       const response = await fetch(
         `/api/conversations/${encodeURIComponent(conversationId)}/mcp-servers`,
@@ -1362,7 +1514,11 @@ export function ChatExperience() {
       const data = (await response.json()) as { memories?: UserMemory[] };
       setMemories(data.memories ?? []);
     } catch (err) {
-      setMemoryError(err instanceof Error && err.message ? err.message : "Unable to load memories.");
+      setMemoryError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Unable to load memories.",
+      );
     } finally {
       setIsLoadingMemories(false);
     }
@@ -1397,7 +1553,11 @@ export function ChatExperience() {
       setEditingMemoryId(null);
       await loadMemories();
     } catch (err) {
-      setMemoryError(err instanceof Error && err.message ? err.message : "Unable to save memory.");
+      setMemoryError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Unable to save memory.",
+      );
     } finally {
       setIsSavingMemory(false);
     }
@@ -1406,7 +1566,9 @@ export function ChatExperience() {
   const deleteMemory = async (id: string) => {
     setMemoryError(null);
     try {
-      const response = await fetch(`/api/memories/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const response = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
       if (!response.ok) throw new Error(await response.text());
       setMemories((prev) => prev.filter((m) => m.id !== id));
       if (editingMemoryId === id) {
@@ -1414,14 +1576,21 @@ export function ChatExperience() {
         setMemoryDraft("");
       }
     } catch (err) {
-      setMemoryError(err instanceof Error && err.message ? err.message : "Unable to delete memory.");
+      setMemoryError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Unable to delete memory.",
+      );
     }
   };
 
   // Partial update for the #515 controls (pin/unpin, retire/restore). The
   // server treats absent fields as untouched, so each action sends only its
   // own flag.
-  const patchMemory = async (id: string, patch: { pinned?: boolean; retired?: boolean }) => {
+  const patchMemory = async (
+    id: string,
+    patch: { pinned?: boolean; retired?: boolean },
+  ) => {
     setMemoryError(null);
     try {
       const response = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
@@ -1432,7 +1601,11 @@ export function ChatExperience() {
       if (!response.ok) throw new Error(await response.text());
       await loadMemories();
     } catch (err) {
-      setMemoryError(err instanceof Error && err.message ? err.message : "Unable to update memory.");
+      setMemoryError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Unable to update memory.",
+      );
     }
   };
 
@@ -1455,7 +1628,8 @@ export function ChatExperience() {
   // conversation. Falls back to a first-user-message derivation for brand
   // new / unsaved chats.
   const title = useMemo(() => {
-    if (activeConversationId && activeConversation?.title) return activeConversation.title;
+    if (activeConversationId && activeConversation?.title)
+      return activeConversation.title;
     return deriveConversationTitle(messages);
   }, [activeConversationId, activeConversation, messages]);
   // Show ⌘K only to mac users; everyone else gets Ctrl+K. SSR is off
@@ -1496,11 +1670,15 @@ export function ChatExperience() {
         fetch("/api/conversations?archived=true", { cache: "no-store" }),
       ]);
       if (activeRes.ok) {
-        const data = (await activeRes.json()) as { conversations: ConversationSummary[] | null };
+        const data = (await activeRes.json()) as {
+          conversations: ConversationSummary[] | null;
+        };
         setConversations(data.conversations ?? []);
       }
       if (archivedRes.ok) {
-        const data = (await archivedRes.json()) as { conversations: ConversationSummary[] | null };
+        const data = (await archivedRes.json()) as {
+          conversations: ConversationSummary[] | null;
+        };
         setArchivedConversations(data.conversations ?? []);
       }
     } catch {
@@ -1510,8 +1688,15 @@ export function ChatExperience() {
 
   const loadConversation = async (
     conversationId: string,
-    options: { preserveScroll?: boolean; background?: boolean } = {},
+    options: { preserveScroll?: boolean; background?: boolean; restore?: boolean } = {},
   ) => {
+    // Opening a conversation dismisses a project home overlaying the chat
+    // pane — every USER entry point (rail rows, search hits, keyboard nav)
+    // funnels through here. Non-navigations leave the home alone: background
+    // (SSE reattach) and restore (boot's auto-load of the latest chat,
+    // tab-return staleness refetch) — otherwise the boot load resolving a
+    // beat after the user opens a project home would silently close it.
+    if (!options.background && !options.restore) setProjectHome(null);
     // If this conversation is currently streaming, the local in-memory
     // copy has the in-flight UI updates that the server hasn't
     // persisted yet. Re-fetching would replace those with whatever's
@@ -1533,7 +1718,9 @@ export function ChatExperience() {
     // fresh server copy underneath the rendered messages.
     if (!options.background) setIsLoadingHistory(true);
     try {
-      const response = await fetch(`/api/conversations/${conversationId}`, { cache: "no-store" });
+      const response = await fetch(`/api/conversations/${conversationId}`, {
+        cache: "no-store",
+      });
       if (!response.ok) throw new Error("Unable to load conversation.");
       const data = (await response.json()) as {
         conversation: ConversationSummary;
@@ -1585,13 +1772,15 @@ export function ChatExperience() {
           status: "pending",
           expiresAt: p.expires_at,
         }));
-        const memoryCards: MemoryProposal[] = pendingMemoryProposals.map((p) => ({
-          id: p.proposal_id,
-          content: p.content,
-          kind: p.kind,
-          supersedesContent: p.supersedes_content,
-          status: "pending",
-        }));
+        const memoryCards: MemoryProposal[] = pendingMemoryProposals.map(
+          (p) => ({
+            id: p.proposal_id,
+            content: p.content,
+            kind: p.kind,
+            supersedesContent: p.supersedes_content,
+            status: "pending",
+          }),
+        );
         const lastAssistantIdx = (() => {
           for (let i = next.length - 1; i >= 0; i--) {
             if (next[i].role === "assistant") return i;
@@ -1601,7 +1790,10 @@ export function ChatExperience() {
         if (lastAssistantIdx >= 0) {
           next[lastAssistantIdx] = {
             ...next[lastAssistantIdx],
-            approvals: [...(next[lastAssistantIdx].approvals ?? []), ...approvalCards],
+            approvals: [
+              ...(next[lastAssistantIdx].approvals ?? []),
+              ...approvalCards,
+            ],
             memoryProposals: [
               ...(next[lastAssistantIdx].memoryProposals ?? []),
               ...memoryCards,
@@ -1687,7 +1879,9 @@ export function ChatExperience() {
   // would leave the Delete/Backspace bulk shortcut armed invisibly.
   // Render-time adjustment (not an effect) per the React "adjusting state
   // when a prop changes" pattern.
-  const [prevRailCollapsed, setPrevRailCollapsed] = useState(railCollapse.collapsed);
+  const [prevRailCollapsed, setPrevRailCollapsed] = useState(
+    railCollapse.collapsed,
+  );
   if (railCollapse.collapsed !== prevRailCollapsed) {
     setPrevRailCollapsed(railCollapse.collapsed);
     if (railCollapse.collapsed) {
@@ -1712,7 +1906,9 @@ export function ChatExperience() {
     const removed = new Set(ids);
     const remaining = conversations.filter((c) => !removed.has(c.id));
     setConversations(remaining);
-    setArchivedConversations((current) => current.filter((c) => !removed.has(c.id)));
+    setArchivedConversations((current) =>
+      current.filter((c) => !removed.has(c.id)),
+    );
     setSelectMode(false);
     setSelectedIds(new Set());
     if (activeConversationId && removed.has(activeConversationId)) {
@@ -1755,17 +1951,11 @@ export function ChatExperience() {
   };
 
   // bulkPatchConversations targets the current multi-select set.
-  const bulkPatchConversations = (changes: { pinned?: boolean; folder?: string; labels?: string[] }) =>
-    patchConversationIds(Array.from(selectedIds), changes);
-
-  // setConversationFolder files (folder=name) or unfiles (folder=null) a single
-  // conversation from the rail's kebab. Filing auto-pins it — matching the rail's
-  // "filing pins it" model; unfiling clears the folder and leaves the pin alone.
-  const setConversationFolder = (conversationId: string, folder: string | null) => {
-    const changes: { pinned?: boolean; folder?: string } = { folder: folder ?? "" };
-    if (folder) changes.pinned = true;
-    void patchConversationIds([conversationId], changes);
-  };
+  const bulkPatchConversations = (changes: {
+    pinned?: boolean;
+    folder?: string;
+    labels?: string[];
+  }) => patchConversationIds(Array.from(selectedIds), changes);
 
   // setConversationLabels replaces a single conversation's label set. The bulk
   // endpoint replaces (not appends), so the rail computes the next full set
@@ -1785,14 +1975,18 @@ export function ChatExperience() {
   };
 
   const deleteConversationById = async (conversationId: string) => {
-    const response = await fetch(`/api/conversations/${conversationId}`, { method: "DELETE" });
+    const response = await fetch(`/api/conversations/${conversationId}`, {
+      method: "DELETE",
+    });
     if (!response.ok) throw new Error("Unable to delete conversation.");
     const remaining = conversations.filter((c) => c.id !== conversationId);
     setConversations(remaining);
     // Also drop it from the archived list (#282): delete is reachable from the
     // Archived section, and the two lists are disjoint, so filtering both is
     // safe — it's a no-op on whichever list didn't hold the row.
-    setArchivedConversations((current) => current.filter((c) => c.id !== conversationId));
+    setArchivedConversations((current) =>
+      current.filter((c) => c.id !== conversationId),
+    );
     clearConvSlot(conversationId);
     if (activeConversationId !== conversationId) return;
     const nextConversation = remaining[0];
@@ -1861,7 +2055,9 @@ export function ChatExperience() {
       );
       if (!response.ok) {
         if (response.status === 409) {
-          throw new Error("A turn is currently running — wait for it to finish before compacting.");
+          throw new Error(
+            "A turn is currently running — wait for it to finish before compacting.",
+          );
         }
         const text = await response.text();
         throw new Error(text || `Compact failed (HTTP ${response.status}).`);
@@ -1926,7 +2122,9 @@ export function ChatExperience() {
     // Optimistic update
     setConversations((current) =>
       current
-        .map((c) => (c.id === conversation.id ? { ...c, pinned: nextPinned } : c))
+        .map((c) =>
+          c.id === conversation.id ? { ...c, pinned: nextPinned } : c,
+        )
         .sort((a, b) => {
           if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
           return b.updated_at - a.updated_at;
@@ -1979,15 +2177,22 @@ export function ChatExperience() {
       const response = await fetch("/api/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "New conversation", project_id: projectID }),
+        body: JSON.stringify({
+          title: "New conversation",
+          project_id: projectID,
+        }),
       });
       if (!response.ok) {
-        console.error("project chat failed:", response.status, await response.text());
+        console.error(
+          "project chat failed:",
+          response.status,
+          await response.text(),
+        );
         return;
       }
       const conv = (await response.json()) as { id?: string };
       if (!conv.id) return;
-      setProjectsOpen(false);
+      setProjectsModal(null);
       await refreshConversations();
       await loadConversation(conv.id);
     } catch (err) {
@@ -1995,23 +2200,273 @@ export function ChatExperience() {
     }
   };
 
+  // Projects for the rail section (#509 follow-up): the sidebar shows the
+  // top few most-recently-updated projects as drag targets / dropdowns. The
+  // ProjectsModal still owns its own fetching (it's self-contained); this
+  // list only feeds the rail, refreshed on boot and when the modal closes
+  // (the modal is where projects get created/renamed).
+  const [projects, setProjects] = useState<Project[]>([]);
+  const loadProjects = useCallback(async () => {
+    try {
+      const res = await fetch("/api/projects", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { projects?: Project[] };
+      setProjects(data.projects ?? []);
+    } catch {
+      // Rail projects are best-effort — a failed load keeps the previous list.
+    }
+  }, []);
+  // queueMicrotask pushes the fetch (and its setState) out of the effect's
+  // synchronous phase — the same pattern as the loadCatalogModels mount
+  // effect below; the guard skips the call if we unmount first.
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void loadProjects();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadProjects]);
+  const projectHomeProject = projectHome
+    ? (projects.find((p) => p.id === projectHome.id) ?? null)
+    : null;
+
+  const closeProjectsModal = () => {
+    setProjectsModal(null);
+    void loadProjects();
+  };
+
+  // Rail-action error toast: the rail's project/move mutations are
+  // optimistic, so a failed request used to snap the UI back with only a
+  // console.error — which reads as "the feature silently doesn't work"
+  // (e.g. dragging a chat onto a project against a backend that predates
+  // the endpoint). One brief visible line makes the failure diagnosable.
+  const [railError, setRailError] = useState<string | null>(null);
+  const railErrorTimer = useRef<number | null>(null);
+  const showRailError = (message: string) => {
+    setRailError(message);
+    if (railErrorTimer.current) window.clearTimeout(railErrorTimer.current);
+    railErrorTimer.current = window.setTimeout(() => setRailError(null), 5000);
+  };
+
+  // Rail project management (#509 follow-up): rename inline (PATCH just the
+  // name — the API's pointer-field patch leaves everything else untouched)
+  // and delete with the same confirm + copy the modal uses. Both refresh the
+  // rail's project list; delete also refreshes conversations, since the
+  // server detaches the project's chats (they return to the main list).
+  const renameProject = async (projectID: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const prev = projects;
+    setProjects((ps) =>
+      ps.map((p) => (p.id === projectID ? { ...p, name: trimmed } : p)),
+    );
+    try {
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(projectID)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: trimmed }),
+        },
+      );
+      if (!res.ok) {
+        console.error("rename project failed:", res.status, await res.text());
+        showRailError(`Couldn't rename the project (HTTP ${res.status}).`);
+        setProjects(prev);
+        return;
+      }
+      void loadProjects();
+    } catch (err) {
+      console.error("rename project error:", err);
+      showRailError("Couldn't rename the project — network error.");
+      setProjects(prev);
+    }
+  };
+
+  // pinProject floats a project to the top of the rail's list (owner-only —
+  // the kebab hides the item for non-owners and the store's owner-scoped
+  // UPDATE enforces it). Optimistic with revert; the PATCH carries only
+  // {pinned} so nothing else on the project is touched.
+  const pinProject = async (projectID: string, pinned: boolean) => {
+    const prev = projects;
+    setProjects((ps) =>
+      ps.map((p) => (p.id === projectID ? { ...p, pinned } : p)),
+    );
+    try {
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(projectID)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pinned }),
+        },
+      );
+      if (!res.ok) {
+        console.error("pin project failed:", res.status, await res.text());
+        showRailError(`Couldn't pin the project (HTTP ${res.status}).`);
+        setProjects(prev);
+        return;
+      }
+      void loadProjects();
+    } catch (err) {
+      console.error("pin project error:", err);
+      showRailError("Couldn't pin the project — network error.");
+      setProjects(prev);
+    }
+  };
+
+  // shareProject toggles team sharing (#509's membership model: a project
+  // with the owner's team_id is visible to every same-team user). The server
+  // resolves the team — and 400s with guidance when the owner has none, so
+  // that message is surfaced verbatim rather than a generic failure.
+  const shareProject = async (projectID: string, shared: boolean) => {
+    try {
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(projectID)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ team_shared: shared }),
+        },
+      );
+      if (!res.ok) {
+        const detail = (await res.text()).trim();
+        console.error("share project failed:", res.status, detail);
+        showRailError(
+          detail || `Couldn't update sharing (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      void loadProjects();
+    } catch (err) {
+      console.error("share project error:", err);
+      showRailError("Couldn't update sharing — network error.");
+    }
+  };
+
+  // updateProject is the project home's mutation seam (instructions edits
+  // and the per-project settings dialog): a bare PATCH passthrough that
+  // reports success so the home keeps unsaved drafts on failure, refreshing
+  // the rail's list on success. Failures surface on the rail-error toast
+  // (the server's own message when it has one — e.g. the no-team guidance).
+  const updateProject = async (
+    projectID: string,
+    patch: { name?: string; instructions?: string; team_shared?: boolean },
+  ): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(projectID)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const detail = (await res.text()).trim();
+        console.error("update project failed:", res.status, detail);
+        showRailError(detail || `Couldn't update the project (HTTP ${res.status}).`);
+        return false;
+      }
+      await loadProjects();
+      return true;
+    } catch (err) {
+      console.error("update project error:", err);
+      showRailError("Couldn't update the project — network error.");
+      return false;
+    }
+  };
+
+  const deleteProject = async (projectID: string) => {
+    if (
+      !window.confirm(
+        "Delete this project? Conversations are kept (detached); shared project memories are removed.",
+      )
+    )
+      return;
+    try {
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(projectID)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        console.error("delete project failed:", res.status, await res.text());
+        showRailError(`Couldn't delete the project (HTTP ${res.status}).`);
+        return;
+      }
+      await loadProjects();
+      await refreshConversations();
+    } catch (err) {
+      console.error("delete project error:", err);
+      showRailError("Couldn't delete the project — network error.");
+    }
+  };
+
+  // moveConversationToProject re-files a chat into a project ("" = unfile) —
+  // the drag-and-drop / kebab path (#509 follow-up). Optimistic: the row
+  // moves immediately; a failed POST restores the previous grouping.
+  const moveConversationToProject = async (
+    conversationId: string,
+    projectID: string,
+  ) => {
+    const prev = conversations;
+    setConversations((cs) =>
+      cs.map((c) =>
+        c.id === conversationId
+          ? { ...c, project_id: projectID || undefined }
+          : c,
+      ),
+    );
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/project`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project_id: projectID }),
+        },
+      );
+      if (!response.ok) {
+        console.error(
+          "move to project failed:",
+          response.status,
+          await response.text(),
+        );
+        showRailError(
+          `Couldn't move the chat (HTTP ${response.status})${response.status === 404 ? " — the server may predate this feature; update the deployment" : ""}.`,
+        );
+        setConversations(prev);
+      }
+    } catch (err) {
+      console.error("move to project error:", err);
+      showRailError("Couldn't move the chat — network error.");
+      setConversations(prev);
+    }
+  };
+
   // The share dialog (#226 UX): opened whenever a share link is created or
   // managed, so the user SEES the URL with an explicit Copy affordance instead
   // of inferring success from a small sidebar icon. {id,token,title} of the
   // conversation being shared; null = closed.
-  const [shareDialog, setShareDialog] = useState<{ id: string; token: string; title: string } | null>(null);
+  const [shareDialog, setShareDialog] = useState<{
+    id: string;
+    token: string;
+    title: string;
+  } | null>(null);
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
 
   // buildShareUrl turns a share token into the absolute, copy-paste link a
   // recipient opens. window.origin is the deployment origin the user is on (#226).
   const buildShareUrl = (token: string) =>
-    typeof window !== "undefined" ? `${window.location.origin}/shared/${token}` : `/shared/${token}`;
+    typeof window !== "undefined"
+      ? `${window.location.origin}/shared/${token}`
+      : `/shared/${token}`;
 
   // patchShareToken updates a conversation's share_token in BOTH the active and
   // archived lists so the 🔗 badge + Share/Unshare menu reflect reality whichever
   // section the row lives in.
   const patchShareToken = (id: string, token: string) => {
-    const patch = (c: ConversationSummary) => (c.id === id ? { ...c, share_token: token } : c);
+    const patch = (c: ConversationSummary) =>
+      c.id === id ? { ...c, share_token: token } : c;
     setConversations((current) => current.map(patch));
     setArchivedConversations((current) => current.map(patch));
   };
@@ -2021,12 +2476,17 @@ export function ChatExperience() {
   // Returns true only when the link was both created AND copied, so the sidebar
   // shows "Copied!" honestly (a blocked clipboard returns false → no flash, but
   // the 🔗 badge still appears as the share succeeded).
-  const shareConversation = async (conversation: ConversationSummary): Promise<boolean> => {
-    const response = await fetch(`/api/conversations/${conversation.id}/share`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
+  const shareConversation = async (
+    conversation: ConversationSummary,
+  ): Promise<boolean> => {
+    const response = await fetch(
+      `/api/conversations/${conversation.id}/share`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    );
     if (!response.ok) {
       await refreshConversations();
       return false;
@@ -2052,7 +2512,10 @@ export function ChatExperience() {
   // unshareConversation revokes the public link (#226).
   const unshareConversation = async (conversation: ConversationSummary) => {
     patchShareToken(conversation.id, "");
-    const response = await fetch(`/api/conversations/${conversation.id}/share`, { method: "DELETE" });
+    const response = await fetch(
+      `/api/conversations/${conversation.id}/share`,
+      { method: "DELETE" },
+    );
     if (!response.ok) {
       await refreshConversations();
     }
@@ -2060,7 +2523,9 @@ export function ChatExperience() {
 
   // copyShareLink surfaces an already-shared conversation's link (#226): opens
   // the share dialog (URL + explicit Copy) and best-effort pre-copies.
-  const copyShareLink = async (conversation: ConversationSummary): Promise<boolean> => {
+  const copyShareLink = async (
+    conversation: ConversationSummary,
+  ): Promise<boolean> => {
     if (!conversation.share_token) return false;
     setShareLinkCopied(false);
     setShareDialog({
@@ -2069,7 +2534,9 @@ export function ChatExperience() {
       title: conversation.title,
     });
     try {
-      await navigator.clipboard.writeText(buildShareUrl(conversation.share_token));
+      await navigator.clipboard.writeText(
+        buildShareUrl(conversation.share_token),
+      );
       return true;
     } catch {
       return false;
@@ -2080,16 +2547,28 @@ export function ChatExperience() {
   // (#282). Optimistic: the row hops sections immediately; on a backend error
   // we re-fetch to restore the truth. Archiving also clears the pin (the
   // backend enforces this), so the optimistic copy drops it too.
-  const toggleArchive = async (conversation: ConversationSummary, archived: boolean) => {
+  const toggleArchive = async (
+    conversation: ConversationSummary,
+    archived: boolean,
+  ) => {
     if (archived) {
-      setConversations((current) => current.filter((c) => c.id !== conversation.id));
+      setConversations((current) =>
+        current.filter((c) => c.id !== conversation.id),
+      );
       setArchivedConversations((current) =>
-        [{ ...conversation, pinned: false, archived_at: Math.floor(Date.now() / 1000) }, ...current].sort(
-          (a, b) => b.updated_at - a.updated_at,
-        ),
+        [
+          {
+            ...conversation,
+            pinned: false,
+            archived_at: Math.floor(Date.now() / 1000),
+          },
+          ...current,
+        ].sort((a, b) => b.updated_at - a.updated_at),
       );
     } else {
-      setArchivedConversations((current) => current.filter((c) => c.id !== conversation.id));
+      setArchivedConversations((current) =>
+        current.filter((c) => c.id !== conversation.id),
+      );
       setConversations((current) =>
         [{ ...conversation, archived_at: null }, ...current].sort((a, b) => {
           if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -2097,11 +2576,14 @@ export function ChatExperience() {
         }),
       );
     }
-    const response = await fetch(`/api/conversations/${conversation.id}/archive`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ archived }),
-    });
+    const response = await fetch(
+      `/api/conversations/${conversation.id}/archive`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived }),
+      },
+    );
     if (!response.ok) {
       await refreshConversations();
     }
@@ -2117,13 +2599,18 @@ export function ChatExperience() {
     if (!before) return false;
     if (before.title === trimmed) return true;
     setConversations((current) =>
-      current.map((c) => (c.id === conversationId ? { ...c, title: trimmed } : c)),
+      current.map((c) =>
+        c.id === conversationId ? { ...c, title: trimmed } : c,
+      ),
     );
-    const response = await fetch(`/api/conversations/${conversationId}/rename`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: trimmed }),
-    });
+    const response = await fetch(
+      `/api/conversations/${conversationId}/rename`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      },
+    );
     if (!response.ok) {
       await refreshConversations();
       return false;
@@ -2133,9 +2620,12 @@ export function ChatExperience() {
 
   const downloadConversation = async (conversation: ConversationSummary) => {
     try {
-      const response = await fetch(`/api/conversations/${conversation.id}/export`, {
-        method: "GET",
-      });
+      const response = await fetch(
+        `/api/conversations/${conversation.id}/export`,
+        {
+          method: "GET",
+        },
+      );
       if (!response.ok) {
         console.error("export failed", response.status, await response.text());
         return;
@@ -2167,11 +2657,18 @@ export function ChatExperience() {
   // the task is created only on approve, via the existing #239 path.
   const promoteConversation = async (conversation: ConversationSummary) => {
     try {
-      const response = await fetch(`/api/conversations/${conversation.id}/promote-to-task`, {
-        method: "POST",
-      });
+      const response = await fetch(
+        `/api/conversations/${conversation.id}/promote-to-task`,
+        {
+          method: "POST",
+        },
+      );
       if (!response.ok) {
-        console.error("promote-to-task failed", response.status, await response.text());
+        console.error(
+          "promote-to-task failed",
+          response.status,
+          await response.text(),
+        );
         return;
       }
       await loadConversation(conversation.id);
@@ -2185,13 +2682,19 @@ export function ChatExperience() {
       current.includes(assistantId) ? current : [...current, assistantId],
     );
     const timeoutId = window.setTimeout(() => {
-      setCrossfadingMessageIds((current) => current.filter((id) => id !== assistantId));
-      fadeTimeoutsRef.current = fadeTimeoutsRef.current.filter((v) => v !== timeoutId);
+      setCrossfadingMessageIds((current) =>
+        current.filter((id) => id !== assistantId),
+      );
+      fadeTimeoutsRef.current = fadeTimeoutsRef.current.filter(
+        (v) => v !== timeoutId,
+      );
     }, 220);
     fadeTimeoutsRef.current.push(timeoutId);
   };
 
   const clearConversation = (opts?: { lockdown?: boolean }) => {
+    // Starting a new chat likewise dismisses an open project home.
+    setProjectHome(null);
     // The slot the user is staring at. Only tear it down when it's
     // idle — if a turn is in flight (including the brief window before
     // a per-submission pending key is promoted to a real conv id),
@@ -2262,7 +2765,6 @@ export function ChatExperience() {
     // shortcut overlays also carry their own focus-independent Escape listeners
     // (they're mounted-while-open), so this is the catch-all for the sidebar.
     setShortcutsOpen(false);
-    setSearchOpen(false);
     setSidebarOpen(false);
   }, []);
 
@@ -2285,7 +2787,9 @@ export function ChatExperience() {
     (delta: number) => {
       if (visibleOrder.length === 0) return;
       setSidebarOpen(true);
-      const idx = focusedConversationId ? visibleOrder.findIndex((c) => c.id === focusedConversationId) : -1;
+      const idx = focusedConversationId
+        ? visibleOrder.findIndex((c) => c.id === focusedConversationId)
+        : -1;
       const next =
         idx === -1
           ? delta > 0
@@ -2302,7 +2806,9 @@ export function ChatExperience() {
   // no-op if the row isn't mounted (e.g. the rail is collapsed on desktop).
   useEffect(() => {
     if (!focusedConversationId || typeof document === "undefined") return;
-    const row = document.querySelector(`[data-conversation-id="${CSS.escape(focusedConversationId)}"]`);
+    const row = document.querySelector(
+      `[data-conversation-id="${CSS.escape(focusedConversationId)}"]`,
+    );
     row?.scrollIntoView({ block: "nearest" });
   }, [focusedConversationId]);
 
@@ -2334,22 +2840,27 @@ export function ChatExperience() {
         if (selectedIds.size === 0) return;
         const target = e.target as HTMLElement | null;
         const tag = target?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
-        if (searchOpen || shortcutsOpen || pendingDeleteConversation) return;
+        if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable)
+          return;
+        if (shortcutsOpen || pendingDeleteConversation) return;
         e.preventDefault();
         setBulkDeleteConfirm(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectMode, selectedIds.size, searchOpen, shortcutsOpen, pendingDeleteConversation]);
+  }, [
+    selectMode,
+    selectedIds.size,
+    shortcutsOpen,
+    pendingDeleteConversation,
+  ]);
 
   // The list-navigation + per-conversation/transcript shortcuts (#306) are
   // suppressed whenever a transient surface owns the keyboard — the same
   // convention the multi-select handler above follows — so a bare key never
   // acts on a hidden conversation from behind an open overlay or dialog.
   const listNavActive =
-    !searchOpen &&
     !shortcutsOpen &&
     !pendingDeleteConversation &&
     !confirmBulkDelete &&
@@ -2362,7 +2873,12 @@ export function ChatExperience() {
         key: "k",
         mod: true,
         allowInInput: true,
-        handler: () => setSearchOpen(true),
+        // The #308 palette merged into the rail's unified search bar — ⌘K
+        // focuses it (opening the <sm drawer first so it's visible).
+        handler: () => {
+          setSidebarOpen(true);
+          requestAnimationFrame(() => searchRef.current?.focus());
+        },
       },
       // Bindings deliberately NOT taken, so core browser features keep working:
       // ⌘/Ctrl+F (find-in-page — the natural way to search the visible
@@ -2441,7 +2957,11 @@ export function ChatExperience() {
         key: "r",
         enabled: listNavActive && focusedConv !== null,
         handler: () => {
-          if (focusedConv) setRenameSignal((s) => ({ id: focusedConv.id, nonce: (s?.nonce ?? 0) + 1 }));
+          if (focusedConv)
+            setRenameSignal((s) => ({
+              id: focusedConv.id,
+              nonce: (s?.nonce ?? 0) + 1,
+            }));
         },
       },
       {
@@ -2450,7 +2970,11 @@ export function ChatExperience() {
         key: "#",
         enabled: listNavActive && focusedConv !== null,
         handler: () => {
-          if (focusedConv) setPendingDeleteConversation({ id: focusedConv.id, title: focusedConv.title });
+          if (focusedConv)
+            setPendingDeleteConversation({
+              id: focusedConv.id,
+              title: focusedConv.title,
+            });
         },
       },
       {
@@ -2467,7 +2991,10 @@ export function ChatExperience() {
         enabled: listNavActive && lastUserMessageId !== null && !isStreaming,
         handler: () => {
           if (lastUserMessageId !== null) {
-            setEditLastUserSignal((s) => ({ id: lastUserMessageId, nonce: (s?.nonce ?? 0) + 1 }));
+            setEditLastUserSignal((s) => ({
+              id: lastUserMessageId,
+              nonce: (s?.nonce ?? 0) + 1,
+            }));
           }
         },
       },
@@ -2698,7 +3225,10 @@ export function ChatExperience() {
       // away), snap-to-bottom on tab return is jarring — keep their
       // scroll position and let the live "follow along" auto-scroll
       // handle anything they were already at the bottom of.
-      void loadConversationRef.current(convId, { preserveScroll: true });
+      void loadConversationRef.current(convId, {
+        preserveScroll: true,
+        restore: true,
+      });
     };
     const handle = () => {
       void refreshIfStale();
@@ -2742,7 +3272,9 @@ export function ChatExperience() {
     // helper. PENDING_CONV_KEY is a module constant. A real conversation id is
     // anything that isn't the empty-new-chat sentinel or a per-submission slot.
     const isRealConvId = (id: string | null): id is string =>
-      id !== null && id !== PENDING_CONV_KEY && !id.startsWith(`${PENDING_CONV_KEY}:`);
+      id !== null &&
+      id !== PENDING_CONV_KEY &&
+      !id.startsWith(`${PENDING_CONV_KEY}:`);
 
     // Personas — nice-to-have; the server falls back to default. Sets the
     // roster always, but the default persona only when no conversation loads.
@@ -2804,7 +3336,9 @@ export function ChatExperience() {
 
     const loadInitialState = async () => {
       try {
-        const sessionResponse = await fetch("/api/session", { cache: "no-store" });
+        const sessionResponse = await fetch("/api/session", {
+          cache: "no-store",
+        });
         if (!sessionResponse.ok) {
           window.location.href = "/login";
           return;
@@ -2813,7 +3347,9 @@ export function ChatExperience() {
         if (cancelled) return;
         setUserEmail(sessionData.email);
 
-        const conversationsResponse = await fetch("/api/conversations", { cache: "no-store" });
+        const conversationsResponse = await fetch("/api/conversations", {
+          cache: "no-store",
+        });
         if (!conversationsResponse.ok) {
           window.location.href = "/login";
           return;
@@ -2833,7 +3369,7 @@ export function ChatExperience() {
         // Flip before awaiting so a personas fetch that resolves after this
         // point does not overwrite the loaded conversation's persona.
         willLoadConversation = true;
-        await loadConversationRef.current(latest.id);
+        await loadConversationRef.current(latest.id, { restore: true });
       } finally {
         if (!cancelled) {
           setIsLoadingHistory(false);
@@ -2852,7 +3388,9 @@ export function ChatExperience() {
     // change) is missed. See ./chatSessionStore.
     const revalidateInBackground = async () => {
       try {
-        const sessionResponse = await fetch("/api/session", { cache: "no-store" });
+        const sessionResponse = await fetch("/api/session", {
+          cache: "no-store",
+        });
         if (!sessionResponse.ok) {
           window.location.href = "/login";
           return;
@@ -2874,7 +3412,10 @@ export function ChatExperience() {
       // server-side, so a stream that was aborted on unmount resumes on return.
       const activeId = activeConversationIdRef.current;
       if (isRealConvId(activeId)) {
-        void loadConversationRef.current(activeId, { preserveScroll: true, background: true });
+        void loadConversationRef.current(activeId, {
+          preserveScroll: true,
+          background: true,
+        });
       }
     };
 
@@ -2992,8 +3533,6 @@ export function ChatExperience() {
           sidebarQuery={sidebarQuery}
           setSidebarQuery={setSidebarQuery}
           searchRef={searchRef}
-          filterFolder={filterFolder}
-          setFilterFolder={setFilterFolder}
           filterLabels={filterLabels}
           setFilterLabels={setFilterLabels}
           isLoadingHistory={isLoadingHistory}
@@ -3010,7 +3549,6 @@ export function ChatExperience() {
           downloadConversation={downloadConversation}
           promoteConversation={promoteConversation}
           setPendingDeleteConversation={setPendingDeleteConversation}
-          setConversationFolder={setConversationFolder}
           setConversationLabels={setConversationLabels}
           shareConversation={shareConversation}
           unshareConversation={unshareConversation}
@@ -3032,27 +3570,32 @@ export function ChatExperience() {
             void bulkPatchConversations({ pinned: true });
             exitSelectMode();
           }}
-          onBulkMoveFolder={(folder) => {
-            if (folder === "") return;
-            void bulkPatchConversations({ folder, pinned: true });
-            exitSelectMode();
-          }}
           onBulkAddLabel={(label) => {
             if (label === "") return;
             void bulkPatchConversations({ labels: [label] });
             exitSelectMode();
           }}
+          searchShortcut={searchShortcut}
+          onOpenProjects={() => setProjectsModal({})}
+          onCreateProject={() => setProjectsModal({ create: true })}
+          onOpenProjectHome={(projectID, settings) =>
+            setProjectHome({ id: projectID, settings })
+          }
+          onPinProject={(projectID, pinned) =>
+            void pinProject(projectID, pinned)
+          }
+          onShareProject={(projectID, shared) =>
+            void shareProject(projectID, shared)
+          }
+          onRenameProject={(projectID, name) =>
+            void renameProject(projectID, name)
+          }
+          onDeleteProject={(projectID) => void deleteProject(projectID)}
+          projects={projects}
+          onMoveToProject={(conversationId, projectID) =>
+            void moveConversationToProject(conversationId, projectID)
+          }
         />
-
-        {searchOpen ? (
-          <SearchBar
-            onClose={() => setSearchOpen(false)}
-            onSelect={(conversationId) => {
-              setSearchOpen(false);
-              void loadConversation(conversationId);
-            }}
-          />
-        ) : null}
 
         {shortcutsOpen ? (
           <KeyboardShortcutsOverlay
@@ -3075,8 +3618,10 @@ export function ChatExperience() {
               </h2>
               <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
                 {conversations.filter((c) => !c.pinned).length} conversation
-                {conversations.filter((c) => !c.pinned).length === 1 ? "" : "s"} will be
-                removed. Pinned chats are kept. This cannot be undone.
+                {conversations.filter((c) => !c.pinned).length === 1
+                  ? ""
+                  : "s"}{" "}
+                will be removed. Pinned chats are kept. This cannot be undone.
               </p>
               <div className="flex items-center justify-end gap-2">
                 <button
@@ -3116,12 +3661,25 @@ export function ChatExperience() {
           />
         ) : null}
 
-        {projectsOpen ? (
+        {projectsModal ? (
           <ProjectsModal
             userEmail={userEmail}
-            onClose={() => setProjectsOpen(false)}
+            onClose={closeProjectsModal}
             onStartChat={(id) => void startProjectChat(id)}
+            initialCreate={projectsModal.create}
+            initialSelectedId={projectsModal.selectId}
           />
+        ) : null}
+
+        {/* Rail-action error toast — fixed to the viewport (rail mutations can
+            fire from anywhere), auto-dismissed by showRailError's timer. */}
+        {railError ? (
+          <div
+            role="alert"
+            className="fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-3 py-1.5 text-[0.8rem] text-[var(--color-text-primary)] shadow-[var(--shadow-md)]"
+          >
+            {railError}
+          </div>
         ) : null}
 
         {memoryManagerOpen ? (
@@ -3135,9 +3693,12 @@ export function ChatExperience() {
             <div className="motion-safe:animate-pop-up-base relative z-10 flex max-h-[88vh] w-full max-w-[34rem] flex-col gap-4 overflow-hidden rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Memories</h2>
+                  <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
+                    Memories
+                  </h2>
                   <p className="mt-1 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
-                    Saved memories are scoped to {userEmail || "this user"} and are added to future chats.
+                    Saved memories are scoped to {userEmail || "this user"} and
+                    are added to future chats.
                   </p>
                 </div>
                 <button
@@ -3173,158 +3734,188 @@ export function ChatExperience() {
                 <MemoryGraphView />
               ) : (
                 <>
-              <div className="grid gap-2">
-                <textarea
-                  className="min-h-24 w-full resize-y rounded-[0.9rem] border border-[var(--color-border-strong)] bg-transparent px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
-                  placeholder="Remember that deal names may contain intentional typos."
-                  value={memoryDraft}
-                  onChange={(event) => setMemoryDraft(event.target.value)}
-                />
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <label className="text-[0.72rem] text-[var(--color-text-muted)]" htmlFor="memory-kind">
-                      Kind
-                    </label>
-                    <select
-                      id="memory-kind"
-                      className="rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                      value={memoryKindDraft}
-                      onChange={(event) => setMemoryKindDraft(event.target.value)}
-                    >
-                      {MEMORY_KINDS.map((k) => (
-                        <option key={k} value={k}>
-                          {k}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {editingMemoryId ? (
-                      <button
-                        type="button"
-                        className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                        onClick={() => {
-                          setEditingMemoryId(null);
-                          setMemoryDraft("");
-                        }}
-                      >
-                        Cancel edit
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
-                      disabled={!memoryDraft.trim() || isSavingMemory}
-                      onClick={() => void saveMemory()}
-                    >
-                      {isSavingMemory ? "Saving..." : editingMemoryId ? "Save changes" : "Add memory"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {memoryError ? (
-                <div className="rounded-[0.75rem] border border-[var(--color-danger,#dc2626)] bg-[color-mix(in_srgb,var(--color-danger,#dc2626)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger,#dc2626)]">
-                  {memoryError}
-                </div>
-              ) : null}
-
-              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                {isLoadingMemories ? (
-                  <p className="py-4 text-[0.8125rem] text-[var(--color-text-muted)]">Loading memories...</p>
-                ) : memories.length === 0 ? (
-                  <p className="rounded-[0.9rem] border border-dashed border-[var(--color-border)] px-3 py-4 text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
-                    No memories yet. Add one manually or tell chat “remember this: ...”.
-                  </p>
-                ) : (
                   <div className="grid gap-2">
-                    {memories.map((memory) => {
-                      const retired = memory.retired_at != null;
-                      const sourceLabel =
-                        memory.source === "chat"
-                          ? memory.origin === "auto"
-                            ? "Auto-extracted from chat"
-                            : "Saved from chat"
-                          : memory.source === "proposed"
-                            ? "Proposed"
-                            : "Manual";
-                      const learned = memory.learned_at
-                        ? new Date(memory.learned_at * 1000).toLocaleDateString()
-                        : null;
-                      return (
-                        <div
-                          key={memory.id}
-                          className={`rounded-[0.9rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 ${retired ? "opacity-60" : ""}`}
+                    <textarea
+                      className="min-h-24 w-full resize-y rounded-[0.9rem] border border-[var(--color-border-strong)] bg-transparent px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
+                      placeholder="Remember that deal names may contain intentional typos."
+                      value={memoryDraft}
+                      onChange={(event) => setMemoryDraft(event.target.value)}
+                    />
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <label
+                          className="text-[0.72rem] text-[var(--color-text-muted)]"
+                          htmlFor="memory-kind"
                         >
-                          <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)]">
-                            {memory.pinned ? <span title="Pinned">📌 </span> : null}
-                            {memory.content}
-                          </p>
-                          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
-                            <span>
-                              {memory.kind && memory.kind !== "fact" ? (
-                                <span className="mr-1.5 rounded-full border border-[var(--color-border)] px-1.5 py-0.5">
-                                  {memory.kind}
-                                </span>
-                              ) : null}
-                              {sourceLabel}
-                              {learned ? ` · learned ${learned}` : ""}
-                              {retired ? " · retired" : ""}
-                            </span>
-                            <div className="flex items-center gap-3">
-                              {retired ? (
-                                <button
-                                  type="button"
-                                  className="hover:text-[var(--color-text-primary)]"
-                                  onClick={() => void patchMemory(memory.id, { retired: false })}
-                                >
-                                  Restore
-                                </button>
-                              ) : (
-                                <>
-                                  <button
-                                    type="button"
-                                    className="hover:text-[var(--color-text-primary)]"
-                                    onClick={() => void patchMemory(memory.id, { pinned: !memory.pinned })}
-                                  >
-                                    {memory.pinned ? "Unpin" : "Pin"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="hover:text-[var(--color-text-primary)]"
-                                    onClick={() => {
-                                      setEditingMemoryId(memory.id);
-                                      setMemoryDraft(memory.content);
-                                      setMemoryKindDraft(memory.kind ?? "fact");
-                                    }}
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="hover:text-[var(--color-text-primary)]"
-                                    title="Keep for audit, stop injecting into chats"
-                                    onClick={() => void patchMemory(memory.id, { retired: true })}
-                                  >
-                                    Retire
-                                  </button>
-                                </>
-                              )}
-                              <button
-                                type="button"
-                                className="hover:text-[var(--color-danger)]"
-                                onClick={() => void deleteMemory(memory.id)}
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                          Kind
+                        </label>
+                        <select
+                          id="memory-kind"
+                          className="rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                          value={memoryKindDraft}
+                          onChange={(event) =>
+                            setMemoryKindDraft(event.target.value)
+                          }
+                        >
+                          {MEMORY_KINDS.map((k) => (
+                            <option key={k} value={k}>
+                              {k}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {editingMemoryId ? (
+                          <button
+                            type="button"
+                            className="rounded-full border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                            onClick={() => {
+                              setEditingMemoryId(null);
+                              setMemoryDraft("");
+                            }}
+                          >
+                            Cancel edit
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="rounded-full bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
+                          disabled={!memoryDraft.trim() || isSavingMemory}
+                          onClick={() => void saveMemory()}
+                        >
+                          {isSavingMemory
+                            ? "Saving..."
+                            : editingMemoryId
+                              ? "Save changes"
+                              : "Add memory"}
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                )}
-              </div>
+
+                  {memoryError ? (
+                    <div className="rounded-[0.75rem] border border-[var(--color-danger,#dc2626)] bg-[color-mix(in_srgb,var(--color-danger,#dc2626)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger,#dc2626)]">
+                      {memoryError}
+                    </div>
+                  ) : null}
+
+                  <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                    {isLoadingMemories ? (
+                      <p className="py-4 text-[0.8125rem] text-[var(--color-text-muted)]">
+                        Loading memories...
+                      </p>
+                    ) : memories.length === 0 ? (
+                      <p className="rounded-[0.9rem] border border-dashed border-[var(--color-border)] px-3 py-4 text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
+                        No memories yet. Add one manually or tell chat “remember
+                        this: ...”.
+                      </p>
+                    ) : (
+                      <div className="grid gap-2">
+                        {memories.map((memory) => {
+                          const retired = memory.retired_at != null;
+                          const sourceLabel =
+                            memory.source === "chat"
+                              ? memory.origin === "auto"
+                                ? "Auto-extracted from chat"
+                                : "Saved from chat"
+                              : memory.source === "proposed"
+                                ? "Proposed"
+                                : "Manual";
+                          const learned = memory.learned_at
+                            ? new Date(
+                                memory.learned_at * 1000,
+                              ).toLocaleDateString()
+                            : null;
+                          return (
+                            <div
+                              key={memory.id}
+                              className={`rounded-[0.9rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 ${retired ? "opacity-60" : ""}`}
+                            >
+                              <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)]">
+                                {memory.pinned ? (
+                                  <span title="Pinned">📌 </span>
+                                ) : null}
+                                {memory.content}
+                              </p>
+                              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
+                                <span>
+                                  {memory.kind && memory.kind !== "fact" ? (
+                                    <span className="mr-1.5 rounded-full border border-[var(--color-border)] px-1.5 py-0.5">
+                                      {memory.kind}
+                                    </span>
+                                  ) : null}
+                                  {sourceLabel}
+                                  {learned ? ` · learned ${learned}` : ""}
+                                  {retired ? " · retired" : ""}
+                                </span>
+                                <div className="flex items-center gap-3">
+                                  {retired ? (
+                                    <button
+                                      type="button"
+                                      className="hover:text-[var(--color-text-primary)]"
+                                      onClick={() =>
+                                        void patchMemory(memory.id, {
+                                          retired: false,
+                                        })
+                                      }
+                                    >
+                                      Restore
+                                    </button>
+                                  ) : (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="hover:text-[var(--color-text-primary)]"
+                                        onClick={() =>
+                                          void patchMemory(memory.id, {
+                                            pinned: !memory.pinned,
+                                          })
+                                        }
+                                      >
+                                        {memory.pinned ? "Unpin" : "Pin"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="hover:text-[var(--color-text-primary)]"
+                                        onClick={() => {
+                                          setEditingMemoryId(memory.id);
+                                          setMemoryDraft(memory.content);
+                                          setMemoryKindDraft(
+                                            memory.kind ?? "fact",
+                                          );
+                                        }}
+                                      >
+                                        Edit
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="hover:text-[var(--color-text-primary)]"
+                                        title="Keep for audit, stop injecting into chats"
+                                        onClick={() =>
+                                          void patchMemory(memory.id, {
+                                            retired: true,
+                                          })
+                                        }
+                                      >
+                                        Retire
+                                      </button>
+                                    </>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="hover:text-[var(--color-danger)]"
+                                    onClick={() => void deleteMemory(memory.id)}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
             </div>
@@ -3344,10 +3935,11 @@ export function ChatExperience() {
                 Compact this conversation?
               </h2>
               <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                Long conversations get expensive and can hit the model&apos;s context
-                window. Compacting replaces earlier turns with a short summary so
-                the next turn stays affordable and fits. The originals collapse
-                below a banner — you can expand them again anytime.
+                Long conversations get expensive and can hit the model&apos;s
+                context window. Compacting replaces earlier turns with a short
+                summary so the next turn stays affordable and fits. The
+                originals collapse below a banner — you can expand them again
+                anytime.
               </p>
               <div className="flex items-center justify-end gap-2">
                 <button
@@ -3382,11 +3974,13 @@ export function ChatExperience() {
             />
             <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[28rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
               <div className="mb-3 grid gap-2">
-                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Share link</h2>
+                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
+                  Share link
+                </h2>
                 <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                  Anyone with this link can view a <strong>read-only</strong> copy of{" "}
-                  <strong>&quot;{shareDialog.title}&quot;</strong>. Revoke it any time with{" "}
-                  <em>Stop sharing</em>.
+                  Anyone with this link can view a <strong>read-only</strong>{" "}
+                  copy of <strong>&quot;{shareDialog.title}&quot;</strong>.
+                  Revoke it any time with <em>Stop sharing</em>.
                 </p>
               </div>
               <div className="mb-4 flex items-center gap-2">
@@ -3414,7 +4008,9 @@ export function ChatExperience() {
                 <button
                   type="button"
                   onClick={() => {
-                    const conv = conversations.find((c) => c.id === shareDialog.id);
+                    const conv = conversations.find(
+                      (c) => c.id === shareDialog.id,
+                    );
                     if (conv) void unshareConversation(conv);
                     setShareDialog(null);
                   }}
@@ -3445,9 +4041,13 @@ export function ChatExperience() {
 
             <div className="motion-safe:animate-pop-up-base relative z-10 w-full max-w-[25rem] rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--composer-surface)_94%,black)] p-5 shadow-[var(--composer-shadow)] backdrop-blur-sm">
               <div className="mb-4 grid gap-2">
-                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">Delete chat?</h2>
+                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
+                  Delete chat?
+                </h2>
                 <p className="text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-                  Are you sure you want to delete <strong>&quot;{pendingDeleteConversation.title}&quot;</strong>?
+                  Are you sure you want to delete{" "}
+                  <strong>&quot;{pendingDeleteConversation.title}&quot;</strong>
+                  ?
                 </p>
               </div>
 
@@ -3471,7 +4071,10 @@ export function ChatExperience() {
           </div>
         ) : null}
 
-        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden" suppressHydrationWarning>
+        <main
+          className="flex min-h-0 min-w-0 flex-col overflow-hidden"
+          suppressHydrationWarning
+        >
           {/* Shared top header (#169): "Chat" on the left, the chat's header
               controls (search, shortcuts, memories, details) right-aligned —
               the same bordered bar the Operations Center renders. */}
@@ -3480,19 +4083,6 @@ export function ChatExperience() {
             onMenu={() => setSidebarOpen(true)}
             actions={
               <>
-                {/* Unified page-header search (#169): an icon-only button, inline
-                    with the other header icons, that opens the full-text search
-                    overlay (also bound to ⌘K). The rail's own "Search chats…" input
-                    is a separate local title filter — both are unchanged. */}
-                <button
-                  aria-label="Search conversations"
-                  className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  title={`Search conversations (${searchShortcut})`}
-                  type="button"
-                  onClick={() => setSearchOpen(true)}
-                >
-                  <Icon name="search" className="size-5" />
-                </button>
                 <button
                   aria-label="Keyboard shortcuts"
                   className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
@@ -3504,15 +4094,6 @@ export function ChatExperience() {
                   <Icon name="keyboard" className="size-5" />
                 </button>
                 <button
-                  aria-label="Projects"
-                  className="relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  title="Projects"
-                  type="button"
-                  onClick={() => setProjectsOpen(true)}
-                >
-                  <Icon name="briefcase" className="size-5" />
-                </button>
-                <button
                   aria-label="Manage memories"
                   className="relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
                   title="Manage memories"
@@ -3522,7 +4103,11 @@ export function ChatExperience() {
                   <Icon name="brain" className="size-5" />
                 </button>
                 <button
-                  aria-label={showStats ? "Hide details (thinking, stats, tool calls)" : "Show details (thinking, stats, tool calls)"}
+                  aria-label={
+                    showStats
+                      ? "Hide details (thinking, stats, tool calls)"
+                      : "Show details (thinking, stats, tool calls)"
+                  }
                   aria-pressed={showStats}
                   // Color stays muted in both states — the icon swap is
                   // the affordance the user keys off, not an accent
@@ -3561,8 +4146,9 @@ export function ChatExperience() {
               content area, left-aligned to the "Chat" header label, carrying the
               existing rename-on-click affordance + the lockdown badge. A new/empty
               chat (no active conversation) shows no name — the empty-state hero in
-              the transcript stands in. */}
-          {activeConversationId ? (
+              the transcript stands in. Hidden while a project home is open (the
+              home has its own header; the chat underneath stays mounted). */}
+          {activeConversationId && !projectHomeProject ? (
             <div className="flex min-w-0 items-center gap-2 px-4 pt-3 sm:px-6">
               {renamingTitleDraft !== null ? (
                 <input
@@ -3620,158 +4206,205 @@ export function ChatExperience() {
             </div>
           ) : null}
 
+          {/* Project home replaces the chat content while open — the rail's
+              project rows and kebab land here. */}
+          {projectHomeProject ? (
+            <ProjectHome
+              key={projectHomeProject.id}
+              project={projectHomeProject}
+              chats={conversations.filter((c) => c.project_id === projectHomeProject.id)}
+              isOwner={projectHomeProject.owner_email === userEmail}
+              initialSettingsOpen={projectHome?.settings}
+              onBack={() => setProjectHome(null)}
+              onOpenChat={(conversationId) => {
+                setProjectHome(null);
+                void loadConversation(conversationId);
+              }}
+              onNewChat={() => {
+                setProjectHome(null);
+                void startProjectChat(projectHomeProject.id);
+              }}
+              onSaveInstructions={(instructions) =>
+                updateProject(projectHomeProject.id, { instructions })
+              }
+              onUpdateSettings={(patch) => updateProject(projectHomeProject.id, patch)}
+              onDelete={() => {
+                setProjectHome(null);
+                void deleteProject(projectHomeProject.id);
+              }}
+            />
+          ) : null}
+
           {/* Chat content — transcript scrolls, composer pins to the bottom.
               grid-cols-[minmax(0,1fr)] clamps the single column to the container
               width so rich content can't bleed past the right edge on mobile;
               min-w-0 descendants still scroll wide children internally. */}
-          <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] gap-2 overflow-hidden px-3 pb-3 pt-2 sm:gap-3 sm:px-6 sm:pb-5 lg:px-8 xl:px-10">
-
-          <ChatTranscript
-            conversationRef={conversationRef}
-            streamEndRef={streamEndRef}
-            promptRef={promptRef}
-            isLoadingHistory={isLoadingHistory}
-            isLockdown={isLockdown}
-            messages={messages}
-            pills={pills}
-            activePillId={activePillId}
-            setActivePillId={setActivePillId}
-            submitPrompt={submitPrompt}
-            setPrompt={setPrompt}
-            isSummarizing={isSummarizing}
-            summarizeStartedAt={summarizeStartedAt}
-            summarizeStream={summarizeStream}
-            summarizeError={summarizeError}
-            summaryIndex={summaryIndex}
-            summaryExpanded={summaryExpanded}
-            setSummaryExpanded={setSummaryExpanded}
-            setConfirmSummarize={setConfirmSummarize}
-            showStats={showStats}
-            crossfadingMessageIds={crossfadingMessageIds}
-            currentConvKey={currentConvKey}
-            realConvId={realConvId}
-            isStreaming={isStreaming}
-            lastUserMessageId={lastUserMessageId}
-            lastAssistantMessageId={lastAssistantMessageId}
-            editLastUserSignal={editLastUserSignal}
-            selectedModel={selectedModel}
-            patchAssistantMessage={patchAssistantMessage}
-            resendUserMessage={resendUserMessage}
-            retryLastUserMessage={retryLastUserMessage}
-            regenerateLastAssistant={regenerateLastAssistant}
-            branchFromMessage={branchFromMessage}
-            loadMemories={loadMemories}
-            setSelectedModel={setSelectedModel}
-            setModelPickerOpen={setModelPickerOpen}
-            setModelSearchQuery={setModelSearchQuery}
-            loadRankedModels={loadRankedModels}
-            loadCatalogModels={loadCatalogModels}
-          />
-
-          <section className="motion-safe:animate-pop-up-base relative z-10 pb-[calc(env(safe-area-inset-bottom,0px)+0.35rem)] sm:pb-4">
-            {showJumpToLatest ? (
-              // Anchored to the composer section's TOP edge, not the
-              // viewport bottom, so it always sits just above the form
-              // regardless of how the toolbar wraps. The earlier
-              // "viewport bottom + 6.25rem" approach overlapped the
-              // textarea on iPhone-class widths once the toolbar
-              // wrapped onto a second row.
-              <div className="pointer-events-none absolute -top-12 right-3 z-20 flex justify-end sm:-top-14 sm:right-6 lg:right-8">
-                <button
-                  aria-label="Jump to latest"
-                  className="pointer-events-auto inline-flex size-11 items-center justify-center rounded-full border border-[var(--color-border-strong)] bg-[var(--gradient-surface-elevated)] text-[var(--color-text-primary)] shadow-[var(--shadow-md)] backdrop-blur transition hover:border-[var(--color-accent)] hover:text-[var(--color-white)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                  type="button"
-                  onClick={jumpToLatest}
-                >
-                  <svg aria-hidden="true" viewBox="0 0 20 20" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M10 4v10" strokeLinecap="round" />
-                    <path d="m5.5 10.5 4.5 4.5 4.5-4.5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </button>
-              </div>
-            ) : null}
-            <div className="pointer-events-none absolute inset-x-0 -top-16 h-16 bg-[var(--sticky-fade)]" />
-            <div className="mx-auto mb-1 w-full max-w-[53rem] px-1 sm:mb-1.5 sm:px-0">
-              {showStats ? (
-                <ConversationTotalsChip messages={messages} usage={contextUsage} />
-              ) : null}
-            </div>
-            {modelError ? (
-              <div
-                role="alert"
-                className="mx-auto mb-1 w-full max-w-[53rem] rounded-[0.9rem] border border-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger)] sm:mb-1.5"
-              >
-                {modelError.message}{" "}
-                <a
-                  href={modelError.modelsUrl}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="underline"
-                >
-                  Browse affordable models
-                </a>
-                .
-              </div>
-            ) : null}
-            <Composer
-              prompt={prompt}
-              setPrompt={setPrompt}
-              promptPlaceholder={promptPlaceholder}
+          <div
+            className={[
+              "grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] gap-2 overflow-hidden px-3 pb-3 pt-2 sm:gap-3 sm:px-6 sm:pb-5 lg:px-8 xl:px-10",
+              projectHomeProject ? "hidden" : "",
+            ].join(" ")}
+          >
+            <ChatTranscript
+              conversationRef={conversationRef}
+              streamEndRef={streamEndRef}
               promptRef={promptRef}
+              isLoadingHistory={isLoadingHistory}
+              isLockdown={isLockdown}
+              messages={messages}
+              pills={pills}
+              activePillId={activePillId}
+              setActivePillId={setActivePillId}
               submitPrompt={submitPrompt}
-              sealed={isLockdown}
+              setPrompt={setPrompt}
+              isSummarizing={isSummarizing}
+              summarizeStartedAt={summarizeStartedAt}
+              summarizeStream={summarizeStream}
+              summarizeError={summarizeError}
+              summaryIndex={summaryIndex}
+              summaryExpanded={summaryExpanded}
+              setSummaryExpanded={setSummaryExpanded}
+              setConfirmSummarize={setConfirmSummarize}
+              showStats={showStats}
+              crossfadingMessageIds={crossfadingMessageIds}
+              currentConvKey={currentConvKey}
+              realConvId={realConvId}
               isStreaming={isStreaming}
-              isUploadingAttachments={isUploadingAttachments}
-              isDraggingOver={isDraggingOver}
-              setIsDraggingOver={setIsDraggingOver}
-              dragCounterRef={dragCounterRef}
-              fileInputRef={fileInputRef}
-              addAttachmentFiles={addAttachmentFiles}
-              pendingAttachments={pendingAttachments}
-              attachmentError={attachmentError}
-              removePendingAttachment={removePendingAttachment}
-              spreadsheetNudge={spreadsheetNudge}
-              setSpreadsheetNudgeDismissed={setSpreadsheetNudgeDismissed}
-              personas={personas}
-              selectedPersona={selectedPersona}
-              setSelectedPersona={setSelectedPersona}
-              personaPickerOpen={personaPickerOpen}
-              setPersonaPickerOpen={setPersonaPickerOpen}
-              personaPickerRef={personaPickerRef}
+              lastUserMessageId={lastUserMessageId}
+              lastAssistantMessageId={lastAssistantMessageId}
+              editLastUserSignal={editLastUserSignal}
               selectedModel={selectedModel}
+              patchAssistantMessage={patchAssistantMessage}
+              resendUserMessage={resendUserMessage}
+              retryLastUserMessage={retryLastUserMessage}
+              regenerateLastAssistant={regenerateLastAssistant}
+              branchFromMessage={branchFromMessage}
+              loadMemories={loadMemories}
               setSelectedModel={setSelectedModel}
-              selectedModelLabel={selectedModelLabel}
-              modelError={modelError}
-              modelPickerOpen={modelPickerOpen}
               setModelPickerOpen={setModelPickerOpen}
-              modelPickerRef={modelPickerRef}
-              modelInputRef={modelInputRef}
-              modelSearchQuery={modelSearchQuery}
               setModelSearchQuery={setModelSearchQuery}
-              filteredRankedModels={filteredRankedModels}
-              isLoadingRankedModels={isLoadingRankedModels}
-              isLoadingCatalog={isLoadingCatalog}
               loadRankedModels={loadRankedModels}
               loadCatalogModels={loadCatalogModels}
-              skills={skills}
-              mcpServers={mcpServers}
-              mcpPickerOpen={mcpPickerOpen}
-              setMcpPickerOpen={setMcpPickerOpen}
-              mcpPickerRef={mcpPickerRef}
-              isLoadingMcpServers={isLoadingMcpServers}
-              loadMcpServerCatalog={loadMcpServerCatalog}
-              toggleMcpServer={toggleMcpServer}
-              activeConversationId={activeConversationId}
-              messages={messages}
-              contextUsage={contextUsage}
-              isSummarizing={isSummarizing}
-              compactToastVisible={compactToastVisible}
-              setConfirmSummarize={setConfirmSummarize}
-              activeConversationIdRef={activeConversationIdRef}
-              abortControllersRef={abortControllersRef}
-              isPendingKey={isPendingKey}
             />
-          </section>
+
+            <section className="motion-safe:animate-pop-up-base relative z-10 pb-[calc(env(safe-area-inset-bottom,0px)+0.35rem)] sm:pb-4">
+              {showJumpToLatest ? (
+                // Anchored to the composer section's TOP edge, not the
+                // viewport bottom, so it always sits just above the form
+                // regardless of how the toolbar wraps. The earlier
+                // "viewport bottom + 6.25rem" approach overlapped the
+                // textarea on iPhone-class widths once the toolbar
+                // wrapped onto a second row.
+                <div className="pointer-events-none absolute -top-12 right-3 z-20 flex justify-end sm:-top-14 sm:right-6 lg:right-8">
+                  <button
+                    aria-label="Jump to latest"
+                    className="pointer-events-auto inline-flex size-11 items-center justify-center rounded-full border border-[var(--color-border-strong)] bg-[var(--gradient-surface-elevated)] text-[var(--color-text-primary)] shadow-[var(--shadow-md)] backdrop-blur transition hover:border-[var(--color-accent)] hover:text-[var(--color-white)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                    type="button"
+                    onClick={jumpToLatest}
+                  >
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 20 20"
+                      className="size-4"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                    >
+                      <path d="M10 4v10" strokeLinecap="round" />
+                      <path
+                        d="m5.5 10.5 4.5 4.5 4.5-4.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              ) : null}
+              <div className="pointer-events-none absolute inset-x-0 -top-16 h-16 bg-[var(--sticky-fade)]" />
+              <div className="mx-auto mb-1 w-full max-w-[53rem] px-1 sm:mb-1.5 sm:px-0">
+                {showStats ? (
+                  <ConversationTotalsChip
+                    messages={messages}
+                    usage={contextUsage}
+                  />
+                ) : null}
+              </div>
+              {modelError ? (
+                <div
+                  role="alert"
+                  className="mx-auto mb-1 w-full max-w-[53rem] rounded-[0.9rem] border border-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger)] sm:mb-1.5"
+                >
+                  {modelError.message}{" "}
+                  <a
+                    href={modelError.modelsUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="underline"
+                  >
+                    Browse affordable models
+                  </a>
+                  .
+                </div>
+              ) : null}
+              <Composer
+                prompt={prompt}
+                setPrompt={setPrompt}
+                promptPlaceholder={promptPlaceholder}
+                promptRef={promptRef}
+                submitPrompt={submitPrompt}
+                sealed={isLockdown}
+                isStreaming={isStreaming}
+                isUploadingAttachments={isUploadingAttachments}
+                isDraggingOver={isDraggingOver}
+                setIsDraggingOver={setIsDraggingOver}
+                dragCounterRef={dragCounterRef}
+                fileInputRef={fileInputRef}
+                addAttachmentFiles={addAttachmentFiles}
+                pendingAttachments={pendingAttachments}
+                attachmentError={attachmentError}
+                removePendingAttachment={removePendingAttachment}
+                spreadsheetNudge={spreadsheetNudge}
+                setSpreadsheetNudgeDismissed={setSpreadsheetNudgeDismissed}
+                personas={personas}
+                selectedPersona={selectedPersona}
+                setSelectedPersona={setSelectedPersona}
+                personaPickerOpen={personaPickerOpen}
+                setPersonaPickerOpen={setPersonaPickerOpen}
+                personaPickerRef={personaPickerRef}
+                selectedModel={selectedModel}
+                setSelectedModel={setSelectedModel}
+                selectedModelLabel={selectedModelLabel}
+                modelError={modelError}
+                modelPickerOpen={modelPickerOpen}
+                setModelPickerOpen={setModelPickerOpen}
+                modelPickerRef={modelPickerRef}
+                modelInputRef={modelInputRef}
+                modelSearchQuery={modelSearchQuery}
+                setModelSearchQuery={setModelSearchQuery}
+                filteredRankedModels={filteredRankedModels}
+                isLoadingRankedModels={isLoadingRankedModels}
+                isLoadingCatalog={isLoadingCatalog}
+                loadRankedModels={loadRankedModels}
+                loadCatalogModels={loadCatalogModels}
+                skills={skills}
+                mcpServers={mcpServers}
+                mcpPickerOpen={mcpPickerOpen}
+                setMcpPickerOpen={setMcpPickerOpen}
+                mcpPickerRef={mcpPickerRef}
+                isLoadingMcpServers={isLoadingMcpServers}
+                loadMcpServerCatalog={loadMcpServerCatalog}
+                toggleMcpServer={toggleMcpServer}
+                activeConversationId={activeConversationId}
+                messages={messages}
+                contextUsage={contextUsage}
+                isSummarizing={isSummarizing}
+                compactToastVisible={compactToastVisible}
+                setConfirmSummarize={setConfirmSummarize}
+                activeConversationIdRef={activeConversationIdRef}
+                abortControllersRef={abortControllersRef}
+                isPendingKey={isPendingKey}
+              />
+            </section>
           </div>
         </main>
       </div>

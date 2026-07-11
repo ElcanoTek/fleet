@@ -1607,6 +1607,32 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case sub == "project" && r.Method == http.MethodPost:
+		// Re-file the conversation into a project, or unfile it (#509
+		// follow-up): body {"project_id": "..."} — empty unfiles. Membership
+		// is enforced exactly like project-bound creation (404 for missing
+		// AND non-member, so project ids don't leak membership state).
+		// Re-filing binds the project's instructions + shared memory from
+		// the next turn on; it does NOT retro-apply the project's curated
+		// connectors or default persona/model (those are creation-time
+		// inheritances — see SetConversationProject).
+		var req struct {
+			ProjectID string `json:"project_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.ProjectID != "" {
+			if p := s.projectForMember(w, r, user, req.ProjectID); p == nil {
+				return
+			}
+		}
+		if err := s.store.SetConversationProject(r.Context(), user, id, req.ProjectID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case sub == "rename" && r.Method == http.MethodPost:
 		var req struct {
 			Title string `json:"title"`

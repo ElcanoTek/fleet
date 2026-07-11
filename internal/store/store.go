@@ -6,8 +6,8 @@
 //
 // Retention: conversations with pinned=false and updated_at older than TTL
 // are deleted by SweepExpired. A per-user cap further evicts the oldest
-// unpinned conversations beyond UnpinnedCap. Pinned conversations are
-// exempt from both.
+// unpinned conversations beyond UnpinnedCap. Pinned, archived, shared, and
+// project-bound conversations are exempt from both.
 package store
 
 import (
@@ -94,10 +94,11 @@ type Conversation struct {
 	// are gated by this list. Stored as JSONB in Postgres; marshalled
 	// as a JSON array over the wire. nil / empty = no opt-ins.
 	OptionalMCPServersEnabled []string `json:"optional_mcp_servers_enabled"`
-	// ProjectID scopes this conversation to a project/space (#509). Set once
-	// at creation; empty = no project. The turn path uses it to inject the
-	// project's standing instructions + shared memory and to inherit its
-	// curated connector selection.
+	// ProjectID scopes this conversation to a project/space (#509). Set at
+	// creation or re-filed later via SetConversationProject; empty = no
+	// project. The turn path uses it to inject the project's standing
+	// instructions + shared memory. Connector/persona/model inheritance
+	// happens only at creation — re-filing does not retro-apply them.
 	ProjectID string `json:"project_id,omitempty"`
 	// Lockdown is set at conversation creation and never changes. When
 	// true: the per-turn sandbox is cold-started fresh with
@@ -751,7 +752,9 @@ func (s *Store) GetConversationByShareToken(ctx context.Context, token string, n
 // whose updated_at is older than d (#282). Returns the count archived. A zero or
 // negative duration is a no-op (the feature is disabled). This is a softer
 // alternative to the TTL hard-delete in SweepExpired — conversations are filed
-// away rather than destroyed.
+// away rather than destroyed. Project conversations (#509) are exempt like
+// they are from the sweep: auto-archiving one would silently pull it out of
+// its project's rail tree.
 func (s *Store) AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int, error) {
 	if d <= 0 {
 		return 0, nil
@@ -760,7 +763,7 @@ func (s *Store) AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int,
 	cutoff := time.Now().Add(-d).Unix()
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET archived_at = $1, updated_at = $2
-		 WHERE pinned = FALSE AND archived_at IS NULL AND updated_at < $3`,
+		 WHERE pinned = FALSE AND archived_at IS NULL AND project_id IS NULL AND updated_at < $3`,
 		now, now, cutoff,
 	)
 	if err != nil {
@@ -1816,6 +1819,10 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	// Archived conversations (#282) are exempt from both cleanup paths, just
 	// like pinned ones: archiving is a user-intentional "keep, but decluttered"
 	// state, so it must not be hard-deleted by the TTL or evicted by the cap.
+	// Project conversations (#509) are exempt the same way: filing a chat
+	// into a project is a deliberate "keep" act, and the rail presents
+	// projects as durable workspaces — silently reaping their chats would
+	// betray that.
 
 	// 0. Soft-delete tombstone purge (#279): permanently remove rows soft-deleted
 	//    more than 30 days ago. Runs regardless of the soft-delete flag so a
@@ -1838,7 +1845,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		// re-sweep never re-tombstones.
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND updated_at < $2`,
+			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND updated_at < $2`,
 			time.Now().Unix(), cutoff,
 		)
 		if err != nil {
@@ -1848,7 +1855,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		expired += int(n)
 	} else {
 		res, err := s.db.ExecContext(ctx,
-			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND updated_at < $1`,
+			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND updated_at < $1`,
 			cutoff,
 		)
 		if err != nil {
@@ -1865,7 +1872,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT user_email, COUNT(*) FROM conversations
-		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
+		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL GROUP BY user_email HAVING COUNT(*) > $1`,
 		unpinnedCap,
 	)
 	if err != nil {
@@ -1890,7 +1897,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		res, err := s.db.ExecContext(ctx,
 			`DELETE FROM conversations WHERE id IN (
 			    SELECT id FROM conversations
-			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL
+			    WHERE user_email = $1 AND pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL
 			    ORDER BY updated_at DESC, id DESC
 			    OFFSET $2
 			 )`,

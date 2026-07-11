@@ -3,12 +3,12 @@ import {
   MAX_LABELS,
   addLabel,
   canAddLabel,
-  deriveFolders,
   deriveLabels,
   filterConversations,
   isFiltering,
   normalizeLabel,
   pinnedUnfiled,
+  projectGroups,
   recentUnfiled,
   removeLabel,
   visibleConversationOrder,
@@ -59,22 +59,6 @@ describe("addLabel / removeLabel", () => {
   });
 });
 
-describe("deriveFolders", () => {
-  it("returns distinct non-empty folders with counts, sorted by name", () => {
-    const convs = [
-      conv({ folder: "Research" }),
-      conv({ folder: "Work Projects" }),
-      conv({ folder: "Work Projects" }),
-      conv({ folder: "" }),
-      conv({}),
-    ];
-    expect(deriveFolders(convs)).toEqual([
-      { name: "Research", count: 1 },
-      { name: "Work Projects", count: 2 },
-    ]);
-  });
-});
-
 describe("deriveLabels", () => {
   it("counts labels across conversations, sorted by name", () => {
     const convs = [
@@ -92,14 +76,10 @@ describe("deriveLabels", () => {
 
 describe("filterConversations", () => {
   const convs = [
-    conv({ title: "Acme renewal", folder: "Clients", labels: ["client", "urgent"] }),
-    conv({ title: "Omnicom pacing", folder: "Clients", labels: ["client"] }),
+    conv({ title: "Acme renewal", labels: ["client", "urgent"] }),
+    conv({ title: "Omnicom pacing", labels: ["client"] }),
     conv({ title: "Schema notes", labels: ["research"] }),
   ];
-
-  it("filters by folder (exact)", () => {
-    expect(filterConversations(convs, { folder: "Clients" })).toHaveLength(2);
-  });
 
   it("AND-filters by labels", () => {
     const res = filterConversations(convs, { labels: ["client", "urgent"] });
@@ -112,8 +92,8 @@ describe("filterConversations", () => {
     ]);
   });
 
-  it("combines folder + label + query", () => {
-    const res = filterConversations(convs, { folder: "Clients", labels: ["client"], query: "acme" });
+  it("combines label + query", () => {
+    const res = filterConversations(convs, { labels: ["client"], query: "acme" });
     expect(res.map((c) => c.title)).toEqual(["Acme renewal"]);
   });
 });
@@ -122,7 +102,6 @@ describe("isFiltering", () => {
   it("is false for an empty filter and true when any facet is set", () => {
     expect(isFiltering({})).toBe(false);
     expect(isFiltering({ query: "  " })).toBe(false);
-    expect(isFiltering({ folder: "Clients" })).toBe(true);
     expect(isFiltering({ labels: ["x"] })).toBe(true);
     expect(isFiltering({ query: "ac" })).toBe(true);
   });
@@ -131,12 +110,12 @@ describe("isFiltering", () => {
 describe("pinnedUnfiled / recentUnfiled", () => {
   const convs = [
     conv({ title: "Pinned loose", pinned: true }),
-    conv({ title: "Pinned filed", pinned: true, folder: "Work" }),
+    conv({ title: "Pinned project", pinned: true, project_id: "p1" }),
     conv({ title: "Recent loose", pinned: false }),
-    conv({ title: "Recent filed", pinned: false, folder: "Work" }),
+    conv({ title: "Recent project", pinned: false, project_id: "p1" }),
   ];
 
-  it("excludes filed conversations from both sections", () => {
+  it("excludes project conversations from both sections", () => {
     expect(pinnedUnfiled(convs).map((c) => c.title)).toEqual(["Pinned loose"]);
     expect(recentUnfiled(convs).map((c) => c.title)).toEqual(["Recent loose"]);
   });
@@ -147,7 +126,7 @@ describe("visibleConversationOrder", () => {
   // experience) and the sidebar's rendered rows — the two must never drift.
   const all = [
     conv({ title: "Pinned loose", pinned: true }),
-    conv({ title: "Filed", pinned: true, folder: "Work" }),
+    conv({ title: "Project chat", pinned: true, project_id: "p1" }),
     conv({ title: "Recent loose", pinned: false }),
   ];
 
@@ -158,21 +137,72 @@ describe("visibleConversationOrder", () => {
     ).toEqual(["Pinned loose", "Recent loose"]);
   });
 
-  it("excludes filed conversations from the unfiltered order", () => {
+  it("excludes project conversations from the unfiltered order", () => {
     const order = visibleConversationOrder({ all, filtered: all, filtering: false });
-    expect(order.map((c) => c.title)).not.toContain("Filed");
+    expect(order.map((c) => c.title)).not.toContain("Project chat");
   });
 
-  it("returns the filtered list verbatim (including filed rows) when filtering", () => {
-    const filtered = filterConversations(all, { folder: "Work" });
+  it("returns the filtered list verbatim (including project rows) when filtering", () => {
+    const filtered = filterConversations(all, { query: "project" });
     expect(
       visibleConversationOrder({ all, filtered, filtering: true }).map((c) => c.title),
-    ).toEqual(["Filed"]);
+    ).toEqual(["Project chat"]);
   });
 
   it("does not mutate its inputs", () => {
     const order = visibleConversationOrder({ all, filtered: all, filtering: false });
     order.push(conv({ title: "extra" }));
     expect(all).toHaveLength(3);
+  });
+});
+
+describe("project grouping (#509 follow-up)", () => {
+  const proj = (id: string, updated_at: number) => ({ id, name: id, updated_at });
+
+  it("a project conversation lives only under its project — excluded from Pinned and Chats", () => {
+    const all = [
+      conv({ title: "p", pinned: true, project_id: "alpha" }),
+      conv({ title: "r", project_id: "alpha" }),
+      conv({ title: "plain" }),
+      conv({ title: "pinned-plain", pinned: true }),
+    ];
+    expect(pinnedUnfiled(all).map((c) => c.title)).toEqual(["pinned-plain"]);
+    expect(recentUnfiled(all).map((c) => c.title)).toEqual(["plain"]);
+    expect(visibleConversationOrder({ all, filtered: [], filtering: false }).map((c) => c.title)).toEqual([
+      "pinned-plain",
+      "plain",
+    ]);
+  });
+
+  it("projectGroups returns the top N projects by recent update, each with its chats in input order", () => {
+    const projects = [proj("old", 1), proj("newest", 9), proj("mid", 5)];
+    const all = [
+      conv({ title: "a", project_id: "newest" }),
+      conv({ title: "b", project_id: "old" }),
+      conv({ title: "c", project_id: "newest" }),
+    ];
+    const groups = projectGroups(all, projects, 2);
+    expect(groups.map((g) => g.project.id)).toEqual(["newest", "mid"]);
+    expect(groups[0].chats.map((c) => c.title)).toEqual(["a", "c"]);
+    // "mid" has no chats yet but still gets a group — it must exist in the
+    // rail to be a drag target.
+    expect(groups[1].chats).toEqual([]);
+  });
+
+  it("pinned projects sort first in place and always make the cut", () => {
+    const projects = [
+      proj("recent-a", 9),
+      proj("recent-b", 8),
+      { ...proj("pinned-old", 1), pinned: true },
+    ];
+    const groups = projectGroups([], projects, 2);
+    // The pinned project beats both fresher ones for the top slot; the
+    // remaining slot goes to the freshest unpinned.
+    expect(groups.map((g) => g.project.id)).toEqual(["pinned-old", "recent-a"]);
+  });
+
+  it("search still reaches project conversations (filters are explicit)", () => {
+    const all = [conv({ title: "quarterly report", project_id: "alpha" }), conv({ title: "misc" })];
+    expect(filterConversations(all, { query: "quarterly" }).map((c) => c.title)).toEqual(["quarterly report"]);
   });
 });

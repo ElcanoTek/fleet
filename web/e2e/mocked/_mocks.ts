@@ -89,6 +89,19 @@ export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
   // Per-conversation GET (loadConversation): return the seeded summary with an
   // empty history so opening a conversation — on boot or via the keyboard —
   // resolves cleanly instead of 502-ing against the absent Go backend.
+  // Per-conversation side fetches the shell fires on load. Without mocks
+  // these fall through to the Next proxy and burn ~1s each before 502ing —
+  // harmless locally, but under CI load the backlog makes menu/reveal
+  // interactions flaky. Registered BEFORE the generic /conversations/* route
+  // (later registrations win) — wait, Playwright checks the LAST registered
+  // first, so register these AFTER it… they match more specifically anyway
+  // because the generic pattern's single `*` cannot cross the extra segment.
+  await page.route("**/api/conversations/*/inflight", (r: Route) =>
+    r.fulfill({ json: { inflight: false } }),
+  );
+  await page.route("**/api/conversations/*/mcp-servers", (r: Route) =>
+    r.fulfill({ json: { servers: [] } }),
+  );
   await page.route("**/api/conversations/*", (r: Route) => {
     if (r.request().method() !== "GET") return r.fulfill({ json: {} });
     const url = new URL(r.request().url());

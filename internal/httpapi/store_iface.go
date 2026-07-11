@@ -48,6 +48,9 @@ type chatStore interface {
 	BulkPatch(ctx context.Context, userEmail string, ids []string, pinned *bool, folder *string, labels []string) (int, error)
 	SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error
 	SetArchived(ctx context.Context, userEmail, convID string, archived bool) error
+	// SetConversationProject re-files a conversation into a project ("" =
+	// unfile); the handler validates membership first (#509 follow-up).
+	SetConversationProject(ctx context.Context, userEmail, convID, projectID string) error
 	SetModel(ctx context.Context, userEmail, convID, model string) error
 	SetApprovalTimeout(ctx context.Context, userEmail, convID string, seconds *int) error
 	SetThinkingConfig(ctx context.Context, userEmail, convID string, cfg *store.ThinkingConfig) error
@@ -111,6 +114,13 @@ type chatStore interface {
 	ListProjectMemories(ctx context.Context, projectID string) ([]store.Memory, error)
 	DeleteProjectMemory(ctx context.Context, projectID, memoryID string) error
 	ListProjectConversationIDs(ctx context.Context, projectID string) ([]string, error)
+	// ListProjectConversationsForUser is the project home's chat list —
+	// the CALLER'S OWN conversations only (chats stay private to their
+	// creators even inside a shared project).
+	ListProjectConversationsForUser(ctx context.Context, userEmail, projectID string) ([]store.Conversation, error)
+	// ListProjectConversationPreviews is the home's 1–2 line chat history:
+	// last text-message snippet per conversation, same caller scoping.
+	ListProjectConversationPreviews(ctx context.Context, userEmail, projectID string) (map[string]string, error)
 
 	// Memories + memory proposals.
 	ListMemories(ctx context.Context, userEmail string) ([]store.Memory, error)

@@ -7,10 +7,14 @@ package httpapi
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // resolveUserTeam returns the requester's team_id ("" when unset/unknown).
@@ -48,6 +52,10 @@ type projectRequest struct {
 	// server resolves the team — a caller can never name an arbitrary team);
 	// false makes/keeps it personal.
 	TeamShared *bool `json:"team_shared"`
+	// Pinned floats the project to the top of the rail's Projects section
+	// (PATCH only; a new project starts unpinned). Owner-only, enforced by
+	// the store's owner-scoped UPDATE.
+	Pinned *bool `json:"pinned"`
 }
 
 // projects handles GET/POST /projects.
@@ -126,6 +134,10 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 				memID = parts[2]
 			}
 			s.projectMemories(w, r, p, memID)
+		case "conversations":
+			s.projectConversations(w, r, p)
+		case "files":
+			s.projectFiles(w, r, p)
 		case "export":
 			s.projectExport(w, r, p)
 		default:
@@ -149,6 +161,7 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 			DefaultPersona: req.DefaultPersona,
 			DefaultModel:   req.DefaultModel,
 			MCPServers:     req.MCPServers,
+			Pinned:         req.Pinned,
 		}
 		if req.TeamShared != nil {
 			team := ""
@@ -176,6 +189,117 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// projectConversations handles GET /projects/{id}/conversations — the project
+// home's chat list. Scoped to the CALLER'S OWN conversations: members share
+// the project definition, but conversations stay private to their creators
+// (#237's rule), so this must never enumerate another member's chats.
+func (s *Server) projectConversations(w http.ResponseWriter, r *http.Request, p *store.Project) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := userFromCtx(r.Context())
+	list, err := s.store.ListProjectConversationsForUser(r.Context(), user, p.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Previews are display sugar — a failure degrades to titles-only rather
+	// than failing the home.
+	previews, err := s.store.ListProjectConversationPreviews(r.Context(), user, p.ID)
+	if err != nil {
+		previews = nil
+	}
+	type convWithPreview struct {
+		store.Conversation
+		// Preview is the last text message's snippet ("You: …" when the
+		// user spoke last) — the home's 1–2 line history per chat.
+		Preview string `json:"preview,omitempty"`
+	}
+	out := make([]convWithPreview, 0, len(list))
+	for _, c := range list {
+		out = append(out, convWithPreview{Conversation: c, Preview: previews[c.ID]})
+	}
+	writeJSON(w, map[string]any{"conversations": out})
+}
+
+// projectFile is one entry in the project home's Sources list.
+type projectFile struct {
+	ConversationID    string `json:"conversation_id"`
+	ConversationTitle string `json:"conversation_title"`
+	// Path is relative to the conversation's workspace root — the exact
+	// segment GET /conversations/{id}/workspace/{path} streams.
+	Path       string `json:"path"`
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	ModifiedAt int64  `json:"modified_at"`
+}
+
+// maxProjectFiles caps the Sources listing — a runaway workspace (a build
+// tree, node_modules the agent unpacked) must not stall the project home.
+// Newest-first, so the cap drops the oldest entries.
+const maxProjectFiles = 200
+
+// projectFiles handles GET /projects/{id}/files — the project home's Sources
+// panel: every workspace file (uploads, generated CSVs/plots, …) across the
+// CALLER'S OWN conversations in the project, newest first. Same privacy rule
+// as projectConversations: another member's files are never listed. Download
+// goes through the existing per-conversation workspace streamer, which owns
+// the path-traversal guards.
+func (s *Server) projectFiles(w http.ResponseWriter, r *http.Request, p *store.Project) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := userFromCtx(r.Context())
+	convs, err := s.store.ListProjectConversationsForUser(r.Context(), user, p.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	files := []projectFile{}
+	for _, conv := range convs {
+		wsDir := tools.WorkspaceDirForConversation(conv.ID)
+		root, err := filepath.EvalSymlinks(wsDir)
+		if err != nil {
+			// Most conversations never touched a file — no workspace dir.
+			continue
+		}
+		title := conv.Title
+		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+			// Per-entry errors (perms, vanished mid-walk) skip the entry,
+			// never abort the whole listing.
+			if walkErr != nil || d.IsDir() {
+				return nil //nolint:nilerr // best-effort listing
+			}
+			info, err := d.Info()
+			if err != nil {
+				return nil //nolint:nilerr // best-effort listing
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return nil //nolint:nilerr // best-effort listing
+			}
+			files = append(files, projectFile{
+				ConversationID:    conv.ID,
+				ConversationTitle: title,
+				Path:              filepath.ToSlash(rel),
+				Name:              d.Name(),
+				Size:              info.Size(),
+				ModifiedAt:        info.ModTime().Unix(),
+			})
+			return nil
+		})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].ModifiedAt > files[j].ModifiedAt })
+	truncated := false
+	if len(files) > maxProjectFiles {
+		files = files[:maxProjectFiles]
+		truncated = true
+	}
+	writeJSON(w, map[string]any{"files": files, "truncated": truncated})
 }
 
 // projectMemories handles GET/POST /projects/{id}/memories and

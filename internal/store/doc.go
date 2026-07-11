@@ -13,9 +13,10 @@
 // # Retention
 //
 // Unpinned conversations expire after CONVERSATION_TTL_DAYS (default 14) of
-// inactivity. Pinned conversations are exempt from TTL and cap eviction
-// and are kept indefinitely. The [Store.SweepExpired] routine runs at
-// server startup and after every successful turn.
+// inactivity. Pinned, archived, shared, and project-bound (#509)
+// conversations are exempt from TTL and cap eviction and are kept
+// indefinitely. The [Store.SweepExpired] routine runs at server startup and
+// after every successful turn.
 //
 // # Schema
 //
