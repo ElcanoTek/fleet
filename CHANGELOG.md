@@ -33,6 +33,37 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Connector-directory onboarding** (`docs/CONNECTOR-ONBOARDING.md`): every
+  hosted-directory entry is now either connectable in place or visibly
+  documented. Per-user remote MCP gains an **API-key auth mode** (migration
+  039: key sealed AES-256-GCM host-side like OAuth tokens, replayed as
+  `Authorization: Bearer` or the entry's `api_key_header`; rotation via
+  `PUT /remote-mcp-servers/{id}/key`) — the 60 `api_key` catalog entries
+  previously had no working connect path. Directory cards grow **guided add
+  forms**: per-`{placeholder}` inputs with a live URL preview for
+  tenant-scoped endpoints, a write-only key field for api_key entries, and
+  bring-your-own OAuth client fields for vendors without dynamic client
+  registration (`client_registration: manual` — Google Workspace, Microsoft
+  Work IQ, Slack, HubSpot). New catalog fields `setup_hint` (rendered visibly;
+  CI-required for every tenant/api_key entry) and `setup_url` link the
+  vendor's actual connect walkthrough; hints were researched and authored for
+  all 97 such entries. Catalog refresh: new `google-people` (Contacts) entry
+  plus community self-hosted `google-workspace-self-hosted`
+  (Docs/Sheets-capable) and `microsoft-365-self-hosted` (no Copilot license
+  needed) entries; auth corrections for aws-mcp and the key-in-URL vendors
+  (Scrapfly, thirdweb, Smartlead). A curation audit removed 25 low-quality
+  listings (docs-search-only servers for niche products, unworkable auth
+  schemes, obscure duplicates) and added 15 newly-verified official hosted
+  endpoints (Docusign, Adobe for Creativity, WordPress.com, Contentful,
+  Sanity, Algolia, Cloudinary, Amazon Ads, DoorDash, ServiceNow, Microsoft
+  Dataverse/Dynamics 365, Vimeo, Egnyte, Granola, Jotform) — net 267 → 282.
+  A new **Featured shelf** (`featured: true`, capped 8–20 entries) surfaces
+  the household names — the Google Workspace trio, GitHub, Notion, Slack,
+  Linear, Atlassian, Asana, monday, Airtable, Stripe, PayPal, HubSpot,
+  Canva, Figma, Adobe, Zapier, Hugging Face — ahead of the category listing.
+  The "remote MCP isn't configured" notice is now admin-aware instead of
+  showing env-var instructions to members.
+
 - **v1 → fleet cutover runbook** (`docs/CUTOVER.md`, #718): the ordered
   operational sequence for a box already live on the legacy chat + moc stack —
   backups, stopping **and disabling** the legacy units (and the runner daemon

@@ -47,6 +47,8 @@ type tokenStore interface {
 	ListRemoteMCPServers(ctx context.Context, userEmail string) ([]store.RemoteMCPServer, error)
 	DeleteRemoteMCPServer(ctx context.Context, userEmail, id string) error
 	LoadServerSecrets(ctx context.Context, server *store.RemoteMCPServer) (clientSecret, registrationToken string, err error)
+	GetRemoteMCPAPIKey(ctx context.Context, server *store.RemoteMCPServer) (string, error)
+	SetRemoteMCPAPIKey(ctx context.Context, userEmail, id, apiKey string) error
 	GetOAuthTokens(ctx context.Context, server *store.RemoteMCPServer) (*store.RemoteMCPTokens, error)
 	StoreOAuthTokens(ctx context.Context, server *store.RemoteMCPServer, tokens store.RemoteMCPTokens) error
 	EnsureFreshToken(ctx context.Context, server *store.RemoteMCPServer, marginSeconds int64, refreshFn store.RefreshFunc) (string, error)
@@ -137,12 +139,17 @@ type AddServerInput struct {
 	Email string
 	Name  string
 	URL   string
-	// AuthMode is "open" only for servers that require no Authorization header.
-	// Empty and "oauth" retain the discovery + authorization flow.
+	// AuthMode is "open" for servers that require no Authorization header, or
+	// "api_key" for servers authenticated by a static vendor key. Empty and
+	// "oauth" retain the discovery + authorization flow.
 	AuthMode string
 	// Optional manual client credentials for an authorization server without DCR.
 	ClientID     string
 	ClientSecret string
+	// api_key mode only: the key itself (sealed at rest, never echoed back) and
+	// the header NAME to send it under ("" = Authorization: Bearer <key>).
+	APIKey       string
+	APIKeyHeader string
 }
 
 // AddServer validates + canonicalizes the URL, walks the OAuth discovery chain,
@@ -160,14 +167,29 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 	if name == "" {
 		return nil, errors.New("a name is required")
 	}
-	if in.AuthMode == "open" {
+	if in.AuthMode == store.RemoteMCPAuthOpen {
 		return s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
 			UserEmail: in.Email, Name: name, URL: canonURL,
 			Transport: store.RemoteMCPTransportStreamableHTTP,
 			Status:    store.RemoteMCPStatusConnected,
+			AuthKind:  store.RemoteMCPAuthOpen,
 		})
 	}
-	if in.AuthMode != "" && in.AuthMode != "oauth" {
+	if in.AuthMode == store.RemoteMCPAuthAPIKey {
+		header, err := validateAPIKeyAuth(in.APIKey, in.APIKeyHeader)
+		if err != nil {
+			return nil, err
+		}
+		return s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+			UserEmail: in.Email, Name: name, URL: canonURL,
+			Transport:    store.RemoteMCPTransportStreamableHTTP,
+			Status:       store.RemoteMCPStatusConnected,
+			AuthKind:     store.RemoteMCPAuthAPIKey,
+			APIKey:       in.APIKey,
+			APIKeyHeader: header,
+		})
+	}
+	if in.AuthMode != "" && in.AuthMode != store.RemoteMCPAuthOAuth {
 		return nil, fmt.Errorf("unsupported remote MCP auth mode %q", in.AuthMode)
 	}
 
@@ -213,6 +235,49 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		ClientSecret:          clientSecret,
 		RegistrationToken:     regToken,
 	})
+}
+
+// validateAPIKeyAuth vets a user-supplied API key + header name before either
+// is persisted. The header name must be an RFC 7230 token and must not collide
+// with headers the MCP transport itself owns; the key must be a single line of
+// visible ASCII (Go's transport would reject anything else at send time, but a
+// clear error here beats a mid-run failure). Returns the trimmed header name.
+func validateAPIKeyAuth(key, header string) (string, error) {
+	if strings.TrimSpace(key) == "" {
+		return "", errors.New("an API key is required")
+	}
+	for _, r := range key {
+		if r < 0x20 || r > 0x7e {
+			return "", errors.New("the API key contains characters that cannot be sent in an HTTP header")
+		}
+	}
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return "", nil // default: Authorization: Bearer <key>
+	}
+	for _, r := range header {
+		headerOK := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_'
+		if !headerOK {
+			return "", fmt.Errorf("invalid API key header name %q", header)
+		}
+	}
+	switch strings.ToLower(header) {
+	case "host", "content-length", "content-type", "transfer-encoding", "connection", "mcp-session-id", "accept":
+		return "", fmt.Errorf("header %q is reserved by the MCP transport", header)
+	}
+	return header, nil
+}
+
+// SetAPIKey replaces an api_key connection's stored key (rotation / fixing a
+// mistyped key) and marks it connected again. Owner-scoped.
+func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string) error {
+	if !s.Enabled() {
+		return ErrDisabled
+	}
+	if _, err := validateAPIKeyAuth(apiKey, ""); err != nil {
+		return err
+	}
+	return s.store.SetRemoteMCPAPIKey(ctx, email, serverID, apiKey)
 }
 
 // Authorize starts the OAuth flow for a server and returns the authorization URL

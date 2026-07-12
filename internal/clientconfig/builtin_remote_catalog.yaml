@@ -29,19 +29,20 @@
 servers:
 
   # ── development ─────────────────────────────────────────────────
-  - name: apollo-graphql
-    display_name: Apollo GraphOS MCP Tools
+  - name: algolia
+    display_name: Algolia
     description: >-
-      Fixed-endpoint hosted server exposing Apollo documentation and connector-
-      spec tools (ApolloDocsRead, ApolloDocsSearch, ApolloConnectorsSpec) over
-      Streamable HTTP. No API key or configuration required.
-    url: "https://mcp.apollographql.com"
-    vendor: Apollo Graph, Inc.
-    docs_url: "https://www.apollographql.com/docs/graphos/platform/graphos-mcp-tools"
+      Algolia's hosted "Productivity MCP": search and manage indices,
+      configure Search/Recommend, and pull analytics and usage metrics with
+      the signed-in user's permissions.
+    url: "https://mcp.algolia.com/mcp"
+    vendor: Algolia, Inc.
+    docs_url: "https://www.algolia.com/doc/guides/algolia-ai/mcp-server/overview"
+    repo_url: "https://github.com/algolia/mcp"
     category: development
-    tags: [graphql, documentation, api, graphos]
+    tags: [search, indexing, recommendations, analytics]
     provenance: official
-    auth: open
+    auth: oauth
   - name: browserstack
     display_name: BrowserStack
     description: >-
@@ -84,6 +85,12 @@ servers:
     tags: [storybook, ui, design-system, visual-testing]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      Run a Chromatic build first — the MCP server is published alongside
+      your Storybook. Your app ID is the identifier in your project's
+      Chromatic URLs (e.g. the appId in permalinks like
+      main--<appid>.chromatic.com).
+    setup_url: "https://www.chromatic.com/docs/mcp/"
   - name: context7
     display_name: Context7
     description: >-
@@ -122,6 +129,11 @@ servers:
     tags: [coding-agent, sessions, playbooks, automation]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Sign in at app.devin.ai and generate a service-user API key under
+      Settings → API Keys, then paste it here. Legacy personal apk_ keys
+      are not accepted.
+    setup_url: "https://docs.devin.ai/work-with-devin/devin-mcp"
   - name: expo
     display_name: Expo
     description: >-
@@ -148,6 +160,7 @@ servers:
     tags: [git, repositories, issues, pull-requests, ci]
     provenance: official
     auth: oauth
+    featured: true
   - name: gitlab
     display_name: GitLab
     description: >-
@@ -176,6 +189,11 @@ servers:
     tags: [openapi, toolsets, api-generation, hosting]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      The server slug is the name you choose when you create an MCP server
+      for a toolset in Gram; the exact URL is shown in the toolset's MCP
+      Installation section (click View) at app.getgram.ai.
+    setup_url: "https://www.speakeasy.com/docs/gram/examples/creating-taskmaster-mcp-server"
   - name: greptile
     display_name: Greptile
     description: >-
@@ -189,6 +207,10 @@ servers:
     tags: [code-review, pull-requests, codebase-context]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Sign in at app.greptile.com, go to Settings → Organization → API
+      Keys, and copy your API key here.
+    setup_url: "https://www.greptile.com/docs/mcp/overview"
   - name: jetbrains-youtrack
     display_name: JetBrains YouTrack Cloud
     description: >-
@@ -202,6 +224,12 @@ servers:
     tags: [issue-tracking, youtrack, projects, jetbrains]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      Your instance name is the subdomain you sign in at — "my-company" in
+      my-company.youtrack.cloud. Just add /mcp to your YouTrack Cloud
+      address; OAuth setup may need an admin if your client lacks CIMD
+      support.
+    setup_url: "https://www.jetbrains.com/help/youtrack/cloud/model-context-protocol-server.html"
   - name: kong-konnect
     display_name: Kong Konnect
     description: >-
@@ -217,6 +245,11 @@ servers:
     tags: [api-gateway, kong, konnect, observability, analytics]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      In Kong Konnect, open your account menu and generate a Personal
+      Access Token (or create a System Account access token), then paste
+      it here. Org admins can disable MCP access.
+    setup_url: "https://developer.konghq.com/konnect-platform/konnect-mcp/installation/"
   - name: lambdatest
     display_name: LambdaTest (TestMu AI)
     description: >-
@@ -286,6 +319,12 @@ servers:
     tags: [code-search, code-intelligence, enterprise]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      Use the web address of the Sourcegraph you sign in at (e.g.
+      sourcegraph.company.com) plus /.api/mcp. Enterprise plans only; an
+      admin controls the mcp.enabled site setting and MCP access
+      permission.
+    setup_url: "https://sourcegraph.com/docs/api/mcp"
   - name: stainless
     display_name: Stainless Hosted
     description: >-
@@ -300,23 +339,12 @@ servers:
     tags: [sdk, openapi, codegen, hosting]
     provenance: official
     auth: tenant
-  - name: temporal-docs
-    display_name: Temporal Knowledge Base
-    description: >-
-      Vendor-hosted (Kapa.ai-powered) MCP server giving AI tools real-time
-      access to Temporal's documentation, tutorials, forum answers, and Slack
-      knowledge; a docs/knowledge-base assistant, not a workflow-orchestration
-      control plane. Requires MCP OAuth (Google or GitHub sign-in) for rate
-      limiting.
-    url: "https://temporal.mcp.kapa.ai"
-    vendor: Temporal Technologies
-    docs_url: "https://docs.temporal.io/with-ai"
-    category: development
-    tags: [workflow, orchestration, documentation, knowledge-base, temporal]
-    provenance: official
-    auth: oauth
-
-  # ── cloud-infrastructure ────────────────────────────────────────
+    setup_hint: >-
+      The subdomain is your Stainless project name. A project owner must
+      flip the "Host with Stainless" switch in the SDK Studio MCP pane
+      (paid feature; provisioning takes ~5 minutes) to make
+      {project}.stlmcp.com live.
+    setup_url: "https://www.stainless.com/docs/mcp/remote/"
   - name: aws-mcp
     display_name: AWS
     description: >-
@@ -331,7 +359,13 @@ servers:
     category: cloud-infrastructure
     tags: [aws, iam, cloud-api, sigv4, agents]
     provenance: official
-    auth: api_key
+    auth: oauth
+    setup_hint: >-
+      No API key: connecting signs you in with your AWS Builder ID / IAM
+      Identity Center via OAuth (your IAM principal needs the
+      AWSMCPSignInOAuthAccessPolicy). For SigV4 credential auth, self-host
+      mcp-proxy-for-aws instead.
+    setup_url: "https://docs.aws.amazon.com/agent-toolkit/latest/userguide/getting-started-aws-mcp-server.html"
   - name: azure-devops
     display_name: Azure DevOps
     description: >-
@@ -348,6 +382,12 @@ servers:
     tags: [azure, devops, pipelines, repos, work-items]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      {organization} is your Azure DevOps organization name — the part
+      after dev.azure.com/ when you sign in. Preview: your org must use
+      Microsoft Entra ID, and only VS Code and Visual Studio clients are
+      supported today.
+    setup_url: "https://learn.microsoft.com/en-us/azure/devops/mcp-server/remote-mcp-server?view=azure-devops"
   - name: cast-ai
     display_name: CAST AI
     description: >-
@@ -361,6 +401,12 @@ servers:
     tags: [castai, kubernetes, cost-optimization, autoscaling]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      In the CAST AI console, open your user menu → API keys and create a
+      key, then paste it here. The key is sent in the X-API-Key header
+      (Bearer also works on most clients).
+    setup_url: "https://docs.cast.ai/reference/mcp"
+    api_key_header: X-API-Key
   - name: cloudflare
     display_name: Cloudflare
     description: >-
@@ -403,6 +449,13 @@ servers:
     tags: [firefly, iac, cloud-inventory, codification, governance]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an access key/secret key pair in Firefly under Settings →
+      Access Management (save the secret immediately; it is shown once).
+      The access key goes in X-access-Key; the secret must also be sent as
+      X-secret-Key.
+    setup_url: "https://docs.firefly.ai/integrations/integrating-mcp-v2"
+    api_key_header: X-access-Key
   - name: google-cloud
     display_name: Google Cloud & Workspace (per-product)
     description: >-
@@ -417,6 +470,12 @@ servers:
     tags: [gcp, bigquery, workspace, gmail]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      Each Google Cloud product has its own host — look up your product in
+      the supported-products table (e.g. bigquery.googleapis.com/mcp). You
+      must enable that product's API in your Google Cloud project and set
+      up auth first.
+    setup_url: "https://docs.cloud.google.com/mcp/supported-products"
   - name: harness
     display_name: Harness
     description: >-
@@ -471,6 +530,12 @@ servers:
     tags: [oracle, oci, database, sql, autonomous]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      An admin must first enable the MCP server by tagging the database in
+      the OCI Console (adb$feature = mcp_server). The database OCID is on
+      the database's OCI Console page; the region identifier is your OCI
+      region.
+    setup_url: "https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/use-mcp-server.html"
   - name: ovhcloud
     display_name: OVHcloud
     description: >-
@@ -497,20 +562,6 @@ servers:
     docs_url: "https://www.pulumi.com/docs/ai/mcp-server/"
     category: cloud-infrastructure
     tags: [pulumi, iac, stacks, registry, policy]
-    provenance: official
-    auth: oauth
-  - name: qovery
-    display_name: Qovery
-    description: >-
-      Exposes a devops_copilot tool for managing Qovery environments, services,
-      deployments, projects, and logs in natural language. Read-only by default;
-      append ?read_write=true for write mode. OAuth recommended, API token
-      supported.
-    url: "https://mcp.qovery.com/mcp"
-    vendor: BIRDSIGHT SAS (Qovery)
-    docs_url: "https://www.qovery.com/docs/copilot/mcp-server"
-    category: cloud-infrastructure
-    tags: [qovery, paas, deployments, devops, kubernetes]
     provenance: official
     auth: oauth
   - name: railway
@@ -568,21 +619,6 @@ servers:
     tags: [runpod, gpu, serverless, pods, ai-compute]
     provenance: official
     auth: oauth
-  - name: sevalla
-    display_name: Sevalla
-    description: >-
-      Stateless "code mode" server with two tools: search (discover Sevalla PaaS
-      API endpoints from the OpenAPI spec) and execute (run sandboxed JS calling
-      sevalla.request() against any endpoint). Browser OAuth login; no keys in
-      client config.
-    url: "https://mcp.sevalla.com/mcp"
-    vendor: Kinsta Inc. (Sevalla)
-    docs_url: "https://mcp.sevalla.com/"
-    repo_url: "https://github.com/sevalla-hosting/mcp"
-    category: cloud-infrastructure
-    tags: [sevalla, paas, hosting, kinsta, deployments]
-    provenance: official
-    auth: oauth
   - name: spacelift
     display_name: Spacelift
     description: >-
@@ -598,6 +634,12 @@ servers:
     tags: [spacelift, iac, terraform, opentofu, graphql]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      The account name is the subdomain you sign in at — "acme" in
+      acme.app.spacelift.io. Add /mcp to that address and authenticate via
+      the browser OAuth flow (choose mcp:read or mcp:write scopes when
+      prompted).
+    setup_url: "https://docs.spacelift.io/concepts/intelligence/spacelift-mcp/connecting"
   - name: tigris
     display_name: Tigris
     description: >-
@@ -627,6 +669,12 @@ servers:
     tags: [upsun, platformsh, paas, environments, backups]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      In the Upsun Console, open your account settings → API tokens tab
+      and click Create API token (copy it immediately; it is shown once),
+      then paste it here.
+    setup_url: "https://docs.upsun.com/get-started/ai/using-the-mcp.html"
+    api_key_header: upsun-api-token
   - name: val-town
     display_name: Val Town
     description: >-
@@ -668,6 +716,10 @@ servers:
     tags: [vultr, vps, kubernetes, dns, compute]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      In the Vultr customer portal (my.vultr.com), go to Account → API to
+      enable and copy your personal API key, then paste it here.
+    setup_url: "https://github.com/vultr/vultr-mcp"
 
   # ── databases ───────────────────────────────────────────────────
   - name: aiven
@@ -716,6 +768,12 @@ servers:
     tags: [code-search, semantic-search, vector, embeddings]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Click "Get API Key" on the Chroma Package Search page to create/log
+      in to your Chroma Cloud account and issue a key, then copy it from
+      the "Other" tab and paste it here.
+    setup_url: "https://docs.trychroma.com/cloud/package-search"
+    api_key_header: x-chroma-token
   - name: clickhouse
     display_name: ClickHouse Cloud
     description: >-
@@ -743,20 +801,6 @@ servers:
     docs_url: "https://www.cockroachlabs.com/docs/cockroachcloud/connect-to-the-cockroachdb-cloud-mcp-server"
     category: databases
     tags: [distributed-sql, postgres, sql, cloud]
-    provenance: official
-    auth: oauth
-  - name: influxdb-docs
-    display_name: InfluxDB Docs
-    description: >-
-      InfluxData's official hosted docs MCP (run on kapa.ai) with a single
-      search_influxdb_knowledge_sources tool over InfluxDB documentation. Docs
-      search only — the influxdb3 database-access MCP is self-hosted. Sign-in
-      required; rate-limited to 40 req/hour, 200/day.
-    url: "https://influxdb-docs.mcp.kapa.ai"
-    vendor: InfluxData Inc.
-    docs_url: "https://docs.influxdata.com/influxdb/v2/tools/mcp-server/"
-    category: databases
-    tags: [time-series, docs, influxdb]
     provenance: official
     auth: oauth
   - name: motherduck
@@ -803,6 +847,11 @@ servers:
     tags: [vector, rag, retrieval, assistant]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      Open your assistant in the Pinecone console: the assistant-host is
+      the assistant's Host value and the assistant-name is its displayed
+      name. You also need a Pinecone API key from the console.
+    setup_url: "https://docs.pinecone.io/guides/assistant/mcp-server"
   - name: planetscale
     display_name: PlanetScale
     description: >-
@@ -845,6 +894,12 @@ servers:
     tags: [data-warehouse, sql, cortex, semantic-layer, ai]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      An admin must first create the MCP server in Snowflake with CREATE
+      MCP SERVER; the URL parts are your account URL (see your account
+      identifier in Snowsight) plus the database, schema, and server name
+      they chose.
+    setup_url: "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents-mcp"
   - name: supabase
     display_name: Supabase
     description: >-
@@ -859,21 +914,6 @@ servers:
     tags: [postgres, edge-functions, auth, sql]
     provenance: official
     auth: oauth
-  - name: tigerdata-docs
-    display_name: Tiger Data Docs (pg-aiguide)
-    description: >-
-      Tiger Data's hosted docs MCP (pg-aiguide): semantic search over
-      PostgreSQL, TimescaleDB, and Tiger Cloud documentation and design guides.
-      Documentation search only — Tiger's database-access MCP runs locally via
-      the Tiger CLI and is not remote.
-    url: "https://mcp.tigerdata.com/docs"
-    vendor: Timescale, Inc. (Tiger Data)
-    docs_url: "https://mcp.tigerdata.com/docs"
-    repo_url: "https://github.com/timescale/pg-aiguide"
-    category: databases
-    tags: [postgres, timescaledb, docs, time-series]
-    provenance: official
-    auth: open
   - name: tinybird
     display_name: Tinybird
     description: >-
@@ -889,6 +929,12 @@ servers:
     tags: [real-time, analytics, clickhouse, sql, api]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      The token comes from your Tinybird workspace — create or copy one
+      under the workspace's Tokens section, with scopes covering the
+      endpoints you want exposed. Only endpoints that token can read
+      appear as tools.
+    setup_url: "https://www.tinybird.co/docs/forward/work-with-data/mcp"
 
   # ── data-analytics ──────────────────────────────────────────────
   - name: airbyte
@@ -934,6 +980,12 @@ servers:
     tags: [kafka, streaming, topics, schemas]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create a Cloud API key in the Confluent Cloud console. The server
+      uses HTTP Basic auth: paste `Basic <base64 of key:secret>` here — it
+      is sent as the raw Authorization header.
+    setup_url: "https://docs.confluent.io/cloud/current/ai/ai-tools/managed-mcp-server.html"
+    api_key_header: Authorization
   - name: cube
     display_name: Cube Cloud
     description: >-
@@ -950,6 +1002,11 @@ servers:
     tags: [semantic-layer, bi, sql, metrics]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      Premium/Enterprise plans only. A Cube Cloud admin must enable MCP
+      under Admin > Team & Security > OAuth Integrations, where the
+      tenant's MCP server URL is shown; you need Viewer role or higher.
+    setup_url: "https://docs.cube.dev/docs/integrations/mcp-server"
   - name: databricks
     display_name: Databricks (managed, per-workspace)
     description: >-
@@ -964,6 +1021,11 @@ servers:
     tags: [lakehouse, sql, genie, unity-catalog]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      The workspace hostname is the address in your browser when signed in
+      to Databricks (e.g. my-company.cloud.databricks.com). Add
+      /api/2.0/mcp/ plus the server path; Unity Catalog permissions apply.
+    setup_url: "https://docs.databricks.com/aws/en/generative-ai/mcp/managed-mcp"
   - name: dbt
     display_name: dbt
     description: >-
@@ -980,20 +1042,12 @@ servers:
     tags: [transformation, semantic-layer, sql, analytics-engineering]
     provenance: official
     auth: tenant
-  - name: definite
-    display_name: Definite
-    description: >-
-      Hosted MCP with a broad tool surface: SQL and Cube semantic-layer query
-      execution, semantic-model CRUD, integration/OAuth management, sync
-      orchestration, notebook-style docs CRUD/execution, and drive file
-      management. API key auth for Claude Code/Cursor; OAuth for Claude.ai.
-    url: "https://api.definite.app/v3/mcp/http"
-    vendor: Definite Inc.
-    docs_url: "https://docs.definite.app/mcp/mcp"
-    category: data-analytics
-    tags: [bi, sql, semantic-layer, etl]
-    provenance: official
-    auth: api_key
+    setup_hint: >-
+      Find your host (and the full ready-to-copy MCP Endpoint URL) in dbt
+      under Account settings > Access URLs — e.g. cloud.getdbt.com or
+      YOUR_PREFIX.us1.dbt.com. Token auth also needs your production
+      environment ID as a header.
+    setup_url: "https://docs.getdbt.com/docs/dbt-ai/setup-remote-mcp"
   - name: dune
     display_name: Dune
     description: >-
@@ -1039,6 +1093,12 @@ servers:
     tags: [bi, lookml, semantic-layer, gcp]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      The instance is the web address you use to open Looker (e.g.
+      looker.company.com). A Looker admin must first register the AI
+      client via the oauth_client_apps API and enable tool access in admin
+      settings.
+    setup_url: "https://docs.cloud.google.com/looker/docs/mcp"
   - name: metabase
     display_name: Metabase
     description: >-
@@ -1054,6 +1114,11 @@ servers:
     tags: [bi, sql, dashboards, queries]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      The host is the address you use to open Metabase. An admin must turn
+      AI features on and enable the MCP server under Admin > AI > MCP —
+      the exact MCP server URL is then shown on that settings page.
+    setup_url: "https://www.metabase.com/docs/latest/ai/mcp"
   - name: mixpanel
     display_name: Mixpanel
     description: >-
@@ -1083,6 +1148,11 @@ servers:
     tags: [bi, semantic-layer, nlq, metrics]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      Use the web address you sign in to Omni at (e.g. acme.omniapp.co)
+      plus /mcp/https. For the recommended OAuth sign-in, an admin must
+      have personal access tokens enabled for your organization.
+    setup_url: "https://docs.omni.co/ai/mcp"
   - name: posthog
     display_name: PostHog
     description: >-
@@ -1116,19 +1186,6 @@ servers:
     auth: oauth
 
   # ── web-search ──────────────────────────────────────────────────
-  - name: anchor-browser
-    display_name: Anchor Browser
-    description: >-
-      Cloud browser-automation MCP (Playwright-driven) with built-in proxies and
-      stealth features for agentic web interaction; runs on Anchor's own
-      servers.
-    url: "https://api.anchorbrowser.io/mcp"
-    vendor: Anchor Browser
-    docs_url: "https://docs.anchorbrowser.io/advanced/mcp"
-    category: web-search
-    tags: [browser-automation, scraping, stealth, playwright]
-    provenance: official
-    auth: api_key
   - name: apify
     display_name: Apify
     description: >-
@@ -1155,6 +1212,11 @@ servers:
     tags: [scraping, unlocker, ecommerce-data, proxies]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      The token is your Bright Data API key — copy it from account
+      settings at brightdata.com/cp/setting (new users also get it in
+      their welcome email) and paste it into the URL.
+    setup_url: "https://docs.brightdata.com/ai/mcp-server/remote/quickstart"
   - name: browserbase
     display_name: Browserbase
     description: >-
@@ -1181,6 +1243,11 @@ servers:
     tags: [search, retrieval, research, crawling]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create or copy an API key at dashboard.exa.ai/api-keys in your Exa
+      dashboard and paste it here.
+    setup_url: "https://exa.ai/docs/reference/exa-mcp"
+    api_key_header: x-api-key
   - name: firecrawl
     display_name: Firecrawl
     description: >-
@@ -1195,6 +1262,11 @@ servers:
     tags: [scraping, crawling, extraction, search]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Get your API key (fc-…) from the Firecrawl dashboard at
+      firecrawl.dev/app/api-keys and paste it here. Without a key the
+      endpoint falls back to a rate-limited free tier.
+    setup_url: "https://docs.firecrawl.dev/mcp-server"
   - name: jina
     display_name: Jina AI
     description: >-
@@ -1209,6 +1281,11 @@ servers:
     tags: [web-search, scraping, reader, embeddings, academic-search]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Get a Jina AI API key from the API dashboard at jina.ai (free keys
+      are issued on signup) and paste it here; some tools work keyless at
+      lower rate limits.
+    setup_url: "https://jina.ai/news/agentic-workflow-with-jina-remote-mcp-server/"
   - name: linkup
     display_name: Linkup
     description: >-
@@ -1222,6 +1299,10 @@ servers:
     tags: [web-search, real-time, natural-language]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create a free Linkup account at app.linkup.so and copy your API key
+      from the dashboard, then paste it here.
+    setup_url: "https://docs.linkup.so/pages/integrations/mcp/mcp"
   - name: parallel-search
     display_name: Parallel Search
     description: >-
@@ -1247,19 +1328,28 @@ servers:
     tags: [web-search, research, async-tasks, automation]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an account at platform.parallel.ai and generate an API key
+      from the platform dashboard, then paste it here.
+    setup_url: "https://docs.parallel.ai/integrations/mcp/getting-started"
   - name: scrapfly
     display_name: Scrapfly
     description: >-
       Enterprise-grade scraping and AI-extraction MCP server with anti-bot-
       aware data access as first-class tools.
-    url: "https://mcp.scrapfly.io/mcp"
+    url: "https://mcp.scrapfly.io/mcp?apiKey={api-key}"
     vendor: Scrapfly
     docs_url: "https://github.com/scrapfly/scrapfly-mcp"
     repo_url: "https://github.com/scrapfly/scrapfly-mcp"
     category: web-search
     tags: [scraping, anti-bot, ai-extraction]
     provenance: official
-    auth: api_key
+    auth: open
+    setup_hint: >-
+      Copy your API key from the Scrapfly dashboard
+      (scrapfly.io/dashboard) and enter it below — it becomes part of your
+      connection URL, which is how this endpoint authenticates.
+    setup_url: "https://github.com/scrapfly/scrapfly-mcp"
   - name: scrapingbee
     display_name: ScrapingBee
     description: >-
@@ -1273,6 +1363,11 @@ servers:
     tags: [scraping, screenshots, captcha, js-rendering]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      The api_key is your ScrapingBee API key — sign up (free tier
+      includes 1,000 credits) and copy it from your dashboard at
+      app.scrapingbee.com/account/, then paste it into the URL.
+    setup_url: "https://mcp.scrapingbee.com/"
   - name: tavily
     display_name: Tavily
     description: >-
@@ -1286,22 +1381,11 @@ servers:
     tags: [search, extract, crawl, research]
     provenance: official
     auth: api_key
-  - name: valyu
-    display_name: Valyu
-    description: >-
-      Deepsearch API MCP server for web search plus academic/financial content
-      (Wikipedia, arXiv, textbooks, market data); API key passed as a URL query
-      param.
-    url: "https://mcp.valyu.ai/mcp"
-    vendor: Valyu
-    docs_url: "https://docs.valyu.ai/integrations/mcp-server"
-    repo_url: "https://github.com/valyuAI/valyu-mcp"
-    category: web-search
-    tags: [web-search, knowledge, academic, finance, deepsearch]
-    provenance: official
-    auth: api_key
-
-  # ── productivity ────────────────────────────────────────────────
+    setup_hint: >-
+      Create or copy an API key from your Tavily dashboard at
+      app.tavily.com and paste it here; it can also be passed in the URL
+      as ?tavilyApiKey=YOUR_KEY.
+    setup_url: "https://docs.tavily.com/documentation/mcp"
   - name: airtable
     display_name: Airtable
     description: >-
@@ -1314,18 +1398,7 @@ servers:
     tags: [database, spreadsheet, no-code, records]
     provenance: official
     auth: oauth
-  - name: akiflow
-    display_name: Akiflow
-    description: >-
-      Akiflow's single shared hosted MCP endpoint for managing tasks, calendar
-      events, time slots, projects/tags, and Meeting Assistant transcripts.
-    url: "https://mcp.akiflow.com/mcp"
-    vendor: Akiflow
-    docs_url: "https://product.akiflow.com/en/help/articles/4302815-akiflow-mcp"
-    category: productivity
-    tags: [tasks, calendar, time-blocking, meetings]
-    provenance: official
-    auth: oauth
+    featured: true
   - name: asana
     display_name: Asana
     description: >-
@@ -1338,6 +1411,7 @@ servers:
     tags: [tasks, projects, work-management]
     provenance: official
     auth: oauth
+    featured: true
   - name: atlassian
     display_name: Atlassian (Rovo)
     description: >-
@@ -1351,6 +1425,7 @@ servers:
     tags: [jira, confluence, tickets, wiki, bitbucket]
     provenance: official
     auth: oauth
+    featured: true
   - name: box
     display_name: Box
     description: >-
@@ -1415,6 +1490,11 @@ servers:
     tags: [docs, tables, wiki, beta]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      In your Coda account settings, scroll to the API settings section
+      and click Generate API token (choose the MCP restriction type), then
+      paste it here. Free-plan use is capped and read-only.
+    setup_url: "https://help.coda.io/hc/en-us/articles/44722661982989-Connect-to-the-Coda-MCP"
   - name: craft
     display_name: Craft
     description: >-
@@ -1427,6 +1507,18 @@ servers:
     tags: [docs, notes, collaboration, tasks]
     provenance: official
     auth: oauth
+  - name: docusign
+    display_name: Docusign
+    description: >-
+      Send envelopes for signature, check signing status, query agreements
+      via Navigator, and trigger Maestro workflows on Docusign IAM. Beta.
+    url: "https://mcp.docusign.com/mcp"
+    vendor: Docusign, Inc.
+    docs_url: "https://developers.docusign.com/platform/mcp-server/"
+    category: productivity
+    tags: [esignature, agreements, contracts, workflows]
+    provenance: official
+    auth: oauth
   - name: dropbox
     display_name: Dropbox
     description: >-
@@ -1437,6 +1529,19 @@ servers:
     docs_url: "https://help.dropbox.com/integrations/connect-dropbox-mcp-server"
     category: productivity
     tags: [files, storage, sharing, search]
+    provenance: official
+    auth: oauth
+  - name: egnyte
+    display_name: Egnyte
+    description: >-
+      Search, retrieve, and summarize files in Egnyte while respecting
+      existing permissions and governance policies. Available on Gen 4
+      Essential, Elite, and Ultimate plans.
+    url: "https://mcp-server.egnyte.com/mcp"
+    vendor: Egnyte, Inc.
+    docs_url: "https://developers.egnyte.com/docs/Remote_MCP_Server"
+    category: productivity
+    tags: [file-storage, content-governance, documents, enterprise]
     provenance: official
     auth: oauth
   - name: fibery
@@ -1466,6 +1571,14 @@ servers:
     tags: [calendar, scheduling, google-workspace, preview]
     provenance: official
     auth: oauth
+    featured: true
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable
+      the product's API + MCP service, configure the OAuth consent screen,
+      and create an OAuth client — then paste its client ID and secret
+      here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
   - name: google-drive
     display_name: Google Drive (Workspace MCP)
     description: >-
@@ -1479,6 +1592,55 @@ servers:
     tags: [file-storage, google-workspace, preview, oauth]
     provenance: official
     auth: oauth
+    featured: true
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable
+      the product's API + MCP service, configure the OAuth consent screen,
+      and create an OAuth client — then paste its client ID and secret
+      here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
+  - name: google-people
+    display_name: Google Contacts (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for the People API --
+      search and manage your Google contacts. Requires a Google Cloud
+      project with an OAuth client.
+    url: "https://people.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    category: productivity
+    tags: [contacts, people, google-workspace, preview]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable the
+      People API + MCP service, configure the OAuth consent screen, and
+      create an OAuth client -- then paste its client ID and secret here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
+  - name: google-workspace-self-hosted
+    display_name: Google Workspace (self-hosted, full suite)
+    description: >-
+      Self-hosted community MCP server covering the full Workspace suite --
+      Gmail, Drive, Calendar, Docs, Sheets, Slides, Forms, Chat, Tasks, and
+      Contacts -- with none of the Developer Preview gating of Google's own
+      hosted servers. You deploy it on your infrastructure and connect by
+      URL; nothing is hosted by a third party.
+    url: "https://{your-server-host}/mcp"
+    vendor: Taylor Wilsdon (community maintainer)
+    docs_url: "https://workspacemcp.com"
+    repo_url: "https://github.com/taylorwilsdon/google_workspace_mcp"
+    category: productivity
+    tags: [google-workspace, gmail, drive, calendar, docs, sheets, self-hosted]
+    provenance: community
+    auth: tenant
+    setup_hint: >-
+      Runs on infrastructure you control: deploy the server (uvx
+      workspace-mcp, or Docker) with a Google Cloud OAuth client, then enter
+      your deployment's hostname here. The setup guide walks through both
+      steps.
+    setup_url: "https://workspacemcp.com"
   - name: guru
     display_name: Guru
     description: >-
@@ -1502,6 +1664,7 @@ servers:
     tags: [issues, projects, engineering, tracking]
     provenance: official
     auth: oauth
+    featured: true
   - name: microsoft-workiq-calendar
     display_name: Microsoft Work IQ Calendar
     description: >-
@@ -1515,6 +1678,13 @@ servers:
     tags: [calendar, outlook, enterprise, preview]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      {tenantId} is your Microsoft Entra Directory (tenant) ID, shown on
+      an app registration's Overview page in the Entra admin center.
+      Preview: needs an M365 Copilot license and an admin-registered Entra
+      app (client ID) for OAuth.
+    setup_url: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
+    client_registration: manual
   - name: microsoft-workiq-sharepoint
     display_name: Microsoft Work IQ SharePoint
     description: >-
@@ -1527,6 +1697,35 @@ servers:
     tags: [file-storage, sharepoint, enterprise, preview]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      {tenantId} is your Microsoft Entra Directory (tenant) ID, shown on
+      an app registration's Overview page in the Entra admin center.
+      Preview: needs an M365 Copilot license and an admin-registered Entra
+      app (client ID) for OAuth.
+    setup_url: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
+    client_registration: manual
+  - name: microsoft-365-self-hosted
+    display_name: Microsoft 365 (self-hosted)
+    description: >-
+      Self-hosted community MCP server for Microsoft 365 via the Graph API --
+      Outlook mail and calendar, OneDrive, Excel, OneNote, To Do, Planner,
+      and contacts, with Teams/SharePoint in org mode. Works with personal
+      and work accounts and needs no Copilot license. You deploy it on your
+      infrastructure and connect by URL.
+    url: "https://{your-server-host}/mcp"
+    vendor: Softeria (community maintainer)
+    docs_url: "https://github.com/softeria/ms-365-mcp-server"
+    repo_url: "https://github.com/softeria/ms-365-mcp-server"
+    category: productivity
+    tags: [microsoft-365, outlook, onedrive, teams, excel, sharepoint, self-hosted]
+    provenance: community
+    auth: tenant
+    setup_hint: >-
+      Runs on infrastructure you control: start the server in HTTP mode (npx
+      @softeria/ms-365-mcp-server --http 3000) -- it ships a built-in Entra
+      app and supports OAuth with dynamic client registration -- then enter
+      your deployment's hostname here.
+    setup_url: "https://github.com/softeria/ms-365-mcp-server"
   - name: monday
     display_name: monday.com
     description: >-
@@ -1540,6 +1739,7 @@ servers:
     tags: [boards, projects, work-management, graphql]
     provenance: official
     auth: oauth
+    featured: true
   - name: notion
     display_name: Notion
     description: >-
@@ -1552,6 +1752,7 @@ servers:
     tags: [notes, wiki, databases, pages]
     provenance: official
     auth: oauth
+    featured: true
   - name: plane
     display_name: Plane
     description: >-
@@ -1606,19 +1807,11 @@ servers:
     tags: [spreadsheet, project-management, sheets, enterprise]
     provenance: official
     auth: api_key
-  - name: sunsama
-    display_name: Sunsama
-    description: >-
-      Sunsama's hosted MCP server for creating and managing tasks and daily
-      planning workflows; clients without native remote-MCP support can bridge
-      via mcp-remote.
-    url: "https://api.sunsama.com/mcp"
-    vendor: Sunsama
-    docs_url: "https://help.sunsama.com/docs/integrations/mcp/"
-    category: productivity
-    tags: [daily-planning, tasks, calendar]
-    provenance: official
-    auth: oauth
+    setup_hint: >-
+      In Smartsheet, click your Account icon (lower left) → Personal
+      Settings → API Access and generate an access token, then paste it
+      here.
+    setup_url: "https://developers.smartsheet.com/ai-mcp/smartsheet/install-the-smartsheet-mcp-server"
   - name: teamwork
     display_name: Teamwork.com
     description: >-
@@ -1683,6 +1876,13 @@ servers:
     tags: [agile, sprints, issues, github]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create a personal API token at app.zenhub.com/settings/tokens and
+      paste it here; it is sent as the raw Authorization header (no Bearer
+      prefix). The server also requires your workspace ID in an
+      X-zh-workspace header.
+    setup_url: "https://developers.zenhub.com/mcp/index.html"
+    api_key_header: Authorization
 
   # ── communication ───────────────────────────────────────────────
   - name: fellow
@@ -1709,6 +1909,10 @@ servers:
     tags: [meetings, transcripts, summaries, notes]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      In your Fireflies.ai account, go to Settings → Developer Settings
+      and copy your API key, then paste it here.
+    setup_url: "https://docs.fireflies.ai/getting-started/mcp-configuration"
   - name: google-chat
     display_name: Google Chat (Workspace MCP)
     description: >-
@@ -1721,6 +1925,13 @@ servers:
     tags: [chat, messaging, google-workspace, preview]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable
+      the product's API + MCP service, configure the OAuth consent screen,
+      and create an OAuth client — then paste its client ID and secret
+      here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
   - name: google-gmail
     display_name: Google Gmail (Workspace MCP)
     description: >-
@@ -1734,6 +1945,14 @@ servers:
     tags: [email, google-workspace, preview, oauth]
     provenance: official
     auth: oauth
+    featured: true
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable
+      the product's API + MCP service, configure the OAuth consent screen,
+      and create an OAuth client — then paste its client ID and secret
+      here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
   - name: grain
     display_name: Grain
     description: >-
@@ -1744,6 +1963,18 @@ servers:
     docs_url: "https://developers.grain.com/mcp"
     category: communication
     tags: [meetings, transcription, sales-intelligence, notes]
+    provenance: official
+    auth: oauth
+  - name: granola
+    display_name: Granola
+    description: >-
+      Search meetings and access transcripts, AI notes, action items, and
+      folders from the Granola meeting notetaker.
+    url: "https://mcp.granola.ai/mcp"
+    vendor: Granola Inc.
+    docs_url: "https://docs.granola.ai/help-center/sharing/integrations/mcp"
+    category: communication
+    tags: [meetings, notes, transcripts, notetaker]
     provenance: official
     auth: oauth
   - name: microsoft-workiq-mail
@@ -1760,6 +1991,13 @@ servers:
     tags: [email, outlook, enterprise, preview]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      {tenantId} is your Microsoft Entra Directory (tenant) ID, shown on
+      an app registration's Overview page in the Entra admin center.
+      Preview: needs an M365 Copilot license and an admin-registered Entra
+      app (client ID) for OAuth.
+    setup_url: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
+    client_registration: manual
   - name: microsoft-workiq-teams
     display_name: Microsoft Work IQ Teams
     description: >-
@@ -1773,6 +2011,13 @@ servers:
     tags: [chat, teams, enterprise, preview]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      {tenantId} is your Microsoft Entra Directory (tenant) ID, shown on
+      an app registration's Overview page in the Entra admin center.
+      Preview: needs an M365 Copilot license and an admin-registered Entra
+      app (client ID) for OAuth.
+    setup_url: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
+    client_registration: manual
   - name: otter-ai
     display_name: Otter.ai
     description: >-
@@ -1786,20 +2031,6 @@ servers:
     tags: [meetings, transcription, notes, voice]
     provenance: official
     auth: oauth
-  - name: pearl
-    display_name: Pearl
-    description: >-
-      Connects agents to Pearl's 12,000+ certified human experts plus AI-
-      generated answers; tools include askPearlAi, askPearlExpert, and
-      askExpert. Bearer/X-API-KEY auth.
-    url: "https://mcp.pearl.com/sse"
-    vendor: Pearl.com
-    docs_url: "https://www.pearl.com/api/docs/pearl-api-mcp-server"
-    repo_url: "https://github.com/Pearl-com/pearl_mcp_server"
-    category: communication
-    tags: [expert-network, qa, human-in-the-loop, support]
-    provenance: official
-    auth: api_key
   - name: read-ai
     display_name: Read.ai
     description: >-
@@ -1825,6 +2056,13 @@ servers:
     tags: [chat, messages, channels, canvases]
     provenance: official
     auth: oauth
+    featured: true
+    setup_hint: >-
+      Slack's server has no automatic client registration — use the client
+      ID and secret Slack publishes in its MCP docs, and a workspace admin
+      must have approved MCP access for your workspace.
+    setup_url: "https://docs.slack.dev/ai/slack-mcp-server/"
+    client_registration: manual
   - name: superhuman-mail
     display_name: Superhuman Mail
     description: >-
@@ -1916,6 +2154,13 @@ servers:
     tags: [crm, contacts, deals, marketing]
     provenance: official
     auth: oauth
+    featured: true
+    setup_hint: >-
+      Create a self-service “MCP Auth app” in your HubSpot developer
+      account to get a client ID and secret (a super-admin must connect it
+      to the account), then paste them here.
+    setup_url: "https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server"
+    client_registration: manual
   - name: lusha
     display_name: Lusha
     description: >-
@@ -1930,6 +2175,25 @@ servers:
     tags: [sales-intelligence, prospecting, enrichment, b2b-data]
     provenance: official
     auth: oauth
+  - name: microsoft-dataverse
+    display_name: Microsoft Dataverse (Dynamics 365)
+    description: >-
+      Query and manage Dataverse tables and records behind Dynamics 365 and
+      Power Platform apps via the environment's built-in MCP endpoint.
+    url: "https://{org}.crm.dynamics.com/api/mcp"
+    vendor: Microsoft Corporation
+    docs_url: "https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp"
+    category: crm-sales
+    tags: [dataverse, dynamics-365, power-platform, records, enterprise]
+    provenance: official
+    auth: tenant
+    setup_hint: >-
+      Use your environment's own host (from the environment URL, e.g.
+      org.crm4.dynamics.com) plus /api/mcp. An admin must enable the MCP
+      server and allowed clients for the environment; non-Microsoft clients
+      authenticate via a registered Microsoft Entra app.
+    setup_url: "https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-other-clients"
+    client_registration: manual
   - name: outreach
     display_name: Outreach
     description: >-
@@ -1971,6 +2235,11 @@ servers:
     tags: [crm, sobjects, flows, apex, enterprise]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      An admin must first toggle the servers on in Setup > API Catalog >
+      MCP Servers and register an External Client App for OAuth; your
+      org's exact endpoint URL is copied from that same MCP Servers page.
+    setup_url: "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/hosted-mcp-servers-overview.html"
   - name: zoominfo
     display_name: ZoomInfo
     description: >-
@@ -2001,21 +2270,11 @@ servers:
     tags: [live-chat, conversations, helpdesk, messaging]
     provenance: official
     auth: api_key
-  - name: dixa
-    display_name: Dixa
-    description: >-
-      Vendor-run public-beta MCP server (built on FastMCP, hosted by Dixa's own
-      GitHub org) exposing ~79 tools across analytics, conversations, agents,
-      end-users, tags, knowledge base, and settings. Explicitly disclaimed as
-      not covered by Dixa's official support channels.
-    url: "https://dixa-mcp-public.fastmcp.app/mcp"
-    vendor: Dixa ApS
-    docs_url: "https://docs.dixa.io/docs/dixamcp/dixa-mcp"
-    repo_url: "https://github.com/Dixa-public/dixa-mcp-public"
-    category: customer-support
-    tags: [contact-center, conversations, analytics, beta]
-    provenance: official
-    auth: api_key
+    setup_hint: >-
+      In the Crisp Dashboard, go to Settings → Workspace Settings →
+      Advanced configuration and click Generate Token in the MCP Server
+      Token section, then paste it here (the token is workspace-scoped).
+    setup_url: "https://docs.crisp.chat/guides/mcp-server/quickstart/"
   - name: freshdesk
     display_name: Freshdesk
     description: >-
@@ -2030,6 +2289,12 @@ servers:
     tags: [helpdesk, tickets, beta, enterprise-only]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      Your domain is your helpdesk address — company.freshdesk.com (or
+      your custom support domain). Enterprise plan only; a beta EAP you
+      must request via your account manager or support@freshdesk.com.
+      Admin/agent login required.
+    setup_url: "https://support.freshdesk.com/support/solutions/articles/50000012670-model-context-protocol-mcp-integration-in-freshdesk-eap-"
   - name: front
     display_name: Front
     description: >-
@@ -2101,6 +2366,27 @@ servers:
     auth: oauth
 
   # ── commerce-payments ───────────────────────────────────────────
+  - name: servicenow
+    display_name: ServiceNow (MCP Server Console, per-instance)
+    description: >-
+      ServiceNow-hosted MCP servers published from your instance's MCP
+      Server Console: Now Assist skills, Knowledge Graph queries, scripted
+      REST APIs, subflows, and actions. Requires Zurich Patch 9+ / Australia
+      Patch 2+.
+    url: "https://{instance}.service-now.com/sncapps/mcp-server/mcp/{server-name}"
+    vendor: ServiceNow, Inc.
+    docs_url: "https://www.servicenow.com/docs/bundle/zurich-intelligent-experiences/page/administer/mcp-server-console/concept/connect-mcp-server-client.html"
+    category: customer-support
+    tags: [itsm, service-desk, workflows, enterprise, now-assist]
+    provenance: official
+    auth: tenant
+    setup_hint: >-
+      An admin creates/publishes servers in MCP Server Console on your
+      instance (the quickstart server name is sn_mcp_server_default) and
+      must manually register each MCP client for OAuth — dynamic client
+      registration is not supported.
+    setup_url: "https://www.servicenow.com/docs/bundle/zurich-intelligent-experiences/page/administer/mcp-server-console/concept/connect-mcp-server-client.html"
+    client_registration: manual
   - name: airwallex
     display_name: Airwallex
     description: >-
@@ -2128,6 +2414,12 @@ servers:
     tags: [billing, subscriptions, invoicing, saas, sandbox]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      An admin creates the server under Settings > Configure Chargebee >
+      Agentic AI > MCP Servers; the subdomain is your site name and the
+      slug comes from the server name they chose. Test/sandbox sites only
+      for now.
+    setup_url: "https://www.chargebee.com/docs/billing/2.0/ai-in-chargebee/custom-mcp-server"
   - name: checkout-com
     display_name: Checkout.com
     description: >-
@@ -2143,61 +2435,6 @@ servers:
     tags: [payments, refunds, payment-links, docs-search, psp]
     provenance: official
     auth: oauth
-  - name: circle-codegen
-    display_name: Circle Codegen
-    description: >-
-      Circle's official hosted MCP that helps LLMs/AI IDEs generate and fix code
-      for Circle's Wallets, Contracts, CCTP, and Gateway products; a codegen
-      assistant, not a live transaction/execution API.
-    url: "https://api.circle.com/v1/codegen/mcp"
-    vendor: Circle Internet Financial, LLC
-    docs_url: "https://developers.circle.com/ai/mcp"
-    category: commerce-payments
-    tags: [usdc, stablecoin, cctp, wallets, codegen]
-    provenance: official
-    auth: open
-  - name: commercetools-knowledge
-    display_name: commercetools Knowledge
-    description: >-
-      Stateless, vendor-hosted MCP exposing commercetools documentation-search
-      and API-schema tools. Serves only public content — no live store or
-      transactional data access (the transactional Commerce MCP is self-hosted
-      only).
-    url: "https://docs.commercetools.com/apis/mcp"
-    vendor: commercetools GmbH
-    docs_url: "https://docs.commercetools.com/dev-tooling/mcp/knowledge-mcp"
-    category: commerce-payments
-    tags: [commerce, headless, documentation, composable-commerce]
-    provenance: official
-    auth: open
-  - name: dodo-payments
-    display_name: Dodo Payments
-    description: >-
-      Hosted SSE MCP providing a documentation-search tool and a sandboxed
-      TypeScript code-execution tool for calling the Dodo Payments API/SDK;
-      OAuth flow prompts for an API key and environment (test/live) on first
-      connection.
-    url: "https://mcp.dodopayments.com/sse"
-    vendor: Dodo Payments, Inc.
-    docs_url: "https://docs.dodopayments.com/developer-resources/mcp-server"
-    category: commerce-payments
-    tags: [payments, billing, saas, merchant-of-record]
-    provenance: official
-    auth: oauth
-  - name: etsy-dev
-    display_name: Etsy Dev
-    description: >-
-      Etsy's official documentation/spec-helper MCP exposing tools such as
-      learn_etsy_api and search_etsy_api for looking up Etsy Open API v3
-      endpoints, schemas, and OAuth scopes. Not a live-data or transactional
-      connector.
-    url: "https://mcp.api.etsycloud.com/mcp"
-    vendor: Etsy, Inc.
-    docs_url: "https://developers.etsy.com/documentation/mcp_server/devmcpserver/"
-    category: commerce-payments
-    tags: [marketplace, api-docs, developer-tools]
-    provenance: official
-    auth: open
   - name: gocardless
     display_name: GoCardless
     description: >-
@@ -2211,20 +2448,6 @@ servers:
     docs_url: "https://developer.gocardless.com/developer-tools/mcp/"
     category: commerce-payments
     tags: [direct-debit, bank-payments, mandates, refunds]
-    provenance: official
-    auth: oauth
-  - name: medusa-docs
-    display_name: Medusa MCP Remote Server
-    description: >-
-      Medusa-hosted Streamable HTTP MCP for searching and retrieving Medusa
-      documentation from IDEs/agents. Available to Medusa Cloud account users
-      only (OAuth or personal access key); documentation lookup, not live
-      commerce-data access.
-    url: "https://docs.medusajs.com/mcp"
-    vendor: Medusa (medusajs)
-    docs_url: "https://docs.medusajs.com/learn/introduction/build-with-llms-ai/mcp-server"
-    category: commerce-payments
-    tags: [commerce, documentation, headless, cloud]
     provenance: official
     auth: oauth
   - name: mercado-libre
@@ -2269,6 +2492,12 @@ servers:
     tags: [payments, subscriptions, settlements, europe, psp]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an organization access token in the Mollie Dashboard under
+      Developers → Organization access tokens, granting at least the
+      profile.read scope (add scopes for each API the agent should use),
+      then paste it here.
+    setup_url: "https://docs.mollie.com/docs/mollie-mcp-server"
   - name: paddle
     display_name: Paddle
     description: >-
@@ -2284,6 +2513,12 @@ servers:
     tags: [payments, billing, subscriptions, merchant-of-record]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an API key in your Paddle dashboard under Developer Tools →
+      Authentication, granting only the permissions the agent needs (start
+      read-only), then paste it here. Sandbox keys go with
+      sandbox-mcp.paddle.com.
+    setup_url: "https://developer.paddle.com/build/tools/ai/mcp"
   - name: paypal
     display_name: PayPal
     description: >-
@@ -2298,6 +2533,7 @@ servers:
     tags: [payments, invoices, transactions, merchant]
     provenance: official
     auth: oauth
+    featured: true
   - name: polar
     display_name: Polar
     description: >-
@@ -2327,6 +2563,13 @@ servers:
     tags: [payments, payment-links, orders, refunds, india]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Generate a Key ID and Secret in the Razorpay Dashboard under Account
+      & Settings → API Keys, then paste `Basic <base64 of
+      key_id:key_secret>` here — it is sent as the raw Authorization
+      header.
+    setup_url: "https://razorpay.com/docs/mcp-server/remote/"
+    api_key_header: Authorization
   - name: saleor
     display_name: Saleor Commerce
     description: >-
@@ -2342,6 +2585,12 @@ servers:
     tags: [commerce, graphql, read-only, multi-tenant, headless]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an app token in your Saleor Dashboard (Configuration → Apps)
+      with MANAGE_PRODUCTS and MANAGE_ORDERS permissions. Your store's
+      GraphQL API URL must also be sent in an X-Saleor-API-URL header.
+    setup_url: "https://github.com/saleor/saleor-mcp"
+    api_key_header: X-Saleor-Auth-Token
   - name: shopify-storefront
     display_name: Shopify Storefront (per-store)
     description: >-
@@ -2355,6 +2604,12 @@ servers:
     tags: [ecommerce, storefront, cart, catalog]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      {store} is the store's myshopify.com subdomain — "my-coffee-shop" in
+      my-coffee-shop.myshopify.com (the store's own domain also works). No
+      sign-in or key needed for public catalog data, though some stores
+      restrict access.
+    setup_url: "https://shopify.dev/docs/apps/build/storefront-mcp/servers/storefront"
   - name: square
     display_name: Square
     description: >-
@@ -2382,6 +2637,7 @@ servers:
     tags: [payments, subscriptions, invoices, refunds]
     provenance: official
     auth: oauth
+    featured: true
   - name: whop
     display_name: Whop API
     description: >-
@@ -2396,6 +2652,11 @@ servers:
     tags: [commerce, payments, memberships, creator-economy]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create a Company API key (or an App API key for cross-company
+      access) in the Whop dashboard under Developer settings, then paste
+      it here.
+    setup_url: "https://docs.whop.com/developer/guides/ai_and_mcp"
 
   # ── finance ─────────────────────────────────────────────────────
   - name: alchemy
@@ -2455,19 +2716,6 @@ servers:
     tags: [spend-management, corporate-cards, expenses, banking, bills]
     provenance: official
     auth: oauth
-  - name: coinbase-cdp-docs
-    display_name: Coinbase CDP Docs
-    description: >-
-      Coinbase's official hosted MCP for Coinbase Developer Platform
-      documentation; exposes docs search/retrieval tools only and explicitly
-      does not execute API calls, trades, or wallet operations.
-    url: "https://docs.cdp.coinbase.com/mcp"
-    vendor: Coinbase Global, Inc.
-    docs_url: "https://docs.cdp.coinbase.com/get-started/build-with-ai/docs-for-ai/cdp-docs-mcp"
-    category: finance
-    tags: [coinbase, cdp, docs-search, crypto, developer-tools]
-    provenance: official
-    auth: open
   - name: coingecko
     display_name: CoinGecko
     description: >-
@@ -2496,6 +2744,11 @@ servers:
     tags: [crypto-prices, market-data, technical-analysis, news]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Log in or register at pro.coinmarketcap.com and copy the API key
+      shown on your developer dashboard, then paste it here.
+    setup_url: "https://coinmarketcap.com/api/documentation/ai-agent-hub/mcp"
+    api_key_header: X-CMC-MCP-API-KEY
   - name: etherscan
     display_name: Etherscan
     description: >-
@@ -2509,6 +2762,11 @@ servers:
     tags: [ethereum, evm, blockchain-explorer, contracts]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Sign in at etherscan.io and create a free API key under your
+      account's API Keys page (etherscan.io/myapikey); higher API usage
+      tiers unlock more MCP tools.
+    setup_url: "https://docs.etherscan.io/ai/mcp.md"
   - name: expensify
     display_name: Expensify
     description: >-
@@ -2523,22 +2781,6 @@ servers:
     tags: [expenses, receipts, reports, spend-analysis, read-only]
     provenance: official
     auth: oauth
-  - name: fi-money
-    display_name: Fi Money
-    description: >-
-      Personal-finance MCP over a Fi Money user's connected accounts:
-      fetch_net_worth, fetch_credit_report, fetch_epf_details,
-      fetch_mf_transactions, fetch_bank_transactions, fetch_stock_transactions.
-      Auth via a short-lived passcode generated in the Fi app; note the non-
-      standard :8080 port.
-    url: "https://mcp.fi.money:8080/mcp/stream"
-    vendor: Epifi Technologies Pvt. Ltd. (Fi Money)
-    docs_url: "https://fi.money/features/getting-started-with-fi-mcp"
-    repo_url: "https://github.com/epiFi/mcp-docs"
-    category: finance
-    tags: [personal-finance, net-worth, banking, mutual-funds, india]
-    provenance: official
-    auth: api_key
   - name: financial-datasets
     display_name: Financial Datasets
     description: >-
@@ -2596,6 +2838,12 @@ servers:
     tags: [crypto, onchain-analytics, smart-money, wallets]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an API key in the Nansen app at app.nansen.ai/api (API tab)
+      and paste it here; MCP usage draws from the same credit pool as your
+      regular API keys.
+    setup_url: "https://docs.nansen.ai/mcp/connecting"
+    api_key_header: NANSEN-API-KEY
   - name: netsuite
     display_name: NetSuite AI Connector Service (MCP Standard Tools)
     description: >-
@@ -2610,6 +2858,12 @@ servers:
     tags: [erp, accounting, suiteql, oauth2]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      Your account ID is shown in NetSuite under Setup > Company
+      Information (e.g. TD12345678). The MCP Standard Tools SuiteApp must
+      be installed, and you must sign in with a non-Administrator role
+      that has MCP permissions.
+    setup_url: "https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_0714082142.html"
   - name: octagon
     display_name: Octagon
     description: >-
@@ -2674,13 +2928,18 @@ servers:
       payments (e.g. fetchWithPayment, getWalletBalance). Authenticates with a
       project secret key passed as a query parameter; tools can be filtered via
       a tools= query parameter.
-    url: "https://api.thirdweb.com/mcp"
+    url: "https://api.thirdweb.com/mcp?secretKey={api-key}"
     vendor: Thirdweb Pte. Ltd.
     docs_url: "https://portal.thirdweb.com/ai/mcp"
     category: finance
     tags: [web3, wallets, smart-contracts, x402, crypto-payments]
     provenance: official
-    auth: api_key
+    auth: open
+    setup_hint: >-
+      Create a project in the thirdweb dashboard and copy its secret key
+      from Project Settings, then enter it below — it becomes part of your
+      connection URL, which is how this endpoint authenticates.
+    setup_url: "https://portal.thirdweb.com/ai/mcp"
   - name: twelve-data
     display_name: Twelve Data
     description: >-
@@ -2729,6 +2988,21 @@ servers:
     auth: oauth
 
   # ── design-media ────────────────────────────────────────────────
+  - name: adobe-creativity
+    display_name: Adobe for Creativity
+    description: >-
+      Adobe's hosted creative MCP: Photoshop, Lightroom, Illustrator,
+      Firefly, Premiere, Express, InDesign, and Stock capabilities — create
+      and edit images, designs, and video via natural language. Some free
+      tools work as guest; sign in with an Adobe account for the full set.
+    url: "https://adobe-creativity.adobe.io/mcp"
+    vendor: Adobe Inc.
+    docs_url: "https://developer.adobe.com/adobe-for-creativity/"
+    category: design-media
+    tags: [photoshop, firefly, image-editing, video, creative]
+    provenance: official
+    auth: oauth
+    featured: true
   - name: audioscrape
     display_name: Audioscrape
     description: >-
@@ -2753,6 +3027,21 @@ servers:
     tags: [design, graphics, presentations, export]
     provenance: official
     auth: oauth
+    featured: true
+  - name: cloudinary
+    display_name: Cloudinary (Asset Management)
+    description: >-
+      Upload, search, manage, and transform media assets in your Cloudinary
+      product environment. One of several official hosted servers (others
+      cover environment config, structured metadata, analysis, MediaFlows).
+    url: "https://asset-management.mcp.cloudinary.com/mcp"
+    vendor: Cloudinary Ltd.
+    docs_url: "https://cloudinary.com/documentation/cloudinary_llm_mcp"
+    repo_url: "https://github.com/cloudinary/mcp-servers"
+    category: design-media
+    tags: [media, images, video, dam, transformation]
+    provenance: official
+    auth: oauth
   - name: figma
     display_name: Figma
     description: >-
@@ -2765,6 +3054,7 @@ servers:
     tags: [design, prototypes, components, codegen]
     provenance: official
     auth: oauth
+    featured: true
   - name: miro
     display_name: Miro
     description: >-
@@ -2776,6 +3066,19 @@ servers:
     docs_url: "https://developers.miro.com/docs/miro-mcp"
     category: design-media
     tags: [whiteboard, diagrams, boards, collaboration]
+    provenance: official
+    auth: oauth
+  - name: vimeo
+    display_name: Vimeo
+    description: >-
+      Access and manage your Vimeo videos and platform capabilities —
+      library search, video metadata, and account operations. Public beta;
+      Pro plan or above recommended.
+    url: "https://mcp.vimeo.com/mcp"
+    vendor: Vimeo.com, Inc.
+    docs_url: "https://developer.vimeo.com/api/mcp-server"
+    category: design-media
+    tags: [video, hosting, media, library]
     provenance: official
     auth: oauth
   - name: webflow
@@ -2806,6 +3109,23 @@ servers:
     auth: oauth
 
   # ── observability ───────────────────────────────────────────────
+  - name: wordpress-com
+    display_name: WordPress.com
+    description: >-
+      Manage WordPress.com sites — posts, pages, media, comments, and site
+      settings. Read-only tools are on by default; write tools are opt-in
+      per account. Requires a paid WordPress.com plan.
+    url: "https://public-api.wordpress.com/wpcom/v2/mcp/v1"
+    vendor: Automattic Inc. (WordPress.com)
+    docs_url: "https://developer.wordpress.com/docs/mcp/"
+    category: design-media
+    tags: [wordpress, cms, blogging, website]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Enable the MCP server in your WordPress.com account settings first;
+      write tools must be individually enabled there as well.
+    setup_url: "https://developer.wordpress.com/docs/mcp/"
   - name: axiom
     display_name: Axiom
     description: >-
@@ -2851,6 +3171,10 @@ servers:
     tags: [evals, experiments, tracing, sql, datasets]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an API key in Braintrust under your organization's Settings →
+      API Keys and paste it here.
+    setup_url: "https://www.braintrust.dev/docs/integrations/developer-tools/mcp"
   - name: bugsnag
     display_name: BugSnag MCP (SmartBear)
     description: >-
@@ -2893,6 +3217,11 @@ servers:
     tags: [metrics, logs, traces, promql, slo]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      {tenant} is your organization's Chronosphere subdomain — the part
+      before .chronosphere.io in the address you sign in at. You'll also
+      need an API token or OAuth sign-in from your Chronosphere account.
+    setup_url: "https://docs.chronosphere.io/integrate/mcp-server"
   - name: coralogix
     display_name: Coralogix
     description: >-
@@ -2907,6 +3236,12 @@ servers:
     tags: [logs, metrics, traces, alerts, slo]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      The region must match your account's Coralogix domain
+      (us1/us2/eu1/eu2/ap1-ap3) — check your Coralogix domain in account
+      settings or use the domain selector on the setup page, then pick the
+      matching api.{region} endpoint.
+    setup_url: "https://coralogix.com/docs/user-guides/mcp-server/setup/"
   - name: datadog
     display_name: Datadog
     description: >-
@@ -2935,6 +3270,12 @@ servers:
     tags: [dql, problems, vulnerabilities, kubernetes, forecasting]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      {environment} is your Dynatrace environment ID — the first part of
+      the address you sign in at (abc12345 in
+      abc12345.apps.dynatrace.com). You also need a platform token with
+      the mcp-gateway invoke/read scopes.
+    setup_url: "https://docs.dynatrace.com/docs/dynatrace-intelligence/dynatrace-mcp"
   - name: elastic-agent-builder
     display_name: Elastic Agent Builder
     description: >-
@@ -2949,6 +3290,11 @@ servers:
     tags: [elasticsearch, search, logs, analytics]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      The kibana-host is your deployment's Kibana URL, shown on the
+      deployment page in the Elastic Cloud console. Needs Serverless or
+      Stack 9.3+ and an API key with Agent Builder privileges.
+    setup_url: "https://www.elastic.co/docs/explore-analyze/ai-features/agent-builder/mcp-server"
   - name: galileo
     display_name: Galileo
     description: >-
@@ -2964,6 +3310,11 @@ servers:
     tags: [evals, datasets, experiments, agent-observability, logging]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Generate an API key at app.galileo.ai/settings/api-keys and paste it
+      here.
+    setup_url: "https://docs.galileo.ai/getting-started/mcp/setup-galileo-mcp"
+    api_key_header: Galileo-API-Key
   - name: globalping
     display_name: Globalping
     description: >-
@@ -2990,19 +3341,6 @@ servers:
     repo_url: "https://github.com/grafana/mcp-grafana"
     category: observability
     tags: [metrics, logs, traces, dashboards, alerting, prometheus]
-    provenance: official
-    auth: oauth
-  - name: groundcover
-    display_name: groundcover
-    description: >-
-      Hosted MCP server for querying logs/traces/metrics, root-cause analysis,
-      auto-debugging with observability context, and deployment validation. Docs
-      label it work-in-progress; OAuth default or API key Bearer.
-    url: "https://mcp.groundcover.com/api/mcp"
-    vendor: Groundcover Ltd.
-    docs_url: "https://docs.groundcover.com/getting-started/groundcover-mcp/configure-groundcovers-mcp-server"
-    category: observability
-    tags: [kubernetes, logs, traces, metrics, ebpf]
     provenance: official
     auth: oauth
   - name: honeycomb
@@ -3049,6 +3387,12 @@ servers:
     tags: [tracing, prompt-management, evals, open-source, llm-observability]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create a project API key pair in Langfuse (Settings → API Keys),
+      base64-encode "pk-lf-…:sk-lf-…", and paste it here as: Basic
+      <encoded value> — this server uses Basic auth, not a plain key.
+    setup_url: "https://langfuse.com/docs/api-and-data-platform/features/mcp-server"
+    api_key_header: Authorization
   - name: langsmith
     display_name: LangSmith
     description: >-
@@ -3065,20 +3409,6 @@ servers:
     tags: [tracing, evals, datasets, prompt-management, oauth]
     provenance: official
     auth: oauth
-  - name: last9
-    display_name: Last9
-    description: >-
-      Org-scoped hosted MCP server for exceptions, service performance,
-      dependency graphs, PromQL queries, logs, traces, alerts, and dashboard
-      CRUD. OAuth 2.0 browser flow (Bearer token for programmatic use).
-    url: "https://app.last9.io/api/v4/organizations/{org_slug}/mcp"
-    vendor: Last9 Inc.
-    docs_url: "https://last9.io/docs/integrations/mcp/"
-    repo_url: "https://github.com/last9/last9-mcp-server"
-    category: observability
-    tags: [metrics, logs, traces, promql, alerts]
-    provenance: official
-    auth: tenant
   - name: new-relic
     display_name: New Relic
     description: >-
@@ -3106,6 +3436,12 @@ servers:
     tags: [incidents, on-call, escalation, paging]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create a User API token in PagerDuty (My Profile → User Settings →
+      Create API User Token) and paste it here as: Token <your token> —
+      this server uses the Token scheme, not Bearer.
+    setup_url: "https://support.pagerduty.com/main/docs/pagerduty-mcp-server-integration-guide"
+    api_key_header: Authorization
   - name: pydantic-logfire
     display_name: Pydantic Logfire
     description: >-
@@ -3134,6 +3470,10 @@ servers:
     tags: [errors, crash-reporting, rum, deployments]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create a Personal Access Token at app.raygun.com/user/tokens (Create
+      New Token, pick the permissions you need) and paste it here.
+    setup_url: "https://github.com/MindscapeHQ/mcp-server-raygun"
   - name: rootly
     display_name: Rootly
     description: >-
@@ -3177,6 +3517,11 @@ servers:
     tags: [metrics, traces, logs, alerts, opentelemetry]
     provenance: official
     auth: tenant
+    setup_hint: >-
+      Find your region (US, EU, IN, ...) in SigNoz Cloud under Settings >
+      Ingestion, then use the matching mcp.{region}.signoz.cloud endpoint.
+      Sign in via OAuth or use a SigNoz API key.
+    setup_url: "https://signoz.io/docs/ai/signoz-mcp-server/"
   - name: uptime-robot
     display_name: UptimeRobot
     description: >-
@@ -3207,6 +3552,11 @@ servers:
     tags: [metrics, promql, timeseries, cardinality]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Generate an access token in the VictoriaMetrics Cloud console; the
+      console's AI Assistants section has the token and connection guide.
+    setup_url: "https://victoriametrics.com/blog/q1-2026-whats-new-victoriametrics-cloud/"
+    api_key_header: X-VM-Cloud-Access
   - name: wandb
     display_name: Weights & Biases
     description: >-
@@ -3222,6 +3572,10 @@ servers:
     tags: [experiment-tracking, tracing, weave, artifacts, ml-ops]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Copy your Weights & Biases API key from wandb.ai/authorize and paste
+      it here.
+    setup_url: "https://docs.wandb.ai/platform/mcp-server"
 
   # ── security ────────────────────────────────────────────────────
   - name: bugcrowd
@@ -3237,6 +3591,11 @@ servers:
     tags: [bug-bounty, vulnerability-disclosure, pentest, crowdsourced-security, sse]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an API key + secret in Bugcrowd via your profile icon → API
+      Credentials → Create New Credentials (shown only once), and enable
+      AI Connect for each program under Program Settings → Integrations.
+    setup_url: "https://docs.bugcrowd.com/customers/ai-capabilities/ai-connect/"
   - name: censys
     display_name: Censys Platform
     description: >-
@@ -3252,6 +3611,11 @@ servers:
     tags: [attack-surface, internet-scanning, threat-hunting, recon, cve]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create a Platform Personal Access Token in the Censys Platform
+      console (requires the API Access role) and paste it here; requests
+      also need your organization ID in an X-Organization-ID header.
+    setup_url: "https://docs.censys.com/docs/platform-mcp-server"
   - name: orca-security
     display_name: Orca Security
     description: >-
@@ -3307,6 +3671,12 @@ servers:
     tags: [vulnerability-management, exposure-management, asset-inventory, scanning]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Generate API keys in Tenable under Settings → My Account → API Keys
+      (requires a Tenable One Foundation or Advanced license). Send both
+      as X-ApiKeys: accessKey=<a>;secretKey=<s>.
+    setup_url: "https://docs.tenable.com/vulnerability-management/Content/getting-started/hexa-AI-MCP.htm"
+    api_key_header: X-ApiKeys
   - name: wiz
     display_name: Wiz
     description: >-
@@ -3323,19 +3693,6 @@ servers:
     auth: oauth
 
   # ── ai-ml ───────────────────────────────────────────────────────
-  - name: assemblyai-docs
-    display_name: AssemblyAI Docs
-    description: >-
-      Documentation search/fetch tools over AssemblyAI's docs (Streamable HTTP,
-      no auth). Docs-lookup only — it does not expose transcription or LLM
-      Gateway API calls; AssemblyAI's product-API MCP options are local-only.
-    url: "https://assemblyai.com/docs/mcp"
-    vendor: AssemblyAI, Inc.
-    docs_url: "https://www.assemblyai.com/docs/coding-agent-prompts"
-    category: ai-ml
-    tags: [speech-to-text, transcription, docs, search]
-    provenance: official
-    auth: open
   - name: black-forest-labs
     display_name: Black Forest Labs (FLUX)
     description: >-
@@ -3364,19 +3721,6 @@ servers:
     tags: [tts, stt, voice-cloning, speech, audio]
     provenance: official
     auth: oauth
-  - name: deepgram-docs
-    display_name: Deepgram Docs
-    description: >-
-      Documentation Q&A server (Kapa-backed, hosted under Deepgram's domain)
-      answering questions about Deepgram APIs, SDKs, and features. Docs-lookup
-      only — Deepgram's product-API MCP (dg mcp) is local/self-hosted only.
-    url: "https://api.dx.deepgram.com/kapa/mcp"
-    vendor: Deepgram, Inc.
-    docs_url: "https://developers.deepgram.com/developer-tools/agentic-tools"
-    category: ai-ml
-    tags: [speech-to-text, voice, docs, search]
-    provenance: official
-    auth: open
   - name: fal-ai
     display_name: fal.ai
     description: >-
@@ -3392,6 +3736,9 @@ servers:
     tags: [inference, image-generation, video-generation, media-generation]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an API key at fal.ai/dashboard/keys and paste it here.
+    setup_url: "https://fal.ai/docs/documentation/setting-up/mcp"
   - name: google-gemini-agent-platform
     display_name: Google Gemini Enterprise Agent Platform (Vertex AI)
     description: >-
@@ -3433,6 +3780,7 @@ servers:
     tags: [models, datasets, spaces, papers]
     provenance: official
     auth: oauth
+    featured: true
   - name: ideogram
     display_name: Ideogram
     description: >-
@@ -3459,19 +3807,12 @@ servers:
     tags: [image-generation, text-to-image, art]
     provenance: official
     auth: api_key
-  - name: livekit-docs
-    display_name: LiveKit Docs
-    description: >-
-      LiveKit's documentation/answer-engine server: docs search, code search,
-      changelog, and pricing lookup tools. Docs-lookup only — it does not
-      provision rooms or control LiveKit realtime/voice infrastructure.
-    url: "https://docs.livekit.io/mcp"
-    vendor: LiveKit, Inc.
-    docs_url: "https://docs.livekit.io/home/get-started/mcp-server/"
-    category: ai-ml
-    tags: [webrtc, voice, realtime, docs, search]
-    provenance: official
-    auth: open
+    setup_hint: >-
+      Subscribe to any Leonardo.Ai API plan, then create an API key
+      following the getting-started guide in the API settings and paste it
+      here.
+    setup_url: "https://docs.leonardo.ai/docs/connect-to-leonardoai-mcp"
+    api_key_header: API-Key
   - name: magnific-freepik
     display_name: Magnific (Freepik)
     description: >-
@@ -3570,6 +3911,10 @@ servers:
     tags: [voice-agents, telephony, calls, tts]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an API key in the Retell dashboard under account → Manage API
+      Keys; Retell recommends a least-privilege key for MCP use.
+    setup_url: "https://docs.retellai.com/get-started/mcp-server"
   - name: runway
     display_name: Runway
     description: >-
@@ -3599,6 +3944,10 @@ servers:
     tags: [voice-agents, telephony, calls, assistants]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Copy your API key from the Vapi dashboard at
+      dashboard.vapi.ai/org/api-keys and paste it here.
+    setup_url: "https://docs.vapi.ai/sdk/mcp-server"
 
   # ── automation ──────────────────────────────────────────────────
   - name: composio
@@ -3614,6 +3963,12 @@ servers:
     tags: [aggregator, integrations, tool-router, saas]
     provenance: third_party
     auth: tenant
+    setup_hint: >-
+      The SERVER_ID is created when you set up an MCP config in the
+      Composio dashboard (or via composio.mcp.create() in the SDK);
+      user_id is any identifier you choose for the end user. Requires your
+      Composio API key as a header.
+    setup_url: "https://docs.composio.dev/mcp/introduction"
   - name: make
     display_name: Make
     description: >-
@@ -3639,6 +3994,12 @@ servers:
     tags: [integrations, workflows, apis, aggregator]
     provenance: third_party
     auth: api_key
+    setup_hint: >-
+      Create a Pipedream Connect project and OAuth client (client
+      ID/secret), exchange them for an access token used as the Bearer
+      key; requests also need x-pd-project-id, x-pd-environment, and
+      x-pd-external-user-id headers.
+    setup_url: "https://pipedream.com/docs/connect/mcp/developers"
   - name: smithery
     display_name: Smithery
     description: >-
@@ -3652,6 +4013,12 @@ servers:
     tags: [aggregator, registry, hosting-platform, gateway]
     provenance: third_party
     auth: tenant
+    setup_hint: >-
+      {server} is the server's name as shown on its page in the
+      smithery.ai registry — browse the registry, open the server, and
+      copy its connection URL. You also need a Smithery API key from
+      smithery.ai/account/api-keys.
+    setup_url: "https://smithery.ai/docs/use/connect"
   - name: zapier
     display_name: Zapier
     description: >-
@@ -3665,6 +4032,12 @@ servers:
     tags: [integrations, workflows, apps, aggregator]
     provenance: third_party
     auth: oauth
+    featured: true
+    setup_hint: >-
+      Requires a Zapier account with an MCP server created at
+      mcp.zapier.com (you pick which of your connected apps and actions it
+      exposes) before connecting here.
+    setup_url: "https://help.zapier.com/hc/en-us/articles/36265392843917"
 
   # ── marketing-social ────────────────────────────────────────────
   - name: ahrefs
@@ -3682,6 +4055,24 @@ servers:
     tags: [seo, backlinks, keyword-research, rank-tracking, site-audit]
     provenance: official
     auth: oauth
+  - name: amazon-ads
+    display_name: Amazon Ads
+    description: >-
+      Create and manage Amazon Ads campaigns, run performance reports, and
+      handle account/billing tasks through the Amazon Ads API. Open beta,
+      for accounts/partners with active Ads API access.
+    url: "https://advertising-ai.amazon.com/mcp"
+    vendor: Amazon.com, Inc. (Amazon Ads)
+    docs_url: "https://advertising.amazon.com/API/docs/en-us/mcp/mcp-overview"
+    category: marketing-social
+    tags: [advertising, ppc, campaigns, retail-media, reporting]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Requires Amazon Ads API credentials (Login with Amazon OAuth). This is
+      the North America endpoint; use advertising-ai-eu.amazon.com for
+      Europe or the Far East regional endpoint as applicable.
+    setup_url: "https://advertising.amazon.com/API/docs/en-us/mcp/mcp-overview"
   - name: brevo
     display_name: Brevo
     description: >-
@@ -3696,6 +4087,10 @@ servers:
     tags: [email, sms, whatsapp, crm, transactional]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      In Brevo go to Account → SMTP & API → API Keys and generate a key
+      with the MCP option checked, then paste it here.
+    setup_url: "https://developers.brevo.com/docs/mcp-protocol"
   - name: buffer
     display_name: Buffer
     description: >-
@@ -3709,6 +4104,10 @@ servers:
     tags: [social-media, scheduling, publishing, content-calendar]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Generate a personal access token in Buffer at publish.buffer.com
+      under your avatar → Settings → API access, then paste it here.
+    setup_url: "https://developers.buffer.com/guides/integrations/mcp.html"
   - name: customer-io
     display_name: Customer.io
     description: >-
@@ -3775,6 +4174,24 @@ servers:
     tags: [cold-email, outbound, campaigns, lead-generation, deliverability]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an API key in Instantly under Integrations → API Keys →
+      Create API Key and paste it here; you need a subscription with API
+      access.
+    setup_url: "https://help.instantly.ai/en/articles/12980002-instantly-mcp-model-context-protocol"
+  - name: jotform
+    display_name: Jotform
+    description: >-
+      Create and edit Jotform forms, list forms, and read or create
+      submissions through Jotform's hosted MCP server.
+    url: "https://mcp.jotform.com"
+    vendor: Jotform Inc.
+    docs_url: "https://www.jotform.com/developers/mcp/"
+    repo_url: "https://github.com/jotform/mcp-server"
+    category: marketing-social
+    tags: [forms, surveys, submissions, no-code]
+    provenance: official
+    auth: oauth
   - name: klaviyo
     display_name: Klaviyo
     description: >-
@@ -3817,6 +4234,11 @@ servers:
     tags: [email, transactional, mandrill, diagnostics]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Generate a Transactional (Mandrill) API key from the Mandrill app's
+      SMTP & API settings; if the key uses restricted permissions, enable
+      its "AI Agents" permission group for MCP access.
+    setup_url: "https://mailchimp.com/developer/transactional/guides/how-to-use-mailchimps-transactional-messaging-mcp/"
   - name: mailerlite
     display_name: MailerLite
     description: >-
@@ -3872,6 +4294,12 @@ servers:
     tags: [web-analytics, traffic-data, competitive-intelligence, serp]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Copy your API key from the Similarweb platform under your account's
+      API Access settings; requires an API-only, Business, or Enterprise
+      plan. The same key as the REST API works.
+    setup_url: "https://developers.similarweb.com/docs/similarweb-mcp"
+    api_key_header: api-key
   - name: smartlead
     display_name: Smartlead
     description: >-
@@ -3879,13 +4307,18 @@ servers:
       campaign management, lead lifecycle, mailbox/deliverability diagnostics,
       analytics, and webhooks. SSE-only transport; the API key is passed as a
       user_api_key query parameter on the endpoint URL.
-    url: "https://mcp.smartlead.ai/sse"
+    url: "https://mcp.smartlead.ai/sse?user_api_key={api-key}"
     vendor: Smartlead
     docs_url: "https://helpcenter.smartlead.ai/en/articles/300-smartlead-mcp-server"
     category: marketing-social
     tags: [cold-email, outbound, deliverability, campaigns, analytics]
     provenance: official
-    auth: api_key
+    auth: open
+    setup_hint: >-
+      Generate an API key in Smartlead under Settings → API Keys and enter
+      it below — it becomes part of your connection URL, which is how this
+      endpoint authenticates.
+    setup_url: "https://helpcenter.smartlead.ai/en/articles/300-smartlead-mcp-server"
   - name: sprout-social
     display_name: Sprout Social
     description: >-
@@ -3930,6 +4363,12 @@ servers:
     tags: [advertising, reddit-ads, tiktok-ads, multi-platform, reporting]
     provenance: community
     auth: api_key
+    setup_hint: >-
+      Create a Synter account, connect your ad platforms via OAuth, then
+      generate an API key from the Synter Developer Portal and paste it
+      here.
+    setup_url: "https://syntermedia.ai/mcp"
+    api_key_header: X-Synter-Key
   - name: typeform
     display_name: Typeform
     description: >-
@@ -3972,6 +4411,23 @@ servers:
     tags: [cloudflare, documentation, reference]
     provenance: official
     auth: open
+  - name: contentful
+    display_name: Contentful
+    description: >-
+      Manage Contentful entries, assets, content types, locales, tags, AI
+      Actions, and environments. Admins gate tool categories and read/write
+      level per environment via the Contentful MCP app.
+    url: "https://mcp.contentful.com/mcp"
+    vendor: Contentful GmbH
+    docs_url: "https://www.contentful.com/developers/docs/tools/mcp-server/"
+    category: knowledge-docs
+    tags: [cms, headless-cms, content, publishing]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      The Contentful MCP app must be installed in each space/environment you
+      want to use; an EU endpoint exists at https://mcp.eu.contentful.com/mcp.
+    setup_url: "https://www.contentful.com/developers/docs/tools/mcp-server/"
   - name: microsoft-learn
     display_name: Microsoft Learn
     description: >-
@@ -3985,6 +4441,19 @@ servers:
     tags: [microsoft, azure, documentation, reference]
     provenance: official
     auth: open
+  - name: sanity
+    display_name: Sanity
+    description: >-
+      Query and edit Sanity content: documents, schema deployment, datasets,
+      releases, and project administration on the hosted Content Operating
+      System. Replaces the deprecated local @sanity/mcp-server.
+    url: "https://mcp.sanity.io"
+    vendor: Sanity Inc.
+    docs_url: "https://www.sanity.io/docs/ai/mcp-server"
+    category: knowledge-docs
+    tags: [cms, headless-cms, content, structured-content]
+    provenance: official
+    auth: oauth
   - name: x-docs
     display_name: X Docs
     description: >-
@@ -3999,6 +4468,18 @@ servers:
     auth: open
 
   # ── travel-local ────────────────────────────────────────────────
+  - name: doordash
+    display_name: DoorDash
+    description: >-
+      Explore restaurants, browse menus, compare options, and plan orders
+      and reservations from DoorDash's consumer platform.
+    url: "https://openapi.doordash.com/mcp/consumer"
+    vendor: DoorDash, Inc.
+    docs_url: "https://claude.com/connectors/doordash"
+    category: travel-local
+    tags: [food-delivery, restaurants, ordering, local]
+    provenance: official
+    auth: oauth
   - name: google-maps
     display_name: Google Maps Grounding Lite
     description: >-
@@ -4012,6 +4493,12 @@ servers:
     tags: [maps, places, weather, routing, google]
     provenance: official
     auth: api_key
+    setup_hint: >-
+      Create an API key in the Google Cloud console under APIs & Services
+      → Credentials, in a project with the Maps Grounding Lite (Maps
+      Tools) API enabled.
+    setup_url: "https://developers.google.com/maps/ai/grounding-lite/reference/mcp"
+    api_key_header: X-Goog-Api-Key
   - name: kiwi-flights
     display_name: Kiwi.com Flight Search
     description: >-

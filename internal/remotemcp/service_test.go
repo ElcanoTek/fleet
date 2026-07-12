@@ -3,6 +3,7 @@ package remotemcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,8 @@ type fakeStore struct {
 	servers map[string]*store.RemoteMCPServer
 	tokens  map[string]store.RemoteMCPTokens
 	flows   map[string]*store.OAuthFlowState
+	// apiKeys: server id -> plaintext key (the real store seals it).
+	apiKeys map[string]string
 	nextID  int
 	// shares: server id -> grantees ('*' or emails), mirroring the real table.
 	shares map[string][]string
@@ -31,6 +34,7 @@ func newFakeStore() *fakeStore {
 		servers: map[string]*store.RemoteMCPServer{},
 		tokens:  map[string]store.RemoteMCPTokens{},
 		flows:   map[string]*store.OAuthFlowState{},
+		apiKeys: map[string]string{},
 	}
 }
 
@@ -45,9 +49,13 @@ func (f *fakeStore) CreateRemoteMCPServer(_ context.Context, in store.RemoteMCPS
 		Issuer: in.Issuer, AuthorizationEndpoint: in.AuthorizationEndpoint, TokenEndpoint: in.TokenEndpoint,
 		RegistrationEndpoint: in.RegistrationEndpoint, RevocationEndpoint: in.RevocationEndpoint,
 		Scopes: in.Scopes, AuthMethods: in.AuthMethods, ClientID: in.ClientID,
+		AuthKind: in.AuthKind, APIKeyHeader: in.APIKeyHeader,
 	}
 	if srv.Status == "" {
 		srv.Status = store.RemoteMCPStatusLoginRequired
+	}
+	if in.APIKey != "" {
+		f.apiKeys[id] = in.APIKey
 	}
 	f.servers[id] = srv
 	cp := *srv
@@ -85,6 +93,26 @@ func (f *fakeStore) DeleteRemoteMCPServer(_ context.Context, email, id string) e
 
 func (f *fakeStore) LoadServerSecrets(_ context.Context, _ *store.RemoteMCPServer) (string, string, error) {
 	return "", "", nil
+}
+
+func (f *fakeStore) GetRemoteMCPAPIKey(_ context.Context, srv *store.RemoteMCPServer) (string, error) {
+	if _, ok := f.servers[srv.ID]; !ok {
+		return "", store.ErrRemoteMCPNotFound
+	}
+	return f.apiKeys[srv.ID], nil
+}
+
+func (f *fakeStore) SetRemoteMCPAPIKey(_ context.Context, email, id, apiKey string) error {
+	s, ok := f.servers[id]
+	if !ok || !strings.EqualFold(s.UserEmail, email) {
+		return store.ErrRemoteMCPNotFound
+	}
+	if s.AuthKind != store.RemoteMCPAuthAPIKey {
+		return errors.New("this connection does not use an API key")
+	}
+	f.apiKeys[id] = apiKey
+	s.Status = store.RemoteMCPStatusConnected
+	return nil
 }
 
 func (f *fakeStore) GetOAuthTokens(_ context.Context, srv *store.RemoteMCPServer) (*store.RemoteMCPTokens, error) {
@@ -372,6 +400,76 @@ func TestServiceAddOpenServerSkipsOAuthDiscovery(t *testing.T) {
 	bearer, err := svc.AcquireTokenByID(context.Background(), "u@x.com", server.ID)
 	if err != nil || bearer != "" {
 		t.Errorf("AcquireTokenByID(open) = %q, %v; want empty bearer, nil", bearer, err)
+	}
+}
+
+func TestServiceAddAPIKeyServerSkipsOAuthDiscovery(t *testing.T) {
+	fs := newFakeStore()
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	// Missing key is rejected before anything is stored.
+	if _, err := svc.AddServer(ctx, AddServerInput{
+		Email: "u@x.com", Name: "zapier", URL: srv.URL, AuthMode: "api_key",
+	}); err == nil {
+		t.Fatal("AddServer(api_key) accepted an empty key")
+	}
+	// A reserved / malformed header name is rejected.
+	for _, h := range []string{"Host", "Content-Length", "X Bad Header", "X-Key\r\nEvil: 1"} {
+		if _, err := svc.AddServer(ctx, AddServerInput{
+			Email: "u@x.com", Name: "zapier", URL: srv.URL, AuthMode: "api_key", APIKey: "sk-1", APIKeyHeader: h,
+		}); err == nil {
+			t.Errorf("AddServer(api_key) accepted header %q", h)
+		}
+	}
+	// A key with control characters can never be sent as a header value.
+	if _, err := svc.AddServer(ctx, AddServerInput{
+		Email: "u@x.com", Name: "zapier", URL: srv.URL, AuthMode: "api_key", APIKey: "sk\r\nEvil: 1",
+	}); err == nil {
+		t.Error("AddServer(api_key) accepted a key with CRLF")
+	}
+
+	server, err := svc.AddServer(ctx, AddServerInput{
+		Email: "u@x.com", Name: "zapier", URL: srv.URL, AuthMode: "api_key",
+		APIKey: "sk-live-123", APIKeyHeader: "X-API-Key",
+	})
+	if err != nil {
+		t.Fatalf("AddServer(api_key): %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("api_key add made %d discovery requests, want none", requests)
+	}
+	if server.Status != store.RemoteMCPStatusConnected || server.AuthKind != store.RemoteMCPAuthAPIKey {
+		t.Errorf("api_key server = %+v, want connected with auth_kind api_key", server)
+	}
+	if server.APIKeyHeader != "X-API-Key" {
+		t.Errorf("api_key header = %q", server.APIKeyHeader)
+	}
+
+	// The run loop's credential path returns the key itself.
+	cred, err := svc.AcquireTokenByID(ctx, "u@x.com", server.ID)
+	if err != nil || cred != "sk-live-123" {
+		t.Errorf("AcquireTokenByID(api_key) = %q, %v; want the key, nil", cred, err)
+	}
+
+	// Rotation replaces the key and reconnects; only the owner's api_key rows.
+	if err := svc.SetAPIKey(ctx, "u@x.com", server.ID, "sk-live-456"); err != nil {
+		t.Fatalf("SetAPIKey: %v", err)
+	}
+	if cred, _ := svc.AcquireTokenByID(ctx, "u@x.com", server.ID); cred != "sk-live-456" {
+		t.Errorf("rotated key = %q", cred)
+	}
+	if err := svc.SetAPIKey(ctx, "other@x.com", server.ID, "steal"); !errors.Is(err, store.ErrRemoteMCPNotFound) {
+		t.Errorf("SetAPIKey by non-owner = %v, want not-found", err)
+	}
+	if err := svc.SetAPIKey(ctx, "u@x.com", server.ID, ""); err == nil {
+		t.Error("SetAPIKey accepted an empty key")
 	}
 }
 

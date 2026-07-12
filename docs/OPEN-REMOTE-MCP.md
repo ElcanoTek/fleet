@@ -19,8 +19,15 @@ origin redirect tool-call payloads to another host. Credentials remain
 host-side, and open connections have no token or client secret to store or
 share.
 
-## Deliberately deferred
+## Related auth modes
 
-This change does not add arbitrary API-key entry or AWS SigV4 signing support.
-Those authentication modes require explicit host-side credential plumbing and
-must not be approximated with user-supplied headers in the sandbox.
+API-key connections — originally deferred from this change — shipped with the
+connector-directory onboarding work: the key is sealed host-side with the same
+cipher as OAuth tokens and replayed as a static header (see
+`docs/CONNECTOR-ONBOARDING.md`). Open entries may also carry a `{placeholder}`
+URL when the vendor authenticates via the URL itself (a key or account id as a
+query parameter); the directory card's guided form fills it in.
+
+AWS SigV4 signing remains deferred: it requires request-signing plumbing, not
+just credential storage, and must not be approximated with user-supplied
+headers in the sandbox.
