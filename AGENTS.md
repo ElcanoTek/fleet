@@ -148,6 +148,11 @@ same PR.
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via
   `fleet mcp reload` / SIGHUP / admin endpoint): [`docs/MCP-RELOAD.md`](docs/MCP-RELOAD.md)
+- **The connector directory** (trust classes, the built-in hosted-server
+  catalog, provenance tiers) and its **guided onboarding** (setup hints,
+  guided tenant/API-key/BYO-client add forms, the per-user api_key auth mode):
+  [`docs/MCP-CATALOG.md`](docs/MCP-CATALOG.md) +
+  [`docs/CONNECTOR-ONBOARDING.md`](docs/CONNECTOR-ONBOARDING.md)
 - **Admin-managed workspace feature settings** (the Settings → Admin Features
   panel: DB override > env var > default, live apply, the registry admission
   rule, what stays env-only): [`docs/ADMIN-SETTINGS.md`](docs/ADMIN-SETTINGS.md)

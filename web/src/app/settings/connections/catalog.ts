@@ -21,6 +21,18 @@ export type CatalogThirdParty = {
   // services), "community" (an identifiable maintainer who is neither).
   provenance: string;
   auth?: string;
+  // Onboarding guidance (connector-directory onboarding): a visible sentence
+  // on where the URL/key comes from, the vendor's connect walkthrough URL,
+  // and — for api_key entries — the header name the key is sent under.
+  setup_hint?: string;
+  setup_url?: string;
+  api_key_header?: string;
+  // "manual" = the vendor's authorization server has no dynamic client
+  // registration; the guided form collects a bring-your-own OAuth client ID
+  // (+ optional secret) up front.
+  client_registration?: string;
+  // Curated Featured-shelf pick, rendered before the category listing.
+  featured?: boolean;
 };
 
 export type CatalogBundled = {
@@ -187,9 +199,54 @@ export function provenanceBadge(provenance: string): {
 }
 
 // needsTenantURL — a {placeholder} endpoint is per org/workspace/store and
-// can't be one-click added; the user supplies their own URL.
+// can't be one-click added; the user supplies the placeholder values through
+// the card's guided form.
 export function needsTenantURL(e: CatalogThirdParty): boolean {
   return e.url.includes("{");
+}
+
+// placeholdersOf extracts the {placeholder} tokens from a tenant-scoped URL
+// template, deduped, in order of appearance — one guided-form input each.
+export function placeholdersOf(url: string): string[] {
+  const out: string[] = [];
+  for (const m of url.matchAll(/\{([^{}]+)\}/g)) {
+    if (!out.includes(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
+// placeholderLabel humanizes a {placeholder} token for the guided form:
+// "tenantId" / "tenant_id" / "tenant-id" all render "tenant id".
+export function placeholderLabel(ph: string): string {
+  return ph
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[-_]+/g, " ")
+    .toLowerCase()
+    .trim();
+}
+
+// fillPlaceholders substitutes the user's values into the URL template. Values
+// are trimmed; slashes are allowed (some templates take a host or a path
+// segment) but whitespace and braces are not — the preview + backend URL
+// validation catch the rest.
+export function fillPlaceholders(url: string, values: Record<string, string>): string {
+  return url.replace(/\{([^{}]+)\}/g, (whole, ph: string) => {
+    const v = (values[ph] ?? "").trim();
+    return v === "" ? whole : v;
+  });
+}
+
+// placeholderValueOK — a single placeholder value is usable when present and
+// free of characters that would corrupt the URL.
+export function placeholderValueOK(v: string): boolean {
+  const t = v.trim();
+  return t !== "" && !/[\s{}]/.test(t);
+}
+
+// setupLink is the best "how do I connect this?" destination: the explicit
+// setup walkthrough when the entry has one, else the vendor docs.
+export function setupLink(e: CatalogThirdParty): string | null {
+  return e.setup_url || e.docs_url || null;
 }
 
 // authHint is the small secondary label describing what connecting takes.
@@ -200,7 +257,7 @@ export function authHint(e: CatalogThirdParty): string | null {
     case "open":
       return "No sign-in needed";
     case "api_key":
-      return "API key";
+      return "Needs an API key";
     default:
       return null;
   }

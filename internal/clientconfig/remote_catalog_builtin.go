@@ -83,6 +83,11 @@ func loadBuiltinRemoteCatalog() ([]RemoteMCPCatalogEntry, error) {
 				// Unreachable given the vendor check above; kept as the written
 				// rule: a non-official entry must be attributable.
 				errBuiltinCatalog = fmt.Errorf("builtin remote MCP catalog[%q]: non-official entry must be attributable", name)
+			case (e.Auth == "tenant" || e.Auth == "api_key") && strings.TrimSpace(e.SetupHint) == "":
+				// An entry a user cannot one-click add must SAY how to get
+				// connected — a "needs your URL"/"API key" badge with no
+				// instructions is advertising, not onboarding.
+				errBuiltinCatalog = fmt.Errorf("builtin remote MCP catalog[%q]: auth %q requires a setup_hint telling the user where the URL/key comes from", name, e.Auth)
 			}
 			if errBuiltinCatalog != nil {
 				return

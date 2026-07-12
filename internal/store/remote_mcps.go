@@ -32,6 +32,13 @@ const (
 	RemoteMCPTransportSSE            = "sse"
 )
 
+// Remote-MCP auth kinds — how a connection authenticates to the server.
+const (
+	RemoteMCPAuthOAuth  = "oauth"   // OAuth 2.1 discovery + PKCE (tokens in remote_mcp_oauth)
+	RemoteMCPAuthOpen   = "open"    // no Authorization header at all
+	RemoteMCPAuthAPIKey = "api_key" // static vendor key, sealed in api_key_enc
+)
+
 // AAD purpose strings — distinct per secret kind so a ciphertext from one column
 // can't be opened as another even within the same (user, server) row. These are
 // domain-separation labels (the AEAD's Additional Authenticated Data), NOT
@@ -42,6 +49,7 @@ const (
 	aadPurposeClientSe   = "fleet:mcp-oauth-client-secret:v1"
 	aadPurposeRegTok     = "fleet:mcp-oauth-reg-token:v1"
 	aadPurposeFlow       = "fleet:mcp-oauth-flow:v1"
+	aadPurposeAPIKey     = "fleet:mcp-api-key:v1" //nolint:gosec // G101: AAD domain-separation label, not a credential
 )
 
 var (
@@ -65,6 +73,8 @@ type RemoteMCPServer struct {
 	Transport             string `json:"transport"`
 	Status                string `json:"status"`
 	StatusDetail          string `json:"status_detail,omitempty"`
+	AuthKind              string `json:"auth_kind,omitempty"` // oauth | open | api_key (non-secret; drives the UI's connect affordance)
+	APIKeyHeader          string `json:"-"`                   // header NAME the sealed key is sent under; "" = Authorization: Bearer
 	Issuer                string `json:"-"`
 	AuthorizationEndpoint string `json:"-"`
 	TokenEndpoint         string `json:"-"`
@@ -93,7 +103,10 @@ type RemoteMCPServerInput struct {
 	ClientID              string
 	ClientSecret          string // plaintext; encrypted before insert ("" → NULL)
 	RegistrationToken     string // plaintext RFC 7592 token; encrypted ("" → NULL)
-	Status                string // empty defaults to login_required; open servers use connected
+	Status                string // empty defaults to login_required; open/api_key servers use connected
+	AuthKind              string // empty defaults to oauth
+	APIKeyHeader          string // api_key only: header NAME ("" = Authorization: Bearer)
+	APIKey                string // api_key only: plaintext; encrypted before insert
 }
 
 // RemoteMCPTokens is a decrypted token pair plus its expiry (unix seconds).
@@ -148,22 +161,32 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 	if err != nil {
 		return nil, fmt.Errorf("encrypt registration token: %w", err)
 	}
+	apiKeyEnc, err := s.sealSecret(in.APIKey, aadPurposeAPIKey, email, in.URL)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt api key: %w", err)
+	}
 	id := uuid.NewString()
 	now := time.Now().Unix()
 	status := in.Status
 	if status == "" {
 		status = RemoteMCPStatusLoginRequired
 	}
+	authKind := in.AuthKind
+	if authKind == "" {
+		authKind = RemoteMCPAuthOAuth
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO remote_mcp_servers (
 			id, user_email, name, url, transport, status, status_detail,
 			issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
 			scopes, auth_methods, client_id, client_secret_enc, registration_access_token_enc,
+			auth_kind, api_key_header, api_key_enc,
 			created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)`,
+		VALUES ($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)`,
 		id, email, in.Name, in.URL, in.Transport, status,
 		in.Issuer, in.AuthorizationEndpoint, in.TokenEndpoint, in.RegistrationEndpoint, in.RevocationEndpoint,
-		in.Scopes, in.AuthMethods, in.ClientID, secretEnc, regEnc, now)
+		in.Scopes, in.AuthMethods, in.ClientID, secretEnc, regEnc,
+		authKind, in.APIKeyHeader, apiKeyEnc, now)
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("a remote MCP server named %q already exists", in.Name)
@@ -175,13 +198,13 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 
 const remoteMCPColumns = `id, user_email, name, url, transport, status, status_detail,
 	issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
-	scopes, auth_methods, client_id, created_at, updated_at`
+	scopes, auth_methods, client_id, auth_kind, api_key_header, created_at, updated_at`
 
 func scanRemoteMCPServer(row interface{ Scan(...any) error }) (*RemoteMCPServer, error) {
 	var m RemoteMCPServer
 	if err := row.Scan(&m.ID, &m.UserEmail, &m.Name, &m.URL, &m.Transport, &m.Status, &m.StatusDetail,
 		&m.Issuer, &m.AuthorizationEndpoint, &m.TokenEndpoint, &m.RegistrationEndpoint, &m.RevocationEndpoint,
-		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.AuthKind, &m.APIKeyHeader, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -263,6 +286,50 @@ func (s *Store) LoadServerSecrets(ctx context.Context, server *RemoteMCPServer) 
 		return "", "", fmt.Errorf("decrypt registration token: %w", err)
 	}
 	return clientSecret, registrationToken, nil
+}
+
+// GetRemoteMCPAPIKey reads + decrypts an api_key server's static key (host-side
+// use only; never returned to a browser). The AAD is bound to the OWNER's email
+// (server.UserEmail), so shared connections open under the owner's identity.
+func (s *Store) GetRemoteMCPAPIKey(ctx context.Context, server *RemoteMCPServer) (string, error) {
+	var keyEnc []byte
+	row := s.db.QueryRowContext(ctx,
+		`SELECT api_key_enc FROM remote_mcp_servers WHERE user_email = $1 AND id = $2`,
+		normalizeEmail(server.UserEmail), server.ID)
+	if err := row.Scan(&keyEnc); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrRemoteMCPNotFound
+		}
+		return "", err
+	}
+	key, err := s.openSecret(keyEnc, aadPurposeAPIKey, server.UserEmail, server.URL)
+	if err != nil {
+		return "", fmt.Errorf("decrypt api key: %w", err)
+	}
+	return key, nil
+}
+
+// SetRemoteMCPAPIKey replaces an api_key server's sealed key (rotation) and
+// marks the connection usable again. Scoped to the owner; a grantee of a shared
+// connection can never rotate the owner's key.
+func (s *Store) SetRemoteMCPAPIKey(ctx context.Context, userEmail, id, apiKey string) error {
+	email := normalizeEmail(userEmail)
+	server, err := s.GetRemoteMCPServer(ctx, email, id)
+	if err != nil {
+		return err
+	}
+	if server.AuthKind != RemoteMCPAuthAPIKey {
+		return errors.New("this connection does not use an API key")
+	}
+	keyEnc, err := s.sealSecret(apiKey, aadPurposeAPIKey, email, server.URL)
+	if err != nil {
+		return fmt.Errorf("encrypt api key: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE remote_mcp_servers SET api_key_enc = $3, status = $4, status_detail = '', updated_at = $5
+		 WHERE user_email = $1 AND id = $2`,
+		email, id, keyEnc, RemoteMCPStatusConnected, time.Now().Unix())
+	return err
 }
 
 // StoreOAuthTokens upserts a server's tokens (encrypted) and marks it connected.

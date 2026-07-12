@@ -338,8 +338,18 @@ func TestBuiltinRemoteCatalog(t *testing.T) {
 		if e.Auth == "" {
 			t.Errorf("entry %q: builtin entries must carry an auth hint", e.Name)
 		}
-		if strings.Contains(e.URL, "{") != (e.Auth == "tenant") {
-			t.Errorf("entry %q: a {placeholder} URL and auth=tenant must imply each other (url=%q auth=%q)", e.Name, e.URL, e.Auth)
+		// A {placeholder} URL is the guided-form signal. auth=tenant means
+		// "your URL + OAuth"; an open entry may also carry a placeholder when
+		// the vendor authenticates via the URL itself (a key or account id as
+		// a query parameter) — but tenant without a placeholder is always a
+		// data bug, as is a placeholder on an oauth/api_key entry (those
+		// one-click flows never render the URL form).
+		hasPlaceholder := strings.Contains(e.URL, "{")
+		if e.Auth == "tenant" && !hasPlaceholder {
+			t.Errorf("entry %q: auth=tenant requires a {placeholder} URL (url=%q)", e.Name, e.URL)
+		}
+		if hasPlaceholder && e.Auth != "tenant" && e.Auth != "open" {
+			t.Errorf("entry %q: a {placeholder} URL requires auth tenant or open (url=%q auth=%q)", e.Name, e.URL, e.Auth)
 		}
 		if e.Provenance == "community" && strings.TrimSpace(e.RepoURL) == "" {
 			t.Errorf("entry %q: a community-hosted entry must link its source repo so users can vet it", e.Name)
@@ -347,6 +357,24 @@ func TestBuiltinRemoteCatalog(t *testing.T) {
 	}
 	if len(categories) < 8 {
 		t.Errorf("builtin catalog should span many categories, got %d: %v", len(categories), categories)
+	}
+
+	// The Featured shelf is a short curated recommendation, not a second
+	// catalog: keep it small, and never feature a community entry (they are
+	// hidden unless the bundle opts in, so a featured one would silently
+	// vanish from most deployments).
+	featured := 0
+	for _, e := range entries {
+		if !e.Featured {
+			continue
+		}
+		featured++
+		if e.Provenance == "community" {
+			t.Errorf("entry %q: community entries cannot be featured (hidden by default)", e.Name)
+		}
+	}
+	if featured < 8 || featured > 20 {
+		t.Errorf("featured shelf should hold 8–20 entries, got %d", featured)
 	}
 
 	// X documents its API-capable XMCP as self-hosted; api.x.com/mcp is not a

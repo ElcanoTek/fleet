@@ -48,7 +48,17 @@ type mcpCatalogThirdPartyEntry struct {
 	Tags        []string `json:"tags,omitempty"`
 	Provenance  string   `json:"provenance"` // official | third_party | community (hosting-operator trust tier)
 	Auth        string   `json:"auth,omitempty"`
-	Trust       string   `json:"trust"` // always "third_party" (the CLASS, vs "bundled"; distinct from Provenance)
+	// Onboarding guidance (connector-directory onboarding): a visible hint on
+	// where the URL/key comes from, the vendor's connect walkthrough, and — for
+	// api_key entries — the header name the key must be sent under.
+	SetupHint    string `json:"setup_hint,omitempty"`
+	SetupURL     string `json:"setup_url,omitempty"`
+	APIKeyHeader string `json:"api_key_header,omitempty"`
+	// "manual" = the vendor's AS has no dynamic client registration; the UI
+	// collects a bring-your-own OAuth client ID (+ optional secret) up front.
+	ClientRegistration string `json:"client_registration,omitempty"`
+	Featured           bool   `json:"featured,omitempty"` // curated Featured-shelf pick
+	Trust              string `json:"trust"`              // always "third_party" (the CLASS, vs "bundled"; distinct from Provenance)
 }
 
 type mcpCatalogResponse struct {
@@ -110,17 +120,22 @@ func (s *Server) mcpCatalog(w http.ResponseWriter, r *http.Request) {
 // trimming whitespace once at the edge so the UI never renders stray spaces.
 func thirdPartyCatalogEntry(e clientconfig.RemoteMCPCatalogEntry) mcpCatalogThirdPartyEntry {
 	return mcpCatalogThirdPartyEntry{
-		Name:        strings.TrimSpace(e.Name),
-		DisplayName: strings.TrimSpace(e.DisplayName),
-		Description: strings.TrimSpace(e.Description),
-		URL:         strings.TrimSpace(e.URL),
-		Vendor:      strings.TrimSpace(e.Vendor),
-		DocsURL:     strings.TrimSpace(e.DocsURL),
-		RepoURL:     strings.TrimSpace(e.RepoURL),
-		Category:    strings.TrimSpace(e.Category),
-		Tags:        e.Tags,
-		Provenance:  e.Provenance,
-		Auth:        e.Auth,
-		Trust:       "third_party",
+		Name:               strings.TrimSpace(e.Name),
+		DisplayName:        strings.TrimSpace(e.DisplayName),
+		Description:        strings.TrimSpace(e.Description),
+		URL:                strings.TrimSpace(e.URL),
+		Vendor:             strings.TrimSpace(e.Vendor),
+		DocsURL:            strings.TrimSpace(e.DocsURL),
+		RepoURL:            strings.TrimSpace(e.RepoURL),
+		Category:           strings.TrimSpace(e.Category),
+		Tags:               e.Tags,
+		Provenance:         e.Provenance,
+		Auth:               e.Auth,
+		SetupHint:          strings.TrimSpace(e.SetupHint),
+		SetupURL:           strings.TrimSpace(e.SetupURL),
+		APIKeyHeader:       strings.TrimSpace(e.APIKeyHeader),
+		ClientRegistration: strings.TrimSpace(e.ClientRegistration),
+		Featured:           e.Featured,
+		Trust:              "third_party",
 	}
 }
