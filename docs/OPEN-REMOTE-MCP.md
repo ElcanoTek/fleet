@@ -3,9 +3,12 @@
 ## Shipped scope
 
 Fleet's hosted MCP directory can label a server `auth: open`. Adding one of
-these entries now creates an immediately connected, per-user remote connection:
+these entries creates an immediately connected, per-user remote connection:
 Fleet does not run OAuth discovery and does not attach an `Authorization`
-header to its MCP requests.
+header to its MCP requests. The add is validated with a real MCP handshake
+(initialize + tools/list) before anything is stored, so an unreachable or
+non-MCP URL fails the add with an actionable error instead of surfacing
+mid-run (see `docs/CONNECTOR-ONBOARDING.md`).
 
 This supports public Streamable HTTP servers such as AWS Knowledge, whose MCP
 endpoint accepts protocol requests via POST while an ordinary GET redirects to

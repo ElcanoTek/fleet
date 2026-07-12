@@ -16,6 +16,7 @@ import {
   prefFor,
   provenanceBadge,
   setupLink,
+  toolCountSuffix,
   type CatalogBundled,
   type CatalogResponse,
   type CatalogThirdParty,
@@ -334,7 +335,10 @@ function DirectoryCard({
   added: boolean;
   busy: boolean;
   remoteEnabled: boolean;
-  onAdd: (overrides?: AddOverrides) => void;
+  // Resolves true when the server was actually added (validated + stored);
+  // false keeps the guided form — and whatever the user typed — open so a
+  // rejected key or mistyped tenant value can be corrected in place.
+  onAdd: (overrides?: AddOverrides) => Promise<boolean>;
 }) {
   const hint = authHint(entry);
   const guide = setupLink(entry);
@@ -353,8 +357,8 @@ function DirectoryCard({
     (entry.auth !== "api_key" || apiKey.trim() !== "") &&
     (!manualClient || clientId.trim() !== "");
 
-  const submit = () => {
-    onAdd({
+  const submit = async () => {
+    const ok = await onAdd({
       ...(placeholders.length > 0 ? { url: filledURL } : {}),
       ...(entry.auth === "api_key" ? { apiKey: apiKey.trim() } : {}),
       ...(manualClient
@@ -364,8 +368,9 @@ function DirectoryCard({
           }
         : {}),
     });
+    if (!ok) return; // validation failed (or consent pending) — keep the form + values
     setFormOpen(false);
-    // Drop the secrets from component state the moment they're handed off.
+    // Drop the secrets from component state the moment the add succeeds.
     setApiKey("");
     setClientSecret("");
   };
@@ -434,7 +439,7 @@ function DirectoryCard({
               type="button"
               data-testid={`dir-add-${entry.name}`}
               aria-expanded={needsForm ? formOpen : undefined}
-              onClick={() => (needsForm ? setFormOpen((o) => !o) : onAdd())}
+              onClick={() => (needsForm ? setFormOpen((o) => !o) : void onAdd())}
               disabled={busy || added}
               className={dirAddButtonClass(added)}
             >
@@ -505,7 +510,7 @@ function DirectoryCard({
             <button
               type="button"
               data-testid={`dir-form-add-${entry.name}`}
-              onClick={submit}
+              onClick={() => void submit()}
               disabled={busy || !ready}
               className={dirAddButtonClass(false)}
             >
@@ -675,7 +680,9 @@ export default function ConnectionsPage() {
   };
 
   // Rotate an api_key connection's key (write-only; the current key is never
-  // shown). Marks the connection usable again server-side.
+  // shown). The server validates the NEW key with a real MCP handshake before
+  // storing it — a rejected key leaves the old one untouched and the form
+  // open, with the error explaining exactly that.
   const updateKey = (id: string) => {
     setError(null);
     setNotice(null);
@@ -689,9 +696,10 @@ export default function ConnectionsPage() {
         if (!res.ok && res.status !== 204) {
           throw new Error((await res.text()) || `Update failed: ${res.status}`);
         }
+        const data = res.status === 204 ? null : ((await res.json()) as { tool_count?: number });
         setKeyOpenFor(null);
         setKeyValue("");
-        setNotice("API key updated.");
+        setNotice(`API key updated${toolCountSuffix(data?.tool_count)}.`);
         refresh();
       })
       .catch((err: unknown) => setError(errMessage(err)))
@@ -702,25 +710,30 @@ export default function ConnectionsPage() {
   // curated entry plus whatever the card's guided form collected (a tenant URL
   // with its placeholders filled, a pasted API key). OAuth entries land in
   // "login_required" and the user clicks Connect; open and api_key entries are
-  // usable immediately. An entry whose endpoint is NOT operated by the
-  // service's own vendor first goes through an explicit consent step naming
-  // the operator (the operator receives tool-call arguments — which can
-  // include conversation content — and, for OAuth flows, often holds the
-  // delegated access token).
-  const requestAddFromCatalog = (entry: CatalogThirdParty, overrides?: AddOverrides) => {
+  // validated server-side with a real MCP handshake and arrive already
+  // connected — the success notice carries the observed tool count, and a
+  // rejected key/URL resolves false so the card keeps its form (and the
+  // typed values) open for correction. An entry whose endpoint is NOT
+  // operated by the service's own vendor first goes through an explicit
+  // consent step naming the operator (the operator receives tool-call
+  // arguments — which can include conversation content — and, for OAuth
+  // flows, often holds the delegated access token).
+  const requestAddFromCatalog = (entry: CatalogThirdParty, overrides?: AddOverrides): Promise<boolean> => {
     if (consentRequired(entry)) {
       setConsentFor({ entry, overrides });
-      return;
+      // Not added yet — the card keeps its form; a confirmed consent add
+      // flips `added`, which hides the form anyway.
+      return Promise.resolve(false);
     }
-    addFromCatalog(entry, overrides);
+    return addFromCatalog(entry, overrides);
   };
 
-  const addFromCatalog = (entry: CatalogThirdParty, overrides?: AddOverrides) => {
+  const addFromCatalog = (entry: CatalogThirdParty, overrides?: AddOverrides): Promise<boolean> => {
     setConsentFor(null);
     setError(null);
     setNotice(null);
     setBusy(true);
-    fetch("/api/remote-mcp-servers", {
+    return fetch("/api/remote-mcp-servers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -742,14 +755,19 @@ export default function ConnectionsPage() {
         if (!res.ok) {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
+        const data = (await res.json()) as { tool_count?: number };
         setNotice(
           entry.auth === "open" || entry.auth === "api_key"
-            ? `${entry.display_name} added and ready to use.`
+            ? `${entry.display_name} connected${toolCountSuffix(data.tool_count)}.`
             : `${entry.display_name} added. Click Connect to sign in.`,
         );
         refresh();
+        return true;
       })
-      .catch((err: unknown) => setError(errMessage(err)))
+      .catch((err: unknown) => {
+        setError(errMessage(err));
+        return false;
+      })
       .finally(() => setBusy(false));
   };
 
@@ -1507,7 +1525,7 @@ export default function ConnectionsPage() {
               </button>
               <button
                 type="button"
-                onClick={() => addFromCatalog(consentFor.entry, consentFor.overrides)}
+                onClick={() => void addFromCatalog(consentFor.entry, consentFor.overrides)}
                 disabled={busy}
                 className={btnClass({ variant: "primary" })}
               >

@@ -14,6 +14,7 @@ import {
   placeholderValueOK,
   provenanceBadge,
   setupLink,
+  toolCountSuffix,
   type CatalogThirdParty,
 } from "./catalog";
 
@@ -176,6 +177,15 @@ describe("guided tenant-URL form helpers", () => {
     expect(placeholderValueOK("")).toBe(false);
     expect(placeholderValueOK("has space")).toBe(false);
     expect(placeholderValueOK("{nested}")).toBe(false);
+  });
+});
+
+describe("toolCountSuffix", () => {
+  it("pluralizes and stays silent on absent/zero counts", () => {
+    expect(toolCountSuffix(12)).toBe(" — 12 tools available");
+    expect(toolCountSuffix(1)).toBe(" — 1 tool available");
+    expect(toolCountSuffix(0)).toBe("");
+    expect(toolCountSuffix(undefined)).toBe("");
   });
 });
 

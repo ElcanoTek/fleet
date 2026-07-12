@@ -39,7 +39,11 @@ prior versions are listed because none have shipped.
   039: key sealed AES-256-GCM host-side like OAuth tokens, replayed as
   `Authorization: Bearer` or the entry's `api_key_header`; rotation via
   `PUT /remote-mcp-servers/{id}/key`) — the 60 `api_key` catalog entries
-  previously had no working connect path. Directory cards grow **guided add
+  previously had no working connect path. api_key and open adds (and key
+  rotations) are **validated with a real MCP handshake** before anything is
+  stored: a rejected key or unreachable URL fails the add with an actionable
+  error and the guided form keeps the typed values, while a successful add
+  confirms with the observed tool count. Directory cards grow **guided add
   forms**: per-`{placeholder}` inputs with a live URL preview for
   tenant-scoped endpoints, a write-only key field for api_key entries, and
   bring-your-own OAuth client fields for vendors without dynamic client

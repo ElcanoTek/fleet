@@ -26,9 +26,20 @@ connectable in place or honestly, visibly documented on the card.
   decrypted key; the overlay sends it as `Authorization: Bearer <key>` or, when
   the connection carries a header name, as `<header>: <key>` raw. Shared
   connections decrypt under the **owner's** AAD, exactly like OAuth.
-- Rotation: `PUT /remote-mcp-servers/{id}/key` (owner-scoped, write-only;
-  204). The UI's connection row shows "Update key" instead of
-  Connect/Reconnect; `open` connections show neither.
+- Rotation: `PUT /remote-mcp-servers/{id}/key` (owner-scoped, write-only).
+  The UI's connection row shows "Update key" instead of Connect/Reconnect;
+  `open` connections show neither.
+
+**Add-time validation handshake**: `open` and `api_key` adds — the two flows
+with no OAuth login step to prove the connection — are validated with a real
+MCP handshake (initialize + tools/list over the SSRF-safe client, bounded by
+the HTTP timeout) before anything is stored. A wrong key or mistyped tenant
+URL fails the add with an actionable error ("the server did not accept this
+API key…") and the guided form keeps the user's typed values for correction;
+a successful add reports the observed tool count ("connected — 12 tools
+available"). Key rotation validates the NEW key the same way and leaves the
+old key untouched on rejection. OAuth adds are unchanged — their login flow
+is the validation.
 
 **Catalog setup-guidance fields** (`internal/clientconfig`, surfaced through
 `GET /mcp-catalog`):
@@ -117,10 +128,10 @@ newly-verified official endpoints (see CHANGELOG).
   hints say so plainly rather than pretending. Basic/Token schemes work by
   pasting the full value (`Basic <base64>`, `Token <key>`) with
   `api_key_header: Authorization` — the raw value is sent unprefixed.
-- **No connectivity validation on add.** An api_key add is marked `connected`
-  without a test call; a wrong key surfaces at first use (the run skips the
-  server and reports it). A validating handshake at add time is a sensible
-  follow-up.
+- **Validation is a point-in-time probe.** The add/rotate handshake proves
+  the credential works at that moment; a key revoked later still surfaces at
+  run time (the run skips the server and reports it). There is no periodic
+  re-probe.
 - **Community self-hosted entries stay opt-in** behind
   `remote_mcp_catalog_community: true` — the trust posture for
   community-provenance listings is unchanged even though *you* host these two.
