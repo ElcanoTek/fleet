@@ -89,6 +89,11 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Sandbox Soup Sieve ReDoS (GHSA-836r-79rf-4m37)**: replaced Fedora's
+  vulnerable `soupsieve` 2.8.3 RPM payload with upstream 2.8.4 and removed the
+  old RPM metadata from the final image so Grype no longer reports the
+  vulnerable package.
+
 - **`bootstrap.sh` can no longer hijack a legacy database or truncate a
   foreign Caddyfile** (#718). Local-mode provisioning refuses when a
   role/database matching the configured names already exists on the cluster
