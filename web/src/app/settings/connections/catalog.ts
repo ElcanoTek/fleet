@@ -243,6 +243,14 @@ export function placeholderValueOK(v: string): boolean {
   return t !== "" && !/[\s{}]/.test(t);
 }
 
+// toolCountSuffix renders the validation probe's observed tool count for a
+// success notice — " — 12 tools available" — or nothing when the count is
+// absent or zero (it is decorative, never blocking).
+export function toolCountSuffix(count: number | undefined): string {
+  if (!count || count <= 0) return "";
+  return ` — ${count} ${count === 1 ? "tool" : "tools"} available`;
+}
+
 // setupLink is the best "how do I connect this?" destination: the explicit
 // setup walkthrough when the entry has one, else the vendor docs.
 export function setupLink(e: CatalogThirdParty): string | null {

@@ -204,6 +204,14 @@ default, or the entry's `api_key_header` name. It never enters the sandbox,
 the model context, a log line, or any HTTP response; rotation is
 `PUT /remote-mcp-servers/{id}/key` ("Update key" on the connection row).
 
+Because api_key and open adds have no OAuth login step to prove the
+connection, both are **validated at add time with a real MCP handshake**
+(initialize + tools/list over the SSRF-safe client) before anything is
+stored: a rejected key or unreachable URL fails the add with an actionable
+error and the guided form keeps the typed values, while a successful add
+confirms with the observed tool count. Rotation validates the new key the
+same way and keeps the old key on rejection.
+
 ### Self-hosted entries
 
 A few community entries (`google-workspace-self-hosted`,
