@@ -148,6 +148,9 @@ same PR.
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](docs/MIGRATIONS.md)
 - **MCP server hot-reload** (add/remove/update MCP servers without a restart via
   `fleet mcp reload` / SIGHUP / admin endpoint): [`docs/MCP-RELOAD.md`](docs/MCP-RELOAD.md)
+- **Testing MCP servers** (`fleet mcp test` per-server smoke: handshake +
+  tools/list with the boot loader's exact env/gates; plus the full testing
+  ladder): [`docs/MCP-TESTING.md`](docs/MCP-TESTING.md)
 - **The connector directory** (trust classes, the built-in hosted-server
   catalog, provenance tiers) and its **guided onboarding** (setup hints,
   guided tenant/API-key/BYO-client add forms, the per-user api_key auth mode):
