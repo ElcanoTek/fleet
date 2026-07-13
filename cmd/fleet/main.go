@@ -118,6 +118,10 @@ func main() {
 		// Preflight checks (#248) against the SAME loaders the server boots through;
 		// exits 0/1. Starts no servers, runs no migrations.
 		os.Exit(runValidateConfig(argv[1:]))
+	case invokeMCPTest:
+		// Per-server MCP smoke: handshake + tools/list against the bundle
+		// catalog, spawned exactly as the broker would. Boots nothing else.
+		os.Exit(runMCPTest(argv[2:]))
 	case invokeEval:
 		// Eval & regression harness (#502): replay bundle goldens through the
 		// governed loop and gate on the set threshold; exits 0/1 (2 = usage).
@@ -149,6 +153,7 @@ const (
 	invokeVersion
 	invokeMCPBroker
 	invokeValidateConfig
+	invokeMCPTest
 	invokeEval
 	invokeGenerateVAPIDKeys
 	invokeTaskRun
@@ -184,6 +189,15 @@ func classifyInvocation(argv []string) invocation {
 		// every other `task` subverb (export/import/memories) is admincli's.
 		if len(argv) > 1 && argv[1] == "run" {
 			return invokeTaskRun
+		}
+		return invokeAdmin
+	case "mcp":
+		// `fleet mcp test` probes the bundle catalog locally (spawns the
+		// servers host-side, like the broker) so it dispatches here; every
+		// other `mcp` subverb (reload) talks to the running server via
+		// admincli.
+		if len(argv) > 1 && argv[1] == "test" {
+			return invokeMCPTest
 		}
 		return invokeAdmin
 	default:

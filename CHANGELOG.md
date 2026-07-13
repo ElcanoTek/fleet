@@ -17,6 +17,16 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **`fleet mcp test` (docs/MCP-TESTING.md)**: per-server smoke test for the
+  bundle's MCP catalog — loads the bundle through the boot loader (same env
+  interpolation, enable gates, TLS), spawns/handshakes each server exactly as
+  the broker would (`initialize` + `tools/list`), and reports tools or the
+  actionable failure per server. `--all` sweeps the catalog, `--json` for CI
+  gates; exit 0/1/2. Boots nothing (no DB, no server, no sandbox) — run it
+  where the deployment's env lives.
+
 ### Changed
 
 - **Public-repo hygiene (#721)**: untracked the runtime `fleet.pid` file (now
