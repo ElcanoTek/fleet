@@ -73,7 +73,7 @@ func TestMCPTestVerb_ProbesStdioServers(t *testing.T) {
 	report := mcpTestReport{Passed: true}
 	catalog := loadCatalogForTest(t, bundle)
 	for _, name := range []string{"broken", "dummy"} {
-		res := probeBundleServer(name, catalog[name], 30*time.Second)
+		res := probeBundleServer(name, catalog[name], 30*time.Second, false)
 		if !res.Connected {
 			report.Passed = false
 			report.Failed++
@@ -132,6 +132,75 @@ func TestMCPTestVerb_SelectionAndGating(t *testing.T) {
 	if len(targets) != 0 || unknown != nil {
 		t.Errorf("--all on empty catalog = %v/%v, want none", targets, unknown)
 	}
+}
+
+// --deep calls advertised auth-status tools: a healthy upstream check reports
+// ok with the result text; an isError result fails the check (and via
+// deepFailed, the sweep); a server without an auth-status tool is skipped
+// with an explanation rather than failed. Red/green: the flag is new.
+func TestMCPTestVerb_DeepAuthStatus(t *testing.T) {
+	fixture := filepath.Join(mustGetwd(t), "testdata", "authstatus_server.py")
+	if _, err := os.Stat(fixture); err != nil {
+		t.Fatalf("fixture missing: %v", err)
+	}
+	dummy := dummyServerPath(t)
+	bundle := mcpTestBundle(t, `mcp_servers:
+  - name: auth_ok
+    type: stdio
+    command: python3
+    args: ["`+fixture+`"]
+    always: true
+  - name: auth_bad
+    type: stdio
+    command: python3
+    args: ["`+fixture+`"]
+    env:
+      AUTH_FAIL: "1"
+    always: true
+  - name: plain
+    type: stdio
+    command: python3
+    args: ["`+dummy+`"]
+    always: true
+`)
+	catalog := loadCatalogForTest(t, bundle)
+
+	ok := probeBundleServer("auth_ok", catalog["auth_ok"], 30*time.Second, true)
+	if !ok.Connected || len(ok.DeepChecks) != 1 || !ok.DeepChecks[0].OK {
+		t.Fatalf("auth_ok = %+v, want one passing deep check", ok)
+	}
+	if !strings.Contains(ok.DeepChecks[0].Detail, "authenticated") {
+		t.Errorf("detail = %q, want the tool's text surfaced", ok.DeepChecks[0].Detail)
+	}
+	if deepFailed(ok) {
+		t.Error("passing deep check must not mark the sweep failed")
+	}
+
+	bad := probeBundleServer("auth_bad", catalog["auth_bad"], 30*time.Second, true)
+	if !bad.Connected || len(bad.DeepChecks) != 1 || bad.DeepChecks[0].OK {
+		t.Fatalf("auth_bad = %+v, want one FAILING deep check on a connected server", bad)
+	}
+	if !strings.Contains(bad.DeepChecks[0].Detail, "401") {
+		t.Errorf("detail = %q, want the error text surfaced", bad.DeepChecks[0].Detail)
+	}
+	if !deepFailed(bad) {
+		t.Error("isError deep check must mark the sweep failed")
+	}
+
+	plain := probeBundleServer("plain", catalog["plain"], 30*time.Second, true)
+	if !plain.Connected || len(plain.DeepChecks) != 1 || !plain.DeepChecks[0].OK || plain.DeepChecks[0].Tool != "" {
+		t.Fatalf("plain = %+v, want a skipped (ok) placeholder deep check", plain)
+	}
+}
+
+// mustGetwd is Getwd with a test failure instead of an error return.
+func mustGetwd(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func TestMCPTestVerb_FlagParsing(t *testing.T) {

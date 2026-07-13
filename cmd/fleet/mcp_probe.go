@@ -15,6 +15,13 @@ package main
 // deploy box, or any box with the env file sourced): the point is validating
 // the exact machine-plus-credentials combination production uses.
 //
+// --deep goes one rung further: for every connected server that advertises an
+// auth-status tool ("auth_status" or "*_auth_status" — the bundle servers'
+// convention for "ask the upstream if my credentials are actually valid"), it
+// CALLS that tool and reports the result. The handshake proves dial tone;
+// --deep proves the far end accepts the call. Servers without such a tool are
+// noted and skipped, never failed.
+//
 // It never prints a credential VALUE. Failures name the server and the error
 // (a missing executable, a dead process, a handshake timeout) — the same
 // classes that otherwise surface as cryptic mid-chat tool errors.
@@ -43,6 +50,7 @@ import (
 type mcpTestOptions struct {
 	bundlePath string
 	all        bool
+	deep       bool
 	jsonOutput bool
 	timeout    time.Duration
 	names      []string
@@ -60,6 +68,20 @@ type mcpTestResult struct {
 	// Optional mirrors the manifest flag so a sweep's output distinguishes
 	// always-on servers from per-conversation opt-ins.
 	Optional bool `json:"optional"`
+	// DeepChecks holds --deep auth-status call outcomes (absent otherwise).
+	DeepChecks []mcpDeepCheck `json:"deep_checks,omitempty"`
+}
+
+// mcpDeepCheck is one --deep auth-status tool call's outcome. OK means the
+// CALL succeeded and the server did not flag the result as an error
+// (ToolResult.IsError); Detail carries the result's first text block (or the
+// error) so the operator judges the CONTENT — the probe does not interpret
+// auth semantics beyond the MCP error flag, deliberately: result shapes are
+// server-specific and guessing would fake precision.
+type mcpDeepCheck struct {
+	Tool   string `json:"tool"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // mcpTestReport is the top-level --json envelope.
@@ -109,8 +131,8 @@ func runMCPTest(args []string) int {
 
 	report := mcpTestReport{Passed: true}
 	for _, name := range targets {
-		res := probeBundleServer(name, catalog[name], opts.timeout)
-		if !res.Connected {
+		res := probeBundleServer(name, catalog[name], opts.timeout, opts.deep)
+		if !res.Connected || deepFailed(res) {
 			report.Passed = false
 			report.Failed++
 		}
@@ -125,10 +147,11 @@ func parseMCPTestFlags(args []string) (mcpTestOptions, error) {
 	var opts mcpTestOptions
 	fs.StringVar(&opts.bundlePath, "bundle-path", "", "client-config bundle dir (overrides FLEET_CLIENT_CONFIG_DIR; default config/default)")
 	fs.BoolVar(&opts.all, "all", false, "test every enabled server in the catalog")
+	fs.BoolVar(&opts.deep, "deep", false, "also call each server's auth-status tool (auth_status / *_auth_status) to verify credentials against the upstream")
 	fs.BoolVar(&opts.jsonOutput, "json", false, "machine-readable output")
 	fs.DurationVar(&opts.timeout, "timeout", 30*time.Second, "per-server handshake timeout")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: fleet mcp test [--all | <server> ...] [--bundle-path dir] [--timeout 30s] [--json]")
+		fmt.Fprintln(fs.Output(), "usage: fleet mcp test [--all | <server> ...] [--deep] [--bundle-path dir] [--timeout 30s] [--json]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -181,7 +204,17 @@ func gatedOffServer(bundle *clientconfig.Bundle, name string) bool {
 // (same client methods, same ${FLEET_WORKSPACE} expansion, same TLS options)
 // — but capturing the per-server error instead of log-and-skip, because the
 // error IS this verb's product.
-func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Duration) mcpTestResult {
+// deepFailed reports whether any --deep check on a connected server failed.
+func deepFailed(res mcpTestResult) bool {
+	for _, c := range res.DeepChecks {
+		if !c.OK {
+			return true
+		}
+	}
+	return false
+}
+
+func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Duration, deep bool) mcpTestResult {
 	res := mcpTestResult{Server: name, Type: spec.Type, Optional: spec.Optional, ToolCount: -1}
 	if res.Type == "" {
 		if spec.URL != "" {
@@ -225,7 +258,56 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 		res.Tools = append(res.Tools, st.Tool.Name)
 	}
 	sort.Strings(res.Tools)
+
+	if deep {
+		res.DeepChecks = runDeepChecks(client, name, res.Tools, timeout)
+	}
 	return res
+}
+
+// runDeepChecks calls every advertised auth-status tool (the bundle servers'
+// convention: "auth_status" or "*_auth_status") with empty arguments and a
+// fresh per-call timeout. A server with no such tool gets a single skipped
+// (OK) entry so the report says WHY nothing deeper was proven.
+func runDeepChecks(client *mcp.Client, server string, tools []string, timeout time.Duration) []mcpDeepCheck {
+	var checks []mcpDeepCheck
+	for _, t := range tools {
+		if t != "auth_status" && !strings.HasSuffix(t, "_auth_status") {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		result, err := client.CallToolOn(ctx, server, t, map[string]interface{}{})
+		cancel()
+		switch {
+		case err != nil:
+			checks = append(checks, mcpDeepCheck{Tool: t, OK: false, Detail: err.Error()})
+		case result.IsError:
+			checks = append(checks, mcpDeepCheck{Tool: t, OK: false, Detail: firstResultText(result)})
+		default:
+			checks = append(checks, mcpDeepCheck{Tool: t, OK: true, Detail: firstResultText(result)})
+		}
+	}
+	if len(checks) == 0 {
+		checks = append(checks, mcpDeepCheck{Tool: "", OK: true, Detail: "no auth-status tool advertised — deep check skipped"})
+	}
+	return checks
+}
+
+// firstResultText extracts the result's first text block, collapsed to one
+// line and capped so a verbose status payload cannot flood the report.
+func firstResultText(result *mcp.ToolResult) string {
+	for _, block := range result.Content {
+		text := strings.Join(strings.Fields(block.Text), " ")
+		if text == "" {
+			continue
+		}
+		const maxDetail = 200
+		if r := []rune(text); len(r) > maxDetail {
+			text = string(r[:maxDetail]) + "…"
+		}
+		return text
+	}
+	return "(no text content)"
 }
 
 // emitMCPTestReport prints the report (human or --json) and returns the exit code.
@@ -244,6 +326,16 @@ func emitMCPTestReport(w io.Writer, report mcpTestReport, jsonOutput bool) int {
 				fmt.Fprintln(w)
 				for _, t := range r.Tools {
 					fmt.Fprintf(w, "    - %s\n", t)
+				}
+				for _, c := range r.DeepChecks {
+					switch {
+					case c.Tool == "":
+						fmt.Fprintf(w, "    deep: %s\n", c.Detail)
+					case c.OK:
+						fmt.Fprintf(w, "    deep ✓ %s — %s\n", c.Tool, c.Detail)
+					default:
+						fmt.Fprintf(w, "    deep ✗ %s FAILED — %s\n", c.Tool, c.Detail)
+					}
 				}
 			} else {
 				fmt.Fprintf(w, "✗ %-24s %-6s FAILED: %s\n", r.Server, r.Type, r.Error)
