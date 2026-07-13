@@ -1937,6 +1937,10 @@ tr.sla-row-fail {
 .modal {
   width: 100%;
   max-width: 640px;
+  /* The overlay is a flex row, so without this the modal's min-content width
+     (nowrap reveal hints/summaries) beats width:100% and pushes the dialog
+     past a phone viewport. min-width:0 lets the inner ellipsizing engage. */
+  min-width: 0;
   background: var(--color-surface-1, #241b31);
   border: 1px solid var(--color-border);
   border-radius: 0.85rem;
@@ -2051,6 +2055,10 @@ tr.sla-row-fail {
   padding: 0;
   min-width: 0;
   display: grid;
+  /* minmax(0,…) pins the single column to the modal width — the implicit
+     auto track otherwise grows to the nowrap reveal-headers' min-content
+     and overflows a phone viewport. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.375rem;
 }
 .task-group-label {
@@ -2180,6 +2188,13 @@ tr.sla-row-fail {
 .task-reveal-spacer {
   flex: 1;
 }
+@media (max-width: 480px) {
+  /* With the live summary taking the right slot there's no room left for the
+     contents hint on a phone — it ellipsizes to a lone letter. Summary wins. */
+  .task-reveal-hint {
+    display: none;
+  }
+}
 .task-reveal-summary {
   font-size: 0.76rem;
   color: var(--color-text-secondary);
@@ -2293,6 +2308,9 @@ tr.sla-row-fail {
    Behavior, then the caution-tinted pre-run gate card. */
 .task-advanced {
   display: grid;
+  /* Same minmax(0,…) pin as .task-form: don't let item min-content widen
+     the column past the modal on phones. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.25rem;
 }
 .task-eyebrow {
@@ -2468,6 +2486,16 @@ tr.sla-row-fail {
 }
 .task-footer.is-scrolled {
   box-shadow: 0 -8px 18px var(--color-overlay-strong);
+}
+@media (max-width: 720px) {
+  /* Six footer items can't share a phone-width line: wrap, with the spacer
+     as the line break — estimate row on top, status + actions below. */
+  .task-footer {
+    flex-wrap: wrap;
+  }
+  .task-footer-spacer {
+    flex-basis: 100%;
+  }
 }
 .task-footer-spacer {
   flex: 1;
@@ -3518,6 +3546,13 @@ select.mcp-server-picker__account-select {
   text-transform: uppercase;
   color: var(--color-text-muted);
   margin-bottom: 0.3rem;
+}
+/* Fenced code in the react-markdown log falls through to the browser-default
+   <pre> — scroll long lines inside the block instead of clipping them at the
+   modal edge (same treatment as chat's .assistant-markdown-pre). */
+.log-message-content pre {
+  overflow-x: auto;
+  max-width: 100%;
 }
 /* Inline agent-generated images in the task log (#271). */
 .log-image {
