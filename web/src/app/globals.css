@@ -1499,6 +1499,12 @@ tr.sla-row-fail {
   gap: 0.25rem;
   margin: 0.5rem 0;
   border-bottom: 1px solid var(--color-border);
+  /* On narrow screens (phones) the tab row is wider than the viewport;
+     scroll the row itself instead of blowing out the page. */
+  overflow-x: auto;
+  max-width: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
 }
 .tab-btn {
   background: transparent;
@@ -1508,6 +1514,9 @@ tr.sla-row-fail {
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: 0.9rem;
+  /* Labels must not wrap — force the row to overflow into its own scroll. */
+  white-space: nowrap;
+  flex: none;
 }
 .tab-btn:hover {
   color: var(--color-text-primary);
