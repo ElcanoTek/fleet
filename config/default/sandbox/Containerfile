@@ -121,7 +121,15 @@ RUN microdnf install -y \
 # soupsieve, ...) resolve at runtime; the in-layer asserts below and the
 # matplotlib warm run keep this honest.
 # When bumping a pin, re-check the advisory list (gh api /advisories/GHSA-...).
-RUN python3 -m pip install --no-cache-dir \
+#
+# --ignore-installed is load-bearing: when Fedora's OWN rpm catches up to a
+# pinned version (as python3-tornado did), plain pip sees the requirement
+# already satisfied by the rpm copy in /usr/lib64 and installs NOTHING — then
+# the rpm -e below deletes the only copy and the image stops building. The
+# flag forces a fresh /usr/local install regardless of what the base image
+# ships, keeping this layer immune to Fedora's package versions drifting
+# under the pins.
+RUN python3 -m pip install --no-cache-dir --ignore-installed \
         "pip==26.1.2" \
         "pypdf==6.14.2" \
         "tornado==6.5.7" \
