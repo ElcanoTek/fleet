@@ -1736,6 +1736,20 @@ tr.sla-row-fail {
   background: color-mix(in srgb, var(--color-warning-strong) 16%, transparent);
   color: var(--color-warning-strong);
 }
+@media (max-width: 720px) {
+  /* On phones the nowrap schedule pill ("At minute 30 past every hour…")
+     starves the name column to nothing. Two lines instead: time + name,
+     then the pill under the name, free to wrap. */
+  .upcoming-run-row {
+    grid-template-columns: 4.5rem 1fr;
+    gap: 0.25rem 0.75rem;
+  }
+  .upcoming-run-kind {
+    grid-column: 2;
+    justify-self: start;
+    white-space: normal;
+  }
+}
 
 /* Live progress checklist (#518): the agent's task_tracker plan, rendered as a
    todo→done list in the Operations Center live view. The --live variant is the
