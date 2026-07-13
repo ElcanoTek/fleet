@@ -1354,6 +1354,10 @@ button {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.75rem;
+  /* On narrow screens the controls drop below the heading instead of
+     crushing into a skinny column beside it. Inert when everything fits. */
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
 }
 .section-header h2 {
   margin: 0;
@@ -1565,7 +1569,9 @@ tr.sla-row-fail {
 }
 .usage-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  /* 140px min fits a 2x2 tile grid on ~390px phones (vs a 4-tall stack);
+     desktop still resolves to one column per tile. */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 0.75rem;
   margin: 0.75rem 0 0.5rem;
 }
@@ -1665,6 +1671,14 @@ tr.sla-row-fail {
 }
 .usage-num {
   font-variant-numeric: tabular-nums;
+}
+@media (max-width: 720px) {
+  /* Narrower label column so the bars keep most of the width on phones;
+     names still ellipsize and carry their full text in title/aria-label. */
+  .usage-bar-row {
+    grid-template-columns: minmax(84px, 120px) 1fr minmax(56px, auto);
+    gap: 0.45rem;
+  }
 }
 
 /* Upcoming runs timeline (Scheduler UX 2.0, #504): a day-grouped list of the
