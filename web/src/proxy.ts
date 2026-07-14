@@ -11,7 +11,7 @@ import { BUILD_ID_HEADER, currentBuildId } from "@/app/lib/buildId";
 //   - elcano_session: the HMAC cookie minted by the password form.
 //   - moc bearer: when a request carries an Authorization: Bearer <token>
 //     header (moc's username/password login persists a bearer token), the
-//     orchestrator API proxy forwards it upstream, so middleware lets the
+//     orchestrator API proxy forwards it upstream, so this request proxy lets the
 //     request through to be authorized by the orchestrator. The bearer is
 //     opaque to the Next layer (moc owns it), so the only sane gate here is
 //     "a bearer is present" — the real check happens at :8000.
@@ -88,7 +88,7 @@ function decorate(res: NextResponse, pathname: string): NextResponse {
 
 // hasBearer detects moc's username/password Bearer token on the request. The
 // token is opaque to Next (the orchestrator at :8000 owns + validates it), so
-// the middleware's only job is to NOT block a request that carries one and let
+// this proxy's only job is to NOT block a request that carries one and let
 // the upstream proxy authorize it. Without this, a moc bearer user (no cookie)
 // would be redirected to /login on every navigation.
 function hasBearer(request: NextRequest): boolean {
@@ -96,7 +96,7 @@ function hasBearer(request: NextRequest): boolean {
   return !!auth && /^Bearer\s+\S/i.test(auth);
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (

@@ -660,6 +660,9 @@ func run() error {
 	h.SetTaskTemplateProvider(func() []clientconfig.TaskTemplate {
 		return bundle.TaskTemplates
 	})
+	// The hybrid prompt library reads bundle prompts/ live (Git-backed,
+	// read-only) and merges it with sched-DB private/workspace entries.
+	h.SetPromptCatalogProvider(bundle.Prompts)
 	// Wire the chat side of the usage report (#601 part 1) — see wireChatUsage.
 	h.SetChatUsageProvider(chatUsage)
 	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
@@ -1314,6 +1317,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// template" affordance (#262). The web app proxies
 		// /api/orchestrator/task-templates to this. Never persists or creates a task.
 		r.Get("/task-templates", h.ListTaskTemplates)
+		r.Get("/prompts", h.PromptLibraryCollection)
+		r.Post("/prompts", h.PromptLibraryCollection)
+		r.Get("/prompts/export", h.ExportPromptLibrary)
+		r.Put("/prompts/{prompt_id}", h.PromptLibraryItem)
+		r.Delete("/prompts/{prompt_id}", h.PromptLibraryItem)
 
 		// Notes reads (admin + scoped user).
 		r.Get("/notes", notes.ListNotes)

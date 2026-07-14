@@ -38,6 +38,7 @@ import type { NudgeDecision } from "@/app/lib/spreadsheetNudge";
 import type { Message } from "./history";
 import type { MCPServerInfo, RankedModel } from "./chat-experience";
 import { completeSkill, filterSkills, skillSlashQuery, type SkillInfo } from "./skillSlash";
+import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 
 // isNewlyReleased was a module-level helper in chat-experience; its only
 // caller was the composer's model-picker rows, so it moves here verbatim
@@ -910,6 +911,7 @@ export function Composer({
                       </div>
                     );
                   })()}
+                  <PromptLibrary currentText={prompt} onInsert={setPrompt} compact />
                   <button
                     type="button"
                     aria-label="Attach files"

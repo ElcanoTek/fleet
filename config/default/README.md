@@ -23,9 +23,15 @@ supply the client's prompts, personas, playbooks, and connectors.
     chat.md            # interactive-chat base prompt
   personas/            # *.yaml — one per persona; PERSONA_DEFAULT picks the default
   protocols/           # *.yaml | *.md — reusable playbooks
+  prompts/             # *.yaml | *.yml | *.md | *.txt — Git-backed prompt library
   skills/              # <name>/SKILL.md — Agent Skills (progressive disclosure)
   mcp/                 # the client's Python MCP servers (+ requirements.txt)
 ```
+
+The optional `prompts/` directory feeds the hybrid prompt library shown in Chat
+and Operations Center. Bundle files are read-only and Git-trackable; users can
+also create private or workspace-shared prompts in the UI and export the visible
+library as JSON. See [`docs/PROMPT-LIBRARY.md`](../../docs/PROMPT-LIBRARY.md).
 
 See `internal/clientconfig/clientconfig.go` for the manifest schema and the
 authoritative description of each field, including the MCP catalog's declarative

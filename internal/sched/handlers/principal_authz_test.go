@@ -106,6 +106,20 @@ func addTask(t *testing.T, store *storage.Storage, prompt string) *models.Task {
 	return task
 }
 
+func TestPrincipalOwnsTask(t *testing.T) {
+	aliceID, bobID := uuid.New(), uuid.New()
+	alice := principal{user: &models.User{ID: aliceID}}
+	if !alice.ownsTask(&models.Task{CreatedBy: &aliceID}) {
+		t.Fatal("creator should own their task")
+	}
+	if alice.ownsTask(&models.Task{CreatedBy: &bobID}) || alice.ownsTask(&models.Task{}) {
+		t.Fatal("user must not own another user's or unattributed task")
+	}
+	if (principal{apiKey: &apikeys.APIKey{KeyID: "key-1"}}).ownsTask(&models.Task{CreatedBy: &aliceID}) {
+		t.Fatal("API keys must use explicit cancel_task permission")
+	}
+}
+
 // TestScopedAPIKeyAuthorization is the regression test for the authorization
 // bypass where a scoped API key admitted by AdminOrUserAuthMiddleware skipped
 // every handler's permission check (those were gated on user != nil).

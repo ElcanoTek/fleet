@@ -40,6 +40,35 @@ test("authenticated /chat reaches the empty composer state", async ({ page }) =>
   await expect(page.getByRole("textbox").first()).toBeVisible();
 });
 
+test("a Git-backed library prompt can be selected into the chat composer", async ({ page }) => {
+  const content = "name: Weekly brief\ngoal: Summarize the week\n";
+  await mockChatBoot(page);
+  await page.route("**/api/orchestrator/prompts", (r: Route) =>
+    r.fulfill({
+      json: [
+        {
+          id: "git:weekly.yaml",
+          name: "Weekly brief",
+          description: "Summarize the week",
+          content,
+          source: "git",
+          visibility: "workspace",
+          read_only: true,
+          owned_by_caller: false,
+          path: "prompts/weekly.yaml",
+        },
+      ],
+    }),
+  );
+
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Open prompt library" }).click();
+  await expect(page.getByRole("dialog", { name: "Prompt library" })).toBeVisible();
+  await page.getByRole("button", { name: "Use prompt" }).click();
+  await expect(page.getByRole("textbox").first()).toHaveValue(content);
+});
+
 test("a sent turn streams text deltas and a final assistant message", async ({ page }) => {
   await mockChatBoot(page);
   await mockStreamingTurn(page);

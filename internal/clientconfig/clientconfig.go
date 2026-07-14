@@ -18,6 +18,7 @@
 //	  system_prompts/      # default.md (scheduled base), chat.md (interactive base)
 //	  personas/            # *.yaml
 //	  protocols/           # *.yaml|md
+//	  prompts/             # *.yaml|yml|md|txt reusable prompt library entries
 //	  skills/              # <name>/SKILL.md Agent Skills (progressive disclosure)
 //	  mcp/                 # the client's Python MCP servers + requirements.txt
 //
@@ -168,7 +169,11 @@ type Bundle struct {
 	SystemPromptsDir string
 	PersonasDir      string
 	ProtocolsDir     string
-	SkillsDir        string
+	// PromptsDir is the bundle-owned, Git-trackable reusable prompt library.
+	// Entries are read on demand so a config-repo pull is visible without a
+	// fleet restart. See ReadPrompts and Bundle.Prompts.
+	PromptsDir string
+	SkillsDir  string
 	// BundleSkillsDir is the bundle's OWN skills/ dir (the author-owned
 	// source). SkillsDir may point at the merged bundle+builtin dir instead —
 	// see builtin_skills.go. Validation always runs against this one.
@@ -867,6 +872,7 @@ func Load(dir string) (*Bundle, error) {
 		SystemPromptsDir:  filepath.Join(abs, "system_prompts"),
 		PersonasDir:       filepath.Join(abs, "personas"),
 		ProtocolsDir:      filepath.Join(abs, "protocols"),
+		PromptsDir:        filepath.Join(abs, "prompts"),
 		SkillsDir:         filepath.Join(abs, "skills"),
 		MCPDir:            filepath.Join(abs, "mcp"),
 		EvalsDir:          filepath.Join(abs, "evals"),
