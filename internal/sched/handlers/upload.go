@@ -36,6 +36,16 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// 1. API Key
 	if h.verifyAdminKey(r) {
 		isAuthed = true
+	} else if user, handled := h.headerTrustUser(w, r); handled {
+		// 1a. Next-proxy header-trust path (#157): /upload sits outside the
+		// AdminOrUserAuthMiddleware group like POST /tasks, so the cookie
+		// user's proxied identity must be honored here too (an upload is only
+		// usable via a subsequent task create). Fail-closed: a rejected token
+		// has already written its response.
+		if user == nil {
+			return
+		}
+		isAuthed = true
 	} else {
 		// 1b. Scoped API key carrying create_task permission (#719): an uploaded
 		// file is only usable via a subsequent task create, so the SAME scoped
