@@ -290,6 +290,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
         task={logTask}
         onClose={() => setLogTask(null)}
         canStop={isAdmin || (!!session.username && logTask?.created_by_username === session.username)}
+        onResubmitted={() => void dashboard.reload()}
       />
     </div>
   );

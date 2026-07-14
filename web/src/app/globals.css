@@ -3812,16 +3812,281 @@ select.mcp-server-picker__account-select {
   border-color: var(--color-danger, #e08080);
 }
 
-/* Log viewer */
+/* Log viewer — moc-style task detail modal. The log modal is the ops
+   center's deep-dive surface, so unlike the 640px form modals it takes most
+   of the viewport. */
+.modal-log {
+  max-width: min(1150px, 96vw);
+}
+.modal-log .modal-body {
+  /* The overlay reserves ~4rem padding + header/summary rows; a taller body
+     keeps the transcript scrolling inside the modal, not the page. */
+  max-height: calc(100dvh - 16rem);
+  min-height: 20rem;
+}
+.modal-log-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  font-size: 1rem;
+}
+
+/* Task summary strip: mirrors the Recent Tasks row (ID / Status / SLA /
+   Schedule / Created by / Created) under the modal header. */
+.task-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-overlay-soft, rgba(0, 0, 0, 0.2));
+}
+.task-summary-item {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.task-summary-label {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+.task-summary-value {
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.4rem;
+}
+
+/* Status + Resubmit/Download row. */
+.task-detail-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--gradient-surface-card);
+}
+.task-detail-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+}
+.task-detail-actions {
+  display: inline-flex;
+  gap: 0.5rem;
+}
+
+/* moc-style metrics strip: cumulative session token/cost figures. */
+.log-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.75rem;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--gradient-surface-card);
+}
+.log-metric {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  text-align: center;
+}
+.log-metric-label {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+.log-metric-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Interaction filters: chip groups computed from the transcript. */
+.log-filters {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  display: grid;
+  gap: 0.6rem;
+}
+.log-filters-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.log-filters-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+.log-filter-group {
+  display: grid;
+  gap: 0.35rem;
+}
+.log-filter-group-title {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+.log-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.log-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  font-family: var(--font-code);
+  cursor: pointer;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+.log-chip:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+.log-chip--active {
+  color: var(--color-status-assigned-fg);
+  background: var(--color-status-assigned-bg);
+  border-color: var(--color-status-assigned-border);
+}
+.log-chip-count {
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+}
+.log-chip--active .log-chip-count {
+  color: inherit;
+}
+.log-filters-shown {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+/* Transcript messages: role-tinted header bar over the content card. */
+.log-session {
+  display: grid;
+  gap: 0.6rem;
+}
 .log-message {
-  border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.1));
-  padding: 0.6rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-overlay-soft, rgba(0, 0, 0, 0.15));
+}
+.log-message-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  background: var(--color-surface-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.log-message--user .log-message-head {
+  background: color-mix(in srgb, var(--color-primary) 22%, var(--color-surface-2));
+}
+.log-message--tool .log-message-head {
+  background: color-mix(in srgb, #7c6bff 14%, var(--color-surface-2));
+}
+.log-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-white);
+  background: var(--color-secondary);
+  flex: 0 0 auto;
+}
+.log-avatar--user {
+  background: var(--color-primary);
+}
+.log-avatar--assistant {
+  background: var(--color-secondary);
+}
+.log-avatar--tool {
+  background: #6b5bd6;
 }
 .log-message-role {
   font-size: 0.7rem;
+  font-weight: 600;
   text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-secondary);
+}
+.log-message-model {
+  font-size: 0.68rem;
+  font-family: var(--font-code);
   color: var(--color-text-muted);
-  margin-bottom: 0.3rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.log-message-time {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+.log-message-content {
+  padding: 0.6rem 0.75rem;
+}
+.log-pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+}
+.log-reasoning summary,
+.log-tool-call summary,
+.log-tool-output summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.log-reasoning,
+.log-tool-call {
+  margin-bottom: 0.35rem;
+}
+.log-tool-calls {
+  display: grid;
+  gap: 0.2rem;
 }
 /* Fenced code in the react-markdown log falls through to the browser-default
    <pre> — scroll long lines inside the block instead of clipping them at the

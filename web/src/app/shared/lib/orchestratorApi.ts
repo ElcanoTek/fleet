@@ -323,22 +323,39 @@ export type McpServer = {
   remote?: boolean;
 };
 
+export type LogToolCall = {
+  id?: string;
+  name?: string;
+  arguments?: string;
+};
+
 export type LogMessage = {
   id?: string;
   role?: string;
   content?: string;
+  reasoning?: string;
   model?: string;
   provider?: string;
   created_at?: number;
   finished_at?: number;
+  message_type?: string;
+  tool_calls?: LogToolCall[];
+  tool_call_id?: string;
 };
 
+// Token fields are CUMULATIVE across the whole session (billing/display
+// numbers — see agentcore.LogSession). cached_tokens is the cache-read subset
+// of prompt_tokens.
 export type LogSession = {
   id?: string;
   title?: string;
   prompt_tokens?: number;
   completion_tokens?: number;
+  cached_tokens?: number;
+  cache_creation_tokens?: number;
   cost?: number;
+  created_at?: number;
+  updated_at?: number;
   messages?: LogMessage[];
 };
 
@@ -461,6 +478,14 @@ export const orchestratorApi = {
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  // Resubmit (#TBD): POST /tasks/{id}/rerun creates a NEW one-time task copied
+  // from this one (recurrence cleared, runs now); optional overrides replace
+  // fields on the copy. The source task is untouched.
+  rerunTask: (taskId: string, overrides?: Record<string, unknown>) =>
+    request<Task>(`/tasks/${encodeURIComponent(taskId)}/rerun`, {
+      method: "POST",
+      body: JSON.stringify(overrides ? { overrides } : {}),
+    }),
   upcomingRuns: (limit = 50) => request<{ upcoming: UpcomingRun[] }>(`/tasks/upcoming?limit=${limit}`),
   // #516 self-improving memory: feedback + versioned learned instructions.
   submitFeedback: (taskId: string, rating: "up" | "down", critique?: string) =>
