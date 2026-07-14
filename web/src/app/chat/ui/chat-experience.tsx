@@ -4094,22 +4094,22 @@ export function ChatExperience({
               <>
                 <button
                   aria-label="Keyboard shortcuts"
-                  className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                  className="group/tbtn inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
                   title="Keyboard shortcuts (?)"
                   data-testid="shortcuts-button"
                   type="button"
                   onClick={() => setShortcutsOpen(true)}
                 >
-                  <Icon name="keyboard" className="size-5" />
+                  <Icon name="keyboard" className="size-5 transition motion-safe:group-hover/tbtn:scale-110" />
                 </button>
                 <button
                   aria-label="Manage memories"
-                  className="relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                  className="group/tbtn relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
                   title="Manage memories"
                   type="button"
                   onClick={openMemoryManager}
                 >
-                  <Icon name="brain" className="size-5" />
+                  <Icon name="brain" className="size-5 transition motion-safe:group-hover/tbtn:scale-110" />
                 </button>
                 <button
                   aria-label={
@@ -4121,7 +4121,7 @@ export function ChatExperience({
                   // Color stays muted in both states — the icon swap is
                   // the affordance the user keys off, not an accent
                   // highlight. Mirrors the sun/moon theme toggle next door.
-                  className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                  className="group/tbtn inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
                   title={showStats ? "Hide details" : "Show details"}
                   type="button"
                   onClick={toggleShowStats}

@@ -921,11 +921,15 @@ function SectionToggle({
   label,
   open,
   onToggle,
+  hue = "accent",
 }: {
   icon: string;
   label: string;
   open: boolean;
   onToggle: () => void;
+  // Section identity color: Projects wear the scheduled amber, Chats the
+  // brand accent — same hue language as the ops-center status palette.
+  hue?: "accent" | "amber";
 }) {
   return (
     <button
@@ -936,7 +940,12 @@ function SectionToggle({
     >
       <Icon
         name={icon}
-        className="size-3.5 shrink-0 text-[var(--color-accent)]"
+        className={[
+          "size-3.5 shrink-0",
+          hue === "amber"
+            ? "text-[var(--color-status-scheduled-fg)]"
+            : "text-[var(--color-accent)]",
+        ].join(" ")}
       />
       <span className="min-w-0 flex-1 text-left">{label}</span>
       <Icon
@@ -1328,6 +1337,7 @@ export function ConversationSidebar({
           <SectionToggle
             icon="briefcase"
             label="Projects"
+            hue="amber"
             open={projectsSectionOpen}
             onToggle={() => setProjectsSectionOpen((o) => !o)}
           />
@@ -1337,7 +1347,7 @@ export function ConversationSidebar({
           ariaLabel="Create project"
           icon="plus"
           iconClassName="size-4"
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           onClick={onCreateProject}
         />
       </div>
@@ -1674,7 +1684,7 @@ export function ConversationSidebar({
           ariaLabel="New chat"
           icon="plus"
           iconClassName="size-4"
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           onClick={() =>
             clearConversation(
               serverConfig.lockdownOnly ? { lockdown: true } : undefined,
