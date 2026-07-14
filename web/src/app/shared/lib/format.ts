@@ -9,10 +9,29 @@ export function formatDate(dateStr: string | null | undefined): string {
   try {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return "-";
-    return d.toLocaleString();
+    // Minutes are enough visually ("7/14/2026, 3:32 PM") — the backend keeps
+    // the exact timestamp; seconds were display bloat.
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
   } catch {
     return "-";
   }
+}
+
+// Time-first stamp for the task list ("9:00 AM · 7/20/2026"): the time of
+// day is the salient part and the date qualifies it; the middle dot keeps the
+// two visually separate.
+export function formatTimeFirst(dateStr: string | null | undefined): string {
+  if (!dateStr) return "-";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "-";
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${time} · ${d.toLocaleDateString()}`;
 }
 
 export function formatTimestamp(ts: number | null | undefined): string {

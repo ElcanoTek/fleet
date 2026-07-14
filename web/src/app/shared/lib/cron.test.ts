@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeCronExpression } from "./cron";
+import { describeCronExpression, describeCronExpressionShort } from "./cron";
 
 // Exercises the cron → English describer ported from moc's utils.js. Covers the
 // common preset shapes the task form's recurrence presets emit plus edge cases.
@@ -44,5 +44,24 @@ describe("describeCronExpression", () => {
     expect(describeCronExpression("0 9 1 * 1")).toBe(
       "At 09:00, on the 1st of the month or only on Monday",
     );
+  });
+});
+
+describe("describeCronExpressionShort", () => {
+  it("compacts a weekday list", () => {
+    expect(describeCronExpressionShort("0 9 * * 6,0")).toBe("9:00 AM, Sat, Sun");
+  });
+  it("compacts a weekday range with an en dash", () => {
+    expect(describeCronExpressionShort("30 8 * * 1-5")).toBe("8:30 AM, Mon–Fri");
+  });
+  it("compacts every-day and single-day schedules", () => {
+    expect(describeCronExpressionShort("0 9 * * *")).toBe("9:00 AM, Daily");
+    expect(describeCronExpressionShort("15 14 * * 3")).toBe("2:15 PM, Wed");
+  });
+  it("returns empty for shapes it does not cover (caller falls back)", () => {
+    expect(describeCronExpressionShort("*/5 * * * *")).toBe("");
+    expect(describeCronExpressionShort("0 9 1 * *")).toBe("");
+    expect(describeCronExpressionShort("0 9 * 6 *")).toBe("");
+    expect(describeCronExpressionShort("not cron")).toBe("");
   });
 });

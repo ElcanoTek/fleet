@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { stripAnsiCodes } from "./format";
+import { formatTimeFirst, stripAnsiCodes } from "./format";
 
 const ESC = String.fromCharCode(27); // ESC (\x1b), kept out of the source as a raw byte
 
@@ -21,5 +21,15 @@ describe("stripAnsiCodes", () => {
   it("returns empty string for null/undefined", () => {
     expect(stripAnsiCodes(null)).toBe("");
     expect(stripAnsiCodes(undefined)).toBe("");
+  });
+});
+
+describe("formatTimeFirst", () => {
+  it("renders time-first with a middle-dot separator", () => {
+    expect(formatTimeFirst("2026-07-20T09:00:00")).toBe("9:00 AM · 7/20/2026");
+  });
+  it("returns a dash for empty or invalid input", () => {
+    expect(formatTimeFirst(undefined)).toBe("-");
+    expect(formatTimeFirst("not a date")).toBe("-");
   });
 });
