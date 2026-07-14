@@ -107,13 +107,30 @@ function navItemClass(active: boolean, collapsed: boolean): string {
     active
       ? "bg-[color-mix(in_srgb,var(--color-primary)_18%,transparent)] font-semibold text-[var(--color-text-primary)] before:absolute before:left-0 before:top-1/2 before:h-[0.95rem] before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-[var(--color-primary)]"
       : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
-    // Collapsed strip (≥sm): 2.5rem icon squares, centered.
+    // Collapsed strip (≥sm): 2.5rem squares with the hue tile centered.
     collapsed ? "sm:size-10 sm:justify-center sm:gap-0 sm:p-0" : "",
   ].join(" ");
 }
 
-function navIconClass(active: boolean): string {
-  return ["size-[1.05rem] shrink-0", active ? "text-[var(--color-primary)]" : "text-[var(--color-accent)]"].join(" ");
+// navTileClass — the icon sits in a small hue-tinted tile so each surface
+// carries its own color identity (chat = brand lavender, ops = the running
+// cyan the Operations Center uses everywhere). Hover gives a motion-safe
+// lift; active saturates the tint. This is what keeps the rail from reading
+// as a column of identical gray glyphs.
+function navTileClass(active: boolean, hue: "chat" | "ops"): string {
+  const tint =
+    hue === "ops"
+      ? active
+        ? "bg-[var(--color-status-running-bg)] text-[#2fb7dc] shadow-[0_0_10px_var(--color-status-running-bg)]"
+        : "bg-[color-mix(in_srgb,#2fb7dc_10%,transparent)] text-[color-mix(in_srgb,#2fb7dc_75%,var(--color-text-secondary))]"
+      : active
+        ? "bg-[color-mix(in_srgb,var(--color-accent)_24%,transparent)] text-[var(--color-accent)] shadow-[0_0_10px_color-mix(in_srgb,var(--color-accent)_24%,transparent)]"
+        : "bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] text-[color-mix(in_srgb,var(--color-accent)_75%,var(--color-text-secondary))]";
+  return [
+    "flex size-7 shrink-0 items-center justify-center rounded-[0.55rem] transition",
+    "motion-safe:group-hover/nav:scale-110 group-hover/nav:text-[var(--color-text-primary)]",
+    tint,
+  ].join(" ");
 }
 
 // Focusable elements inside the overlay drawer, for the Tab trap. Mirrors the
@@ -295,7 +312,9 @@ export function NavRail({
             ariaCurrent={activeView === "chat" ? "page" : undefined}
             dataTip={collapsed ? "Chat" : undefined}
           >
-            <Icon name="message" className={navIconClass(activeView === "chat")} />
+            <span className={navTileClass(activeView === "chat", "chat")} aria-hidden="true">
+              <Icon name="message" className="size-[1rem]" />
+            </span>
             <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>Chat</span>
           </NavToChat>
           <NavToOrchestrator
@@ -309,7 +328,9 @@ export function NavRail({
                 : undefined
             }
           >
-            <Icon name="grid" className={navIconClass(activeView === "orchestrator")} />
+            <span className={navTileClass(activeView === "orchestrator", "ops")} aria-hidden="true">
+              <Icon name="grid" className="size-[1rem]" />
+            </span>
             <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>
               Operations Center
             </span>
