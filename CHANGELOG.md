@@ -165,6 +165,15 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`fleet update` no longer breaks sandbox starts after a bundle pull**: the
+  updater runs as root, so files a client-bundle `git pull` created or rewrote
+  came out root-owned — and the sandbox bind-mounts bundle dirs with an SELinux
+  relabel (`:z`) that rootless podman may only apply to files the service user
+  owns. One root-owned `protocols/*.yaml` was enough to dead-letter every task
+  with `podman run: exit status 126` / `lsetxattr … operation not permitted`.
+  The bundle-pull step now re-applies service-user ownership (mirroring
+  `bootstrap.sh`), also healing checkouts a previous root-run pull broke.
+
 - **Cookie users can mutate orchestrator state from the web UI again**:
   launching or editing a task while signed in with the elcano session cookie
   died with `403 Cross-origin request blocked`. The Next.js orchestrator proxy
