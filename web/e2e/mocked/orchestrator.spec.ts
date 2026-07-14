@@ -109,7 +109,7 @@ test("the dashboard loads stats and the task list", async ({ page }) => {
   await page.goto("/orchestrator");
 
   await expect(page.getByTestId("orchestrator-dashboard")).toBeVisible();
-  await expect(page.getByText("Run the optimization protocol")).toBeVisible();
+  await expect(page.locator("#tasksTable").getByText("Run the optimization protocol")).toBeVisible();
 });
 
 test("create a task via the MCP picker (enable a server + select an account); target_node_name is gone", async ({
@@ -152,7 +152,7 @@ test("create a task via the MCP picker (enable a server + select an account); ta
   expect(body.target_node_name).toBeUndefined();
 
   // The new task shows up in the refreshed list.
-  await expect(page.getByText("Pull yesterday's deal report")).toBeVisible();
+  await expect(page.locator("#tasksTable").getByText("Pull yesterday's deal report")).toBeVisible();
 });
 
 test("opening a task renders its log viewer (react-markdown)", async ({ page }) => {
@@ -161,7 +161,7 @@ test("opening a task renders its log viewer (react-markdown)", async ({ page }) 
   await page.goto("/orchestrator");
   await expect(page.getByTestId("orchestrator-dashboard")).toBeVisible();
 
-  await page.getByText("Run the optimization protocol").click();
+  await page.locator("#tasksTable").getByText("Run the optimization protocol").click();
   await expect(page.getByRole("dialog", { name: "Task Logs" })).toBeVisible();
   await expect(page.getByTestId("log-modal-body")).toContainText("Run the optimization protocol");
   // The assistant message's **Report** markdown renders to <strong>Report</strong>
@@ -175,7 +175,7 @@ test("the log viewer renders an agent-generated image inline (#271)", async ({ p
   await page.goto("/orchestrator");
   await expect(page.getByTestId("orchestrator-dashboard")).toBeVisible();
 
-  await page.getByText("Run the optimization protocol").click();
+  await page.locator("#tasksTable").getByText("Run the optimization protocol").click();
   await expect(page.getByRole("dialog", { name: "Task Logs" })).toBeVisible();
 
   // The relative `![chart](spend_chart.png)` reference is rewritten to the task

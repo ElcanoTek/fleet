@@ -172,7 +172,7 @@ export function TasksTable({
         </div>
       </div>
 
-      <div className="table-wrapper">
+      <div className="table-wrapper tasks-table-wrapper">
         <table id="tasksTable">
           <thead>
             <tr>
@@ -255,6 +255,57 @@ export function TasksTable({
           </tbody>
         </table>
       </div>
+
+      {/* Phone card view: the 8-column table needs sideways scrolling on a
+          phone, so <=720px renders each task as a stacked card instead. CSS
+          toggles .tasks-table-wrapper/.task-cards; both share onOpenLogs. */}
+      <ul className="task-cards" data-testid="task-cards">
+        {tasks.length === 0 ? (
+          <li className="table-empty">No tasks created yet</li>
+        ) : (
+          tasks.map((task) => {
+            const hasLogs = !!task.agent_session_id;
+            const badge = slaBadge(task);
+            return (
+              <li key={task.id}>
+                <button
+                  type="button"
+                  className="task-card"
+                  data-task-id={task.id}
+                  data-sla-breached={task.sla_breached ? "true" : undefined}
+                  aria-label={`View task ${task.id.slice(0, 8)}`}
+                  onClick={() => onOpenLogs(task)}
+                >
+                  <span className="task-card-top">
+                    <span className={`status-badge status-${task.status ?? "unknown"}`}>
+                      {task.status ?? "-"}
+                    </span>
+                    {badge ? (
+                      <span className={`sla-badge sla-badge-${badge.tone}`}>{badge.label}</span>
+                    ) : task.expected_duration_minutes ? (
+                      <span className="sla-badge sla-badge-ok">
+                        {task.actual_duration_seconds != null
+                          ? `${Math.round(task.actual_duration_seconds / 60)}m / ${task.expected_duration_minutes}m`
+                          : `${task.expected_duration_minutes}m`}
+                      </span>
+                    ) : null}
+                    <span className="task-card-time">{formatDate(task.created_at)}</span>
+                  </span>
+                  <span className="task-card-prompt">{truncate((task.prompt ?? "").trim(), 120)}</span>
+                  <span className="task-card-meta">
+                    <code>{task.id.slice(0, 8)}</code>
+                    <span>{createdByLabel(task)}</span>
+                    {scheduleLabel(task) !== "-" ? <span>{scheduleLabel(task)}</span> : null}
+                    <span className={`logs-badge ${hasLogs ? "" : "no-logs"}`}>
+                      {hasLogs ? "View logs" : "No logs"}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            );
+          })
+        )}
+      </ul>
 
       <div className="tasks-pagination" role="navigation" aria-label="Tasks pagination">
         <div className="pagination-info">

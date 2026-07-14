@@ -171,7 +171,23 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
       </NavRail>
 
       <main className="flex min-h-0 flex-col overflow-hidden">
-        <PageTopBar title="Operations Center" onMenu={() => setSidebarOpen(true)} />
+        <PageTopBar
+          title="Operations Center"
+          onMenu={() => setSidebarOpen(true)}
+          actions={
+            /* Mobile-only New task: on phones the rail's button is inside the
+               off-canvas drawer, so surface the primary action in the bar. */
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:hidden"
+              data-testid="new-task-btn-topbar"
+              onClick={() => setTaskModalOpen(true)}
+            >
+              <Icon name="plus" className="size-4" />
+              New task
+            </button>
+          }
+        />
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="container">

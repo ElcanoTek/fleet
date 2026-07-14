@@ -1912,6 +1912,66 @@ tr.sla-row-fail {
   align-items: center;
   gap: 0.5rem;
 }
+/* Recent Tasks phone cards: the 8-column table needs sideways scrolling on a
+   phone, so ≤720px renders each task as a stacked card instead — status +
+   SLA + time, the prompt, then a small meta row. The table stays the desktop
+   view; the media query below toggles .tasks-table-wrapper/.task-cards and
+   both share the same click-through to the log viewer. */
+.task-cards {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.task-card {
+  display: grid;
+  gap: 0.45rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 0.55rem);
+  background: var(--color-surface-2, rgba(255, 255, 255, 0.03));
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.task-card:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.task-card-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.task-card-time {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+.task-card-prompt {
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--color-text-primary);
+}
+.task-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.8rem;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+@media (max-width: 720px) {
+  .tasks-table-wrapper {
+    display: none;
+  }
+  .task-cards {
+    display: grid;
+    gap: 0.5rem;
+  }
+}
 
 /* Modals */
 .modal-overlay {
