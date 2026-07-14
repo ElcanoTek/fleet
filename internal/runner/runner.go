@@ -720,17 +720,20 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	buf.Emit("status", terminalFrame)
 
 	if wasPaused {
-		// ask (#510): park the task awaiting a human answer. The lease-guarded
-		// pause clears the lease so no sandbox is held while waiting; the
-		// partial transcript persists (submitLog is lease-free) and an
-		// out-of-band notification tells the human a task needs them. NOT a
-		// failure — no retry/dead-letter/error-analysis.
+		// ask (#510): park the task awaiting a human answer. The partial
+		// transcript persists FIRST (submitLog is lease-free), THEN the
+		// lease-guarded pause clears the lease — so the moment the task is
+		// visibly paused_awaiting_input its logs are already readable (a UI
+		// opening a just-paused task never sees an empty transcript, and the
+		// stoptask test's paused→logs assertion is race-free). An out-of-band
+		// notification tells the human a task needs them. NOT a failure — no
+		// retry/dead-letter/error-analysis.
+		p.submitLog(task, session, "Paused awaiting human input: "+pauseQuestion)
 		if ok, err := p.store.PauseTaskForQuestion(context.Background(), task.ID, p.leaseOwner, pauseQuestion); err != nil {
 			log.Printf("runner: task %s pause write failed: %v", task.ID, err)
 		} else if !ok {
 			log.Printf("runner: task %s pause did not apply (lease lost or not running)", task.ID)
 		}
-		p.submitLog(task, session, "Paused awaiting human input: "+pauseQuestion)
 		p.notifyProgress(task, "Task is paused and needs your answer: "+pauseQuestion)
 		log.Printf("runner: task %s paused awaiting input after %v", task.ID, time.Since(start).Round(time.Second))
 		return
