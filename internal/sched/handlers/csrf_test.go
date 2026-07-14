@@ -137,4 +137,30 @@ func TestCSRFMiddlewareOrigin(t *testing.T) {
 			t.Fatalf("/auth/login should bypass CSRF: code=%d", rr.Code)
 		}
 	})
+
+	t.Run("Next-proxy shared-token request is exempt", func(t *testing.T) {
+		// The Next.js orchestrator proxy forwards the cookie user's identity as
+		// X-User-Email + X-Orchestrator-Server-Token and does NOT forward the
+		// browser's Origin — it enforced same-origin itself before proxying.
+		// Without this exemption every cookie-path mutation (e.g. launching a
+		// task from the web UI) dies with "Cross-origin request blocked".
+		rr := do("POST", "/tasks", func(r *http.Request) {
+			r.Header.Set("X-Orchestrator-Server-Token", "shared-secret") // no Origin
+			r.Header.Set("X-User-Email", "u@example.com")
+		})
+		if rr.Code != http.StatusOK || !reached {
+			t.Fatalf("shared-token POST should bypass CSRF: code=%d", rr.Code)
+		}
+	})
+
+	t.Run("cross-origin POST without the shared token still rejected", func(t *testing.T) {
+		// The exemption keys on the header the browser can't attach cross-site;
+		// a plain forged form POST (cookie only, evil Origin) stays blocked.
+		rr := do("POST", "/tasks", func(r *http.Request) {
+			r.Header.Set("Origin", "https://evil.example.com")
+		})
+		if rr.Code != http.StatusForbidden || reached {
+			t.Fatalf("cookie-only cross-origin POST must stay 403: code=%d", rr.Code)
+		}
+	})
 }

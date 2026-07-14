@@ -242,6 +242,19 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Skip for the Next-proxy header-trust path (#157). Like X-API-Key and
+		// Bearer above, a custom header cannot be attached to a cross-site
+		// browser request (it would require a CORS preflight we never grant),
+		// so its presence proves a programmatic caller — and the only caller
+		// that sets it, the Next.js proxy, has already enforced the browser's
+		// Origin itself (web/src/app/lib/csrf.ts) before forwarding, WITHOUT
+		// forwarding the Origin header. Presence is enough here: the auth
+		// middleware fail-closed rejects a wrong token value.
+		if r.Header.Get("X-Orchestrator-Server-Token") != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Cookie/session requests: verify the Origin matches our host. This is
 		// stateless (no token store, nothing to go stale on restart) and mirrors
 		// chat's CSRF defense: browsers always send Origin on cross-origin
