@@ -30,6 +30,11 @@ describe("StatsGrid agent-pool cards", () => {
     expect(screen.getByTestId("stat-slots")).toHaveTextContent("8");
     // display-only: not buttons, no filter wiring
     expect(screen.getByTestId("stat-agents").tagName).toBe("DIV");
+    // order: Agent Slots leads, then Active Agents, then the task cards
+    const cards = document.querySelectorAll(".stats-bar .stat-card");
+    expect(cards[0]).toHaveTextContent("Agent Slots");
+    expect(cards[1]).toHaveTextContent("Active Agents");
+    expect(cards[2]).toHaveTextContent("Pending Tasks");
   });
 
   it("shows a zero (not a blank) and drops the pulse when no agents run", () => {

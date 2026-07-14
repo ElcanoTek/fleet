@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import { useOrchestratorSession } from "@/app/shared/hooks/useOrchestratorSession";
 import { useDashboardData } from "@/app/shared/hooks/useDashboardData";
@@ -69,6 +69,25 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   // "sla" swaps in the SLA report panel. Defaults to tasks so the existing
   // dashboard shape is unchanged on load.
   const [tab, setTab] = useState<"tasks" | "upcoming" | "sla" | "datasets" | "usage">("tasks");
+  const tabsRef = useRef<HTMLDivElement | null>(null);
+  // switchTab pins the tab row to the top of the scroll container when the
+  // user had scrolled: the new tab then starts at its beginning instead of
+  // the scroller clamping to the page top when the outgoing (taller) content
+  // unmounts — the "jumps to the top" bug on phones.
+  const switchTab = (next: typeof tab) => {
+    setTab(next);
+    // Pin after React commits the swapped panel (rAF): pinning against the
+    // OLD layout would be undone when the taller outgoing content unmounts
+    // and the scroller clamps.
+    requestAnimationFrame(() => {
+      const bar = tabsRef.current;
+      const scroller = bar?.closest(".overflow-y-auto");
+      if (!bar || !(scroller instanceof HTMLElement)) return;
+      if (scroller.scrollTop <= 1) return; // already at the top — don't move
+      const delta = bar.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTop = Math.max(0, scroller.scrollTop + delta - 8);
+    });
+  };
 
   // #458 symptom 2: the SLA tab + panel are admin-only. role may be absent (an
   // admin-API-key principal carries no role) — treat absent as non-admin for
@@ -195,13 +214,18 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
             <div className="dashboard-content visible" data-testid="orchestrator-dashboard">
               <StatsGrid stats={dashboard.stats} activeFilter={statFilter} onFilter={applyStatFilter} />
 
-              <div className="dashboard-tabs" role="tablist" aria-label="Operations Center view">
+              <div
+                className="dashboard-tabs"
+                role="tablist"
+                aria-label="Operations Center view"
+                ref={tabsRef}
+              >
                 <button
                   type="button"
                   role="tab"
                   aria-selected={tab === "tasks"}
                   className={`tab-btn${tab === "tasks" ? " tab-btn-active" : ""}`}
-                  onClick={() => setTab("tasks")}
+                  onClick={() => switchTab("tasks")}
                 >
                   Recent Tasks
                 </button>
@@ -210,7 +234,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                   role="tab"
                   aria-selected={tab === "upcoming"}
                   className={`tab-btn${tab === "upcoming" ? " tab-btn-active" : ""}`}
-                  onClick={() => setTab("upcoming")}
+                  onClick={() => switchTab("upcoming")}
                 >
                   Upcoming
                 </button>
@@ -222,7 +246,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                   role="tab"
                   aria-selected={tab === "datasets"}
                   className={`tab-btn${tab === "datasets" ? " tab-btn-active" : ""}`}
-                  onClick={() => setTab("datasets")}
+                  onClick={() => switchTab("datasets")}
                 >
                   Datasets
                 </button>
@@ -232,7 +256,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                     role="tab"
                     aria-selected={tab === "sla"}
                     className={`tab-btn${tab === "sla" ? " tab-btn-active" : ""}`}
-                    onClick={() => setTab("sla")}
+                    onClick={() => switchTab("sla")}
                   >
                     SLA
                   </button>
@@ -245,13 +269,19 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                     role="tab"
                     aria-selected={tab === "usage"}
                     className={`tab-btn${tab === "usage" ? " tab-btn-active" : ""}`}
-                    onClick={() => setTab("usage")}
+                    onClick={() => switchTab("usage")}
                   >
                     Usage
                   </button>
                 ) : null}
               </div>
 
+              {/* The tab-panel wrapper keeps a floor under the content: when a
+                  tab switches, the incoming panel briefly renders a tiny
+                  loading state, and without the floor the page's height
+                  collapses under the scroll position — the browser clamps to
+                  the top, which reads as a jarring jump on phones. */}
+              <div className="dashboard-tab-panel">
               {tab === "datasets" ? (
                 <DatasetsPanel />
               ) : tab === "upcoming" ? (
@@ -274,6 +304,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                   onEdit={setEditTask}
                 />
               )}
+              </div>
 
               <p className="refresh-note">
                 Auto-refresh every {dashboard.refreshSeconds} seconds
