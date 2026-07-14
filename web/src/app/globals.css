@@ -1993,6 +1993,34 @@ tr.sla-row-fail {
   gap: 0.5rem;
   margin-top: 1rem;
 }
+/* New-dataset modal (#514): the form was raw browser layout — inline labels
+   and intrinsic-width controls that forced a horizontal scroll inside the
+   dialog on phones. Block labels + full-width top fields; the column-editor
+   rows wrap on narrow viewports instead of overflowing. */
+.dataset-modal .modal-body > label {
+  display: grid;
+  gap: 0.3rem;
+}
+.dataset-modal .modal-body > label input,
+.dataset-modal .modal-body > label textarea {
+  width: 100%;
+  min-width: 0;
+}
+.dataset-modal fieldset {
+  /* Fieldsets default to min-inline-size: min-content and refuse to shrink. */
+  min-inline-size: 0;
+}
+.dataset-column-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.dataset-column-row input:not([type="checkbox"]) {
+  flex: 1 1 8rem;
+  min-width: 0;
+}
 
 /* Large modals (New Task, Settings) — a flex column so the body scrolls between
    a fixed header and a fixed footer (#169 design handoff: .modal-lg +

@@ -352,8 +352,8 @@ function DatasetCreateModal({
   };
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="New dataset">
-      <div className="modal">
+    <div className="modal-overlay is-open" role="dialog" aria-modal="true" aria-label="New dataset">
+      <div className="modal dataset-modal">
         <div className="modal-header">
           <h3>New dataset</h3>
           <button type="button" className="btn" onClick={onClose} aria-label="Close">
@@ -381,7 +381,7 @@ function DatasetCreateModal({
           <fieldset>
             <legend>Columns — input columns carry your data; output columns (✎) are what the agent fills</legend>
             {columns.map((c, i) => (
-              <div key={i} style={{ display: "flex", gap: "0.5rem", marginBottom: "0.4rem", alignItems: "center" }}>
+              <div key={i} className="dataset-column-row">
                 <input
                   aria-label={`Column ${i + 1} name`}
                   value={c.name}
