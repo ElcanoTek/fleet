@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CostForecast, McpServer, MCPChoice, TaskCreate, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
+import type { CostForecast, McpServer, MCPChoice, Task, TaskCreate, TaskTemplate } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { applyTemplateVars, promptableVars } from "@/app/shared/lib/taskTemplates";
 import { validateTaskForm, validateCronExpression, describeEmailError } from "@/app/shared/lib/validation";
@@ -111,7 +111,72 @@ export type TaskCreateModalProps = {
   serversLoading?: boolean;
   onClose: () => void;
   onCreated: () => void;
+  // Edit mode: when set, the form opens prefilled from this task and Save
+  // updates it instead of creating. Pending/scheduled tasks edit in place
+  // (PUT — the definition, i.e. every future run, with a run-once escape
+  // hatch for recurring tasks); terminal tasks resubmit as a new one-off run
+  // with the changes as overrides.
+  editTask?: Task | null;
+  onUpdated?: () => void;
 };
+
+// Statuses that already finished: editing one resubmits (POST /rerun with
+// overrides) instead of rewriting history.
+const EDIT_TERMINAL = new Set(["success", "error", "cancelled", "dead_lettered"]);
+
+// taskToFormValues maps a task (or null for create mode) onto the form's
+// initial state. Pure: the modal remounts per edit target (parent keys the
+// component on the task id), so useState initializers read these once.
+function taskToFormValues(task: Task | null) {
+  const rec = task?.recurrence ?? "";
+  const parsed = parseSimpleSchedule(rec);
+  let scheduleMode: ScheduleMode = "now";
+  let scheduledDate = "";
+  let scheduledTime = "09:00";
+  if (rec) {
+    scheduleMode = "repeat";
+  } else if (task?.scheduled_for) {
+    const d = new Date(task.scheduled_for);
+    if (!Number.isNaN(d.getTime())) {
+      const pad = (n: number) => String(n).padStart(2, "0");
+      scheduleMode = "once";
+      scheduledDate = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      scheduledTime = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+  }
+  return {
+    prompt: task?.prompt ?? "",
+    description: task?.description ?? "",
+    tagsInput: (task?.tags ?? []).join(", "),
+    persona: task?.persona ?? "",
+    scheduleMode,
+    scheduledDate,
+    scheduledTime,
+    recurrence: rec,
+    repeatEditor: (rec && !parsed ? "cron" : "simple") as RepeatEditor,
+    simpleFrequency: parsed?.frequency ?? ("weekdays" as SimpleFrequency),
+    simpleTime: parsed?.time ?? "09:00",
+    simpleWeekdays: parsed?.weekdays ?? ["1"],
+    model: task?.model || DEFAULT_PRIMARY_MODEL,
+    fallbackModel: task?.fallback_model || DEFAULT_FALLBACK_MODEL,
+    maxIterations:
+      typeof task?.max_iterations === "number" ? String(task.max_iterations) : "",
+    captainsLog: Boolean(task?.instruction_self_improve),
+    allowNetwork: Boolean(task?.allow_network),
+    carryContext: Boolean(task?.carry_context),
+    mcpSelection: task?.mcp_selection ?? [],
+    runIfCommand: task?.run_if?.command ?? "",
+    runIfOnError: (task?.run_if?.on_error ?? "run") as "run" | "skip",
+    runIfTimeout: task?.run_if?.timeout_seconds ?? 30,
+    expectedDuration:
+      typeof task?.expected_duration_minutes === "number" &&
+      task.expected_duration_minutes > 0
+        ? String(task.expected_duration_minutes)
+        : "",
+    contextOpen: Boolean(task?.description || task?.tags?.length || task?.persona),
+    toolsOpen: Boolean(task?.mcp_selection?.length),
+  };
+}
 
 // Reveal — the one disclosure anatomy every collapsible group shares (chevron +
 // label + muted contents hint + a right-aligned live slot). The body stays
@@ -190,50 +255,66 @@ function Spinner() {
   );
 }
 
-export function TaskCreateModal({ open, servers, serversLoading, onClose, onCreated }: TaskCreateModalProps) {
+export function TaskCreateModal({
+  open,
+  servers,
+  serversLoading,
+  onClose,
+  onCreated,
+  editTask,
+  onUpdated,
+}: TaskCreateModalProps) {
   const { showToast } = useToast();
+  const editing = !!editTask;
+  const editTerminal = editing && EDIT_TERMINAL.has(editTask?.status ?? "");
+  // Which scope a recurring edit applies to: asked via an in-modal chooser.
+  const [scopeOpen, setScopeOpen] = useState(false);
+  // Mount-time form values (blank for create, prefilled for edit). The parent
+  // keys this component on the edit target, so a different task remounts with
+  // fresh state — no prefill effects needed.
+  const [init] = useState(() => taskToFormValues(editTask ?? null));
 
-  const [prompt, setPrompt] = useState("");
-  const [description, setDescription] = useState("");
-  const [tagsInput, setTagsInput] = useState("");
-  const [persona, setPersona] = useState("");
+  const [prompt, setPrompt] = useState(init.prompt);
+  const [description, setDescription] = useState(init.description);
+  const [tagsInput, setTagsInput] = useState(init.tagsInput);
+  const [persona, setPersona] = useState(init.persona);
 
   const [emails, setEmails] = useState<string[]>([]);
   const [emailInput, setEmailInput] = useState("");
   const [emailError, setEmailError] = useState("");
 
-  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("now");
-  const [scheduledDate, setScheduledDate] = useState("");
-  const [scheduledTime, setScheduledTime] = useState("09:00");
-  const [recurrence, setRecurrence] = useState("");
-  const [repeatEditor, setRepeatEditor] = useState<RepeatEditor>("simple");
-  const [simpleFrequency, setSimpleFrequency] = useState<SimpleFrequency>("weekdays");
-  const [simpleTime, setSimpleTime] = useState("09:00");
-  const [simpleWeekdays, setSimpleWeekdays] = useState<string[]>(["1"]);
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>(init.scheduleMode);
+  const [scheduledDate, setScheduledDate] = useState(init.scheduledDate);
+  const [scheduledTime, setScheduledTime] = useState(init.scheduledTime);
+  const [recurrence, setRecurrence] = useState(init.recurrence);
+  const [repeatEditor, setRepeatEditor] = useState<RepeatEditor>(init.repeatEditor);
+  const [simpleFrequency, setSimpleFrequency] = useState<SimpleFrequency>(init.simpleFrequency);
+  const [simpleTime, setSimpleTime] = useState(init.simpleTime);
+  const [simpleWeekdays, setSimpleWeekdays] = useState<string[]>(init.simpleWeekdays);
 
-  const [contextOpen, setContextOpen] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(init.contextOpen);
+  const [toolsOpen, setToolsOpen] = useState(init.toolsOpen);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  const [model, setModel] = useState(DEFAULT_PRIMARY_MODEL);
-  const [fallbackModel, setFallbackModel] = useState(DEFAULT_FALLBACK_MODEL);
-  const [maxIterations, setMaxIterations] = useState("");
-  const [captainsLog, setCaptainsLog] = useState(false);
-  const [allowNetwork, setAllowNetwork] = useState(false);
-  const [carryContext, setCarryContext] = useState(false);
+  const [model, setModel] = useState(init.model);
+  const [fallbackModel, setFallbackModel] = useState(init.fallbackModel);
+  const [maxIterations, setMaxIterations] = useState(init.maxIterations);
+  const [captainsLog, setCaptainsLog] = useState(init.captainsLog);
+  const [allowNetwork, setAllowNetwork] = useState(init.allowNetwork);
+  const [carryContext, setCarryContext] = useState(init.carryContext);
   // Pre-run shell gate (#269): empty = no gate (unconditional promotion).
-  const [runIfCommand, setRunIfCommand] = useState("");
-  const [runIfOnError, setRunIfOnError] = useState<"run" | "skip">("run");
-  const [runIfTimeout, setRunIfTimeout] = useState(30);
+  const [runIfCommand, setRunIfCommand] = useState(init.runIfCommand);
+  const [runIfOnError, setRunIfOnError] = useState<"run" | "skip">(init.runIfOnError);
+  const [runIfTimeout, setRunIfTimeout] = useState(init.runIfTimeout);
   // SLA expected duration (#274): blank = no SLA. Stored as a string so the
   // empty/typing states round-trip cleanly; parsed to int on submit.
-  const [expectedDuration, setExpectedDuration] = useState("");
+  const [expectedDuration, setExpectedDuration] = useState(init.expectedDuration);
   // Per-task extended-thinking override (#220): "" = inherit the deployment
   // default, "0" = off, a positive value = this task's budget in tokens.
   const [thinkingBudget, setThinkingBudget] = useState("");
 
   // The per-task MCP selection (replaces the legacy target_node_name).
-  const [mcpSelection, setMcpSelection] = useState<MCPChoice[]>([]);
+  const [mcpSelection, setMcpSelection] = useState<MCPChoice[]>(init.mcpSelection);
   const [fileCount, setFileCount] = useState(0);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -291,7 +372,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
 
   const scheduledFor = scheduledDate ? `${scheduledDate}T${scheduledTime || "09:00"}` : "";
 
-  const dirty =
+  const createDirty =
     prompt.trim() !== "" ||
     description.trim() !== "" ||
     tagsInput.trim() !== "" ||
@@ -312,6 +393,53 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
     allowNetwork ||
     carryContext ||
     runIfCommand.trim() !== "";
+
+  // Edit mode compares the live form against the prefilled values (the
+  // component remounts per edit target via the parent's key, so `init` is the
+  // mount-time truth); create mode keeps its semantic any-field-set check.
+  const formSnapshot = JSON.stringify([
+    prompt,
+    description,
+    tagsInput,
+    persona,
+    scheduleMode,
+    scheduledDate,
+    scheduledTime,
+    recurrence,
+    model,
+    fallbackModel,
+    maxIterations,
+    captainsLog,
+    allowNetwork,
+    carryContext,
+    runIfCommand,
+    runIfOnError,
+    runIfTimeout,
+    expectedDuration,
+    mcpSelection,
+  ]);
+  const initSnapshot = JSON.stringify([
+    init.prompt,
+    init.description,
+    init.tagsInput,
+    init.persona,
+    init.scheduleMode,
+    init.scheduledDate,
+    init.scheduledTime,
+    init.recurrence,
+    init.model,
+    init.fallbackModel,
+    init.maxIterations,
+    init.captainsLog,
+    init.allowNetwork,
+    init.carryContext,
+    init.runIfCommand,
+    init.runIfOnError,
+    init.runIfTimeout,
+    init.expectedDuration,
+    init.mcpSelection,
+  ]);
+  const dirty = editing ? formSnapshot !== initSnapshot : createDirty;
 
   const resetForm = useCallback(() => {
     setPrompt("");
@@ -664,7 +792,11 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
     }
   };
 
-  const submit = async () => {
+  // submit handles all three save paths. scope applies only to a recurring
+  // in-place edit: undefined asks (opens the chooser), "definition" PUTs the
+  // task (every future run), "once" resubmits a one-off with the changes and
+  // leaves the schedule untouched. Terminal tasks always resubmit.
+  const submit = async (scope?: "definition" | "once") => {
     if (submitting) return;
     // Commit a half-typed email first so it isn't silently dropped — but keep
     // validating the rest either way, so one Launch surfaces EVERY problem and
@@ -678,6 +810,12 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
       return;
     }
 
+    // A recurring task edited in place needs a scope decision first.
+    if (editing && !editTerminal && editTask?.recurrence && !scope) {
+      setScopeOpen(true);
+      return;
+    }
+
     const taskData = buildTaskData(buildFinalPrompt(emails));
     setSubmitting(true);
     try {
@@ -687,9 +825,50 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
         );
         taskData.files = filenames;
       }
-      await orchestratorApi.createTask(taskData);
-      showToast("Task created successfully!", "success");
-      onCreated();
+      if (editing && editTask) {
+        if (editTerminal || scope === "once") {
+          // POST /rerun with overrides: a fresh one-off copy, source untouched.
+          // Only fields the rerun endpoint accepts as overrides are sent.
+          const created = await orchestratorApi.rerunTask(editTask.id, {
+            prompt: taskData.prompt,
+            description: taskData.description ?? "",
+            model: taskData.model,
+            fallback_model: taskData.fallback_model,
+            ...(taskData.max_iterations != null
+              ? { max_iterations: taskData.max_iterations }
+              : {}),
+            allow_network: Boolean(taskData.allow_network),
+            tags: taskData.tags ?? [],
+            persona: taskData.persona ?? "",
+            ...(taskData.thinking_budget_tokens != null
+              ? { thinking_budget: taskData.thinking_budget_tokens }
+              : {}),
+          });
+          showToast(
+            `Resubmitted as task ${created.id.slice(0, 8)}… — running now`,
+            "success",
+          );
+        } else {
+          // PUT rewrites the definition. mcp_selection/tags must ALWAYS be
+          // present on an edit: the server only applies them when non-nil, so
+          // an empty array is how "cleared" round-trips (omitting would
+          // silently keep the old value).
+          taskData.mcp_selection = mcpSelection;
+          taskData.tags = taskData.tags ?? [];
+          await orchestratorApi.updateTask(editTask.id, taskData);
+          showToast(
+            editTask.recurrence
+              ? "Task updated — applies to all future runs."
+              : "Task updated.",
+            "success",
+          );
+        }
+        onUpdated?.();
+      } else {
+        await orchestratorApi.createTask(taskData);
+        showToast("Task created successfully!", "success");
+        onCreated();
+      }
       resetForm();
       onClose();
     } catch (err) {
@@ -772,7 +951,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
         className="modal modal-lg task-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Create New Task"
+        aria-label={editing ? "Edit Task" : "Create New Task"}
         ref={modalRef}
         tabIndex={-1}
         onDragOver={(e) => {
@@ -789,11 +968,19 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
       >
         <div
           className={`modal-header${scrolledTop ? " is-scrolled" : ""}${submitting ? " is-dimmed" : ""}`}
-          inert={discardOpen ? true : undefined}
+          inert={discardOpen || scopeOpen ? true : undefined}
         >
           <div className="modal-header-text">
-            <h3>Create New Task</h3>
-            <p className="modal-subtitle">Define what runs, when it runs, and what it may touch.</p>
+            <h3>{editing ? "Edit Task" : "Create New Task"}</h3>
+            <p className="modal-subtitle">
+              {editing
+                ? editTerminal
+                  ? "This task already ran — saving resubmits it as a new one-off run with your changes."
+                  : editTask?.recurrence
+                    ? "Editing the schedule definition — you'll choose the scope when you save."
+                    : "Editing a task that hasn't started yet."
+                : "Define what runs, when it runs, and what it may touch."}
+            </p>
           </div>
           <button
             type="button"
@@ -820,7 +1007,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
           className={`modal-body${submitting ? " is-dimmed" : ""}`}
           ref={bodyRef}
           onScroll={updateScrollShadows}
-          inert={discardOpen ? true : undefined}
+          inert={discardOpen || scopeOpen ? true : undefined}
         >
           <form
             id="createTaskForm"
@@ -833,7 +1020,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
             <fieldset className="task-form" disabled={submitting}>
               {/* Task templates (#262) — pre-filled starting points. Suppressed
                   entirely when the bundle ships none. */}
-              {templates.length > 0 ? (
+              {templates.length > 0 && !editing ? (
                 <section className="task-group" data-testid="task-template-section">
                   <div className="task-group-label">Start from a template</div>
                   <div className="template-card-grid" role="group" aria-label="Task templates">
@@ -1612,7 +1799,7 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
             submit button stays wired to the form via the `form` attribute. */}
         <div
           className={`modal-footer task-footer${scrolledBottom ? " is-scrolled" : ""}`}
-          inert={discardOpen ? true : undefined}
+          inert={discardOpen || scopeOpen ? true : undefined}
         >
           <button
             type="button"
@@ -1673,19 +1860,82 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
             type="submit"
             form="createTaskForm"
             className="btn btn-primary task-launch-btn"
-            aria-label="Launch task"
+            aria-label={editing ? "Save task changes" : "Launch task"}
             aria-describedby={footerStatus ? "task-footer-status" : undefined}
             disabled={promptEmpty || submitting}
           >
             {submitting ? (
               <>
-                <Spinner /> Launching…
+                <Spinner /> {editing ? "Saving…" : "Launching…"}
               </>
+            ) : editing ? (
+              editTerminal ? (
+                "Resubmit with changes"
+              ) : (
+                "Save changes"
+              )
             ) : (
               "Launch Task"
             )}
           </button>
         </div>
+
+        {/* Recurring-edit scope chooser: PUT rewrites every future run; the
+            run-once path resubmits a one-off copy and leaves the schedule
+            untouched. Asked at save time so the user decides with the final
+            values in front of them. */}
+        {scopeOpen ? (
+          <div className="task-discard-overlay">
+            <div
+              className="task-discard-card task-scope-card"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="edit-scope-title"
+              aria-describedby="edit-scope-message"
+              data-testid="edit-scope-chooser"
+            >
+              <div className="task-discard-title" id="edit-scope-title">
+                Apply changes to…
+              </div>
+              <div className="task-discard-message" id="edit-scope-message">
+                This task repeats on a schedule. Save the changes for every
+                future run, or run once now with these changes and leave the
+                schedule as it is?
+              </div>
+              <div className="task-discard-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setScopeOpen(false)}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="edit-scope-once"
+                  onClick={() => {
+                    setScopeOpen(false);
+                    void submit("once");
+                  }}
+                >
+                  Run once now
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  data-testid="edit-scope-definition"
+                  onClick={() => {
+                    setScopeOpen(false);
+                    void submit("definition");
+                  }}
+                >
+                  All future runs
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* Dirty-close guard — an in-modal confirm naming what would be lost.
             "Keep editing" returns focus to where the close was requested from. */}

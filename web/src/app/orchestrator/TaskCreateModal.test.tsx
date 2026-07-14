@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { TaskCreateModal } from "./TaskCreateModal";
-import type { McpServer } from "@/app/shared/lib/orchestratorApi";
+import type { McpServer, Task } from "@/app/shared/lib/orchestratorApi";
 
 // Component tests for the redesigned New Task modal: schedule mode segment,
 // launch gating + footer reason, blur validation with the design's error copy,
@@ -12,6 +12,8 @@ const taskTemplates = vi.fn();
 const createTask = vi.fn();
 const estimateTask = vi.fn();
 const uploadFile = vi.fn();
+const updateTask = vi.fn();
+const rerunTask = vi.fn();
 
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
@@ -19,6 +21,8 @@ vi.mock("@/app/shared/lib/orchestratorApi", () => ({
     createTask: (...args: unknown[]) => createTask(...args),
     estimateTask: (...args: unknown[]) => estimateTask(...args),
     uploadFile: (...args: unknown[]) => uploadFile(...args),
+    updateTask: (...args: unknown[]) => updateTask(...args),
+    rerunTask: (...args: unknown[]) => rerunTask(...args),
   },
 }));
 
@@ -234,5 +238,96 @@ describe("TaskCreateModal — create path", () => {
     fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
     fireEvent.click(screen.getByTestId("mcp-toggle-xandr"));
     expect(screen.getByText("1 server")).toBeInTheDocument();
+  });
+});
+
+// ── edit mode ─────────────────────────────────────────────────────────────────
+
+const EDIT_ID = "aaaabbbb-cccc-dddd-eeee-ffff00001111";
+const baseEdit: Task = {
+  id: EDIT_ID,
+  prompt: "Weekly latency report",
+  description: "sums p95s",
+  tags: ["reports"],
+  status: "scheduled",
+  model: "z-ai/glm-5.2",
+};
+
+describe("TaskCreateModal — edit mode", () => {
+  it("prefills the form from the task and saves a non-recurring edit via PUT", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    const onUpdated = vi.fn();
+    renderModal({ editTask: baseEdit, onUpdated });
+
+    const promptBox = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    expect(promptBox.value).toBe("Weekly latency report");
+    expect(screen.getByRole("heading", { name: "Edit Task" })).toBeTruthy();
+
+    fireEvent.change(promptBox, { target: { value: "Weekly latency report v2" } });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    const [id, body] = updateTask.mock.calls[0];
+    expect(id).toBe(EDIT_ID);
+    expect(body.prompt).toBe("Weekly latency report v2");
+    // cleared-able collections are always present on an edit (empty = clear)
+    expect(Array.isArray(body.mcp_selection)).toBe(true);
+    expect(body.tags).toEqual(["reports"]);
+    expect(onUpdated).toHaveBeenCalled();
+    expect(rerunTask).not.toHaveBeenCalled();
+  });
+
+  it("asks all-future-runs vs run-once for a recurring task; PUT for the definition", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    renderModal({
+      editTask: { ...baseEdit, recurrence: "0 9 * * 1" },
+      onUpdated: vi.fn(),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    // no network call yet — the scope chooser interposes
+    expect(updateTask).not.toHaveBeenCalled();
+    const chooser = await screen.findByTestId("edit-scope-chooser");
+    expect(chooser).toHaveTextContent(/every\s+future run/i);
+    fireEvent.click(screen.getByTestId("edit-scope-definition"));
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    expect(updateTask.mock.calls[0][1].recurrence).toBe("0 9 * * 1");
+    expect(rerunTask).not.toHaveBeenCalled();
+  });
+
+  it("run-once on a recurring task resubmits with overrides and leaves the definition alone", async () => {
+    rerunTask.mockResolvedValue({ id: "99990000-9999-0000-9999-000000000000" });
+    renderModal({
+      editTask: { ...baseEdit, recurrence: "0 9 * * 1" },
+      onUpdated: vi.fn(),
+    });
+    const promptBox = screen.getByLabelText("Prompt");
+    fireEvent.change(promptBox, { target: { value: "One-off variant" } });
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(await screen.findByTestId("edit-scope-once"));
+    await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
+    const [id, overrides] = rerunTask.mock.calls[0];
+    expect(id).toBe(EDIT_ID);
+    expect(overrides.prompt).toBe("One-off variant");
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it("a terminal task resubmits directly (with the resubmit notice, no chooser)", async () => {
+    rerunTask.mockResolvedValue({ id: "99990000-9999-0000-9999-000000000000" });
+    renderModal({
+      editTask: { ...baseEdit, status: "success", recurrence: "" },
+      onUpdated: vi.fn(),
+    });
+    expect(screen.getByText(/already ran — saving resubmits/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("edit-scope-chooser")).toBeNull();
+  });
+
+  it("closing an untouched edit form does not raise the discard guard", () => {
+    const { onClose } = renderModal({ editTask: baseEdit, onUpdated: vi.fn() });
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(screen.queryByText(/unsaved changes/i)).toBeNull();
+    expect(onClose).toHaveBeenCalled();
   });
 });

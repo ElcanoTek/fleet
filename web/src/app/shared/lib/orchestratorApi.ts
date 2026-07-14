@@ -478,6 +478,14 @@ export const orchestratorApi = {
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  // Edit (PUT /tasks/{id}): rewrites a pending/scheduled task's definition —
+  // for a recurring task that means every future run. The server re-checks
+  // editability transactionally (409 when the task started meanwhile).
+  updateTask: (taskId: string, body: TaskCreate) =>
+    request<Task>(`/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   // Resubmit (#TBD): POST /tasks/{id}/rerun creates a NEW one-time task copied
   // from this one (recurrence cleared, runs now); optional overrides replace
   // fields on the copy. The source task is untouched.
