@@ -273,7 +273,9 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                 />
               )}
 
-              <p className="refresh-note">Auto-refresh every 30 seconds</p>
+              <p className="refresh-note">
+                Auto-refresh every {dashboard.refreshSeconds} seconds
+              </p>
             </div>
           </div>
         </div>

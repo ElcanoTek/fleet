@@ -91,3 +91,46 @@ describe("useDashboardData run-id supersession", () => {
     expect(result.current.tasks).toEqual([{ id: "newer", prompt: "ab" }]);
   });
 });
+
+describe("useDashboardData adaptive refresh", () => {
+  it("polls at 5s while work is in flight and 30s when idle", async () => {
+    tasksMock.mockResolvedValue({ data: [], total: 0 });
+
+    statsMock.mockResolvedValue({ pending_tasks: 0, running_tasks: 2 });
+    const { result } = renderHook(() => useDashboardData(true));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.stats).not.toBeNull());
+    expect(result.current.refreshSeconds).toBe(5);
+
+    // Work drains; the next reload relaxes the cadence.
+    statsMock.mockResolvedValue({ pending_tasks: 0, running_tasks: 0 });
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(result.current.refreshSeconds).toBe(30);
+
+    // Active agents alone also keep it hot.
+    statsMock.mockResolvedValue({ active_agents: 1 });
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(result.current.refreshSeconds).toBe(5);
+  });
+
+  it("refetches when the tab becomes visible again", async () => {
+    tasksMock.mockResolvedValue({ data: [], total: 0 });
+    statsMock.mockResolvedValue({});
+    renderHook(() => useDashboardData(true));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const before = statsMock.mock.calls.length;
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    expect(statsMock.mock.calls.length).toBeGreaterThan(before);
+  });
+});

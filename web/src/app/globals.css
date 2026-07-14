@@ -1461,6 +1461,40 @@ button {
 .stat-card.stat-tone-error .stat-card-val {
   color: var(--stat-tone-error);
 }
+/* Agent-pool cards: Active Agents wears the brand accent (it is neither a
+   task status nor clickable); Agent Slots stays neutral — it is capacity,
+   not a state. */
+.stat-card-static {
+  cursor: default;
+}
+.stat-card-static:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--color-border);
+}
+.stat-dot.agents {
+  background: var(--color-accent);
+}
+.stat-dot.slots {
+  background: var(--color-text-muted);
+}
+.stat-card.stat-tone-agents::before {
+  background: var(--color-accent);
+}
+.stat-card.stat-tone-agents .stat-card-val {
+  color: var(--color-accent);
+}
+/* With the agent cards present there are six cards: three-up by default,
+   one row of six on wide screens, two-up on phones. Without them the base
+   four-up layout above holds. */
+.stats-bar-agents {
+  grid-template-columns: repeat(3, 1fr);
+}
+@media (min-width: 1100px) {
+  .stats-bar-agents {
+    grid-template-columns: repeat(6, 1fr);
+  }
+}
 @media (max-width: 720px) {
   .stats-bar {
     grid-template-columns: repeat(2, 1fr);

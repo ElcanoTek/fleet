@@ -257,6 +257,11 @@ export type DashboardStats = {
   running_tasks?: number;
   completed_tasks_today?: number;
   failed_tasks_today?: number;
+  // Live agent-pool occupancy (absent on servers that predate the field or
+  // when the pool isn't wired): agents executing scheduled tasks right now,
+  // and the pool's schedulable slot count.
+  active_agents?: number;
+  agent_slots?: number;
 };
 
 export type Paginated<T> = { data: T[]; total: number; limit: number; offset: number };

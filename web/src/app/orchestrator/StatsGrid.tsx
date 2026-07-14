@@ -39,8 +39,26 @@ const CARDS: Array<{
 ];
 
 export function StatsGrid({ stats, activeFilter, onFilter }: StatsGridProps) {
+  // Agent-pool cards: display-only (no task filter maps to them), shown only
+  // when the server reports the pool (older servers omit the fields).
+  const agentCards: Array<{ label: string; value: number; tone: string; live?: boolean }> = [];
+  if (typeof stats?.active_agents === "number") {
+    agentCards.push({
+      label: "Active Agents",
+      value: stats.active_agents,
+      tone: "agents",
+      live: stats.active_agents > 0,
+    });
+  }
+  if (typeof stats?.agent_slots === "number") {
+    agentCards.push({ label: "Agent Slots", value: stats.agent_slots, tone: "slots" });
+  }
   return (
-    <div className="stats-bar" role="region" aria-label="Dashboard statistics">
+    <div
+      className={`stats-bar${agentCards.length > 0 ? " stats-bar-agents" : ""}`}
+      role="region"
+      aria-label="Dashboard statistics"
+    >
       {CARDS.map((card) => {
         const value = stats ? stats[card.key] : undefined;
         const isActive = activeFilter === card.filter;
@@ -64,6 +82,22 @@ export function StatsGrid({ stats, activeFilter, onFilter }: StatsGridProps) {
           </button>
         );
       })}
+      {agentCards.map((card) => (
+        <div
+          key={card.label}
+          className={`stat-card stat-card-static stat-tone-${card.tone}${card.live ? " live" : ""}`}
+          data-testid={`stat-${card.tone}`}
+          aria-label={card.label}
+        >
+          <span className="stat-card-head">
+            <span className={`stat-dot ${card.tone}`} aria-hidden="true" />
+            <span className="stat-card-title">{card.label}</span>
+          </span>
+          <span className="stat-card-val" aria-live="polite">
+            {card.value}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
