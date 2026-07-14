@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
 import { UpcomingPanel } from "./UpcomingPanel";
 import type { UpcomingRun } from "@/app/shared/lib/orchestratorApi";
 
@@ -80,5 +80,56 @@ describe("UpcomingPanel (#504)", () => {
     });
     // Two runs, one shared day-group header.
     expect(screen.getAllByText(/Next 2 scheduled run/).length).toBe(1);
+  });
+});
+
+// ── week view ────────────────────────────────────────────────────────────────
+
+// Local-time helper: a run N days from now at a fixed hour, so the day-bucket
+// math is deterministic regardless of when the test runs.
+function inDays(n: number, hour = 9): string {
+  const d = new Date();
+  const local = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n, hour, 0, 0);
+  return local.toISOString();
+}
+
+describe("UpcomingPanel week view", () => {
+  it("toggles to a 7-day board bucketing runs by day, today first", async () => {
+    mockRuns([
+      { task_id: "t1", prompt: "Morning sweep", next_run: inDays(0, 23), recurring: true, recurrence: "0 9 * * *" },
+      { task_id: "t2", prompt: "Backfill", next_run: inDays(2), recurring: false },
+      { task_id: "t3", prompt: "Way later", next_run: inDays(30), recurring: false },
+    ]);
+    render(<UpcomingPanel />);
+    await screen.findByTestId("upcoming-timeline");
+
+    fireEvent.click(screen.getByTestId("upcoming-view-week"));
+    const board = await screen.findByTestId("upcoming-week");
+    const days = board.querySelectorAll(".upcoming-week-day");
+    expect(days).toHaveLength(7);
+    expect(days[0]).toHaveTextContent("Today");
+    expect(days[0]).toHaveTextContent("Morning sweep");
+    expect(days[2]).toHaveTextContent("Backfill");
+    // outside the window: summarized, not silently dropped
+    expect(board).toHaveTextContent(/1 more scheduled run\(s\) beyond this window/);
+    expect(screen.queryByText("Way later")).toBeNull();
+
+    // back to the list
+    fireEvent.click(screen.getByTestId("upcoming-view-list"));
+    await screen.findByTestId("upcoming-timeline");
+    expect(screen.queryByTestId("upcoming-week")).toBeNull();
+  });
+
+  it("marks empty days instead of collapsing them", async () => {
+    mockRuns([
+      { task_id: "t1", prompt: "Only run", next_run: inDays(3), recurring: false },
+    ]);
+    render(<UpcomingPanel />);
+    await screen.findByTestId("upcoming-timeline");
+    fireEvent.click(screen.getByTestId("upcoming-view-week"));
+    const board = await screen.findByTestId("upcoming-week");
+    expect(board.querySelectorAll(".upcoming-week-day")).toHaveLength(7);
+    expect(board.querySelectorAll(".upcoming-week-empty").length).toBe(6);
+    expect(board.querySelectorAll("[data-testid=upcoming-week-run]")).toHaveLength(1);
   });
 });
