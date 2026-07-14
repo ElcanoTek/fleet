@@ -44,7 +44,7 @@ function createdByLabel(task: Task): string {
 
 function scheduleLabel(task: Task): string {
   if (task.recurrence) {
-    // Compact plain English, not raw cron ("Sat, Sun, 9:00 AM", not
+    // Compact plain English, not raw cron ("9:00 AM · Sat, Sun", not
     // "0 9 * * 6,0"), falling back to the verbose description and then the
     // raw expression; the exact cron stays in the cell's title.
     const described =
