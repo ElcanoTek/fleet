@@ -67,3 +67,18 @@ describe("PromptLibrary", () => {
     }));
   });
 });
+
+it("portals the dialog to <body> so transformed ancestors can't trap position:fixed", async () => {
+  vi.mocked(orchestratorApi.prompts).mockResolvedValue([]);
+  // The chat composer wraps this component in transform-animated containers;
+  // position:fixed resolves against the nearest transformed ancestor, which
+  // used to shove the dialog half off-screen.
+  render(
+    <div style={{ transform: "translateZ(0)" }}>
+      <PromptLibrary currentText="" onInsert={() => {}} compact />
+    </div>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Open prompt library" }));
+  const dialog = await screen.findByRole("dialog", { name: "Prompt library" });
+  expect(dialog.parentElement).toBe(document.body);
+});

@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Icon } from "./Icon";
 import {
   orchestratorApi,
   type PromptLibraryItem,
@@ -135,22 +137,38 @@ export function PromptLibrary({ currentText, onInsert, compact = false }: Props)
           void load();
         }}
       >
-        <span aria-hidden="true">▤</span>
+        <Icon name="book" className="size-4" />
         {!compact ? <span style={{ marginLeft: 6 }}>Prompt library</span> : null}
       </button>
 
-      {open ? (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-3" role="dialog" aria-modal="true" aria-label="Prompt library">
-          <div ref={modalRef} className="flex h-[min(46rem,92vh)] w-[min(68rem,96vw)] flex-col overflow-hidden rounded-xl border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] shadow-2xl">
-            <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">
-              <div>
+      {open
+        ? createPortal(
+        // Portalled to <body>: the composer sits inside transform-animated
+        // ancestors, and position:fixed resolves against the nearest
+        // transformed box — which used to shove this dialog half off-screen.
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/60 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Prompt library">
+          <div ref={modalRef} className="flex h-[100dvh] w-full flex-col overflow-hidden border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] shadow-2xl sm:h-[min(46rem,92vh)] sm:w-[min(68rem,96vw)] sm:rounded-xl">
+            <header className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-[var(--gradient-surface-panel)] px-4 py-3">
+              <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]">
+                <Icon name="book" className="size-4.5" />
+              </span>
+              <div className="min-w-0 flex-1">
                 <h2 className="m-0 text-base font-semibold text-[var(--color-text-primary)]">Prompt library</h2>
-                <p className="m-0 text-xs text-[var(--color-text-muted)]">Git-backed team prompts and workspace prompts, together.</p>
+                <p className="m-0 truncate text-xs text-[var(--color-text-muted)]">Git-backed team prompts and workspace prompts, together.</p>
               </div>
-              <div className="flex items-center gap-2">
+              {/* The close stays pinned to the title row (top-right) even when
+                  the action buttons wrap to a second row on phones. */}
+              <button
+                type="button"
+                className="order-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-transparent text-[var(--color-text-muted)] transition hover:border-[var(--color-border)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+                aria-label="Close prompt library"
+                onClick={() => setOpen(false)}
+              >
+                <Icon name="close" className="size-4.5" />
+              </button>
+              <div className="order-4 flex w-full items-center gap-2 sm:order-2 sm:w-auto">
                 <button type="button" className="btn btn-secondary btn-small" disabled={items.length === 0} onClick={exportLibrary}>Back up JSON</button>
                 <button type="button" className="btn btn-primary btn-small" onClick={beginNew}>New prompt</button>
-                <button type="button" className="icon-action" aria-label="Close prompt library" onClick={() => setOpen(false)}>×</button>
               </div>
             </header>
 
@@ -170,20 +188,31 @@ export function PromptLibrary({ currentText, onInsert, compact = false }: Props)
                 <div className="min-h-0 flex-1 overflow-y-auto">
                   {loading ? <p className="p-2 text-sm text-[var(--color-text-muted)]">Loading…</p> : null}
                   {!loading && visible.length === 0 ? <p className="p-2 text-sm text-[var(--color-text-muted)]">No matching prompts.</p> : null}
-                  {visible.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className={`mb-1 block w-full rounded-lg border px-3 py-2 text-left transition ${selectedID === p.id ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]" : "border-transparent hover:bg-[var(--color-surface-2)]"}`}
-                      onClick={() => { setSelectedID(p.id); setEditing(false); }}
-                    >
-                      <span className="block truncate text-sm font-medium text-[var(--color-text-primary)]">{p.name}</span>
-                      <span className="mt-0.5 flex items-center gap-1.5 text-[0.68rem] uppercase tracking-wide text-[var(--color-text-muted)]">
-                        <span>{p.source === "git" ? "Git" : p.visibility === "workspace" ? "Workspace" : "Private"}</span>
-                        {p.path ? <span className="truncate normal-case tracking-normal">{p.path}</span> : null}
-                      </span>
-                    </button>
-                  ))}
+                  {visible.map((p) => {
+                    const kind = p.source === "git" ? "git" : p.visibility === "workspace" ? "workspace" : "private";
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={`mb-1 flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition ${selectedID === p.id ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]" : "border-transparent hover:bg-[var(--color-surface-2)]"}`}
+                        onClick={() => { setSelectedID(p.id); setEditing(false); }}
+                      >
+                        <span aria-hidden="true" className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${kind === "git" ? "bg-[color-mix(in_srgb,#7c6bff_16%,transparent)] text-[#a99cff]" : kind === "workspace" ? "bg-[var(--color-status-assigned-bg)] text-[var(--color-status-assigned-fg)]" : "bg-[var(--color-overlay-soft)] text-[var(--color-text-muted)]"}`}>
+                          <Icon name={kind === "git" ? "layers" : kind === "workspace" ? "briefcase" : "lock"} className="size-3.5" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-[var(--color-text-primary)]">{p.name}</span>
+                          {p.description ? (
+                            <span className="mt-0.5 block truncate text-xs text-[var(--color-text-secondary)]">{p.description}</span>
+                          ) : null}
+                          <span className="mt-0.5 flex items-center gap-1.5 text-[0.68rem] uppercase tracking-wide text-[var(--color-text-muted)]">
+                            <span>{kind === "git" ? "Git" : kind === "workspace" ? "Workspace" : "Private"}</span>
+                            {p.path ? <span className="truncate normal-case tracking-normal">{p.path}</span> : null}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </aside>
 
@@ -214,17 +243,26 @@ export function PromptLibrary({ currentText, onInsert, compact = false }: Props)
                     <pre className="mt-3 min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-text-secondary)]">{selected.content}</pre>
                     <div className="mt-3 flex items-center justify-between gap-3">
                       <span className="text-xs text-[var(--color-text-muted)]">{selected.read_only ? `Tracked in ${selected.path}` : selected.visibility === "workspace" ? `Shared by ${selected.owner_username}` : "Only you can see this prompt"}</span>
-                      <button type="button" className="btn btn-primary" onClick={() => { onInsert(selected.content); setOpen(false); }}>Use prompt</button>
+                      <button type="button" className="btn btn-primary" onClick={() => { onInsert(selected.content); setOpen(false); }}>
+                        <Icon name="arrow-up" className="mr-1.5 size-3.5 rotate-90" />
+                        Use prompt
+                      </button>
                     </div>
                   </div>
                 ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-[var(--color-text-muted)]">Choose a prompt or create one.</div>
+                  <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-[var(--color-text-muted)]">
+                    <Icon name="book" className="size-8 opacity-40" />
+                    <span>Choose a prompt on the left, or create one.</span>
+                    <button type="button" className="btn btn-secondary btn-small" onClick={beginNew}>New prompt</button>
+                  </div>
                 )}
               </main>
             </div>
           </div>
-        </div>
-      ) : null}
+        </div>,
+          document.body,
+        )
+        : null}
     </>
   );
 }
