@@ -105,6 +105,7 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith("/icons/") ||
     pathname.startsWith("/logos/") ||
     pathname.startsWith("/backgrounds/") ||
+    pathname === "/manifest.webmanifest" ||
     pathname === "/robots.txt"
   ) {
     return NextResponse.next();
