@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
-import { formatDate, truncate } from "@/app/shared/lib/format";
-import { describeCronExpression } from "@/app/shared/lib/cron";
+import { formatDate, formatTimeFirst, truncate } from "@/app/shared/lib/format";
+import { describeCronExpression, describeCronExpressionShort } from "@/app/shared/lib/cron";
 
 // TasksTable — the Recent Tasks table + filter bar + pagination. React port of
 // moc dashboard.js renderTasks()/buildTaskQueryString()/pagination controls.
@@ -44,12 +44,14 @@ function createdByLabel(task: Task): string {
 
 function scheduleLabel(task: Task): string {
   if (task.recurrence) {
-    // Plain English, not raw cron ("At 09:00, only on Saturday and Sunday",
-    // not "0 9 * * 6,0"); the raw expression stays in the cell's title.
-    const described = describeCronExpression(task.recurrence);
+    // Compact plain English, not raw cron ("Sat, Sun, 9:00 AM", not
+    // "0 9 * * 6,0"), falling back to the verbose description and then the
+    // raw expression; the exact cron stays in the cell's title.
+    const described =
+      describeCronExpressionShort(task.recurrence) || describeCronExpression(task.recurrence);
     return `🔄 ${described || task.recurrence}`;
   }
-  if (task.scheduled_for) return `⏰ ${formatDate(task.scheduled_for)}`;
+  if (task.scheduled_for) return `⏰ ${formatTimeFirst(task.scheduled_for)}`;
   return "-";
 }
 

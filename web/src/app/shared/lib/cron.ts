@@ -182,3 +182,57 @@ export function describeCronExpression(expr: unknown): string {
     return "";
   }
 }
+
+// Compact schedule label for dense surfaces (the Recent Tasks Schedule
+// column / phone cards), time first: "9:00 AM, Sat, Sun" · "8:30 AM,
+// Mon–Fri" · "9:00 AM, Daily". Handles fixed-time + day-of-week shapes and
+// returns "" for anything else so callers can fall back to the verbose
+// describeCronExpression (which in turn falls back to the raw string).
+const CRON_DAYS_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function dowIndex(token: string): number | null {
+  if (/^\d+$/.test(token)) return parseInt(token, 10) % 7;
+  const named = CRON_DAY_NAMES[token.toUpperCase()];
+  return named === undefined ? null : named;
+}
+
+export function describeCronExpressionShort(expr: unknown): string {
+  if (!expr || typeof expr !== "string") return "";
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return "";
+  const [minute, hour, dom, month, dow] = parts;
+  // Compact form only covers fixed times on day-of-week patterns; months and
+  // day-of-month schedules keep the verbose description.
+  if (dom !== "*" || month !== "*") return "";
+  if (!/^\d+$/.test(minute) || !/^\d+$/.test(hour)) return "";
+  const h = parseInt(hour, 10);
+  const m = parseInt(minute, 10);
+  if (h > 23 || m > 59) return "";
+  const time = new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  let days = "";
+  if (dow === "*") {
+    days = "Daily";
+  } else {
+    const single = dowIndex(dow);
+    const range = dow.match(/^([^-]+)-([^-]+)$/);
+    if (single !== null) {
+      days = CRON_DAYS_SHORT[single];
+    } else if (range) {
+      const a = dowIndex(range[1]);
+      const b = dowIndex(range[2]);
+      if (a === null || b === null) return "";
+      days = `${CRON_DAYS_SHORT[a]}–${CRON_DAYS_SHORT[b]}`;
+    } else if (dow.includes(",")) {
+      const idxs = dow.split(",").map(dowIndex);
+      if (idxs.some((i) => i === null)) return "";
+      days = idxs.map((i) => CRON_DAYS_SHORT[i as number]).join(", ");
+    } else {
+      return "";
+    }
+  }
+  return `${time}, ${days}`;
+}
