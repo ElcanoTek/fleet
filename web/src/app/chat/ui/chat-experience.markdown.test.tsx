@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { autoFenceRawHtmlDocument, renderAssistantContent } from "./chat-experience";
+// Imported from AssistantContent directly: chat-experience no longer re-exports
+// the markdown API — a static re-export would drag the lazy-loaded markdown
+// module back into the initial /chat bundle.
+import { autoFenceRawHtmlDocument, renderAssistantContent } from "./AssistantContent";
 
 const CONV = "fdf80072-b988-47fb-b3c0-11cb9cb1f0ba";
 

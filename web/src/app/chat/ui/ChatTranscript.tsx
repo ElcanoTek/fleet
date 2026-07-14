@@ -14,7 +14,7 @@
 // SummarizeProgressCard — were module-level functions in chat-experience whose
 // only callers are this transcript JSX, so they move here verbatim (the
 // originals are removed from chat-experience to keep one definition each).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { LoadingLogo } from "./LoadingLogo";
@@ -24,7 +24,34 @@ import { Icon } from "./Icon";
 import { PythonOutput, ToolChip, taskTrackerDisplayForMessage } from "./ToolChips";
 import { CopyButton, SummaryBanner, TurnSummaryChip } from "./ChatChips";
 import { ApprovalCard, MemoryProposalCard } from "./ApprovalCards";
-import { renderAssistantContent } from "./AssistantContent";
+// The assistant markdown pipeline (react-markdown + micromark, ~43 KiB
+// transfer) is lazy-loaded: nothing renders it until a transcript message is
+// on screen, so the first-load critical path (hydrate + boot fetch + paint
+// the empty state or transcript shell) doesn't pay its download/parse cost.
+// While the chunk loads, messages show their raw text with preserved
+// whitespace — same box, same type metrics — then upgrade in place.
+const AssistantMarkdown = lazy(() => import("./AssistantContent"));
+
+function MessageMarkdown({
+  content,
+  isStreaming,
+  conversationId,
+}: {
+  content: string;
+  isStreaming?: boolean;
+  conversationId?: string | null;
+}) {
+  if (!content.trim()) return null;
+  return (
+    <Suspense fallback={<div className="whitespace-pre-wrap">{content}</div>}>
+      <AssistantMarkdown
+        content={content}
+        isStreaming={isStreaming}
+        conversationId={conversationId}
+      />
+    </Suspense>
+  );
+}
 import { humanToolLabel, shortModelName, type Message } from "./history";
 
 export type ChatTranscriptProps = {
@@ -608,11 +635,13 @@ export function ChatTranscript({
                                 </div>
                               ) : null}
 
-                              {renderAssistantContent(
-                                message.content,
-                                message.state === "streaming" || message.state === "thinking",
-                                realConvId(currentConvKey),
-                              )}
+                              <MessageMarkdown
+                                content={message.content}
+                                isStreaming={
+                                  message.state === "streaming" || message.state === "thinking"
+                                }
+                                conversationId={realConvId(currentConvKey)}
+                              />
                               {(message.state === "streaming" ||
                                 (message.state === "thinking" && message.reasoning)) &&
                               message.content ? (
@@ -1057,7 +1086,7 @@ function UserBubble({
           so a pasted long URL/token wraps inside the max-w-[88%] cap
           instead of pushing the bubble past the chat column on mobile. */}
       <div className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--color-overlay-soft)] px-3 py-2.5 text-[0.875rem] leading-[1.55] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3 sm:text-[0.9375rem] sm:leading-[1.65]">
-        {renderAssistantContent(message.content) ?? message.content}
+        <MessageMarkdown content={message.content} />
       </div>
       {isLastUser && !isStreaming ? (
         // "Edit" text action in an in-flow footer row, mirroring the
@@ -1112,7 +1141,11 @@ function ReasoningBlock({ text }: { text: string }) {
           {expanded ? "Hide" : "Show"}
         </span>
       </button>
-      {expanded ? <div className="mt-2">{renderAssistantContent(text)}</div> : null}
+      {expanded ? (
+        <div className="mt-2">
+          <MessageMarkdown content={text} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1168,7 +1201,7 @@ function SummarizeProgressCard({
       </div>
       {streamingText ? (
         <div className="mt-3 grid gap-2 border-t border-[var(--color-border)] pt-3 text-[0.85rem] leading-[1.55] text-[var(--color-text-primary)]">
-          {renderAssistantContent(streamingText)}
+          <MessageMarkdown content={streamingText} />
         </div>
       ) : null}
     </div>
