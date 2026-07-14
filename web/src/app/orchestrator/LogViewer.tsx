@@ -5,16 +5,22 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type {
+  LogMessage,
+  LogSession,
   Task,
   TaskStreamFrame,
   TaskLearnedInstruction,
 } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
-import { stripAnsiCodes } from "@/app/shared/lib/format";
+import { formatTimeFirst, stripAnsiCodes } from "@/app/shared/lib/format";
+import { useToast } from "@/app/shared/ui/Toast";
+import { createdByLabel, scheduleLabel, TaskSlaBadge } from "./taskDisplay";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import {
   Checklist,
@@ -59,9 +65,14 @@ export type LogViewerProps = {
   // canStop shows the Stop button on a live run. The server enforces the real
   // permission (admin or the task's creator); this only gates the affordance.
   canStop?: boolean;
+  // Called after a successful Resubmit so the dashboard can refetch and show
+  // the new run immediately.
+  onResubmitted?: () => void;
+  // Opens the edit form for this task (parent closes the log modal first).
+  onEdit?: (task: Task) => void;
 };
 
-export function LogViewer({ task, onClose, canStop }: LogViewerProps) {
+export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit }: LogViewerProps) {
   if (!task) return null;
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
@@ -83,7 +94,287 @@ export function LogViewer({ task, onClose, canStop }: LogViewerProps) {
       task={task}
       onClose={onClose}
       canStop={!!canStop}
+      onResubmitted={onResubmitted}
+      onEdit={onEdit}
     />
+  );
+}
+
+// Terminal statuses that make sense to resubmit as a fresh one-off run. A
+// pending/scheduled task will run on its own; a running one already is.
+const RESUBMITTABLE = new Set(["success", "error", "cancelled", "dead_lettered"]);
+
+// TaskSummary mirrors the Recent Tasks row the user clicked (ID / Status /
+// SLA / Schedule / Created By / Created) so the modal carries the row's
+// context — which in turn lets the phone card view drop those columns.
+function TaskSummary({ task }: { task: Task }) {
+  const schedule = scheduleLabel(task);
+  const items: Array<{ label: string; node: ReactNode }> = [
+    {
+      label: "ID",
+      node: (
+        <code title={task.id}>{task.id.slice(0, 8)}…</code>
+      ),
+    },
+    {
+      label: "Status",
+      node: (
+        <span className={`status-badge status-${task.status ?? "unknown"}`}>
+          {task.status ?? "-"}
+        </span>
+      ),
+    },
+    { label: "SLA", node: <TaskSlaBadge task={task} /> },
+    {
+      label: "Schedule",
+      node: (
+        <span title={task.recurrence || undefined}>{schedule}</span>
+      ),
+    },
+    { label: "Created by", node: <span>{createdByLabel(task)}</span> },
+    { label: "Created", node: <span>{formatTimeFirst(task.created_at)}</span> },
+  ];
+  return (
+    <div className="task-summary" data-testid="task-summary">
+      {items.map((it) => (
+        <div key={it.label} className="task-summary-item">
+          <span className="task-summary-label">{it.label}</span>
+          <span className="task-summary-value">{it.node}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// SessionMetrics — the moc-style strip over the transcript: cumulative token
+// and cost figures recorded on the captain's-log session.
+function SessionMetrics({ session }: { session: LogSession }) {
+  const num = (n: number | undefined) =>
+    typeof n === "number" ? n.toLocaleString() : undefined;
+  const tiles: Array<{ label: string; value: string | undefined }> = [
+    { label: "Session", value: session.title || undefined },
+    { label: "Messages", value: num(session.messages?.length) },
+    { label: "Prompt tokens", value: num(session.prompt_tokens) },
+    { label: "Completion tokens", value: num(session.completion_tokens) },
+    { label: "Cached tokens", value: num(session.cached_tokens) },
+    {
+      label: "Cost",
+      value:
+        typeof session.cost === "number" && session.cost > 0
+          ? `$${session.cost.toFixed(4)}`
+          : undefined,
+    },
+  ];
+  const shown = tiles.filter((t) => t.value !== undefined);
+  if (shown.length === 0) return null;
+  return (
+    <div className="log-metrics" data-testid="log-metrics">
+      {shown.map((t) => (
+        <div key={t.label} className="log-metric">
+          <span className="log-metric-label">{t.label}</span>
+          <span className="log-metric-value">{t.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── interaction filters ──────────────────────────────────────────────────────
+// Chip taxonomy computed once per session: highlight kinds, tool names,
+// models, providers. Selecting chips narrows the transcript to messages
+// matching ANY selected chip (union); no selection shows everything.
+
+type FilterChip = { key: string; label: string; count: number };
+type FilterGroups = Array<{ title: string; chips: FilterChip[] }>;
+
+function buildFilterIndex(messages: LogMessage[]): {
+  tags: Array<Set<string>>;
+  groups: FilterGroups;
+  toolNames: Map<number, string>;
+} {
+  // Resolve a tool-result message's tool name through the assistant tool_call
+  // it answers (LogMessage carries only tool_call_id).
+  const callName = new Map<string, string>();
+  for (const m of messages) {
+    for (const tc of m.tool_calls ?? []) {
+      if (tc.id && tc.name) callName.set(tc.id, tc.name);
+    }
+  }
+  const toolNames = new Map<number, string>();
+  const tags = messages.map((m, i) => {
+    const t = new Set<string>();
+    const role = m.role ?? "";
+    if ((m.reasoning ?? "").trim()) t.add("hl:reasoning");
+    if (role === "assistant" && (m.content ?? "").trim()) t.add("hl:responses");
+    if ((m.tool_calls?.length ?? 0) > 0) t.add("hl:tool-calls");
+    if (role === "tool") t.add("hl:tool-results");
+    const names = new Set<string>();
+    for (const tc of m.tool_calls ?? []) if (tc.name) names.add(tc.name);
+    if (role === "tool" && m.tool_call_id) {
+      const n = callName.get(m.tool_call_id);
+      if (n) {
+        names.add(n);
+        toolNames.set(i, n);
+      }
+    }
+    for (const n of names) {
+      t.add(`tool:${n}`);
+      if (n === "task_tracker") t.add("hl:task-tracker");
+    }
+    if (m.model) t.add(`model:${m.model}`);
+    if (m.provider) t.add(`provider:${m.provider}`);
+    return t;
+  });
+
+  const count = (key: string) => tags.filter((t) => t.has(key)).length;
+  const collect = (prefix: string) => {
+    const keys = new Set<string>();
+    for (const t of tags)
+      for (const k of t) if (k.startsWith(prefix)) keys.add(k);
+    return [...keys]
+      .sort()
+      .map((k) => ({ key: k, label: k.slice(prefix.length), count: count(k) }));
+  };
+  const highlights: FilterChip[] = [
+    { key: "hl:reasoning", label: "Reasoning", count: count("hl:reasoning") },
+    { key: "hl:responses", label: "Responses", count: count("hl:responses") },
+    { key: "hl:tool-calls", label: "Tool calls", count: count("hl:tool-calls") },
+    { key: "hl:tool-results", label: "Tool results", count: count("hl:tool-results") },
+    { key: "hl:task-tracker", label: "Task tracker", count: count("hl:task-tracker") },
+  ].filter((c) => c.count > 0);
+  const groups: FilterGroups = [
+    { title: "Highlights", chips: highlights },
+    { title: "Tool types", chips: collect("tool:") },
+    { title: "Models", chips: collect("model:") },
+    { title: "Providers", chips: collect("provider:") },
+  ].filter((g) => g.chips.length > 0);
+  return { tags, groups, toolNames };
+}
+
+function LogFilters({
+  groups,
+  selected,
+  onToggle,
+  onClear,
+  shown,
+  total,
+}: {
+  groups: FilterGroups;
+  selected: Set<string>;
+  onToggle: (key: string) => void;
+  onClear: () => void;
+  shown: number;
+  total: number;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <div className="log-filters" data-testid="log-filters">
+      <div className="log-filters-head">
+        <span className="log-filters-title">Interaction filters</span>
+        {selected.size > 0 ? (
+          <button type="button" className="btn btn-small" onClick={onClear}>
+            Clear all
+          </button>
+        ) : null}
+      </div>
+      {groups.map((g) => (
+        <div key={g.title} className="log-filter-group">
+          <span className="log-filter-group-title">{g.title}</span>
+          <div className="log-filter-chips">
+            {g.chips.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                className={`log-chip${selected.has(c.key) ? " log-chip--active" : ""}`}
+                aria-pressed={selected.has(c.key)}
+                onClick={() => onToggle(c.key)}
+              >
+                {c.label} <span className="log-chip-count">{c.count}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div className="log-filters-shown">
+        {selected.size === 0
+          ? `Showing all ${total} messages`
+          : `Showing ${shown} of ${total} messages`}
+      </div>
+    </div>
+  );
+}
+
+// LogMessageCard — one transcript entry, moc-style: a role-tinted header bar
+// (avatar initial, role, model, timestamp) over the rendered content.
+// Reasoning and tool arguments sit behind disclosures; tool OUTPUT renders as
+// preformatted text (it is machine output, not markdown).
+function LogMessageCard({
+  msg,
+  taskId,
+  toolName,
+}: {
+  msg: LogMessage;
+  taskId: string;
+  toolName?: string;
+}) {
+  const role = msg.role ?? "unknown";
+  const ts = msg.created_at
+    ? new Date(msg.created_at * 1000).toLocaleTimeString()
+    : null;
+  const initial =
+    role === "user" ? "U" : role === "assistant" ? "A" : role === "tool" ? "T" : "?";
+  const roleLabel =
+    role === "tool" && toolName ? `tool · ${toolName}` : role;
+  const content = stripAnsiCodes(msg.content ?? "");
+  return (
+    <div className={`log-message log-message--${role}`}>
+      <div className="log-message-head">
+        <span className={`log-avatar log-avatar--${role}`} aria-hidden="true">
+          {initial}
+        </span>
+        <span className="log-message-role">{roleLabel}</span>
+        {msg.model ? <span className="log-message-model">{msg.model}</span> : null}
+        {ts ? <span className="log-message-time">{ts}</span> : null}
+      </div>
+      <div className="log-message-content">
+        {(msg.reasoning ?? "").trim() ? (
+          <details className="log-reasoning">
+            <summary>Reasoning</summary>
+            <pre className="log-pre">{stripAnsiCodes(msg.reasoning ?? "")}</pre>
+          </details>
+        ) : null}
+        {(msg.tool_calls?.length ?? 0) > 0 ? (
+          <div className="log-tool-calls">
+            {msg.tool_calls!.map((tc, i) => (
+              <details key={tc.id ?? i} className="log-tool-call">
+                <summary>{tc.name ?? "tool"}</summary>
+                <pre className="log-pre">{tc.arguments ?? ""}</pre>
+              </details>
+            ))}
+          </div>
+        ) : null}
+        {content ? (
+          role === "tool" ? (
+            content.length > 1200 ? (
+              <details className="log-tool-output">
+                <summary>
+                  Tool output ({content.length.toLocaleString()} characters)
+                </summary>
+                <pre className="log-pre">{content}</pre>
+              </details>
+            ) : (
+              <pre className="log-pre">{content}</pre>
+            )
+          ) : (
+            <Suspense
+              fallback={<div className="whitespace-pre-wrap">{content}</div>}
+            >
+              <LogMarkdown content={content} taskId={taskId} />
+            </Suspense>
+          )
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -252,9 +543,9 @@ function LiveTaskView({
       aria-modal="true"
       aria-label="Live task activity"
     >
-      <div className="modal">
+      <div className="modal modal-log">
         <div className="modal-header">
-          <h3>
+          <h3 className="modal-log-title" title={task.prompt ?? ""}>
             Live activity
             <span
               className={`status-badge status-${terminal ? (runStatus === "succeeded" ? "success" : runStatus === "stopped" ? "cancelled" : "error") : "running"}`}
@@ -287,6 +578,7 @@ function LiveTaskView({
             </button>
           </div>
         </div>
+        <TaskSummary task={task} />
         <div className="modal-body" data-testid="live-activity-body">
           {streamError ? (
             <div className="table-error">Live stream error: {streamError}</div>
@@ -307,12 +599,14 @@ function LiveTaskView({
                   key={e.key}
                   className={`log-message log-message--${e.kind === "message" ? "assistant" : "tool"}`}
                 >
-                  <div className="log-message-role">
-                    {e.kind === "tool_call"
-                      ? `▶ ${e.name ?? "tool"}`
-                      : e.kind === "tool_result"
-                        ? `${e.isError ? "✗" : "✓"} ${e.name ?? "result"}`
-                        : "assistant"}
+                  <div className="log-message-head">
+                    <span className="log-message-role">
+                      {e.kind === "tool_call"
+                        ? `▶ ${e.name ?? "tool"}`
+                        : e.kind === "tool_result"
+                          ? `${e.isError ? "✗" : "✓"} ${e.name ?? "result"}`
+                          : "assistant"}
+                    </span>
                   </div>
                   <div className="log-message-content">
                     {e.checklist ? (
@@ -360,10 +654,14 @@ function LogViewerBody({
   task,
   onClose,
   canStop,
+  onResubmitted,
+  onEdit,
 }: {
   task: Task;
   onClose: () => void;
   canStop: boolean;
+  onResubmitted?: () => void;
+  onEdit?: (task: Task) => void;
 }) {
   // The shared hook owns the cancelled-ref guard and the lone setState after
   // the await, so this component no longer needs its own one-shot load-flag
@@ -376,6 +674,72 @@ function LogViewerBody({
     useCallback(() => orchestratorApi.taskLogs(task.id), [task.id]),
     [task.id],
   );
+  const { showToast } = useToast();
+  const [resubmitting, setResubmitting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const messages = useMemo(() => session?.messages ?? [], [session]);
+  const { tags, groups, toolNames } = useMemo(
+    () => buildFilterIndex(messages),
+    [messages],
+  );
+  const visibleIdx = useMemo(
+    () =>
+      messages
+        .map((_, i) => i)
+        .filter(
+          (i) =>
+            selected.size === 0 || [...selected].some((k) => tags[i].has(k)),
+        ),
+    [messages, tags, selected],
+  );
+
+  const toggleChip = (key: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const resubmit = async () => {
+    if (resubmitting) return;
+    setResubmitting(true);
+    try {
+      const created = await orchestratorApi.rerunTask(task.id);
+      showToast(
+        `Resubmitted as task ${created.id.slice(0, 8)}… — running now`,
+        "success",
+      );
+      onResubmitted?.();
+    } catch (err) {
+      showToast(
+        `Resubmit failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        "error",
+      );
+    } finally {
+      setResubmitting(false);
+    }
+  };
+
+  // Download the stored session (plus the task row for context) as JSON — the
+  // full fidelity record, not the filtered view.
+  const download = () => {
+    const payload = { task, session };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `fleet-task-${task.id.slice(0, 8)}-logs.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const canResubmit = RESUBMITTABLE.has(task.status ?? "");
 
   return (
     <div
@@ -384,9 +748,12 @@ function LogViewerBody({
       aria-modal="true"
       aria-label="Task Logs"
     >
-      <div className="modal">
+      <div className="modal modal-log">
         <div className="modal-header">
-          <h3>Task Logs</h3>
+          <h3 className="modal-log-title" title={task.prompt ?? ""}>
+            Task: {(task.prompt ?? "").trim().slice(0, 90) || task.id.slice(0, 8)}
+            {(task.prompt ?? "").trim().length > 90 ? "…" : ""}
+          </h3>
           <button
             type="button"
             className="icon-action modal-close"
@@ -396,8 +763,50 @@ function LogViewerBody({
             ×
           </button>
         </div>
+        <TaskSummary task={task} />
         {task.expected_duration_minutes ? <SLADetail task={task} /> : null}
         <div className="modal-body" data-testid="log-modal-body">
+          <div className="task-detail-bar" data-testid="task-detail-bar">
+            <span className="task-detail-status">
+              Status:{" "}
+              <span className={`status-badge status-${task.status ?? "unknown"}`}>
+                {task.status ?? "-"}
+              </span>
+            </span>
+            <span className="task-detail-actions">
+              {onEdit && ["pending", "scheduled", ...RESUBMITTABLE].includes(task.status ?? "") ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="edit-task-button"
+                  onClick={() => onEdit(task)}
+                >
+                  Edit
+                </button>
+              ) : null}
+              {canResubmit ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="resubmit-task-button"
+                  disabled={resubmitting}
+                  onClick={() => void resubmit()}
+                >
+                  {resubmitting ? "Resubmitting…" : "Resubmit"}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-testid="download-logs-button"
+                disabled={!session}
+                onClick={download}
+              >
+                Download logs
+              </button>
+            </span>
+          </div>
+          {session ? <SessionMetrics session={session} /> : null}
           <SelfImprovePanel task={task} canManage={canStop} />
           <TaskRunIfBanner task={task} />
           {loading ? (
@@ -409,33 +818,26 @@ function LogViewerBody({
           ) : !session || !session.messages || session.messages.length === 0 ? (
             <div className="table-empty">No logs for this task.</div>
           ) : (
-            <div className="log-session">
-              {session.title ? (
-                <h4 className="log-session-title">{session.title}</h4>
-              ) : null}
-              {session.messages.map((msg, idx) => (
-                <div
-                  key={msg.id ?? idx}
-                  className={`log-message log-message--${msg.role ?? "unknown"}`}
-                >
-                  <div className="log-message-role">{msg.role ?? "—"}</div>
-                  <div className="log-message-content">
-                    <Suspense
-                      fallback={
-                        <div className="whitespace-pre-wrap">
-                          {stripAnsiCodes(msg.content ?? "")}
-                        </div>
-                      }
-                    >
-                      <LogMarkdown
-                        content={stripAnsiCodes(msg.content ?? "")}
-                        taskId={task.id}
-                      />
-                    </Suspense>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <>
+              <LogFilters
+                groups={groups}
+                selected={selected}
+                onToggle={toggleChip}
+                onClear={() => setSelected(new Set())}
+                shown={visibleIdx.length}
+                total={messages.length}
+              />
+              <div className="log-session">
+                {visibleIdx.map((i) => (
+                  <LogMessageCard
+                    key={messages[i].id ?? i}
+                    msg={messages[i]}
+                    taskId={task.id}
+                    toolName={toolNames.get(i)}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </div>
       </div>
