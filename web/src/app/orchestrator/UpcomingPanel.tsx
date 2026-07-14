@@ -36,6 +36,8 @@ function timeLabel(d: Date): string {
 
 type UpcomingView = "list" | "week";
 
+const VIEW_STORAGE_KEY = "fleet-upcoming-view";
+
 const VIEWS: Array<{ id: UpcomingView; label: string }> = [
   { id: "list", label: "List" },
   { id: "week", label: "Week" },
@@ -50,9 +52,23 @@ export function UpcomingPanel() {
     useCallback(() => orchestratorApi.upcomingRuns(50), []),
     [],
   );
-  // View toggle: the chronological list (default) or a 7-day week board.
-  // Designed so a month grid can slot in as a third view later.
-  const [view, setView] = useState<UpcomingView>("list");
+  // View toggle: the chronological list (default) or a week board. Designed
+  // so a month grid can slot in as a third view later. The choice persists
+  // per browser; lazy init is safe from hydration mismatch because this
+  // panel only mounts on a post-hydration tab click.
+  const [view, setView] = useState<UpcomingView>(() => {
+    if (typeof window === "undefined") return "list";
+    const saved = window.localStorage.getItem(VIEW_STORAGE_KEY);
+    return saved === "week" ? "week" : "list";
+  });
+  const changeView = (v: UpcomingView) => {
+    setView(v);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, v);
+    } catch {
+      /* storage full/blocked — the toggle still works for this session */
+    }
+  };
 
   const runs = data?.upcoming ?? [];
 
@@ -70,7 +86,7 @@ export function UpcomingPanel() {
               tabIndex={view === v.id ? 0 : -1}
               className={`task-segment-btn${view === v.id ? " is-active" : ""}`}
               data-testid={`upcoming-view-${v.id}`}
-              onClick={() => setView(v.id)}
+              onClick={() => changeView(v.id)}
             >
               {v.label}
             </button>
@@ -97,15 +113,18 @@ export function UpcomingPanel() {
   );
 }
 
-// UpcomingWeek — the next 7 days as columns (today first), each listing that
-// day's runs in order. A rolling window rather than a calendar week: it
-// matches the "what is fleet about to do?" horizon and never opens on a
-// mostly-spent week. Runs beyond the window are summarized under the board.
+// UpcomingWeek — the current calendar week as fixed Sun…Sat columns with
+// today highlighted, each day listing its runs in order. Fixed columns keep
+// the board's shape stable day to day (Wednesday is always the fourth
+// column); days already behind us render dimmed. Runs beyond Saturday are
+// summarized under the board.
 function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
   const today = new Date();
+  const sunday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay());
+  const todayKey = dayKey(today);
   const days: Array<{ key: string; date: Date; runs: UpcomingRun[] }> = [];
   for (let i = 0; i < 7; i++) {
-    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
+    const d = new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate() + i);
     days.push({ key: dayKey(d), date: d, runs: [] });
   }
   const byKey = new Map(days.map((d) => [d.key, d]));
@@ -122,13 +141,17 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
         {days.map((day, i) => (
           <div
             key={day.key}
-            className={`upcoming-week-day${i === 0 ? " upcoming-week-day--today" : ""}`}
+            className={`upcoming-week-day${
+              day.key === todayKey
+                ? " upcoming-week-day--today"
+                : i < today.getDay()
+                  ? " upcoming-week-day--past"
+                  : ""
+            }`}
           >
             <div className="upcoming-week-day-header">
               <span className="upcoming-week-day-name">
-                {i === 0
-                  ? "Today"
-                  : day.date.toLocaleDateString(undefined, { weekday: "short" })}
+                {day.date.toLocaleDateString(undefined, { weekday: "short" })}
               </span>
               <span className="upcoming-week-day-date">
                 {day.date.toLocaleDateString(undefined, { month: "numeric", day: "numeric" })}
@@ -161,8 +184,8 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
       </div>
       <p className="refresh-note">
         {beyond > 0
-          ? `Next 7 days · ${beyond} more scheduled run(s) beyond this window — see List`
-          : "Next 7 days"}
+          ? `This week · ${beyond} more scheduled run(s) beyond this week — see List`
+          : "This week"}
       </p>
     </div>
   );

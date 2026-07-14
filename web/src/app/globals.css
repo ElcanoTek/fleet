@@ -2001,8 +2001,14 @@ tr.sla-row-fail {
   min-height: 9rem;
 }
 .upcoming-week-day--today {
-  border-color: var(--color-border-strong);
+  border-color: var(--color-accent);
   background: var(--gradient-surface-card);
+  box-shadow: 0 0 0 1px var(--color-accent) inset;
+}
+/* Days of this week already behind us: kept in place (fixed Sun…Sat shape)
+   but visually receded. */
+.upcoming-week-day--past {
+  opacity: 0.55;
 }
 .upcoming-week-day-header {
   display: flex;
