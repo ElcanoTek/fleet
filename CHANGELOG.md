@@ -25,7 +25,10 @@ prior versions are listed because none have shipped.
   the broker would (`initialize` + `tools/list`), and reports tools or the
   actionable failure per server. `--all` sweeps the catalog, `--json` for CI
   gates; exit 0/1/2. Boots nothing (no DB, no server, no sandbox) — run it
-  where the deployment's env lives.
+  where the deployment's env lives. `--deep` additionally calls each
+  server's advertised auth-status tool (`auth_status` / `*_auth_status`) to
+  verify the credentials against the upstream, failing the run on an
+  `isError` result.
 
 ### Changed
 

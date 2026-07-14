@@ -26,8 +26,36 @@ process, a handshake timeout — the same classes that otherwise surface as
 cryptic mid-chat tool errors. Requesting a server whose enable gate is off
 says so explicitly (vs. "unknown server" for a typo).
 
-Exit codes: `0` all requested servers connected · `1` at least one failed
-(or a requested name is unknown/gated off) · `2` usage error.
+### `--deep` — verify credentials against the upstream
+
+```sh
+fleet mcp test --all --deep
+```
+
+The handshake proves dial tone; `--deep` proves the far end accepts the
+call. For every connected server that advertises an auth-status tool
+(`auth_status` or `*_auth_status` — the bundle servers' convention for "ask
+the upstream whether my credentials are actually valid"), `--deep` CALLS
+that tool and reports the outcome under the server's row:
+
+```
+✓ magnite_mcp              stdio   32 tools  (optional)
+    deep ✓ magnite_auth_status — authenticated: seat 12345 ok
+✗-style failure:
+    deep ✗ ix_auth_status FAILED — 401 Unauthorized: key revoked
+```
+
+A failing deep check fails the run (exit 1) even though the server itself
+connected. A server with no auth-status tool is noted and skipped — never
+failed. Honest scope: the probe trusts the MCP error flag (`isError`) and
+surfaces the tool's own text; it does NOT parse result content for
+auth semantics — a server that reports "not authenticated" as a NON-error
+result will read as deep-✓, so glance at the surfaced text, don't just read
+the glyph.
+
+Exit codes: `0` all requested servers connected (and, with `--deep`, all
+deep checks passed) · `1` at least one failed (or a requested name is
+unknown/gated off) · `2` usage error.
 
 ### What it needs (and deliberately does not)
 
@@ -43,10 +71,10 @@ Exit codes: `0` all requested servers connected · `1` at least one failed
 
 ### Honest scope
 
-- The probe is **point-in-time liveness + tool discovery**. It does not call
-  tools, so a server that lists tools but fails on invocation (e.g. a key
-  that authenticates but lacks a scope) still passes. Use an eval
-  (`docs/EVALS.md`) or a manual tool call for that depth.
+- The plain probe is **point-in-time liveness + tool discovery**; it does
+  not call tools. `--deep` closes most of that gap where servers advertise
+  an auth-status tool, but tool *behavior* (scopes, quotas, correctness)
+  still belongs to an eval (`docs/EVALS.md`) or a manual tool call.
 - HTTP catalog servers are probed with the manifest's resolved headers/TLS;
   per-user hosted connectors (Settings → Connections) are NOT covered here —
   they get their own add-time validation handshake
@@ -58,6 +86,7 @@ Exit codes: `0` all requested servers connected · `1` at least one failed
 | --- | --- | --- |
 | Manifest shape | `fleet validate-config` | Bundle/manifest well-formed, env keys named, executables present |
 | Server liveness | `fleet mcp test --all` | Each server spawns, handshakes, lists tools with real credentials |
+| Credential validity | `fleet mcp test --all --deep` | Each server's auth-status tool confirms the upstream accepts the credentials |
 | Runtime state | admin Health panel / `GET /health` | What the *running* deployment actually connected |
 | Hot iteration | `fleet mcp reload` (`docs/MCP-RELOAD.md`) | Bundle edits re-register without a restart |
 | Full stack | live Playwright lane (`npm run test:e2e:live`) | Real server + sandbox + broker wiring, fake LLM |
