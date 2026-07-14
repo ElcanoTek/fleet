@@ -305,6 +305,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
           setLogTask(null);
           setEditTask(t);
         }}
+        onSelectTask={setLogTask}
       />
     </div>
   );
