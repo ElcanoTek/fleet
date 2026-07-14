@@ -165,6 +165,21 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Cookie users can mutate orchestrator state from the web UI again**:
+  launching or editing a task while signed in with the elcano session cookie
+  died with `403 Cross-origin request blocked`. The Next.js orchestrator proxy
+  forwards the user's identity as `X-User-Email` + `X-Orchestrator-Server-Token`
+  without the browser's `Origin` header (it enforces same-origin itself before
+  forwarding), but the backend's `CSRFMiddleware` treated the missing Origin as
+  cross-site. The shared-token header now joins `X-API-Key`/`Bearer` in the
+  CSRF exemption list — browsers can't attach custom headers cross-site, and
+  the auth middleware still fail-closed rejects a wrong token value. The
+  in-handler auth of the routes registered outside the auth group
+  (`POST /tasks`, `/tasks/batch`, `/tasks/estimate`, `/upload`) now honors the
+  same header-trust identity via a shared fail-closed helper — previously it
+  only accepted admin/API keys, bearer tokens, or the raw cookie, so the
+  proxied cookie request would have cleared CSRF only to die with 401.
+
 - **Sandbox Soup Sieve ReDoS (GHSA-836r-79rf-4m37)**: replaced Fedora's
   vulnerable `soupsieve` 2.8.3 RPM payload with upstream 2.8.4 and removed the
   old RPM metadata from the final image so Grype no longer reports the

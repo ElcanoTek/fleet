@@ -98,9 +98,12 @@ on the cookie path must carry an `Origin` header whose host matches the server's
 (`X-Forwarded-Host` when behind a proxy, else `Host`). A missing, malformed, or
 cross-origin `Origin` is rejected with `403 Cross-origin request blocked`.
 
-Requests authenticated with `X-API-Key`, `X-Registration-Token`, or
-`Authorization: Bearer …` are **exempt** — browsers do not auto-attach custom
-headers cross-origin, so those paths are not CSRF-reachable.
+Requests authenticated with `X-API-Key`, `X-Registration-Token`,
+`Authorization: Bearer …`, or the Next-proxy `X-Orchestrator-Server-Token` are
+**exempt** — browsers do not auto-attach custom headers cross-origin, so those
+paths are not CSRF-reachable. On the proxy path the browser's Origin has
+already been enforced by the Next.js layer (`web/src/app/lib/csrf.ts`), which
+does not forward the header upstream.
 
 Two operator-facing contracts make this defense-in-depth complete:
 
