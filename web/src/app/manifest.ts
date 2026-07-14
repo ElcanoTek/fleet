@@ -1,13 +1,13 @@
 import type { MetadataRoute } from "next";
 
+// Keep installed-app labels aligned with layout.tsx's white-label metadata.
+const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME?.trim() || "Fleet";
+
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Elcano Chat",
-    short_name: "Elcano Chat",
-    description:
-      "Persistent multi-turn conversations with real tool use across email, files, and analytics.",
+    name: APP_NAME,
+    short_name: APP_NAME,
     start_url: "/",
-    scope: "/",
     display: "standalone",
     background_color: "#1a0b1e",
     theme_color: "#1a0b1e",

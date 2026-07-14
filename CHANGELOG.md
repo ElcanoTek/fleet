@@ -53,6 +53,10 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Fleet application icons**: browser favicons, iOS/Android install icons, and
+  the maskable launcher icon now derive from one checked-in Fleet mark. App
+  Router file conventions eliminate duplicate icon metadata, and installed-app
+  labels now follow `NEXT_PUBLIC_APP_NAME` instead of the old hardcoded name.
 - **Coherent latest-Fedora sandbox policy**: the generic sandbox upgrades from
   `fedora-minimal:latest` and installs current Fedora packages on every rebuild,
   without hand-maintained pip overlays that can conflict with RPM ownership.

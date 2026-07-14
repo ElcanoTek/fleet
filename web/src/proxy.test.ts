@@ -75,6 +75,14 @@ describe("proxy", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
+  it("serves the install manifest without a session", async () => {
+    getSessionFromRequestMock.mockResolvedValue(null);
+    const res = await proxy(req("/manifest.webmanifest"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    expect(getSessionFromRequestMock).not.toHaveBeenCalled();
+  });
+
   // ── Widened matcher gates BOTH views ────────────────────────────────────
   it("gates /chat/* with the SAME session check", async () => {
     getSessionFromRequestMock.mockResolvedValue(null);
