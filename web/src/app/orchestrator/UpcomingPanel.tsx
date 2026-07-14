@@ -119,8 +119,15 @@ export function UpcomingPanel() {
 // column); days already behind us render dimmed. Runs beyond Saturday are
 // summarized under the board.
 function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
+  // weekOffset pages whole weeks: 0 = this week, 1 = next, … The upcoming
+  // feed only projects forward, so past weeks aren't offered.
+  const [weekOffset, setWeekOffset] = useState(0);
   const today = new Date();
-  const sunday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay());
+  const sunday = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - today.getDay() + weekOffset * 7,
+  );
   const todayKey = dayKey(today);
   const days: Array<{ key: string; date: Date; runs: UpcomingRun[] }> = [];
   for (let i = 0; i < 7; i++) {
@@ -128,15 +135,52 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
     days.push({ key: dayKey(d), date: d, runs: [] });
   }
   const byKey = new Map(days.map((d) => [d.key, d]));
+  // Runs after this week's Saturday: they justify the Next-week arrow (and
+  // the footnote count). Runs before Sunday can't exist in an upcoming feed.
   let beyond = 0;
   for (const run of runs) {
     const bucket = byKey.get(dayKey(new Date(run.next_run)));
     if (bucket) bucket.runs.push(run);
-    else beyond++;
+    else if (new Date(run.next_run) > days[6].date) beyond++;
   }
+  const saturdayEnd = new Date(
+    sunday.getFullYear(),
+    sunday.getMonth(),
+    sunday.getDate() + 7,
+  );
+  const weekLabel =
+    weekOffset === 0
+      ? "This week"
+      : weekOffset === 1
+        ? "Next week"
+        : `${sunday.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${new Date(saturdayEnd.getTime() - 1).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 
   return (
     <div className="upcoming-week-wrapper" data-testid="upcoming-week">
+      <div className="upcoming-week-nav">
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          aria-label="Previous week"
+          data-testid="week-prev"
+          disabled={weekOffset === 0}
+          onClick={() => setWeekOffset((w) => Math.max(0, w - 1))}
+        >
+          ‹
+        </button>
+        <span className="upcoming-week-label" data-testid="week-label">
+          {weekLabel}
+        </span>
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          aria-label="Next week"
+          data-testid="week-next"
+          onClick={() => setWeekOffset((w) => w + 1)}
+        >
+          ›
+        </button>
+      </div>
       <div className="upcoming-week">
         {days.map((day, i) => (
           <div
@@ -144,7 +188,7 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
             className={`upcoming-week-day${
               day.key === todayKey
                 ? " upcoming-week-day--today"
-                : i < today.getDay()
+                : weekOffset === 0 && i < today.getDay()
                   ? " upcoming-week-day--past"
                   : ""
             }`}
@@ -184,8 +228,8 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
       </div>
       <p className="refresh-note">
         {beyond > 0
-          ? `This week · ${beyond} more scheduled run(s) beyond this week — see List`
-          : "This week"}
+          ? `${weekLabel} · ${beyond} more scheduled run(s) after this week`
+          : weekLabel}
       </p>
     </div>
   );

@@ -120,7 +120,7 @@ describe("UpcomingPanel week view", () => {
       expect(days[i].className).toContain("upcoming-week-day--past");
     }
     // outside the week: summarized, not silently dropped
-    expect(board).toHaveTextContent(/1 more scheduled run\(s\) beyond this week/);
+    expect(board).toHaveTextContent(/1 more scheduled run\(s\) after this week/);
     expect(screen.queryByText("Way later")).toBeNull();
 
     // back to the list
@@ -153,5 +153,32 @@ describe("UpcomingPanel week view", () => {
     render(<UpcomingPanel />);
     const weekBtn = await screen.findByTestId("upcoming-view-week");
     expect(weekBtn.getAttribute("aria-checked")).toBe("true");
+  });
+});
+
+describe("UpcomingPanel week navigation", () => {
+  it("pages to next week and back; prev disabled on the current week", async () => {
+    mockRuns([
+      { task_id: "t1", prompt: "This week run", next_run: inDays(0, 23), recurring: false },
+      { task_id: "t2", prompt: "Next week run", next_run: inDays(7, 9), recurring: true, recurrence: "0 9 * * *" },
+    ]);
+    render(<UpcomingPanel />);
+    await screen.findByTestId("upcoming-timeline");
+    fireEvent.click(screen.getByTestId("upcoming-view-week"));
+    await screen.findByTestId("upcoming-week");
+
+    expect(screen.getByTestId("week-label")).toHaveTextContent("This week");
+    expect(screen.getByTestId("week-prev")).toBeDisabled();
+    expect(screen.getByTestId("upcoming-week")).toHaveTextContent("This week run");
+    expect(screen.getByTestId("upcoming-week")).not.toHaveTextContent("Next week run");
+
+    fireEvent.click(screen.getByTestId("week-next"));
+    expect(screen.getByTestId("week-label")).toHaveTextContent("Next week");
+    expect(screen.getByTestId("week-prev")).not.toBeDisabled();
+    expect(screen.getByTestId("upcoming-week")).toHaveTextContent("Next week run");
+    expect(screen.getByTestId("upcoming-week")).not.toHaveTextContent("This week run");
+
+    fireEvent.click(screen.getByTestId("week-prev"));
+    expect(screen.getByTestId("week-label")).toHaveTextContent("This week");
   });
 });
