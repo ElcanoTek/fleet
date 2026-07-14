@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
-import { formatDate, formatTimeFirst, truncate } from "@/app/shared/lib/format";
+import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
 import { describeCronExpression, describeCronExpressionShort } from "@/app/shared/lib/cron";
 
 // TasksTable — the Recent Tasks table + filter bar + pagination. React port of
@@ -250,7 +250,7 @@ export function TasksTable({
                     </td>
                     <td title={task.recurrence || undefined}>{scheduleLabel(task)}</td>
                     <td>{createdByLabel(task)}</td>
-                    <td>{formatDate(task.created_at)}</td>
+                    <td>{formatTimeFirst(task.created_at)}</td>
                     <td>
                       <span className={`logs-badge ${hasLogs ? "" : "no-logs"}`}>
                         {hasLogs ? "View" : "None"}
@@ -297,7 +297,7 @@ export function TasksTable({
                           : `${task.expected_duration_minutes}m`}
                       </span>
                     ) : null}
-                    <span className="task-card-time">{formatDate(task.created_at)}</span>
+                    <span className="task-card-time">{formatTimeFirst(task.created_at)}</span>
                   </span>
                   <span className="task-card-prompt">{truncate((task.prompt ?? "").trim(), 120)}</span>
                   <span className="task-card-meta">

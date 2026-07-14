@@ -23,14 +23,15 @@ export function formatDate(dateStr: string | null | undefined): string {
   }
 }
 
-// Time-first stamp for schedule surfaces ("9:00 AM 7/20/2026"): when a task
-// will run, the time of day is the salient part and the date qualifies it.
+// Time-first stamp for the task list ("9:00 AM · 7/20/2026"): the time of
+// day is the salient part and the date qualifies it; the middle dot keeps the
+// two visually separate.
 export function formatTimeFirst(dateStr: string | null | undefined): string {
   if (!dateStr) return "-";
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return "-";
   const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  return `${time} ${d.toLocaleDateString()}`;
+  return `${time} · ${d.toLocaleDateString()}`;
 }
 
 export function formatTimestamp(ts: number | null | undefined): string {
