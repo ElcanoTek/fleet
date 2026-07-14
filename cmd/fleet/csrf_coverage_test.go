@@ -48,5 +48,20 @@ func TestOrchestratorCSRFCoverage(t *testing.T) {
 		if rr := do(path, "https://"+host); strings.Contains(rr.Body.String(), csrfMsg) {
 			t.Errorf("POST %s same-origin: still CSRF-blocked (%q); the Origin check should have passed", path, rr.Body.String())
 		}
+
+		// The Next-proxy shared-token exemption composes with fail-closed auth:
+		// a present-but-WRONG X-Orchestrator-Server-Token skips the CSRF gate
+		// (a custom header cannot be attached by a cross-site browser request,
+		// so it is not CSRF-forgeable) and is then rejected by the handler's
+		// own auth — 403 Forbidden, never the CSRF message, never a success.
+		req := httptest.NewRequest("POST", path, nil)
+		req.Host = host
+		req.Header.Set("X-Orchestrator-Server-Token", "wrong-token")
+		req.Header.Set("X-User-Email", "attacker@example.com")
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden || strings.Contains(rr.Body.String(), csrfMsg) {
+			t.Errorf("POST %s wrong shared token: code=%d body=%q, want 403 from fail-closed auth (not CSRF, not success)", path, rr.Code, rr.Body.String())
+		}
 	}
 }

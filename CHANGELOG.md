@@ -19,6 +19,11 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Admin server status**: Settings now includes an admin-only **Server** tab
+  with a lightweight, auto-refreshing view of CPU/load, memory, root-disk,
+  uptime, and aggregate non-loopback network traffic. The read-only endpoint is
+  role-gated and deliberately omits process, environment, address, and
+  filesystem-detail data.
 - **Hybrid prompt library** (`docs/PROMPT-LIBRARY.md`): Chat and Operations
   Center now share a searchable prompt picker that live-loads read-only
   `.yaml`/`.yml`/`.md`/`.txt` entries from the client bundle's Git-trackable
@@ -48,6 +53,17 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Fleet application icons**: browser favicons, iOS/Android install icons, and
+  the maskable launcher icon now derive from one checked-in Fleet mark. App
+  Router file conventions eliminate duplicate icon metadata, and installed-app
+  labels now follow `NEXT_PUBLIC_APP_NAME` instead of the old hardcoded name.
+- **Coherent latest-Fedora sandbox policy**: the generic sandbox upgrades from
+  `fedora-minimal:latest` and installs current Fedora packages on every rebuild,
+  without hand-maintained pip overlays that can conflict with RPM ownership.
+  Grype continues to publish every finding, while the merge gate blocks only on
+  fixable CRITICAL Fedora RPM findings that the image can act on. Client bundles
+  may still pin a base digest, package NEVRAs, or a prebuilt image when they need
+  reproducibility.
 - **Public-repo hygiene (#721)**: untracked the runtime `fleet.pid` file (now
   gitignored along with `/workspace/`), removed the dead
   `web/scripts/smoke-mcp-reporting.py` (bundle repos own their smoke tests),
@@ -152,6 +168,30 @@ prior versions are listed because none have shipped.
   See [ADR-0034](docs/adr/0034-audit-gate-commitment-binding.md).
 
 ### Fixed
+
+- **`fleet update` no longer breaks sandbox starts after a bundle pull**: the
+  updater runs as root, so files a client-bundle `git pull` created or rewrote
+  came out root-owned — and the sandbox bind-mounts bundle dirs with an SELinux
+  relabel (`:z`) that rootless podman may only apply to files the service user
+  owns. One root-owned `protocols/*.yaml` was enough to dead-letter every task
+  with `podman run: exit status 126` / `lsetxattr … operation not permitted`.
+  The bundle-pull step now re-applies service-user ownership (mirroring
+  `bootstrap.sh`), also healing checkouts a previous root-run pull broke.
+
+- **Cookie users can mutate orchestrator state from the web UI again**:
+  launching or editing a task while signed in with the elcano session cookie
+  died with `403 Cross-origin request blocked`. The Next.js orchestrator proxy
+  forwards the user's identity as `X-User-Email` + `X-Orchestrator-Server-Token`
+  without the browser's `Origin` header (it enforces same-origin itself before
+  forwarding), but the backend's `CSRFMiddleware` treated the missing Origin as
+  cross-site. The shared-token header now joins `X-API-Key`/`Bearer` in the
+  CSRF exemption list — browsers can't attach custom headers cross-site, and
+  the auth middleware still fail-closed rejects a wrong token value. The
+  in-handler auth of the routes registered outside the auth group
+  (`POST /tasks`, `/tasks/batch`, `/tasks/estimate`, `/upload`) now honors the
+  same header-trust identity via a shared fail-closed helper — previously it
+  only accepted admin/API keys, bearer tokens, or the raw cookie, so the
+  proxied cookie request would have cleared CSRF only to die with 401.
 
 - **Sandbox Soup Sieve ReDoS (GHSA-836r-79rf-4m37)**: replaced Fedora's
   vulnerable `soupsieve` 2.8.3 RPM payload with upstream 2.8.4 and removed the

@@ -30,15 +30,12 @@ export const metadata: Metadata = {
   applicationName: APP_NAME,
   authors: [{ name: APP_NAME }],
   manifest: "/manifest.webmanifest",
-  icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/icon.png", type: "image/png", sizes: "512x512" },
-      { url: "/app-icons/favicon-32.png", type: "image/png", sizes: "32x32" },
-      { url: "/app-icons/favicon-16.png", type: "image/png", sizes: "16x16" },
-    ],
-    apple: [{ url: "/apple-icon.png", type: "image/png", sizes: "180x180" }],
-    shortcut: "/favicon.ico",
+  // App Router discovers icon.svg, favicon.ico, and apple-icon.png from this
+  // directory. Declaring them again here would emit duplicate, stale links.
+  appleWebApp: {
+    capable: true,
+    title: APP_NAME,
+    statusBarStyle: "black-translucent",
   },
   // Internal tool — don't show up in Google. Slack / iMessage / Discord
   // unfurl scrapers ignore robots and still pull openGraph below, so the

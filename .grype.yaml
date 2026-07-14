@@ -2,15 +2,17 @@
 #
 # Grype scans the sandbox container image (built from
 # config/default/sandbox/Containerfile) for known CVEs in its RPM and Python
-# packages. The per-PR `grype-scan` job (.github/workflows/ci.yml) fails the
-# build on a fixable CRITICAL; the weekly `.github/workflows/grype-scheduled.yml`
-# scan is report-only. Grype auto-reads this file from the repo root, so both
-# scans honour the same suppressions.
+# packages. Both scans publish every non-suppressed finding. The per-PR job's
+# explicit policy (`scripts/check-grype-policy.sh`) blocks only a fixable
+# CRITICAL in a Fedora RPM; the weekly scan is report-only. Grype auto-reads
+# this file from the repo root, so both scans honour the same suppressions.
 #
 # Why Grype and not Trivy: the sandbox base is registry.fedoraproject.org/
 # fedora-minimal, and Trivy has no Fedora advisory feed — it scans 0 of the
 # image's ~400 RPMs (a false-green gate). Grype matches RPM + Python packages
-# against NVD/GHSA, so it actually covers this image.
+# against NVD/GHSA, so it actually covers this image. Python dist-info owned by
+# an RPM is still reported, but is not a merge blocker based solely on an
+# upstream PyPI fix that Fedora cannot apply.
 #
 # To accept/suppress a specific CVE, add an `ignore:` entry with a rationale
 # comment. Keep this list MINIMAL — prefer rebuilding the image (the unpinned

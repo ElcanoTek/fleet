@@ -286,16 +286,18 @@ supply-chain discipline as the gitleaks gate) rather than run as a third-party
 action on a mutable ref — the scanner is part of the merge gate, so its own
 supply chain matters as much as what it scans.
 
-The per-PR job FAILS only on a **CRITICAL** CVE that has an available upstream fix
-(`--fail-on critical --only-fixed`). `--only-fixed` filters Grype's entire match
-set — the SARIF included — so the per-PR scan neither blocks on **nor reports** an
-unfixed CVE: there is nothing the team can do about one immediately, and blocking
-would just noise the gate (the most common cause of false-positive scanner
-failures). Fixed findings of **all** severities (the blocking CRITICALs plus
-informational HIGH/MEDIUM/LOW) are uploaded to the Security tab. Unfixed CVEs are
-surfaced by the weekly scheduled scan, which omits `--only-fixed` (see below).
-Suppressions live in [`.grype.yaml`](../.grype.yaml) (one `ignore:` entry per CVE,
-with a rationale comment); Grype auto-reads that file from the repo root.
+The per-PR scan collects and uploads **all** findings, including unfixed and
+non-blocking language-package records. A separate repository-owned policy
+(`scripts/check-grype-policy.sh`) fails only on a **CRITICAL Fedora RPM** with a
+non-empty fix version. This distinction is intentional: Fedora RPMs sometimes
+also expose Python `dist-info`, which Grype catalogs as a second PyPI artifact;
+an upstream PyPI fix does not mean Fedora has published an installable RPM. The
+generic image follows Fedora latest, so an actionable failure should be fixed by
+rebuilding/updating the RPM rather than by layering a pip wheel over files owned
+by the distro. The weekly scan uses the same complete reporting model (see
+below). Narrow, reviewed suppressions live in [`.grype.yaml`](../.grype.yaml)
+(one `ignore:` entry per CVE, with a rationale comment); Grype auto-reads it from
+the repository root.
 
 Findings are uploaded as SARIF to **GitHub Security → Code scanning** (category
 `grype-sandbox-image`) so CVE details, affected packages, and fix versions are

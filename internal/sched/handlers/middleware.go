@@ -32,6 +32,48 @@ func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// headerTrustUser resolves the Next-proxy header-trust path (#157). The Next.js
+// layer is the SOLE client that sets these headers: it verifies the user's
+// session cookie, then forwards the identity as X-User-Email guarded by the
+// shared X-Orchestrator-Server-Token (the chat-server token; see
+// Config.SharedToken). This is what lets a /chat-cookie user use the Operations
+// Center without a second (moc bearer) login. The token is
+// impersonation-load-bearing, so this is fail-closed: a PRESENT-but-wrong token
+// is rejected outright (no fall-through to the weaker scoped-key/bearer/cookie
+// paths). Mirrors chat-server's authMiddleware (shared token + X-User-Email,
+// then the membership gate).
+//
+// Returns (nil, false) when no token is present — the caller should try its
+// other auth paths. Returns handled=true when the token was present and this
+// helper wrote the response on rejection (user == nil) or resolved the member
+// (user != nil). Shared by AdminOrUserAuthMiddleware, authorizeTaskCreator, and
+// HandleUpload so the fail-closed semantics cannot drift between them.
+func (h *Handlers) headerTrustUser(w http.ResponseWriter, r *http.Request) (*models.User, bool) {
+	tok := r.Header.Get("X-Orchestrator-Server-Token")
+	if tok == "" {
+		return nil, false
+	}
+	if subtle.ConstantTimeCompare([]byte(tok), []byte(h.config.SharedToken)) != 1 {
+		writeError(w, http.StatusForbidden, "Forbidden")
+		return nil, true
+	}
+	email := strings.ToLower(strings.TrimSpace(r.Header.Get("X-User-Email")))
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "missing X-User-Email")
+		return nil, true
+	}
+	user, err := h.lookupMember(r.Context(), email)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "Membership check failed")
+		return nil, true
+	}
+	if user == nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
+		return nil, true
+	}
+	return user, true
+}
+
 // AdminOrUserAuthMiddleware allows access with either an admin API key, a scoped API key, or a user token.
 func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,34 +83,10 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Next-proxy header-trust path (#157). The Next.js layer is the SOLE
-		// client of this backend: it verifies the user's session cookie, then
-		// forwards the identity as X-User-Email guarded by the shared
-		// X-Orchestrator-Server-Token (the chat-server token; see Config.SharedToken).
-		// This is what lets a /chat-cookie user open the Operations Center without
-		// a second (moc bearer) login. The token is impersonation-load-bearing, so
-		// this is fail-closed: a PRESENT-but-wrong token is rejected outright (no
-		// fall-through to the weaker scoped-key/bearer/cookie paths). Only an ABSENT
-		// token continues to those direct-client paths below. Mirrors chat-server's
-		// authMiddleware (shared token + X-User-Email, then the membership gate).
-		if tok := r.Header.Get("X-Orchestrator-Server-Token"); tok != "" {
-			if subtle.ConstantTimeCompare([]byte(tok), []byte(h.config.SharedToken)) != 1 {
-				writeError(w, http.StatusForbidden, "Forbidden")
-				return
-			}
-			email := strings.ToLower(strings.TrimSpace(r.Header.Get("X-User-Email")))
-			if email == "" {
-				writeError(w, http.StatusBadRequest, "missing X-User-Email")
-				return
-			}
-			user, err := h.lookupMember(r.Context(), email)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				writeError(w, http.StatusInternalServerError, "Membership check failed")
-				return
-			}
+		// Next-proxy header-trust path (#157): see headerTrustUser.
+		if user, handled := h.headerTrustUser(w, r); handled {
 			if user == nil {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
-				return
+				return // rejected fail-closed; response already written
 			}
 			ctx := context.WithValue(r.Context(), userContextKey, user)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -238,6 +256,19 @@ func (h *Handlers) CSRFMiddleware(next http.Handler) http.Handler {
 		// per-trigger HMAC-SHA256 signature the external caller supplies, not a
 		// browser-auto-sent cookie, so they are not CSRF-vulnerable.
 		if strings.HasPrefix(r.URL.Path, "/triggers/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Skip for the Next-proxy header-trust path (#157). Like X-API-Key and
+		// Bearer above, a custom header cannot be attached to a cross-site
+		// browser request (it would require a CORS preflight we never grant),
+		// so its presence proves a programmatic caller — and the only caller
+		// that sets it, the Next.js proxy, has already enforced the browser's
+		// Origin itself (web/src/app/lib/csrf.ts) before forwarding, WITHOUT
+		// forwarding the Origin header. Presence is enough here: the auth
+		// middleware fail-closed rejects a wrong token value.
+		if r.Header.Get("X-Orchestrator-Server-Token") != "" {
 			next.ServeHTTP(w, r)
 			return
 		}

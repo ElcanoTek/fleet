@@ -11,7 +11,7 @@
 #
 # Why Grype (not Trivy): Trivy has no Fedora advisory feed and scans 0 of the
 # fedora-minimal image's RPMs; Grype matches RPM + Python packages against
-# NVD/GHSA. See docs/TESTING.md for the full rationale.
+# NVD/GHSA. The scheduled lane remains report-only. See docs/TESTING.md.
 name: Weekly container vulnerability scan
 
 on:

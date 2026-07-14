@@ -81,6 +81,18 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 	if h.verifyAdminKey(r) {
 		return taskCreator{isAdmin: true}, true
 	}
+	// Next-proxy header-trust path (#157): POST /tasks (and /tasks/batch,
+	// /tasks/estimate) sit outside the AdminOrUserAuthMiddleware group, so the
+	// cookie user's proxied identity (X-User-Email + shared token) must be
+	// honored here too — otherwise the web UI's elcano-cookie login path can
+	// never create tasks. Fail-closed like the middleware: a present-but-wrong
+	// token is rejected outright, never falling through to weaker paths.
+	if user, handled := h.headerTrustUser(w, r); handled {
+		if user == nil {
+			return taskCreator{}, false
+		}
+		return taskCreator{creatorID: &user.ID, creatorUsername: user.Username}, true
+	}
 	if h.scopedKeyCannotCreate(r) {
 		writeError(w, http.StatusForbidden, "insufficient key scope: this key type cannot create tasks")
 		return taskCreator{}, false

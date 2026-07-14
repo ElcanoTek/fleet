@@ -326,6 +326,27 @@ else
   fi
 fi
 
+# Re-apply service-user ownership after the pull, mirroring bootstrap.sh: this
+# script runs as root, so every file the pull creates/rewrites comes out
+# root-owned — and the sandbox bind-mounts bundle dirs with an SELinux relabel
+# (:z), which rootless podman may only apply to files the service user OWNS.
+# One root-owned protocols/*.yaml is enough to kill every container start with
+# `lsetxattr … operation not permitted` (exit 126) until the next chown.
+# Skipped for the in-repo generic bundle (chowning the fleet checkout would be
+# wrong); runs even in rebuild-only mode to heal a checkout a previous
+# root-run pull broke. Idempotent.
+if [[ -d "$CLIENT_DIR/.git" && "$CLIENT_DIR" != "$SRC_DIR"/* && "$CLIENT_DIR" != "config/default" ]]; then
+  service_user="$(systemctl show -p User --value "${SERVICE_NAME}.service" 2>/dev/null)"
+  service_user="${service_user:-fleet}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would chown -R ${service_user}: ${CLIENT_DIR} (rootless sandbox relabel needs service-user ownership)"
+  elif chown -R "$service_user": "$CLIENT_DIR" 2>/dev/null; then
+    ok "bundle ${CLIENT_DIR} owned by ${service_user} (so the rootless sandbox :z relabel is permitted)"
+  else
+    warn "could not chown ${CLIENT_DIR} to ${service_user} — sandbox relabel may fail (EPERM) on files the pull rewrote"
+  fi
+fi
+
 # ── record the pre-build sandbox Containerfile hash (for the change gate) ──
 # Compare a stored hash of the bundle's Containerfile before/after the pulls so
 # the ~2-3min image build only runs when the Containerfile actually changed.
