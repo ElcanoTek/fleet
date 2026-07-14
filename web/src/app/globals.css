@@ -1977,6 +1977,20 @@ tr.sla-row-fail {
    a readable min width and the BOARD scrolls sideways inside its own shell
    (the repo's standard wide-content pattern), so phones pan the board, not
    the page. */
+.upcoming-week-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.upcoming-week-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  min-width: 8rem;
+  text-align: center;
+}
 .upcoming-week-wrapper {
   overflow-x: auto;
   max-width: 100%;

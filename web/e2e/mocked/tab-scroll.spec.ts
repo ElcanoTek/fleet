@@ -49,21 +49,20 @@ test("switching tabs on mobile keeps the scroll position", async ({ browser }) =
   });
   await page.waitForTimeout(100);
   await page.getByRole("tab", { name: "Upcoming" }).click();
-  await page.waitForTimeout(250);
-  const barTop = await page.evaluate(() => {
-    const el = document.querySelector("main .overflow-y-auto") as HTMLElement;
-    const bar = document.querySelector(".dashboard-tabs") as HTMLElement;
-    return { y: el.scrollTop, delta: bar.getBoundingClientRect().top - el.getBoundingClientRect().top };
-  });
-  // the tab bar sits at (or very near) the top of the scroller mid-loading…
-  expect(Math.abs(barTop.delta)).toBeLessThan(60);
-  // …and still after the new tab's data lands
-  await page.waitForTimeout(700);
-  const after = await page.evaluate(() => {
-    const el = document.querySelector("main .overflow-y-auto") as HTMLElement;
-    const bar = document.querySelector(".dashboard-tabs") as HTMLElement;
-    return bar.getBoundingClientRect().top - el.getBoundingClientRect().top;
-  });
-  expect(Math.abs(after)).toBeLessThan(60);
+  const barDelta = () =>
+    page.evaluate(() => {
+      const el = document.querySelector("main .overflow-y-auto") as HTMLElement;
+      const bar = document.querySelector(".dashboard-tabs") as HTMLElement;
+      return bar.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    });
+  // The tab bar gets pinned to (or very near) the top of the scroller. Poll
+  // rather than sleep — under a loaded worker pool the rAF pin can land a few
+  // frames later. On the pre-fix code this never converges: the scroller
+  // clamps to the page top and the bar stays ~500px down.
+  await expect.poll(barDelta, { timeout: 3000 }).toBeLessThan(60);
+  await expect.poll(barDelta, { timeout: 3000 }).toBeGreaterThan(-60);
+  // …and it still holds after the new tab's data lands.
+  await page.waitForTimeout(800);
+  expect(Math.abs(await barDelta())).toBeLessThan(60);
   await context.close();
 });
