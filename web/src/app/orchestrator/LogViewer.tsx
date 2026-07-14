@@ -70,9 +70,11 @@ export type LogViewerProps = {
   onResubmitted?: () => void;
   // Opens the edit form for this task (parent closes the log modal first).
   onEdit?: (task: Task) => void;
+  // Swaps the modal to another task (the History panel's row click).
+  onSelectTask?: (task: Task) => void;
 };
 
-export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit }: LogViewerProps) {
+export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSelectTask }: LogViewerProps) {
   if (!task) return null;
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
@@ -96,6 +98,7 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit }: Log
       canStop={!!canStop}
       onResubmitted={onResubmitted}
       onEdit={onEdit}
+      onSelectTask={onSelectTask}
     />
   );
 }
@@ -656,12 +659,14 @@ function LogViewerBody({
   canStop,
   onResubmitted,
   onEdit,
+  onSelectTask,
 }: {
   task: Task;
   onClose: () => void;
   canStop: boolean;
   onResubmitted?: () => void;
   onEdit?: (task: Task) => void;
+  onSelectTask?: (task: Task) => void;
 }) {
   // The shared hook owns the cancelled-ref guard and the lone setState after
   // the await, so this component no longer needs its own one-shot load-flag
@@ -740,6 +745,7 @@ function LogViewerBody({
   };
 
   const canResubmit = RESUBMITTABLE.has(task.status ?? "");
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   return (
     <div
@@ -798,6 +804,15 @@ function LogViewerBody({
               <button
                 type="button"
                 className="btn btn-secondary"
+                data-testid="history-button"
+                aria-expanded={historyOpen}
+                onClick={() => setHistoryOpen((v) => !v)}
+              >
+                History
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
                 data-testid="download-logs-button"
                 disabled={!session}
                 onClick={download}
@@ -806,6 +821,9 @@ function LogViewerBody({
               </button>
             </span>
           </div>
+          {historyOpen ? (
+            <TaskRunHistory task={task} onSelectTask={onSelectTask} />
+          ) : null}
           {session ? <SessionMetrics session={session} /> : null}
           <SelfImprovePanel task={task} canManage={canStop} />
           <TaskRunIfBanner task={task} />
@@ -841,6 +859,94 @@ function LogViewerBody({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// TaskRunHistory lists the other runs of this task. Fleet has no first-class
+// lineage for recurring occurrences (each firing is a fresh row with name
+// blanked and no source_task_id — see storage.scheduleNextRecurrence), so
+// runs are grouped the same way the SLA report buckets them: exact prompt
+// equality. The server-side q= search narrows by prompt substring; the exact
+// match is enforced client-side (ILIKE wildcards in a prompt can over-match,
+// never under-match).
+function TaskRunHistory({
+  task,
+  onSelectTask,
+}: {
+  task: Task;
+  onSelectTask?: (task: Task) => void;
+}) {
+  const prompt = (task.prompt ?? "").trim();
+  const {
+    data,
+    loading,
+    error,
+  } = useCancellableFetch(
+    useCallback(() => {
+      const p = new URLSearchParams();
+      // The first 120 chars keep the query URL sane for very long prompts;
+      // the exact-equality filter below does the real matching.
+      p.set("q", prompt.slice(0, 120));
+      p.set("limit", "50");
+      // orchestratorApi.tasks prepends the "?" itself.
+      return orchestratorApi.tasks(p.toString());
+    }, [prompt]),
+    [prompt],
+  );
+
+  const runs = (data?.data ?? [])
+    .filter((t) => (t.prompt ?? "").trim() === prompt)
+    .sort(
+      (a, b) =>
+        new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime(),
+    );
+
+  return (
+    <div className="task-history" data-testid="task-history">
+      <div className="task-history-title">
+        Run history <span className="task-history-hint">(same task prompt)</span>
+      </div>
+      {loading ? (
+        <div className="loading">
+          <p>Loading history…</p>
+        </div>
+      ) : error ? (
+        <div className="table-error">Failed to load history: {error}</div>
+      ) : runs.length <= 1 ? (
+        <div className="task-history-empty">No other runs of this task yet.</div>
+      ) : (
+        <ul className="task-history-list">
+          {runs.map((run) => {
+            const current = run.id === task.id;
+            return (
+              <li key={run.id}>
+                <button
+                  type="button"
+                  className={`task-history-row${current ? " task-history-row--current" : ""}`}
+                  data-testid="task-history-row"
+                  disabled={current || !onSelectTask}
+                  onClick={() => onSelectTask?.(run)}
+                >
+                  <span className="task-history-time">
+                    {formatTimeFirst(run.created_at)}
+                  </span>
+                  <span className={`status-badge status-${run.status ?? "unknown"}`}>
+                    {run.status ?? "-"}
+                  </span>
+                  <TaskSlaBadge task={run} />
+                  <code className="task-history-id">{run.id.slice(0, 8)}</code>
+                  {current ? (
+                    <span className="task-history-current">viewing</span>
+                  ) : (
+                    <span className="task-history-open">view →</span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

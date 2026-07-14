@@ -11,10 +11,12 @@ import type { LogSession, Task } from "@/app/shared/lib/orchestratorApi";
 
 const taskLogs = vi.fn();
 const rerunTask = vi.fn();
+const tasks = vi.fn();
 vi.mock("@/app/shared/lib/orchestratorApi", () => ({
   orchestratorApi: {
     taskLogs: (...args: unknown[]) => taskLogs(...args),
     rerunTask: (...args: unknown[]) => rerunTask(...args),
+    tasks: (...args: unknown[]) => tasks(...args),
   },
 }));
 
@@ -249,5 +251,53 @@ describe("LogViewer task-detail modal", () => {
     fireEvent.click(download);
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:mock");
+  });
+});
+
+// ── run history ───────────────────────────────────────────────────────────────
+
+describe("LogViewer run history", () => {
+  it("lists other runs with the same prompt (exact match), newest first; clicking swaps the task", async () => {
+    mockSession(RICH_SESSION);
+    tasks.mockReset();
+    tasks.mockResolvedValue({
+      data: [
+        { id: "aaaa1111-0000-0000-0000-000000000000", prompt: "Generate a weekly infographic", status: "error", created_at: "2026-07-13T09:00:00" },
+        DONE_TASK,
+        { id: "bbbb2222-0000-0000-0000-000000000000", prompt: "Generate a weekly infographic", status: "success", created_at: "2026-07-15T09:00:00" },
+        // ILIKE over-match with a different exact prompt: must be excluded
+        { id: "cccc3333-0000-0000-0000-000000000000", prompt: "Generate a weekly infographic v2", status: "success", created_at: "2026-07-12T09:00:00" },
+      ],
+      total: 4,
+    });
+    const onSelectTask = vi.fn();
+    render(
+      <LogViewer task={DONE_TASK} onClose={() => {}} onSelectTask={onSelectTask} />,
+    );
+    fireEvent.click(await screen.findByTestId("history-button"));
+    const rows = await screen.findAllByTestId("task-history-row");
+    expect(rows).toHaveLength(3); // v2 prompt excluded
+    // newest first; the query narrowed by the prompt
+    expect(rows[0]).toHaveTextContent("bbbb2222");
+    expect(rows[2]).toHaveTextContent("aaaa1111");
+    expect(String(tasks.mock.calls[0][0])).toContain(encodeURIComponent("Generate a weekly infographic").replaceAll("%20", "+"));
+    // the currently-viewed run is marked and inert
+    const current = rows.find((r) => r.textContent?.includes("11111111"));
+    expect(current).toHaveTextContent("viewing");
+    expect(current).toBeDisabled();
+    // clicking another run swaps the modal
+    fireEvent.click(rows[0]);
+    expect(onSelectTask).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "bbbb2222-0000-0000-0000-000000000000" }),
+    );
+  });
+
+  it("says so when this is the only run", async () => {
+    mockSession(RICH_SESSION);
+    tasks.mockReset();
+    tasks.mockResolvedValue({ data: [DONE_TASK], total: 1 });
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    fireEvent.click(await screen.findByTestId("history-button"));
+    expect(await screen.findByText(/no other runs of this task yet/i)).toBeTruthy();
   });
 });

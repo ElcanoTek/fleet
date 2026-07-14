@@ -4084,6 +4084,92 @@ select.mcp-server-picker__account-select {
   gap: 0.5rem;
 }
 
+/* Run-history panel: other runs sharing this task's prompt, newest first. */
+.task-history {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.task-history-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.45rem;
+}
+.task-history-hint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--color-text-muted);
+}
+.task-history-empty {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+.task-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+.task-history-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm, 0.5rem);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.task-history-row:hover:not(:disabled) {
+  border-color: var(--color-border);
+  background: var(--color-overlay-soft);
+}
+.task-history-row:disabled {
+  cursor: default;
+}
+.task-history-row--current {
+  border-color: var(--color-border-strong);
+  background: var(--color-overlay-soft);
+}
+.task-history-time {
+  font-variant-numeric: tabular-nums;
+  min-width: 9.5rem;
+}
+.task-history-id {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+}
+.task-history-current,
+.task-history-open {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+.task-history-open {
+  color: var(--color-accent);
+}
+@media (max-width: 720px) {
+  .task-history-row {
+    flex-wrap: wrap;
+    gap: 0.3rem 0.6rem;
+  }
+  .task-history-time {
+    min-width: 0;
+  }
+}
+
 /* moc-style metrics strip: cumulative session token/cost figures. */
 .log-metrics {
   display: grid;
