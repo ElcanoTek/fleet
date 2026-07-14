@@ -169,6 +169,15 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Ops Center loads without the markdown pipeline**: the /orchestrator
+  bundle statically shipped react-markdown (~43 KiB transfer) for the task-log
+  modal only. `LogMarkdown` (renderer + workspace img/a rewrites, moved
+  verbatim from LogViewer) is now lazy-loaded when a log modal actually opens,
+  with a raw-text fallback until the chunk arrives — the same split #757 gave
+  chat. Note: the ~13 KiB of legacy polyfills Lighthouse flags in the main
+  chunk is Next's own baseline polyfill module, injected regardless of
+  browserslist targets — verified by building with modern targets — so there
+  is no supported way to drop it and no config was added for it.
 - **Faster first paint on mobile (Lighthouse)**: the initial /chat bundle no
   longer ships the syntax highlighter (~75 KiB transfer; now lazy-loaded on
   first tool-chip expand with a plain `<pre>` fallback) or the ReactMarkdown
