@@ -83,6 +83,42 @@
   --color-syntax-builtin: #7fc7ff;
   --color-syntax-operator: #d2d9de;
   --color-syntax-punctuation: #beb6cd;
+  /* Per-status badge triplets (fg on tinted bg with a matching border),
+     ported from the MOC dashboard / flag design system so the Operations
+     Center task lifecycle reads at a glance by hue: gray=pending,
+     amber=scheduled, cyan=running, violet=analyzing/proposed, green=success,
+     red=error, orange=dead-lettered/warning, slate=cancelled. Redefined in
+     the light-theme block below. */
+  --color-status-pending-fg: #d3dde6;
+  --color-status-pending-bg: rgba(124, 140, 152, 0.2);
+  --color-status-pending-border: rgba(124, 140, 152, 0.6);
+  --color-status-scheduled-fg: #ffe4b8;
+  --color-status-scheduled-bg: rgba(224, 171, 74, 0.18);
+  --color-status-scheduled-border: rgba(224, 171, 74, 0.62);
+  --color-status-assigned-fg: #cfe3ff;
+  --color-status-assigned-bg: rgba(90, 132, 255, 0.2);
+  --color-status-assigned-border: rgba(90, 132, 255, 0.58);
+  --color-status-leased-fg: #e5d6ff;
+  --color-status-leased-bg: rgba(168, 119, 255, 0.2);
+  --color-status-leased-border: rgba(168, 119, 255, 0.58);
+  --color-status-running-fg: #c9f0ff;
+  --color-status-running-bg: rgba(47, 183, 220, 0.22);
+  --color-status-running-border: rgba(47, 183, 220, 0.62);
+  --color-status-analyzing-fg: #d6ddff;
+  --color-status-analyzing-bg: rgba(124, 107, 255, 0.22);
+  --color-status-analyzing-border: rgba(124, 107, 255, 0.62);
+  --color-status-success-fg: #cbfdd8;
+  --color-status-success-bg: rgba(80, 250, 123, 0.14);
+  --color-status-success-border: rgba(80, 250, 123, 0.6);
+  --color-status-warning-fg: #ffd2a1;
+  --color-status-warning-bg: rgba(255, 136, 71, 0.2);
+  --color-status-warning-border: rgba(255, 136, 71, 0.62);
+  --color-status-error-fg: #ffd2d2;
+  --color-status-error-bg: rgba(255, 85, 85, 0.14);
+  --color-status-error-border: rgba(255, 85, 85, 0.6);
+  --color-status-cancelled-fg: #c7ced4;
+  --color-status-cancelled-bg: rgba(108, 118, 130, 0.16);
+  --color-status-cancelled-border: rgba(108, 118, 130, 0.48);
   --gradient-bg-home-signature:
     radial-gradient(circle at 8% -4%, rgba(114, 114, 171, 0.34), transparent 34%),
     radial-gradient(circle at 92% 2%, rgba(88, 111, 124, 0.28), transparent 32%),
@@ -198,6 +234,38 @@
   --color-syntax-builtin: #0369a1;
   --color-syntax-operator: #33415f;
   --color-syntax-punctuation: #5c6a87;
+  /* Light-mode status badge triplets: dark saturated foregrounds for AA
+     contrast on the light tinted fills (values from the MOC/flag tokens). */
+  --color-status-pending-fg: #33415f;
+  --color-status-pending-bg: rgba(124, 140, 152, 0.18);
+  --color-status-pending-border: rgba(124, 140, 152, 0.42);
+  --color-status-scheduled-fg: #7a4a12;
+  --color-status-scheduled-bg: rgba(224, 171, 74, 0.24);
+  --color-status-scheduled-border: rgba(224, 171, 74, 0.54);
+  --color-status-assigned-fg: #1f3f87;
+  --color-status-assigned-bg: rgba(90, 132, 255, 0.2);
+  --color-status-assigned-border: rgba(90, 132, 255, 0.44);
+  --color-status-leased-fg: #5a2f8f;
+  --color-status-leased-bg: rgba(168, 119, 255, 0.18);
+  --color-status-leased-border: rgba(168, 119, 255, 0.42);
+  --color-status-running-fg: #0f5e78;
+  --color-status-running-bg: rgba(47, 183, 220, 0.22);
+  --color-status-running-border: rgba(47, 183, 220, 0.46);
+  --color-status-analyzing-fg: #3b3391;
+  --color-status-analyzing-bg: rgba(124, 107, 255, 0.2);
+  --color-status-analyzing-border: rgba(124, 107, 255, 0.44);
+  --color-status-success-fg: #1c5a33;
+  --color-status-success-bg: rgba(80, 250, 123, 0.16);
+  --color-status-success-border: rgba(80, 250, 123, 0.42);
+  --color-status-warning-fg: #8f3e10;
+  --color-status-warning-bg: rgba(255, 136, 71, 0.24);
+  --color-status-warning-border: rgba(255, 136, 71, 0.48);
+  --color-status-error-fg: #7c1f1f;
+  --color-status-error-bg: rgba(255, 85, 85, 0.18);
+  --color-status-error-border: rgba(255, 85, 85, 0.44);
+  --color-status-cancelled-fg: #59657a;
+  --color-status-cancelled-bg: rgba(108, 118, 130, 0.16);
+  --color-status-cancelled-border: rgba(108, 118, 130, 0.34);
   --gradient-bg-home-signature:
     radial-gradient(circle at 9% -8%, rgba(114, 114, 171, 0.28), transparent 42%),
     radial-gradient(circle at 90% 0%, rgba(88, 111, 124, 0.24), transparent 38%),
@@ -1264,16 +1332,33 @@ button {
   flex-direction: column;
   width: 100%;
   text-align: left;
-  background: var(--color-surface-1);
+  background: var(--gradient-surface-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: 1.1rem 1.15rem 1.2rem;
   cursor: pointer;
-  transition: border-color var(--transition-fast), transform var(--transition-fast);
+  position: relative;
+  overflow: hidden;
+  transition:
+    border-color var(--transition-fast),
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+/* MOC-style colored top accent bar: each card reads as a tile in its
+   status hue (bar + dot + value share the tone). */
+.stat-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--gradient-featured-top-accent);
 }
 .stat-card:hover {
   border-color: var(--color-border-strong);
   transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
 }
 .stat-card:focus-visible {
   outline: none;
@@ -1298,7 +1383,10 @@ button {
   background: var(--color-warning);
 }
 .stat-dot.running {
-  background: var(--color-accent);
+  /* Solid base of the running-status cyan (the badge tokens are alpha tints
+     that wash out as a 0.5rem dot, especially on the light surface). Same hue
+     family as .status-running so the card and the rows below read together. */
+  background: #2fb7dc;
 }
 .stat-dot.success {
   background: var(--color-success);
@@ -1335,6 +1423,33 @@ button {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
 }
+/* Per-tone accent bar + value color (tone class set by StatsGrid alongside
+   the matching .stat-dot). The whole card reads as one colored tile. */
+.stat-card.stat-tone-pending::before {
+  background: var(--color-warning);
+}
+.stat-card.stat-tone-pending .stat-card-val {
+  color: var(--color-warning);
+}
+.stat-card.stat-tone-running::before {
+  /* Solid running cyan — see .stat-dot.running. */
+  background: #2fb7dc;
+}
+.stat-card.stat-tone-running .stat-card-val {
+  color: var(--color-status-running-fg);
+}
+.stat-card.stat-tone-success::before {
+  background: var(--color-success);
+}
+.stat-card.stat-tone-success .stat-card-val {
+  color: var(--color-success);
+}
+.stat-card.stat-tone-error::before {
+  background: var(--color-danger);
+}
+.stat-card.stat-tone-error .stat-card-val {
+  color: var(--color-danger);
+}
 @media (max-width: 720px) {
   .stats-bar {
     grid-template-columns: repeat(2, 1fr);
@@ -1345,9 +1460,10 @@ button {
 .section {
   margin-bottom: 1.5rem;
   border: 1px solid var(--color-border);
-  border-radius: 0.75rem;
+  border-radius: var(--radius-lg);
   padding: 1rem;
-  background: var(--color-surface-1, #241b31);
+  background: var(--gradient-surface-panel);
+  box-shadow: var(--shadow-sm);
 }
 .section-header {
   display: flex;
@@ -1397,52 +1513,111 @@ tr.clickable:hover td {
   color: var(--color-text-muted);
   padding: 1.5rem;
 }
+/* Status badges — MOC-style tinted pills. One class per backend status value
+   (the components render `status-${task.status}` verbatim, hence the
+   snake_case class names) so every lifecycle state gets its own hue instead
+   of the old outline-only success/error/running trio. Unknown statuses fall
+   back to the pending-gray base. */
 .status-badge {
-  display: inline-block;
-  padding: 0.1rem 0.5rem;
-  border-radius: 0.4rem;
-  font-size: 0.75rem;
-  border: 1px solid var(--color-border);
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-status-pending-fg);
+  background: var(--color-status-pending-bg);
+  border: 1px solid var(--color-status-pending-border);
 }
-.status-success {
-  color: var(--color-success, #7bdca0);
-  border-color: var(--color-success, #7bdca0);
+.status-success,
+.status-active,
+.status-idle {
+  color: var(--color-status-success-fg);
+  background: var(--color-status-success-bg);
+  border-color: var(--color-status-success-border);
 }
-.status-error {
-  color: var(--color-danger, #e08080);
-  border-color: var(--color-danger, #e08080);
+.status-error,
+.status-failed {
+  color: var(--color-status-error-fg);
+  background: var(--color-status-error-bg);
+  border-color: var(--color-status-error-border);
 }
-.status-running,
-.status-analyzing {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
+.status-running {
+  color: var(--color-status-running-fg);
+  background: var(--color-status-running-bg);
+  border-color: var(--color-status-running-border);
+}
+.status-analyzing,
+.status-proposed {
+  color: var(--color-status-analyzing-fg);
+  background: var(--color-status-analyzing-bg);
+  border-color: var(--color-status-analyzing-border);
+}
+.status-scheduled {
+  color: var(--color-status-scheduled-fg);
+  background: var(--color-status-scheduled-bg);
+  border-color: var(--color-status-scheduled-border);
+}
+.status-leased {
+  color: var(--color-status-leased-fg);
+  background: var(--color-status-leased-bg);
+  border-color: var(--color-status-leased-border);
+}
+.status-dead_lettered,
+.status-paused_awaiting_input {
+  color: var(--color-status-warning-fg);
+  background: var(--color-status-warning-bg);
+  border-color: var(--color-status-warning-border);
+}
+.status-cancelled {
+  color: var(--color-status-cancelled-fg);
+  background: var(--color-status-cancelled-bg);
+  border-color: var(--color-status-cancelled-border);
+}
+/* Logs column: colored pill when logs exist, muted ghost when not. */
+.logs-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-status-assigned-fg);
+  background: var(--color-status-assigned-bg);
+  border: 1px solid var(--color-status-assigned-border);
 }
 .logs-badge.no-logs {
   color: var(--color-text-muted);
+  background: transparent;
+  border-color: var(--color-border);
 }
 
 /* SLA monitoring (#274): table badges, log-modal progress bar, report tab. */
 .sla-badge {
   display: inline-block;
-  padding: 0.1rem 0.45rem;
-  border-radius: 0.4rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-pill);
   font-size: 0.72rem;
+  font-weight: 600;
   border: 1px solid var(--color-border);
   white-space: nowrap;
 }
 .sla-badge-ok {
-  color: var(--color-success, #7bdca0);
-  border-color: var(--color-success, #7bdca0);
+  color: var(--color-status-success-fg);
+  background: var(--color-status-success-bg);
+  border-color: var(--color-status-success-border);
 }
 .sla-badge-warn {
-  color: var(--color-warning-strong);
-  border-color: var(--color-warning-strong);
-  background: color-mix(in srgb, var(--color-warning-strong) 12%, transparent);
+  color: var(--color-status-warning-fg);
+  background: var(--color-status-warning-bg);
+  border-color: var(--color-status-warning-border);
 }
 .sla-badge-fail {
-  color: var(--color-danger, #e08080);
-  border-color: var(--color-danger, #e08080);
-  background: rgba(224, 128, 128, 0.12);
+  color: var(--color-status-error-fg);
+  background: var(--color-status-error-bg);
+  border-color: var(--color-status-error-border);
 }
 .sla-badge-none {
   color: var(--color-text-muted);
@@ -1729,12 +1904,14 @@ tr.sla-row-fail {
   white-space: nowrap;
 }
 .upcoming-run-kind-recurring {
-  background: rgba(123, 174, 220, 0.16);
-  color: #7baedc;
+  color: var(--color-status-assigned-fg);
+  background: var(--color-status-assigned-bg);
+  border: 1px solid var(--color-status-assigned-border);
 }
 .upcoming-run-kind-oneshot {
-  background: color-mix(in srgb, var(--color-warning-strong) 16%, transparent);
-  color: var(--color-warning-strong);
+  color: var(--color-status-scheduled-fg);
+  background: var(--color-status-scheduled-bg);
+  border: 1px solid var(--color-status-scheduled-border);
 }
 @media (max-width: 720px) {
   /* On phones the nowrap schedule pill ("At minute 30 past every hour…")

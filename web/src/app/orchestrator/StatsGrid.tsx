@@ -26,7 +26,8 @@ const CARDS: Array<{
   filter: StatFilter;
   label: string;
   key: keyof DashboardStats;
-  // tone drives the .stat-dot color (mapped to a semantic token in CSS).
+  // tone drives the .stat-dot color and the card's stat-tone-* accent bar +
+  // value color (mapped to semantic tokens in CSS).
   tone: "pending" | "running" | "success" | "error";
   // live = the in-flight "Running" metric; its dot pulses (reduced-motion safe).
   live?: boolean;
@@ -47,7 +48,7 @@ export function StatsGrid({ stats, activeFilter, onFilter }: StatsGridProps) {
           <button
             key={card.filter}
             type="button"
-            className={`stat-card${card.live ? " live" : ""}${isActive ? " active" : ""}`}
+            className={`stat-card stat-tone-${card.tone}${card.live ? " live" : ""}${isActive ? " active" : ""}`}
             data-filter={card.filter}
             aria-label={card.label}
             aria-pressed={isActive}
