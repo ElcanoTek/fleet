@@ -34,6 +34,10 @@ type addRemoteMCPRequest struct {
 	// Optional manual client credentials for an AS without dynamic registration.
 	ClientID     string `json:"client_id,omitempty"`
 	ClientSecret string `json:"client_secret,omitempty"`
+	// api_key mode: the key is write-only (sealed at rest, never in a response);
+	// the header is the NAME to send it under ("" = Authorization: Bearer).
+	APIKey       string `json:"api_key,omitempty"`
+	APIKeyHeader string `json:"api_key_header,omitempty"`
 }
 
 // remoteMCPServers handles GET (list) and POST (add) on /remote-mcp-servers.
@@ -80,16 +84,28 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		server, err := s.remoteMCP.AddServer(r.Context(), remotemcp.AddServerInput{
+		server, toolCount, err := s.remoteMCP.AddServer(r.Context(), remotemcp.AddServerInput{
 			Email:        user,
 			Name:         req.Name,
 			URL:          req.URL,
 			AuthMode:     req.AuthMode,
 			ClientID:     req.ClientID,
 			ClientSecret: req.ClientSecret,
+			APIKey:       req.APIKey,
+			APIKeyHeader: req.APIKeyHeader,
 		})
 		if err != nil {
 			s.remoteMCPError(w, err)
+			return
+		}
+		// Probed adds (open/api_key) validated the connection with a real MCP
+		// handshake; surface the observed tool count so the UI can confirm
+		// "connected — N tools" instead of a bare "added".
+		if toolCount >= 0 {
+			writeJSON(w, struct {
+				*store.RemoteMCPServer
+				ToolCount int `json:"tool_count"`
+			}{server, toolCount})
 			return
 		}
 		writeJSON(w, server)
@@ -140,6 +156,24 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case sub == "key" && r.Method == http.MethodPut:
+		// Rotate / correct an api_key connection's key. Write-only: the key is
+		// sealed at rest and never appears in any response. The new key is
+		// validated with a real MCP handshake before it replaces the old one;
+		// the probed tool count comes back for the UI's confirmation notice.
+		var req struct {
+			APIKey string `json:"api_key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		toolCount, err := s.remoteMCP.SetAPIKey(r.Context(), user, id, req.APIKey)
+		if err != nil {
+			s.remoteMCPError(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "tool_count": toolCount})
 	case sub == "authorize" && r.Method == http.MethodPost:
 		authURL, err := s.remoteMCP.Authorize(r.Context(), user, id)
 		if err != nil {

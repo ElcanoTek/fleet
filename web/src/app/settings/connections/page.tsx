@@ -7,11 +7,16 @@ import {
   categoriesOf,
   consentRequired,
   effectiveEnabled,
+  fillPlaceholders,
   filterCatalog,
   groupByCategory,
-  needsTenantURL,
+  placeholderLabel,
+  placeholdersOf,
+  placeholderValueOK,
   prefFor,
   provenanceBadge,
+  setupLink,
+  toolCountSuffix,
   type CatalogBundled,
   type CatalogResponse,
   type CatalogThirdParty,
@@ -21,6 +26,7 @@ import { CredentialAccountAdmin } from "./CredentialAccountAdmin";
 import {
   btnClass,
   ClampText,
+  CodeChip,
   ConnBadge,
   InlineConfirmButton,
   RevealButton,
@@ -28,6 +34,7 @@ import {
   SETTINGS_INPUT,
   type BadgeVariant,
 } from "../ui/atoms";
+import { useIsAdmin } from "../useIsAdmin";
 import {
   ConnEmpty,
   ConnField,
@@ -60,6 +67,10 @@ type RemoteServer = {
   transport: string;
   status: string;
   status_detail?: string;
+  // oauth | open | api_key — drives the row's connect affordance (OAuth
+  // servers get Connect/Reconnect; api_key servers get Update key; open
+  // servers need neither). Absent on pre-migration rows ⇒ treated as oauth.
+  auth_kind?: string;
   created_at: number;
   updated_at: number;
 };
@@ -291,9 +302,28 @@ function BundledCard({
   );
 }
 
+// AddOverrides carries what a DirectoryCard's guided form collected beyond the
+// static catalog entry: the tenant URL with its {placeholders} filled in, the
+// pasted API key (write-only; sealed server-side, never echoed), and/or a
+// bring-your-own OAuth client for vendors without dynamic registration.
+type AddOverrides = { url?: string; apiKey?: string; clientId?: string; clientSecret?: string };
+
+// dirAddButtonClass — the pill Add/Set up button on a directory card.
+function dirAddButtonClass(added: boolean): string {
+  return [
+    "shrink-0 rounded-[var(--radius-pill)] border bg-transparent px-[0.85rem] py-[0.24rem] text-[0.76rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
+    added
+      ? "border-[var(--color-success-border)] text-[var(--color-success)]"
+      : "border-[var(--color-border-strong)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-overlay-soft)] disabled:opacity-50",
+  ].join(" ");
+}
+
 // DirectoryCard — one third-party entry (.dir-card): provenance badge,
-// clamped description, vendor + vetting links, auth signal, and the gated
-// one-click Add.
+// clamped description, vendor + vetting + setup-guide links, a VISIBLE setup
+// hint, and the gated Add. Entries a user can't one-click add get a guided
+// inline form instead of a bare "needs your URL" label: one input per
+// {placeholder} in a tenant-scoped URL template (with a live preview of the
+// resulting endpoint), and a write-only key field for api_key entries.
 function DirectoryCard({
   entry,
   added,
@@ -305,9 +335,46 @@ function DirectoryCard({
   added: boolean;
   busy: boolean;
   remoteEnabled: boolean;
-  onAdd: () => void;
+  // Resolves true when the server was actually added (validated + stored);
+  // false keeps the guided form — and whatever the user typed — open so a
+  // rejected key or mistyped tenant value can be corrected in place.
+  onAdd: (overrides?: AddOverrides) => Promise<boolean>;
 }) {
   const hint = authHint(entry);
+  const guide = setupLink(entry);
+  const placeholders = placeholdersOf(entry.url);
+  const manualClient = entry.client_registration === "manual" && entry.auth !== "api_key";
+  const needsForm = placeholders.length > 0 || entry.auth === "api_key" || manualClient;
+  const [formOpen, setFormOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [apiKey, setApiKey] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+
+  const filledURL = fillPlaceholders(entry.url, values);
+  const ready =
+    placeholders.every((ph) => placeholderValueOK(values[ph] ?? "")) &&
+    (entry.auth !== "api_key" || apiKey.trim() !== "") &&
+    (!manualClient || clientId.trim() !== "");
+
+  const submit = async () => {
+    const ok = await onAdd({
+      ...(placeholders.length > 0 ? { url: filledURL } : {}),
+      ...(entry.auth === "api_key" ? { apiKey: apiKey.trim() } : {}),
+      ...(manualClient
+        ? {
+            clientId: clientId.trim(),
+            ...(clientSecret.trim() ? { clientSecret: clientSecret.trim() } : {}),
+          }
+        : {}),
+    });
+    if (!ok) return; // validation failed (or consent pending) — keep the form + values
+    setFormOpen(false);
+    // Drop the secrets from component state the moment the add succeeds.
+    setApiKey("");
+    setClientSecret("");
+  };
+
   const linkClass =
     "border-b border-dotted border-[var(--color-border-strong)] text-[var(--color-text-secondary)] no-underline hover:text-[var(--color-text-primary)]";
   return (
@@ -324,6 +391,19 @@ function DirectoryCard({
         </ConnBadge>
       </div>
       {entry.description ? <ClampText text={entry.description} /> : null}
+      {entry.setup_hint ? (
+        <p className="m-0 text-[0.72rem] leading-[1.5] text-[var(--color-text-secondary)]">
+          {entry.setup_hint}
+          {guide ? (
+            <>
+              {" "}
+              <a href={guide} target="_blank" rel="noreferrer" className={linkClass}>
+                Setup guide
+              </a>
+            </>
+          ) : null}
+        </p>
+      ) : null}
       <div className="mt-auto flex items-center gap-[0.6rem] text-[0.72rem] text-[var(--color-text-muted)]">
         <span className="min-w-0 flex-1 truncate">
           {entry.vendor || entry.url}
@@ -343,49 +423,121 @@ function DirectoryCard({
               </a>
             </>
           ) : null}
+          {entry.setup_url && !entry.setup_hint ? (
+            <>
+              {" · "}
+              <a href={entry.setup_url} target="_blank" rel="noreferrer" className={linkClass}>
+                setup guide
+              </a>
+            </>
+          ) : null}
         </span>
         {remoteEnabled ? (
-          needsTenantURL(entry) ? (
-            // A {placeholder} endpoint is per-organization — no one-click Add;
-            // the user pastes their own URL into the Remote servers form.
-            <span
-              className="shrink-0 whitespace-nowrap"
-              title="This endpoint is per-organization — copy your own URL from the vendor docs into the form above."
+          <>
+            {hint ? <span className="shrink-0 whitespace-nowrap">{hint}</span> : null}
+            <button
+              type="button"
+              data-testid={`dir-add-${entry.name}`}
+              aria-expanded={needsForm ? formOpen : undefined}
+              onClick={() => (needsForm ? setFormOpen((o) => !o) : void onAdd())}
+              disabled={busy || added}
+              className={dirAddButtonClass(added)}
             >
-              {hint}
-            </span>
-          ) : (
-            <>
-              {hint ? <span className="shrink-0 whitespace-nowrap">{hint}</span> : null}
-              <button
-                type="button"
-                onClick={onAdd}
-                disabled={busy || added}
-                className={[
-                  "shrink-0 rounded-[var(--radius-pill)] border bg-transparent px-[0.85rem] py-[0.24rem] text-[0.76rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]",
-                  added
-                    ? "border-[var(--color-success-border)] text-[var(--color-success)]"
-                    : "border-[var(--color-border-strong)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-overlay-soft)] disabled:opacity-50",
-                ].join(" ")}
-              >
-                {added ? "Added" : "Add"}
-              </button>
-            </>
-          )
+              {added ? "Added" : needsForm ? (formOpen ? "Cancel" : "Set up…") : "Add"}
+            </button>
+          </>
         ) : null}
       </div>
+      {remoteEnabled && needsForm && formOpen && !added ? (
+        <div
+          data-testid={`dir-form-${entry.name}`}
+          className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5"
+        >
+          {placeholders.map((ph) => (
+            <label key={ph} className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+              <span className="font-medium">Your {placeholderLabel(ph)}</span>
+              <input
+                className={SETTINGS_INPUT}
+                value={values[ph] ?? ""}
+                onChange={(e) => setValues((cur) => ({ ...cur, [ph]: e.target.value }))}
+                placeholder={ph}
+              />
+            </label>
+          ))}
+          {placeholders.length > 0 ? (
+            <p className="m-0 break-all font-mono text-[0.68rem] text-[var(--color-text-muted)]">
+              {filledURL}
+            </p>
+          ) : null}
+          {entry.auth === "api_key" ? (
+            <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+              <span className="font-medium">API key</span>
+              <input
+                className={SETTINGS_INPUT}
+                type="password"
+                autoComplete="off"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="paste your key (stored encrypted, never shown again)"
+              />
+            </label>
+          ) : null}
+          {manualClient ? (
+            <>
+              <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+                <span className="font-medium">OAuth client ID</span>
+                <input
+                  className={SETTINGS_INPUT}
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                  placeholder="from your app registration — see the setup guide"
+                />
+              </label>
+              <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+                <span className="font-medium">OAuth client secret (if your client has one)</span>
+                <input
+                  className={SETTINGS_INPUT}
+                  type="password"
+                  autoComplete="off"
+                  value={clientSecret}
+                  onChange={(e) => setClientSecret(e.target.value)}
+                  placeholder="stored encrypted, never shown again"
+                />
+              </label>
+            </>
+          ) : null}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              data-testid={`dir-form-add-${entry.name}`}
+              onClick={() => void submit()}
+              disabled={busy || !ready}
+              className={dirAddButtonClass(false)}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 export default function ConnectionsPage() {
   const [initialBanner] = useState(readCallbackBanner);
+  // Admin visibility only (authorization stays server-side): picks which
+  // "remote MCP isn't configured" explanation to show.
+  const adminState = useIsAdmin();
   const [servers, setServers] = useState<RemoteServer[] | null>(null);
   const [shares, setShares] = useState<Record<string, string[]>>({});
   const [sharedWithMe, setSharedWithMe] = useState<SharedServer[]>([]);
   // Which of your servers has its share panel open, and the pending grantee.
   const [shareOpenFor, setShareOpenFor] = useState<string | null>(null);
   const [shareGrantee, setShareGrantee] = useState("");
+  // Which api_key server has its rotate-key form open, and the pending key
+  // (write-only; cleared the moment it is submitted).
+  const [keyOpenFor, setKeyOpenFor] = useState<string | null>(null);
+  const [keyValue, setKeyValue] = useState("");
   // Explicit per-user availability choices (unified connector UX); absence of
   // an entry means the operator default.
   const [prefs, setPrefs] = useState<ConnectorPref[]>([]);
@@ -395,9 +547,14 @@ export default function ConnectionsPage() {
   const [catalogOpen, setCatalogOpen] = useState(true);
   const [catalogQuery, setCatalogQuery] = useState("");
   const [catalogCategory, setCatalogCategory] = useState("");
-  // A non-official (aggregator/community) entry awaiting the user's explicit,
-  // operator-named consent before it is added.
-  const [consentFor, setConsentFor] = useState<CatalogThirdParty | null>(null);
+  // Consent modal state: the non-official (aggregator/community) entry
+  // awaiting the user's explicit, operator-named consent, plus whatever the
+  // card's guided form collected (tenant URL / API key) so the confirm can
+  // complete the same add.
+  const [consentFor, setConsentFor] = useState<{
+    entry: CatalogThirdParty;
+    overrides?: AddOverrides;
+  } | null>(null);
   const [error, setError] = useState<string | null>(initialBanner.error);
   const [notice, setNotice] = useState<string | null>(initialBanner.notice);
   const [loading, setLoading] = useState(true);
@@ -522,43 +679,95 @@ export default function ConnectionsPage() {
       });
   };
 
-  // One-click add from the directory: same POST as the manual form, prefilled
-  // from the curated entry. The server lands in "login_required"; the user
-  // then clicks Connect like any manual add. An entry whose endpoint is NOT
+  // Rotate an api_key connection's key (write-only; the current key is never
+  // shown). The server validates the NEW key with a real MCP handshake before
+  // storing it — a rejected key leaves the old one untouched and the form
+  // open, with the error explaining exactly that.
+  const updateKey = (id: string) => {
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}/key`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: keyValue.trim() }),
+    })
+      .then(async (res) => {
+        if (!res.ok && res.status !== 204) {
+          throw new Error((await res.text()) || `Update failed: ${res.status}`);
+        }
+        const data = res.status === 204 ? null : ((await res.json()) as { tool_count?: number });
+        setKeyOpenFor(null);
+        setKeyValue("");
+        setNotice(`API key updated${toolCountSuffix(data?.tool_count)}.`);
+        refresh();
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
+  // Add from the directory: same POST as the manual form, prefilled from the
+  // curated entry plus whatever the card's guided form collected (a tenant URL
+  // with its placeholders filled, a pasted API key). OAuth entries land in
+  // "login_required" and the user clicks Connect; open and api_key entries are
+  // validated server-side with a real MCP handshake and arrive already
+  // connected — the success notice carries the observed tool count, and a
+  // rejected key/URL resolves false so the card keeps its form (and the
+  // typed values) open for correction. An entry whose endpoint is NOT
   // operated by the service's own vendor first goes through an explicit
   // consent step naming the operator (the operator receives tool-call
   // arguments — which can include conversation content — and, for OAuth
   // flows, often holds the delegated access token).
-  const requestAddFromCatalog = (entry: CatalogThirdParty) => {
+  const requestAddFromCatalog = (entry: CatalogThirdParty, overrides?: AddOverrides): Promise<boolean> => {
     if (consentRequired(entry)) {
-      setConsentFor(entry);
-      return;
+      setConsentFor({ entry, overrides });
+      // Not added yet — the card keeps its form; a confirmed consent add
+      // flips `added`, which hides the form anyway.
+      return Promise.resolve(false);
     }
-    addFromCatalog(entry);
+    return addFromCatalog(entry, overrides);
   };
 
-  const addFromCatalog = (entry: CatalogThirdParty) => {
+  const addFromCatalog = (entry: CatalogThirdParty, overrides?: AddOverrides): Promise<boolean> => {
     setConsentFor(null);
     setError(null);
     setNotice(null);
     setBusy(true);
-    fetch("/api/remote-mcp-servers", {
+    return fetch("/api/remote-mcp-servers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: entry.name, url: entry.url, auth: entry.auth }),
+      body: JSON.stringify({
+        name: entry.name,
+        url: overrides?.url ?? entry.url,
+        // "tenant" describes the URL shape, not the auth protocol — once the
+        // user has supplied their URL the add goes through the default OAuth
+        // discovery path.
+        auth: entry.auth === "tenant" ? undefined : entry.auth,
+        ...(overrides?.apiKey
+          ? { api_key: overrides.apiKey, api_key_header: entry.api_key_header }
+          : {}),
+        ...(overrides?.clientId
+          ? { client_id: overrides.clientId, client_secret: overrides.clientSecret }
+          : {}),
+      }),
     })
       .then(async (res) => {
         if (!res.ok) {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
+        const data = (await res.json()) as { tool_count?: number };
         setNotice(
-          entry.auth === "open"
-            ? `${entry.display_name} added and ready to use.`
+          entry.auth === "open" || entry.auth === "api_key"
+            ? `${entry.display_name} connected${toolCountSuffix(data.tool_count)}.`
             : `${entry.display_name} added. Click Connect to sign in.`,
         );
         refresh();
+        return true;
       })
-      .catch((err: unknown) => setError(errMessage(err)))
+      .catch((err: unknown) => {
+        setError(errMessage(err));
+        return false;
+      })
       .finally(() => setBusy(false));
   };
 
@@ -672,8 +881,27 @@ export default function ConnectionsPage() {
   const dirHits = filterCatalog(thirdParty, catalogQuery, effectiveCategory);
   const dirFiltering = trimmedQuery !== "" || catalogCategory !== "";
   const dirCategories = categoriesOf(thirdParty);
+  // The Featured shelf: curated household-name picks, rendered before the
+  // category listing on the unfiltered view only (searching or picking a
+  // category means the user already knows what they want).
+  const dirFeatured = thirdParty.filter((e) => e.featured);
   const activeCategoryLabel =
     dirCategories.find((c) => c.slug === catalogCategory)?.label ?? catalogCategory;
+
+  // One card, one prop wiring — shared by the Featured shelf and the category
+  // groups. Added-state matches by URL for one-click entries and by
+  // registration name for tenant entries (their added URL has the user's
+  // placeholder values filled in).
+  const renderDirCard = (tp: CatalogThirdParty) => (
+    <DirectoryCard
+      key={tp.name}
+      entry={tp}
+      added={(servers ?? []).some((s) => s.url === tp.url || s.name === tp.name)}
+      busy={busy}
+      remoteEnabled={catalog?.remote_mcp_enabled ?? false}
+      onAdd={(overrides) => requestAddFromCatalog(tp, overrides)}
+    />
+  );
 
   const scrollDirectoryResults = () => {
     const el = directoryResultsRef.current;
@@ -872,19 +1100,36 @@ export default function ConnectionsPage() {
                             title="Off hides this connection from your own chats and tasks; people you share with are unaffected."
                           />
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => connect(s.id)}
-                          disabled={busy}
-                          className={btnClass({ sm: true, reveal: true })}
-                        >
-                          {s.status === "connected" ? "Reconnect" : "Connect"}
-                        </button>
+                        {s.auth_kind === "api_key" ? (
+                          <button
+                            type="button"
+                            aria-expanded={keyOpenFor === s.id}
+                            onClick={() => {
+                              setKeyValue("");
+                              setShareOpenFor(null);
+                              setKeyOpenFor((cur) => (cur === s.id ? null : s.id));
+                            }}
+                            disabled={busy}
+                            className={btnClass({ sm: true, reveal: true })}
+                          >
+                            Update key
+                          </button>
+                        ) : s.auth_kind === "open" ? null : (
+                          <button
+                            type="button"
+                            onClick={() => connect(s.id)}
+                            disabled={busy}
+                            className={btnClass({ sm: true, reveal: true })}
+                          >
+                            {s.status === "connected" ? "Reconnect" : "Connect"}
+                          </button>
+                        )}
                         <button
                           type="button"
                           aria-expanded={shareOpenFor === s.id}
                           onClick={() => {
                             setShareGrantee("");
+                            setKeyOpenFor(null);
                             setShareOpenFor((cur) => (cur === s.id ? null : s.id));
                           }}
                           disabled={busy}
@@ -901,7 +1146,32 @@ export default function ConnectionsPage() {
                       </>
                     }
                     detail={
-                      shareOpenFor === s.id ? (
+                      keyOpenFor === s.id ? (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
+                          <input
+                            value={keyValue}
+                            onChange={(e) => setKeyValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && keyValue.trim()) {
+                                e.preventDefault();
+                                updateKey(s.id);
+                              }
+                            }}
+                            placeholder="paste the new API key (never shown again)"
+                            type="password"
+                            autoComplete="off"
+                            className="min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => updateKey(s.id)}
+                            disabled={busy || !keyValue.trim()}
+                            className={btnClass({ sm: true, reveal: true })}
+                          >
+                            Save key
+                          </button>
+                        </div>
+                      ) : shareOpenFor === s.id ? (
                         <div className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
                           <p className="mb-2 mt-0 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
                             People you share with can use this connection in their chats and
@@ -1130,6 +1400,14 @@ export default function ConnectionsPage() {
                     {dirHits.length === 1 ? "1 server matches" : `${dirHits.length} servers match`}
                   </p>
                 ) : null}
+                {!dirFiltering && dirFeatured.length > 0 ? (
+                  <div data-testid="dir-featured">
+                    <DirCatHead>✦ Featured</DirCatHead>
+                    <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
+                      {dirFeatured.map(renderDirCard)}
+                    </div>
+                  </div>
+                ) : null}
                 {dirHits.length === 0 ? (
                   <ConnEmpty>
                     No servers match “{trimmedQuery}”
@@ -1140,24 +1418,27 @@ export default function ConnectionsPage() {
                     <div key={group.slug}>
                       <DirCatHead>{group.label}</DirCatHead>
                       <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
-                        {group.entries.map((tp) => (
-                          <DirectoryCard
-                            key={tp.name}
-                            entry={tp}
-                            added={(servers ?? []).some((s) => s.url === tp.url)}
-                            busy={busy}
-                            remoteEnabled={catalog.remote_mcp_enabled}
-                            onAdd={() => requestAddFromCatalog(tp)}
-                          />
-                        ))}
+                        {group.entries.map(renderDirCard)}
                       </div>
                     </div>
                   ))
                 )}
                 {!catalog.remote_mcp_enabled ? (
                   <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">
-                    Connecting hosted servers requires the operator to configure remote MCP
-                    OAuth (FLEET_MCP_OAUTH_ENCRYPTION_KEY and FLEET_PUBLIC_BASE_URL).
+                    {adminState === "admin" ? (
+                      <>
+                        Connecting hosted servers is off because remote MCP isn’t configured.
+                        To enable it, set <CodeChip>FLEET_MCP_OAUTH_ENCRYPTION_KEY</CodeChip>{" "}
+                        (a 32-byte base64 key) and <CodeChip>FLEET_PUBLIC_BASE_URL</CodeChip>{" "}
+                        on the server, then restart — see docs/MCP-CATALOG.md in the fleet
+                        repository for the walkthrough.
+                      </>
+                    ) : (
+                      <>
+                        Connecting hosted servers isn’t enabled on this workspace yet — ask
+                        your administrator to turn on remote MCP connections.
+                      </>
+                    )}
                   </p>
                 ) : null}
               </div>
@@ -1175,7 +1456,7 @@ export default function ConnectionsPage() {
         <div
           role="dialog"
           aria-modal="true"
-          aria-label={`Connect ${consentFor.display_name}?`}
+          aria-label={`Connect ${consentFor.entry.display_name}?`}
           className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-strong)] px-4"
           onClick={() => setConsentFor(null)}
         >
@@ -1185,32 +1466,33 @@ export default function ConnectionsPage() {
           >
             <div className="mb-2 flex items-center gap-2">
               <h3 className="text-[0.9375rem] font-semibold">
-                Connect {consentFor.display_name}?
+                Connect {consentFor.entry.display_name}?
               </h3>
-              <ConnBadge variant={provenanceVariant(consentFor.provenance)}>
-                {provenanceBadge(consentFor.provenance).label}
+              <ConnBadge variant={provenanceVariant(consentFor.entry.provenance)}>
+                {provenanceBadge(consentFor.entry.provenance).label}
               </ConnBadge>
             </div>
             <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
               This endpoint is operated by{" "}
               <strong className="text-[var(--color-text-primary)]">
-                {consentFor.vendor || "an unnamed operator"}
+                {consentFor.entry.vendor || "an unnamed operator"}
               </strong>
-              {provenanceBadge(consentFor.provenance).label === "Aggregator"
+              {provenanceBadge(consentFor.entry.provenance).label === "Aggregator"
                 ? " — a platform that hosts access to other vendors' services, not the services themselves."
                 : " — not the vendor of the underlying service, and not your workspace."}{" "}
               Once connected, it receives your tool calls (which can include parts of your
               conversations)
-              {consentFor.auth === "oauth"
+              {consentFor.entry.auth === "oauth"
                 ? " and holds the access token you grant during sign-in"
                 : ""}
+              {consentFor.overrides?.apiKey ? " and holds the API key you provide" : ""}
               .
             </p>
             <p className="mb-4 text-[0.75rem] text-[var(--color-text-muted)]">
               Vet it first:{" "}
-              {consentFor.docs_url ? (
+              {consentFor.entry.docs_url ? (
                 <a
-                  href={consentFor.docs_url}
+                  href={consentFor.entry.docs_url}
                   target="_blank"
                   rel="noreferrer"
                   className="underline underline-offset-2"
@@ -1218,10 +1500,10 @@ export default function ConnectionsPage() {
                   documentation
                 </a>
               ) : null}
-              {consentFor.docs_url && consentFor.repo_url ? " · " : null}
-              {consentFor.repo_url ? (
+              {consentFor.entry.docs_url && consentFor.entry.repo_url ? " · " : null}
+              {consentFor.entry.repo_url ? (
                 <a
-                  href={consentFor.repo_url}
+                  href={consentFor.entry.repo_url}
                   target="_blank"
                   rel="noreferrer"
                   className="underline underline-offset-2"
@@ -1229,7 +1511,7 @@ export default function ConnectionsPage() {
                   source code
                 </a>
               ) : null}
-              {!consentFor.docs_url && !consentFor.repo_url
+              {!consentFor.entry.docs_url && !consentFor.entry.repo_url
                 ? "no docs or source were provided for this entry."
                 : null}
             </p>
@@ -1243,7 +1525,7 @@ export default function ConnectionsPage() {
               </button>
               <button
                 type="button"
-                onClick={() => addFromCatalog(consentFor)}
+                onClick={() => void addFromCatalog(consentFor.entry, consentFor.overrides)}
                 disabled={busy}
                 className={btnClass({ variant: "primary" })}
               >

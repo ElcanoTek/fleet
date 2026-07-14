@@ -769,6 +769,20 @@ var RolePermissions = map[string][]Permission{
 	"readonly": {PermissionViewTasks, PermissionViewLogs},
 }
 
+// PromptLibraryEntry is one UI-authored reusable prompt. Bundle/Git entries
+// use clientconfig.Prompt and are merged by the HTTP handler; only mutable
+// private/workspace rows live in the scheduler database.
+type PromptLibraryEntry struct {
+	ID            uuid.UUID `json:"id"`
+	OwnerUsername string    `json:"owner_username,omitempty"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description,omitempty"`
+	Content       string    `json:"content"`
+	Visibility    string    `json:"visibility"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 // TaskCreate is the request model for creating a new task.
 type TaskCreate struct {
 	// Name is an optional, human-readable label for the task (#238). It is the

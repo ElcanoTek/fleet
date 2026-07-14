@@ -3,6 +3,8 @@ package remotemcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +21,8 @@ type fakeStore struct {
 	servers map[string]*store.RemoteMCPServer
 	tokens  map[string]store.RemoteMCPTokens
 	flows   map[string]*store.OAuthFlowState
+	// apiKeys: server id -> plaintext key (the real store seals it).
+	apiKeys map[string]string
 	nextID  int
 	// shares: server id -> grantees ('*' or emails), mirroring the real table.
 	shares map[string][]string
@@ -31,6 +35,7 @@ func newFakeStore() *fakeStore {
 		servers: map[string]*store.RemoteMCPServer{},
 		tokens:  map[string]store.RemoteMCPTokens{},
 		flows:   map[string]*store.OAuthFlowState{},
+		apiKeys: map[string]string{},
 	}
 }
 
@@ -45,9 +50,13 @@ func (f *fakeStore) CreateRemoteMCPServer(_ context.Context, in store.RemoteMCPS
 		Issuer: in.Issuer, AuthorizationEndpoint: in.AuthorizationEndpoint, TokenEndpoint: in.TokenEndpoint,
 		RegistrationEndpoint: in.RegistrationEndpoint, RevocationEndpoint: in.RevocationEndpoint,
 		Scopes: in.Scopes, AuthMethods: in.AuthMethods, ClientID: in.ClientID,
+		AuthKind: in.AuthKind, APIKeyHeader: in.APIKeyHeader,
 	}
 	if srv.Status == "" {
 		srv.Status = store.RemoteMCPStatusLoginRequired
+	}
+	if in.APIKey != "" {
+		f.apiKeys[id] = in.APIKey
 	}
 	f.servers[id] = srv
 	cp := *srv
@@ -85,6 +94,26 @@ func (f *fakeStore) DeleteRemoteMCPServer(_ context.Context, email, id string) e
 
 func (f *fakeStore) LoadServerSecrets(_ context.Context, _ *store.RemoteMCPServer) (string, string, error) {
 	return "", "", nil
+}
+
+func (f *fakeStore) GetRemoteMCPAPIKey(_ context.Context, srv *store.RemoteMCPServer) (string, error) {
+	if _, ok := f.servers[srv.ID]; !ok {
+		return "", store.ErrRemoteMCPNotFound
+	}
+	return f.apiKeys[srv.ID], nil
+}
+
+func (f *fakeStore) SetRemoteMCPAPIKey(_ context.Context, email, id, apiKey string) error {
+	s, ok := f.servers[id]
+	if !ok || !strings.EqualFold(s.UserEmail, email) {
+		return store.ErrRemoteMCPNotFound
+	}
+	if s.AuthKind != store.RemoteMCPAuthAPIKey {
+		return errors.New("this connection does not use an API key")
+	}
+	f.apiKeys[id] = apiKey
+	s.Status = store.RemoteMCPStatusConnected
+	return nil
 }
 
 func (f *fakeStore) GetOAuthTokens(_ context.Context, srv *store.RemoteMCPServer) (*store.RemoteMCPTokens, error) {
@@ -296,7 +325,7 @@ func TestServiceAddAuthorizeComplete(t *testing.T) {
 	svc := newTestService(t, fs, srv)
 	ctx := context.Background()
 
-	server, err := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	server, _, err := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", URL: srv.URL + "/mcp"})
 	if err != nil {
 		t.Fatalf("AddServer: %v", err)
 	}
@@ -346,32 +375,183 @@ func TestServiceAddAuthorizeComplete(t *testing.T) {
 	}
 }
 
-func TestServiceAddOpenServerSkipsOAuthDiscovery(t *testing.T) {
-	fs := newFakeStore()
-	requests := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests++
-		w.Header().Set("Location", "https://example.com/docs")
-		w.WriteHeader(http.StatusFound)
+// mcpProbeServer is a minimal streamable-HTTP MCP server for the add-time
+// validation probe: it answers initialize and tools/list (toolCount tools),
+// accepts notifications, and — when keyHeader is set — rejects any request
+// whose keyHeader value is not in validKeys with a 401, which is how a vendor
+// rejects a bad API key. It also records whether any OAuth discovery path
+// (/.well-known/*) was ever requested.
+func mcpProbeServer(t *testing.T, toolCount int, keyHeader string, validKeys map[string]bool, sawDiscovery *bool) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, ".well-known") {
+			*sawDiscovery = true
+			http.NotFound(w, r)
+			return
+		}
+		if keyHeader != "" && !validKeys[r.Header.Get(keyHeader)] {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.ID == nil {
+			// A notification (notifications/initialized) — acknowledge, no body.
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		resp := map[string]any{"jsonrpc": "2.0", "id": *req.ID}
+		switch req.Method {
+		case "initialize":
+			resp["result"] = map[string]any{"protocolVersion": "2024-11-05"}
+		case "tools/list":
+			tools := make([]map[string]any, toolCount)
+			for i := range tools {
+				tools[i] = map[string]any{"name": fmt.Sprintf("tool_%d", i), "description": "test tool"}
+			}
+			resp["result"] = map[string]any{"tools": tools}
+		default:
+			resp["error"] = map[string]any{"code": -32601, "message": "method not found"}
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
+}
+
+func TestServiceAddOpenServerProbesWithoutOAuthDiscovery(t *testing.T) {
+	fs := newFakeStore()
+	sawDiscovery := false
+	srv := mcpProbeServer(t, 3, "", nil, &sawDiscovery)
 	defer srv.Close()
 	svc := newTestService(t, fs, srv)
 
-	server, err := svc.AddServer(context.Background(), AddServerInput{
+	server, toolCount, err := svc.AddServer(context.Background(), AddServerInput{
 		Email: "u@x.com", Name: "aws-knowledge", URL: srv.URL, AuthMode: "open",
 	})
 	if err != nil {
 		t.Fatalf("AddServer(open): %v", err)
 	}
-	if requests != 0 {
-		t.Fatalf("open server add made %d discovery requests, want none", requests)
+	if sawDiscovery {
+		t.Fatal("open server add ran OAuth discovery; the probe must be a plain MCP handshake")
 	}
 	if server.Status != store.RemoteMCPStatusConnected || server.Issuer != "" {
 		t.Errorf("open server = %+v, want connected without an OAuth issuer", server)
 	}
+	if toolCount != 3 {
+		t.Errorf("probed tool count = %d, want 3", toolCount)
+	}
 	bearer, err := svc.AcquireTokenByID(context.Background(), "u@x.com", server.ID)
 	if err != nil || bearer != "" {
 		t.Errorf("AcquireTokenByID(open) = %q, %v; want empty bearer, nil", bearer, err)
+	}
+
+	// A server that doesn't answer the handshake never becomes a connection.
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not an MCP server", http.StatusNotFound)
+	}))
+	defer dead.Close()
+	if _, _, err := svc.AddServer(context.Background(), AddServerInput{
+		Email: "u@x.com", Name: "dead", URL: dead.URL, AuthMode: "open",
+	}); err == nil {
+		t.Error("AddServer(open) stored a server that failed the validation handshake")
+	}
+}
+
+func TestServiceAddAPIKeyServerValidatesKey(t *testing.T) {
+	fs := newFakeStore()
+	sawDiscovery := false
+	srv := mcpProbeServer(t, 5, "X-API-Key", map[string]bool{"sk-live-123": true, "sk-live-456": true}, &sawDiscovery)
+	defer srv.Close()
+	svc := newTestService(t, fs, srv)
+	ctx := context.Background()
+
+	// Missing key is rejected before anything is stored.
+	if _, _, err := svc.AddServer(ctx, AddServerInput{
+		Email: "u@x.com", Name: "zapier", URL: srv.URL, AuthMode: "api_key",
+	}); err == nil {
+		t.Fatal("AddServer(api_key) accepted an empty key")
+	}
+	// A reserved / malformed header name is rejected.
+	for _, h := range []string{"Host", "Content-Length", "X Bad Header", "X-Key\r\nEvil: 1"} {
+		if _, _, err := svc.AddServer(ctx, AddServerInput{
+			Email: "u@x.com", Name: "zapier", URL: srv.URL, AuthMode: "api_key", APIKey: "sk-1", APIKeyHeader: h,
+		}); err == nil {
+			t.Errorf("AddServer(api_key) accepted header %q", h)
+		}
+	}
+	// A key with control characters can never be sent as a header value.
+	if _, _, err := svc.AddServer(ctx, AddServerInput{
+		Email: "u@x.com", Name: "zapier", URL: srv.URL, AuthMode: "api_key", APIKey: "sk\r\nEvil: 1",
+	}); err == nil {
+		t.Error("AddServer(api_key) accepted a key with CRLF")
+	}
+	// A key the server rejects fails the add with an actionable error and
+	// stores nothing — the whole point of the validation handshake.
+	if _, _, err := svc.AddServer(ctx, AddServerInput{
+		Email: "u@x.com", Name: "zapier", URL: srv.URL, AuthMode: "api_key",
+		APIKey: "sk-wrong", APIKeyHeader: "X-API-Key",
+	}); err == nil || !strings.Contains(err.Error(), "did not accept this API key") {
+		t.Fatalf("AddServer(api_key, wrong key) = %v; want key-rejected error", err)
+	}
+	if len(fs.servers) != 0 {
+		t.Fatalf("a rejected key stored %d server(s); want none", len(fs.servers))
+	}
+
+	server, toolCount, err := svc.AddServer(ctx, AddServerInput{
+		Email: "u@x.com", Name: "zapier", URL: srv.URL, AuthMode: "api_key",
+		APIKey: "sk-live-123", APIKeyHeader: "X-API-Key",
+	})
+	if err != nil {
+		t.Fatalf("AddServer(api_key): %v", err)
+	}
+	if sawDiscovery {
+		t.Fatal("api_key add ran OAuth discovery; the probe must be a plain MCP handshake")
+	}
+	if server.Status != store.RemoteMCPStatusConnected || server.AuthKind != store.RemoteMCPAuthAPIKey {
+		t.Errorf("api_key server = %+v, want connected with auth_kind api_key", server)
+	}
+	if server.APIKeyHeader != "X-API-Key" {
+		t.Errorf("api_key header = %q", server.APIKeyHeader)
+	}
+	if toolCount != 5 {
+		t.Errorf("probed tool count = %d, want 5", toolCount)
+	}
+
+	// The run loop's credential path returns the key itself.
+	cred, err := svc.AcquireTokenByID(ctx, "u@x.com", server.ID)
+	if err != nil || cred != "sk-live-123" {
+		t.Errorf("AcquireTokenByID(api_key) = %q, %v; want the key, nil", cred, err)
+	}
+
+	// Rotation validates the NEW key first: a rejected key leaves the stored
+	// key untouched; an accepted one replaces it. Owner-scoped throughout.
+	if _, err := svc.SetAPIKey(ctx, "u@x.com", server.ID, "sk-wrong"); err == nil ||
+		!strings.Contains(err.Error(), "previous key is unchanged") {
+		t.Fatalf("SetAPIKey(wrong key) = %v; want key-rejected error", err)
+	}
+	if cred, _ := svc.AcquireTokenByID(ctx, "u@x.com", server.ID); cred != "sk-live-123" {
+		t.Errorf("stored key after rejected rotation = %q, want the original", cred)
+	}
+	rotatedCount, err := svc.SetAPIKey(ctx, "u@x.com", server.ID, "sk-live-456")
+	if err != nil {
+		t.Fatalf("SetAPIKey: %v", err)
+	}
+	if rotatedCount != 5 {
+		t.Errorf("rotation tool count = %d, want 5", rotatedCount)
+	}
+	if cred, _ := svc.AcquireTokenByID(ctx, "u@x.com", server.ID); cred != "sk-live-456" {
+		t.Errorf("rotated key = %q", cred)
+	}
+	if _, err := svc.SetAPIKey(ctx, "other@x.com", server.ID, "steal"); !errors.Is(err, store.ErrRemoteMCPNotFound) {
+		t.Errorf("SetAPIKey by non-owner = %v, want not-found", err)
+	}
+	if _, err := svc.SetAPIKey(ctx, "u@x.com", server.ID, ""); err == nil {
+		t.Error("SetAPIKey accepted an empty key")
 	}
 }
 
@@ -381,7 +561,7 @@ func TestServiceAcquireTokenRefreshes(t *testing.T) {
 	svc := newTestService(t, fs, srv)
 	ctx := context.Background()
 
-	server, _ := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	server, _, _ := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", URL: srv.URL + "/mcp"})
 	// Store a near-expiry token (expires_in:1 from the exchange).
 	authURL, _ := svc.Authorize(ctx, "u@x.com", server.ID)
 	_ = authURL
@@ -410,7 +590,7 @@ func TestServiceAcquireTokenNeedsReauth(t *testing.T) {
 	svc := newTestService(t, fs, srv)
 	ctx := context.Background()
 
-	server, _ := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	server, _, _ := svc.AddServer(ctx, AddServerInput{Email: "u@x.com", Name: "acme", URL: srv.URL + "/mcp"})
 	authURL, _ := svc.Authorize(ctx, "u@x.com", server.ID)
 	_ = authURL
 	var state string
@@ -441,7 +621,7 @@ func TestResolverIncludesSharedServers(t *testing.T) {
 	ctx := context.Background()
 
 	// Owner connects a server, then shares it with mate.
-	owned, _ := svc.AddServer(ctx, AddServerInput{Email: "owner@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	owned, _, _ := svc.AddServer(ctx, AddServerInput{Email: "owner@x.com", Name: "acme", URL: srv.URL + "/mcp"})
 	authURL, _ := svc.Authorize(ctx, "owner@x.com", owned.ID)
 	_ = authURL
 	var state string
@@ -477,7 +657,7 @@ func TestResolverIncludesSharedServers(t *testing.T) {
 	}
 
 	// Name collision: mate's OWN server named acme wins; the shared one is skipped.
-	mates, _ := svc.AddServer(ctx, AddServerInput{Email: "mate@x.com", Name: "acme", URL: srv.URL + "/mcp"})
+	mates, _, _ := svc.AddServer(ctx, AddServerInput{Email: "mate@x.com", Name: "acme", URL: srv.URL + "/mcp"})
 	authURL, _ = svc.Authorize(ctx, "mate@x.com", mates.ID)
 	_ = authURL
 	for k := range fs.flows {

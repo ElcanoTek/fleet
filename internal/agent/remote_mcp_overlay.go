@@ -36,6 +36,10 @@ type RemoteMCPConn struct {
 	// the running user (empty for the user's own servers). Used for audit
 	// attribution: tool calls authenticate with the owner's token host-side.
 	Owner string
+	// AuthHeader is the header NAME the credential is sent under for api_key
+	// connections (e.g. "X-API-Key"). Empty means the default OAuth/bearer
+	// shape: "Authorization: Bearer <credential>".
+	AuthHeader string
 }
 
 // RemoteMCPResolver supplies a user's connected remote servers and mints fresh
@@ -143,7 +147,13 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 		}
 		opts := mcp.HTTPServerOptions{HTTPClient: httpClient}
 		if bearer != "" {
-			opts.Headers = map[string]string{"Authorization": "Bearer " + bearer}
+			if conn.AuthHeader != "" {
+				// api_key connection with a vendor-specific header: the raw key,
+				// no Bearer scheme.
+				opts.Headers = map[string]string{conn.AuthHeader: bearer}
+			} else {
+				opts.Headers = map[string]string{"Authorization": "Bearer " + bearer}
+			}
 		}
 		if aerr := client.AddHTTPServerWithOptions(ctx, conn.Name, conn.URL, opts); aerr != nil {
 			log.Printf("remote-mcp: skipping server %q for %s — failed to connect: %v", conn.Name, email, aerr)

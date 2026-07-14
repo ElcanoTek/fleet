@@ -14,6 +14,7 @@ import { ModelPicker } from "@/app/shared/ui/ModelPicker";
 import { McpServerPicker } from "@/app/shared/ui/McpServerPicker";
 import { FileUpload, type FileUploadHandle, type FileEntry } from "@/app/shared/ui/FileUpload";
 import { CostForecastPanel } from "./CostForecastPanel";
+import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 
 // TaskCreateModal — the create-task form, matching the elevated New Task design
 // (states: default · filled · advanced · validation · submitting · scrolled ·
@@ -867,7 +868,10 @@ export function TaskCreateModal({ open, servers, serversLoading, onClose, onCrea
                   <label className="task-label" htmlFor="promptTextarea">
                     Prompt
                   </label>
-                  <span className="task-required-badge">Required</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <PromptLibrary currentText={prompt} onInsert={setPrompt} />
+                    <span className="task-required-badge">Required</span>
+                  </span>
                 </div>
                 <textarea
                   id="promptTextarea"

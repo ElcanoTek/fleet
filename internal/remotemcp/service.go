@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -47,6 +48,8 @@ type tokenStore interface {
 	ListRemoteMCPServers(ctx context.Context, userEmail string) ([]store.RemoteMCPServer, error)
 	DeleteRemoteMCPServer(ctx context.Context, userEmail, id string) error
 	LoadServerSecrets(ctx context.Context, server *store.RemoteMCPServer) (clientSecret, registrationToken string, err error)
+	GetRemoteMCPAPIKey(ctx context.Context, server *store.RemoteMCPServer) (string, error)
+	SetRemoteMCPAPIKey(ctx context.Context, userEmail, id, apiKey string) error
 	GetOAuthTokens(ctx context.Context, server *store.RemoteMCPServer) (*store.RemoteMCPTokens, error)
 	StoreOAuthTokens(ctx context.Context, server *store.RemoteMCPServer, tokens store.RemoteMCPTokens) error
 	EnsureFreshToken(ctx context.Context, server *store.RemoteMCPServer, marginSeconds int64, refreshFn store.RefreshFunc) (string, error)
@@ -137,43 +140,78 @@ type AddServerInput struct {
 	Email string
 	Name  string
 	URL   string
-	// AuthMode is "open" only for servers that require no Authorization header.
-	// Empty and "oauth" retain the discovery + authorization flow.
+	// AuthMode is "open" for servers that require no Authorization header, or
+	// "api_key" for servers authenticated by a static vendor key. Empty and
+	// "oauth" retain the discovery + authorization flow.
 	AuthMode string
 	// Optional manual client credentials for an authorization server without DCR.
 	ClientID     string
 	ClientSecret string
+	// api_key mode only: the key itself (sealed at rest, never echoed back) and
+	// the header NAME to send it under ("" = Authorization: Bearer <key>).
+	APIKey       string
+	APIKeyHeader string
 }
 
-// AddServer validates + canonicalizes the URL, walks the OAuth discovery chain,
-// performs dynamic client registration (or uses manual credentials), and
-// persists the server in status login_required.
-func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.RemoteMCPServer, error) {
+// AddServer validates + canonicalizes the URL and persists the server. OAuth
+// adds walk the discovery chain + dynamic client registration (or use manual
+// credentials) and land in status login_required — the login flow itself
+// proves the connection works. open and api_key adds carry no login step, so
+// they are validated NOW with a real MCP handshake (probeServer) and only
+// land connected if the server answers; a wrong key or mistyped tenant URL
+// fails the add with an actionable error instead of surfacing mid-run. The
+// returned tool count is >= 0 for probed adds and -1 when no probe ran.
+func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.RemoteMCPServer, int, error) {
 	if !s.Enabled() {
-		return nil, ErrDisabled
+		return nil, -1, ErrDisabled
 	}
 	canonURL, err := mcpoauth.ValidateServerURL(in.URL, s.cfg.AllowInsecureHTTP)
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
-		return nil, errors.New("a name is required")
+		return nil, -1, errors.New("a name is required")
 	}
-	if in.AuthMode == "open" {
-		return s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+	if in.AuthMode == store.RemoteMCPAuthOpen {
+		toolCount, perr := s.probeServer(ctx, canonURL, "", "")
+		if perr != nil {
+			return nil, -1, fmt.Errorf("could not connect to the MCP server: %w", perr)
+		}
+		server, cerr := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
 			UserEmail: in.Email, Name: name, URL: canonURL,
 			Transport: store.RemoteMCPTransportStreamableHTTP,
 			Status:    store.RemoteMCPStatusConnected,
+			AuthKind:  store.RemoteMCPAuthOpen,
 		})
+		return server, toolCount, cerr
 	}
-	if in.AuthMode != "" && in.AuthMode != "oauth" {
-		return nil, fmt.Errorf("unsupported remote MCP auth mode %q", in.AuthMode)
+	if in.AuthMode == store.RemoteMCPAuthAPIKey {
+		header, verr := validateAPIKeyAuth(in.APIKey, in.APIKeyHeader)
+		if verr != nil {
+			return nil, -1, verr
+		}
+		toolCount, perr := s.probeServer(ctx, canonURL, header, in.APIKey)
+		if perr != nil {
+			return nil, -1, fmt.Errorf("the server did not accept this API key — check the key and try again: %w", perr)
+		}
+		server, cerr := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+			UserEmail: in.Email, Name: name, URL: canonURL,
+			Transport:    store.RemoteMCPTransportStreamableHTTP,
+			Status:       store.RemoteMCPStatusConnected,
+			AuthKind:     store.RemoteMCPAuthAPIKey,
+			APIKey:       in.APIKey,
+			APIKeyHeader: header,
+		})
+		return server, toolCount, cerr
+	}
+	if in.AuthMode != "" && in.AuthMode != store.RemoteMCPAuthOAuth {
+		return nil, -1, fmt.Errorf("unsupported remote MCP auth mode %q", in.AuthMode)
 	}
 
 	disco, err := mcpoauth.Discover(ctx, s.httpClient, canonURL)
 	if err != nil {
-		return nil, fmt.Errorf("discover authorization server: %w", err)
+		return nil, -1, fmt.Errorf("discover authorization server: %w", err)
 	}
 
 	scopes := strings.Join(disco.PRM.ScopesSupported, " ")
@@ -186,18 +224,18 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 	regToken := ""
 	if clientID == "" {
 		if disco.AS.RegistrationEndpoint == "" {
-			return nil, ErrManualClientRequired
+			return nil, -1, ErrManualClientRequired
 		}
 		reg, rerr := mcpoauth.Register(ctx, s.httpClient, disco.AS.RegistrationEndpoint, s.cfg.ClientName, s.RedirectURI(), scopes)
 		if rerr != nil {
-			return nil, fmt.Errorf("dynamic client registration: %w", rerr)
+			return nil, -1, fmt.Errorf("dynamic client registration: %w", rerr)
 		}
 		clientID = reg.ClientID
 		clientSecret = reg.ClientSecret
 		regToken = reg.RegistrationAccessToken
 	}
 
-	return s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+	server, err := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
 		UserEmail:             in.Email,
 		Name:                  name,
 		URL:                   disco.Resource,
@@ -213,6 +251,90 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 		ClientSecret:          clientSecret,
 		RegistrationToken:     regToken,
 	})
+	return server, -1, err
+}
+
+// probeServer performs a real MCP handshake — initialize + tools/list, over
+// the SSRF-safe client — against url with the given credential, and returns
+// the server's tool count. It is the add/rotate-time validation for
+// connections that have no OAuth login step: without it a wrong key or a
+// mistyped tenant URL would be stored as "connected" and only fail mid-run,
+// where the error is far from the person who can fix it. The ephemeral client
+// is closed before returning; nothing is registered.
+func (s *Service) probeServer(ctx context.Context, url, headerName, credential string) (int, error) {
+	client := mcp.NewClient()
+	defer func() { _ = client.Close() }()
+	opts := mcp.HTTPServerOptions{HTTPClient: s.httpClient}
+	if credential != "" {
+		header, value := "Authorization", "Bearer "+credential
+		if headerName != "" {
+			header, value = headerName, credential
+		}
+		opts.Headers = map[string]string{header: value}
+	}
+	pctx, cancel := context.WithTimeout(ctx, s.cfg.HTTPTimeout)
+	defer cancel()
+	if err := client.AddHTTPServerWithOptions(pctx, "verify", url, opts); err != nil {
+		return 0, err
+	}
+	return len(client.GetAllTools()), nil
+}
+
+// validateAPIKeyAuth vets a user-supplied API key + header name before either
+// is persisted. The header name must be an RFC 7230 token and must not collide
+// with headers the MCP transport itself owns; the key must be a single line of
+// visible ASCII (Go's transport would reject anything else at send time, but a
+// clear error here beats a mid-run failure). Returns the trimmed header name.
+func validateAPIKeyAuth(key, header string) (string, error) {
+	if strings.TrimSpace(key) == "" {
+		return "", errors.New("an API key is required")
+	}
+	for _, r := range key {
+		if r < 0x20 || r > 0x7e {
+			return "", errors.New("the API key contains characters that cannot be sent in an HTTP header")
+		}
+	}
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return "", nil // default: Authorization: Bearer <key>
+	}
+	for _, r := range header {
+		headerOK := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_'
+		if !headerOK {
+			return "", fmt.Errorf("invalid API key header name %q", header)
+		}
+	}
+	switch strings.ToLower(header) {
+	case "host", "content-length", "content-type", "transfer-encoding", "connection", "mcp-session-id", "accept":
+		return "", fmt.Errorf("header %q is reserved by the MCP transport", header)
+	}
+	return header, nil
+}
+
+// SetAPIKey replaces an api_key connection's stored key (rotation / fixing a
+// mistyped key) and marks it connected again. Owner-scoped. The new key is
+// validated with a real MCP handshake before it replaces the old one — a
+// rejected key leaves the stored key untouched — and the probed tool count is
+// returned for the UI's confirmation notice.
+func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string) (int, error) {
+	if !s.Enabled() {
+		return 0, ErrDisabled
+	}
+	if _, err := validateAPIKeyAuth(apiKey, ""); err != nil {
+		return 0, err
+	}
+	server, err := s.store.GetRemoteMCPServer(ctx, email, serverID)
+	if err != nil {
+		return 0, err
+	}
+	if server.AuthKind != store.RemoteMCPAuthAPIKey {
+		return 0, errors.New("this connection does not use an API key")
+	}
+	toolCount, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, apiKey)
+	if err != nil {
+		return 0, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
+	}
+	return toolCount, s.store.SetRemoteMCPAPIKey(ctx, email, serverID, apiKey)
 }
 
 // Authorize starts the OAuth flow for a server and returns the authorization URL

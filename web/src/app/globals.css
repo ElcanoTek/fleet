@@ -1354,6 +1354,10 @@ button {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.75rem;
+  /* On narrow screens the controls drop below the heading instead of
+     crushing into a skinny column beside it. Inert when everything fits. */
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
 }
 .section-header h2 {
   margin: 0;
@@ -1499,6 +1503,12 @@ tr.sla-row-fail {
   gap: 0.25rem;
   margin: 0.5rem 0;
   border-bottom: 1px solid var(--color-border);
+  /* On narrow screens (phones) the tab row is wider than the viewport;
+     scroll the row itself instead of blowing out the page. */
+  overflow-x: auto;
+  max-width: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
 }
 .tab-btn {
   background: transparent;
@@ -1508,6 +1518,9 @@ tr.sla-row-fail {
   color: var(--color-text-secondary);
   cursor: pointer;
   font-size: 0.9rem;
+  /* Labels must not wrap — force the row to overflow into its own scroll. */
+  white-space: nowrap;
+  flex: none;
 }
 .tab-btn:hover {
   color: var(--color-text-primary);
@@ -1556,7 +1569,9 @@ tr.sla-row-fail {
 }
 .usage-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  /* 140px min fits a 2x2 tile grid on ~390px phones (vs a 4-tall stack);
+     desktop still resolves to one column per tile. */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 0.75rem;
   margin: 0.75rem 0 0.5rem;
 }
@@ -1657,6 +1672,14 @@ tr.sla-row-fail {
 .usage-num {
   font-variant-numeric: tabular-nums;
 }
+@media (max-width: 720px) {
+  /* Narrower label column so the bars keep most of the width on phones;
+     names still ellipsize and carry their full text in title/aria-label. */
+  .usage-bar-row {
+    grid-template-columns: minmax(84px, 120px) 1fr minmax(56px, auto);
+    gap: 0.45rem;
+  }
+}
 
 /* Upcoming runs timeline (Scheduler UX 2.0, #504): a day-grouped list of the
    next scheduled executions. Each row is time · task · schedule-kind. */
@@ -1712,6 +1735,20 @@ tr.sla-row-fail {
 .upcoming-run-kind-oneshot {
   background: color-mix(in srgb, var(--color-warning-strong) 16%, transparent);
   color: var(--color-warning-strong);
+}
+@media (max-width: 720px) {
+  /* On phones the nowrap schedule pill ("At minute 30 past every hour…")
+     starves the name column to nothing. Two lines instead: time + name,
+     then the pill under the name, free to wrap. */
+  .upcoming-run-row {
+    grid-template-columns: 4.5rem 1fr;
+    gap: 0.25rem 0.75rem;
+  }
+  .upcoming-run-kind {
+    grid-column: 2;
+    justify-self: start;
+    white-space: normal;
+  }
 }
 
 /* Live progress checklist (#518): the agent's task_tracker plan, rendered as a
@@ -1900,6 +1937,10 @@ tr.sla-row-fail {
 .modal {
   width: 100%;
   max-width: 640px;
+  /* The overlay is a flex row, so without this the modal's min-content width
+     (nowrap reveal hints/summaries) beats width:100% and pushes the dialog
+     past a phone viewport. min-width:0 lets the inner ellipsizing engage. */
+  min-width: 0;
   background: var(--color-surface-1, #241b31);
   border: 1px solid var(--color-border);
   border-radius: 0.85rem;
@@ -2014,6 +2055,10 @@ tr.sla-row-fail {
   padding: 0;
   min-width: 0;
   display: grid;
+  /* minmax(0,…) pins the single column to the modal width — the implicit
+     auto track otherwise grows to the nowrap reveal-headers' min-content
+     and overflows a phone viewport. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.375rem;
 }
 .task-group-label {
@@ -2143,6 +2188,13 @@ tr.sla-row-fail {
 .task-reveal-spacer {
   flex: 1;
 }
+@media (max-width: 480px) {
+  /* With the live summary taking the right slot there's no room left for the
+     contents hint on a phone — it ellipsizes to a lone letter. Summary wins. */
+  .task-reveal-hint {
+    display: none;
+  }
+}
 .task-reveal-summary {
   font-size: 0.76rem;
   color: var(--color-text-secondary);
@@ -2256,6 +2308,9 @@ tr.sla-row-fail {
    Behavior, then the caution-tinted pre-run gate card. */
 .task-advanced {
   display: grid;
+  /* Same minmax(0,…) pin as .task-form: don't let item min-content widen
+     the column past the modal on phones. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.25rem;
 }
 .task-eyebrow {
@@ -2431,6 +2486,16 @@ tr.sla-row-fail {
 }
 .task-footer.is-scrolled {
   box-shadow: 0 -8px 18px var(--color-overlay-strong);
+}
+@media (max-width: 720px) {
+  /* Six footer items can't share a phone-width line: wrap, with the spacer
+     as the line break — estimate row on top, status + actions below. */
+  .task-footer {
+    flex-wrap: wrap;
+  }
+  .task-footer-spacer {
+    flex-basis: 100%;
+  }
 }
 .task-footer-spacer {
   flex: 1;
@@ -3481,6 +3546,13 @@ select.mcp-server-picker__account-select {
   text-transform: uppercase;
   color: var(--color-text-muted);
   margin-bottom: 0.3rem;
+}
+/* Fenced code in the react-markdown log falls through to the browser-default
+   <pre> — scroll long lines inside the block instead of clipping them at the
+   modal edge (same treatment as chat's .assistant-markdown-pre). */
+.log-message-content pre {
+  overflow-x: auto;
+  max-width: 100%;
 }
 /* Inline agent-generated images in the task log (#271). */
 .log-image {

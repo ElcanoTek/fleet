@@ -41,7 +41,7 @@ func newTestStore(t *testing.T) (*Storage, *db.Database) {
 
 	ctx := context.Background()
 	cleanup := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
+		for _, q := range []string{"DELETE FROM prompt_library", "DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
 			database.Conn().ExecContext(ctx, q)
 		}
 	}

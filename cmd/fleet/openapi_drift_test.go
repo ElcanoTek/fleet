@@ -260,6 +260,11 @@ var schemaModelRegistry = map[string]any{
 	"Budget":       models.Budget{},
 	"BudgetCreate": models.BudgetCreate{},
 	"BudgetStatus": models.BudgetStatus{},
+	// Hybrid prompt library: the merged wire item and mutable request are
+	// exported handler DTOs because the Git and database models have different
+	// internal shapes.
+	"PromptLibraryWrite": handlers.PromptLibraryWrite{},
+	"PromptLibraryItem":  handlers.PromptLibraryItem{},
 	// Pre-submission cost forecast (#233/#405). The estimate handler returns
 	// agentcore.CostForecast verbatim via writeJSON, so these three reusable
 	// schemas are backed by the exported, reflectable agentcore types.

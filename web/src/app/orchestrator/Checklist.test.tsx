@@ -98,4 +98,28 @@ describe("LiveTaskView checklist wiring", () => {
     // The three plan items render (both in the live panel and the history entry).
     expect(screen.getAllByTestId("checklist-item").length).toBeGreaterThanOrEqual(3);
   });
+
+  it("reconnects a cleanly dropped stream from the last SSE event id", async () => {
+    vi.useFakeTimers();
+    try {
+      streamTaskActivity.mockReset();
+      streamTaskActivity
+        .mockImplementationOnce((_id: string, cb: (f: TaskStreamFrame) => void) => {
+          cb({ type: "agent_message", content: "started", _event_id: "17" });
+          return Promise.resolve();
+        })
+        .mockImplementationOnce(() => new Promise<void>(() => {}));
+
+      const task = { id: "t-reconnect", status: "running" } as unknown as Task;
+      render(<LogViewer task={task} onClose={() => {}} />);
+      await act(async () => { await Promise.resolve(); });
+      await act(async () => { vi.advanceTimersByTime(500); await Promise.resolve(); });
+
+      expect(streamTaskActivity).toHaveBeenCalledTimes(2);
+      expect(streamTaskActivity.mock.calls[1][3]).toBe("17");
+      expect(screen.getByText("started")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

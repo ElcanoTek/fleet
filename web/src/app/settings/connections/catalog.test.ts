@@ -5,10 +5,16 @@ import {
   categoriesOf,
   categoryLabel,
   consentRequired,
+  fillPlaceholders,
   filterCatalog,
   groupByCategory,
   needsTenantURL,
+  placeholderLabel,
+  placeholdersOf,
+  placeholderValueOK,
   provenanceBadge,
+  setupLink,
+  toolCountSuffix,
   type CatalogThirdParty,
 } from "./catalog";
 
@@ -132,7 +138,7 @@ describe("auth + tenant + consent", () => {
 
   it("hints open and api_key auth, stays quiet for oauth", () => {
     expect(authHint(entry({ auth: "open" }))).toBe("No sign-in needed");
-    expect(authHint(entry({ auth: "api_key" }))).toBe("API key");
+    expect(authHint(entry({ auth: "api_key" }))).toBe("Needs an API key");
     expect(authHint(entry({ auth: "oauth" }))).toBeNull();
     expect(authHint(entry({}))).toBeNull();
   });
@@ -141,5 +147,56 @@ describe("auth + tenant + consent", () => {
     expect(consentRequired(entry({}))).toBe(false);
     expect(consentRequired(entry({ provenance: "third_party" }))).toBe(true);
     expect(consentRequired(entry({ provenance: "community" }))).toBe(true);
+  });
+});
+
+describe("guided tenant-URL form helpers", () => {
+  it("extracts placeholders deduped, in order", () => {
+    expect(placeholdersOf("https://{tenantId}.example.com/{tenantId}/{region}/mcp")).toEqual([
+      "tenantId",
+      "region",
+    ]);
+    expect(placeholdersOf("https://mcp.example.com/mcp")).toEqual([]);
+  });
+
+  it("humanizes placeholder tokens", () => {
+    expect(placeholderLabel("tenantId")).toBe("tenant id");
+    expect(placeholderLabel("instance-name")).toBe("instance name");
+    expect(placeholderLabel("workspace_hostname")).toBe("workspace hostname");
+  });
+
+  it("fills placeholders with trimmed values, leaving empties visible", () => {
+    const url = "https://{store}.myshopify.com/api/mcp";
+    expect(fillPlaceholders(url, { store: " acme " })).toBe("https://acme.myshopify.com/api/mcp");
+    expect(fillPlaceholders(url, {})).toBe(url);
+  });
+
+  it("rejects placeholder values that would corrupt the URL", () => {
+    expect(placeholderValueOK("acme")).toBe(true);
+    expect(placeholderValueOK("acme/eu")).toBe(true);
+    expect(placeholderValueOK("")).toBe(false);
+    expect(placeholderValueOK("has space")).toBe(false);
+    expect(placeholderValueOK("{nested}")).toBe(false);
+  });
+});
+
+describe("toolCountSuffix", () => {
+  it("pluralizes and stays silent on absent/zero counts", () => {
+    expect(toolCountSuffix(12)).toBe(" — 12 tools available");
+    expect(toolCountSuffix(1)).toBe(" — 1 tool available");
+    expect(toolCountSuffix(0)).toBe("");
+    expect(toolCountSuffix(undefined)).toBe("");
+  });
+});
+
+describe("setupLink", () => {
+  it("prefers the explicit setup walkthrough, falls back to docs", () => {
+    expect(
+      setupLink(entry({ setup_url: "https://vendor.test/setup", docs_url: "https://vendor.test/docs" })),
+    ).toBe("https://vendor.test/setup");
+    expect(setupLink(entry({ docs_url: "https://vendor.test/docs" }))).toBe(
+      "https://vendor.test/docs",
+    );
+    expect(setupLink(entry({}))).toBeNull();
   });
 });

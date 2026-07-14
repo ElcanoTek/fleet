@@ -3,7 +3,7 @@ import { execSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 // resolveBuildId picks the string that identifies this deploy. The
-// cache-busting story depends on it: middleware stamps it on every
+// cache-busting story depends on it: the request proxy stamps it on every
 // response as X-App-Version, and the client compares subsequent
 // probes against the value baked into its bundle. Anything unique
 // per `next build` works; git SHA is nicest because `chat backup`

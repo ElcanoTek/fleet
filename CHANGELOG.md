@@ -17,6 +17,35 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **Hybrid prompt library** (`docs/PROMPT-LIBRARY.md`): Chat and Operations
+  Center now share a searchable prompt picker that live-loads read-only
+  `.yaml`/`.yml`/`.md`/`.txt` entries from the client bundle's Git-trackable
+  `prompts/` directory and merges them with UI-authored private or
+  workspace-shared prompts. Authors/admins can edit or delete database-backed
+  entries, seed a new entry from the current draft, and download a versioned
+  JSON backup suitable for ordinary cloud-drive storage. The generic bundle
+  includes a neutral example prompt.
+- **Resilient live Operations logs**: the task activity viewer now reconnects
+  dropped fetch-based SSE streams and forwards `Last-Event-ID`, resuming at the
+  next tool/message event instead of silently freezing or replaying the live
+  buffer from the start. Tool details are now expandable rather than clipped at
+  600 characters. Live cancellation continues to interrupt the governed run
+  and records the stopping operator; task creators can now stop their own jobs
+  without gaining permission to stop a teammate's job.
+
+- **`fleet mcp test` (docs/MCP-TESTING.md)**: per-server smoke test for the
+  bundle's MCP catalog — loads the bundle through the boot loader (same env
+  interpolation, enable gates, TLS), spawns/handshakes each server exactly as
+  the broker would (`initialize` + `tools/list`), and reports tools or the
+  actionable failure per server. `--all` sweeps the catalog, `--json` for CI
+  gates; exit 0/1/2. Boots nothing (no DB, no server, no sandbox) — run it
+  where the deployment's env lives. `--deep` additionally calls each
+  server's advertised auth-status tool (`auth_status` / `*_auth_status`) to
+  verify the credentials against the upstream, failing the run on an
+  `isError` result.
+
 ### Changed
 
 - **Public-repo hygiene (#721)**: untracked the runtime `fleet.pid` file (now
@@ -32,6 +61,41 @@ prior versions are listed because none have shipped.
   refer to the internal predecessor stack this project replaces.
 
 ### Added
+
+- **Connector-directory onboarding** (`docs/CONNECTOR-ONBOARDING.md`): every
+  hosted-directory entry is now either connectable in place or visibly
+  documented. Per-user remote MCP gains an **API-key auth mode** (migration
+  039: key sealed AES-256-GCM host-side like OAuth tokens, replayed as
+  `Authorization: Bearer` or the entry's `api_key_header`; rotation via
+  `PUT /remote-mcp-servers/{id}/key`) — the 60 `api_key` catalog entries
+  previously had no working connect path. api_key and open adds (and key
+  rotations) are **validated with a real MCP handshake** before anything is
+  stored: a rejected key or unreachable URL fails the add with an actionable
+  error and the guided form keeps the typed values, while a successful add
+  confirms with the observed tool count. Directory cards grow **guided add
+  forms**: per-`{placeholder}` inputs with a live URL preview for
+  tenant-scoped endpoints, a write-only key field for api_key entries, and
+  bring-your-own OAuth client fields for vendors without dynamic client
+  registration (`client_registration: manual` — Google Workspace, Microsoft
+  Work IQ, Slack, HubSpot). New catalog fields `setup_hint` (rendered visibly;
+  CI-required for every tenant/api_key entry) and `setup_url` link the
+  vendor's actual connect walkthrough; hints were researched and authored for
+  all 97 such entries. Catalog refresh: new `google-people` (Contacts) entry
+  plus community self-hosted `google-workspace-self-hosted`
+  (Docs/Sheets-capable) and `microsoft-365-self-hosted` (no Copilot license
+  needed) entries; auth corrections for aws-mcp and the key-in-URL vendors
+  (Scrapfly, thirdweb, Smartlead). A curation audit removed 25 low-quality
+  listings (docs-search-only servers for niche products, unworkable auth
+  schemes, obscure duplicates) and added 15 newly-verified official hosted
+  endpoints (Docusign, Adobe for Creativity, WordPress.com, Contentful,
+  Sanity, Algolia, Cloudinary, Amazon Ads, DoorDash, ServiceNow, Microsoft
+  Dataverse/Dynamics 365, Vimeo, Egnyte, Granola, Jotform) — net 267 → 282.
+  A new **Featured shelf** (`featured: true`, capped 8–20 entries) surfaces
+  the household names — the Google Workspace trio, GitHub, Notion, Slack,
+  Linear, Atlassian, Asana, monday, Airtable, Stripe, PayPal, HubSpot,
+  Canva, Figma, Adobe, Zapier, Hugging Face — ahead of the category listing.
+  The "remote MCP isn't configured" notice is now admin-aware instead of
+  showing env-var instructions to members.
 
 - **v1 → fleet cutover runbook** (`docs/CUTOVER.md`, #718): the ordered
   operational sequence for a box already live on the legacy chat + moc stack —

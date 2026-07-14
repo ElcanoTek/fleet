@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 
+	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -151,6 +152,10 @@ type Handlers struct {
 	// SetTaskTemplateProvider from the loaded client bundle; nil → empty catalog.
 	// See task_templates.go.
 	taskTemplates taskTemplateProvider
+
+	// promptCatalog returns the bundle/Git-backed half of the hybrid prompt
+	// library. Mutable private/workspace entries live in sched storage.
+	promptCatalog func() ([]clientconfig.Prompt, []string)
 
 	// taskStreamLookup resolves a task's live SSE run-log buffer (#200), wired by
 	// cmd/fleet via SetTaskStreamProvider from the worker pool's registry. nil →
@@ -1457,11 +1462,6 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 // CancelTask handles DELETE /tasks/{task_id}
 func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 	p := h.principalFromRequest(r)
-	if !p.hasPermission(models.PermissionCancelTask) {
-		writeError(w, http.StatusForbidden, "Insufficient permissions")
-		return
-	}
-
 	taskIDStr := chi.URLParam(r, "task_id")
 	taskID, err := uuid.Parse(taskIDStr)
 	if err != nil {
@@ -1469,9 +1469,29 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Admins and explicitly-scoped API keys retain the broad cancel permission.
+	// A normal member may stop only a task they personally created. This makes
+	// the live viewer's Stop control useful to job authors without granting them
+	// the ability to interrupt a teammate's run.
+	var taskForAuth *models.Task
+	if !p.hasPermission(models.PermissionCancelTask) {
+		taskForAuth, err = h.storage.GetTask(taskID)
+		if err != nil || taskForAuth == nil {
+			writeError(w, http.StatusNotFound, "Task not found")
+			return
+		}
+		if !p.ownsTask(taskForAuth) {
+			writeError(w, http.StatusForbidden, "Only the task creator or an admin can stop this run")
+			return
+		}
+	}
+
 	// If the principal is scoped, verify it has access to this task.
 	if scopes := p.scopes(); len(scopes) > 0 {
-		task, err := h.storage.GetTask(taskID)
+		task := taskForAuth
+		if task == nil {
+			task, err = h.storage.GetTask(taskID)
+		}
 		if err != nil || task == nil {
 			writeError(w, http.StatusNotFound, "Task not found")
 			return
@@ -2435,6 +2455,15 @@ func (p principal) ownerID() *uuid.UUID {
 		return &p.user.ID
 	}
 	return nil
+}
+
+// ownsTask is the narrow non-admin stop authorization: only user-created tasks
+// participate. API-key principals continue to require PermissionCancelTask,
+// even when a task records their key id, so a read-only key never gains a
+// mutation through ownership.
+func (p principal) ownsTask(task *models.Task) bool {
+	ownerID := p.ownerID()
+	return task != nil && ownerID != nil && task.CreatedBy != nil && *ownerID == *task.CreatedBy
 }
 
 // taskVisibleToUser reports whether a task is visible to the given user under

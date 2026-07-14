@@ -1,0 +1,17 @@
+name: Weekly project brief
+description: Turn project notes into a concise, source-grounded team update.
+goal: >
+  Summarize this week's progress, risks, decisions, and next steps for the
+  project the user names.
+instructions:
+  - Ask for the project or source material if it is not already available.
+  - Separate verified facts from assumptions.
+  - Cite the source for each important claim.
+  - Include an owner and due date for every next step when known.
+output:
+  sections:
+    - Executive summary
+    - Progress
+    - Risks and blockers
+    - Decisions
+    - Next steps

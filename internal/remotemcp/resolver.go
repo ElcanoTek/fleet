@@ -51,7 +51,7 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 			continue
 		}
 		names[srv.Name] = true
-		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL})
+		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL, AuthHeader: srv.APIKeyHeader})
 	}
 	for _, srv := range shared {
 		if srv.Status != store.RemoteMCPStatusConnected || !enabledForMe(srv.ID) {
@@ -62,19 +62,23 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 			continue
 		}
 		names[srv.Name] = true
-		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL, Owner: srv.UserEmail})
+		out = append(out, agent.RemoteMCPConn{ID: srv.ID, Name: srv.Name, URL: srv.URL, Owner: srv.UserEmail, AuthHeader: srv.APIKeyHeader})
 	}
 	return out, nil
 }
 
-// AcquireTokenByID mints a fresh bearer for a server the user may use — their
-// own or one shared with them. The returned row keeps the OWNER's email, so
-// the refresh path opens and reseals secrets under the owner's AAD; the
-// grantee never handles the credential.
+// AcquireTokenByID mints a fresh credential for a server the user may use —
+// their own or one shared with them. The returned row keeps the OWNER's email,
+// so the refresh/decrypt path opens and reseals secrets under the owner's AAD;
+// the grantee never handles the credential. For api_key servers the credential
+// is the sealed static key; for open servers it is empty (no header at all).
 func (s *Service) AcquireTokenByID(ctx context.Context, email, serverID string) (string, error) {
 	server, err := s.store.GetRemoteMCPServerForUse(ctx, email, serverID)
 	if err != nil {
 		return "", err
+	}
+	if server.AuthKind == store.RemoteMCPAuthAPIKey {
+		return s.store.GetRemoteMCPAPIKey(ctx, server)
 	}
 	if server.Issuer == "" {
 		return "", nil

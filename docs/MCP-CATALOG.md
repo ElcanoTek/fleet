@@ -23,11 +23,12 @@ Every bundle inherits it by default.
 
 **A directory entry is a listing, not a connection — and that property is
 load-bearing.** fleet never contacts an entry's URL until a user explicitly
-adds the server, and the add goes through the existing per-user remote-MCP
-OAuth flow (#443) — discovery, dynamic client registration, PKCE, encrypted
-token storage. The directory only saves the user from typing a URL; it grants
-nothing by itself. Any change that makes directory entries auto-connect must
-revisit the inherit-by-default decision here.
+adds the server, and the add goes through the per-user remote-MCP flow (#443)
+— for OAuth entries: discovery, dynamic client registration, PKCE, encrypted
+token storage; for API-key entries: the pasted key is sealed with the same
+cipher and replayed host-side. The directory only saves the user from typing a
+URL; it grants nothing by itself. Any change that makes directory entries
+auto-connect must revisit the inherit-by-default decision here.
 
 ### Manifest knobs
 
@@ -67,6 +68,18 @@ releases.
   tags: [git, repositories, issues, pull-requests, ci]     # search keywords
   provenance: official            # official | third_party | community
   auth: oauth                     # oauth | api_key | open | tenant
+  # Onboarding guidance (connector-directory onboarding):
+  setup_hint: >-                  # VISIBLE on the card: where the URL/key comes
+    Create a key under ...        # from, prerequisites (plan tier, app
+                                  # registration, self-hosted deployment)
+  setup_url: "https://..."        # the vendor page that walks through connecting
+  api_key_header: X-API-Key       # api_key only: header NAME the key is sent
+                                  # under ("" = Authorization: Bearer <key>)
+  client_registration: manual     # the vendor's AS has no dynamic client
+                                  # registration; the card collects a
+                                  # bring-your-own OAuth client ID (+ secret)
+  featured: true                  # curated Featured-shelf pick (kept small:
+                                  # 8–20 built-in entries, never community)
 ```
 
 **Provenance is the hosting-operator trust tier** — who runs the endpoint,
@@ -87,11 +100,16 @@ distinct from the bundled/third_party *class*:
 In the built-in catalog `provenance`, `category`, `vendor`, `docs_url`, and
 `auth` are **required on every entry** — trust and grouping are never
 inherited by omission in the file every deployment silently receives
-(`TestBuiltinRemoteCatalog` fails CI on a violation, including the
-`{placeholder}`-URL ⟺ `auth: tenant` invariant). Bundle-authored entries keep
+(`TestBuiltinRemoteCatalog` fails CI on a violation). Two more shape
+invariants: `auth: tenant` requires a `{placeholder}` URL, and a
+`{placeholder}` URL requires `auth` tenant **or** open (open covers vendors
+that authenticate via the URL itself, e.g. a key as a query parameter); and
+every entry a user cannot one-click add (`tenant` or `api_key`) **must carry a
+`setup_hint`** — a listing that names a prerequisite without saying how to
+satisfy it is advertising, not onboarding. Bundle-authored entries keep
 back-compat defaults: absent `provenance` → `official` (every pre-existing
 bundle's entries were vendor-official), absent `category` → grouped under
-"Other".
+"Other", `setup_hint` optional.
 
 ## Load-time validation
 
@@ -117,11 +135,15 @@ explicit trust tags plus the directory metadata:
 }
 ```
 
+Entries also carry the onboarding fields when present: `setup_hint`,
+`setup_url`, `api_key_header`, `client_registration`.
+
 `bundled` is the Optional-server catalog snapshot (the same source as
 `/mcp-servers`; always-on servers need no opt-in decision so they are not
-listed). `remote_mcp_enabled` reports whether the OAuth flow is configured
-(`FLEET_MCP_OAUTH_ENCRYPTION_KEY` + `FLEET_PUBLIC_BASE_URL`), so the UI can
-render one-click Add vs an explanatory hint.
+listed). `remote_mcp_enabled` reports whether the per-user remote flow is
+configured (`FLEET_MCP_OAUTH_ENCRYPTION_KEY` + `FLEET_PUBLIC_BASE_URL`), so
+the UI can render one-click Add vs an explanatory hint (admins see the env
+vars to set; members are told to ask their administrator).
 
 ## UI
 
@@ -129,15 +151,30 @@ Settings → Connections renders the "Connector directory" panel (open by
 default; the search/grouping/badge helpers live in
 `web/src/app/settings/connections/catalog.ts`, unit-tested):
 
+- **Featured shelf** — a short curated section of household-name connectors
+  (Gmail, Drive, Notion, Slack, Stripe, GitHub, …) rendered before the
+  category listing on the unfiltered view. `featured: true` in the catalog;
+  a test caps the built-in shelf at 8–20 entries and forbids featuring
+  community entries (hidden by default, so a featured one would silently
+  vanish).
 - **Search** across name, description, vendor, category, and tags, plus
   category filter chips with counts; results grouped under category headers.
 - **Provenance badges** — green "Official", amber "Aggregator"
   (`third_party`), amber "Community". An unknown provenance value renders as
   Community — bad input never inflates trust.
 - **Vet-it links** — every card links the vendor `docs` and, when present, the
-  `source` repository.
-- **Auth hints** — "No sign-in needed" (`open`), "API key", or "Needs your
-  URL" for tenant-scoped entries.
+  `source` repository and the `setup guide`.
+- **Setup hints** — an entry's `setup_hint` renders visibly on the card (not a
+  tooltip), with the `setup_url` walkthrough linked inline.
+- **Auth hints** — "No sign-in needed" (`open`), "Needs an API key", or "Needs
+  your URL" for tenant-scoped entries.
+- **Guided add forms** — entries that can't be one-click added open an inline
+  form on the card instead of dead-ending: tenant entries get one input per
+  `{placeholder}` with a live preview of the resulting endpoint URL; `api_key`
+  entries get a write-only key field (sealed server-side, never echoed);
+  `client_registration: manual` entries get bring-your-own OAuth client ID +
+  secret fields. The submitted add goes through the same consent gate and the
+  same POST as everything else.
 - **Consent step** — adding a non-official entry opens an explicit,
   operator-named confirmation stating that the operator receives tool-call
   arguments (which can include conversation content) and, for OAuth flows,
@@ -150,10 +187,40 @@ default; the search/grouping/badge helpers live in
 ### Tenant-scoped entries
 
 Some vendors host their MCP servers **per org/store/workspace** — the endpoint
-contains a `{placeholder}` (Databricks, Salesforce, Snowflake, NetSuite, …).
-These are listed for discoverability, but they can't be one-click added: the
-UI shows "Needs your URL" and the user pastes their own tenant endpoint into
-the manual add form.
+contains a `{placeholder}` (Databricks, Salesforce, Snowflake, NetSuite, the
+Microsoft Work IQ suite, …). The card's guided form renders one input per
+placeholder (with the entry's `setup_hint` explaining where the value comes
+from) and previews the resulting URL before adding. `auth: tenant` entries
+then run the normal OAuth discovery; `auth: open` placeholder entries (vendors
+whose key/account id rides in the URL itself) connect immediately.
+
+### API-key entries
+
+`auth: api_key` entries connect by pasting a vendor key into the card's
+write-only field. The key is sealed at rest with the same AES-256-GCM cipher
+as OAuth tokens (AAD bound to purpose + user + canonical URL) and replayed
+host-side on every MCP request — under `Authorization: Bearer <key>` by
+default, or the entry's `api_key_header` name. It never enters the sandbox,
+the model context, a log line, or any HTTP response; rotation is
+`PUT /remote-mcp-servers/{id}/key` ("Update key" on the connection row).
+
+Because api_key and open adds have no OAuth login step to prove the
+connection, both are **validated at add time with a real MCP handshake**
+(initialize + tools/list over the SSRF-safe client) before anything is
+stored: a rejected key or unreachable URL fails the add with an actionable
+error and the guided form keeps the typed values, while a successful add
+confirms with the observed tool count. Rotation validates the new key the
+same way and keeps the old key on rejection.
+
+### Self-hosted entries
+
+A few community entries (`google-workspace-self-hosted`,
+`microsoft-365-self-hosted`) describe servers **you deploy yourself** to cover
+gaps the vendors' hosted servers leave (Google's preview servers lack
+Docs/Sheets; Microsoft's Work IQ servers require a Copilot license). Their URL
+placeholder is your own deployment's hostname and the `setup_url` is the
+deployment guide. Like all community-provenance entries they are hidden unless
+the bundle opts in via `remote_mcp_catalog_community: true`.
 
 ## Curation guidance
 

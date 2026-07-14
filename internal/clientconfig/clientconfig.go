@@ -18,6 +18,7 @@
 //	  system_prompts/      # default.md (scheduled base), chat.md (interactive base)
 //	  personas/            # *.yaml
 //	  protocols/           # *.yaml|md
+//	  prompts/             # *.yaml|yml|md|txt reusable prompt library entries
 //	  skills/              # <name>/SKILL.md Agent Skills (progressive disclosure)
 //	  mcp/                 # the client's Python MCP servers + requirements.txt
 //
@@ -168,7 +169,11 @@ type Bundle struct {
 	SystemPromptsDir string
 	PersonasDir      string
 	ProtocolsDir     string
-	SkillsDir        string
+	// PromptsDir is the bundle-owned, Git-trackable reusable prompt library.
+	// Entries are read on demand so a config-repo pull is visible without a
+	// fleet restart. See ReadPrompts and Bundle.Prompts.
+	PromptsDir string
+	SkillsDir  string
 	// BundleSkillsDir is the bundle's OWN skills/ dir (the author-owned
 	// source). SkillsDir may point at the merged bundle+builtin dir instead —
 	// see builtin_skills.go. Validation always runs against this one.
@@ -719,6 +724,35 @@ type RemoteMCPCatalogEntry struct {
 	// or "tenant" (the URL carries a {placeholder} — per org/workspace/store,
 	// so the user supplies their own endpoint). Optional; blank renders no hint.
 	Auth string `yaml:"auth"`
+	// SetupHint is one or two plain-language sentences of onboarding guidance
+	// rendered VISIBLY on the directory card: where the URL or key comes from,
+	// what must exist first (an app registration, a paid plan, a self-hosted
+	// deployment), or which placeholder value to look up. Required in the
+	// built-in catalog for every entry a user cannot one-click add (auth
+	// "tenant" or "api_key") — a listing that names a prerequisite without
+	// saying how to satisfy it is advertising, not onboarding.
+	SetupHint string `yaml:"setup_hint"`
+	// SetupURL links the vendor page that actually walks through connecting —
+	// creating the API key, finding the tenant URL, registering the OAuth
+	// client, or deploying the server. Distinct from DocsURL (what the server
+	// does); the UI falls back to DocsURL when absent.
+	SetupURL string `yaml:"setup_url"`
+	// APIKeyHeader (auth "api_key" only) is the HTTP header NAME the vendor
+	// expects the key under, e.g. "X-API-Key". Empty means the default shape:
+	// "Authorization: Bearer <key>".
+	APIKeyHeader string `yaml:"api_key_header"`
+	// ClientRegistration is "manual" when the vendor's authorization server
+	// does not support RFC 7591 dynamic client registration — the user must
+	// bring their own OAuth client (a GCP OAuth client, an Entra app
+	// registration, a vendor-issued client ID). The directory card then
+	// collects a client ID (+ optional secret) up front instead of letting the
+	// add fail mid-discovery. Empty means DCR is expected to work.
+	ClientRegistration string `yaml:"client_registration"`
+	// Featured surfaces the entry in the directory's Featured section — the
+	// short, curated shelf of household-name connectors shown before the
+	// category listing. Kept small on purpose (a test caps the built-in count)
+	// so it stays a recommendation, not a second catalog.
+	Featured bool `yaml:"featured"`
 	// Builtin marks an entry inherited from fleet's embedded directory rather
 	// than authored by this bundle's manifest. Never parsed from YAML.
 	Builtin bool `yaml:"-"`
@@ -838,6 +872,7 @@ func Load(dir string) (*Bundle, error) {
 		SystemPromptsDir:  filepath.Join(abs, "system_prompts"),
 		PersonasDir:       filepath.Join(abs, "personas"),
 		ProtocolsDir:      filepath.Join(abs, "protocols"),
+		PromptsDir:        filepath.Join(abs, "prompts"),
 		SkillsDir:         filepath.Join(abs, "skills"),
 		MCPDir:            filepath.Join(abs, "mcp"),
 		EvalsDir:          filepath.Join(abs, "evals"),
@@ -1141,6 +1176,11 @@ var remoteMCPProvenances = map[string]bool{"official": true, "third_party": true
 // RemoteMCPCatalogEntry.Auth.
 var remoteMCPAuths = map[string]bool{"oauth": true, "api_key": true, "open": true, "tenant": true}
 
+// remoteMCPHeaderShape bounds api_key_header to an HTTP header-name token, so a
+// catalog entry can never smuggle whitespace/CRLF into the per-user connect
+// request that later replays it.
+var remoteMCPHeaderShape = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+
 // remoteMCPCategoryShape bounds a category slug to lowercase kebab-case so the
 // UI's grouping/filter keys stay uniform. The set is open (a bundle may invent
 // its own grouping) but the shape is not — "CRM Sales" vs "crm-sales" silently
@@ -1168,6 +1208,20 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 	}
 	if r := strings.TrimSpace(e.RepoURL); r != "" && !strings.HasPrefix(r, "https://") {
 		return fmt.Errorf("remote_mcp_catalog[%q]: repo_url must be https:// (got %q)", name, e.RepoURL)
+	}
+	if u := strings.TrimSpace(e.SetupURL); u != "" && !strings.HasPrefix(u, "https://") {
+		return fmt.Errorf("remote_mcp_catalog[%q]: setup_url must be https:// (got %q)", name, e.SetupURL)
+	}
+	if h := strings.TrimSpace(e.APIKeyHeader); h != "" {
+		if e.Auth != "api_key" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header is only meaningful with auth: api_key", name)
+		}
+		if !remoteMCPHeaderShape.MatchString(h) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: api_key_header %q is not a valid header name", name, e.APIKeyHeader)
+		}
+	}
+	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {
+		return fmt.Errorf("remote_mcp_catalog[%q]: unknown client_registration %q (want manual or empty)", name, e.ClientRegistration)
 	}
 	for _, tag := range e.Tags {
 		if strings.TrimSpace(tag) == "" {

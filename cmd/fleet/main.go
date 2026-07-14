@@ -118,6 +118,10 @@ func main() {
 		// Preflight checks (#248) against the SAME loaders the server boots through;
 		// exits 0/1. Starts no servers, runs no migrations.
 		os.Exit(runValidateConfig(argv[1:]))
+	case invokeMCPTest:
+		// Per-server MCP smoke: handshake + tools/list against the bundle
+		// catalog, spawned exactly as the broker would. Boots nothing else.
+		os.Exit(runMCPTest(argv[2:]))
 	case invokeEval:
 		// Eval & regression harness (#502): replay bundle goldens through the
 		// governed loop and gate on the set threshold; exits 0/1 (2 = usage).
@@ -149,6 +153,7 @@ const (
 	invokeVersion
 	invokeMCPBroker
 	invokeValidateConfig
+	invokeMCPTest
 	invokeEval
 	invokeGenerateVAPIDKeys
 	invokeTaskRun
@@ -184,6 +189,15 @@ func classifyInvocation(argv []string) invocation {
 		// every other `task` subverb (export/import/memories) is admincli's.
 		if len(argv) > 1 && argv[1] == "run" {
 			return invokeTaskRun
+		}
+		return invokeAdmin
+	case "mcp":
+		// `fleet mcp test` probes the bundle catalog locally (spawns the
+		// servers host-side, like the broker) so it dispatches here; every
+		// other `mcp` subverb (reload) talks to the running server via
+		// admincli.
+		if len(argv) > 1 && argv[1] == "test" {
+			return invokeMCPTest
 		}
 		return invokeAdmin
 	default:
@@ -646,6 +660,9 @@ func run() error {
 	h.SetTaskTemplateProvider(func() []clientconfig.TaskTemplate {
 		return bundle.TaskTemplates
 	})
+	// The hybrid prompt library reads bundle prompts/ live (Git-backed,
+	// read-only) and merges it with sched-DB private/workspace entries.
+	h.SetPromptCatalogProvider(bundle.Prompts)
 	// Wire the chat side of the usage report (#601 part 1) — see wireChatUsage.
 	h.SetChatUsageProvider(chatUsage)
 	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
@@ -1300,6 +1317,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// template" affordance (#262). The web app proxies
 		// /api/orchestrator/task-templates to this. Never persists or creates a task.
 		r.Get("/task-templates", h.ListTaskTemplates)
+		r.Get("/prompts", h.PromptLibraryCollection)
+		r.Post("/prompts", h.PromptLibraryCollection)
+		r.Get("/prompts/export", h.ExportPromptLibrary)
+		r.Put("/prompts/{prompt_id}", h.PromptLibraryItem)
+		r.Delete("/prompts/{prompt_id}", h.PromptLibraryItem)
 
 		// Notes reads (admin + scoped user).
 		r.Get("/notes", notes.ListNotes)

@@ -270,7 +270,11 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
         onClose={() => setTaskModalOpen(false)}
         onCreated={() => void dashboard.reload()}
       />
-      <LogViewer task={logTask} onClose={() => setLogTask(null)} canStop={isAdmin} />
+      <LogViewer
+        task={logTask}
+        onClose={() => setLogTask(null)}
+        canStop={isAdmin || (!!session.username && logTask?.created_by_username === session.username)}
+      />
     </div>
   );
 }
