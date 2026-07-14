@@ -57,6 +57,9 @@ export type UseDashboardData = {
   setPage: (page: number) => void;
   setPageSize: (size: number) => void;
   reload: () => Promise<void>;
+  // Current auto-refresh cadence in seconds (5 while work is in flight, 30
+  // when idle) so the UI can say what it actually does.
+  refreshSeconds: number;
 };
 
 export function useDashboardData(active: boolean): UseDashboardData {
@@ -118,11 +121,34 @@ export function useDashboardData(active: boolean): UseDashboardData {
     };
   }, [active, reload]);
 
-  // 30s auto-refresh, matching moc.
+  // Adaptive auto-refresh: 5s while anything is in flight (pending/running
+  // tasks or active agents) so short-lived statuses are actually visible,
+  // relaxing to 30s when idle. The interval re-arms when the cadence flips.
+  const fastPoll =
+    !!stats &&
+    ((stats.pending_tasks ?? 0) > 0 ||
+      (stats.running_tasks ?? 0) > 0 ||
+      (stats.active_agents ?? 0) > 0);
+  const refreshSeconds = fastPoll ? 5 : 30;
   useEffect(() => {
     if (!active) return;
-    const id = setInterval(() => void reload(), 30000);
+    const id = setInterval(() => void reload(), refreshSeconds * 1000);
     return () => clearInterval(id);
+  }, [active, reload, refreshSeconds]);
+
+  // Refetch when the tab regains focus/visibility — a backgrounded dashboard
+  // comes back current instead of up to 30s stale.
+  useEffect(() => {
+    if (!active) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void reload();
+    };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [active, reload]);
 
   const setFilters = useCallback((next: Partial<TaskFilters>) => {
@@ -148,5 +174,6 @@ export function useDashboardData(active: boolean): UseDashboardData {
     setPage,
     setPageSize,
     reload,
+    refreshSeconds,
   };
 }
