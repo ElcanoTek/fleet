@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
 import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
-import { describeCronExpression, describeCronExpressionShort } from "@/app/shared/lib/cron";
+import { createdByLabel, scheduleLabel, slaBadge, TaskSlaBadge } from "./taskDisplay";
 
 // TasksTable — the Recent Tasks table + filter bar + pagination. React port of
 // moc dashboard.js renderTasks()/buildTaskQueryString()/pagination controls.
@@ -33,40 +33,6 @@ const STATUS_OPTIONS = [
   "cancelled",
   "scheduled",
 ];
-
-function createdByLabel(task: Task): string {
-  if (task.created_by_username) return task.created_by_username;
-  if (!task.created_by) return "—";
-  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (uuid.test(task.created_by)) return `user: ${task.created_by.slice(0, 6)}…`;
-  return task.created_by;
-}
-
-function scheduleLabel(task: Task): string {
-  if (task.recurrence) {
-    // Compact plain English, not raw cron ("9:00 AM · Sat, Sun", not
-    // "0 9 * * 6,0"), falling back to the verbose description and then the
-    // raw expression; the exact cron stays in the cell's title.
-    const described =
-      describeCronExpressionShort(task.recurrence) || describeCronExpression(task.recurrence);
-    return `🔄 ${described || task.recurrence}`;
-  }
-  if (task.scheduled_for) return `⏰ ${formatTimeFirst(task.scheduled_for)}`;
-  return "-";
-}
-
-// slaBadge returns {label, tone} when a task carries SLA state worth surfacing
-// in the table (#274), or null when the task has no SLA / no breach. tone is
-// the CSS class suffix appended to `sla-badge-` (amber for warn, red for fail).
-function slaBadge(task: Task): { label: string; tone: string } | null {
-  if (!task.expected_duration_minutes) return null;
-  if (task.sla_breached) return { label: "SLA breached", tone: "fail" };
-  // Without a live elapsed probe on the client, the in-progress warn state is
-  // surfaced only when the server has already latched a breach. A running task
-  // that has merely CROSSED the warn threshold (but not fail) is not latched,
-  // so we don't render a spurious warn here; the SLA tab carries the live view.
-  return null;
-}
 
 export function TasksTable({
   tasks,
@@ -234,19 +200,7 @@ export function TasksTable({
                       </span>
                     </td>
                     <td>
-                      {badge ? (
-                        <span className={`sla-badge sla-badge-${badge.tone}`} title={badge.label}>
-                          {badge.label}
-                        </span>
-                      ) : task.expected_duration_minutes ? (
-                        <span className="sla-badge sla-badge-ok" title={`Expected ${task.expected_duration_minutes}m`}>
-                          {task.actual_duration_seconds != null
-                            ? `${Math.round(task.actual_duration_seconds / 60)}m / ${task.expected_duration_minutes}m`
-                            : `${task.expected_duration_minutes}m`}
-                        </span>
-                      ) : (
-                        <span className="sla-badge sla-badge-none">—</span>
-                      )}
+                      <TaskSlaBadge task={task} />
                     </td>
                     <td title={task.recurrence || undefined}>{scheduleLabel(task)}</td>
                     <td>{createdByLabel(task)}</td>
@@ -266,7 +220,10 @@ export function TasksTable({
 
       {/* Phone card view: the 8-column table needs sideways scrolling on a
           phone, so <=720px renders each task as a stacked card instead. CSS
-          toggles .tasks-table-wrapper/.task-cards; both share onOpenLogs. */}
+          toggles .tasks-table-wrapper/.task-cards; both share onOpenLogs.
+          Created time + creator are deliberately omitted here — the log
+          modal's task summary now carries them, so the card keeps only what
+          identifies the task at a glance. */}
       <ul className="task-cards" data-testid="task-cards">
         {tasks.length === 0 ? (
           <li className="table-empty">No tasks created yet</li>
@@ -297,12 +254,10 @@ export function TasksTable({
                           : `${task.expected_duration_minutes}m`}
                       </span>
                     ) : null}
-                    <span className="task-card-time">{formatTimeFirst(task.created_at)}</span>
                   </span>
                   <span className="task-card-prompt">{truncate((task.prompt ?? "").trim(), 120)}</span>
                   <span className="task-card-meta">
                     <code>{task.id.slice(0, 8)}</code>
-                    <span>{createdByLabel(task)}</span>
                     {scheduleLabel(task) !== "-" ? (
                       <span title={task.recurrence || undefined}>{scheduleLabel(task)}</span>
                     ) : null}
