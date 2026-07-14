@@ -184,8 +184,9 @@ export function describeCronExpression(expr: unknown): string {
 }
 
 // Compact schedule label for dense surfaces (the Recent Tasks Schedule
-// column / phone cards), time first: "9:00 AM, Sat, Sun" · "8:30 AM,
-// Mon–Fri" · "9:00 AM, Daily". Handles fixed-time + day-of-week shapes and
+// column / phone cards), time first with a middle-dot separator:
+// "9:00 AM · Sat, Sun" / "8:30 AM · Mon–Fri" / "9:00 AM · Daily".
+// Handles fixed-time + day-of-week shapes and
 // returns "" for anything else so callers can fall back to the verbose
 // describeCronExpression (which in turn falls back to the raw string).
 const CRON_DAYS_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -234,5 +235,5 @@ export function describeCronExpressionShort(expr: unknown): string {
       return "";
     }
   }
-  return `${time}, ${days}`;
+  return `${time} · ${days}`;
 }

@@ -49,14 +49,14 @@ describe("describeCronExpression", () => {
 
 describe("describeCronExpressionShort", () => {
   it("compacts a weekday list", () => {
-    expect(describeCronExpressionShort("0 9 * * 6,0")).toBe("9:00 AM, Sat, Sun");
+    expect(describeCronExpressionShort("0 9 * * 6,0")).toBe("9:00 AM · Sat, Sun");
   });
   it("compacts a weekday range with an en dash", () => {
-    expect(describeCronExpressionShort("30 8 * * 1-5")).toBe("8:30 AM, Mon–Fri");
+    expect(describeCronExpressionShort("30 8 * * 1-5")).toBe("8:30 AM · Mon–Fri");
   });
   it("compacts every-day and single-day schedules", () => {
-    expect(describeCronExpressionShort("0 9 * * *")).toBe("9:00 AM, Daily");
-    expect(describeCronExpressionShort("15 14 * * 3")).toBe("2:15 PM, Wed");
+    expect(describeCronExpressionShort("0 9 * * *")).toBe("9:00 AM · Daily");
+    expect(describeCronExpressionShort("15 14 * * 3")).toBe("2:15 PM · Wed");
   });
   it("returns empty for shapes it does not cover (caller falls back)", () => {
     expect(describeCronExpressionShort("*/5 * * * *")).toBe("");

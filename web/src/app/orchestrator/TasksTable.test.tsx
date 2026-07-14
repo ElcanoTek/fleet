@@ -112,7 +112,7 @@ describe("TasksTable SLA badge (#274)", () => {
     const recurring: Task = { ...baseTask, recurrence: "0 9 * * 6,0" };
     renderWithTasks([recurring]);
     // Rendered in both the table row and the phone card; raw cron only in title.
-    const labels = screen.getAllByText(/9:00 AM, Sat, Sun/);
+    const labels = screen.getAllByText(/9:00 AM · Sat, Sun/);
     expect(labels.length).toBe(2);
     expect(screen.queryByText(/0 9 \* \* 6,0/)).toBeNull();
   });
