@@ -1939,6 +1939,104 @@ tr.sla-row-fail {
   }
 }
 
+/* Upcoming week board: the next 7 days as columns, today first. Columns keep
+   a readable min width and the BOARD scrolls sideways inside its own shell
+   (the repo's standard wide-content pattern), so phones pan the board, not
+   the page. */
+.upcoming-week-wrapper {
+  overflow-x: auto;
+  max-width: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+.upcoming-week {
+  display: grid;
+  /* 7 × 7.5rem + gaps ≈ 888px — the full week fits a desktop container
+     without scrolling; narrower viewports pan via the wrapper. */
+  grid-template-columns: repeat(7, minmax(7.5rem, 1fr));
+  gap: 0.5rem;
+  min-width: 40rem;
+  padding-bottom: 0.25rem;
+}
+.upcoming-week-day {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-overlay-soft, rgba(255, 255, 255, 0.03));
+  display: flex;
+  flex-direction: column;
+  min-height: 9rem;
+}
+.upcoming-week-day--today {
+  border-color: var(--color-border-strong);
+  background: var(--gradient-surface-card);
+}
+.upcoming-week-day-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.upcoming-week-day-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-secondary);
+}
+.upcoming-week-day--today .upcoming-week-day-name {
+  color: var(--color-accent);
+}
+.upcoming-week-day-date {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.upcoming-week-empty {
+  color: var(--color-text-disabled);
+  text-align: center;
+  padding: 1rem 0;
+  font-size: 0.8rem;
+}
+.upcoming-week-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem;
+  display: grid;
+  gap: 0.3rem;
+  align-content: start;
+}
+.upcoming-week-run {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm, 0.5rem);
+  border: 1px solid var(--color-status-assigned-border);
+  background: var(--color-status-assigned-bg);
+}
+.upcoming-week-run--oneshot {
+  border-color: var(--color-status-scheduled-border);
+  background: var(--color-status-scheduled-bg);
+}
+.upcoming-week-run-time {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-status-assigned-fg);
+  font-variant-numeric: tabular-nums;
+}
+.upcoming-week-run--oneshot .upcoming-week-run-time {
+  color: var(--color-status-scheduled-fg);
+}
+.upcoming-week-run-name {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 /* Live progress checklist (#518): the agent's task_tracker plan, rendered as a
    todo→done list in the Operations Center live view. The --live variant is the
    sticky top panel that updates as the plan changes; the plain variant is an
