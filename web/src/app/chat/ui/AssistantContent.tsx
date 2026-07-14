@@ -10,13 +10,16 @@
 // (including the markdown unit tests) keep working.
 
 import type { ReactElement, ReactNode } from "react";
-import { Children, isValidElement, memo, useState } from "react";
+import { Children, isValidElement, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyButton } from "./ChatChips";
 import { DiffBlock } from "./DiffBlock";
 import { isUnifiedDiff } from "@/app/lib/diffUtils";
 import { PENDING_CONV_KEY, resolveWorkspaceHref } from "./workspaceHref";
+// WorkspaceImage moved to its own module so ToolChips can use it without
+// statically importing this (now lazy-loaded) ReactMarkdown pipeline.
+import { WorkspaceImage } from "./WorkspaceImage";
 
 // ── markdown renderer ────────────────────────────────────────────────────
 
@@ -96,30 +99,54 @@ export function renderAssistantContent(
       // still emit these hallucinated sandbox paths, so let them through
       // here and resolve them downstream; every other URL keeps the default
       // sanitization.
-      urlTransform={(url) => (/^sandbox:/i.test(url) ? url : defaultUrlTransform(url))}
+      urlTransform={(url) =>
+        /^sandbox:/i.test(url) ? url : defaultUrlTransform(url)
+      }
       components={{
-        h1: ({ children }) => <h1 className="assistant-markdown-h1">{children}</h1>,
-        h2: ({ children }) => <h2 className="assistant-markdown-h2">{children}</h2>,
-        h3: ({ children }) => <h3 className="assistant-markdown-h3">{children}</h3>,
+        h1: ({ children }) => (
+          <h1 className="assistant-markdown-h1">{children}</h1>
+        ),
+        h2: ({ children }) => (
+          <h2 className="assistant-markdown-h2">{children}</h2>
+        ),
+        h3: ({ children }) => (
+          <h3 className="assistant-markdown-h3">{children}</h3>
+        ),
         p: ({ children }) => <p className="assistant-markdown-p">{children}</p>,
-        ul: ({ children }) => <ul className="assistant-markdown-ul">{children}</ul>,
-        ol: ({ children }) => <ol className="assistant-markdown-ol">{children}</ol>,
-        li: ({ children }) => <li className="assistant-markdown-li">{children}</li>,
+        ul: ({ children }) => (
+          <ul className="assistant-markdown-ul">{children}</ul>
+        ),
+        ol: ({ children }) => (
+          <ol className="assistant-markdown-ol">{children}</ol>
+        ),
+        li: ({ children }) => (
+          <li className="assistant-markdown-li">{children}</li>
+        ),
         hr: () => <hr className="assistant-markdown-hr" />,
         table: ({ children }) => (
           <div className="assistant-markdown-table-shell">
             <table className="assistant-markdown-table">{children}</table>
           </div>
         ),
-        thead: ({ children }) => <thead className="assistant-markdown-thead">{children}</thead>,
-        th: ({ children }) => <th className="assistant-markdown-th">{children}</th>,
-        td: ({ children }) => <td className="assistant-markdown-td">{children}</td>,
+        thead: ({ children }) => (
+          <thead className="assistant-markdown-thead">{children}</thead>
+        ),
+        th: ({ children }) => (
+          <th className="assistant-markdown-th">{children}</th>
+        ),
+        td: ({ children }) => (
+          <td className="assistant-markdown-td">{children}</td>
+        ),
         code: ({ children, className }) => {
           const isBlock = Boolean(className);
           if (isBlock) {
-            return <code className="assistant-markdown-code-block">{children}</code>;
+            return (
+              <code className="assistant-markdown-code-block">{children}</code>
+            );
           }
-          return <code className="assistant-markdown-code-inline">{children}</code>;
+          return (
+            <code className="assistant-markdown-code-inline">{children}</code>
+          );
         },
         pre: ({ children }) => {
           // Intercept ```html fences and render them as a sandboxed
@@ -136,7 +163,9 @@ export function renderAssistantContent(
           // (` ``` `…` ``` `) carries no language class at all. We still need
           // its text in both cases so isUnifiedDiff() can catch untagged diffs
           // the agent emits.
-          const codeChild = Children.toArray(children).find((c) => isValidElement(c)) as
+          const codeChild = Children.toArray(children).find((c) =>
+            isValidElement(c),
+          ) as
             | ReactElement<{ className?: string; children?: ReactNode }>
             | undefined;
           let language: string | null = null;
@@ -145,18 +174,29 @@ export function renderAssistantContent(
             const cls = codeChild.props.className ?? "";
             const langMatch = cls.match(/language-([^\s]+)/i);
             if (langMatch) language = langMatch[1].toLowerCase();
-            rawText = typeof codeChild.props.children === "string"
-              ? codeChild.props.children
-              : Children.toArray(codeChild.props.children).join("");
+            rawText =
+              typeof codeChild.props.children === "string"
+                ? codeChild.props.children
+                : Children.toArray(codeChild.props.children).join("");
             if (language === "html") {
-              return <InlineHtmlPreview html={rawText.replace(/\n$/, "")} isStreaming={isStreaming} conversationId={conversationId} />;
+              return (
+                <InlineHtmlPreview
+                  html={rawText.replace(/\n$/, "")}
+                  isStreaming={isStreaming}
+                  conversationId={conversationId}
+                />
+              );
             }
             // Render unified diffs as a coloured, gutter-marked diff view:
             // either an explicit ```diff / ```patch fence, or a bare code
             // block whose content matches the unified-diff shape (so agents
             // that forget the language tag still get highlighting). Everything
             // else falls through to the plain toolbar+<pre> path unchanged.
-            if (language === "diff" || language === "patch" || isUnifiedDiff(rawText)) {
+            if (
+              language === "diff" ||
+              language === "patch" ||
+              isUnifiedDiff(rawText)
+            ) {
               return <DiffBlock raw={rawText} />;
             }
           }
@@ -164,8 +204,14 @@ export function renderAssistantContent(
           return (
             <div className="assistant-markdown-pre-wrapper">
               <div className="assistant-markdown-pre-toolbar">
-                <span className="assistant-markdown-pre-lang">{language ?? ""}</span>
-                <CopyButton text={copyText} title="Copy code to clipboard" variant="compact" />
+                <span className="assistant-markdown-pre-lang">
+                  {language ?? ""}
+                </span>
+                <CopyButton
+                  text={copyText}
+                  title="Copy code to clipboard"
+                  variant="compact"
+                />
               </div>
               <pre className="assistant-markdown-pre">{children}</pre>
             </div>
@@ -179,8 +225,17 @@ export function renderAssistantContent(
         // pass through unchanged so e.g. inline base64 still works and
         // the agent can still link to public images.
         img: ({ src, alt, title }) => {
-          const { href } = resolveWorkspaceHref(typeof src === "string" ? src : "", conversationId);
-          return <WorkspaceImage src={href} alt={alt ?? ""} title={title ?? undefined} />;
+          const { href } = resolveWorkspaceHref(
+            typeof src === "string" ? src : "",
+            conversationId,
+          );
+          return (
+            <WorkspaceImage
+              src={href}
+              alt={alt ?? ""}
+              title={title ?? undefined}
+            />
+          );
         },
         // Same rewrite for <a href>: when the agent writes
         // `[Deck.pptx](Deck.pptx)` after producing the file via an MCP
@@ -195,12 +250,20 @@ export function renderAssistantContent(
         // it, react-markdown's bare <a> inherits body color and looks
         // identical to surrounding text.
         a: ({ href, title, children }) => {
-          const { href: resolved, isWorkspaceFile, downloadFilename } = resolveWorkspaceHref(
+          const {
+            href: resolved,
+            isWorkspaceFile,
+            downloadFilename,
+          } = resolveWorkspaceHref(
             typeof href === "string" ? href : "",
             conversationId,
           );
           const isExternal = /^https?:\/\//i.test(resolved);
-          const extraProps: { target?: string; rel?: string; download?: string } = {};
+          const extraProps: {
+            target?: string;
+            rel?: string;
+            download?: string;
+          } = {};
           if (isWorkspaceFile) {
             // Pass the original basename so the browser saves with the
             // name the agent referenced, not a percent-encoded URL slice.
@@ -220,60 +283,18 @@ export function renderAssistantContent(
             </a>
           );
         },
-        strong: ({ children }) => <strong className="assistant-markdown-strong">{children}</strong>,
-        em: ({ children }) => <em className="assistant-markdown-em">{children}</em>,
+        strong: ({ children }) => (
+          <strong className="assistant-markdown-strong">{children}</strong>
+        ),
+        em: ({ children }) => (
+          <em className="assistant-markdown-em">{children}</em>
+        ),
       }}
     >
       {normalizedContent}
     </ReactMarkdown>
   );
 }
-
-// WorkspaceImage renders an <img> from the chat workspace with the
-// settings that keep it from flickering when the user scrolls.
-//
-// Three fixes layered together:
-//   - React.memo: parent re-renders triggered by scroll (the
-//     showJumpToLatest visibility update fires on every scroll tick,
-//     so without memoization every tick reconciles a fresh <img>
-//     tree and mobile browsers blank the paint for a frame).
-//   - loading="eager": once the agent shows the user a chart it's
-//     intentional content, not a long-article tail. Lazy loading
-//     plus aggressive mobile-browser memory unloads on scroll-away
-//     was the biggest source of flicker — re-entering viewport
-//     would re-fetch and re-decode.
-//   - decoding="async": lets the browser decode off the main thread
-//     so the scroll keeps its frame budget while the image paints.
-export const WorkspaceImage = memo(function WorkspaceImage({
-  src,
-  alt,
-  title,
-}: {
-  src: string;
-  alt: string;
-  title?: string;
-}) {
-  const [errored, setErrored] = useState(false);
-  if (errored) {
-    return (
-      <span className="my-2 inline-block rounded-md border border-dashed border-[var(--color-border-strong)] px-2 py-1 text-[0.72rem] text-[var(--color-text-muted)]">
-        couldn&rsquo;t load image: {alt || src}
-      </span>
-    );
-  }
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt={alt}
-      title={title}
-      loading="eager"
-      decoding="async"
-      className="my-2 block max-w-full rounded-[0.5rem] border border-[var(--color-border)]"
-      onError={() => setErrored(true)}
-    />
-  );
-});
 
 // InlineHtmlPreview renders a ```html code block from an assistant
 // message as a sandboxed iframe. Uses sandbox="" (most restrictive —
@@ -290,7 +311,15 @@ export const WorkspaceImage = memo(function WorkspaceImage({
 // that thrashed reflow). A static "Building preview…" placeholder lets
 // the rest of the streaming text flow normally; the iframe mounts once
 // the turn completes.
-function InlineHtmlPreview({ html, isStreaming = false, conversationId }: { html: string; isStreaming?: boolean; conversationId?: string | null }) {
+function InlineHtmlPreview({
+  html,
+  isStreaming = false,
+  conversationId,
+}: {
+  html: string;
+  isStreaming?: boolean;
+  conversationId?: string | null;
+}) {
   // Inject a <base> tag so relative image/link paths in the LLM-generated HTML
   // resolve to the workspace API. This allows charts and other files generated
   // by the agent to render correctly inside the sandboxed iframe.
@@ -301,9 +330,15 @@ function InlineHtmlPreview({ html, isStreaming = false, conversationId }: { html
     if (/<head[^>]*>/i.test(processedHtml)) {
       processedHtml = processedHtml.replace(/(<head[^>]*>)/i, `$1\n${baseTag}`);
     } else if (/<html[^>]*>/i.test(processedHtml)) {
-      processedHtml = processedHtml.replace(/(<html[^>]*>)/i, `$1\n<head>\n${baseTag}\n</head>`);
+      processedHtml = processedHtml.replace(
+        /(<html[^>]*>)/i,
+        `$1\n<head>\n${baseTag}\n</head>`,
+      );
     } else if (/<!DOCTYPE[^>]*>/i.test(processedHtml)) {
-      processedHtml = processedHtml.replace(/(<!DOCTYPE[^>]*>)/i, `$1\n<head>\n${baseTag}\n</head>`);
+      processedHtml = processedHtml.replace(
+        /(<!DOCTYPE[^>]*>)/i,
+        `$1\n<head>\n${baseTag}\n</head>`,
+      );
     } else {
       processedHtml = `<head>\n${baseTag}\n</head>\n${processedHtml}`;
     }
@@ -317,7 +352,9 @@ function InlineHtmlPreview({ html, isStreaming = false, conversationId }: { html
           <span className="thinking-dot" />
           <span className="thinking-dot" />
         </span>
-        <span>Building HTML preview ({html.length.toLocaleString()} chars so far)…</span>
+        <span>
+          Building HTML preview ({html.length.toLocaleString()} chars so far)…
+        </span>
       </div>
     );
   }
@@ -351,4 +388,24 @@ function InlineHtmlPreview({ html, isStreaming = false, conversationId }: { html
       )}
     </div>
   );
+}
+
+// AssistantMarkdown is the component form of renderAssistantContent, and the
+// module's default export so ChatTranscript can `React.lazy(() =>
+// import("./AssistantContent"))`. This module (react-markdown + micromark +
+// remark-gfm, ~43 KiB transfer) is deliberately kept OUT of the initial /chat
+// bundle: nothing needs it until a transcript message actually renders, and
+// on the first-load path that matters most (the empty state) it never loads
+// at all. The lazy boundary lives in ChatTranscript; unit tests keep calling
+// renderAssistantContent directly.
+export default function AssistantMarkdown({
+  content,
+  isStreaming = false,
+  conversationId = null,
+}: {
+  content: string;
+  isStreaming?: boolean;
+  conversationId?: string | null;
+}) {
+  return <>{renderAssistantContent(content, isStreaming, conversationId)}</>;
 }

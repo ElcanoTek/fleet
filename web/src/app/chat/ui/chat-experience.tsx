@@ -60,15 +60,6 @@ import { ChatTranscript } from "./ChatTranscript";
 import { usePerConvComposerState } from "./usePerConvComposerState";
 import { useTurnStreamState } from "./useTurnStreamState";
 import { useTurnStream, type TurnStreamDeps } from "./useTurnStream";
-// The assistant markdown renderer lives in its own module now. Re-export
-// the public API so existing import paths — including the markdown unit
-// tests that import { autoFenceRawHtmlDocument, renderAssistantContent }
-// from "./chat-experience" — keep resolving unchanged.
-import {
-  autoFenceRawHtmlDocument,
-  renderAssistantContent,
-} from "./AssistantContent";
-export { autoFenceRawHtmlDocument, renderAssistantContent };
 import { readChatSession, writeChatSession } from "./chatSessionStore";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
@@ -331,7 +322,16 @@ function isInteractiveTarget(el: Element | null): boolean {
 // The constant lives in ./workspaceHref.ts so the rewrite helpers can
 // share it with no React dependency.
 
-export function ChatExperience() {
+// initialUserEmail: the session email the /chat server component already
+// resolved (getServerSession) — passing it down removes a serial /api/session
+// round-trip from the cold-boot critical path (session THEN conversations →
+// just conversations). Optional so other mounts keep the fetch fallback; the
+// warm-return revalidation still re-checks the session on every return.
+export function ChatExperience({
+  initialUserEmail = null,
+}: {
+  initialUserEmail?: string | null;
+} = {}) {
   // Cross-navigation rehydration. /chat and /settings are separate App Router
   // route segments, so leaving chat fully unmounts this component. The module
   // store (./chatSessionStore) keeps the conversation state alive across that
@@ -3336,16 +3336,23 @@ export function ChatExperience() {
 
     const loadInitialState = async () => {
       try {
-        const sessionResponse = await fetch("/api/session", {
-          cache: "no-store",
-        });
-        if (!sessionResponse.ok) {
-          window.location.href = "/login";
-          return;
+        // The server component already resolved the session for this very
+        // request; trust it and skip the round-trip. An expired session is
+        // still caught: the conversations fetch below 401s and redirects.
+        if (initialUserEmail) {
+          setUserEmail(initialUserEmail);
+        } else {
+          const sessionResponse = await fetch("/api/session", {
+            cache: "no-store",
+          });
+          if (!sessionResponse.ok) {
+            window.location.href = "/login";
+            return;
+          }
+          const sessionData = (await sessionResponse.json()) as { email: string };
+          if (cancelled) return;
+          setUserEmail(sessionData.email);
         }
-        const sessionData = (await sessionResponse.json()) as { email: string };
-        if (cancelled) return;
-        setUserEmail(sessionData.email);
 
         const conversationsResponse = await fetch("/api/conversations", {
           cache: "no-store",
@@ -3462,8 +3469,10 @@ export function ChatExperience() {
     // Mount-once bootstrap: re-running it would re-fetch the session and
     // clobber the active conversation. It calls loadMcpServerCatalogPreview
     // and loadConversation through their latest-refs (see the ref bundle
-    // above), so there are no reactive dependencies to declare.
-  }, []);
+    // above). initialUserEmail is a per-mount constant (the server component
+    // resolves it per request), so listing it keeps exhaustive-deps honest
+    // without changing the mount-once behavior.
+  }, [initialUserEmail]);
 
   const toggleShowStats = () => {
     setShowStats((prev) => {

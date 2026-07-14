@@ -167,6 +167,17 @@ prior versions are listed because none have shipped.
   the task (user) portion only — the cached system prefix stays byte-stable.
   See [ADR-0034](docs/adr/0034-audit-gate-commitment-binding.md).
 
+### Changed
+
+- **Faster first paint on mobile (Lighthouse)**: the initial /chat bundle no
+  longer ships the syntax highlighter (~75 KiB transfer; now lazy-loaded on
+  first tool-chip expand with a plain `<pre>` fallback) or the ReactMarkdown
+  pipeline (~43 KiB; lazy-loaded when a transcript message renders, showing
+  raw text until the chunk arrives), and cold boot skips the serial
+  `/api/session` round-trip by reusing the session the /chat server component
+  already resolved. Together: ~40% fewer JS bytes and one less blocking RTT
+  before the largest contentful paint.
+
 ### Fixed
 
 - **`fleet update` no longer breaks sandbox starts after a bundle pull**: the
