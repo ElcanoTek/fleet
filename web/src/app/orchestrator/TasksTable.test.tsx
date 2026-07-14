@@ -108,6 +108,15 @@ describe("TasksTable SLA badge (#274)", () => {
     expect(screen.getAllByText("10m / 20m").length).toBe(2);
   });
 
+  it("describes a recurrence in plain English instead of raw cron", () => {
+    const recurring: Task = { ...baseTask, recurrence: "0 9 * * 6,0" };
+    renderWithTasks([recurring]);
+    // Rendered in both the table row and the phone card; raw cron only in title.
+    const labels = screen.getAllByText(/At 09:00, only on Saturday and Sunday/);
+    expect(labels.length).toBe(2);
+    expect(screen.queryByText(/0 9 \* \* 6,0/)).toBeNull();
+  });
+
   it("phone cards click through to the log viewer", () => {
     const onOpenLogs = vi.fn();
     render(
