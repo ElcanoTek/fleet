@@ -116,9 +116,18 @@
   --color-status-error-fg: #ffd2d2;
   --color-status-error-bg: rgba(255, 85, 85, 0.14);
   --color-status-error-border: rgba(255, 85, 85, 0.6);
-  --color-status-cancelled-fg: #c7ced4;
-  --color-status-cancelled-bg: rgba(108, 118, 130, 0.16);
-  --color-status-cancelled-border: rgba(108, 118, 130, 0.48);
+  /* Cancelled reads as a soft red (a failure-adjacent outcome), one step
+     dimmer than error so the two stay distinguishable side by side. */
+  --color-status-cancelled-fg: #f2b8b8;
+  --color-status-cancelled-bg: rgba(255, 85, 85, 0.1);
+  --color-status-cancelled-border: rgba(255, 85, 85, 0.42);
+  /* Stat-card tone anchors: MOC's neon palette on dark (the muted chat-app
+     --color-success/-warning/-danger pastels wash out at stat-value size);
+     the light theme swaps in darker AA-contrast equivalents below. */
+  --stat-tone-pending: #ffb86c;
+  --stat-tone-running: #40d0f0;
+  --stat-tone-success: #50fa7b;
+  --stat-tone-error: #ff5555;
   --gradient-bg-home-signature:
     radial-gradient(circle at 8% -4%, rgba(114, 114, 171, 0.34), transparent 34%),
     radial-gradient(circle at 92% 2%, rgba(88, 111, 124, 0.28), transparent 32%),
@@ -263,9 +272,14 @@
   --color-status-error-fg: #7c1f1f;
   --color-status-error-bg: rgba(255, 85, 85, 0.18);
   --color-status-error-border: rgba(255, 85, 85, 0.44);
-  --color-status-cancelled-fg: #59657a;
-  --color-status-cancelled-bg: rgba(108, 118, 130, 0.16);
-  --color-status-cancelled-border: rgba(108, 118, 130, 0.34);
+  --color-status-cancelled-fg: #8f2f2f;
+  --color-status-cancelled-bg: rgba(255, 85, 85, 0.12);
+  --color-status-cancelled-border: rgba(255, 85, 85, 0.32);
+  /* Neon stat tones don't survive on white; darker saturated equivalents. */
+  --stat-tone-pending: #b07a24;
+  --stat-tone-running: #0f5e78;
+  --stat-tone-success: #137b47;
+  --stat-tone-error: #b02a2a;
   --gradient-bg-home-signature:
     radial-gradient(circle at 9% -8%, rgba(114, 114, 171, 0.28), transparent 42%),
     radial-gradient(circle at 90% 0%, rgba(88, 111, 124, 0.24), transparent 38%),
@@ -1380,19 +1394,16 @@ button {
   flex: 0 0 auto;
 }
 .stat-dot.pending {
-  background: var(--color-warning);
+  background: var(--stat-tone-pending);
 }
 .stat-dot.running {
-  /* Solid base of the running-status cyan (the badge tokens are alpha tints
-     that wash out as a 0.5rem dot, especially on the light surface). Same hue
-     family as .status-running so the card and the rows below read together. */
-  background: #2fb7dc;
+  background: var(--stat-tone-running);
 }
 .stat-dot.success {
-  background: var(--color-success);
+  background: var(--stat-tone-success);
 }
 .stat-dot.error {
-  background: var(--color-danger);
+  background: var(--stat-tone-error);
 }
 .stat-card.live .stat-dot {
   animation: statPulse 1.8s ease-in-out infinite;
@@ -1424,31 +1435,31 @@ button {
   color: var(--color-text-primary);
 }
 /* Per-tone accent bar + value color (tone class set by StatsGrid alongside
-   the matching .stat-dot). The whole card reads as one colored tile. */
+   the matching .stat-dot). Dot, bar, and value share one --stat-tone-*
+   anchor so the whole card reads as one colored tile. */
 .stat-card.stat-tone-pending::before {
-  background: var(--color-warning);
+  background: var(--stat-tone-pending);
 }
 .stat-card.stat-tone-pending .stat-card-val {
-  color: var(--color-warning);
+  color: var(--stat-tone-pending);
 }
 .stat-card.stat-tone-running::before {
-  /* Solid running cyan — see .stat-dot.running. */
-  background: #2fb7dc;
+  background: var(--stat-tone-running);
 }
 .stat-card.stat-tone-running .stat-card-val {
-  color: var(--color-status-running-fg);
+  color: var(--stat-tone-running);
 }
 .stat-card.stat-tone-success::before {
-  background: var(--color-success);
+  background: var(--stat-tone-success);
 }
 .stat-card.stat-tone-success .stat-card-val {
-  color: var(--color-success);
+  color: var(--stat-tone-success);
 }
 .stat-card.stat-tone-error::before {
-  background: var(--color-danger);
+  background: var(--stat-tone-error);
 }
 .stat-card.stat-tone-error .stat-card-val {
-  color: var(--color-danger);
+  color: var(--stat-tone-error);
 }
 @media (max-width: 720px) {
   .stats-bar {
