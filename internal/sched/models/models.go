@@ -1651,6 +1651,13 @@ type DashboardStats struct {
 	RunningTasks        int `json:"running_tasks"`
 	CompletedTasksToday int `json:"completed_tasks_today"`
 	FailedTasksToday    int `json:"failed_tasks_today"`
+	// Live agent-pool occupancy: agents executing scheduled tasks right now
+	// and the pool's schedulable slot count. Attached by the handler from the
+	// runner at response time (never cached — see GetDashboardStats), and only
+	// when cmd/fleet wired the pool in, so standalone handlers omit them.
+	// Pointers so a real zero still serializes.
+	ActiveAgents *int `json:"active_agents,omitempty"`
+	AgentSlots   *int `json:"agent_slots,omitempty"`
 }
 
 // LogToolCall represents a structured tool call in a log message

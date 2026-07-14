@@ -205,6 +205,20 @@ type Handlers struct {
 	// part 2) — injected by cmd/fleet via SetBudgetGate (*budget.Enforcer). nil
 	// → no budget enforcement, today's behavior byte-for-byte. See budgets.go.
 	budgetGate BudgetGate
+
+	// agentPoolActive/agentPoolSlots report the scheduled-runner pool's live
+	// occupancy for the dashboard's agent cards — injected by cmd/fleet via
+	// SetAgentPoolStats. nil → GET /stats omits the agent fields.
+	agentPoolActive func() int
+	agentPoolSlots  func() int
+}
+
+// SetAgentPoolStats wires the live agent-pool occupancy into GET /stats:
+// active = agents executing scheduled tasks now, slots = schedulable
+// capacity. Call before serving traffic.
+func (h *Handlers) SetAgentPoolStats(active, slots func() int) {
+	h.agentPoolActive = active
+	h.agentPoolSlots = slots
 }
 
 // statsCache caches dashboard statistics.
@@ -1695,6 +1709,21 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+// withAgentPool copies the (possibly cached) stats and stamps the LIVE
+// agent-pool occupancy, so the stats cache can never freeze the agent
+// numbers. Returns the input untouched when the pool isn't wired.
+func (h *Handlers) withAgentPool(stats *models.DashboardStats) *models.DashboardStats {
+	if h.agentPoolActive == nil || h.agentPoolSlots == nil {
+		return stats
+	}
+	out := *stats
+	active := h.agentPoolActive()
+	slots := h.agentPoolSlots()
+	out.ActiveAgents = &active
+	out.AgentSlots = &slots
+	return &out
+}
+
 // GetTagCatalogue handles GET /tasks/tags (#212): the distinct tags in use with
 // per-tag task counts, busiest first. A read endpoint — group auth suffices.
 func (h *Handlers) GetTagCatalogue(w http.ResponseWriter, r *http.Request) {
@@ -2320,9 +2349,9 @@ func (h *Handlers) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Check cache (1 minute TTL)
+	// Check cache (short TTL — see Set below)
 	if cached, ok := h.statsCache.Get(cacheKey); ok {
-		writeJSON(w, http.StatusOK, cached)
+		writeJSON(w, http.StatusOK, h.withAgentPool(cached))
 		return
 	}
 
@@ -2339,9 +2368,12 @@ func (h *Handlers) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update cache
-	h.statsCache.Set(cacheKey, stats, 1*time.Minute)
+	// 5s TTL: still collapses a burst of dashboard polls into one DB round of
+	// count queries, but no longer makes the stat cards lag the world by up to
+	// a minute — the web dashboard polls every 5s while work is in flight.
+	h.statsCache.Set(cacheKey, stats, 5*time.Second)
 
-	writeJSON(w, http.StatusOK, stats)
+	writeJSON(w, http.StatusOK, h.withAgentPool(stats))
 }
 
 // GetCurrentUser handles GET /api/me. It sits behind AdminOrUserAuthMiddleware,

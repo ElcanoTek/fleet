@@ -794,6 +794,9 @@ func run() error {
 	// process now interrupts the governed run at its next checkpoint, with
 	// who-stopped-it attribution on the terminal record.
 	h.SetTaskStopper(pool.StopTask)
+	// Dashboard agent cards: live pool occupancy (active scheduled agents /
+	// schedulable slots), stamped onto GET /stats at response time.
+	h.SetAgentPoolStats(pool.ActiveTasks, pool.Cap)
 	// Self-improving memory (#516): the feedback→learned-instruction distiller,
 	// gated on FLEET_SELF_IMPROVE_ENABLED (default off; nil leaves feedback
 	// recorded but never auto-distilled).

@@ -496,3 +496,52 @@ func TestGetLogsForScheduledTaskReturns404(t *testing.T) {
 		t.Errorf("Expected 404 for scheduled task with no logs, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// TestDashboardStatsAgentPool: the agent-pool fields are absent until
+// cmd/fleet wires the seam, and once wired they are stamped LIVE on every
+// response — including cache hits — so the stats cache can't freeze them.
+func TestDashboardStatsAgentPool(t *testing.T) {
+	h, _ := setupTest(t)
+
+	fetch := func() models.DashboardStats {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/stats", nil)
+		w := httptest.NewRecorder()
+		h.GetDashboardStats(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var stats models.DashboardStats
+		if err := json.NewDecoder(w.Body).Decode(&stats); err != nil {
+			t.Fatalf("decode stats: %v", err)
+		}
+		return stats
+	}
+
+	// Unwired: fields omitted.
+	stats := fetch()
+	if stats.ActiveAgents != nil || stats.AgentSlots != nil {
+		t.Fatalf("expected agent fields absent before wiring, got %+v", stats)
+	}
+
+	// Wired: live values attached. The first fetch above populated the stats
+	// cache, so this response is a cache hit — the agent numbers must still be
+	// the CURRENT closure values, not frozen ones.
+	active := 3
+	h.SetAgentPoolStats(func() int { return active }, func() int { return 8 })
+	stats = fetch()
+	if stats.ActiveAgents == nil || *stats.ActiveAgents != 3 {
+		t.Fatalf("expected active_agents=3, got %+v", stats.ActiveAgents)
+	}
+	if stats.AgentSlots == nil || *stats.AgentSlots != 8 {
+		t.Fatalf("expected agent_slots=8, got %+v", stats.AgentSlots)
+	}
+
+	// The pool moves; the next response reflects it immediately even though
+	// the cached task counts haven't expired.
+	active = 5
+	stats = fetch()
+	if stats.ActiveAgents == nil || *stats.ActiveAgents != 5 {
+		t.Fatalf("expected live active_agents=5 on a cache hit, got %+v", stats.ActiveAgents)
+	}
+}
