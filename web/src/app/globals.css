@@ -3952,6 +3952,21 @@ select.mcp-server-picker__account-select {
   border-color: var(--color-danger, #e08080);
 }
 
+/* Tab-panel floor: keep the page tall enough through a tab switch's brief
+   loading state so the browser never clamps the scroll position to the top
+   (most visible on phones). */
+.dashboard-tab-panel {
+  min-height: 24rem;
+}
+@media (max-width: 720px) {
+  /* On phones the tab bar gets pinned to the top of the scroller on switch
+     (see switchTab); a viewport-sized floor keeps the container tall enough
+     during the incoming panel's loading state that the pin can't clamp. */
+  .dashboard-tab-panel {
+    min-height: 100dvh;
+  }
+}
+
 /* Row/card edit affordance: a small pencil that opens the edit form without
    triggering the row's open-logs click. */
 .task-row-actions {
@@ -4006,14 +4021,18 @@ select.mcp-server-picker__account-select {
 }
 
 /* Task summary strip: mirrors the Recent Tasks row (ID / Status / SLA /
-   Schedule / Created by / Created) under the modal header. */
+   Schedule / Created by / Created) under the modal header — as its own card
+   so it reads as one unit with the detail/metrics cards below rather than a
+   loose row of labels. */
 .task-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem 1.5rem;
-  padding: 0.75rem 1.25rem;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-overlay-soft, rgba(0, 0, 0, 0.2));
+  padding: 0.6rem 0.75rem;
+  margin: 0.9rem 1.25rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--gradient-surface-card);
 }
 .task-summary-item {
   display: grid;
