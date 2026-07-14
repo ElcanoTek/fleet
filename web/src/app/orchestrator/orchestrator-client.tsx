@@ -60,6 +60,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
 
   const [statFilter, setStatFilter] = useState<StatFilter | null>(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [editTask, setEditTask] = useState<Task | null>(null);
   const [logTask, setLogTask] = useState<Task | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
@@ -270,6 +271,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                   onPage={dashboard.setPage}
                   onPageSize={dashboard.setPageSize}
                   onOpenLogs={setLogTask}
+                  onEdit={setEditTask}
                 />
               )}
 
@@ -280,17 +282,27 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
       </main>
 
       <TaskCreateModal
-        open={taskModalOpen}
+        key={editTask ? `edit-${editTask.id}` : "create"}
+        open={taskModalOpen || !!editTask}
         servers={servers}
         serversLoading={serversLoading}
-        onClose={() => setTaskModalOpen(false)}
+        onClose={() => {
+          setTaskModalOpen(false);
+          setEditTask(null);
+        }}
         onCreated={() => void dashboard.reload()}
+        editTask={editTask}
+        onUpdated={() => void dashboard.reload()}
       />
       <LogViewer
         task={logTask}
         onClose={() => setLogTask(null)}
         canStop={isAdmin || (!!session.username && logTask?.created_by_username === session.username)}
         onResubmitted={() => void dashboard.reload()}
+        onEdit={(t) => {
+          setLogTask(null);
+          setEditTask(t);
+        }}
       />
     </div>
   );

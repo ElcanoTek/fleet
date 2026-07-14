@@ -3736,6 +3736,14 @@ select.mcp-server-picker__account-select {
   gap: 0.5rem;
   margin-top: 0.875rem;
 }
+/* The recurring-edit scope chooser reuses the discard card but carries three
+   actions, so it gets a little more width and lets them wrap on phones. */
+.task-scope-card {
+  width: 26rem;
+}
+.task-scope-card .task-discard-actions {
+  flex-wrap: wrap;
+}
 .task-discard-confirm {
   background: var(--color-danger);
   /* Theme-flipped label: near-black on the light-red dark-theme danger, near-
@@ -3810,6 +3818,39 @@ select.mcp-server-picker__account-select {
 }
 .toast--error {
   border-color: var(--color-danger, #e08080);
+}
+
+/* Row/card edit affordance: a small pencil that opens the edit form without
+   triggering the row's open-logs click. */
+.task-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.task-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+.task-edit-btn:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+  background: var(--color-overlay-soft);
+}
+.task-edit-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 /* Log viewer — moc-style task detail modal. The log modal is the ops

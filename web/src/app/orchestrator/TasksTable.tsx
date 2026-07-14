@@ -4,7 +4,20 @@ import { useEffect, useRef, useState } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
 import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
+import { Icon } from "@/app/shared/ui/Icon";
 import { createdByLabel, scheduleLabel, slaBadge, TaskSlaBadge } from "./taskDisplay";
+
+// Statuses whose tasks can be edited: pending/scheduled edit in place;
+// terminal ones reopen the form to resubmit with changes. In-flight tasks
+// (assigned/leased/running/analyzing) can only be stopped, not edited.
+const EDITABLE_STATUSES = new Set([
+  "pending",
+  "scheduled",
+  "success",
+  "error",
+  "cancelled",
+  "dead_lettered",
+]);
 
 // TasksTable — the Recent Tasks table + filter bar + pagination. React port of
 // moc dashboard.js renderTasks()/buildTaskQueryString()/pagination controls.
@@ -20,6 +33,7 @@ export type TasksTableProps = {
   onPage: (page: number) => void;
   onPageSize: (size: number) => void;
   onOpenLogs: (task: Task) => void;
+  onEdit?: (task: Task) => void;
 };
 
 const STATUS_OPTIONS = [
@@ -44,6 +58,7 @@ export function TasksTable({
   onPage,
   onPageSize,
   onOpenLogs,
+  onEdit,
 }: TasksTableProps) {
   // Debounce ONLY the search box. The status/createdBy selects, the
   // scheduledOnly checkbox, and the stat-card quick filters all call onFilters
@@ -206,8 +221,25 @@ export function TasksTable({
                     <td>{createdByLabel(task)}</td>
                     <td>{formatTimeFirst(task.created_at)}</td>
                     <td>
-                      <span className={`logs-badge ${hasLogs ? "" : "no-logs"}`}>
-                        {hasLogs ? "View" : "None"}
+                      <span className="task-row-actions">
+                        <span className={`logs-badge ${hasLogs ? "" : "no-logs"}`}>
+                          {hasLogs ? "View" : "None"}
+                        </span>
+                        {onEdit && EDITABLE_STATUSES.has(task.status ?? "") ? (
+                          <button
+                            type="button"
+                            className="icon-action task-edit-btn"
+                            aria-label={`Edit task ${task.id.slice(0, 8)}`}
+                            title="Edit task"
+                            data-testid="task-edit-button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onEdit(task);
+                            }}
+                          >
+                            <Icon name="edit" className="size-3.5" />
+                          </button>
+                        ) : null}
                       </span>
                     </td>
                   </tr>
@@ -264,6 +296,29 @@ export function TasksTable({
                     <span className={`logs-badge ${hasLogs ? "" : "no-logs"}`}>
                       {hasLogs ? "View logs" : "No logs"}
                     </span>
+                    {onEdit && EDITABLE_STATUSES.has(task.status ?? "") ? (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className="icon-action task-edit-btn"
+                        aria-label={`Edit task ${task.id.slice(0, 8)}`}
+                        title="Edit task"
+                        data-testid="task-edit-button-card"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEdit(task);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onEdit(task);
+                          }
+                        }}
+                      >
+                        <Icon name="edit" className="size-3.5" />
+                      </span>
+                    ) : null}
                   </span>
                 </button>
               </li>

@@ -68,9 +68,11 @@ export type LogViewerProps = {
   // Called after a successful Resubmit so the dashboard can refetch and show
   // the new run immediately.
   onResubmitted?: () => void;
+  // Opens the edit form for this task (parent closes the log modal first).
+  onEdit?: (task: Task) => void;
 };
 
-export function LogViewer({ task, onClose, canStop, onResubmitted }: LogViewerProps) {
+export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit }: LogViewerProps) {
   if (!task) return null;
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
@@ -93,6 +95,7 @@ export function LogViewer({ task, onClose, canStop, onResubmitted }: LogViewerPr
       onClose={onClose}
       canStop={!!canStop}
       onResubmitted={onResubmitted}
+      onEdit={onEdit}
     />
   );
 }
@@ -652,11 +655,13 @@ function LogViewerBody({
   onClose,
   canStop,
   onResubmitted,
+  onEdit,
 }: {
   task: Task;
   onClose: () => void;
   canStop: boolean;
   onResubmitted?: () => void;
+  onEdit?: (task: Task) => void;
 }) {
   // The shared hook owns the cancelled-ref guard and the lone setState after
   // the await, so this component no longer needs its own one-shot load-flag
@@ -769,6 +774,16 @@ function LogViewerBody({
               </span>
             </span>
             <span className="task-detail-actions">
+              {onEdit && ["pending", "scheduled", ...RESUBMITTABLE].includes(task.status ?? "") ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="edit-task-button"
+                  onClick={() => onEdit(task)}
+                >
+                  Edit
+                </button>
+              ) : null}
               {canResubmit ? (
                 <button
                   type="button"
