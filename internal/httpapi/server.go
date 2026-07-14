@@ -27,6 +27,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/hoststats"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/otelsetup"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
@@ -151,6 +152,10 @@ type Server struct {
 	startTime   time.Time
 	version     string
 	workerStats func(context.Context) (*WorkerStats, error)
+	// hostStats is the dependency-free procfs/statfs collector behind the
+	// admin-only Server settings page. It retains only the previous counters
+	// needed to calculate CPU/network rates.
+	hostStats *hoststats.Collector
 
 	// memoryGraphExtractor mines a memory for knowledge-graph triples (#523).
 	// Injected via WithMemoryGraphExtractor so httpapi depends on the seam, not
@@ -426,6 +431,7 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		inflight:         make(map[string]inflightEntry),
 		sessionApprovals: NewSessionApprovalRegistry(),
 		sseReconnects:    newReconnectCounter(),
+		hostStats:        hoststats.New(),
 		// Per-token cap on the public /shared read endpoint (#226): generous for
 		// real viewers, a hard ceiling against scraping/DDoS amplification of a
 		// single link. No daily window.
@@ -708,6 +714,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStats)))))
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
+	mux.Handle("/admin/server-stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleServerStats)))))
 	// Admin Users tab (#237): GET list / POST create on the collection;
 	// PATCH role-team / DELETE / PUT …/password on the item. Admin-gated like
 	// the other /admin/* endpoints; role writes also drive the ops-center seam.

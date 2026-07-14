@@ -40,6 +40,22 @@ async function mockAdmin(page: Page) {
       },
     }),
   );
+  await page.route("**/api/admin/server-stats", (r: Route) =>
+    r.fulfill({
+      json: {
+        available: true,
+        sampled_at: "2026-07-14T12:00:00Z",
+        hostname: "fleet-box",
+        platform: "linux/amd64",
+        uptime_seconds: 90061,
+        cpu: { available: true, cores: 8, usage_percent: 21.5, load_1: 0.4, load_5: 0.3, load_15: 0.2 },
+        memory: { available: true, total_bytes: 8589934592, used_bytes: 3221225472, available_bytes: 5368709120, swap_total_bytes: 0, swap_used_bytes: 0 },
+        disk: { available: true, path: "/", total_bytes: 107374182400, used_bytes: 26843545600, available_bytes: 80530636800, usage_percent: 25 },
+        network: { available: true, interfaces: 1, received_bytes: 10737418240, transmitted_bytes: 2147483648, receive_bytes_per_second: 1536, transmit_bytes_per_second: 512 },
+        warnings: [],
+      },
+    }),
+  );
 }
 
 test.beforeEach(async ({ context }) => {
@@ -68,4 +84,17 @@ test("the old /admin URL redirects into the settings area", async ({ page }) => 
   await page.goto("/admin");
   await page.waitForURL("**/settings/admin", { timeout: 15_000 });
   await expect(page.getByTestId("health-panel")).toBeVisible({ timeout: 15_000 });
+});
+
+test("the admin Server section shows host resources without SSH", async ({ page }) => {
+  await mockAdmin(page);
+  await page.goto("/settings/admin/server");
+
+  const panel = page.getByTestId("server-stats-panel");
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  await expect(panel).toContainText("21.5%");
+  await expect(panel).toContainText("5.00 GB available");
+  await expect(panel).toContainText("75.0 GB available");
+  await expect(panel).toContainText("1.50 KB/s");
+  await expect(page.getByRole("button", { name: "Refresh server stats" })).toBeVisible();
 });
