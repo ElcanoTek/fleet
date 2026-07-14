@@ -52,7 +52,13 @@ FROM registry.fedoraproject.org/fedora-minimal:latest
 # Using fedora-minimal (microdnf, ~80MB base) instead of full fedora
 # (~190MB base) drops a layer of distro tooling we never use. Same
 # RPM packages, same compatibility, just less cruft.
-RUN microdnf install -y \
+# The generic bundle intentionally follows Fedora's latest supported package
+# set on every rebuild. `upgrade` refreshes packages inherited from the moving
+# fedora-minimal:latest base; `install` then resolves the data stack as one
+# distro-tested transaction. Client config repositories that need audit-stable
+# bytes can pin a base digest and/or package NEVRAs in their own Containerfile.
+RUN microdnf upgrade -y \
+    && microdnf install -y \
         --setopt=install_weak_deps=0 \
         --setopt=tsflags=nodocs \
         ImageMagick \
@@ -91,66 +97,8 @@ RUN microdnf install -y \
         sed \
         shadow-utils \
     && microdnf clean all \
-    && rm -rf /var/cache/dnf /var/cache/yum /var/log/dnf* /var/log/yum* /usr/share/locale/* /usr/share/man
-
-# ── CVE pins: pip-installed upgrades over the Fedora RPMs ──────────────────
-# A deliberate, narrow deviation from the RPM-only rule above, for exactly the
-# packages the CI Grype gate flags. Fedora's RPMs lag the upstream security
-# releases for these (python3-pypdf ships 4.x against a 6.x upstream), and
-# Grype matches the Python dist-info metadata by upstream version — so even a
-# Fedora BACKPORT of a fix would keep flagging. The only clean signal is the
-# upstream patched version. Each pin was reviewed against the GitHub Security
-# Advisories it clears (minimum patched version in parentheses):
-#   pypdf    6.14.2  (≥ 6.13.3 — GHSA-jm82-fx9c-mx94 and 27 older pypdf GHSAs)
-#   tornado  6.5.7   (≥ 6.5.7  — GHSA-pw6j-qg29-8w7f, GHSA-3x9g-8vmp-wqvf,
-#                     GHSA-mgf9-4vpg-hj56, GHSA-cx3h-4qpv-8hc9,
-#                     GHSA-qjxf-f2mg-c6mc, GHSA-fqwm-6jpj-5wxc,
-#                     GHSA-78cv-mqj4-43f7)
-#   pip      26.1.2  (≥ 26.1   — GHSA-jp4c-xjxw-mgf9, GHSA-58qw-9mgm-455v)
-#   idna     3.18    (≥ 3.15   — GHSA-65pc-fj4g-8rjx)
-#   pygments 2.20.0  (≥ 2.20.0 — GHSA-5239-wwwm-4pmq)
-#   soupsieve 2.8.4  (≥ 2.8.4  — GHSA-836r-79rf-4m37)
-#
-# The RPM copies are removed (rpm -e --nodeps) in the SAME layer: Grype scans
-# the exported image tar, so a leftover old dist-info in
-# /usr/lib/python3.*/site-packages would still flag even though the /usr/local
-# copy shadows it on sys.path. Removing the RPM leaves exactly one unambiguous
-# copy of each package. --nodeps is safe here because the pip-installed
-# replacements satisfy the same imports the dependent RPMs (python3-ipykernel
-# needs tornado, python3-requests needs idna, python3-beautifulsoup4 needs
-# soupsieve, ...) resolve at runtime; the in-layer asserts below and the
-# matplotlib warm run keep this honest.
-# When bumping a pin, re-check the advisory list (gh api /advisories/GHSA-...).
-#
-# --ignore-installed is load-bearing: when Fedora's OWN rpm catches up to a
-# pinned version (as python3-tornado did), plain pip sees the requirement
-# already satisfied by the rpm copy in /usr/lib64 and installs NOTHING — then
-# the rpm -e below deletes the only copy and the image stops building. The
-# flag forces a fresh /usr/local install regardless of what the base image
-# ships, keeping this layer immune to Fedora's package versions drifting
-# under the pins.
-RUN python3 -m pip install --no-cache-dir --ignore-installed \
-        "pip==26.1.2" \
-        "pypdf==6.14.2" \
-        "tornado==6.5.7" \
-        "idna==3.18" \
-        "pygments==2.20.0" \
-        "soupsieve==2.8.4" \
-    && rpm -e --nodeps \
-        python3-pip \
-        python3-pypdf \
-        python3-tornado \
-        python3-idna \
-        python3-pygments \
-        python3-soupsieve \
-    && python3 -c "import pip, pypdf, tornado, idna, pygments, soupsieve; \
-        assert pip.__version__ == '26.1.2', pip.__version__; \
-        assert pypdf.__version__ == '6.14.2', pypdf.__version__; \
-        assert tornado.version == '6.5.7', tornado.version; \
-        assert idna.__version__ == '3.18', idna.__version__; \
-        assert pygments.__version__ == '2.20.0', pygments.__version__; \
-        assert soupsieve.__version__ == '2.8.4', soupsieve.__version__" \
-    && rm -rf /root/.cache/pip
+    && rm -rf /var/cache/dnf /var/cache/yum /var/log/dnf* /var/log/yum* /usr/share/locale/* /usr/share/man \
+    && python3 -c "import pip, pypdf, tornado, idna, pygments, soupsieve"
 
 # Pre-warm matplotlib's font cache so the first plot at runtime doesn't
 # pay the multi-second TTF scan.

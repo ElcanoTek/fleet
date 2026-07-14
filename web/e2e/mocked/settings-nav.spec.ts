@@ -5,7 +5,7 @@ import { loginViaCookie } from "./_session";
 // Mocked e2e for the settings shell (fleet-unified settings redesign): every
 // /settings/* page renders inside the unified NavRail + "Settings" topbar with
 // the sticky sub-nav. Admin visibility is probed from /api/admin/settings —
-// 200 shows the expandable Admin parent (five children), 403 hides it and
+// 200 shows the expandable Admin parent, 403 hides it and
 // bounces /settings/admin/* back to /settings.
 
 async function mockShell(page: Page, opts: { admin: boolean }) {
@@ -111,7 +111,7 @@ test("settings render inside the unified shell with the section sub-nav", async 
   await expect(page.getByRole("switch", { name: "Browser notifications" })).toBeVisible();
 });
 
-test("the Admin parent expands to its five children for admins", async ({ page }) => {
+test("the Admin parent expands to its sections for admins", async ({ page }) => {
   await mockShell(page, { admin: true });
   await page.goto("/settings");
 
@@ -124,7 +124,7 @@ test("the Admin parent expands to its five children for admins", async ({ page }
   await admin.click();
   await page.waitForURL("**/settings/admin");
   await expect(admin).toHaveAttribute("aria-expanded", "true");
-  for (const child of ["Overview", "Users", "Features", "Providers", "Notifications"]) {
+  for (const child of ["Overview", "Server", "Users", "Features", "Providers", "Notifications"]) {
     await expect(nav.getByRole("link", { name: child })).toBeVisible();
   }
   await expect(nav.getByRole("link", { name: "Overview" })).toHaveAttribute(

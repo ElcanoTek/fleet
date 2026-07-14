@@ -113,9 +113,12 @@ servers, and use skills only from sources you trust.
 Agent tool calls (`bash`, `run_python`) execute inside a hardened, rootless
 container. That image is a **per-client bundle artifact**, not a fleet-global
 one — each bundle ships its own `sandbox/Containerfile` flavor (whose base tracks
-`fedora-minimal:latest`, so on-box rebuilds pick up current patches — pin a digest
-there if you want byte-for-byte reproducible builds; see this bundle's
-`sandbox/Containerfile`).
+`fedora-minimal:latest` and runs `microdnf upgrade`, so every on-box rebuild gets
+the current coherent Fedora package set). The generic bundle intentionally does
+not shadow RPM-owned Python packages with hand-maintained pip pins. A client
+bundle can pin the base digest and package NEVRAs in its Containerfile, or set a
+digest-pinned prebuilt `sandbox.image`, when byte-for-byte reproducibility is more
+important than following Fedora latest; see this bundle's `sandbox/Containerfile`.
 
 The manifest's `sandbox:` block declares it:
 

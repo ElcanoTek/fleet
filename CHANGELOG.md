@@ -19,6 +19,11 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Admin server status**: Settings now includes an admin-only **Server** tab
+  with a lightweight, auto-refreshing view of CPU/load, memory, root-disk,
+  uptime, and aggregate non-loopback network traffic. The read-only endpoint is
+  role-gated and deliberately omits process, environment, address, and
+  filesystem-detail data.
 - **Hybrid prompt library** (`docs/PROMPT-LIBRARY.md`): Chat and Operations
   Center now share a searchable prompt picker that live-loads read-only
   `.yaml`/`.yml`/`.md`/`.txt` entries from the client bundle's Git-trackable
@@ -48,6 +53,13 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Coherent latest-Fedora sandbox policy**: the generic sandbox upgrades from
+  `fedora-minimal:latest` and installs current Fedora packages on every rebuild,
+  without hand-maintained pip overlays that can conflict with RPM ownership.
+  Grype continues to publish every finding, while the merge gate blocks only on
+  fixable CRITICAL Fedora RPM findings that the image can act on. Client bundles
+  may still pin a base digest, package NEVRAs, or a prebuilt image when they need
+  reproducibility.
 - **Public-repo hygiene (#721)**: untracked the runtime `fleet.pid` file (now
   gitignored along with `/workspace/`), removed the dead
   `web/scripts/smoke-mcp-reporting.py` (bundle repos own their smoke tests),

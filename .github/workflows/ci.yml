@@ -625,29 +625,26 @@ jobs:
           IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
           podman save --format docker-archive -o sandbox-image.tar "$SANDBOX_IMAGE_LOCAL"
 
-      - name: Scan the sandbox image (fail on a fixable CRITICAL)
-        # --fail-on critical: a CRITICAL CVE fails the job (exit 2); fixed HIGH/
-        #   MEDIUM/LOW are recorded in the SARIF upload but do not block the PR.
-        # --only-fixed: only a CVE WITH an available fix is considered, so this
-        #   per-PR scan neither blocks on NOR reports an unfixed CVE — --only-fixed
-        #   filters the whole match set, the SARIF included. An unfixed CVE is not
-        #   actionable now, and blocking on it would just noise the gate (the most
-        #   common cause of false-positive scanner failures); the weekly
-        #   grype-scheduled.yml scan omits --only-fixed and surfaces unfixed CVEs
-        #   to the Security tab. Accepted CVEs are suppressed in .grype.yaml (Grype
-        #   auto-reads it from the repo root; one `ignore:` entry per CVE, with a
-        #   rationale). The table output is for the CI log; the SARIF is uploaded.
+      - name: Scan the sandbox image (report all findings)
+        # Produce one full report for people and GitHub Security. The separate
+        # policy step below decides what blocks a merge; keeping collection and
+        # policy separate avoids hiding non-blocking findings with --only-fixed.
         run: |
           set -euo pipefail
           grype "docker-archive:sandbox-image.tar" \
-            --only-fixed \
-            --fail-on critical \
             --output table \
+            --output json=grype-results.json \
             --output sarif=grype-results.sarif
 
+      - name: Enforce actionable Fedora RPM policy
+        # The generic image follows Fedora latest. Block only when a CRITICAL
+        # RPM finding has a packaged fix; report upstream language records but
+        # do not force hand-maintained overlay pins over distro-owned packages.
+        run: scripts/check-grype-policy.sh grype-results.json
+
       - name: Upload Grype SARIF results to the GitHub Security tab
-        # Upload whenever the scan produced a SARIF — including when grype exited
-        # non-zero on a fixable CRITICAL (it writes the file before exiting), so
+        # Upload whenever the scan produced a SARIF — including when the policy
+        # step rejects a fixable CRITICAL RPM — so
         # findings reach GitHub Security → Code scanning with full CVE details,
         # affected packages, and fix versions rather than only a red CI job. The
         # hashFiles guard skips this step (instead of erroring "file not found")
