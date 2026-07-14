@@ -19,6 +19,22 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Hybrid prompt library** (`docs/PROMPT-LIBRARY.md`): Chat and Operations
+  Center now share a searchable prompt picker that live-loads read-only
+  `.yaml`/`.yml`/`.md`/`.txt` entries from the client bundle's Git-trackable
+  `prompts/` directory and merges them with UI-authored private or
+  workspace-shared prompts. Authors/admins can edit or delete database-backed
+  entries, seed a new entry from the current draft, and download a versioned
+  JSON backup suitable for ordinary cloud-drive storage. The generic bundle
+  includes a neutral example prompt.
+- **Resilient live Operations logs**: the task activity viewer now reconnects
+  dropped fetch-based SSE streams and forwards `Last-Event-ID`, resuming at the
+  next tool/message event instead of silently freezing or replaying the live
+  buffer from the start. Tool details are now expandable rather than clipped at
+  600 characters. Live cancellation continues to interrupt the governed run
+  and records the stopping operator; task creators can now stop their own jobs
+  without gaining permission to stop a teammate's job.
+
 - **`fleet mcp test` (docs/MCP-TESTING.md)**: per-server smoke test for the
   bundle's MCP catalog — loads the bundle through the boot loader (same env
   interpolation, enable gates, TLS), spawns/handshakes each server exactly as

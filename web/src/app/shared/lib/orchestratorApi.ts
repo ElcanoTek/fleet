@@ -227,6 +227,31 @@ export type TaskTemplate = {
   task: TaskTemplateTask;
 };
 
+// One entry in the hybrid prompt library. Git entries are bundle-owned and
+// read-only; workspace entries may be private or shared and are editable only
+// by their owner (or an admin).
+export type PromptLibraryItem = {
+  id: string;
+  name: string;
+  description?: string;
+  content: string;
+  source: "git" | "workspace";
+  visibility: "private" | "workspace";
+  read_only: boolean;
+  owned_by_caller: boolean;
+  owner_username?: string;
+  path?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type PromptLibraryWrite = {
+  name: string;
+  description: string;
+  content: string;
+  visibility: "private" | "workspace";
+};
+
 export type DashboardStats = {
   pending_tasks?: number;
   running_tasks?: number;
@@ -332,6 +357,9 @@ export type TaskStreamFrame = {
   task_id?: string;
   cost_usd?: number;
   stopped_by?: string;
+  // SSE transport id, attached client-side (not part of the JSON payload).
+  // Used to resume a dropped live-log connection without duplicate activity.
+  _event_id?: string;
 };
 
 // createSSEParser returns a chunk-feeder that assembles SSE frames and invokes
@@ -351,7 +379,9 @@ export function createSSEParser(onFrame: (frame: TaskStreamFrame) => void): (chu
     buffer = remainder;
     for (const ev of events) {
       try {
-        onFrame(JSON.parse(ev.data) as TaskStreamFrame);
+        const frame = JSON.parse(ev.data) as TaskStreamFrame;
+        if (ev.id) frame._event_id = ev.id;
+        onFrame(frame);
       } catch {
         // tolerate a malformed frame rather than killing the stream
       }
@@ -454,7 +484,8 @@ export const orchestratorApi = {
     ),
   // Cancel/stop a task (#508): flips the row to cancelled with who-stopped-it
   // attribution and interrupts a live run at the governed loop's next
-  // checkpoint. Admin permission required server-side.
+  // checkpoint. Server-side authorization permits admins/scoped cancel keys
+  // and the user who created the task.
   cancelTask: (taskId: string) =>
     request<Task>(`/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
   // Attach to a task's live activity stream (#508). Resolves when the stream
@@ -464,9 +495,12 @@ export const orchestratorApi = {
     taskId: string,
     onFrame: (frame: TaskStreamFrame) => void,
     signal: AbortSignal,
+    lastEventID?: string,
   ): Promise<void> => {
+    const headers = authHeaders({ Accept: "text/event-stream" });
+    if (lastEventID) headers["Last-Event-ID"] = lastEventID;
     const res = await fetch(`/api/orchestrator/tasks/${encodeURIComponent(taskId)}/stream`, {
-      headers: authHeaders({ Accept: "text/event-stream" }),
+      headers,
       cache: "no-store",
       signal,
     });
@@ -508,6 +542,18 @@ export const orchestratorApi = {
 
   // Read-only task-template catalog for "new task from a template" (#262).
   taskTemplates: () => request<TaskTemplate[]>("/task-templates"),
+
+  // Hybrid prompt library shared by chat + Operations Center.
+  prompts: () => request<PromptLibraryItem[]>("/prompts"),
+  createPrompt: (body: PromptLibraryWrite) =>
+    request<PromptLibraryItem>("/prompts", { method: "POST", body: JSON.stringify(body) }),
+  updatePrompt: (id: string, body: PromptLibraryWrite) =>
+    request<PromptLibraryItem>(`/prompts/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deletePrompt: (id: string) =>
+    request<void>(`/prompts/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   // MCP catalog + credential accounts.
   mcpServers: () => request<{ servers: McpServer[] }>("/mcp-servers"),

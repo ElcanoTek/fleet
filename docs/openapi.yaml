@@ -68,6 +68,28 @@ components:
       description: The Elcano unified-auth Ed25519-signed identity cookie (scoped-user tier).
 
   schemas:
+    PromptLibraryWrite:
+      type: object
+      required: [name, content, visibility]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1024 }
+        content: { type: string, minLength: 1, maxLength: 262144 }
+        visibility: { type: string, enum: [private, workspace] }
+    PromptLibraryItem:
+      allOf:
+        - { $ref: "#/components/schemas/PromptLibraryWrite" }
+        - type: object
+          required: [id, source, read_only, owned_by_caller]
+          properties:
+            id: { type: string }
+            source: { type: string, enum: [git, workspace] }
+            read_only: { type: boolean }
+            owned_by_caller: { type: boolean }
+            owner_username: { type: string }
+            path: { type: string }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
     TaskFeedback:
       type: object
       properties:
@@ -776,8 +798,9 @@ paths:
         the terminal result ("stopped by <principal>"). If the task is executing
         in this server process, the governed run is interrupted at its next
         checkpoint: the sandbox is released, the partial transcript persists,
-        and the live stream's terminal frame reports "stopped". Requires the
-        cancel permission (admin).
+        and the live stream's terminal frame reports "stopped". Allowed for a
+        principal with cancel permission (admin/scoped key), or a user stopping
+        a task they personally created.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200": { description: Cancelled (attribution on the task's result). }
@@ -2025,6 +2048,75 @@ paths:
                         tags:
                           type: array
                           items: { type: string }
+
+  /prompts:
+    get:
+      summary: List the visible hybrid prompt library.
+      description: >
+        Merges live-read, read-only files from the client bundle's prompts/
+        directory with the caller's private prompts and all workspace-shared
+        database prompts.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: Visible prompt entries.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/PromptLibraryItem" } }
+    post:
+      summary: Create a private or workspace-shared prompt.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PromptLibraryWrite" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/PromptLibraryItem" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /prompts/export:
+    get:
+      summary: Export the visible hybrid prompt library as versioned JSON.
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "200":
+          description: Portable prompt-library backup.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  format: { type: string, enum: [fleet-prompt-library] }
+                  version: { type: integer, enum: [1] }
+                  exported_at: { type: string, format: date-time }
+                  prompts: { type: array, items: { $ref: "#/components/schemas/PromptLibraryItem" } }
+
+  /prompts/{prompt_id}:
+    parameters:
+      - name: prompt_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      summary: Replace an owned database-backed prompt (admins may replace any).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PromptLibraryWrite" }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/PromptLibraryItem" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Delete an owned database-backed prompt (admins may delete any).
+      security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
 
   /keys:
     post:

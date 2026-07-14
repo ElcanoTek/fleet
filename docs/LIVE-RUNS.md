@@ -19,7 +19,11 @@ for both interactive chat and scheduled tasks (#508).
 - **Live activity view**: opening a *running* task in the Operations Center
   attaches to `GET /tasks/{id}/stream` (SSE — `tool_call` / `tool_result` /
   `agent_message` / `status` frames from the run's observer stream) and renders
-  the activity chronologically, auto-following. Finished tasks keep the
+  the activity chronologically, auto-following. The browser reconnects a
+  dropped fetch stream with `Last-Event-ID`, so mobile/proxy blips resume at the
+  next event instead of freezing the view. Long tool output is collapsible and
+  capped at 20,000 characters per entry; the most recent 1,000 entries stay in
+  the DOM. Finished tasks keep the
   existing persisted-log view; the stream replay's terminal frame now reports
   the task's REAL outcome (previously hardcoded `succeeded`).
 - **Live progress checklist (#518)**: when the agent maintains a plan via the
@@ -40,7 +44,8 @@ for both interactive chat and scheduled tasks (#508).
   **not** retried, dead-lettered, notified, or error-analyzed — a deliberate
   stop is not a failure. The live stream emits a terminal
   `{"status":"stopped","stopped_by":…}` frame. The Stop button appears on the
-  live view for admins (the server enforces the permission).
+  live view for admins and for the task's creator (the server enforces ownership
+  and never lets a member stop a teammate's task).
 - **Classification fix**: a force-cancelled run returns a nil error with a
   partial session; the runner previously mislabeled that as `success`.
   Interruption is now keyed on the task context, so shutdown-grace kills
@@ -51,8 +56,6 @@ for both interactive chat and scheduled tasks (#508).
 - **Redirect/steer a running scheduled task** — per the issue triage,
   redirect/resume comes only after stop is proven. The mapped injection seams
   (enforcement rounds / PrepareStep) are documented in the issue.
-- **Stop permission** stays admin-only (`PermissionCancelTask`); a client
-  stopping its *own* tasks needs the ownership model #190 deferred.
 - Chat's send-while-running take-over stays disabled in the UI (Stop → send
   covers it); `reasoning.*` frames remain deliberately absent from the task
   stream.

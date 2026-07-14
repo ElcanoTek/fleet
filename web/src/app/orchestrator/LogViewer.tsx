@@ -36,8 +36,8 @@ import { Checklist, parseTaskTrackerOutput, type ChecklistState } from "./Checkl
 export type LogViewerProps = {
   task: Task | null;
   onClose: () => void;
-  // canStop shows the Stop button on a live run (#508). The server enforces
-  // the real permission (admin); this only gates the affordance.
+  // canStop shows the Stop button on a live run. The server enforces the real
+  // permission (admin or the task's creator); this only gates the affordance.
   canStop?: boolean;
 };
 
@@ -66,7 +66,10 @@ type ActivityEntry = {
   checklist?: ChecklistState;
 };
 
-const clampText = (s: string, max = 600) => (s.length > max ? s.slice(0, max) + "…" : s);
+// Keep enough tool output for real debugging without letting a pathological
+// result pin an unbounded amount of browser memory. Long entries render behind
+// a disclosure below; the old 600-character clamp hid the useful error tail.
+const clampText = (s: string, max = 20_000) => (s.length > max ? s.slice(0, max) + "\n… output capped at 20,000 characters" : s);
 
 // LiveTaskView attaches to GET /tasks/{id}/stream and renders the run's
 // tool-by-tool activity as it happens (#508): each tool call, its result, and
@@ -83,13 +86,18 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
   const [stopping, setStopping] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const seq = useRef(0);
+  const terminalRef = useRef(false);
+  const lastEventID = useRef<string | undefined>(undefined);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const ac = new AbortController();
     const onFrame = (frame: TaskStreamFrame) => {
+      setStreamError(null);
+      if (frame._event_id) lastEventID.current = frame._event_id;
       if (frame.type === "status") {
         if (frame.status && frame.status !== "running") {
+          terminalRef.current = true;
           setRunStatus(frame.status);
           if (frame.stopped_by) setStoppedBy(frame.stopped_by);
         }
@@ -115,16 +123,31 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
         }
       }
       if (entry) {
-        setEntries((prev) => [...prev, entry]);
+        // Bound the DOM/history for extremely chatty runs while retaining the
+        // most recent activity where failures and final output appear.
+        setEntries((prev) => [...prev, entry!].slice(-1000));
       }
     };
-    orchestratorApi
-      .streamTaskActivity(task.id, onFrame, ac.signal)
-      .catch((err: unknown) => {
-        if (!ac.signal.aborted) {
-          setStreamError(err instanceof Error ? err.message : "stream failed");
+    // fetch streams do not reconnect like EventSource. Keep reattaching with
+    // Last-Event-ID until a terminal status arrives, so a proxy/mobile network
+    // blip does not silently freeze the live Operations Center view.
+    const pump = async () => {
+      let failures = 0;
+      while (!ac.signal.aborted && !terminalRef.current) {
+        try {
+          await orchestratorApi.streamTaskActivity(task.id, onFrame, ac.signal, lastEventID.current);
+          failures = 0;
+          if (!terminalRef.current) await new Promise((resolve) => window.setTimeout(resolve, 500));
+        } catch (err) {
+          if (ac.signal.aborted) return;
+          failures += 1;
+          setStreamError(`${err instanceof Error ? err.message : "stream failed"}; reconnecting…`);
+          await new Promise((resolve) => window.setTimeout(resolve, Math.min(5000, 500 * 2 ** Math.min(failures, 4))));
         }
-      });
+      }
+      if (terminalRef.current) setStreamError(null);
+    };
+    void pump();
     return () => ac.abort();
   }, [task.id]);
 
@@ -194,6 +217,11 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
                   <div className="log-message-content">
                     {e.checklist ? (
                       <Checklist state={e.checklist} />
+                    ) : e.kind !== "message" && e.text.length > 1200 ? (
+                      <details>
+                        <summary style={{ cursor: "pointer" }}>Show tool details ({e.text.length.toLocaleString()} characters)</summary>
+                        <pre style={{ whiteSpace: "pre-wrap", margin: "0.5rem 0 0" }}>{e.text}</pre>
+                      </details>
                     ) : (
                       <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: e.kind === "message" ? "inherit" : undefined }}>{e.text}</pre>
                     )}

@@ -1,11 +1,6 @@
 "use client";
 
-import dynamic from "next/dynamic";
-
-const ChatExperience = dynamic(
-  () => import("./ui/chat-experience").then((module) => module.ChatExperience),
-  { ssr: false },
-);
+import { ChatExperience } from "./ui/chat-experience";
 
 export function PageClient() {
   return <ChatExperience />;
