@@ -190,14 +190,9 @@ export function PromptLibrary({
                   >
                     <Icon name="book" className="size-4.5" />
                   </span>
-                  <div className="min-w-0 flex-1">
-                    <h2 className="m-0 text-base font-semibold text-[var(--color-text-primary)]">
-                      Prompt library
-                    </h2>
-                    <p className="m-0 truncate text-xs text-[var(--color-text-muted)]">
-                      Git-backed team prompts and workspace prompts, together.
-                    </p>
-                  </div>
+                  <h2 className="m-0 min-w-0 flex-1 truncate text-base font-semibold text-[var(--color-text-primary)]">
+                    Prompt library
+                  </h2>
                   {/* The close stays pinned to the title row (top-right) even when
                   the action buttons wrap to a second row on phones. */}
                   <button
