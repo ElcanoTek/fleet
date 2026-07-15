@@ -130,7 +130,7 @@ func TestStreamTaskLogs_FallbackToStoredLog(t *testing.T) {
 		Cost:  0.42,
 		Messages: []models.LogMessage{
 			{ID: "m1", Role: "assistant", Content: "doing the work", ToolCalls: []models.LogToolCall{{ID: "c1", Name: "bash", Arguments: "{}"}}},
-			{ID: "m2", Role: "tool", Content: "ok", ToolCallID: strptr("c1")},
+			{ID: "m2", Role: "tool", Content: "failed", ToolCallID: strptr("c1"), IsError: true},
 		},
 	}); err != nil {
 		t.Fatalf("AddLog: %v", err)
@@ -143,7 +143,7 @@ func TestStreamTaskLogs_FallbackToStoredLog(t *testing.T) {
 	streamRouter(h).ServeHTTP(rw, req)
 
 	body := rw.Body()
-	for _, want := range []string{"event: tool_call", "event: agent_message", "event: tool_result", "event: status", `"status":"succeeded"`, `"cost_usd":0.42`} {
+	for _, want := range []string{"event: tool_call", "event: agent_message", "event: tool_result", `"name":"bash"`, `"error":true`, "event: status", `"status":"succeeded"`, `"cost_usd":0.42`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("stored-log replay missing %q:\n%s", want, body)
 		}
