@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -29,5 +30,21 @@ func TestRenderMCPCatalog_SurfacesAccountSeats(t *testing.T) {
 	}
 	if strings.Contains(out, "plainsv — accounts:") {
 		t.Fatalf("plainsv has no suffixed env → should report no accounts, got:\n%s", out)
+	}
+}
+
+// The loader's prose has always called client optional, but without omitempty
+// fantasy advertised it as required and providers rejected the only valid call
+// for HTTP servers (mcp_load_servers(names=["fast_io"])). Keep the generated
+// schema aligned with the runtime contract.
+func TestMCPLoadServers_ClientIsOptionalInSchema(t *testing.T) {
+	a := &Agent{}
+	loader := a.buildLoaderTools()[1]
+	info := loader.Info()
+	if !slices.Contains(info.Required, "names") {
+		t.Fatalf("required fields = %v, want names", info.Required)
+	}
+	if slices.Contains(info.Required, "client") {
+		t.Fatalf("required fields = %v; client must be optional", info.Required)
 	}
 }
