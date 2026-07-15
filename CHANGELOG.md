@@ -53,6 +53,14 @@ prior versions are listed because none have shipped.
 
 ### Changed
 
+- **Removed the stale Projects button from the collapsed sidebar**: the ≥sm
+  icon strip carried a standalone briefcase button that opened the old
+  Projects modal — leftover from before the rail's own Projects section
+  (#509) became the entry point. Dropped the button and its `onOpenProjects`
+  wiring; creating, opening, and pinning projects from the expanded rail is
+  unchanged.
+
+
 - **Fleet application icons**: browser favicons, iOS/Android install icons, and
   the maskable launcher icon now derive from one checked-in Fleet mark. App
   Router file conventions eliminate duplicate icon metadata, and installed-app
