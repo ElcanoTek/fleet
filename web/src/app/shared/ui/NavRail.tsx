@@ -112,20 +112,14 @@ function navItemClass(active: boolean, collapsed: boolean): string {
   ].join(" ");
 }
 
-// navTileClass — the icon sits in a small hue-tinted tile so each surface
-// carries its own color identity (chat = brand lavender, ops = the running
-// cyan the Operations Center uses everywhere). Hover gives a motion-safe
-// lift; active saturates the tint. This is what keeps the rail from reading
-// as a column of identical gray glyphs.
-function navTileClass(active: boolean, hue: "chat" | "ops"): string {
-  const tint =
-    hue === "ops"
-      ? active
-        ? "bg-[var(--color-status-running-bg)] text-[#2fb7dc] shadow-[0_0_10px_var(--color-status-running-bg)]"
-        : "bg-[color-mix(in_srgb,#2fb7dc_10%,transparent)] text-[color-mix(in_srgb,#2fb7dc_75%,var(--color-text-secondary))]"
-      : active
-        ? "bg-[color-mix(in_srgb,var(--color-accent)_24%,transparent)] text-[var(--color-accent)] shadow-[0_0_10px_color-mix(in_srgb,var(--color-accent)_24%,transparent)]"
-        : "bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] text-[color-mix(in_srgb,var(--color-accent)_75%,var(--color-text-secondary))]";
+// navTileClass — the icon sits in a small accent-tinted tile with a
+// motion-safe hover lift; active saturates the tint with a soft glow. One
+// brand hue for every surface (per-surface colors read as noise here — the
+// status palette stays reserved for actual task states).
+function navTileClass(active: boolean): string {
+  const tint = active
+    ? "bg-[color-mix(in_srgb,var(--color-accent)_24%,transparent)] text-[var(--color-accent)] shadow-[0_0_10px_color-mix(in_srgb,var(--color-accent)_24%,transparent)]"
+    : "bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] text-[color-mix(in_srgb,var(--color-accent)_75%,var(--color-text-secondary))]";
   return [
     "flex size-7 shrink-0 items-center justify-center rounded-[0.55rem] transition",
     "motion-safe:group-hover/nav:scale-110 group-hover/nav:text-[var(--color-text-primary)]",
@@ -312,7 +306,7 @@ export function NavRail({
             ariaCurrent={activeView === "chat" ? "page" : undefined}
             dataTip={collapsed ? "Chat" : undefined}
           >
-            <span className={navTileClass(activeView === "chat", "chat")} aria-hidden="true">
+            <span className={navTileClass(activeView === "chat")} aria-hidden="true">
               <Icon name="message" className="size-[1rem]" />
             </span>
             <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>Chat</span>
@@ -328,7 +322,7 @@ export function NavRail({
                 : undefined
             }
           >
-            <span className={navTileClass(activeView === "orchestrator", "ops")} aria-hidden="true">
+            <span className={navTileClass(activeView === "orchestrator")} aria-hidden="true">
               <Icon name="grid" className="size-[1rem]" />
             </span>
             <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>
