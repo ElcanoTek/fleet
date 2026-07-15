@@ -129,42 +129,92 @@
   --stat-tone-success: #50fa7b;
   --stat-tone-error: #ff5555;
   --gradient-bg-home-signature:
-    radial-gradient(circle at 8% -4%, rgba(114, 114, 171, 0.34), transparent 34%),
-    radial-gradient(circle at 92% 2%, rgba(88, 111, 124, 0.28), transparent 32%),
-    radial-gradient(circle at 72% 82%, rgba(114, 114, 171, 0.18), transparent 30%),
+    radial-gradient(
+      circle at 8% -4%,
+      rgba(114, 114, 171, 0.34),
+      transparent 34%
+    ),
+    radial-gradient(
+      circle at 92% 2%,
+      rgba(88, 111, 124, 0.28),
+      transparent 32%
+    ),
+    radial-gradient(
+      circle at 72% 82%,
+      rgba(114, 114, 171, 0.18),
+      transparent 30%
+    ),
     linear-gradient(150deg, #0f0612 0%, #1a0b1e 52%, #090409 100%);
   /* App-wide page background (unified-shell design): painted once on <body>
      under the transparent chat/orchestrator shells, so the rail and main
      column share a single continuous gradient. */
   --gradient-bg:
-    radial-gradient(circle at 8% -4%, rgba(114, 114, 171, 0.3), transparent 34%),
-    radial-gradient(circle at 92% 2%, rgba(88, 111, 124, 0.24), transparent 32%),
+    radial-gradient(
+      circle at 8% -4%,
+      rgba(114, 114, 171, 0.3),
+      transparent 34%
+    ),
+    radial-gradient(
+      circle at 92% 2%,
+      rgba(88, 111, 124, 0.24),
+      transparent 32%
+    ),
     linear-gradient(150deg, #0f0612 0%, #1a0b1e 52%, #090409 100%);
   --gradient-bg-ops-console:
-    radial-gradient(ellipse at center, rgba(113, 114, 170, 0.06) 0%, transparent 60%),
+    radial-gradient(
+      ellipse at center,
+      rgba(113, 114, 170, 0.06) 0%,
+      transparent 60%
+    ),
     linear-gradient(180deg, #1a0b1e 0%, #241b31 40%, #1a0b1e 100%);
-  --gradient-surface-panel:
-    linear-gradient(165deg, rgba(26, 11, 30, 0.88), rgba(52, 43, 73, 0.82));
-  --gradient-surface-card:
-    linear-gradient(145deg, rgba(38, 21, 44, 0.92), rgba(23, 13, 29, 0.88));
-  --gradient-surface-elevated:
-    linear-gradient(150deg, rgba(30, 17, 36, 0.94), rgba(22, 12, 28, 0.92));
-  --gradient-action-primary:
-    linear-gradient(140deg, #7272ab, #586f7c);
-  --gradient-featured-top-accent:
-    linear-gradient(90deg, rgba(200, 201, 237, 0.95), rgba(114, 114, 171, 0.45));
-  --sidebar-surface: linear-gradient(180deg, rgba(16, 8, 21, 0.92), rgba(19, 12, 25, 0.86));
+  --gradient-surface-panel: linear-gradient(
+    165deg,
+    rgba(26, 11, 30, 0.88),
+    rgba(52, 43, 73, 0.82)
+  );
+  --gradient-surface-card: linear-gradient(
+    145deg,
+    rgba(38, 21, 44, 0.92),
+    rgba(23, 13, 29, 0.88)
+  );
+  --gradient-surface-elevated: linear-gradient(
+    150deg,
+    rgba(30, 17, 36, 0.94),
+    rgba(22, 12, 28, 0.92)
+  );
+  --gradient-action-primary: linear-gradient(140deg, #7272ab, #586f7c);
+  --gradient-featured-top-accent: linear-gradient(
+    90deg,
+    rgba(200, 201, 237, 0.95),
+    rgba(114, 114, 171, 0.45)
+  );
+  --sidebar-surface: linear-gradient(
+    180deg,
+    rgba(16, 8, 21, 0.92),
+    rgba(19, 12, 25, 0.86)
+  );
   --hero-surface:
     linear-gradient(165deg, rgba(31, 18, 39, 0.9), rgba(29, 18, 37, 0.72)),
     var(--gradient-surface-panel);
   --subtle-panel-bg: rgba(255, 255, 255, 0.03);
-  --conversation-surface: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
+  --conversation-surface: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.02),
+    rgba(255, 255, 255, 0.01)
+  );
   --assistant-message-bg: rgba(255, 255, 255, 0.03);
-  --composer-surface:
-    linear-gradient(180deg, rgba(31, 18, 39, 0.94), rgba(24, 13, 31, 0.98));
+  --composer-surface: linear-gradient(
+    180deg,
+    rgba(31, 18, 39, 0.94),
+    rgba(24, 13, 31, 0.98)
+  );
   --composer-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
-  --sticky-fade:
-    linear-gradient(180deg, rgba(26, 11, 30, 0), rgba(26, 11, 30, 0.72) 18%, rgba(26, 11, 30, 0.95));
+  --sticky-fade: linear-gradient(
+    180deg,
+    rgba(26, 11, 30, 0),
+    rgba(26, 11, 30, 0.72) 18%,
+    rgba(26, 11, 30, 0.95)
+  );
   --space-2: 0.5rem;
   --space-3: 0.75rem;
   --space-4: 1rem;
@@ -281,15 +331,35 @@
   --stat-tone-success: #137b47;
   --stat-tone-error: #b02a2a;
   --gradient-bg-home-signature:
-    radial-gradient(circle at 9% -8%, rgba(114, 114, 171, 0.28), transparent 42%),
-    radial-gradient(circle at 90% 0%, rgba(88, 111, 124, 0.24), transparent 38%),
+    radial-gradient(
+      circle at 9% -8%,
+      rgba(114, 114, 171, 0.28),
+      transparent 42%
+    ),
+    radial-gradient(
+      circle at 90% 0%,
+      rgba(88, 111, 124, 0.24),
+      transparent 38%
+    ),
     linear-gradient(150deg, #f7f9ff 0%, #eaf0ff 52%, #e2e9fb 100%);
   --gradient-bg:
-    radial-gradient(circle at 9% -8%, rgba(114, 114, 171, 0.24), transparent 42%),
+    radial-gradient(
+      circle at 9% -8%,
+      rgba(114, 114, 171, 0.24),
+      transparent 42%
+    ),
     linear-gradient(150deg, #f7f9ff 0%, #eaf0ff 52%, #e2e9fb 100%);
   --gradient-bg-ops-console:
-    radial-gradient(circle at 18% 22%, rgba(88, 111, 124, 0.28), transparent 48%),
-    radial-gradient(circle at 80% 82%, rgba(114, 114, 171, 0.22), transparent 46%),
+    radial-gradient(
+      circle at 18% 22%,
+      rgba(88, 111, 124, 0.28),
+      transparent 48%
+    ),
+    radial-gradient(
+      circle at 80% 82%,
+      rgba(114, 114, 171, 0.22),
+      transparent 46%
+    ),
     linear-gradient(180deg, #edf2ff 0%, #dce6fb 45%, #e7edfc 100%);
   --gradient-surface-panel: linear-gradient(165deg, #ffffff, #f2f6ff);
   --gradient-surface-card: linear-gradient(145deg, #ffffff, #eef3ff);
@@ -297,20 +367,42 @@
   /* Deepened so white button text clears AA contrast on the light
      background; the dark-theme default reads fine on dark surfaces. */
   --gradient-action-primary: linear-gradient(140deg, #565699, #41566a);
-  --gradient-featured-top-accent:
-    linear-gradient(90deg, rgba(114, 114, 171, 0.42), rgba(88, 111, 124, 0.22));
-  --sidebar-surface: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(240, 245, 255, 0.9));
+  --gradient-featured-top-accent: linear-gradient(
+    90deg,
+    rgba(114, 114, 171, 0.42),
+    rgba(88, 111, 124, 0.22)
+  );
+  --sidebar-surface: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.94),
+    rgba(240, 245, 255, 0.9)
+  );
   --hero-surface:
-    linear-gradient(165deg, rgba(255, 255, 255, 0.96), rgba(239, 244, 255, 0.92)),
+    linear-gradient(
+      165deg,
+      rgba(255, 255, 255, 0.96),
+      rgba(239, 244, 255, 0.92)
+    ),
     var(--gradient-surface-panel);
   --subtle-panel-bg: rgba(255, 255, 255, 0.78);
-  --conversation-surface: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(247, 250, 255, 0.92));
+  --conversation-surface: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.84),
+    rgba(247, 250, 255, 0.92)
+  );
   --assistant-message-bg: rgba(255, 255, 255, 0.88);
-  --composer-surface:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 247, 255, 0.98));
+  --composer-surface: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.96),
+    rgba(244, 247, 255, 0.98)
+  );
   --composer-shadow: 0 18px 42px rgba(38, 55, 92, 0.16);
-  --sticky-fade:
-    linear-gradient(180deg, rgba(244, 246, 251, 0), rgba(244, 246, 251, 0.82) 18%, rgba(244, 246, 251, 0.97));
+  --sticky-fade: linear-gradient(
+    180deg,
+    rgba(244, 246, 251, 0),
+    rgba(244, 246, 251, 0.82) 18%,
+    rgba(244, 246, 251, 0.97)
+  );
   --shadow-sm: 0 6px 14px rgba(40, 52, 86, 0.12);
   --shadow-md: 0 10px 18px rgba(38, 55, 92, 0.16);
   --shadow-lg: 0 16px 34px rgba(38, 55, 92, 0.2);
@@ -439,14 +531,18 @@
 /* ── Tooltips ────────────────────────────────────────────────────────────
    Pure-CSS labels shown on hover AND keyboard focus after a short delay.
    data-tip places the label to the right of the control (collapsed-rail
-   icons); data-tip-top centers it above (bulk bar, composer tools). No JS,
-   so any element can carry one; set the attribute conditionally to disable. */
+   icons); data-tip-top centers it above (bulk bar, composer tools);
+   data-tip-bottom centers it below (top-bar icons, where "above" would be
+   clipped off the top of the page). No JS, so any element can carry one; set
+   the attribute conditionally to disable. */
 [data-tip],
-[data-tip-top] {
+[data-tip-top],
+[data-tip-bottom] {
   position: relative;
 }
 [data-tip]::after,
-[data-tip-top]::after {
+[data-tip-top]::after,
+[data-tip-bottom]::after {
   position: absolute;
   z-index: 500;
   width: max-content;
@@ -476,10 +572,18 @@
   bottom: calc(100% + 0.45rem);
   transform: translateX(-50%);
 }
+[data-tip-bottom]::after {
+  content: attr(data-tip-bottom);
+  left: 50%;
+  top: calc(100% + 0.45rem);
+  transform: translateX(-50%);
+}
 [data-tip]:hover::after,
 [data-tip]:focus-visible::after,
 [data-tip-top]:hover::after,
-[data-tip-top]:focus-visible::after {
+[data-tip-top]:focus-visible::after,
+[data-tip-bottom]:hover::after,
+[data-tip-bottom]:focus-visible::after {
   opacity: 1;
   transition-delay: 350ms;
 }
@@ -569,7 +673,9 @@ body {
   font-family: var(--font-body);
   font-size: var(--font-size-body);
   line-height: var(--line-height-body);
-  transition: color var(--transition-base), background var(--transition-base);
+  transition:
+    color var(--transition-base),
+    background var(--transition-base);
 }
 
 /* Default interactive elements to the inherited font. In @layer base so it
@@ -718,11 +824,13 @@ button {
 }
 
 .message-enter-user {
-  animation: message-in-user var(--motion-base) cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: message-in-user var(--motion-base) cubic-bezier(0.22, 1, 0.36, 1)
+    both;
 }
 
 .message-enter-assistant {
-  animation: message-in-assistant var(--motion-base) cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: message-in-assistant var(--motion-base)
+    cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* ── Suggestion card enter ──────────────────────────────────── */
@@ -738,7 +846,8 @@ button {
 }
 
 .suggestion-enter {
-  animation: suggestion-in var(--motion-base) cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: suggestion-in var(--motion-base) cubic-bezier(0.22, 1, 0.36, 1)
+    both;
 }
 
 /* ── Assistant markdown ──────────────────────────────────────── */
@@ -826,7 +935,8 @@ button {
   padding: 0.5rem 0.2rem 0.5rem 0;
   text-align: left;
   vertical-align: top;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-text-muted) 14%, transparent);
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--color-text-muted) 14%, transparent);
 }
 
 .assistant-markdown-th {
@@ -850,7 +960,11 @@ button {
   padding: 0.02rem 0.22rem;
   font-family: var(--font-code-ui);
   font-size: 0.9em;
-  color: color-mix(in srgb, var(--color-text-primary) 88%, var(--color-text-secondary));
+  color: color-mix(
+    in srgb,
+    var(--color-text-primary) 88%,
+    var(--color-text-secondary)
+  );
 }
 
 .assistant-markdown-pre {
@@ -890,7 +1004,8 @@ button {
   justify-content: space-between;
   gap: 0.5rem;
   padding: 0.3rem 0.7rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--color-border) 45%, transparent);
 }
 
 .assistant-markdown-pre-lang {
@@ -909,7 +1024,9 @@ button {
   color: var(--color-text-muted);
   padding: 0.15rem 0.45rem;
   border-radius: 0.4rem;
-  transition: color var(--transition-fast), background var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
 }
 
 .assistant-markdown-pre-copy:hover {
@@ -1079,7 +1196,9 @@ button {
   text-decoration: underline;
   text-underline-offset: 0.18em;
   text-decoration-thickness: 1px;
-  transition: color var(--transition-fast), text-decoration-thickness var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    text-decoration-thickness var(--transition-fast);
   cursor: pointer;
 }
 
@@ -1120,8 +1239,12 @@ button {
 }
 
 @keyframes thinking-shimmer {
-  0%   { background-position: 100% center; }
-  100% { background-position: -100% center; }
+  0% {
+    background-position: 100% center;
+  }
+  100% {
+    background-position: -100% center;
+  }
 }
 
 @keyframes thinking-pulse {
@@ -1237,7 +1360,9 @@ button {
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color var(--transition-fast), opacity var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    opacity var(--transition-fast);
   background: transparent;
   color: var(--color-text-primary);
 }
@@ -2591,7 +2716,9 @@ tr.sla-row-fail {
   flex: 0 0 auto;
   color: var(--color-text-muted);
   transform: rotate(-90deg);
-  transition: transform var(--motion-fast) ease, color var(--motion-fast) ease;
+  transition:
+    transform var(--motion-fast) ease,
+    color var(--motion-fast) ease;
 }
 .task-reveal.is-open .task-reveal-chevron {
   transform: rotate(0deg);
@@ -2641,7 +2768,9 @@ tr.sla-row-fail {
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
-  transition: grid-template-rows var(--motion-fast) ease, opacity var(--motion-fast) ease;
+  transition:
+    grid-template-rows var(--motion-fast) ease,
+    opacity var(--motion-fast) ease;
 }
 .task-reveal.is-open .task-reveal-body {
   grid-template-rows: 1fr;
@@ -2685,7 +2814,9 @@ tr.sla-row-fail {
   border-radius: 50%;
   background: var(--color-text-muted);
   transform: translateY(-50%);
-  transition: left var(--motion-fast) ease, background var(--motion-fast) ease;
+  transition:
+    left var(--motion-fast) ease,
+    background var(--motion-fast) ease;
 }
 .ui-switch:checked {
   background: var(--color-primary);
@@ -2874,7 +3005,10 @@ tr.sla-row-fail {
   font-size: 0.875rem;
   transition: border-color var(--motion-fast, 0.12s) ease;
 }
-.modal-lg input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus-visible,
+.modal-lg
+  input:not([type="checkbox"]):not([type="radio"]):not(
+    [type="file"]
+  ):focus-visible,
 .modal-lg select:focus-visible,
 .modal-lg textarea:focus-visible {
   outline: none;
@@ -3131,7 +3265,9 @@ tr.sla-row-fail {
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
+  transition:
+    background var(--motion-fast) ease,
+    color var(--motion-fast) ease;
 }
 .task-segment-btn:hover {
   color: var(--color-text-secondary);
@@ -3309,7 +3445,9 @@ tr.sla-row-fail {
   padding: 0.375rem 0.7rem;
   cursor: pointer;
   text-align: left;
-  transition: border-color var(--motion-fast, 0.12s) ease, background var(--motion-fast, 0.12s) ease;
+  transition:
+    border-color var(--motion-fast, 0.12s) ease,
+    background var(--motion-fast, 0.12s) ease;
 }
 .preset-btn:hover {
   border-color: var(--color-border-strong);
@@ -3354,7 +3492,9 @@ tr.sla-row-fail {
   padding: 0.65rem 0.75rem;
   cursor: pointer;
   text-align: left;
-  transition: border-color var(--motion-fast, 0.12s) ease, background var(--motion-fast, 0.12s) ease;
+  transition:
+    border-color var(--motion-fast, 0.12s) ease,
+    background var(--motion-fast, 0.12s) ease;
 }
 .template-card:hover {
   border-color: var(--color-primary);
@@ -3466,7 +3606,9 @@ tr.sla-row-fail {
   font-weight: 500;
   padding: 0.375rem 0.75rem;
   cursor: pointer;
-  transition: border-color var(--motion-fast) ease, background var(--motion-fast) ease;
+  transition:
+    border-color var(--motion-fast) ease,
+    background var(--motion-fast) ease;
 }
 .file-attach-btn:hover {
   border-color: var(--color-border-strong);
@@ -3720,7 +3862,9 @@ select.mcp-server-picker__account-select {
   z-index: 2;
   padding: 1rem 1.25rem 0.875rem;
   background: var(--color-surface-1);
-  transition: box-shadow var(--motion-fast) ease, opacity var(--motion-fast) ease;
+  transition:
+    box-shadow var(--motion-fast) ease,
+    opacity var(--motion-fast) ease;
 }
 .task-modal .modal-header.is-scrolled {
   box-shadow: 0 8px 18px var(--color-overlay-strong);
@@ -3774,7 +3918,9 @@ select.mcp-server-picker__account-select {
 }
 /* Equal-specificity width overrides for the compact inline controls — must
    beat the .modal-lg "every field is 100% wide" anchor by order. */
-.task-modal .task-chipfield input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
+.task-modal
+  .task-chipfield
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
   flex: 1 1 auto;
   width: auto;
   min-width: 9rem;
@@ -3783,12 +3929,18 @@ select.mcp-server-picker__account-select {
   padding: 0.125rem;
   font-size: 0.8rem;
 }
-.task-modal .task-chipfield input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus-visible {
+.task-modal
+  .task-chipfield
+  input:not([type="checkbox"]):not([type="radio"]):not(
+    [type="file"]
+  ):focus-visible {
   outline: none;
   border: none;
   box-shadow: none;
 }
-.task-modal .task-gate-options input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
+.task-modal
+  .task-gate-options
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
   width: 3.5rem;
   padding: 0.31rem 0.56rem;
   font-size: 0.78rem;
@@ -3827,7 +3979,9 @@ select.mcp-server-picker__account-select {
 .task-modal .task-gate-command {
   margin-top: 0.625rem;
 }
-.task-modal .task-limits-grid input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
+.task-modal
+  .task-limits-grid
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]) {
   min-height: 2.125rem;
   padding: 0.44rem 0.7rem;
   font-size: 0.8rem;
@@ -3841,11 +3995,16 @@ select.mcp-server-picker__account-select {
 }
 /* The :not chain mirrors the .modal-lg field anchor so this outranks its
    accent :focus-visible ring (text inputs always match focus-visible). */
-.task-modal input.has-error:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus,
+.task-modal
+  input.has-error:not([type="checkbox"]):not([type="radio"]):not(
+    [type="file"]
+  ):focus,
 .task-modal textarea.has-error:focus {
   outline: none;
   border-color: var(--color-danger);
-  box-shadow: 0 0 0 2px var(--color-surface-1), 0 0 0 4px var(--color-danger);
+  box-shadow:
+    0 0 0 2px var(--color-surface-1),
+    0 0 0 4px var(--color-danger);
 }
 
 /* Dirty-close guard: an in-modal scrim + confirm card ("Discard this task?").
@@ -4312,7 +4471,11 @@ select.mcp-server-picker__account-select {
   border-bottom: 1px solid var(--color-border-subtle);
 }
 .log-message--user .log-message-head {
-  background: color-mix(in srgb, var(--color-primary) 22%, var(--color-surface-2));
+  background: color-mix(
+    in srgb,
+    var(--color-primary) 22%,
+    var(--color-surface-2)
+  );
 }
 .log-message--tool .log-message-head {
   background: color-mix(in srgb, #7c6bff 14%, var(--color-surface-2));
