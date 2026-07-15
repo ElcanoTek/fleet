@@ -68,19 +68,22 @@ const GLYPH: Record<ChecklistTask["status"], string> = {
   done: "[✓]",
 };
 
-// Checklist renders the parsed plan. `live` marks the sticky top progress panel
-// (updated each task_tracker result) vs an inline history entry.
-export function Checklist({ state, live }: { state: ChecklistState; live?: boolean }) {
+// Checklist renders the parsed plan. The live activity view owns its compact
+// progress header and asks this component for items only when the operator
+// expands it; ordinary stored-log rendering keeps the summary.
+export function Checklist({ state, live, showSummary = true }: { state: ChecklistState; live?: boolean; showSummary?: boolean }) {
   const { tasks, summary } = state;
   return (
     <div className={`checklist${live ? " checklist--live" : ""}`} data-testid={live ? "live-checklist" : "checklist"}>
-      <div className="checklist-summary">
-        <span className="checklist-summary-label">{live ? "Progress" : "Checklist"}</span>
-        <span className="checklist-summary-count" data-testid="checklist-summary">
-          {summary.done}/{summary.total} done
-          {summary.in_progress > 0 ? ` · ${summary.in_progress} in progress` : ""}
-        </span>
-      </div>
+      {showSummary ? (
+        <div className="checklist-summary">
+          <span className="checklist-summary-label">{live ? "Progress" : "Checklist"}</span>
+          <span className="checklist-summary-count" data-testid="checklist-summary">
+            {summary.done}/{summary.total} done
+            {summary.in_progress > 0 ? ` · ${summary.in_progress} in progress` : ""}
+          </span>
+        </div>
+      ) : null}
       <ul className="checklist-items">
         {tasks.map((t, i) => (
           <li key={i} className={`checklist-item checklist-item--${t.status}`} data-testid="checklist-item">

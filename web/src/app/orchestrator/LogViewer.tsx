@@ -182,6 +182,32 @@ function SessionMetrics({ session }: { session: LogSession }) {
   );
 }
 
+function deferredToolDisplay(name: string | undefined, input: string | undefined) {
+  const fallback = { name: name || "tool", input: input ?? "" };
+  if (name !== "tool_call" || !input) return fallback;
+  try {
+    const envelope = JSON.parse(input) as { name?: unknown; arguments?: unknown };
+    if (typeof envelope.name !== "string" || !envelope.name) return fallback;
+    let args = envelope.arguments;
+    // Calls emitted from the old incorrect schema wrapped the argument object
+    // in a singleton array. Display the nested call as it will be repaired by
+    // the server during a rolling deployment.
+    if (Array.isArray(args) && args.length === 1 && args[0] && typeof args[0] === "object") {
+      args = args[0];
+    }
+    return { name: envelope.name, input: JSON.stringify(args ?? {}, null, 2) };
+  } catch {
+    return fallback;
+  }
+}
+
+function readableToolError(raw: string) {
+  if (/cannot unmarshal array into Go value of type map\[string\]interface/i.test(raw)) {
+    return "Invalid tool arguments: Fleet expected a JSON object but received an array.";
+  }
+  return raw;
+}
+
 // ── interaction filters ──────────────────────────────────────────────────────
 // Chip taxonomy computed once per session: highlight kinds, tool names,
 // models, providers. Selecting chips narrows the transcript to messages
@@ -200,7 +226,9 @@ function buildFilterIndex(messages: LogMessage[]): {
   const callName = new Map<string, string>();
   for (const m of messages) {
     for (const tc of m.tool_calls ?? []) {
-      if (tc.id && tc.name) callName.set(tc.id, tc.name);
+      if (tc.id && tc.name) {
+        callName.set(tc.id, deferredToolDisplay(tc.name, tc.arguments).name);
+      }
     }
   }
   const toolNames = new Map<number, string>();
@@ -212,9 +240,11 @@ function buildFilterIndex(messages: LogMessage[]): {
     if ((m.tool_calls?.length ?? 0) > 0) t.add("hl:tool-calls");
     if (role === "tool") t.add("hl:tool-results");
     const names = new Set<string>();
-    for (const tc of m.tool_calls ?? []) if (tc.name) names.add(tc.name);
-    if (role === "tool" && m.tool_call_id) {
-      const n = callName.get(m.tool_call_id);
+    for (const tc of m.tool_calls ?? []) {
+      if (tc.name) names.add(deferredToolDisplay(tc.name, tc.arguments).name);
+    }
+    if (role === "tool") {
+      const n = (m.tool_call_id ? callName.get(m.tool_call_id) : undefined) || m.tool_name;
       if (n) {
         names.add(n);
         toolNames.set(i, n);
@@ -348,17 +378,24 @@ function LogMessageCard({
         ) : null}
         {(msg.tool_calls?.length ?? 0) > 0 ? (
           <div className="log-tool-calls">
-            {msg.tool_calls!.map((tc, i) => (
-              <details key={tc.id ?? i} className="log-tool-call">
-                <summary>{tc.name ?? "tool"}</summary>
-                <pre className="log-pre">{tc.arguments ?? ""}</pre>
-              </details>
-            ))}
+            {msg.tool_calls!.map((tc, i) => {
+              const display = deferredToolDisplay(tc.name, tc.arguments);
+              return (
+                <details key={tc.id ?? i} className="log-tool-call" data-testid="stored-tool-call">
+                  <summary>{display.name}</summary>
+                  <pre className="log-pre">{display.input}</pre>
+                </details>
+              );
+            })}
           </div>
         ) : null}
         {content ? (
           role === "tool" ? (
-            content.length > 1200 ? (
+            msg.is_error ? (
+              <p className="log-tool-error" data-testid="stored-tool-result">
+                {readableToolError(content)}
+              </p>
+            ) : content.length > 1200 ? (
               <details className="log-tool-output">
                 <summary>
                   Tool output ({content.length.toLocaleString()} characters)
@@ -385,14 +422,20 @@ function LogMessageCard({
 
 type ActivityEntry = {
   key: string;
-  kind: "message" | "tool_call" | "tool_result";
+  kind: "message" | "tool";
+  callId?: string;
   name?: string;
   text: string;
+  result?: string;
   isError?: boolean;
-  // checklist is set for a task_tracker tool_result whose JSON parsed into a
-  // plan (#518); the entry then renders as a checklist instead of raw text.
-  checklist?: ChecklistState;
+  pending?: boolean;
+  repeats?: number;
 };
+
+function sameFailedCall(a: ActivityEntry, b: ActivityEntry) {
+  return a.kind === "tool" && b.kind === "tool" && a.isError && b.isError &&
+    a.name === b.name && a.text === b.text && a.result === b.result;
+}
 
 // Keep enough tool output for real debugging without letting a pathological
 // result pin an unbounded amount of browser memory. Long entries render behind
@@ -420,6 +463,7 @@ function LiveTaskView({
   // checklist holds the LATEST task_tracker plan (#518) for the live progress
   // panel; it updates each time the agent revises its plan mid-run.
   const [checklist, setChecklist] = useState<ChecklistState | null>(null);
+  const [checklistOpen, setChecklistOpen] = useState(false);
   const [runStatus, setRunStatus] = useState<string>("running");
   const [stoppedBy, setStoppedBy] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -442,48 +486,78 @@ function LiveTaskView({
         }
         return;
       }
-      const key = `e${seq.current++}`;
-      let entry: ActivityEntry | null = null;
       if (frame.type === "agent_message" && frame.content) {
-        entry = { key, kind: "message", text: frame.content };
+        const content = frame.content;
+        // Coalesce adjacent text deltas into one readable assistant entry.
+        setEntries((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.kind === "message") {
+            return [...prev.slice(0, -1), { ...last, text: clampText(last.text + content) }];
+          }
+          const entry: ActivityEntry = { key: `e${seq.current++}`, kind: "message", text: content };
+          return [...prev, entry].slice(-1000);
+        });
+        return;
       } else if (frame.type === "tool_call") {
-        entry = {
-          key,
-          kind: "tool_call",
-          name: frame.name,
-          text: clampText(frame.input ?? ""),
+        // task_tracker is represented once by the dedicated progress panel.
+        if (frame.name === "task_tracker") return;
+        const display = deferredToolDisplay(frame.name, frame.input);
+        const entry: ActivityEntry = {
+          key: `e${seq.current++}`,
+          kind: "tool",
+          callId: frame.call_id,
+          name: display.name,
+          text: clampText(display.input),
+          pending: true,
+          repeats: 1,
         };
+        setEntries((prev) => [...prev, entry].slice(-1000));
+        return;
       } else if (frame.type === "tool_result") {
-        // A task_tracker result carries the structured plan as JSON; parse it
-        // (raw, before clamping) into a checklist for the live progress panel and
-        // a readable history entry, falling back to raw text if it doesn't parse.
         const parsedChecklist =
           frame.name === "task_tracker"
             ? parseTaskTrackerOutput(frame.output ?? "")
             : null;
         if (parsedChecklist) {
           setChecklist(parsedChecklist);
-          entry = {
-            key,
-            kind: "tool_result",
-            name: frame.name,
-            text: "",
-            checklist: parsedChecklist,
-          };
-        } else {
-          entry = {
-            key,
-            kind: "tool_result",
-            name: frame.name,
-            text: clampText(frame.output ?? ""),
-            isError: !!frame.error,
-          };
+          return;
         }
-      }
-      if (entry) {
-        // Bound the DOM/history for extremely chatty runs while retaining the
-        // most recent activity where failures and final output appear.
-        setEntries((prev) => [...prev, entry!].slice(-1000));
+        setEntries((prev) => {
+          let idx = -1;
+          if (frame.call_id) {
+            for (let i = prev.length - 1; i >= 0; i -= 1) {
+              if (prev[i].kind === "tool" && prev[i].callId === frame.call_id) {
+                idx = i;
+                break;
+              }
+            }
+          }
+          const result = clampText(frame.output ?? "");
+          if (idx < 0) {
+            const entry: ActivityEntry = {
+              key: `e${seq.current++}`,
+              kind: "tool",
+              callId: frame.call_id,
+              name: frame.name || "tool",
+              text: "",
+              result,
+              isError: !!frame.error,
+              pending: false,
+              repeats: 1,
+            };
+            return [...prev, entry].slice(-1000);
+          }
+          const updated = { ...prev[idx], result, isError: !!frame.error, pending: false };
+          const next = [...prev.slice(0, idx), updated, ...prev.slice(idx + 1)];
+          const before = next[idx - 1];
+          if (idx === next.length - 1 && before && sameFailedCall(before, updated)) {
+            return [...next.slice(0, idx - 1), {
+              ...before,
+              repeats: (before.repeats ?? 1) + 1,
+            }].slice(-1000);
+          }
+          return next.slice(-1000);
+        });
       }
     };
     // fetch streams do not reconnect like EventSource. Keep reattaching with
@@ -546,7 +620,7 @@ function LiveTaskView({
       aria-modal="true"
       aria-label="Live task activity"
     >
-      <div className="modal modal-log">
+      <div className="modal modal-log live-activity-modal">
         <div className="modal-header">
           <h3 className="modal-log-title" title={task.prompt ?? ""}>
             Live activity
@@ -582,14 +656,43 @@ function LiveTaskView({
           </div>
         </div>
         <TaskSummary task={task} />
+        {checklist ? (
+          <div className="live-progress-panel" data-testid="live-progress-panel">
+            <button
+              type="button"
+              className="live-progress-toggle"
+              aria-expanded={checklistOpen}
+              onClick={() => setChecklistOpen((open) => !open)}
+            >
+              <span className="live-progress-copy">
+                <span className="live-progress-meta">
+                  Progress · {checklist.summary.done}/{checklist.summary.total} done
+                </span>
+                <span className="live-progress-active">
+                  {checklist.activeTask || "Plan complete"}
+                </span>
+              </span>
+              <span className="live-progress-chevron" aria-hidden="true">
+                {checklistOpen ? "▴" : "▾"}
+              </span>
+            </button>
+            <div className="live-progress-track" aria-hidden="true">
+              <span
+                style={{
+                  width: `${checklist.summary.total ? (checklist.summary.done / checklist.summary.total) * 100 : 0}%`,
+                }}
+              />
+            </div>
+            {checklistOpen ? (
+              <div className="live-progress-details">
+                <Checklist state={checklist} live showSummary={false} />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="modal-body" data-testid="live-activity-body">
           {streamError ? (
             <div className="table-error">Live stream error: {streamError}</div>
-          ) : null}
-          {checklist ? (
-            <div className="live-checklist-panel">
-              <Checklist state={checklist} live />
-            </div>
           ) : null}
           {entries.length === 0 && !streamError ? (
             <div className="loading">
@@ -597,52 +700,34 @@ function LiveTaskView({
             </div>
           ) : (
             <div className="log-session" aria-live="polite">
-              {entries.map((e) => (
-                <div
+              {entries.map((e) => e.kind === "message" ? (
+                <div key={e.key} className="live-activity-message" data-testid="live-assistant-message">
+                  {e.text}
+                </div>
+              ) : (
+                <article
                   key={e.key}
-                  className={`log-message log-message--${e.kind === "message" ? "assistant" : "tool"}`}
+                  className={`live-tool-entry${e.isError ? " live-tool-entry--error" : ""}`}
+                  data-testid="live-tool-entry"
                 >
-                  <div className="log-message-head">
-                    <span className="log-message-role">
-                      {e.kind === "tool_call"
-                        ? `▶ ${e.name ?? "tool"}`
-                        : e.kind === "tool_result"
-                          ? `${e.isError ? "✗" : "✓"} ${e.name ?? "result"}`
-                          : "assistant"}
+                  <div className="live-tool-heading">
+                    <code>{e.name ?? "tool"}</code>
+                    <span className={`live-tool-status${e.isError ? " live-tool-status--error" : ""}`}>
+                      {e.pending ? "Running…" : e.isError ? "Failed" : "Done"}
+                      {(e.repeats ?? 1) > 1 ? ` · ${e.repeats} attempts` : ""}
                     </span>
                   </div>
-                  <div className="log-message-content">
-                    {e.checklist ? (
-                      <Checklist state={e.checklist} />
-                    ) : e.kind !== "message" && e.text.length > 1200 ? (
-                      <details>
-                        <summary style={{ cursor: "pointer" }}>
-                          Show tool details ({e.text.length.toLocaleString()}{" "}
-                          characters)
-                        </summary>
-                        <pre
-                          style={{
-                            whiteSpace: "pre-wrap",
-                            margin: "0.5rem 0 0",
-                          }}
-                        >
-                          {e.text}
-                        </pre>
-                      </details>
-                    ) : (
-                      <pre
-                        style={{
-                          whiteSpace: "pre-wrap",
-                          margin: 0,
-                          fontFamily:
-                            e.kind === "message" ? "inherit" : undefined,
-                        }}
-                      >
-                        {e.text}
-                      </pre>
-                    )}
-                  </div>
-                </div>
+                  {e.isError && e.result ? (
+                    <p className="live-tool-error">{readableToolError(e.result)}</p>
+                  ) : null}
+                  {e.text || (!e.isError && e.result) ? (
+                    <details className="live-tool-details">
+                      <summary>Details</summary>
+                      {e.text ? <pre>{e.text}</pre> : null}
+                      {!e.isError && e.result ? <pre>{e.result}</pre> : null}
+                    </details>
+                  ) : null}
+                </article>
               ))}
               <div ref={bottomRef} />
             </div>
