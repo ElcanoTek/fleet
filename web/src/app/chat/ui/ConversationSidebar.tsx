@@ -921,15 +921,11 @@ function SectionToggle({
   label,
   open,
   onToggle,
-  hue = "accent",
 }: {
   icon: string;
   label: string;
   open: boolean;
   onToggle: () => void;
-  // Section identity color: Projects wear the scheduled amber, Chats the
-  // brand accent — same hue language as the ops-center status palette.
-  hue?: "accent" | "amber";
 }) {
   return (
     <button
@@ -940,12 +936,7 @@ function SectionToggle({
     >
       <Icon
         name={icon}
-        className={[
-          "size-3.5 shrink-0",
-          hue === "amber"
-            ? "text-[var(--color-status-scheduled-fg)]"
-            : "text-[var(--color-accent)]",
-        ].join(" ")}
+        className="size-3.5 shrink-0 text-[var(--color-accent)]"
       />
       <span className="min-w-0 flex-1 text-left">{label}</span>
       <Icon
@@ -1335,7 +1326,6 @@ export function ConversationSidebar({
           <SectionToggle
             icon="briefcase"
             label="Projects"
-            hue="amber"
             open={projectsSectionOpen}
             onToggle={() => setProjectsSectionOpen((o) => !o)}
           />
