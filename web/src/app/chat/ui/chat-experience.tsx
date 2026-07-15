@@ -4105,7 +4105,7 @@ export function ChatExperience({
                 <button
                   aria-label="Keyboard shortcuts"
                   className="group/tbtn inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  title="View keyboard shortcuts (?)"
+                  data-tip-bottom="View keyboard shortcuts (?)"
                   data-testid="shortcuts-button"
                   type="button"
                   onClick={() => setShortcutsOpen(true)}
@@ -4118,7 +4118,7 @@ export function ChatExperience({
                 <button
                   aria-label="Manage memories"
                   className="group/tbtn relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  title="Manage what the assistant remembers"
+                  data-tip-bottom="Manage what the assistant remembers"
                   type="button"
                   onClick={openMemoryManager}
                 >
@@ -4138,7 +4138,7 @@ export function ChatExperience({
                   // the affordance the user keys off, not an accent
                   // highlight. Mirrors the sun/moon theme toggle next door.
                   className="group/tbtn inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  title={
+                  data-tip-bottom={
                     showStats
                       ? "Hide thinking, stats & tool calls"
                       : "Show thinking, stats & tool calls"

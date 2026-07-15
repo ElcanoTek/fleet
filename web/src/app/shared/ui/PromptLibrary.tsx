@@ -146,7 +146,12 @@ export function PromptLibrary({
       <button
         type="button"
         aria-label="Open prompt library"
-        title="Prompt library — reuse a saved prompt"
+        // Styled hover/focus tooltip (the app's data-tip system) instead of a
+        // native title, matching the composer's other tool buttons. Only in
+        // compact (icon-only) mode — the full button already shows the label.
+        data-tip-top={
+          compact ? "Prompt library — reuse a saved prompt" : undefined
+        }
         className={
           compact
             ? "relative inline-flex h-[1.95rem] w-[1.95rem] shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
