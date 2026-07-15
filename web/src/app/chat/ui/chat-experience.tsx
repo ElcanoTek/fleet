@@ -3585,7 +3585,6 @@ export function ChatExperience({
             exitSelectMode();
           }}
           searchShortcut={searchShortcut}
-          onOpenProjects={() => setProjectsModal({})}
           onCreateProject={() => setProjectsModal({ create: true })}
           onOpenProjectHome={(projectID, settings) =>
             setProjectHome({ id: projectID, settings })
