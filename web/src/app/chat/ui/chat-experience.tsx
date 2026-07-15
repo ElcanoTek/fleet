@@ -1338,7 +1338,12 @@ export function ChatExperience({
   // any deployment whose catalog errors would self-DDoS the same way).
   const catalogAttemptedRef = useRef(false);
   const loadCatalogModels = useCallback(async () => {
-    if (catalogAttemptedRef.current || catalogModels.length > 0 || isLoadingCatalog) return;
+    if (
+      catalogAttemptedRef.current ||
+      catalogModels.length > 0 ||
+      isLoadingCatalog
+    )
+      return;
     catalogAttemptedRef.current = true;
     setIsLoadingCatalog(true);
     try {
@@ -1688,7 +1693,11 @@ export function ChatExperience({
 
   const loadConversation = async (
     conversationId: string,
-    options: { preserveScroll?: boolean; background?: boolean; restore?: boolean } = {},
+    options: {
+      preserveScroll?: boolean;
+      background?: boolean;
+      restore?: boolean;
+    } = {},
   ) => {
     // Opening a conversation dismisses a project home overlaying the chat
     // pane — every USER entry point (rail rows, search hits, keyboard nav)
@@ -2356,15 +2365,20 @@ export function ChatExperience({
     patch: { name?: string; instructions?: string; team_shared?: boolean },
   ): Promise<boolean> => {
     try {
-      const res = await fetch(`/api/projects/${encodeURIComponent(projectID)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(projectID)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        },
+      );
       if (!res.ok) {
         const detail = (await res.text()).trim();
         console.error("update project failed:", res.status, detail);
-        showRailError(detail || `Couldn't update the project (HTTP ${res.status}).`);
+        showRailError(
+          detail || `Couldn't update the project (HTTP ${res.status}).`,
+        );
         return false;
       }
       await loadProjects();
@@ -2849,12 +2863,7 @@ export function ChatExperience({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [
-    selectMode,
-    selectedIds.size,
-    shortcutsOpen,
-    pendingDeleteConversation,
-  ]);
+  }, [selectMode, selectedIds.size, shortcutsOpen, pendingDeleteConversation]);
 
   // The list-navigation + per-conversation/transcript shortcuts (#306) are
   // suppressed whenever a transient surface owns the keyboard — the same
@@ -3349,7 +3358,9 @@ export function ChatExperience({
             window.location.href = "/login";
             return;
           }
-          const sessionData = (await sessionResponse.json()) as { email: string };
+          const sessionData = (await sessionResponse.json()) as {
+            email: string;
+          };
           if (cancelled) return;
           setUserEmail(sessionData.email);
         }
@@ -4095,21 +4106,27 @@ export function ChatExperience({
                 <button
                   aria-label="Keyboard shortcuts"
                   className="group/tbtn inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  title="Keyboard shortcuts (?)"
+                  title="View keyboard shortcuts (?)"
                   data-testid="shortcuts-button"
                   type="button"
                   onClick={() => setShortcutsOpen(true)}
                 >
-                  <Icon name="keyboard" className="size-5 transition motion-safe:group-hover/tbtn:scale-110" />
+                  <Icon
+                    name="keyboard"
+                    className="size-5 transition motion-safe:group-hover/tbtn:scale-110"
+                  />
                 </button>
                 <button
                   aria-label="Manage memories"
                   className="group/tbtn relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  title="Manage memories"
+                  title="Manage what the assistant remembers"
                   type="button"
                   onClick={openMemoryManager}
                 >
-                  <Icon name="brain" className="size-5 transition motion-safe:group-hover/tbtn:scale-110" />
+                  <Icon
+                    name="brain"
+                    className="size-5 transition motion-safe:group-hover/tbtn:scale-110"
+                  />
                 </button>
                 <button
                   aria-label={
@@ -4122,7 +4139,11 @@ export function ChatExperience({
                   // the affordance the user keys off, not an accent
                   // highlight. Mirrors the sun/moon theme toggle next door.
                   className="group/tbtn inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  title={showStats ? "Hide details" : "Show details"}
+                  title={
+                    showStats
+                      ? "Hide thinking, stats & tool calls"
+                      : "Show thinking, stats & tool calls"
+                  }
                   type="button"
                   onClick={toggleShowStats}
                 >
@@ -4221,7 +4242,9 @@ export function ChatExperience({
             <ProjectHome
               key={projectHomeProject.id}
               project={projectHomeProject}
-              chats={conversations.filter((c) => c.project_id === projectHomeProject.id)}
+              chats={conversations.filter(
+                (c) => c.project_id === projectHomeProject.id,
+              )}
               isOwner={projectHomeProject.owner_email === userEmail}
               initialSettingsOpen={projectHome?.settings}
               onBack={() => setProjectHome(null)}
@@ -4236,7 +4259,9 @@ export function ChatExperience({
               onSaveInstructions={(instructions) =>
                 updateProject(projectHomeProject.id, { instructions })
               }
-              onUpdateSettings={(patch) => updateProject(projectHomeProject.id, patch)}
+              onUpdateSettings={(patch) =>
+                updateProject(projectHomeProject.id, patch)
+              }
               onDelete={() => {
                 setProjectHome(null);
                 void deleteProject(projectHomeProject.id);
