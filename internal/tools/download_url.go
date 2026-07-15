@@ -36,16 +36,16 @@ var downloadURLDialContext = newSSRFGuardedDialer().DialContext
 // back-compat — it just shouldn't be the obvious match for non-email
 // flows anymore.
 const downloadURLDescription = "Download bytes from any HTTP(S) URL straight into your per-conversation workspace. " +
-	"Use this after `mcp_fast_io_download action=file-url` to pull the signed URL's bytes onto disk, or for any other one-call URL→scratch fetch (public CSVs, signed S3 links, generated reports, etc.). " +
+	"Use this after `mcp_fast_io_download action=file-url` to pull the returned opaque `fleet-download://...` handle's bytes onto disk; Fleet keeps the real signed URL server-side so its bearer token never enters your context. This also accepts ordinary HTTP(S) URLs for other one-call URL→scratch fetches (public CSVs, signed S3 links, generated reports, etc.). " +
 	"This is the namespace-neutral alternative to `mcp_email_download_link_attachment` — same single-call shape (URL in, file path out), but not tied to the email server.\n\n" +
 	"BEHAVIOR: follows redirects (chain reported as `redirect_chain`), sends a realistic browser User-Agent so CDNs and signed-URL gateways don't reject the request, derives a filename from `Content-Disposition` then the URL path, suffixes a deterministic 8-char hash to avoid collisions in the workspace, and caps responses at 100 MB.\n\n" +
-	"REQUIRED: `url` (http or https).\n" +
+	"REQUIRED: `url` (http, https, or a fleet-download handle returned by mcp_fast_io_download).\n" +
 	"OPTIONAL: `output_dir` (defaults to the per-conversation workspace; a relative path is interpreted against it; an absolute path must be inside the chat-server's allowed dirs), `filename` (override the auto-detected name; the collision suffix is still appended), `timeout_seconds` (default 120, max 600).\n\n" +
 	"NOT FOR: HTML pages you want to read as markdown — use `web_fetch` for that. Email click-trackers that need HTML-chase to reach the real download — use the email MCP's `download_link_attachment` instead (it has the SendGrid/Mailchimp interstitial bypass)."
 
 // DownloadURLParams is the typed tool surface.
 type DownloadURLParams struct {
-	URL            string `json:"url" description:"HTTP or HTTPS URL to download. Required."`
+	URL            string `json:"url" description:"HTTP/HTTPS URL, or an opaque fleet-download:// handle returned by mcp_fast_io_download. Required."`
 	OutputDir      string `json:"output_dir,omitempty" description:"Directory to save the file in. Defaults to the per-conversation workspace (same dir bash/run_python land files in). A relative path is interpreted against the workspace; an absolute path must be inside the chat-server's allowed dirs."`
 	Filename       string `json:"filename,omitempty" description:"Override the auto-detected filename. The collision-suffix is still appended so repeated downloads of the same URL don't overwrite each other."`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" description:"Per-request timeout in seconds. Defaults to 120. Capped at 600."`
@@ -99,18 +99,24 @@ func NewDownloadURLTool() fantasy.AgentTool {
 // It always returns a populated downloadURLResult — the caller decides
 // how to surface success vs error.
 func runDownloadURL(ctx context.Context, params DownloadURLParams) downloadURLResult {
-	res := downloadURLResult{URL: params.URL}
+	displayURL := strings.TrimSpace(params.URL)
+	res := downloadURLResult{URL: displayURL}
 
-	raw := strings.TrimSpace(params.URL)
-	if raw == "" {
+	if displayURL == "" {
 		res.Status = downloadStatusError
 		res.Error = "url is required"
+		return res
+	}
+	raw, protected, err := resolveDownloadURLHandle(displayURL)
+	if err != nil {
+		res.Status = downloadStatusError
+		res.Error = err.Error()
 		return res
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("invalid url: only http/https schemes are supported (got %q)", raw)
+		res.Error = fmt.Sprintf("invalid url: only http/https URLs or fleet-download handles are supported (got %q)", displayURL)
 		return res
 	}
 
@@ -168,8 +174,8 @@ func runDownloadURL(ctx context.Context, params DownloadURLParams) downloadURLRe
 	resp, err := client.Do(req)
 	if err != nil {
 		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("fetch %s: %v", raw, err)
-		if len(chain) > 0 {
+		res.Error = fmt.Sprintf("fetch %s: %v", displayURL, err)
+		if len(chain) > 0 && !protected {
 			res.RedirectChain = chain
 		}
 		return res
@@ -181,11 +187,18 @@ func runDownloadURL(ctx context.Context, params DownloadURLParams) downloadURLRe
 	// the initial URL up front and rely on the captured intermediate
 	// hops plus the final URL from resp.Request.
 	finalURL := resp.Request.URL.String()
-	res.FinalURL = finalURL
+	if !protected {
+		res.FinalURL = finalURL
+	}
 	res.HTTPStatus = resp.StatusCode
 	res.ContentType = resp.Header.Get("Content-Type")
 
-	if len(chain) == 0 {
+	if protected {
+		// Redirect targets can contain fresh bearer credentials too. The opaque
+		// handle is all the model needs, so keep the entire resolved chain inside
+		// the host process.
+		chain = nil
+	} else if len(chain) == 0 {
 		// No redirects fired; chain is just the initial → final URL.
 		// Keep one entry when start == final (no actual redirect).
 		if finalURL != raw {
@@ -220,7 +233,7 @@ func runDownloadURL(ctx context.Context, params DownloadURLParams) downloadURLRe
 	}
 
 	pickedName := pickDownloadFilename(params.Filename, resp, finalURL)
-	outPath := buildCollisionSafePath(dir, pickedName, raw)
+	outPath := buildCollisionSafePath(dir, pickedName, displayURL)
 
 	f, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // outPath is built from resolveDownloadDir() + a sanitized basename; both are pre-validated
 	if err != nil {
