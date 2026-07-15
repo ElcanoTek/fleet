@@ -160,9 +160,11 @@ func replayStoredLog(w http.ResponseWriter, taskID uuid.UUID, session *models.Lo
 		return true
 	}
 
+	toolNames := make(map[string]string)
 	for _, m := range session.Messages {
 		// Tool calls the assistant issued in this message.
 		for _, tc := range m.ToolCalls {
+			toolNames[tc.ID] = tc.Name
 			if !emit("tool_call", map[string]any{
 				"type": "tool_call", "call_id": tc.ID, "name": tc.Name, "input": tc.Arguments,
 			}) {
@@ -183,8 +185,12 @@ func replayStoredLog(w http.ResponseWriter, taskID uuid.UUID, session *models.Lo
 			if m.ToolCallID != nil {
 				callID = *m.ToolCallID
 			}
+			name := m.ToolName
+			if name == "" {
+				name = toolNames[callID]
+			}
 			if !emit("tool_result", map[string]any{
-				"type": "tool_result", "call_id": callID, "output": m.Content, "error": false,
+				"type": "tool_result", "call_id": callID, "name": name, "output": m.Content, "error": m.IsError,
 			}) {
 				return
 			}

@@ -197,6 +197,12 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- Deferred MCP tools now advertise `arguments` as a JSON object instead of a
+  byte array, preventing models from repeatedly sending array-wrapped arguments
+  that every nested tool rejects. Live scheduled-run activity now keeps the
+  task plan in a compact expandable progress panel, groups repeated failures,
+  and persists structured tool calls/results so terminal logs retain the real
+  cause of an incomplete run.
 - **`fleet update` no longer breaks sandbox starts after a bundle pull**: the
   updater runs as root, so files a client-bundle `git pull` created or rewrote
   came out root-owned — and the sandbox bind-mounts bundle dirs with an SELinux

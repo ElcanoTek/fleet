@@ -2216,19 +2216,76 @@ tr.sla-row-fail {
   -webkit-box-orient: vertical;
 }
 
-/* Live progress checklist (#518): the agent's task_tracker plan, rendered as a
-   todo→done list in the Operations Center live view. The --live variant is the
-   sticky top panel that updates as the plan changes; the plain variant is an
-   inline history entry. */
-.live-checklist-panel {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  margin-bottom: 0.75rem;
-  padding: 0.6rem 0.75rem;
+/* Live progress stays outside the scrolling transcript. The old full-height,
+   translucent sticky list let logs bleed underneath and covered most of the
+   modal on real multi-step tasks. */
+.live-progress-panel {
+  flex: 0 0 auto;
+  margin: 0.75rem 1.25rem 0;
+  padding: 0.65rem 0.75rem 0.75rem;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface-raised, rgba(255, 255, 255, 0.04));
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+}
+.live-progress-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.live-progress-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+.live-progress-meta {
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.live-progress-active {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-progress-chevron {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+.live-progress-track {
+  height: 3px;
+  margin-top: 0.55rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+.live-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transition: width 180ms ease;
+}
+.live-progress-details {
+  max-height: min(15rem, 32vh);
+  margin-top: 0.65rem;
+  overflow-y: auto;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
 }
 .checklist-summary {
   display: flex;
@@ -2273,6 +2330,92 @@ tr.sla-row-fail {
 .checklist-item--done .checklist-title {
   text-decoration: line-through;
   color: var(--color-text-muted);
+}
+
+.modal-log.live-activity-modal {
+  display: flex;
+  max-height: calc(100dvh - 4rem);
+  flex-direction: column;
+}
+.modal-log.live-activity-modal > .modal-body {
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
+}
+.live-activity-message {
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--radius-md);
+  background: var(--color-overlay-soft);
+  color: var(--color-text-primary);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.live-tool-entry {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+.live-tool-entry--error {
+  border-color: var(--color-danger-border);
+}
+.live-tool-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+}
+.live-tool-heading code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-tool-status {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.live-tool-status--error,
+.live-tool-error,
+.log-tool-error {
+  color: var(--color-danger);
+}
+.live-tool-error,
+.log-tool-error {
+  margin: 0;
+  padding: 0 0.75rem 0.7rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.log-tool-error {
+  padding: 0;
+}
+.live-tool-details {
+  border-top: 1px solid var(--color-border-subtle);
+}
+.live-tool-details summary {
+  padding: 0.45rem 0.75rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.72rem;
+}
+.live-tool-details pre {
+  max-height: 12rem;
+  margin: 0;
+  overflow: auto;
+  padding: 0 0.75rem 0.7rem;
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* Filters + pagination — the Recent Tasks filter/search row matches the design

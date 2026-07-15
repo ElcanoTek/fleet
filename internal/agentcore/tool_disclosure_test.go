@@ -162,6 +162,14 @@ func TestDisclosureSearchDescribeCall(t *testing.T) {
 	if !strings.Contains(broker.lastArgs, "amount") {
 		t.Fatalf("args not forwarded: %q", broker.lastArgs)
 	}
+	// The provider-facing schema must describe the nested arguments as an
+	// object. json.RawMessage used to reflect as []byte → array of integers,
+	// which made schema-following models emit arguments:[{...}] (#606).
+	info := reg.callTool().Info()
+	argsSchema, ok := info.Parameters["arguments"].(map[string]any)
+	if !ok || argsSchema["type"] != "object" {
+		t.Fatalf("tool_call arguments schema = %#v, want object", info.Parameters["arguments"])
+	}
 	// unknown name → clear error.
 	if r, _ := reg.callTool().Run(context.Background(), fantasy.ToolCall{Input: `{"name":"nope"}`}); !r.IsError {
 		t.Fatal("unknown tool_call must error")
@@ -274,6 +282,38 @@ func TestDisclosure_PersonaFilterBelowThresholdUnchanged(t *testing.T) {
 	}
 	if len(got) != 6 { // 2 native + 5 mcp - 1 denied
 		t.Fatalf("want 6 tools, got %d: %v", len(got), names)
+	}
+}
+
+// TestDisclosureCallRepairsLegacySingletonArray locks in rolling-deploy
+// compatibility for calls generated from the old, incorrect array schema.
+func TestDisclosureCallRepairsLegacySingletonArray(t *testing.T) {
+	broker := &fakeBroker{}
+	reg := newDeferredToolRegistry(mcpToolsFrom(discMCPTools(3), broker))
+	name := "mcp_srv_stripe_refund_charge_2"
+
+	resp, err := reg.callTool().Run(context.Background(), fantasy.ToolCall{
+		ID:    "legacy-1",
+		Input: `{"name":"` + name + `","arguments":[{"amount":25}]}`,
+	})
+	if err != nil || resp.IsError {
+		t.Fatalf("legacy singleton-array call should recover: resp=%+v err=%v", resp, err)
+	}
+	if broker.lastArgs != `{"amount":25}` {
+		t.Fatalf("repaired arguments = %q, want object", broker.lastArgs)
+	}
+}
+
+func TestDisclosureCallRejectsNonObjectArguments(t *testing.T) {
+	reg := newDeferredToolRegistry(mcpToolsFrom(discMCPTools(3), &fakeBroker{}))
+	name := "mcp_srv_stripe_refund_charge_2"
+	for _, args := range []string{`[]`, `[{"amount":1},{"amount":2}]`, `"bad"`} {
+		resp, err := reg.callTool().Run(context.Background(), fantasy.ToolCall{
+			Input: `{"name":"` + name + `","arguments":` + args + `}`,
+		})
+		if err != nil || !resp.IsError || !strings.Contains(resp.Content, "arguments must be a JSON object") {
+			t.Fatalf("arguments %s: resp=%+v err=%v", args, resp, err)
+		}
 	}
 }
 

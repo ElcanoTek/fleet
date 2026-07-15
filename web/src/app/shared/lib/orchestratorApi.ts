@@ -346,6 +346,8 @@ export type LogMessage = {
   message_type?: string;
   tool_calls?: LogToolCall[];
   tool_call_id?: string;
+  tool_name?: string;
+  is_error?: boolean;
 };
 
 // Token fields are CUMULATIVE across the whole session (billing/display

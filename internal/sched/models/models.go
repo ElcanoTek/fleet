@@ -1680,6 +1680,8 @@ type LogMessage struct {
 	MessageType *string       `json:"message_type,omitempty"`
 	ToolCalls   []LogToolCall `json:"tool_calls,omitempty"`
 	ToolCallID  *string       `json:"tool_call_id,omitempty"`
+	ToolName    string        `json:"tool_name,omitempty"`
+	IsError     bool          `json:"is_error,omitempty"`
 }
 
 // LogSession is an agent session with its messages.

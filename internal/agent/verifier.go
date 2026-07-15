@@ -62,7 +62,7 @@ func buildToolExecSummary(session *LogSession) []toolExecRecord {
 			delete(calls, *msg.ToolCallID)
 			records = append(records, toolExecRecord{
 				Name:      pc.name,
-				Succeeded: !toolResultLooksFailed(msg.Content),
+				Succeeded: !msg.IsError && !toolResultLooksFailed(msg.Content),
 			})
 		}
 	}

@@ -336,6 +336,21 @@ func (o *scheduledObserver) Observe(eventType string, payload map[string]any) {
 		if msg, ok := payload["text"].(string); ok && msg != "" {
 			o.session.AddMessage(roleAssistant, msg, nil, nil)
 		}
+	case "tool.call":
+		id, _ := payload["id"].(string)
+		name, _ := payload["name"].(string)
+		input, _ := payload["input"].(string)
+		if id != "" && name != "" {
+			o.session.AddToolCall(id, name, input)
+		}
+	case "tool.result":
+		id, _ := payload["id"].(string)
+		name, _ := payload["name"].(string)
+		text, _ := payload["text"].(string)
+		isErr, _ := payload["is_err"].(bool)
+		if id != "" {
+			o.session.AddToolResult(id, name, text, isErr)
+		}
 	}
 }
 

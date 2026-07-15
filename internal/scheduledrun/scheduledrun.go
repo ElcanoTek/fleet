@@ -1053,6 +1053,8 @@ func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession 
 			FinishedAt:  m.FinishedAt,
 			MessageType: m.MessageType,
 			ToolCallID:  m.ToolCallID,
+			ToolName:    m.ToolName,
+			IsError:     m.IsError,
 		}
 		for _, tc := range m.ToolCalls {
 			mm.ToolCalls = append(mm.ToolCalls, models.LogToolCall{
