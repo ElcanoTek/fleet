@@ -172,6 +172,9 @@ func (h *hostImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileOpResu
 		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
 		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))
 		wire["replace_all"] = req.ReplaceAll
+		if req.ExpectedSHA256 != "" {
+			wire["expected_sha256"] = req.ExpectedSHA256
+		}
 	default:
 		return FileOpResult{}, fmt.Errorf("unknown fileop %q", req.Op)
 	}

@@ -111,8 +111,12 @@ func TestViewFileTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
-	if result != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, result)
+	// #787: view_file appends a sha256/size metadata trailer.
+	if !strings.HasPrefix(result, expected) {
+		t.Errorf("Expected content prefix %q, got %q", expected, result)
+	}
+	if !strings.Contains(result, "sha256=") {
+		t.Errorf("expected a sha256 metadata trailer, got %q", result)
 	}
 }
 
@@ -135,7 +139,8 @@ func TestViewFileTool_OffsetLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
-	if res != "56789" {
+	// Read-to-end still appends the #787 metadata trailer.
+	if !strings.HasPrefix(res, "56789") || !strings.Contains(res, "sha256=") {
 		t.Errorf("offset 5: got %q", res)
 	}
 
@@ -146,6 +151,81 @@ func TestViewFileTool_OffsetLimit(t *testing.T) {
 	if !strings.HasPrefix(res, "234") || !strings.Contains(res, "reading limit") {
 		t.Errorf("offset 2 limit 3: got %q", res)
 	}
+}
+
+// TestEditFileTool_Safety pins the #787 tool-layer contract: ambiguous matches
+// are rejected, a stale expected_hash fails safely, a no-op is rejected, and a
+// successful edit returns a diff + old/new hashes — all without a host fallback.
+func TestEditFileTool_Safety(t *testing.T) {
+	sb := fsTestSandbox(t)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "code.txt")
+	if err := os.WriteFile(path, []byte("x x x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ambiguous single edit → rejected with the match count, file unchanged.
+	_, err := runEditFile(ctx, sb, EditFileParams{Path: path, OldText: "x", NewText: "y"})
+	if err == nil || !strings.Contains(err.Error(), "matches 3 locations") {
+		t.Fatalf("ambiguous edit: want a 3-locations error, got %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "x x x" {
+		t.Errorf("file changed on ambiguous edit: %q", got)
+	}
+
+	// No-op (old==new) rejected client-side.
+	if _, err := runEditFile(ctx, sb, EditFileParams{Path: path, OldText: "x", NewText: "x"}); err == nil ||
+		!strings.Contains(err.Error(), "no-op") {
+		t.Errorf("no-op edit: want rejection, got %v", err)
+	}
+
+	// replace_all succeeds and returns a diff + hashes.
+	out, err := runEditFile(ctx, sb, EditFileParams{Path: path, OldText: "x", NewText: "y", ReplaceAll: true})
+	if err != nil {
+		t.Fatalf("replace_all edit: %v", err)
+	}
+	for _, want := range []string{"Successfully replaced 3", "old_sha256:", "new_sha256:", "@@"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("edit response missing %q; got %q", want, out)
+		}
+	}
+
+	// Stale guard: a wrong expected_hash fails without touching the file.
+	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = runEditFile(ctx, sb, EditFileParams{Path: path, OldText: "hello", NewText: "world", ExpectedHash: "0000"})
+	if err == nil || !strings.Contains(err.Error(), "changed since") {
+		t.Fatalf("stale edit: want changed-since error, got %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "hello" {
+		t.Errorf("file changed on stale edit: %q", got)
+	}
+
+	// A view_file hash round-trips as a valid expected_hash.
+	view, err := runViewFile(ctx, sb, ViewFileParams{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := extractSHA(t, view)
+	if _, err := runEditFile(ctx, sb, EditFileParams{Path: path, OldText: "hello", NewText: "world", ExpectedHash: hash}); err != nil {
+		t.Fatalf("edit with view_file's hash should succeed: %v", err)
+	}
+}
+
+// extractSHA pulls the sha256=<hex> value from a view_file metadata trailer.
+func extractSHA(t *testing.T, viewOutput string) string {
+	t.Helper()
+	i := strings.Index(viewOutput, "sha256=")
+	if i < 0 {
+		t.Fatalf("no sha256 in view output: %q", viewOutput)
+	}
+	rest := viewOutput[i+len("sha256="):]
+	end := strings.IndexAny(rest, " \n")
+	if end < 0 {
+		end = len(rest)
+	}
+	return rest[:end]
 }
 
 // TestFileToolsFailClosedWithoutSandbox pins the #784 invariant: with no
@@ -232,8 +312,8 @@ func TestFileToolsRejectCrossConversationTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("in-workspace read: %v", err)
 	}
-	if out != "mine" {
-		t.Errorf("in-workspace read = %q, want %q", out, "mine")
+	if !strings.HasPrefix(out, "mine") {
+		t.Errorf("in-workspace read = %q, want prefix %q", out, "mine")
 	}
 }
 

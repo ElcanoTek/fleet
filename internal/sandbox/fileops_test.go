@@ -9,6 +9,8 @@ package sandbox
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"os/exec"
@@ -62,20 +64,94 @@ func TestFileOp_ReadWriteEditRoundtrip(t *testing.T) {
 		t.Errorf("read reports total size %d, want 11", rd.Size)
 	}
 
-	// Edit single vs replace_all.
+	// Edit: a unique single match succeeds and returns a diff + hashes.
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Data: []byte("x A y\n")}); err != nil {
+		t.Fatal(err)
+	}
+	ed, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpEdit, Path: path, OldText: "A", NewText: "B"})
+	if err != nil || ed.ReplacedCount != 1 {
+		t.Fatalf("unique edit = count %d err %v", ed.ReplacedCount, err)
+	}
+	if ed.SHA256 == "" || ed.OldSHA256 == "" || ed.Diff == "" {
+		t.Errorf("edit result missing hashes/diff: %+v", ed)
+	}
+	if got, _ := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path}); string(got.Data) != "x B y\n" {
+		t.Errorf("after unique edit = %q, want 'x B y\\n'", got.Data)
+	}
+	// replace_all handles multiple occurrences.
 	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Data: []byte("a a a")}); err != nil {
 		t.Fatal(err)
 	}
-	ed, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpEdit, Path: path, OldText: "a", NewText: "b"})
-	if err != nil || ed.ReplacedCount != 1 {
-		t.Fatalf("edit single = count %d err %v", ed.ReplacedCount, err)
-	}
-	if got, _ := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path}); string(got.Data) != "b a a" {
-		t.Errorf("after single edit = %q, want 'b a a'", got.Data)
-	}
 	ed, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpEdit, Path: path, OldText: "a", NewText: "b", ReplaceAll: true})
-	if err != nil || ed.ReplacedCount != 2 {
+	if err != nil || ed.ReplacedCount != 3 {
 		t.Fatalf("edit all = count %d err %v", ed.ReplacedCount, err)
+	}
+}
+
+func TestFileOp_EditSafety(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "f.txt")
+	if err := os.WriteFile(path, []byte("a a a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ambiguous single edit → ErrFileOpAmbiguous with the match count.
+	_, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpEdit, Path: path, OldText: "a", NewText: "b"})
+	var amb *FileOpAmbiguousError
+	if !errors.As(err, &amb) || amb.Count != 3 {
+		t.Fatalf("ambiguous edit = %v, want FileOpAmbiguousError count 3", err)
+	}
+	if !errors.Is(err, ErrFileOpAmbiguous) {
+		t.Errorf("ambiguous error should match ErrFileOpAmbiguous sentinel")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "a a a" {
+		t.Errorf("file changed on ambiguous edit: %q", got)
+	}
+
+	// Stale guard: wrong expected hash → ErrFileOpStale, file unchanged.
+	_, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpEdit, Path: path, OldText: "a", NewText: "b", ReplaceAll: true, ExpectedSHA256: "deadbeef"})
+	if !errors.Is(err, ErrFileOpStale) {
+		t.Fatalf("stale edit = %v, want ErrFileOpStale", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "a a a" {
+		t.Errorf("file changed on stale edit: %q", got)
+	}
+
+	// Correct expected hash (from a read) → succeeds.
+	rd, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpEdit, Path: path, OldText: "a", NewText: "b", ReplaceAll: true, ExpectedSHA256: rd.SHA256}); err != nil {
+		t.Fatalf("edit with correct expected hash: %v", err)
+	}
+
+	// No-op edit (old==new after replace) → ErrFileOpNoOp.
+	if err := os.WriteFile(path, []byte("zzz"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpEdit, Path: path, OldText: "z", NewText: "z", ReplaceAll: true})
+	if !errors.Is(err, ErrFileOpNoOp) {
+		t.Fatalf("no-op edit = %v, want ErrFileOpNoOp", err)
+	}
+}
+
+func TestFileOp_ReadReportsFullSHA256(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "f.txt")
+	body := []byte("the quick brown fox")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	want := hex.EncodeToString(sum[:])
+	// Full read and a windowed read both report the FULL-file hash.
+	full, _ := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path})
+	win, _ := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpRead, Path: path, Offset: 4, Limit: 5})
+	if full.SHA256 != want || win.SHA256 != want {
+		t.Errorf("sha256 full=%q window=%q, want %q", full.SHA256, win.SHA256, want)
 	}
 }
 
@@ -102,8 +178,8 @@ func TestFileOp_PreservesModeOnOverwriteAndEdit(t *testing.T) {
 	if info, _ := os.Stat(path); info.Mode().Perm() != 0o755 {
 		t.Errorf("mode after overwrite = %o, want 755 preserved", info.Mode().Perm())
 	}
-	// Edit must also keep 0755.
-	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpEdit, Path: path, OldText: "b", NewText: "c"}); err != nil {
+	// Edit must also keep 0755 (unique old_text).
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpEdit, Path: path, OldText: "echo b", NewText: "echo c"}); err != nil {
 		t.Fatal(err)
 	}
 	if info, _ := os.Stat(path); info.Mode().Perm() != 0o755 {
