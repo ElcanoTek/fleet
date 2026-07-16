@@ -783,10 +783,14 @@ export function TaskCreateModal({
       setForecast(fc);
       setEstimateKey(currentEstimateKey);
     } catch (err) {
-      setEstimateNote("Estimate failed — try again.");
+      // Surface the server's reason inline: a validation rejection ("prompt
+      // cannot exceed 100000 characters", "persona X is not in the loaded
+      // client bundle", …) is actionable, and hiding it behind a generic
+      // "try again" sent operators bug-hunting for what was a clear 400.
+      const detail = (err as Error).message;
+      setEstimateNote(detail ? `Estimate failed: ${detail}` : "Estimate failed — try again.");
       setForecast(null);
-      // Surface the reason without a toast; the title carries the details.
-      console.warn("estimate failed:", (err as Error).message);
+      console.warn("estimate failed:", detail);
     } finally {
       setEstimating(false);
     }

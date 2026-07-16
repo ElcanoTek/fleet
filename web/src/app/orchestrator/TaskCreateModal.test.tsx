@@ -232,6 +232,17 @@ describe("TaskCreateModal — create path", () => {
     expect(onCreated).toHaveBeenCalled();
   });
 
+  it("surfaces the server's reason when the cost estimate is rejected", async () => {
+    estimateTask.mockRejectedValue(new Error("prompt cannot exceed 100000 characters"));
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "A very big protocol" } });
+    fireEvent.click(screen.getByRole("button", { name: "Estimate cost" }));
+
+    expect(
+      await screen.findByText("Estimate failed: prompt cannot exceed 100000 characters"),
+    ).toBeInTheDocument();
+  });
+
   it("updates the Tools & files summary as servers are enabled", () => {
     renderModal();
     expect(screen.getByText("Sandbox only — no tools")).toBeInTheDocument();
