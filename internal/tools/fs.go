@@ -57,31 +57,37 @@ func runWriteFile(ctx context.Context, sb *sandbox.Sandbox, params WriteFilePara
 	if err != nil {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
-	if _, err := sb.RunFileOp(ctx, sandbox.FileOpRequest{
+	res, err := sb.RunFileOp(ctx, sandbox.FileOpRequest{
 		Op:   sandbox.FileOpWrite,
 		Path: validPath,
 		Data: []byte(params.Content),
-	}); err != nil {
+	})
+	if err != nil {
 		return "", fileOpError("write", err)
 	}
-	return fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), validPath), nil
+	out := fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), validPath)
+	if res.SHA256 != "" {
+		out += "\nsha256: " + res.SHA256
+	}
+	return out, nil
 }
 
 // ── edit_file ──
 
 // EditFileParams are the typed parameters for the edit_file tool.
 type EditFileParams struct {
-	Path       string `json:"path" description:"The file path to edit."`
-	OldText    string `json:"old_text" description:"The text to find and replace."`
-	NewText    string `json:"new_text" description:"The text to replace with."`
-	ReplaceAll bool   `json:"replace_all,omitempty" description:"If true, replace all occurrences. If false, replace only the first. Defaults to false."`
+	Path         string `json:"path" description:"The file path to edit."`
+	OldText      string `json:"old_text" description:"The exact text to find and replace. Must match EXACTLY ONE location unless replace_all is set — if it matches several, the edit fails and asks for more surrounding context."`
+	NewText      string `json:"new_text" description:"The text to replace with."`
+	ReplaceAll   bool   `json:"replace_all,omitempty" description:"If true, replace ALL occurrences. If false (default), old_text must match exactly one location or the edit is rejected."`
+	ExpectedHash string `json:"expected_hash,omitempty" description:"Optional SHA-256 (hex, as returned by view_file/edit_file/write_file) of the file's current content. If set and the file changed since, the edit fails without modifying it — pass it to guard against clobbering a concurrent change."`
 }
 
 // NewEditFileTool creates a fantasy.AgentTool for editing files, bound to the
-// per-turn sandbox (#784).
+// per-turn sandbox (#784) with ambiguity/stale/no-op safety (#787).
 func NewEditFileTool(sb *sandbox.Sandbox) fantasy.AgentTool {
 	return fantasy.NewAgentTool("edit_file",
-		"Edits a file by finding and replacing text. Use this to make targeted changes to existing files. Relative paths resolve against the per-conversation workspace (same cwd as bash/run_python).",
+		"Edits a file by finding and replacing text. old_text must match EXACTLY ONE location (else the edit is rejected — add surrounding context or set replace_all=true); pass expected_hash from a prior view_file to fail safely if the file changed. Returns a unified diff plus the old/new SHA-256. Relative paths resolve against the per-conversation workspace (same cwd as bash/run_python).",
 		func(ctx context.Context, params EditFileParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			result, err := runEditFile(ctx, sb, params)
 			if err != nil {
@@ -101,6 +107,9 @@ func runEditFile(ctx context.Context, sb *sandbox.Sandbox, params EditFileParams
 	if params.OldText == "" {
 		return "", fmt.Errorf("old_text is required")
 	}
+	if params.OldText == params.NewText {
+		return "", fmt.Errorf("edit is a no-op (old_text and new_text are identical)")
+	}
 	resolved, err := resolveWorkspacePath(ctx, params.Path)
 	if err != nil {
 		return "", fmt.Errorf("path validation failed: %w", err)
@@ -110,16 +119,22 @@ func runEditFile(ctx context.Context, sb *sandbox.Sandbox, params EditFileParams
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
 	res, err := sb.RunFileOp(ctx, sandbox.FileOpRequest{
-		Op:         sandbox.FileOpEdit,
-		Path:       validPath,
-		OldText:    params.OldText,
-		NewText:    params.NewText,
-		ReplaceAll: params.ReplaceAll,
+		Op:             sandbox.FileOpEdit,
+		Path:           validPath,
+		OldText:        params.OldText,
+		NewText:        params.NewText,
+		ReplaceAll:     params.ReplaceAll,
+		ExpectedSHA256: params.ExpectedHash,
 	})
 	if err != nil {
 		return "", fileOpError("edit", err)
 	}
-	return fmt.Sprintf("Successfully replaced %d occurrence(s) in %s", res.ReplacedCount, validPath), nil
+	out := fmt.Sprintf("Successfully replaced %d occurrence(s) in %s (+%d/-%d lines)\nold_sha256: %s\nnew_sha256: %s",
+		res.ReplacedCount, validPath, res.Added, res.Removed, res.OldSHA256, res.SHA256)
+	if res.Diff != "" {
+		out += "\n\n" + res.Diff
+	}
+	return out, nil
 }
 
 // ── view_file ──
@@ -192,6 +207,11 @@ func runViewFile(ctx context.Context, sb *sandbox.Sandbox, params ViewFileParams
 	if params.Offset+int64(len(res.Data)) < totalSize {
 		content += fmt.Sprintf("\n... (reading limit of %d bytes reached. Total size: %d bytes. Use offset/limit to read more)", limit, totalSize)
 	}
+	// Content-version trailer (#787): the full-file SHA-256 the model can pass
+	// back as edit_file's expected_hash to guard against a stale edit.
+	if res.SHA256 != "" {
+		content += fmt.Sprintf("\n\n(file metadata: sha256=%s size=%d bytes — pass sha256 as expected_hash to edit_file to guard against concurrent changes)", res.SHA256, totalSize)
+	}
 	return content, nil
 }
 
@@ -208,7 +228,12 @@ func fileOpError(op string, err error) error {
 	case errors.Is(err, sandbox.ErrFileOpIsDirectory):
 		return fmt.Errorf("%s failed: path is a directory", op)
 	case errors.Is(err, sandbox.ErrFileOpOldTextAbsent):
-		return fmt.Errorf("old_text not found in file")
+		// The seam may append a CRLF hint; preserve the full message.
+		return fmt.Errorf("%s", err.Error())
+	case errors.Is(err, sandbox.ErrFileOpAmbiguous), errors.Is(err, sandbox.ErrFileOpStale), errors.Is(err, sandbox.ErrFileOpNoOp):
+		// Ambiguous/stale/no-op edits (#787): the seam's message already
+		// explains the recovery (add context / set replace_all / re-read).
+		return fmt.Errorf("%s", err.Error())
 	case errors.Is(err, sandbox.ErrPoisoned):
 		return fmt.Errorf("the sandbox was reset after a cancelled command; retry this %s", op)
 	default:

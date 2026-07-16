@@ -19,6 +19,14 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Safer `edit_file`** (#787, `docs/FILE-EDIT-SAFETY.md`): `old_text` must now
+  match exactly one location unless `replace_all` is set (an ambiguous match is
+  rejected with the count instead of silently editing the first occurrence);
+  no-op edits are rejected; an optional `expected_hash` (SHA-256 from
+  `view_file`) fails the edit safely if the file changed since it was read; and
+  a successful edit returns a bounded unified diff plus old/new content hashes.
+  `view_file` and `write_file` now report the content SHA-256 so the model can
+  round-trip it as `expected_hash`.
 - **Admin server status**: Settings now includes an admin-only **Server** tab
   with a lightweight, auto-refreshing view of CPU/load, memory, root-disk,
   uptime, and aggregate non-loopback network traffic. The read-only endpoint is

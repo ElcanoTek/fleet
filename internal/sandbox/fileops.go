@@ -49,6 +49,10 @@ type FileOpRequest struct {
 	OldText    string
 	NewText    string
 	ReplaceAll bool
+	// ExpectedSHA256 is an optional stale-content guard (#787): when set, the
+	// edit fails (ErrFileOpStale) unless the file's current content hashes to
+	// it. Accepts an optional "sha256:" prefix; case-insensitive hex.
+	ExpectedSHA256 string
 }
 
 // FileOpResult is the outcome of a FileOpRequest.
@@ -56,15 +60,44 @@ type FileOpResult struct {
 	Data          []byte // read: the bytes read
 	Size          int64  // read: total file size; write: bytes written
 	ReplacedCount int    // edit: number of occurrences replaced
+	// SHA256 is the resulting file's content hash: the full-file hash on read,
+	// the written content's hash on write/edit (#787 — the version handle for
+	// a later edit's ExpectedSHA256).
+	SHA256 string
+	// OldSHA256 / Added / Removed / Diff describe an edit (#787): the
+	// pre-edit hash, the +/- line counts, and a bounded unified diff.
+	OldSHA256 string
+	Added     int
+	Removed   int
+	Diff      string
 }
 
-// Typed sentinels so the tool layer can reproduce today's exact model-facing
-// messages regardless of which backend executed the op.
+// Typed sentinels so the tool layer can reproduce exact model-facing messages
+// regardless of which backend executed the op.
 var (
 	ErrFileOpNotFound      = errors.New("file not found")
 	ErrFileOpIsDirectory   = errors.New("path is a directory")
 	ErrFileOpOldTextAbsent = errors.New("old_text not found in file")
+	// ErrFileOpAmbiguous: edit_text matched more than one location and
+	// replace_all was not set (#787). *FileOpAmbiguousError carries the count.
+	ErrFileOpAmbiguous = errors.New("old_text matches multiple locations")
+	// ErrFileOpStale: the file changed since ExpectedSHA256 was captured (#787).
+	ErrFileOpStale = errors.New("file content has changed since it was last read")
+	// ErrFileOpNoOp: old_text and new_text produce identical content (#787).
+	ErrFileOpNoOp = errors.New("edit is a no-op")
 )
+
+// FileOpAmbiguousError carries the match count + the executor's guidance for an
+// ambiguous edit so the tool layer can surface both.
+type FileOpAmbiguousError struct {
+	Count int
+	Msg   string
+}
+
+func (e *FileOpAmbiguousError) Error() string { return e.Msg }
+func (e *FileOpAmbiguousError) Is(target error) bool {
+	return target == ErrFileOpAmbiguous
+}
 
 //go:embed fileops.py
 var fileOpsScript []byte
@@ -92,12 +125,19 @@ func (s *Sandbox) RunFileOp(ctx context.Context, req FileOpRequest) (FileOpResul
 // fileOpResponse is the JSON shape fileops.py writes (shared by both backends;
 // the host backend runs the same script logic in-process, see host.go).
 type fileOpResponse struct {
-	OK      bool   `json:"ok"`
-	ErrKind string `json:"err_kind"`
-	Err     string `json:"err"`
-	DataB64 string `json:"data_b64"`
-	Size    int64  `json:"size"`
-	Count   int    `json:"count"`
+	OK         bool   `json:"ok"`
+	ErrKind    string `json:"err_kind"`
+	Err        string `json:"err"`
+	DataB64    string `json:"data_b64"`
+	Size       int64  `json:"size"`
+	Count      int    `json:"count"`
+	SHA256     string `json:"sha256"`
+	OldSHA256  string `json:"old_sha256"`
+	MatchCount int    `json:"match_count"`
+	Added      int    `json:"added"`
+	Removed    int    `json:"removed"`
+	Diff       string `json:"diff"`
+	Hint       string `json:"hint"`
 }
 
 // decodeFileOpResponse maps the executor's JSON envelope into a FileOpResult or
@@ -114,7 +154,16 @@ func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 		case "is_dir":
 			return FileOpResult{}, ErrFileOpIsDirectory
 		case "old_absent":
+			if resp.Hint != "" {
+				return FileOpResult{}, fmt.Errorf("%w (%s)", ErrFileOpOldTextAbsent, resp.Hint)
+			}
 			return FileOpResult{}, ErrFileOpOldTextAbsent
+		case "ambiguous":
+			return FileOpResult{}, &FileOpAmbiguousError{Count: resp.MatchCount, Msg: resp.Err}
+		case "stale":
+			return FileOpResult{}, fmt.Errorf("%w: %s", ErrFileOpStale, resp.Err)
+		case "noop":
+			return FileOpResult{}, ErrFileOpNoOp
 		default:
 			return FileOpResult{}, errors.New(resp.Err)
 		}
@@ -127,5 +176,8 @@ func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 			return FileOpResult{}, fmt.Errorf("decode fileop data: %w", derr)
 		}
 	}
-	return FileOpResult{Data: data, Size: resp.Size, ReplacedCount: resp.Count}, nil
+	return FileOpResult{
+		Data: data, Size: resp.Size, ReplacedCount: resp.Count, SHA256: resp.SHA256,
+		OldSHA256: resp.OldSHA256, Added: resp.Added, Removed: resp.Removed, Diff: resp.Diff,
+	}, nil
 }
