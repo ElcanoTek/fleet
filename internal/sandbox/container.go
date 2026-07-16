@@ -733,7 +733,11 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 		// process that escaped the group.
 		res.TimedOut = errors.Is(cmdCtx.Err(), context.DeadlineExceeded)
 		res.Cancelled = !res.TimedOut
-		res.CleanupConfirmed = c.killContainerNow()
+		// Pass the containerID captured for this call — killContainerNow must
+		// NOT re-acquire c.mu, which a concurrent long run_python cell holds
+		// for its whole duration; blocking the kill behind it would re-open
+		// the #796 window (the straggler runs while we wait for the lock).
+		res.CleanupConfirmed = c.killContainerNow(c.containerID)
 		res.SandboxRetired = true
 		c.execPoisoned.Store(true)
 		return res, nil
@@ -747,15 +751,14 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 // killContainerNow SIGKILLs the whole container synchronously on a cancelled or
 // timed-out bash call (#796), destroying its PID namespace and with it every
 // process the call spawned — including ones that escaped the process group. It
-// runs on a fresh context because the caller's is already cancelled. Reports
-// whether the kill was confirmed; either way the caller poisons the sandbox so
-// close()/retirement removes the container even if this best-effort kill did
-// not land. Idempotent with close()'s own kill (a second kill of a gone
-// container is a harmless error).
-func (c *containerImpl) killContainerNow() bool {
-	c.mu.Lock()
-	containerID := c.containerID
-	c.mu.Unlock()
+// runs on a fresh context because the caller's is already cancelled, and takes
+// containerID as a parameter so it never touches c.mu — a concurrent
+// run_python cell holds that mutex for its whole runtime, and blocking the kill
+// behind it would leave the straggler running. Reports whether the kill was
+// confirmed; either way the caller poisons the sandbox so close()/retirement
+// removes the container even if this best-effort kill did not land. Idempotent
+// with close()'s own kill (a second kill of a gone container is harmless).
+func (c *containerImpl) killContainerNow(containerID string) bool {
 	if containerID == "" {
 		return true // already torn down by close()
 	}
