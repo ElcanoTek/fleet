@@ -631,20 +631,7 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 	}
 	switch {
 	case out.TimedOut, out.Cancelled:
-		if out.TimedOut {
-			result.Error = fmt.Sprintf("command timed out after %d seconds", timeoutSeconds)
-		} else {
-			result.Error = "command cancelled before it finished"
-		}
-		// #796: on cancel/timeout the sandbox kills the command's whole
-		// in-container process tree. Tell the model whether that was proved,
-		// and — when it wasn't — that the sandbox (including any persistent
-		// Python kernel state) is being retired rather than reused.
-		if out.CleanupConfirmed {
-			result.Error += "; the command and its child processes were killed"
-		} else {
-			result.Error += "; the command could not be confirmed killed — this sandbox is being retired (persistent kernel/container state will be reset)"
-		}
+		result.Error = bashCancellationMessage(out, timeoutSeconds)
 	case runErr != nil:
 		result.Error = runErr.Error()
 		// If the sandbox itself failed to start the process (binary
@@ -716,6 +703,27 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 			result.ExitCode, result.Stdout, result.Stderr, result.Error), nil
 	}
 	return string(jsonBytes), nil
+}
+
+// bashCancellationMessage is the model-visible cancellation contract (#796).
+// Keep the reset notice independent from CleanupConfirmed: a production
+// container is deliberately retired even after SIGKILL was confirmed, while
+// the test-only host backend can confirm its best-effort group kill without a
+// container or persistent kernel to replace.
+func bashCancellationMessage(out sandbox.BashResult, timeoutSeconds int) string {
+	msg := "command cancelled before it finished"
+	if out.TimedOut {
+		msg = fmt.Sprintf("command timed out after %d seconds", timeoutSeconds)
+	}
+	if out.CleanupConfirmed {
+		msg += "; the command and its child processes were killed"
+	} else {
+		msg += "; the command could not be confirmed killed"
+	}
+	if out.SandboxRetired {
+		msg += "; this sandbox is being retired (persistent kernel/container state will be reset)"
+	}
+	return msg
 }
 
 // resolveBashWorkingDir decides what cwd to run a bash command in.

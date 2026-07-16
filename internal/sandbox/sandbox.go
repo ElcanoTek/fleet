@@ -121,6 +121,11 @@ type BashResult struct {
 	// (#796). False means processes may still be running; the sandbox is
 	// poisoned and refuses further work until retired.
 	CleanupConfirmed bool
+	// SandboxRetired reports that cancellation/timeout invalidated the whole
+	// sandbox, including persistent Python kernel state. Production container
+	// sandboxes set this after tearing down the PID namespace; the test-only
+	// host executor does not have a container to retire.
+	SandboxRetired bool
 	// StdoutDiscarded / StderrDiscarded count bytes dropped because the
 	// stream exceeded BashOutputCaptureCap. The tool layer surfaces a
 	// note when either is non-zero.

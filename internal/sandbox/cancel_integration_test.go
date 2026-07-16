@@ -12,14 +12,16 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
-func newCancelTestContainer(t *testing.T) *Sandbox {
+func newCancelTestContainer(t *testing.T) (*Sandbox, string) {
 	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("container backend tested on linux only")
@@ -29,16 +31,21 @@ func newCancelTestContainer(t *testing.T) *Sandbox {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	workspace := t.TempDir()
 	sb, err := NewContainer(ctx, ContainerConfig{
 		Image:            testImage(),
-		WorkspaceHostDir: t.TempDir(),
+		WorkspaceHostDir: workspace,
 		BridgeScript:     []byte("# unused for bash-only test\n"),
 	})
 	if err != nil {
 		t.Fatalf("NewContainer: %v", err)
 	}
+	// The workspace is mounted at the same absolute path on both sides.
+	// Making it the default cwd lets marker writes use relative names and
+	// makes the host-side assertion below observe the exact same files.
+	sb.SetDefaultWorkingDir(workspace)
 	t.Cleanup(sb.Close)
-	return sb
+	return sb, workspace
 }
 
 // markerAbsentInFreshContainer waits past the delayed write, then — because the
@@ -48,16 +55,20 @@ func newCancelTestContainer(t *testing.T) *Sandbox {
 func markerAbsent(t *testing.T, hostWorkspace, name string, wait time.Duration) {
 	t.Helper()
 	time.Sleep(wait)
-	if _, err := exec.Command("test", "-e", hostWorkspace+"/"+name).Output(); err == nil {
+	_, err := os.Stat(filepath.Join(hostWorkspace, name))
+	if err == nil {
 		t.Fatalf("marker %q appeared — the cancelled command completed its side effect", name)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("inspect marker %q: %v", name, err)
 	}
 }
 
 func TestContainerBashTimeout_KillsDelayedMarkerWrite(t *testing.T) {
-	sb := newCancelTestContainer(t)
+	sb, workspace := newCancelTestContainer(t)
 
 	res, err := sb.RunBash(context.Background(), BashRequest{
-		Command: "sleep 3; printf survived > /workspace/timeout-marker",
+		Command: "sleep 3; printf survived > timeout-marker",
 		Timeout: 1 * time.Second,
 	})
 	if err != nil {
@@ -69,16 +80,20 @@ func TestContainerBashTimeout_KillsDelayedMarkerWrite(t *testing.T) {
 	if !res.CleanupConfirmed {
 		t.Fatalf("container kill not confirmed on timeout: %+v", res)
 	}
+	if !res.SandboxRetired {
+		t.Fatalf("timeout result must report sandbox retirement: %+v", res)
+	}
 	if !sb.Poisoned() {
 		t.Fatal("a timed-out bash must poison the sandbox so it is retired")
 	}
 	if _, err := sb.RunBash(context.Background(), BashRequest{Command: "true"}); !errors.Is(err, ErrPoisoned) {
 		t.Fatalf("poisoned sandbox must refuse further work, got %v", err)
 	}
+	markerAbsent(t, workspace, "timeout-marker", 3*time.Second)
 }
 
 func TestContainerBashCancel_KillsSetsidDaemonAndBackgroundChild(t *testing.T) {
-	sb := newCancelTestContainer(t)
+	sb, workspace := newCancelTestContainer(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan BashResult, 1)
@@ -88,9 +103,9 @@ func TestContainerBashCancel_KillsSetsidDaemonAndBackgroundChild(t *testing.T) {
 			// setsid daemon that leaves the process group entirely. Only
 			// killing the container reaches all three.
 			Command: `trap '' TERM
-setsid bash -c 'sleep 3; printf daemon > /workspace/daemon-marker' &
-(sleep 3; printf bg > /workspace/bg-marker) &
-sleep 3; printf fg > /workspace/fg-marker`,
+setsid bash -c 'sleep 3; printf daemon > daemon-marker' &
+(sleep 3; printf bg > bg-marker) &
+sleep 3; printf fg > fg-marker`,
 			Timeout: 30 * time.Second,
 		})
 		if err != nil {
@@ -107,22 +122,21 @@ sleep 3; printf fg > /workspace/fg-marker`,
 	if !res.CleanupConfirmed {
 		t.Fatalf("container kill not confirmed on cancel: %+v", res)
 	}
+	if !res.SandboxRetired {
+		t.Fatalf("cancel result must report sandbox retirement: %+v", res)
+	}
 	if !sb.Poisoned() {
 		t.Fatal("a cancelled bash must poison the sandbox")
 	}
 	// The container is dead; assert none of the three markers reached the
 	// bind-mounted workspace on the host.
-	ws := sb.defaultWorkingDir
-	if ws == "" {
-		t.Skip("workspace dir not resolvable for host-side marker check")
-	}
-	markerAbsent(t, ws, "fg-marker", 3*time.Second)
-	markerAbsent(t, ws, "bg-marker", 0)
-	markerAbsent(t, ws, "daemon-marker", 0)
+	markerAbsent(t, workspace, "fg-marker", 3*time.Second)
+	markerAbsent(t, workspace, "bg-marker", 0)
+	markerAbsent(t, workspace, "daemon-marker", 0)
 }
 
 func TestContainerBash_NormalRunUnaffected(t *testing.T) {
-	sb := newCancelTestContainer(t)
+	sb, _ := newCancelTestContainer(t)
 
 	res, err := sb.RunBash(context.Background(), BashRequest{
 		Command: "echo -n out-here; echo -n err-here 1>&2; exit 4",
@@ -143,7 +157,7 @@ func TestContainerBash_NormalRunUnaffected(t *testing.T) {
 }
 
 func TestContainerBashPoisoned_FailsClosed(t *testing.T) {
-	sb := newCancelTestContainer(t)
+	sb, _ := newCancelTestContainer(t)
 	ci, ok := sb.impl.(*containerImpl)
 	if !ok {
 		t.Fatal("expected container impl")

@@ -734,6 +734,7 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 		res.TimedOut = errors.Is(cmdCtx.Err(), context.DeadlineExceeded)
 		res.Cancelled = !res.TimedOut
 		res.CleanupConfirmed = c.killContainerNow()
+		res.SandboxRetired = true
 		c.execPoisoned.Store(true)
 		return res, nil
 	}
