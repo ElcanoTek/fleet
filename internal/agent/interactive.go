@@ -226,7 +226,11 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 	convo := append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(interactiveLeakedToolCallNudge))
 	agent := fantasy.NewAgent(tc.Model,
 		fantasy.WithSystemPrompt(in.SystemPrompt),
-		fantasy.WithTools(tc.NativeTools...),
+		// Contain tool panics here too (#795): this retry agent registers the
+		// RAW per-turn native tools directly, bypassing buildFantasyTools' own
+		// containment, so wrap them or a panic in a leaked-call retry escapes
+		// fantasy's tool-exec goroutine and kills the process.
+		fantasy.WithTools(agentcore.ContainToolPanics(tc.NativeTools)...),
 		fantasy.WithPrepareStep(chainPrepareSteps(
 			overflowTruncationStep(),
 			agentcore.PromptCachingStep(tc.Model.Model()),

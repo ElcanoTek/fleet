@@ -1,10 +1,13 @@
 package agentcore
 
 import (
+	"runtime/debug"
 	"strings"
 	"sync"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // The streaming bridge: forwards a round's fantasy streaming callbacks into the
@@ -109,10 +112,21 @@ func newStreamSink(obs Observer) *streamSink {
 }
 
 // emit forwards an event to the Observer when one is wired (nil-safe).
+//
+// A panic in the Observer is CONTAINED here (#795): these callbacks fire inside
+// fantasy's unsupervised tool-exec goroutines, where an escaping panic would
+// kill the process. Record-then-degrade — the event is dropped and the run
+// continues; observation is best-effort, tool execution is not.
 func (s *streamSink) emit(eventType string, payload map[string]any) {
-	if s.observer != nil {
-		s.observer.Observe(eventType, payload)
+	if s.observer == nil {
+		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			safe.EmitPanic("agentcore.observer."+eventType, r, debug.Stack())
+		}
+	}()
+	s.observer.Observe(eventType, payload)
 }
 
 // onTextDelta forwards a text chunk to the Observer and accumulates it.

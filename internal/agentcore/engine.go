@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"charm.land/fantasy/providers/openrouter"
 
 	"github.com/ElcanoTek/fleet/internal/observability"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // engine holds the per-run model + resilience state the enforcement loop and
@@ -583,6 +585,16 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			return nil
 		},
 		OnToolResult: func(tr fantasy.ToolResultContent) error {
+			// This callback fires inside fantasy's tool-exec goroutines (which
+			// have no recover of their own), so contain any panic in the
+			// flatten/redact/accumulate path here (#795): record it and return
+			// nil (fantasy ignores the callback error), rather than letting it
+			// escape and kill the process.
+			defer func() {
+				if r := recover(); r != nil {
+					safe.EmitPanic("agentcore.on_tool_result", r, debug.Stack())
+				}
+			}()
 			markFirst()
 			if sink != nil {
 				text, isErr := toolResultText(tr)
