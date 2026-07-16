@@ -237,6 +237,7 @@ func (t *deferredToolCall) Run(ctx context.Context, tc fantasy.ToolCall) (fantas
 
 	args, err := normalizeDeferredArguments(p.Arguments)
 	if err != nil {
+		//nolint:nilerr // intentional: a malformed arguments payload is reported to the MODEL as a text error response (like the two rejections above) so it can correct the call; a non-nil Go error would abort the run.
 		return fantasy.NewTextErrorResponse("tool_call: " + err.Error()), nil
 	}
 

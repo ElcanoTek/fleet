@@ -197,7 +197,12 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 	})
 }
 
+// toolEventCount is nil-safe (0): the resilience loop tolerates a nil sink
+// (the lifted parity tests build rounds without one).
 func (s *streamSink) toolEventCount() int {
+	if s == nil {
+		return 0
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.toolEvents
@@ -215,8 +220,11 @@ type sinkMark struct {
 	toolEvents int
 }
 
-// mark snapshots the current accumulation point.
+// mark snapshots the current accumulation point. Nil-safe (zero mark).
 func (s *streamSink) mark() sinkMark {
+	if s == nil {
+		return sinkMark{}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return sinkMark{entries: len(s.entries), finalText: s.finalText.Len(), toolEvents: s.toolEvents}
@@ -229,8 +237,11 @@ func (s *streamSink) mark() sinkMark {
 // entries are ever dropped, and no tool execution can be racing the rollback.
 // Events already forwarded to the Observer cannot be recalled; the observer
 // stream shows the abandoned partial followed by the retry note, while the
-// accumulated history (what persists) stays clean.
+// accumulated history (what persists) stays clean. Nil-safe (no-op).
 func (s *streamSink) rollbackTo(m sinkMark) {
+	if s == nil {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.entries) > m.entries {

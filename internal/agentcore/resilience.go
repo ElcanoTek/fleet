@@ -497,10 +497,7 @@ func (e *engine) streamRoundWithResilience(
 		recoveryLimit += len(e.fallbackModels)
 	}
 	for attempt := 0; attempt < recoveryLimit; attempt++ {
-		var attemptMark sinkMark
-		if sink != nil {
-			attemptMark = sink.mark()
-		}
+		attemptMark := sink.mark()
 		rs := newRoundState(e, orch, maxTokens)
 		rs.sink = sink
 		result, err := rs.stream(ctx, currentAgent, activeModel, messages)
@@ -551,7 +548,7 @@ func (e *engine) streamRoundWithResilience(
 		// providers and nothing re-executes (ADR-0035; the previous any-semantic-
 		// event gate dead-lettered every long round whose provider hiccuped
 		// mid-answer, with the fallback model configured but never consulted).
-		if sink != nil && sink.toolEventCount() > attemptMark.toolEvents &&
+		if sink.toolEventCount() > attemptMark.toolEvents &&
 			(class == streamErrorRetryExhausted || class == streamErrorStreamBlip) {
 			return streamRoundOutcome{}, fmt.Errorf("%w: %w", ErrCommittedSideEffects, err)
 		}
@@ -560,9 +557,7 @@ func (e *engine) streamRoundWithResilience(
 		// assistant message so the regeneration replaces — not duplicates — the
 		// abandoned partial output.
 		rollbackAttempt := func() {
-			if sink != nil {
-				sink.rollbackTo(attemptMark)
-			}
+			sink.rollbackTo(attemptMark)
 			messages = dropTrailingAssistant(messages)
 		}
 		// Feed genuine provider failures into the circuit breaker (#267) so error
