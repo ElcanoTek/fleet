@@ -69,10 +69,18 @@ prior versions are listed because none have shipped.
   The three tools now dispatch read/write/edit through a new sandbox FileOp
   seam (`Sandbox.RunFileOp`) that runs a one-shot `python3` in the same
   per-turn container as bash/run_python, inheriting the full isolation posture;
-  host-side path validation stays as defense-in-depth input, and there is no
-  host-execution fallback (they fail closed without a sandbox). Overwrite/edit
-  preserves an existing file's mode (a `chmod +x`'d script keeps its execute
-  bit). ADR-0036 also documents the
+  the executor also confines each call to a narrow conversation/worktree root
+  with a boot-bound root identity and dirfd-relative no-follow traversal,
+  defeating both interior symlink swaps and whole conversation-directory
+  exchanges against the shared workspace mount. Atomic replacements preserve
+  existing modes and fsync the parent; cancellation synchronously kills and
+  retires the container so a helper cannot land a late rename. Host-side path
+  validation stays as defense-in-depth input, and there is no host-execution
+  fallback (the tools fail closed without a sandbox). Scheduled non-worktree
+  turns now resolve relative tools against that same workspace root. The
+  existing host-temp truncation spill remains an honestly documented temporary
+  exception pending #793's governed artifact lifecycle. ADR-0036 also documents
+  the
   remaining host-side control-plane/broker tools (network fetch, brokered
   credentials, governed datastore writes) as explicit, threat-modelled
   exceptions rather than a silent contradiction of the invariant.

@@ -205,6 +205,12 @@ type Sandbox struct {
 	// seam is a scheduled-run concern and the two never combine.
 	defaultWorkingDir string
 
+	// fileOpRoot/fileOpRootIdentity are the writable filesystem capability
+	// bound before a turn exposes tools to the model (#784). The identity is
+	// captured inside the selected runtime so it works with runc, Kata and krun.
+	fileOpRoot         string
+	fileOpRootIdentity FileOpRootIdentity
+
 	// pythonCellTimeout is the host-operator ceiling on a single run_python cell
 	// (FLEET_PYTHON_CELL_TIMEOUT, #213). Zero disables it. When > 0, RunPython
 	// clamps the per-call Timeout to min(Timeout, pythonCellTimeout) before
@@ -241,6 +247,7 @@ type impl interface {
 	// (#784) so model-authored filesystem mutations run in the sandbox, not the
 	// host process. See fileops.go.
 	runFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error)
+	bindFileOpRoot(ctx context.Context, root string) (FileOpRootIdentity, error)
 	// resourceUsage returns the per-run resource telemetry rollup (#263) and
 	// whether any was collected. Populated only after close() for the container
 	// backend (the poller publishes its rollup on teardown); the host backend

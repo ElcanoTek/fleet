@@ -12,9 +12,10 @@ this file is the agent-facing distillation, not a replacement for them.
 
 fleet is a self-hosted, general-purpose agent platform. **One** Go process runs
 interactive chat *and* a scheduling engine on one box, driven by **one** unified
-agent runtime (`internal/agentcore`). Every agent tool call — bash, Python, file
-I/O, MCP — executes inside a rootless-Podman sandbox; tools and data are reached
-through an MCP catalog whose credentials are brokered host-side. See
+agent runtime (`internal/agentcore`). Model-authored local execution — bash,
+Python, and file I/O — runs inside a rootless-Podman sandbox; fixed host-side
+brokers handle MCP credentials/network and the small control-plane exception
+set enumerated in ADR-0036. See
 the README "Architecture at a glance" for the full picture.
 
 ## Build · test · lint (run before opening any PR)

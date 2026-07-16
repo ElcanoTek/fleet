@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -738,9 +739,9 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 		// NOT re-acquire c.mu, which a concurrent long run_python cell holds
 		// for its whole duration; blocking the kill behind it would re-open
 		// the #796 window (the straggler runs while we wait for the lock).
+		c.execPoisoned.Store(true)
 		res.CleanupConfirmed = c.killContainerNow(c.containerID)
 		res.SandboxRetired = true
-		c.execPoisoned.Store(true)
 		return res, nil
 	}
 	if execErr != nil && cmd.ProcessState == nil {
@@ -776,7 +777,7 @@ func (c *containerImpl) killContainerNow(containerID string) bool {
 		if strings.Contains(low, "no such container") || strings.Contains(low, "not running") || strings.Contains(low, "no container") {
 			return true
 		}
-		log.Printf("sandbox: cancelled-bash container kill unconfirmed (%s): %v (%.200s)", containerID, err, string(out))
+		log.Printf("sandbox: cancelled-exec container kill unconfirmed (%s): %v (%.200s)", containerID, err, string(out))
 		return false
 	}
 	return true
@@ -799,10 +800,46 @@ const fileOpTimeout = 60 * time.Second
 // posture exactly like bash/run_python. It does not use the run_python bridge
 // (no kernel boot, no c.mu serialization, works in lockdown).
 func (c *containerImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error) {
+	anchor, readOnly, err := c.fileOpAnchor(req.Root)
+	if err != nil {
+		return FileOpResult{}, err
+	}
+	if readOnly && req.Op != FileOpRead {
+		return FileOpResult{}, fmt.Errorf("fileop write requested beneath a read-only mount: %w", ErrFileOpUnsafePath)
+	}
+	if !readOnly && !req.rootBound {
+		return FileOpResult{}, fmt.Errorf("writable fileop root was not bound before the turn: %w", ErrFileOpUnsafePath)
+	}
+	return c.executeFileOp(ctx, req, anchor)
+}
+
+func (c *containerImpl) bindFileOpRoot(ctx context.Context, root string) (FileOpRootIdentity, error) {
+	anchor, readOnly, err := c.fileOpAnchor(root)
+	if err != nil {
+		return FileOpRootIdentity{}, err
+	}
+	if readOnly {
+		return FileOpRootIdentity{}, fmt.Errorf("cannot bind a read-only mount as the writable fileop root: %w", ErrFileOpUnsafePath)
+	}
+	res, err := c.executeFileOp(ctx, FileOpRequest{
+		Op: fileOpBindRoot, Path: root, Root: root,
+	}, anchor)
+	if err != nil {
+		return FileOpRootIdentity{}, err
+	}
+	return res.rootIdentity, nil
+}
+
+func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor string) (FileOpResult, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
 	defer cancel()
 
-	wire := map[string]any{"op": string(req.Op), "path": req.Path}
+	wire := map[string]any{
+		"op":     string(req.Op),
+		"path":   req.Path,
+		"root":   req.Root,
+		"anchor": anchor,
+	}
 	switch req.Op {
 	case FileOpRead:
 		wire["offset"] = req.Offset
@@ -816,8 +853,18 @@ func (c *containerImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileO
 		if req.ExpectedSHA256 != "" {
 			wire["expected_sha256"] = req.ExpectedSHA256
 		}
+	case fileOpBindRoot:
+		// Root + anchor are the complete request.
 	default:
 		return FileOpResult{}, fmt.Errorf("unknown fileop %q", req.Op)
+	}
+	if req.testPause > 0 {
+		wire["test_pause_ms"] = req.testPause.Milliseconds()
+		wire["test_ready_name"] = req.testReadyName
+	}
+	if req.rootBound {
+		wire["expected_dev"] = req.expectedDev
+		wire["expected_ino"] = req.expectedIno
 	}
 	reqJSON, err := json.Marshal(wire)
 	if err != nil {
@@ -831,11 +878,53 @@ func (c *containerImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileO
 	out, err := cmd.Output()
 	if err != nil {
 		if cmdCtx.Err() != nil {
-			return FileOpResult{}, fmt.Errorf("fileop %s timed out: %w", req.Op, cmdCtx.Err())
+			// CommandContext only kills the host-side podman client. Exactly like
+			// bash (#796), the helper may still be alive inside the persistent
+			// container and could complete a rename after the turn stopped. Tear
+			// down the PID namespace synchronously and poison the handle so the
+			// pool retires it before another turn can borrow it.
+			c.execPoisoned.Store(true)
+			_ = c.killContainerNow(c.containerID)
+			return FileOpResult{}, fmt.Errorf("fileop %s interrupted (%w); sandbox retired: %w", req.Op, cmdCtx.Err(), ErrPoisoned)
 		}
 		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w%s", req.Op, err, stderrOf(err))
 	}
 	return decodeFileOpResponse(out)
+}
+
+// fileOpAnchor returns the most specific trusted bind mount containing root.
+// The helper opens this mount with O_NOFOLLOW, then walks Root and Path beneath
+// it using directory descriptors. A model-controlled Root can therefore never
+// turn the shared workspace mount into authority over a sibling conversation.
+func (c *containerImpl) fileOpAnchor(root string) (anchor string, readOnly bool, err error) {
+	type mount struct {
+		path     string
+		readOnly bool
+	}
+	candidates := make([]mount, 0, len(c.cfg.ReadOnlyMounts)+1)
+	candidates = append(candidates, mount{path: c.cfg.WorkspaceHostDir})
+	for _, path := range c.cfg.ReadOnlyMounts {
+		candidates = append(candidates, mount{path: path, readOnly: true})
+	}
+	best := ""
+	for _, candidate := range candidates {
+		if candidate.path == "" {
+			continue
+		}
+		abs, absErr := filepath.Abs(candidate.path)
+		if absErr != nil {
+			continue
+		}
+		inside, withinErr := pathWithin(abs, root)
+		if withinErr == nil && inside && len(abs) > len(best) {
+			best = filepath.Clean(abs)
+			readOnly = candidate.readOnly
+		}
+	}
+	if best == "" {
+		return "", false, fmt.Errorf("fileop root is not inside a sandbox bind mount: %w", ErrFileOpUnsafePath)
+	}
+	return best, readOnly, nil
 }
 
 // stderrOf appends a captured stderr tail from an *exec.ExitError, if any.

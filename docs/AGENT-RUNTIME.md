@@ -1,9 +1,10 @@
 # The fleet agent runtime
 
-fleet runs **one** native agent loop, in the fleet process. Every tool call it
-makes — `bash`, `run_python`, file I/O, MCP — executes inside a rootless-Podman
-sandbox, and the credentials those calls need are brokered **host-side** and
-never enter the sandbox. There is no flavor picker and no external-agent
+fleet runs **one** native agent loop, in the fleet process. Model-authored local
+execution — `bash`, `run_python`, and file I/O — runs inside a rootless-Podman
+sandbox. MCP and the explicitly inventoried native broker/control-plane tools
+execute fixed host code so their credentials remain **host-side** and never
+enter the sandbox. There is no flavor picker and no external-agent
 delegation: the loop, the sandbox, and the credential broker are the whole story.
 
 This guide documents the runtime mechanics an operator needs: the per-turn
@@ -22,10 +23,13 @@ per-conversation workspace. The file tools do host-side path validation as
 defense-in-depth input, then execute the actual read/write/edit **in** the
 sandbox (a one-shot `podman exec python3`), so they inherit the same runtime,
 seccomp, caps, cgroups, disk/PID limits, and lockdown network posture as bash;
-with no sandbox they fail closed (no host fallback). The agent loop itself
-runs in the fleet process, but it holds no privileged executor — each tool call
-is handed to the sandbox under full host policy (cost ceilings, repeat
-detection, critical-tool approval staging, the email send gate, …), and fleet
+the helper is confined to the narrow conversation/worktree root with
+descriptor-relative no-follow traversal, and cancellation kills + retires the
+container before returning. With no sandbox they fail closed (no host fallback).
+The agent loop itself runs in the fleet process, but it holds no privileged
+local executor: local data-plane calls are handed to the sandbox under full host
+policy (cost ceilings, repeat detection, critical-tool approval staging, the
+email send gate, …), and fleet
 records the real, executed tool calls as the audit trail, not a self-report. A
 small set of native tools are deliberately host-side control-plane/broker
 operations (host network fetch, brokered credentials, governed datastore

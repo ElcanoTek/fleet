@@ -833,6 +833,19 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return nil, err
 	}
 	defer sbCleanup()
+	fileOpRoot := m.config.WorkspaceRoot
+	if in.ConversationID != "" {
+		fileOpRoot, err = tools.EnsureWorkspaceDir(in.ConversationID)
+		if err != nil {
+			return nil, fmt.Errorf("prepare conversation workspace: %w", err)
+		}
+	}
+	if fileOpRoot == "" {
+		fileOpRoot = tools.WorkspaceDirForConversation(in.ConversationID)
+	}
+	if err := sb.BindFileOpRoot(ctx, fileOpRoot); err != nil {
+		return nil, fmt.Errorf("bind conversation file capability: %w", err)
+	}
 	turnTools := tools.NewTurnTools(sb, tools.WithBrowser(tools.BrowserConfig{
 		Enabled:  m.config.BrowserEnabled,
 		Lockdown: in.Lockdown,
