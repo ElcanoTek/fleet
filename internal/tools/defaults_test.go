@@ -14,7 +14,7 @@ func TestExcludeInteractiveOnly(t *testing.T) {
 	all := DefaultTools()
 	filtered := ExcludeInteractiveOnly(all)
 
-	var names []string
+	names := make([]string, 0, len(filtered))
 	for _, tool := range filtered {
 		names = append(names, tool.Info().Name)
 	}
@@ -35,7 +35,7 @@ func TestExcludeInteractiveOnly(t *testing.T) {
 	}
 	// Every name in the exclusion set must correspond to a REAL registered
 	// tool — a renamed tool would otherwise silently escape the filter.
-	var allNames []string
+	allNames := make([]string, 0, len(all))
 	for _, tool := range all {
 		allNames = append(allNames, tool.Info().Name)
 	}
