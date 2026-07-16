@@ -237,6 +237,10 @@ func (s *Sandbox) SetDefaultWorkingDir(dir string) {
 type impl interface {
 	runBash(ctx context.Context, req BashRequest) (BashResult, error)
 	runPython(ctx context.Context, req PythonRequest) (PythonResult, error)
+	// runFileOp executes a view/write/edit file operation inside the backend
+	// (#784) so model-authored filesystem mutations run in the sandbox, not the
+	// host process. See fileops.go.
+	runFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error)
 	// resourceUsage returns the per-run resource telemetry rollup (#263) and
 	// whether any was collected. Populated only after close() for the container
 	// backend (the poller publishes its rollup on teardown); the host backend

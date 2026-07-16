@@ -216,7 +216,7 @@ func runPythonWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params RunPy
 		}
 	}
 
-	truncatePythonResponse(&resp)
+	truncatePythonResponse(&resp, workspaceDir)
 	maybeAddEmptyOutputHint(&resp)
 
 	jsonBytes, marshalErr := json.Marshal(resp)
@@ -231,7 +231,7 @@ func runPythonWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params RunPy
 // truncatePythonResponse handles large stdout/stderr by saving full
 // content to temp files and replacing inline content with head+tail
 // excerpts. Same shape the legacy implementation produced.
-func truncatePythonResponse(resp *pythonResponse) {
+func truncatePythonResponse(resp *pythonResponse, spillDir string) {
 	stdoutBytes := []byte(resp.Stdout)
 	stderrBytes := []byte(resp.Stderr)
 	if len(stdoutBytes) <= pythonOutputTruncateThreshold && len(stderrBytes) <= pythonOutputTruncateThreshold {
@@ -239,14 +239,14 @@ func truncatePythonResponse(resp *pythonResponse) {
 	}
 	ti := &truncationInfo{}
 	if len(stdoutBytes) > pythonOutputTruncateThreshold {
-		truncated, path := truncateWithFile(stdoutBytes, "python-stdout")
+		truncated, path := truncateWithFile(stdoutBytes, "python-stdout", spillDir)
 		ti.StdoutTruncated = true
 		ti.StdoutFullPath = path
 		ti.StdoutFullBytes = len(stdoutBytes)
 		resp.Stdout = truncated
 	}
 	if len(stderrBytes) > pythonOutputTruncateThreshold {
-		truncated, path := truncateWithFile(stderrBytes, "python-stderr")
+		truncated, path := truncateWithFile(stderrBytes, "python-stderr", spillDir)
 		ti.StderrTruncated = true
 		ti.StderrFullPath = path
 		ti.StderrFullBytes = len(stderrBytes)

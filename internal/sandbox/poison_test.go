@@ -28,6 +28,9 @@ func (p *poisonableImpl) runPython(context.Context, PythonRequest) (PythonResult
 func (p *poisonableImpl) resourceUsage() (ResourceUsageSummary, bool) {
 	return ResourceUsageSummary{}, false
 }
+func (p *poisonableImpl) runFileOp(context.Context, FileOpRequest) (FileOpResult, error) {
+	return FileOpResult{}, nil
+}
 func (p *poisonableImpl) poisoned() bool { return p.poison.Load() }
 func (p *poisonableImpl) close()         { p.closed.Store(true) }
 

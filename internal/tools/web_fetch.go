@@ -265,7 +265,7 @@ func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 			ExecutionTimeMs: time.Since(start).Milliseconds(),
 			ContentBytes:    len(cached),
 		}
-		truncateWebFetchResult(&result)
+		truncateWebFetchResult(&result, truncationSpillDir(ctx))
 		jsonBytes, err := json.Marshal(result)
 		if err != nil {
 			return cached, err
@@ -298,7 +298,7 @@ func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 		t.cache.set(url, content)
 	}
 
-	truncateWebFetchResult(&result)
+	truncateWebFetchResult(&result, truncationSpillDir(ctx))
 
 	jsonBytes, marshalErr := json.Marshal(result)
 	if marshalErr != nil {
@@ -310,13 +310,14 @@ func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 	return string(jsonBytes), nil
 }
 
-// truncateWebFetchResult handles large content by saving to temp file.
-func truncateWebFetchResult(result *webFetchResult) {
+// truncateWebFetchResult handles large content by saving to a spill file in the
+// per-turn workspace (#784) so the sandboxed view_file recovery hint can read it.
+func truncateWebFetchResult(result *webFetchResult, spillDir string) {
 	contentBytes := []byte(result.Stdout)
 	if len(contentBytes) <= webFetchTruncateThreshold {
 		return
 	}
-	truncated, path := truncateWithFile(contentBytes, "webfetch")
+	truncated, path := truncateWithFile(contentBytes, "webfetch", spillDir)
 	result.TruncationInfo = &truncationInfo{
 		StdoutTruncated: true,
 		StdoutFullPath:  path,

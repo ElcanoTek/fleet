@@ -15,12 +15,22 @@ MCP credential allowlist, the scheduled end-of-run verifier, the optional
 
 ## The per-turn execution sandbox
 
-Every `bash` / `run_python` call runs inside an ephemeral rootless-Podman
-container over a persistent per-conversation workspace. The agent loop itself
+Every `bash` / `run_python` call — and every `view_file` / `write_file` /
+`edit_file` call, via the sandbox FileOp seam (#784, `Sandbox.RunFileOp`) —
+runs inside an ephemeral rootless-Podman container over a persistent
+per-conversation workspace. The file tools do host-side path validation as
+defense-in-depth input, then execute the actual read/write/edit **in** the
+sandbox (a one-shot `podman exec python3`), so they inherit the same runtime,
+seccomp, caps, cgroups, disk/PID limits, and lockdown network posture as bash;
+with no sandbox they fail closed (no host fallback). The agent loop itself
 runs in the fleet process, but it holds no privileged executor — each tool call
 is handed to the sandbox under full host policy (cost ceilings, repeat
 detection, critical-tool approval staging, the email send gate, …), and fleet
-records the real, executed tool calls as the audit trail, not a self-report.
+records the real, executed tool calls as the audit trail, not a self-report. A
+small set of native tools are deliberately host-side control-plane/broker
+operations (host network fetch, brokered credentials, governed datastore
+writes) — enumerated in
+[ADR-0036](adr/0036-sandboxed-file-tools-and-host-io-exceptions.md).
 
 **MCP credentials never enter the sandbox.** MCP tools are advertised to the
 model, but every `mcp_*` call is executed host-side against the per-task

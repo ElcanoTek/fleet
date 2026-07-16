@@ -50,16 +50,18 @@ func ExcludeInteractiveOnly(all []fantasy.AgentTool) []fantasy.AgentTool {
 // clear "no sandbox" error if ever invoked through this slice —
 // production turns rebuild via [NewTurnTools] with a real per-turn
 // sandbox, and that's the only path that should fire bash/run_python.
-// The nil-bound entries here exist so the tool *schemas* (name,
+// The nil-bound entries here (bash, view/write/edit_file — all sandbox
+// data-plane tools since #784) exist so the tool *schemas* (name,
 // description, parameters) stay stable for the system prompt and
 // prompt-prefix caching, even before the agent has Take()d a
-// sandbox for the turn.
+// sandbox for the turn. Invoked with a nil sandbox they fail closed —
+// there is no host-execution fallback.
 func DefaultTools() []fantasy.AgentTool {
 	return []fantasy.AgentTool{
 		NewBashTool(nil),
-		NewViewFileTool(),
-		NewWriteFileTool(),
-		NewEditFileTool(),
+		NewViewFileTool(nil),
+		NewWriteFileTool(nil),
+		NewEditFileTool(nil),
 		NewTaskTrackerTool(),
 		NewWebFetchTool(),
 		NewDownloadURLTool(),
@@ -104,9 +106,9 @@ func NewTurnTools(sb *sandbox.Sandbox, opts ...TurnOption) TurnTools {
 	tt := TurnTools{
 		Tools: []fantasy.AgentTool{
 			NewBashTool(sb),
-			NewViewFileTool(),
-			NewWriteFileTool(),
-			NewEditFileTool(),
+			NewViewFileTool(sb),
+			NewWriteFileTool(sb),
+			NewEditFileTool(sb),
 			NewTaskTrackerTool(),
 			NewWebFetchTool(),
 			NewDownloadURLTool(),

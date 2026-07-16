@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -785,6 +786,70 @@ func (c *containerImpl) killContainerNow(containerID string) bool {
 // sandbox (#796); a poisoned container has been killed and must not be reused.
 func (c *containerImpl) poisoned() bool {
 	return c.execPoisoned.Load()
+}
+
+// fileOpTimeout bounds a single sandboxed file operation (#784). Generous
+// enough for a 10 MB view read, short enough that a wedged container surfaces
+// an error instead of hanging the turn.
+const fileOpTimeout = 60 * time.Second
+
+// runFileOp executes one file operation INSIDE the container via a one-shot
+// `podman exec -i python3 -c <fileops.py>` (#784), so read/write/edit inherit
+// the container's runtime, seccomp, caps, cgroups, disk/PID limits, and network
+// posture exactly like bash/run_python. It does not use the run_python bridge
+// (no kernel boot, no c.mu serialization, works in lockdown).
+func (c *containerImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
+	defer cancel()
+
+	wire := map[string]any{"op": string(req.Op), "path": req.Path}
+	switch req.Op {
+	case FileOpRead:
+		wire["offset"] = req.Offset
+		wire["limit"] = req.Limit
+	case FileOpWrite:
+		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
+	case FileOpEdit:
+		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
+		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))
+		wire["replace_all"] = req.ReplaceAll
+	default:
+		return FileOpResult{}, fmt.Errorf("unknown fileop %q", req.Op)
+	}
+	reqJSON, err := json.Marshal(wire)
+	if err != nil {
+		return FileOpResult{}, fmt.Errorf("marshal fileop: %w", err)
+	}
+
+	args := c.podmanArgs([]string{"exec", "-i", c.containerID, "python3", "-c", string(fileOpsScript)})
+	cmd := exec.CommandContext(cmdCtx, c.cfg.PodmanBinary, args...) //nolint:gosec // fixed embedded script; container is our isolated sandbox
+	cmd.Stdin = bytes.NewReader(reqJSON)
+	cmd.WaitDelay = BashWaitDelay
+	out, err := cmd.Output()
+	if err != nil {
+		if cmdCtx.Err() != nil {
+			return FileOpResult{}, fmt.Errorf("fileop %s timed out: %w", req.Op, cmdCtx.Err())
+		}
+		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w%s", req.Op, err, stderrOf(err))
+	}
+	return decodeFileOpResponse(out)
+}
+
+// stderrOf appends a captured stderr tail from an *exec.ExitError, if any.
+func stderrOf(err error) string {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+		return " (" + summarizeBytes(ee.Stderr, 200) + ")"
+	}
+	return ""
+}
+
+func summarizeBytes(b []byte, n int) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
 
 func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {

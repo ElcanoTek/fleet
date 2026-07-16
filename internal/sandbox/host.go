@@ -12,7 +12,9 @@ package sandbox
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -148,6 +150,48 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 // container to retire, and this test/dev-only executor is not a hardened
 // boundary. Production uses the container backend, which does poison+retire.
 func (h *hostImpl) poisoned() bool { return false }
+
+// runFileOp runs the SAME embedded fileops.py the container backend uses, but
+// as a plain host python3 subprocess (#784) — no container. Running the one
+// script in both backends guarantees byte-identical read/write/edit semantics,
+// and lets the fileop tests exercise the real executor on a dev box without
+// Podman. python3 is a hard dependency of the run_python bridge, so it is
+// present wherever this test/dev-only backend is used.
+func (h *hostImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	wire := map[string]any{"op": string(req.Op), "path": req.Path}
+	switch req.Op {
+	case FileOpRead:
+		wire["offset"] = req.Offset
+		wire["limit"] = req.Limit
+	case FileOpWrite:
+		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
+	case FileOpEdit:
+		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
+		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))
+		wire["replace_all"] = req.ReplaceAll
+	default:
+		return FileOpResult{}, fmt.Errorf("unknown fileop %q", req.Op)
+	}
+	reqJSON, err := json.Marshal(wire)
+	if err != nil {
+		return FileOpResult{}, fmt.Errorf("marshal fileop: %w", err)
+	}
+
+	//nolint:gosec // fixed embedded script; the host backend is the test/dev executor
+	cmd := exec.CommandContext(cmdCtx, "python3", "-c", string(fileOpsScript))
+	cmd.Stdin = bytes.NewReader(reqJSON)
+	out, err := cmd.Output()
+	if err != nil {
+		if cmdCtx.Err() != nil {
+			return FileOpResult{}, fmt.Errorf("fileop %s timed out: %w", req.Op, cmdCtx.Err())
+		}
+		return FileOpResult{}, fmt.Errorf("fileop %s: %w", req.Op, err)
+	}
+	return decodeFileOpResponse(out)
+}
 
 func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {
 	if h.bridgeScript == nil {
