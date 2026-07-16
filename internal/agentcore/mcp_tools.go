@@ -13,6 +13,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/observability"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // MCP tool wrapping + the ONE buildFantasyTools skeleton both modes feed
@@ -433,6 +434,15 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	if err != nil {
 		m.record(toolName, params.Input, "", false)
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("Error calling %s: %v", toolName, err)), nil
+	}
+	// Fast.io returns short-lived bearer URLs from download.file-url/zip-url.
+	// Vault them before the generic secret scrubber sees `token=...`: redaction
+	// alone makes the documented mcp_fast_io_download -> download_url chain
+	// unusable, while passing the raw token through would leak direct file access
+	// into provider context and logs. The model receives only an opaque handle;
+	// download_url redeems it inside this process.
+	if !isErr && m.serverName == mcpServerFastIO && m.tool.Name == "download" {
+		resultText = tools.ProtectFastIODownloadURLs(resultText)
 	}
 	// Scrub secrets from MCP output before it is recorded, returned to the model,
 	// or streamed/persisted downstream.
