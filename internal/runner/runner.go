@@ -673,8 +673,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 
 	session, runErr := p.runner.Run(runCtx, task)
 
-	if runErr != nil && !errors.Is(runErr, agentcore.ErrRetryBudgetExhausted) && !errors.Is(runErr, agentcore.ErrStreamBlipPersisted) &&
-		!errors.Is(runErr, agentcore.ErrCommittedSideEffects) {
+	if runErr != nil && !transientAgentFailure(runErr) {
 		observability.CaptureException(taskCtx, runErr, func(s *sentry.Scope) {
 			s.SetTag("task_id", task.ID.String())
 			s.SetTag("model", model)
@@ -934,6 +933,18 @@ func logSafeRunner(s string) string {
 	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
+// transientAgentFailure reports whether err carries one of agentcore's
+// transient-infra sentinels: the run failed on provider/transport weather, not
+// on anything deterministic. These classify FailureTransient (the whole-task
+// RetryPolicy owns the re-run — for ErrCommittedSideEffects that re-run
+// repeats already-executed tool side effects, which is exactly the opt-in
+// max_retries grants) and are excluded from Sentry capture as non-actionable.
+func transientAgentFailure(err error) bool {
+	return errors.Is(err, agentcore.ErrRetryBudgetExhausted) ||
+		errors.Is(err, agentcore.ErrStreamBlipPersisted) ||
+		errors.Is(err, agentcore.ErrCommittedSideEffects)
+}
+
 // classifyFailure maps a clean run failure to a RetryPolicy failure class (#201).
 // Only failures backed by a distinct agentcore sentinel are distinguishable;
 // everything else (deterministic config errors like "no model configured",
@@ -943,12 +954,7 @@ func logSafeRunner(s string) string {
 // sentinels; until then they fall through to terminal.
 func classifyFailure(err error) string {
 	switch {
-	case errors.Is(err, agentcore.ErrRetryBudgetExhausted), errors.Is(err, agentcore.ErrStreamBlipPersisted),
-		errors.Is(err, agentcore.ErrCommittedSideEffects):
-		// ErrCommittedSideEffects is a transient provider failure whose IN-RUN
-		// recovery was suppressed (tools had executed mid-round). Whether the
-		// whole task re-runs — repeating those side effects — is exactly what
-		// the operator's RetryPolicy decides, so it classifies transient.
+	case transientAgentFailure(err):
 		return models.FailureTransient
 	case errors.Is(err, agentcore.ErrCostCeilingExceeded):
 		return models.FailureCostCeiling

@@ -193,12 +193,13 @@ func runDownloadURL(ctx context.Context, params DownloadURLParams) downloadURLRe
 	res.HTTPStatus = resp.StatusCode
 	res.ContentType = resp.Header.Get("Content-Type")
 
-	if protected {
+	switch {
+	case protected:
 		// Redirect targets can contain fresh bearer credentials too. The opaque
 		// handle is all the model needs, so keep the entire resolved chain inside
 		// the host process.
 		chain = nil
-	} else if len(chain) == 0 {
+	case len(chain) == 0:
 		// No redirects fired; chain is just the initial → final URL.
 		// Keep one entry when start == final (no actual redirect).
 		if finalURL != raw {
@@ -206,7 +207,7 @@ func runDownloadURL(ctx context.Context, params DownloadURLParams) downloadURLRe
 		} else {
 			chain = []string{raw}
 		}
-	} else {
+	default:
 		// CheckRedirect captured the chain mid-flight; prepend the
 		// initial URL and append the final hop's resolved URL.
 		// (chain currently holds the redirect *targets*, not the
