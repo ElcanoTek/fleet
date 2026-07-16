@@ -1,6 +1,8 @@
 # ADR-0033: Cross-provider failover before stream commitment
 
-Status: accepted
+Status: accepted; suppression clause superseded by
+[ADR-0035](0035-side-effect-gated-stream-recovery.md) (recovery after stream
+commitment is gated on tool side effects, not on any semantic event)
 
 ## Context
 

@@ -197,6 +197,16 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A transient mid-stream provider failure no longer dead-letters a whole
+  run once any text has streamed** (ADR-0035). The ADR-0033 commitment guard
+  suppressed the in-place stream-blip retry and the fallback chain after any
+  semantic event, so a single 504 while the model composed its answer killed
+  the task as `non_retryable`. Recovery is now gated on tool side effects:
+  a text/reasoning-only attempt rolls its partial output back and re-drives
+  (in-place retry, then fallback); an attempt that already executed a tool
+  still suppresses in-run recovery but surfaces the transient
+  `ErrCommittedSideEffects` sentinel so the task's RetryPolicy — not a
+  deterministic-failure dead-letter — decides the re-run.
 - Deferred MCP tools now advertise `arguments` as a JSON object instead of a
   byte array, preventing models from repeatedly sending array-wrapped arguments
   that every nested tool rejects. Live scheduled-run activity now keeps the
