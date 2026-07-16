@@ -14,11 +14,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -56,6 +59,11 @@ type hostImpl struct {
 	bridgeStdout     *bufio.Reader
 	bridgeStarted    bool
 	bridgeScriptPath string // temp file the script was extracted to
+
+	// execPoisoned mirrors the container backend's #796 latch: set when a
+	// cancelled/timed-out bash invocation's process group could not be
+	// SIGKILLed, so the suspect state is never reused.
+	execPoisoned atomic.Bool
 }
 
 // NewHost constructs a host-mode sandbox. bridgeScript is the embedded
@@ -81,6 +89,18 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 	cmd := exec.CommandContext(cmdCtx, "bash", "-c", req.Command)
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
+	}
+	// Run bash as its own process-group leader and SIGKILL the WHOLE group on
+	// cancel/timeout (#796): Go's default CommandContext kill signals only the
+	// direct child, so backgrounded grandchildren survived a cancelled call.
+	// The container backend holds the same invariant via its in-container
+	// killer; here we have direct process control.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return os.ErrProcessDone // group-killed above; nothing more to signal
 	}
 	// Without WaitDelay, cmd.Run blocks until the stdout/stderr pipes
 	// close — a background grandchild (e.g. `server &`) holding them
@@ -108,8 +128,13 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 	} else {
 		res.ExitCode = -1
 	}
-	if cmdCtx.Err() == context.DeadlineExceeded {
-		res.TimedOut = true
+	if cmdCtx.Err() != nil {
+		res.TimedOut = errors.Is(cmdCtx.Err(), context.DeadlineExceeded)
+		res.Cancelled = !res.TimedOut
+		res.CleanupConfirmed = h.confirmGroupDead(cmd)
+		if !res.CleanupConfirmed {
+			h.execPoisoned.Store(true)
+		}
 		return res, nil
 	}
 	if execErr != nil && cmd.ProcessState == nil {
@@ -117,6 +142,31 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 		return res, execErr
 	}
 	return res, nil
+}
+
+// confirmGroupDead re-sweeps a cancelled invocation's process group and
+// verifies no member is left (#796). Zombies linger only until the host init
+// reaps the reparented children, so the probe retries briefly before
+// declaring the cleanup unproved.
+func (h *hostImpl) confirmGroupDead(cmd *exec.Cmd) bool {
+	if cmd.Process == nil {
+		return true // never started — nothing to leak
+	}
+	pgid := cmd.Process.Pid
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	for i := 0; i < 5; i++ {
+		// kill(2) with signal 0: ESRCH means the group has no members left.
+		if err := syscall.Kill(-pgid, 0); err != nil {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
+
+// poisoned reports whether a cancelled invocation's cleanup is unproved (#796).
+func (h *hostImpl) poisoned() bool {
+	return h.execPoisoned.Load()
 }
 
 func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {

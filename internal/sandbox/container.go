@@ -7,13 +7,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/metrics"
@@ -56,6 +59,13 @@ type containerImpl struct {
 	statsCancel  context.CancelFunc
 	statsDone    chan struct{}
 	statsSummary ResourceUsageSummary
+
+	// execPoisoned latches when a cancelled/timed-out bash invocation's
+	// in-container process tree could NOT be proved dead (#796). A poisoned
+	// container refuses further work (Sandbox gates on it) and is retired by
+	// its owner — close() podman-kills the container, which is the one
+	// guaranteed way to stop whatever is still running inside.
+	execPoisoned atomic.Bool
 }
 
 // syncBuffer is a goroutine-safe wrapper around bytes.Buffer. We need
@@ -663,6 +673,80 @@ func (c *containerImpl) podmanArgs(rest []string) []string {
 	return out
 }
 
+// bashExecWrapper is the in-container harness around every bash invocation
+// (#796). It publishes the invocation's root PID to a per-exec pidfile BEFORE
+// running the user command (fail-fast if the pidfile can't be written, so a
+// missing pidfile always means "the command never ran or already finished"),
+// runs the command as a child of the same process group, and removes the
+// pidfile on normal completion while preserving the command's exit code. The
+// user command arrives via the FLEET_EXEC_CMD env var — never interpolated
+// into shell text — and $1 is the pidfile path.
+const bashExecWrapper = `echo "$$" > "$1" || exit 97
+bash -c "$FLEET_EXEC_CMD"
+rc=$?
+rm -f -- "$1"
+exit "$rc"`
+
+// bashExecKiller force-kills the process tree a cancelled/timed-out bash
+// invocation left inside the container, using only bash + coreutils + /proc
+// (the sandbox image ships no setsid/pkill/ps). $1 is the invocation's
+// pidfile. It SIGSTOPs the root's process group and every /proc ppid-chain
+// descendant (freezing forks mid-walk), SIGKILLs them, then VERIFIES nothing
+// from the collected set is still alive (zombies count as dead — the
+// container's init may not reap orphans).
+//
+// Exit codes: 0 = proved dead; 3 = no pidfile, i.e. the invocation finished
+// normally or never started (the wrapper fail-fasts before running the
+// command), which is equally clean; anything else = cleanup NOT proved and
+// the caller must poison the sandbox. A recycled PID could in principle make
+// the walk stop an unrelated process, but the PID namespace is private to
+// this conversation's container, so the blast radius is itself.
+const bashExecKiller = `set -u
+f="$1"
+[ -f "$f" ] || exit 3
+root=$(cat -- "$f" 2>/dev/null) || exit 4
+case "$root" in ''|*[!0-9]*) exit 4 ;; esac
+kill -STOP -- "-$root" 2>/dev/null
+pids="$root"
+added=1
+while [ "$added" = 1 ]; do
+  added=0
+  for d in /proc/[0-9]*; do
+    [ -d "$d" ] || continue
+    p="${d#/proc/}"
+    case " $pids " in *" $p "*) continue ;; esac
+    [ -r "$d/status" ] || continue
+    pp=""
+    while read -r k v _; do
+      if [ "$k" = "PPid:" ]; then pp="$v"; break; fi
+    done < "$d/status"
+    case " $pids " in *" $pp "*)
+      pids="$pids $p"
+      kill -STOP -- "$p" 2>/dev/null
+      added=1 ;;
+    esac
+  done
+done
+kill -KILL -- "-$root" 2>/dev/null
+for p in $pids; do kill -KILL -- "$p" 2>/dev/null; done
+rm -f -- "$f"
+sleep 0.3
+for p in $pids; do
+  [ -d "/proc/$p" ] || continue
+  [ -r "/proc/$p/status" ] || continue
+  st=""
+  while read -r k v _; do
+    if [ "$k" = "State:" ]; then st="$v"; break; fi
+  done < "/proc/$p/status"
+  case "$st" in Z|"") continue ;; esac
+  exit 5
+done
+exit 0`
+
+// execReapTimeout bounds the post-cancellation kill/verify exec. A container
+// too wedged to answer within this window cannot prove cleanup — poison it.
+const execReapTimeout = 10 * time.Second
+
 func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResult, error) {
 	timeout := req.Timeout
 	if timeout <= 0 {
@@ -671,11 +755,18 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Per-invocation identity (#796): the wrapper writes its in-container PID
+	// here so a cancelled/timed-out call can be hunted down and killed.
+	var idBytes [8]byte
+	_, _ = rand.Read(idBytes[:])
+	pidFile := "/tmp/.fleet-exec-" + hex.EncodeToString(idBytes[:]) + ".pid"
+
 	args := []string{"exec"}
 	if req.WorkingDir != "" {
 		args = append(args, "--workdir", req.WorkingDir)
 	}
-	args = append(args, c.containerID, "bash", "-c", req.Command)
+	args = append(args, "--env", "FLEET_EXEC_CMD="+req.Command,
+		c.containerID, "bash", "-c", bashExecWrapper, "fleet-exec", pidFile)
 
 	cmd := exec.CommandContext(cmdCtx, c.cfg.PodmanBinary, c.podmanArgs(args)...) //nolint:gosec // bash command runs inside an isolated rootless container by design
 	// Without WaitDelay, cmd.Run blocks until the stdout/stderr pipes
@@ -703,14 +794,56 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 	} else {
 		res.ExitCode = -1
 	}
-	if cmdCtx.Err() == context.DeadlineExceeded {
-		res.TimedOut = true
+	if cmdCtx.Err() != nil {
+		// Cancellation/timeout killed only the podman exec CLIENT — the
+		// in-container process tree survives it (#796). Kill it and verify;
+		// an unproved cleanup poisons the sandbox so no later turn can share
+		// a container with the stragglers.
+		res.TimedOut = errors.Is(cmdCtx.Err(), context.DeadlineExceeded)
+		res.Cancelled = !res.TimedOut
+		res.CleanupConfirmed = c.reapCancelledExec(pidFile)
+		if !res.CleanupConfirmed {
+			c.execPoisoned.Store(true)
+		}
 		return res, nil
 	}
 	if execErr != nil && cmd.ProcessState == nil {
 		return res, fmt.Errorf("podman exec: %w", execErr)
 	}
 	return res, nil
+}
+
+// reapCancelledExec kills the process tree of the invocation identified by
+// pidFile and reports whether cleanup was PROVED (#796). Runs on a fresh
+// context — the caller's is already cancelled.
+func (c *containerImpl) reapCancelledExec(pidFile string) bool {
+	c.mu.Lock()
+	containerID := c.containerID
+	c.mu.Unlock()
+	if containerID == "" {
+		// close() already tore the container down — nothing can be running.
+		return true
+	}
+	killCtx, cancel := context.WithTimeout(context.Background(), execReapTimeout)
+	defer cancel()
+	args := c.podmanArgs([]string{"exec", containerID, "bash", "-c", bashExecKiller, "fleet-exec-reap", pidFile})
+	out, err := exec.CommandContext(killCtx, c.cfg.PodmanBinary, args...).CombinedOutput() //nolint:gosec // fixed killer script; pidFile is our generated name
+	if err == nil {
+		return true
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 3 {
+		// No pidfile: the invocation finished normally (wrapper removed it)
+		// or never started (wrapper fail-fasts before the command) — clean.
+		return true
+	}
+	log.Printf("sandbox: cancelled bash cleanup NOT confirmed (container %s): %v (output: %.200s)", containerID, err, string(out))
+	return false
+}
+
+// poisoned reports whether a cancelled invocation's cleanup is unproved (#796).
+func (c *containerImpl) poisoned() bool {
+	return c.execPoisoned.Load()
 }
 
 func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {

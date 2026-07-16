@@ -630,8 +630,21 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 		ExitCode:        out.ExitCode,
 	}
 	switch {
-	case out.TimedOut:
-		result.Error = fmt.Sprintf("command timed out after %d seconds", timeoutSeconds)
+	case out.TimedOut, out.Cancelled:
+		if out.TimedOut {
+			result.Error = fmt.Sprintf("command timed out after %d seconds", timeoutSeconds)
+		} else {
+			result.Error = "command cancelled before it finished"
+		}
+		// #796: on cancel/timeout the sandbox kills the command's whole
+		// in-container process tree. Tell the model whether that was proved,
+		// and — when it wasn't — that the sandbox (including any persistent
+		// Python kernel state) is being retired rather than reused.
+		if out.CleanupConfirmed {
+			result.Error += "; the command and its child processes were killed"
+		} else {
+			result.Error += "; the command could not be confirmed killed — this sandbox is being retired (persistent kernel/container state will be reset)"
+		}
 	case runErr != nil:
 		result.Error = runErr.Error()
 		// If the sandbox itself failed to start the process (binary
