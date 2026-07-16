@@ -197,6 +197,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Enforcement rounds no longer restart the task from scratch.** When the
+  policy blocked a finish (audit not confirmed, critical actions pending),
+  the next round's input carried only the original prompt plus the nudge —
+  the blocked round's assistant/tool transcript was dropped, so the model
+  re-ran its entire analysis on every nudge (observed as a 31-minute
+  scheduled run doing its full pipeline twice). The round transcript is now
+  carried forward (reasoning stripped, tool call/result pairing preserved)
+  so a nudged round continues the work instead of repeating it.
 - **Orchestrator (scheduled) runs no longer offer the interactive
   staging-card tools** (`preview_email`, `schedule_task`,
   `suggest_advanced_model`, `propose_memory`). Only the interactive chat

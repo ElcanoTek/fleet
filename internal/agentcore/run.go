@@ -478,8 +478,12 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			}, nil
 		}
 
-		// Finish blocked: inject enforcement nudges and loop. The fallback-swap
-		// state carries forward (cutlass nextRoundMessages).
+		// Finish blocked: carry this round's transcript into the next round's
+		// input, then inject the enforcement nudges and loop. The fallback-swap
+		// state carries forward (cutlass nextRoundMessages). The transcript
+		// carry is what lets the next round CONTINUE the work instead of
+		// restarting it — see carryRoundMessages.
+		messages = append(messages, carryRoundMessages(finalResult)...)
 		for _, nudge := range enforcementMsgs {
 			messages = append(messages, fantasy.NewUserMessage(nudge))
 			if deps.Observer != nil {

@@ -362,6 +362,49 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	return out
 }
 
+// carryRoundMessages flattens a finished round's step transcript — the
+// assistant text/tool-call messages and their tool results, in provider form —
+// so the enforcement loop can append it to the NEXT round's input. Reasoning
+// parts are dropped, the same rule as the interactive replay path (reasoning
+// is UI-only: several providers reject re-sent reasoning blocks and they only
+// burn prompt tokens).
+//
+// Without this carry, a blocked finish fed the next round ONLY the original
+// input plus the nudges: the model saw no record of the tool work it had just
+// completed, so it would rationally start the whole task over — observed as a
+// 31-minute scheduled run re-downloading and re-computing its entire analysis
+// after the audit-confirmation nudge (task 401172db).
+func carryRoundMessages(result *fantasy.AgentResult) []fantasy.Message {
+	if result == nil {
+		return nil
+	}
+	var out []fantasy.Message
+	for _, step := range result.Steps {
+		for _, msg := range step.Messages {
+			if msg.Role != fantasy.MessageRoleAssistant {
+				out = append(out, msg)
+				continue
+			}
+			parts := make([]fantasy.MessagePart, 0, len(msg.Content))
+			for _, p := range msg.Content {
+				if _, isReasoning := p.(fantasy.ReasoningPart); isReasoning {
+					continue
+				}
+				parts = append(parts, p)
+			}
+			// An assistant message that was ONLY reasoning has nothing the
+			// next round can use; dropping it keeps the carried sequence
+			// provider-valid.
+			if len(parts) == 0 {
+				continue
+			}
+			msg.Content = parts
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
 // dropTrailingAssistant strips the final message when it is an assistant
 // message, so a fallback model doesn't see a half-finished/errored response as
 // its own last turn.
