@@ -45,6 +45,28 @@ func newCancelTestContainer(t *testing.T) (*Sandbox, string) {
 	// makes the host-side assertion below observe the exact same files.
 	sb.SetDefaultWorkingDir(workspace)
 	t.Cleanup(sb.Close)
+
+	// Rootless podman maps the container's uid 1000 to a subordinate host
+	// uid, so a root-owned t.TempDir() is NOT writable from inside the
+	// container. If left that way, every marker write below fails silently
+	// and the "marker never appeared" assertions pass vacuously — green even
+	// if the kill did nothing. Widen the mode so the container user can
+	// write, then prove it actually can with a canary: a normal marker write
+	// that MUST reach the host. Failing loudly here is the guard against the
+	// marker assertions ever going vacuous again.
+	if err := os.Chmod(workspace, 0o777); err != nil {
+		t.Fatalf("chmod workspace: %v", err)
+	}
+	canary, err := sb.RunBash(context.Background(), BashRequest{Command: "printf ok > .canary", Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("canary RunBash: %v", err)
+	}
+	if canary.ExitCode != 0 {
+		t.Fatalf("canary write failed (exit %d, stderr %q) — workspace not writable by the container user; marker assertions would be vacuous", canary.ExitCode, string(canary.Stderr))
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".canary")); err != nil {
+		t.Fatalf("canary marker not visible on host (%v) — marker assertions would be vacuous", err)
+	}
 	return sb, workspace
 }
 
