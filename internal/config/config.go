@@ -631,6 +631,13 @@ type Config struct {
 	// defaulting to MetadataModel (then TitleModel) so deployments need zero new
 	// config; point it at a larger model for richer prompt synthesis.
 	RecurringTaskModel string
+	// LibraryPromptModel is the model the "save a chat to the prompt library"
+	// synthesizer uses to distill a conversation transcript into a clean,
+	// reusable prompt-library draft (name + description + content).
+	// FLEET_LIBRARY_PROMPT_MODEL, defaulting to MetadataModel (then TitleModel)
+	// so deployments need zero new config; point it at a larger model for
+	// richer prompt synthesis.
+	LibraryPromptModel string
 	// MemoryAutoIndexEnabled gates the memory auto-indexer (#234). Default
 	// FALSE (opt-in): when off, the only memory-write paths are the manual
 	// propose_memory tool + POST /memories, exactly as before. When on, each
@@ -1160,6 +1167,7 @@ func Load(envFile string) (*Config, error) {
 		AutoTitle:              getenvFleetBool("AUTO_TITLE", true),
 		MemoryModel:            getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		RecurringTaskModel:     getenvFleetDefault("RECURRING_TASK_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
+		LibraryPromptModel:     getenvFleetDefault("LIBRARY_PROMPT_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		MemoryAutoIndexEnabled: getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
 		MemoryGraphModel:       getenvFleetDefault("MEMORY_GRAPH_MODEL", getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)))),
 		MemoryGraphEnabled:     getenvFleetBool("MEMORY_GRAPH_ENABLED", false),

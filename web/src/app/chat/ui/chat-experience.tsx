@@ -50,6 +50,7 @@ import { ProjectHome } from "./ProjectHome";
 import { MemoryGraphView } from "./MemoryGraphView";
 import { ConversationTotalsChip, type PendingAttachment } from "./ChatChips";
 import { ConversationSidebar } from "./ConversationSidebar";
+import { SavePromptDialog } from "./SavePromptDialog";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModels } from "@/app/shared/lib/workspaceModels";
 import { PageTopBar } from "@/app/shared/ui/PageTopBar";
@@ -476,6 +477,10 @@ export function ChatExperience({
   );
   const [pendingDeleteConversation, setPendingDeleteConversation] =
     useState<PendingDeleteConversation | null>(null);
+  // "Save to prompt library…" target: while set, SavePromptDialog distills
+  // this conversation into an editable prompt-library draft.
+  const [promptSaveTarget, setPromptSaveTarget] =
+    useState<ConversationSummary | null>(null);
   // Header title click-to-edit. Holds the draft string while the input is
   // open; null means the static label is shown.
   const [renamingTitleDraft, setRenamingTitleDraft] = useState<string | null>(
@@ -3568,6 +3573,7 @@ export function ChatExperience({
           renameConversation={renameConversation}
           downloadConversation={downloadConversation}
           promoteConversation={promoteConversation}
+          savePromptFromConversation={setPromptSaveTarget}
           setPendingDeleteConversation={setPendingDeleteConversation}
           setConversationLabels={setConversationLabels}
           shareConversation={shareConversation}
@@ -4049,6 +4055,14 @@ export function ChatExperience({
           </div>
         ) : null}
 
+        {promptSaveTarget ? (
+          <SavePromptDialog
+            key={promptSaveTarget.id}
+            conversationId={promptSaveTarget.id}
+            conversationTitle={promptSaveTarget.title}
+            onClose={() => setPromptSaveTarget(null)}
+          />
+        ) : null}
         {pendingDeleteConversation ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
             <button
