@@ -320,7 +320,7 @@ fleet is a single-host process running interactive chat, scheduled tasks,
 sandboxes, and workers together, and fantasy executes streamed tool calls in
 unsupervised goroutines (a coordinator goroutine plus per-tool goroutines for
 parallel calls) with no `recover`. So a panic in ANY tool — native, loader,
-pre-gated, direct-MCP, or deferred-MCP — or in a policy gate, an output
+direct-MCP, or deferred-MCP — or in a policy gate, an output
 guardrail, or an Observer callback would escape and terminate the whole
 process; `internal/safe`'s per-goroutine recover in the runner/httpapi callers
 is goroutine-local and cannot catch it.
@@ -328,17 +328,20 @@ is goroutine-local and cannot catch it.
 Every tool fleet hands fantasy is wrapped in an **outermost** panic-containment
 wrapper (`panic_containment.go`). A panic becomes exactly **one in-band tool
 error result** — `err == nil`, so fantasy pairs one result to the call id and
-the round continues instead of aborting the stream — recorded via
-`safe.EmitPanic` (PanicCounts + Sentry + `panic_events`) with tool/mode/label
-and a stable incident id. The model sees only the incident id and a note to
-treat the call as **possibly executed** (do not blindly repeat side-effecting
-work); the panic value and stack never reach it, and the existing ADR-0035
-tool-side-effect gate already blocks in-round provider re-drive once a tool has
-run. Panics in the policy `BeforeToolCall`/`RecordToolResult` gates and the
-output-guardrail pass are attributed to their own boundary (`atBoundary`); an
-Observer panic is contained record-then-degrade (the event is dropped, the run
-continues). The wrapper is outermost by design, so #788's lifecycle hooks (when
-they land) run inside it, never around it.
+the round continues instead of aborting the stream. Logs, Sentry, and
+`panic_events` receive only an opaque incident id, a value-free panic class,
+and non-content tool/run attribution; the recovered value and stack are
+discarded before telemetry. The model sees only the incident id and a
+**possibly executed** marker, and ADR-0035 blocks in-round provider re-drive
+once a tool ran.
+
+Invocation-local phase state attributes policy/output failures and marks a
+`RecordToolResult` attempt before calling it. Before-call, execution, and output
+panics therefore receive one failed logical-tool policy record (including deferred MCP), while a
+panic in the record hook itself is never retried. The run wraps its Observer
+once, disables it after its first panic, and returns an ordinary opaque run
+error only after Fantasy's tool goroutines settle. See
+[ADR-0037](adr/0037-agent-tool-panic-containment.md) for the complete boundary.
 
 ---
 

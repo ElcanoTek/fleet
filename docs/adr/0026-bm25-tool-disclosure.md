@@ -21,7 +21,7 @@ When the roster would exceed a threshold, defer the MCP tools behind
    deterministic, and free (no vector DB, no external service — fleet's
    single-box model), and the index is reusable for #512.
 2. **Core tools never defer.** Only MCP tools (post opt-in + allowlist) hide;
-   native/loader/pre-gated/confirm_audit stay directly callable.
+   native/loader/confirm_audit stay directly callable.
 3. **Deferred calls stay first-class.** `tool_call` dispatches to the same
    `*mcpTool.Run`, so the broker, credential allowlist, policy gate, redaction,
    output ceiling, and audit apply identically — deferral changes visibility,

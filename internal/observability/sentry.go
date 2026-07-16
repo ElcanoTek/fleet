@@ -23,8 +23,9 @@ package observability
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log"
+	"reflect"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -121,21 +122,56 @@ func CaptureException(ctx context.Context, err error, scope func(*sentry.Scope))
 	})
 }
 
-// CapturePanic ships a recovered panic value to Sentry. nil values are skipped.
-// Mirrors CaptureException's WithScope pattern so the caller can attach context
-// tags. The recovered value is coerced to an error so the Sentry UI renders a
-// proper stack-traced exception rather than a bare string message.
+// CapturePanic classifies a recovered panic without formatting it, then ships
+// only that class to Sentry. Calling Error or String here could persist a
+// credential-bearing panic value before BeforeSend has a chance to scrub it.
 func CapturePanic(ctx context.Context, val any, scope func(*sentry.Scope)) {
 	if val == nil {
 		return
 	}
-	var err error
-	if e, ok := val.(error); ok {
-		err = e
-	} else {
-		err = fmt.Errorf("panic: %v", val)
+	CapturePanicClass(ctx, panicClass(val), scope)
+}
+
+// CapturePanicClass ships a pre-classified panic without accepting diagnostic
+// content. Unknown values collapse to "unknown" so callers cannot accidentally
+// pass a recovered message through the class argument.
+func CapturePanicClass(ctx context.Context, class string, scope func(*sentry.Scope)) {
+	class = normalizedPanicClass(class)
+	CaptureException(ctx, errors.New("recovered panic ("+class+")"), scope)
+}
+
+// CapturePanicClassWithTags is the safe-package adapter for a recovery boundary
+// that already discarded the raw value and retained only its class.
+func CapturePanicClassWithTags(ctx context.Context, class string, tags map[string]string) {
+	CapturePanicClass(ctx, class, func(scope *sentry.Scope) {
+		for key, value := range tags {
+			if value != "" {
+				scope.SetTag(key, value)
+			}
+		}
+	})
+}
+
+func panicClass(val any) string {
+	if val == nil {
+		return "nil"
 	}
-	CaptureException(ctx, err, scope)
+	if _, ok := val.(error); ok {
+		return "error"
+	}
+	return reflect.TypeOf(val).Kind().String()
+}
+
+func normalizedPanicClass(class string) string {
+	switch class {
+	case "nil", "invalid", "bool", "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "float32", "float64",
+		"complex64", "complex128", "array", "chan", "func", "interface", "map", "ptr",
+		"slice", "string", "struct", "unsafe.Pointer", "error":
+		return class
+	default:
+		return "unknown"
+	}
 }
 
 // AddBreadcrumb records a breadcrumb (no-op when Sentry is disabled — the SDK

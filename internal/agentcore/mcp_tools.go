@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -64,10 +65,6 @@ type toolBuildConfig struct {
 	loaderTools []fantasy.AgentTool
 	// remediationHints configures the fast.io inline-upload guard hint.
 	remediationHints RemediationHints
-	// preGatedTools are already-policy-aware tools registered verbatim. They call
-	// BeforeToolCall + RecordToolResult themselves, so they are NOT wrapped in
-	// policyGuardedTool.
-	preGatedTools []fantasy.AgentTool
 	// personaName/personaPolicy/observer carry Gate-4 (#294) into the tool build
 	// so the persona allowlist is applied to the deferrable MCP set BEFORE the
 	// disclosure decision (#570) — the roster-level resolvePersonaTools pass in
@@ -77,10 +74,9 @@ type toolBuildConfig struct {
 	personaName   string
 	personaPolicy *PersonaToolPermissions
 	observer      Observer
-	// runMode / runLabel are carried as DATA into the panic-containment wrapper
-	// (#795) for incident attribution — never branched on (TestSeamPurity).
-	runMode  string
-	runLabel string
+	// panicAttribution is copied into the universal dispatch wrapper for every
+	// advertised route and into deferred logical MCP tools before registration.
+	panicAttribution panicAttribution
 }
 
 // buildFantasyTools combines native tools with discovered MCP tools into the
@@ -105,7 +101,7 @@ func buildFantasyTools(
 	// an injected out-of-process broker — issue #167). They are deliberately
 	// separate: where a call runs is decoupled from where the catalog is read, so
 	// the broker can own the client while the loop just advertises what it fetched.
-	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+len(cfg.preGatedTools)+1)
+	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+1)
 
 	for _, t := range nativeTools {
 		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy})
@@ -113,13 +109,6 @@ func buildFantasyTools(
 	for _, t := range cfg.loaderTools {
 		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy})
 	}
-	// Pre-gated tools own their policy handling (BeforeToolCall +
-	// RecordToolResult), exactly like the built-in mcpTool, so they register
-	// VERBATIM — wrapping them would double the gate and drop RecordToolResult.
-	for _, t := range cfg.preGatedTools {
-		allTools = append(allTools, &guardrailOnlyTool{inner: t})
-	}
-
 	// The MCP tools that pass gates 1+2 — these are the DEFERRABLE set (#506):
 	// registered directly when the roster fits, or hidden behind the disclosure
 	// bridges when it would blow the ceiling.
@@ -184,10 +173,25 @@ func buildFantasyTools(
 	threshold := disclosureThreshold()
 	directTotal := len(allTools) + len(mcpTools) + len(confirmAudit)
 	if directTotal > threshold && len(mcpTools) > 0 {
-		reg := newDeferredToolRegistry(mcpTools)
+		// Deferred MCP calls execute inside the advertised tool_call bridge. Wrap
+		// each LOGICAL tool here as well as wrapping the final bridge roster below,
+		// so an MCP panic is attributed and accounted to mcp_<server>_<tool>, not
+		// only to the disclosure plumbing. containToolRoster is idempotent.
+		reg := newDeferredToolRegistry(containToolRoster(mcpTools, cfg.panicAttribution, policy))
 		bridges := reg.bridgeTools()
 		for _, b := range bridges {
-			allTools = append(allTools, &policyGuardedTool{inner: b, policy: policy})
+			guarded := &policyGuardedTool{inner: b, policy: policy}
+			if _, isCallBridge := b.(*deferredToolCall); isCallBridge {
+				// The call bridge returns either a Fleet-generated correction or the
+				// verbatim response of a logical MCP tool that already crossed its
+				// redaction/PII/guardrail boundary. Screening that response again is
+				// not merely redundant: if the screen itself panicked, it would turn
+				// one logical incident into a second bridge incident and replace the
+				// original reference. The structural type assertion cannot be forged
+				// by tool response metadata.
+				guarded.outputAlreadyGoverned = true
+			}
+			allTools = append(allTools, guarded)
 		}
 		allTools = append(allTools, confirmAudit...)
 		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona)",
@@ -195,12 +199,7 @@ func buildFantasyTools(
 		if len(allTools) > maxToolsPerRequest {
 			return nil, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
 		}
-		// Outermost containment (#795): a panic in ANY registered tool — or in a
-		// policy gate / guardrail it calls, or the deferred-MCP bridge dispatch —
-		// becomes an in-band error instead of killing the fantasy tool-exec
-		// goroutine (and the process). Wrapping the deferred bridges covers the
-		// deferred MCP tools too, since their dispatch runs inside the bridge Run.
-		return containToolPanics(allTools, policy, cfg.runMode, cfg.runLabel), nil
+		return containToolRoster(allTools, cfg.panicAttribution, policy), nil
 	}
 
 	allTools = append(allTools, mcpTools...)
@@ -212,7 +211,7 @@ func buildFantasyTools(
 	if len(allTools) > maxToolsPerRequest {
 		return nil, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
 	}
-	return containToolPanics(allTools, policy, cfg.runMode, cfg.runLabel), nil
+	return containToolRoster(allTools, cfg.panicAttribution, policy), nil
 }
 
 // buildConfirmAuditPolicyTool returns the scheduled confirm_audit tool wired to
@@ -247,32 +246,9 @@ func buildConfirmAuditPolicyTool(policy Policy) fantasy.AgentTool {
 // block (returns the message as the tool result without executing); on
 // execution, RecordToolResult records the outcome.
 type policyGuardedTool struct {
-	inner  fantasy.AgentTool
-	policy Policy
-}
-
-// guardrailOnlyTool screens pre-gated tools without re-running their Policy
-// hooks. Those tools deliberately own BeforeToolCall/RecordToolResult, but they
-// still share the host-side untrusted-output boundary.
-type guardrailOnlyTool struct{ inner fantasy.AgentTool }
-
-func (g *guardrailOnlyTool) Info() fantasy.ToolInfo { return g.inner.Info() }
-func (g *guardrailOnlyTool) ProviderOptions() fantasy.ProviderOptions {
-	return g.inner.ProviderOptions()
-}
-func (g *guardrailOnlyTool) SetProviderOptions(opts fantasy.ProviderOptions) {
-	g.inner.SetProviderOptions(opts)
-}
-func (g *guardrailOnlyTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	resp, err := g.inner.Run(ctx, params)
-	if resp.Content != "" {
-		var blocked bool
-		resp.Content, blocked = screenToolOutput(ctx, g.inner.Info().Name, resp.Content)
-		if blocked {
-			resp.IsError = true
-		}
-	}
-	return resp, err
+	inner                 fantasy.AgentTool
+	policy                Policy
+	outputAlreadyGoverned bool
 }
 
 func (g *policyGuardedTool) Info() fantasy.ToolInfo { return g.inner.Info() }
@@ -286,64 +262,74 @@ func (g *policyGuardedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	name := g.inner.Info().Name
 	if g.policy != nil {
-		// atBoundary attributes a panic in the policy gate to
-		// "policy.before_tool_call" (via the outer panicContainedTool) instead
-		// of the generic "tool" location (#795).
-		var blocked bool
-		var msg string
-		atBoundary("policy.before_tool_call", func() {
-			blocked, msg = g.policy.BeforeToolCall(name, params.ID, params.Input)
-		})
-		if blocked {
+		setToolPanicPhase(ctx, panicPhasePolicyBefore)
+		if blocked, msg := g.policy.BeforeToolCall(name, params.ID, params.Input); blocked {
+			msg, _ = governToolOutput(ctx, name, msg)
 			return fantasy.NewTextErrorResponse(msg), nil
 		}
 	}
+	setToolPanicPhase(ctx, panicPhaseToolExecute)
 	resp, err := g.inner.Run(ctx, params)
+	policyResult := resp.Content
 	// Scrub secrets from tool output at the choke point: the redacted text is what
 	// re-enters the model context next turn, what RecordToolResult/the policy sees,
 	// what the stream sink records, and what the session log persists.
-	if resp.Content != "" {
-		// The secret scrubber + PII + guardrail passes share the
-		// "output_guardrail" boundary for panic attribution (#795).
-		atBoundary("output_guardrail", func() {
-			resp.Content = toolRedactor().Redact(resp.Content)
-			// Optional PII pass (#450), layered after the secret scrubber. In
-			// block mode the content is withheld and the result is marked an
-			// error so the model treats it as a failed call rather than
-			// silently losing data.
-			var piiBlocked bool
-			resp.Content, piiBlocked = redactPII(name, resp.Content)
-			if piiBlocked {
-				resp.IsError = true
-			}
-			var guardrailBlocked bool
-			resp.Content, guardrailBlocked = screenToolOutput(ctx, name, resp.Content)
-			if guardrailBlocked {
-				resp.IsError = true
-			}
-		})
+	if resp.Content != "" && !g.outputAlreadyGoverned {
+		var outputBlocked bool
+		resp.Content, outputBlocked = governToolOutput(ctx, name, resp.Content)
+		if outputBlocked {
+			resp.IsError = true
+		}
+		policyResult = resp.Content
 	}
-	// Output ceiling (#199): cap any single tool result before it enters the
-	// transcript so one oversized output can't overflow the context window (which
-	// otherwise triggers reactive compaction that drops the WRONG messages). Done
-	// after redaction (the cap counts the text that actually flows on) and before
-	// RecordToolResult (the policy + session log see the same bytes).
-	if ceil := maxToolOutputBytes(); ceil > 0 && len(resp.Content) > ceil {
-		orig := len(resp.Content)
-		resp.Content, _ = applyOutputCeiling(resp.Content, ceil)
-		log.Printf("agentcore: truncated %s output from %d to %d bytes (FLEET_MAX_TOOL_OUTPUT_BYTES)", name, orig, len(resp.Content))
+	// Fantasy turns a non-nil Go error into model/transcript text AFTER Run
+	// returns. Never let a tool-supplied error object cross that boundary: Error
+	// may contain credentials or may itself panic. Evaluate and normalize it
+	// while the universal outer recovery point can still synthesize one paired
+	// incident response.
+	if err != nil {
+		setToolPanicPhase(ctx, panicPhaseOutputRedact)
+		errText := err.Error()
+		errText, _ = governToolOutput(ctx, name, errText)
+		if errText == "" {
+			errText = "Tool execution failed without an error message."
+		}
+		err = errors.New(errText)
+		policyResult = errText
 	}
 	if g.policy != nil {
 		// Record the outcome so policies that gate on tool RESULTS observe native
 		// tool calls (bash/python/task_tracker/...), not just the MCP and
-		// pre-gated tools. Without this the scheduled task-tracker finish gate
+		// built-in MCP tools. Without this the scheduled task-tracker finish gate
 		// (latestTaskTracker.Seen) never fired in production. A transport error or
 		// an is-error response counts as a failed call.
-		atBoundary("policy.record_tool_result", func() {
-			g.policy.RecordToolResult(name, params.Input, resp.Content, err == nil && !resp.IsError)
-		})
+		recordPolicyToolResult(ctx, g.policy, name, params.Input, policyResult, err == nil && !resp.IsError)
 	}
 	return resp, err
+}
+
+// governToolOutput is the one text-output choke point for native, loader, and
+// direct MCP tools. It applies secret and optional PII screening, the workspace
+// guardrail, and the byte ceiling before text can become model context,
+// transcript/SSE data, or policy accounting. The caller's outer
+// panicContainedTool attributes and contains a panic in any configurable pass.
+func governToolOutput(ctx context.Context, toolName, text string) (string, bool) {
+	if text == "" {
+		return "", false
+	}
+	setToolPanicPhase(ctx, panicPhaseOutputRedact)
+	text = toolRedactor().Redact(text)
+	var piiBlocked bool
+	text, piiBlocked = redactPII(toolName, text)
+	setToolPanicPhase(ctx, panicPhaseOutputGuardrail)
+	var guardrailBlocked bool
+	text, guardrailBlocked = screenToolOutput(ctx, toolName, text)
+	if ceil := maxToolOutputBytes(); ceil > 0 && len(text) > ceil {
+		orig := len(text)
+		text, _ = applyOutputCeiling(text, ceil)
+		log.Printf("agentcore: truncated %s output from %d to %d bytes (FLEET_MAX_TOOL_OUTPUT_BYTES)", toolName, orig, len(text))
+	}
+	return text, piiBlocked || guardrailBlocked
 }
 
 // sanitizeSchemaProperties deep-copies a JSON-schema "properties" map and strips
@@ -433,14 +419,17 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	toolName := m.Name()
 
 	if m.policy != nil {
+		setToolPanicPhase(ctx, panicPhasePolicyBefore)
 		if blocked, msg := m.policy.BeforeToolCall(toolName, params.ID, params.Input); blocked {
+			msg, _ = governToolOutput(ctx, toolName, msg)
 			return fantasy.NewTextErrorResponse(msg), nil
 		}
 	}
 
 	var args map[string]any
 	if err := json.Unmarshal([]byte(params.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+		msg, _ := governToolOutput(ctx, toolName, fmt.Sprintf("invalid arguments: %v", err))
+		return fantasy.NewTextErrorResponse(msg), nil
 	}
 
 	// The broker owns the call itself — the fast.io inline-upload guard, the
@@ -454,10 +443,18 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	// BeforeSend hook is the last-line scrubber, but breadcrumbs stay lean.
 	// No-op when FLEET_SENTRY_DSN is unset.
 	observability.AddBreadcrumb(callCtx, "mcp", "mcp call: "+toolName, nil)
+	setToolPanicPhase(ctx, panicPhaseToolExecute)
 	resultText, isErr, err := m.broker.CallMCP(callCtx, m.serverName, m.tool.Name, args)
 	if err != nil {
-		m.record(toolName, params.Input, "", false)
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("Error calling %s: %v", toolName, err)), nil
+		setToolPanicPhase(ctx, panicPhaseOutputRedact)
+		// Evaluate Error directly while the universal MCP wrapper can recover.
+		// fmt's %v intentionally catches a panicking Error method and returns a
+		// %!v(PANIC=...) string, which would smuggle the raw panic value through
+		// output governance without emitting an incident.
+		errText := "Error calling " + toolName + ": " + err.Error()
+		errText, _ = governToolOutput(ctx, toolName, errText)
+		m.record(ctx, toolName, params.Input, errText, false)
+		return fantasy.NewTextErrorResponse(errText), nil
 	}
 	// Fast.io returns short-lived bearer URLs from download.file-url/zip-url.
 	// Vault them before the generic secret scrubber sees `token=...`: redaction
@@ -468,51 +465,30 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	if !isErr && m.serverName == mcpServerFastIO && m.tool.Name == "download" {
 		resultText = tools.ProtectFastIODownloadURLs(resultText)
 	}
-	// Scrub secrets from MCP output before it is recorded, returned to the model,
+	// Scrub/screen/cap MCP output before it is recorded, returned to the model,
 	// or streamed/persisted downstream.
-	resultText = toolRedactor().Redact(resultText)
-	// Optional PII pass (#450): connector results are the highest-volume vector
-	// for PII entering the model context. In block mode the result is withheld and
-	// treated as an error (isErr) so the raw value never reaches the model.
-	var piiBlocked bool
-	resultText, piiBlocked = redactPII(toolName, resultText)
-	var guardrailBlocked bool
-	resultText, guardrailBlocked = screenToolOutput(callCtx, toolName, resultText)
-	// Output ceiling (#199): the direct-registration path must cap oversized
-	// results exactly like policyGuardedTool.Run does, or the SAME MCP call would
-	// be truncated above the tool-disclosure threshold (where it dispatches via
-	// the wrapped tool_call) but enter the transcript untruncated below it — the
-	// context-window overflow #199 exists to prevent (#576). Applied after
-	// redaction (the cap counts the bytes that actually flow on) and before the
-	// isError mapping + record so the policy, session log, and model all see the
-	// same capped text, error results included.
-	if ceil := maxToolOutputBytes(); ceil > 0 && len(resultText) > ceil {
-		orig := len(resultText)
-		resultText, _ = applyOutputCeiling(resultText, ceil)
-		log.Printf("agentcore: truncated %s output from %d to %d bytes (FLEET_MAX_TOOL_OUTPUT_BYTES)", toolName, orig, len(resultText))
-	}
+	var outputBlocked bool
+	resultText, outputBlocked = governToolOutput(callCtx, toolName, resultText)
 
 	// Map MCP isError to a fantasy error response so both the LLM and the log
 	// know the call failed (per MCP 2025-06-18 spec, tool-level errors arrive as
 	// a successful JSON-RPC response with isError=true). The fast.io guard above
 	// also surfaces through this path (it returns isError=true with the hint text).
-	if isErr || piiBlocked || guardrailBlocked {
+	if isErr || outputBlocked {
 		errText := resultText
 		if errText == "" {
 			errText = fmt.Sprintf("MCP tool %s returned isError=true with no text content", toolName)
 		}
-		m.record(toolName, params.Input, errText, false)
+		m.record(ctx, toolName, params.Input, errText, false)
 		return fantasy.NewTextErrorResponse(errText), nil
 	}
 
-	m.record(toolName, params.Input, resultText, true)
+	m.record(ctx, toolName, params.Input, resultText, true)
 	return fantasy.NewTextResponse(resultText), nil
 }
 
-func (m *mcpTool) record(toolName, rawInput, resultText string, succeeded bool) {
-	if m.policy != nil {
-		m.policy.RecordToolResult(toolName, rawInput, resultText, succeeded)
-	}
+func (m *mcpTool) record(ctx context.Context, toolName, rawInput, resultText string, succeeded bool) {
+	recordPolicyToolResult(ctx, m.policy, toolName, rawInput, resultText, succeeded)
 }
 
 func (m *mcpTool) ProviderOptions() fantasy.ProviderOptions     { return m.providerOptions }

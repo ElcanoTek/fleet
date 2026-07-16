@@ -46,3 +46,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0034](0034-audit-gate-commitment-binding.md) | Audit-gate commitment binding, payload-level failure, and create reconciliation | Accepted |
 | [0035](0035-side-effect-gated-stream-recovery.md) | Side-effect-gated recovery after stream commitment | Accepted |
 | [0036](0036-sandboxed-file-tools-and-host-io-exceptions.md) | Sandboxed file tools, and the host-side I/O exception classes | Accepted |
+| [0037](0037-agent-tool-panic-containment.md) | Contain panics at the AgentTool dispatch boundary | Accepted |

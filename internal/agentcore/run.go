@@ -29,6 +29,12 @@ const maxEnforcementRounds = 20
 
 // RunConfig is the per-run configuration the loop reads. The DRIVERS build it.
 type RunConfig struct {
+	// TaskID / ConversationID are opaque run identities used only to attribute
+	// contained panics in structured operator telemetry. Scheduled drivers set
+	// TaskID; interactive drivers set ConversationID. Neither is sent to the
+	// model, tool arguments, or sandbox.
+	TaskID         string
+	ConversationID string
 	// EnvPrefix selects the env-var family (kill-switches, retry budget).
 	EnvPrefix EnvPrefix
 	// Temperature for the model calls.
@@ -91,14 +97,6 @@ type RunConfig struct {
 	// the global FLEET_DEFAULT_THINKING_BUDGET_TOKENS default; a non-Claude model
 	// silently ignores it (see supportsExtendedThinking).
 	ThinkingConfig *ThinkingConfig
-
-	// PreGatedTools are already-policy-aware tools registered VERBATIM (NOT
-	// wrapped in the policyGuardedTool gate, because they call BeforeToolCall +
-	// RecordToolResult themselves — exactly like the built-in mcpTool). A driver
-	// may use this for tools that mirror the in-process mcpTool's policy handling
-	// while routing execution elsewhere.
-	// Empty for the in-process loop (its MCP tools come from MCPClient).
-	PreGatedTools []fantasy.AgentTool
 }
 
 // Deps are the run dependencies: the four seams plus the model handles, MCP
@@ -234,13 +232,26 @@ type RunUsage struct {
 
 // Run drives a single agent run to completion. It is the shared body both modes
 // use; Mode + the seams are the only divergence axes.
-func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, error) {
+func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Result, err error) {
+	panicAttribution := panicAttribution{
+		runMode:        mode.String(),
+		taskID:         cfg.TaskID,
+		conversationID: cfg.ConversationID,
+	}
+	defer recoverSynchronousRunPanic(panicAttribution, &result, &err)
+
 	if deps.Model == nil {
 		return Result{}, fmt.Errorf("no language model configured")
 	}
 	if deps.Input == nil || deps.Policy == nil {
 		return Result{}, fmt.Errorf("run requires an InputSource and a Policy")
 	}
+
+	// Observer callbacks can originate inside Fantasy's coordinator and parallel
+	// tool goroutines. Wrap the seam once for the whole run, then pass only that
+	// contained observer to every roster/filter/sink/finalize path.
+	observerBoundary := containObserver(deps.Observer, panicAttribution)
+	deps.Observer = observerBoundary.Observer()
 
 	logSession := deps.LogSession
 	if logSession == nil {
@@ -278,13 +289,10 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		// allowlist also governs the deferrable MCP set BEFORE the disclosure
 		// decision (#570) — the roster-level pass in buildTools below cannot see
 		// a tool that deferred behind the tool_search/tool_call bridges.
-		personaName:   cfg.PersonaName,
-		personaPolicy: cfg.PersonaPolicy,
-		observer:      deps.Observer,
-		// Panic-containment attribution (#795): mode + label flow as DATA into
-		// the wrapper so a contained tool panic's incident names the run.
-		runMode:  mode.String(),
-		runLabel: label,
+		personaName:      cfg.PersonaName,
+		personaPolicy:    cfg.PersonaPolicy,
+		observer:         deps.Observer,
+		panicAttribution: panicAttribution,
 	}
 
 	mcpClient := deps.MCPClient
@@ -311,7 +319,6 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	if catalog == nil {
 		catalog = mcpClient.GetAllTools()
 	}
-	toolCfg.preGatedTools = cfg.PreGatedTools
 	buildTools := func() ([]fantasy.AgentTool, error) {
 		tools, err := buildFantasyTools(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
 		if err != nil {
@@ -322,7 +329,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		// denied tool never enters the model's tool list. Applied after
 		// buildFantasyTools — over the slice that already survived Gates 1-3 — so
 		// the persona policy can only SUBTRACT, never widen. This roster pass
-		// covers the native/loader/pre-gated tools; the deferrable MCP set is
+		// covers the native/loader tools; the deferrable MCP set is
 		// persona-filtered INSIDE buildFantasyTools before the disclosure
 		// decision (#570), because a tool hidden behind the disclosure bridges
 		// never appears in this roster — the bridges themselves survive an
@@ -333,7 +340,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		if cfg.PersonaPolicy != nil {
 			tools = resolvePersonaTools(cfg.PersonaName, *cfg.PersonaPolicy, tools, deps.Observer)
 		}
-		return tools, nil
+		return tools, observerBoundary.Err()
 	}
 
 	fantasyTools, err := buildTools()
@@ -355,7 +362,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 	// One run-wide streamSink forwards every round's text / reasoning / tool
 	// events to the Observer and accumulates the run history. Shared across
 	// rounds so a multi-round scheduled run builds one coherent transcript.
-	sink := newStreamSink(deps.Observer)
+	sink := newStreamSink(deps.Observer, panicAttribution)
 	// usageOrch is the orchestration state whose usage counters accumulate
 	// across rounds (the same state the resilience layer mutates per step).
 	usageOrch := policyOrch(deps.Policy)
@@ -374,7 +381,6 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			// transcript + usage rather than erroring, so the driver can persist
 			// what the model produced before the cancel. The interactive driver
 			// uses Cancelled to emit turn.cancelled instead of turn.error.
-			//nolint:nilerr // intentional: a cancelled context is a clean stop, not a failure; returning nil error is the contract so the driver persists partial work and emits turn.cancelled.
 			return cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), nil
 		}
 
@@ -403,12 +409,15 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		outcome, serr := eng.streamRoundWithResilience(
 			ctx, orch, sink, maxTokens, messages, agent, activeModel, swappedToFallback, buildAgent,
 		)
+		// Fantasy waits for its coordinator + all parallel tool goroutines before
+		// streamRoundWithResilience returns. Only now convert an observer panic to
+		// an ordinary run error, after every sibling has settled and paired.
+		serr = observerBoundary.prefer(serr)
 		if serr != nil {
 			// A ctx-cancellation surfaced as a stream error is still a clean
 			// cancel: return the partial transcript instead of a hard error so
 			// the interactive Stop path persists partial work.
 			if ctx.Err() != nil {
-				//nolint:nilerr // intentional: ctx cancellation that surfaced as a stream error is a clean stop; returning nil error is the contract so the Stop path persists partial work.
 				return cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), nil
 			}
 			// A cost/token ceiling hit is a clean STOP, not a failure: the
@@ -437,7 +446,10 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			finalText = finalResult.Response.Content.Text()
 		}
 
-		canFinish, enforcementMsgs := deps.Policy.CanFinish(round)
+		canFinish, enforcementMsgs, policyErr := callPolicyCanFinish(deps.Policy, round, panicAttribution)
+		if policyErr != nil {
+			return Result{}, policyErr
+		}
 		if canFinish {
 			// Interactive-only finalize hook (leaked-tool-call / forced summary).
 			// Stubbed unless the driver supplies an impl. The hook streams its
@@ -445,12 +457,15 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 			// replaces the loop's text and is appended as an assistant entry so
 			// it persists.
 			if deps.Finalize != nil {
-				recovered, ferr := deps.Finalize(ctx, FinalizeInput{
+				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, FinalizeInput{
 					Mode:         mode,
 					FinalText:    finalText,
 					Messages:     messages,
+					Tools:        fantasyTools,
 					Observer:     deps.Observer,
 					SystemPrompt: systemPrompt,
+					OnToolCall:   finalizeToolCallCallback(sink, panicAttribution),
+					OnToolResult: finalizeToolResultCallback(sink, panicAttribution),
 					// Meter a recovery model call into the SAME run accounting as
 					// the main loop, so the cost chip isn't undercounted. Capability
 					// closure over usageOrch — the state never escapes Run, and this
@@ -460,11 +475,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 							usageOrch.updateUsage(slugOf(activeModel), u, md)
 						}
 					},
-				})
-				if ferr != nil {
-					log.Printf("finalize hook error: %v", ferr)
-				} else if recovered != "" {
-					finalText = recovered
+				}, observerBoundary)
+				if err != nil {
+					return Result{}, err
 				}
 			}
 			entries, _ := sink.snapshot()
@@ -488,11 +501,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		// carry is what lets the next round CONTINUE the work instead of
 		// restarting it — see carryRoundMessages.
 		messages = append(messages, carryRoundMessages(finalResult)...)
-		for _, nudge := range enforcementMsgs {
-			messages = append(messages, fantasy.NewUserMessage(nudge))
-			if deps.Observer != nil {
-				deps.Observer.Observe("enforcement", map[string]any{"message": nudge})
-			}
+		messages, err = appendEnforcementMessages(messages, enforcementMsgs, deps.Observer, observerBoundary)
+		if err != nil {
+			return Result{}, err
 		}
 	}
 

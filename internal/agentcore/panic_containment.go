@@ -2,143 +2,402 @@ package agentcore
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
+	"errors"
 	"fmt"
-	"runtime/debug"
+	"log"
+	"sync"
 
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
-// Tool-dispatch panic containment (#795).
-//
-// fantasy v0.35's Agent.Stream buffers streamed tool calls and executes them in
-// a coordinator goroutine — plus additional WaitGroup goroutines for parallel
-// tools — and calls AgentTool.Run with NO recover. Those goroutines are
-// unsupervised: a panic in any tool (native, loader, pre-gated, direct-MCP,
-// deferred-MCP), in a policy gate, in a redaction/guardrail pass, or in an
-// Observer callback would escape and terminate the entire fleet process — the
-// one thing internal/safe exists to prevent, but which safe.Recover in the
-// runner/httpapi caller goroutines CANNOT catch (recover is goroutine-local).
-//
-// This wraps every tool fleet hands fantasy in an OUTERMOST panic-contained
-// wrapper. A panic becomes exactly one in-band tool_result error (err == nil,
-// so fantasy pairs one result to the call ID and the round continues instead of
-// aborting the whole stream), is recorded via safe.EmitPanic (PanicCounts +
-// Sentry + panic_events) with tool/mode/incident attribution, and is
-// conservatively treated as a possibly-committed execution (the model is told
-// not to blindly repeat it; the existing ADR-0035 toolEvents gate already
-// suppresses in-round provider re-drive once a tool ran). The panic value and
-// stack never reach the model — only a stable incident id.
-//
-// The wrapper is OUTERMOST on purpose: it sits outside policyGuardedTool /
-// guardrailOnlyTool / mcpTool, so a panic in a policy gate or guardrail is
-// contained too. #788's lifecycle hooks (when they land) run INSIDE this
-// wrapper, never outside it.
+// ErrRunBoundaryPanic identifies a panic that Fleet contained at a governed
+// run boundary. Tool panics are converted to an in-band ToolResponse and do not
+// return this error; callback/policy panics that cannot be paired to a tool call
+// surface as an ordinary run error wrapping this sentinel.
+var ErrRunBoundaryPanic = errors.New("panic contained at agent run boundary")
 
-// panicContainedTool wraps an AgentTool so a panic in its Run (or anything it
-// calls) is converted to an in-band error instead of escaping the goroutine.
-type panicContainedTool struct {
-	inner  fantasy.AgentTool
-	name   string // cached at construction so the recovery path never re-enters inner.Info()
-	policy Policy
-	mode   string // run mode as DATA (never branched on — TestSeamPurity)
-	label  string
+const (
+	panicLocationTool     = "agentcore.tool"
+	panicLocationObserver = "agentcore.observer"
+	panicLocationPolicy   = "agentcore.policy"
+	panicLocationRun      = "agentcore.run"
+
+	panicPhaseToolExecute     = "tool.execute"
+	panicPhasePolicyBefore    = "policy.before_tool_call"
+	panicPhasePolicyRecord    = "policy.record_tool_result"
+	panicPhasePolicyFinish    = "policy.can_finish"
+	panicPhaseOutputRedact    = "tool.output_redaction"
+	panicPhaseOutputGuardrail = "tool.output_guardrail"
+	panicPhaseResultFlatten   = "tool.result_flatten"
+	panicPhaseRunSynchronous  = "run.synchronous"
+)
+
+// panicAttribution is the non-secret run identity copied into every recovered
+// event. A tool boundary adds its logical name and call ID at dispatch time.
+type panicAttribution struct {
+	runMode        string
+	taskID         string
+	conversationID string
 }
 
-func (p *panicContainedTool) Info() fantasy.ToolInfo { return p.inner.Info() }
-func (p *panicContainedTool) ProviderOptions() fantasy.ProviderOptions {
-	return p.inner.ProviderOptions()
-}
-func (p *panicContainedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
-	p.inner.SetProviderOptions(opts)
-}
-
-func (p *panicContainedTool) Run(ctx context.Context, params fantasy.ToolCall) (resp fantasy.ToolResponse, err error) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			return
-		}
-		incident := newIncidentID()
-		boundary := "tool"
-		val := r
-		var stack []byte
-		if bp, ok := r.(boundaryPanic); ok {
-			boundary, val, stack = bp.boundary, bp.val, bp.stack
-		} else {
-			stack = debug.Stack()
-		}
-		safe.EmitPanic(
-			"agentcore.tool_dispatch."+boundary,
-			fmt.Sprintf("tool=%s call_id=%s mode=%s label=%s incident=%s: %v", p.name, params.ID, p.mode, p.label, incident, val),
-			stack,
-		)
-		// Best-effort accounting so the transcript stays paired; RecordToolResult
-		// itself may be the panicker, so guard it with its own recover.
-		if p.policy != nil {
-			func() {
-				defer func() { _ = recover() }()
-				// ok=false: a panicked call is a FAILED call for policy accounting.
-				p.policy.RecordToolResult(p.name, params.Input, "tool panicked (incident "+incident+")", false)
-			}()
-		}
-		resp = fantasy.NewTextErrorResponse(fmt.Sprintf(
-			"tool %s failed with an internal error (reference %s). Treat this call as possibly executed — do NOT blindly repeat side-effecting work; verify state first if the tool may have mutated something.",
-			p.name, incident))
-		err = nil // in-band: fantasy must pair one result to the call and continue
-	}()
-	return p.inner.Run(ctx, params)
-}
-
-// newIncidentID returns a short random correlation id for a contained panic.
-// crypto/rand (not math/rand) keeps it clear of the gosec G404 lint and needs
-// no seeding; a read failure degrades to a fixed marker rather than panicking
-// inside the recovery path.
-func newIncidentID() string {
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "unknown"
+func (a panicAttribution) metadata(location, boundary string) safe.PanicMetadata {
+	return safe.PanicMetadata{
+		Location:       location,
+		Boundary:       boundary,
+		RunMode:        a.runMode,
+		TaskID:         a.taskID,
+		ConversationID: a.conversationID,
 	}
-	return hex.EncodeToString(b[:])
 }
 
-// boundaryPanic annotates a panic with the seam it originated in (policy gate,
-// guardrail, …) and captures the stack AT that boundary — a re-panic from a
-// defer otherwise loses the original frames. atBoundary wraps a seam call so
-// the outer wrapper attributes the incident to the right location.
-type boundaryPanic struct {
-	boundary string
-	val      any
-	stack    []byte
+// recoverSynchronousRunPanic is the final backstop around agentcore.Run itself.
+// The per-tool wrapper remains necessary because Fantasy dispatches Tool.Run in
+// other goroutines and must receive an in-band paired result there. This guard
+// covers synchronous AgentTool methods such as Info/ProviderOptions, input
+// adapters, finalize hooks, and any future Fleet callback that executes on the
+// Run goroutine. No raw value or stack crosses the recovery seam.
+func recoverSynchronousRunPanic(attribution panicAttribution, result *Result, err *error) {
+	if recovered := recover(); recovered != nil {
+		meta := attribution.metadata(panicLocationRun, panicPhaseRunSynchronous)
+		event := safe.EmitPanicWithMetadata(meta, recovered, nil)
+		*result = Result{}
+		*err = &containedBoundaryError{incidentID: event.IncidentID, boundary: meta.Boundary}
+	}
 }
 
-// atBoundary runs fn, and on panic re-panics with a boundaryPanic carrying the
-// boundary label + the stack captured here. The panicContainedTool defer
-// unwraps it for attribution.
-func atBoundary(boundary string, fn func()) {
-	defer func() {
-		if r := recover(); r != nil {
-			panic(boundaryPanic{boundary: boundary, val: r, stack: debug.Stack()})
+// containedBoundaryError is deliberately opaque: callers get the incident ID
+// needed for operator correlation, never the recovered value or stack.
+type containedBoundaryError struct {
+	incidentID string
+	boundary   string
+}
+
+func (e *containedBoundaryError) Error() string {
+	return fmt.Sprintf("agent run boundary %s failed unexpectedly (reference %s)", e.boundary, e.incidentID)
+}
+
+func (e *containedBoundaryError) Unwrap() error { return ErrRunBoundaryPanic }
+
+// toolPanicState lives only for one AgentTool.Run invocation. Fleet's own
+// policy/output wrappers advance it immediately before each boundary. The
+// recordAttempted bit lets the outer recovery repair failed accounting exactly
+// once when execution/output panics before Policy.RecordToolResult is reached,
+// without retrying a RecordToolResult call that itself panicked.
+type toolPanicState struct {
+	phase           string
+	recordAttempted bool
+}
+type toolPanicStateKey struct{}
+
+func setToolPanicPhase(ctx context.Context, phase string) {
+	if state, ok := ctx.Value(toolPanicStateKey{}).(*toolPanicState); ok && state != nil {
+		state.phase = phase
+	}
+}
+
+func recordPolicyToolResult(ctx context.Context, policy Policy, name, input, result string, succeeded bool) {
+	if policy == nil {
+		return
+	}
+	if state, ok := ctx.Value(toolPanicStateKey{}).(*toolPanicState); ok && state != nil {
+		state.phase = panicPhasePolicyRecord
+		state.recordAttempted = true
+	}
+	policy.RecordToolResult(name, input, result, succeeded)
+}
+
+// panicContainedTool is the outermost Fleet-owned dispatch boundary. Fantasy
+// invokes Run in coordinator/parallel worker goroutines, so recovery MUST occur
+// here, in that same goroutine. A nil Go error keeps the panic as an ordinary
+// tool failure, preserving exactly one tool_result for the original call ID.
+type panicContainedTool struct {
+	inner       fantasy.AgentTool
+	name        string
+	attribution panicAttribution
+	policy      Policy
+}
+
+func containTool(inner fantasy.AgentTool, attribution panicAttribution, policy Policy) fantasy.AgentTool {
+	if inner == nil {
+		return nil
+	}
+	if _, ok := inner.(*panicContainedTool); ok {
+		return inner
+	}
+	return &panicContainedTool{
+		inner:       inner,
+		name:        inner.Info().Name,
+		attribution: attribution,
+		policy:      policy,
+	}
+}
+
+func containToolRoster(tools []fantasy.AgentTool, attribution panicAttribution, policy Policy) []fantasy.AgentTool {
+	out := make([]fantasy.AgentTool, 0, len(tools))
+	for _, tool := range tools {
+		if tool != nil {
+			out = append(out, containTool(tool, attribution, policy))
 		}
-	}()
-	fn()
-}
-
-// containToolPanics wraps each tool in the outermost panic-containment wrapper.
-func containToolPanics(ts []fantasy.AgentTool, policy Policy, mode, label string) []fantasy.AgentTool {
-	out := make([]fantasy.AgentTool, 0, len(ts))
-	for _, t := range ts {
-		out = append(out, &panicContainedTool{inner: t, name: t.Info().Name, policy: policy, mode: mode, label: label})
 	}
 	return out
 }
 
-// ContainToolPanics wraps tools registered OUTSIDE buildFantasyTools (e.g. the
-// interactive leaked-tool-call retry agent, which builds a fresh fantasy.Agent
-// over the raw native tools). Uses no policy and a generic mode label.
-func ContainToolPanics(ts []fantasy.AgentTool) []fantasy.AgentTool {
-	return containToolPanics(ts, nil, "interactive-aux", "")
+func (t *panicContainedTool) Info() fantasy.ToolInfo { return t.inner.Info() }
+func (t *panicContainedTool) ProviderOptions() fantasy.ProviderOptions {
+	return t.inner.ProviderOptions()
+}
+func (t *panicContainedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
+	t.inner.SetProviderOptions(opts)
+}
+
+func (t *panicContainedTool) Run(ctx context.Context, call fantasy.ToolCall) (resp fantasy.ToolResponse, err error) {
+	state := &toolPanicState{phase: panicPhaseToolExecute}
+	ctx = context.WithValue(ctx, toolPanicStateKey{}, state)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			meta := t.attribution.metadata(panicLocationTool, state.phase)
+			meta.ToolName = t.name
+			meta.ToolCallID = call.ID
+			event := safe.EmitPanicWithMetadata(meta, recovered, nil)
+			// A panic may occur after an external mutation. Mark the response as
+			// possibly committed for downstream diagnostics; streamSink's earlier
+			// tool.call event is the authoritative in-round retry gate (ADR-0035).
+			resp = fantasy.WithResponseMetadata(
+				fantasy.NewTextErrorResponse(containedToolPanicText(event.IncidentID)),
+				map[string]any{"incident_id": event.IncidentID, "possibly_committed": true},
+			)
+			// Normal wrappers record after execution/output screening. A panic in
+			// either phase skips that line, so repair the logical tool's failed
+			// accounting here. recordAttempted prevents a RecordToolResult panic
+			// from being retried. This outer wrapper also surrounds deferred MCP's
+			// logical tool, so it records mcp_<server>_<tool>, not only tool_call.
+			if !state.recordAttempted && panicNeedsFailedAccounting(state.phase) {
+				recordRecoveredToolFailure(ctx, t.policy, t.name, call, resp.Content, t.attribution)
+			}
+			err = nil
+		}
+	}()
+	return t.inner.Run(ctx, call)
+}
+
+func containedToolPanicText(incidentID string) string {
+	return fmt.Sprintf(
+		"Tool execution failed unexpectedly. Reference: %s. The call may have committed side effects; verify state before retrying.",
+		incidentID,
+	)
+}
+
+// safeToolResultText is the last defense around Fantasy result flattening.
+// Governed AgentTool errors are normalized before they reach Fantasy, but a
+// provider/validation result can still carry an arbitrary error implementation.
+// If Error itself panics, preserve call/result pairing with the same opaque
+// incident shape and full tool/run attribution instead of dropping the result
+// from a Fantasy worker callback.
+func safeToolResultText(tr fantasy.ToolResultContent, attribution panicAttribution) (text string, isErr bool) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			meta := attribution.metadata(panicLocationTool, panicPhaseResultFlatten)
+			meta.ToolName = tr.ToolName
+			meta.ToolCallID = tr.ToolCallID
+			event := safe.EmitPanicWithMetadata(meta, recovered, nil)
+			text = containedToolPanicText(event.IncidentID)
+			isErr = true
+		}
+	}()
+	return toolResultText(tr)
+}
+
+func panicNeedsFailedAccounting(phase string) bool {
+	switch phase {
+	case panicPhasePolicyBefore, panicPhaseToolExecute, panicPhaseOutputRedact, panicPhaseOutputGuardrail:
+		return true
+	default:
+		return false
+	}
+}
+
+// recordRecoveredToolFailure contains a second panic from the accounting hook:
+// recovery code must never become a new process-fatal path. The original tool
+// incident remains the model-visible reference; a broken policy hook receives
+// its own operator incident at the policy.record boundary.
+func recordRecoveredToolFailure(
+	ctx context.Context,
+	policy Policy,
+	name string,
+	call fantasy.ToolCall,
+	result string,
+	attribution panicAttribution,
+) {
+	if policy == nil {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			meta := attribution.metadata(panicLocationPolicy, panicPhasePolicyRecord)
+			meta.ToolName = name
+			meta.ToolCallID = call.ID
+			safe.EmitPanicWithMetadata(meta, recovered, nil)
+		}
+	}()
+	recordPolicyToolResult(ctx, policy, name, call.Input, result, false)
+}
+
+// panicContainedObserver serializes observer delivery, then permanently
+// disables the observer after its first panic. Serialization ensures concurrent
+// Fantasy tool-result callbacks cannot race past the disable flag. The run
+// checks Err only after callbacks/tool goroutines settle and converts it to an
+// ordinary error, never a cross-goroutine panic.
+type panicContainedObserver struct {
+	inner       Observer
+	attribution panicAttribution
+
+	mu     sync.Mutex
+	failed *containedBoundaryError
+}
+
+func containObserver(inner Observer, attribution panicAttribution) *panicContainedObserver {
+	return &panicContainedObserver{inner: inner, attribution: attribution}
+}
+
+// Observer returns the contained seam while preserving nil as nil for callers
+// whose behavior distinguishes an absent observer from a no-op observer.
+func (o *panicContainedObserver) Observer() Observer {
+	if o == nil || o.inner == nil {
+		return nil
+	}
+	return o
+}
+
+func (o *panicContainedObserver) Observe(eventType string, payload map[string]any) {
+	if o == nil || o.inner == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.failed != nil {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			meta := o.attribution.metadata(panicLocationObserver, "observer."+eventType)
+			if payload != nil {
+				meta.ToolName, _ = payload[evtFieldName].(string)
+				if meta.ToolName == "" {
+					meta.ToolName, _ = payload["tool"].(string)
+				}
+				meta.ToolCallID, _ = payload[evtFieldID].(string)
+			}
+			event := safe.EmitPanicWithMetadata(meta, recovered, nil)
+			o.failed = &containedBoundaryError{incidentID: event.IncidentID, boundary: meta.Boundary}
+		}
+	}()
+	o.inner.Observe(eventType, payload)
+}
+
+func (o *panicContainedObserver) Err() error {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.failed == nil {
+		return nil
+	}
+	return o.failed
+}
+
+// prefer returns a contained observer failure ahead of another stream error.
+// It lets Run reuse its existing stream-error branch without growing another
+// observer-specific control path.
+func (o *panicContainedObserver) prefer(other error) error {
+	if err := o.Err(); err != nil {
+		return err
+	}
+	return other
+}
+
+func finalizeWithPanicBoundary(
+	ctx context.Context,
+	hook FinalizeHook,
+	in FinalizeInput,
+	observer *panicContainedObserver,
+) (string, error) {
+	recovered, err := hook(ctx, in)
+	if observerErr := observer.Err(); observerErr != nil {
+		return "", observerErr
+	}
+	if err != nil {
+		log.Printf("finalize hook error: %v", err)
+		return in.FinalText, nil
+	}
+	if recovered != "" {
+		return recovered, nil
+	}
+	return in.FinalText, nil
+}
+
+func finalizeToolCallCallback(sink *streamSink, attribution panicAttribution) fantasy.OnToolCallFunc {
+	return func(call fantasy.ToolCallContent) (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				meta := attribution.metadata(panicLocationRun, "finalize.on_tool_call")
+				meta.ToolName = call.ToolName
+				meta.ToolCallID = call.ToolCallID
+				safe.EmitPanicWithMetadata(meta, recovered, nil)
+				err = nil
+			}
+		}()
+		if sink != nil {
+			sink.onToolCall(call.ToolCallID, call.ToolName, call.Input)
+		}
+		return nil
+	}
+}
+
+func finalizeToolResultCallback(sink *streamSink, attribution panicAttribution) fantasy.OnToolResultFunc {
+	return func(result fantasy.ToolResultContent) (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				meta := attribution.metadata(panicLocationRun, "finalize.on_tool_result")
+				meta.ToolName = result.ToolName
+				meta.ToolCallID = result.ToolCallID
+				safe.EmitPanicWithMetadata(meta, recovered, nil)
+				err = nil
+			}
+		}()
+		if sink != nil {
+			text, isErr := safeToolResultText(result, attribution)
+			sink.onToolResult(result.ToolCallID, result.ToolName, text, isErr)
+		}
+		return nil
+	}
+}
+
+func appendEnforcementMessages(
+	messages []fantasy.Message,
+	enforcement []string,
+	observer Observer,
+	boundary *panicContainedObserver,
+) ([]fantasy.Message, error) {
+	for _, nudge := range enforcement {
+		messages = append(messages, fantasy.NewUserMessage(nudge))
+		if observer != nil {
+			observer.Observe("enforcement", map[string]any{"message": nudge})
+		}
+	}
+	return messages, boundary.Err()
+}
+
+func callPolicyCanFinish(policy Policy, round int, attribution panicAttribution) (ok bool, messages []string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			meta := attribution.metadata(panicLocationPolicy, panicPhasePolicyFinish)
+			event := safe.EmitPanicWithMetadata(meta, recovered, nil)
+			err = &containedBoundaryError{incidentID: event.IncidentID, boundary: meta.Boundary}
+		}
+	}()
+	ok, messages = policy.CanFinish(round)
+	return ok, messages, nil
 }

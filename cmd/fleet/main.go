@@ -250,6 +250,21 @@ func run() error {
 	if sentryActive {
 		defer observability.Flush(2 * time.Second)
 	}
+	// safe owns recovery and remains SDK-independent; this structured hook is the
+	// single adapter into Sentry. It carries only opaque IDs and boundary names —
+	// never tool arguments/output, recovered values, stacks, or credentials.
+	safe.PanicEventHook = func(event safe.PanicEvent, _ any) {
+		observability.CapturePanicClassWithTags(context.Background(), event.Class, map[string]string{
+			"incident_id":     event.IncidentID,
+			"panic_location":  event.Location,
+			"panic_boundary":  event.Boundary,
+			"tool_name":       event.ToolName,
+			"tool_call_id":    event.ToolCallID,
+			"run_mode":        event.RunMode,
+			"task_id":         event.TaskID,
+			"conversation_id": event.ConversationID,
+		})
+	}
 
 	// Process log file sink (#298): OPT-IN. With FLEET_LOG_FILE unset (the
 	// default) this is a no-op and the process logs only to stderr — which
@@ -416,14 +431,24 @@ func run() error {
 		log.Printf("full-text search: DISABLED (FLEET_SEARCH_ENABLED=false)")
 	}
 
-	// Persist every recovered panic (#241) to the chat DB's panic_events table so
-	// operators can query crashes even if stdout/journald lost the line. The hook
-	// is best-effort and bounded so it never stalls or re-panics inside recovery.
-	safe.PanicEventWriter = func(location, message string, stack []byte) {
+	// Persist every recovered panic (#241, #795) to the chat DB's panic_events
+	// table. Only the value-free class and opaque attribution cross this seam.
+	safe.StructuredPanicEventWriter = func(event safe.PanicEvent) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := chatStore.RecordPanic(ctx, location, message, string(stack)); err != nil {
-			log.Printf("panic event persist failed (location=%s): %v", location, err)
+		record := store.PanicEventRecord{
+			IncidentID:     event.IncidentID,
+			Location:       event.Location,
+			Boundary:       event.Boundary,
+			ToolName:       event.ToolName,
+			ToolCallID:     event.ToolCallID,
+			RunMode:        event.RunMode,
+			TaskID:         event.TaskID,
+			ConversationID: event.ConversationID,
+			Class:          event.Class,
+		}
+		if err := chatStore.RecordPanicEvent(ctx, record); err != nil {
+			log.Printf("panic event persist failed (location=%s incident=%s): %v", event.Location, event.IncidentID, err)
 		}
 	}
 

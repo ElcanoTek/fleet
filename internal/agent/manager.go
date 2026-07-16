@@ -933,6 +933,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		SystemPrompt:    systemPrompt,
 		Messages:        messages,
 		Label:           in.ConversationID,
+		ConversationID:  in.ConversationID,
 		Model:           model,
 		FallbackModels:  providerFallbacks,
 		Temperature:     m.config.LiveTemperature(),

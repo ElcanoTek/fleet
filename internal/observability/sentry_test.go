@@ -125,3 +125,17 @@ func TestInit_DisabledWhenDSNEmpty(t *testing.T) {
 		t.Fatal("Init returned true for empty DSN; want false (disabled)")
 	}
 }
+
+type panicSecretError struct{ secret string }
+
+func (e panicSecretError) Error() string { return e.secret }
+
+func TestPanicClassificationNeverFormatsRecoveredValue(t *testing.T) {
+	const secret = "Authorization: Bearer fake-sentry-regression-secret"
+	if got := panicClass(panicSecretError{secret: secret}); got != "error" {
+		t.Fatalf("panicClass = %q, want error", got)
+	}
+	if got := normalizedPanicClass(secret); got != "unknown" {
+		t.Fatalf("secret passed as panic class = %q, want unknown", got)
+	}
+}
