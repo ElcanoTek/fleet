@@ -7,9 +7,23 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openrouter"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
+
+// openrouterCost extracts the USD cost from OpenRouter provider metadata.
+func openrouterCost(metadata fantasy.ProviderMetadata) *float64 {
+	raw, ok := metadata[openrouter.Name]
+	if !ok {
+		return nil
+	}
+	opts, ok := raw.(*openrouter.ProviderMetadata)
+	if !ok {
+		return nil
+	}
+	return &opts.Usage.Cost
+}
 
 // summarizeSystemPrompt drives the summarize-and-continue compaction call. Kept
 // short + explicit so output is stable across providers. The result is treated
@@ -63,6 +77,7 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 	ag := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(summarizeSystemPrompt),
 		fantasy.WithMaxOutputTokens(maxTokens),
+		fantasy.WithPrepareStep(agentcore.ModelContextBudgetStep(summarizeSystemPrompt, nil, int(maxTokens))),
 	)
 
 	messages = append(messages, fantasy.NewUserMessage("Produce the summary as instructed above."))

@@ -356,6 +356,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if err != nil {
 		return Result{}, fmt.Errorf("build tools: %w", err)
 	}
+	eng.setModelContextPrefix(systemPrompt, fantasyTools)
 
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m,
@@ -399,6 +400,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			if err != nil {
 				return Result{}, fmt.Errorf("rebuild tools: %w", err)
 			}
+			eng.setModelContextPrefix(systemPrompt, fantasyTools)
 			agent = buildAgent(activeModel)
 			if deps.ClearMCPDirty != nil {
 				deps.ClearMCPDirty()

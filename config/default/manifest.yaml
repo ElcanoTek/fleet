@@ -236,6 +236,7 @@ remote_mcp_catalog: []
 #     type: ollama
 #     base_url: http://localhost:11434/v1
 #     models: ["llama3.2", "qwen2.5-coder"]
+#     context_window_tokens: 32768 # match the server's actual Ollama num_ctx
 
 # Agent tool-behavior policy. Client-specific (e.g. ad-tech DSP deal tools); the
 # generic bundle ships NONE, so fleet stays on its base generic critical

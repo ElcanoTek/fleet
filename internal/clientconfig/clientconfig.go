@@ -679,11 +679,12 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 // the model resolver. The secret never enters the manifest, the sandbox, the
 // model context, or the logs.
 type ProviderDef struct {
-	Name      string   `yaml:"name"`        // routing name; unique within the manifest
-	Type      string   `yaml:"type"`        // openrouter | anthropic | openai | ollama
-	APIKeyEnv string   `yaml:"api_key_env"` // env var holding the credential (not needed for ollama)
-	BaseURL   string   `yaml:"base_url"`    // optional endpoint override
-	Models    []string `yaml:"models"`      // slugs this provider serves; empty = catch-all
+	Name                string   `yaml:"name"`                  // routing name; unique within the manifest
+	Type                string   `yaml:"type"`                  // openrouter | anthropic | openai | ollama
+	APIKeyEnv           string   `yaml:"api_key_env"`           // env var holding the credential (not needed for ollama)
+	BaseURL             string   `yaml:"base_url"`              // optional endpoint override
+	Models              []string `yaml:"models"`                // slugs this provider serves; empty = catch-all
+	ContextWindowTokens int      `yaml:"context_window_tokens"` // provider-local context; OpenRouter uses authoritative per-model metadata
 }
 
 // RemoteMCPCatalogEntry is one curated third-party hosted MCP server from the
@@ -1299,6 +1300,9 @@ func (b *Bundle) validateProviders() error {
 		}
 		if typ != "ollama" && strings.TrimSpace(p.APIKeyEnv) == "" {
 			return fmt.Errorf("providers[%q]: api_key_env is required for a %q provider", name, typ)
+		}
+		if p.ContextWindowTokens < 0 {
+			return fmt.Errorf("providers[%q]: context_window_tokens must be positive when set", name)
 		}
 	}
 	chainSeen := map[string]bool{}

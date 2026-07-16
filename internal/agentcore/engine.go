@@ -86,6 +86,12 @@ type engine struct {
 	// accumulated usage so a driver can ship it out-of-band to an external
 	// accountant. Nil for the in-process loop.
 	usageReporter func(RunUsage)
+
+	// modelContextPrefix holds exact-ish token reserves for the run's system
+	// prompt and currently registered tool schemas. roundState combines it with
+	// the active model window, completion allowance, provider headroom, and the
+	// live inner-step messages before every Fantasy provider call (#793).
+	modelContextPrefix modelContextPrefixBudget
 }
 
 // ErrContextBudgetExhausted is returned when a force-compaction has fired on
@@ -311,7 +317,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	if activeModel == nil || e.logSession == nil {
 		return out
 	}
-	window := contextWindowForModel(activeModel.Model())
+	window := contextWindowForActiveModel(activeModel)
 	if window <= 0 {
 		return out
 	}
@@ -597,14 +603,20 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			}
 			return nil
 		},
-		PrepareStep: budgetGuardedStep(r.orch, promptCachingStep(modelSlug,
-			WithCacheEnvPrefix(r.engine.envPrefix),
-			// The shared loop is where compaction summaries live (the engine's
-			// compaction paths insert them into this history), so the optional
-			// 4th breakpoint anchors the summary as a stable boundary between
-			// the cached head and the evolving tail. nil = default prefix
-			// matcher (isCompactionSummaryMessage).
-			WithCompactionSummaryBreakpoint(nil),
+		PrepareStep: budgetGuardedStep(r.orch, chainPrepareStepFunctions(
+			// Runs FIRST: prompt-cache markers must be attached to the reduced
+			// message slice, and no provider call may observe the pre-reduction
+			// history. opts.Model makes fallback swaps use their own window.
+			modelContextBudgetStep(r.engine.modelContextPrefix, int(r.maxTokens), sink),
+			promptCachingStep(modelSlug,
+				WithCacheEnvPrefix(r.engine.envPrefix),
+				// The shared loop is where compaction summaries live (the engine's
+				// compaction paths insert them into this history), so the optional
+				// 4th breakpoint anchors the summary as a stable boundary between
+				// the cached head and the evolving tail. nil = default prefix
+				// matcher (isCompactionSummaryMessage).
+				WithCompactionSummaryBreakpoint(nil),
+			),
 		)),
 	})
 	if err != nil && firstTimedOut.Load() && ctx.Err() == nil {

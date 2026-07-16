@@ -1,45 +1,70 @@
 package agentcore
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"charm.land/fantasy"
+
+	fleettools "github.com/ElcanoTek/fleet/internal/tools"
 )
 
+type captureOutputStager struct {
+	content string
+}
+
+func (s *captureOutputStager) StageModelOutputArtifact(_ context.Context, _, _, _, content string) (string, error) {
+	s.content = content
+	return testArtifactPath(0), nil
+}
+
+func testArtifactPath(slot int) string {
+	return fmt.Sprintf(".fleet/tool-output/slot-%02d/artifact-%s.txt", slot, strings.Repeat("a", 64))
+}
+
 func TestApplyOutputCeiling(t *testing.T) {
-	// Under the limit → unchanged.
 	if out, trunc := applyOutputCeiling("short", 100); trunc || out != "short" {
 		t.Errorf("under limit: trunc=%v out=%q, want false/short", trunc, out)
 	}
-	// Disabled (limit<=0) → unchanged.
-	big := strings.Repeat("x", 10_000)
-	if out, trunc := applyOutputCeiling(big, 0); trunc || out != big {
-		t.Errorf("limit 0 must disable truncation")
+
+	// Zero used to disable the cap. It now selects the safe default.
+	big := strings.Repeat("not binary prose ", defaultMaxToolOutputBytes)
+	out, trunc := applyOutputCeiling(big, 0)
+	if !trunc {
+		t.Fatal("limit 0 must not disable truncation")
+	}
+	if len(out) > defaultMaxToolOutputBytes {
+		t.Fatalf("zero-normalized result = %d bytes, want <= %d", len(out), defaultMaxToolOutputBytes)
+	}
+	if !strings.Contains(out, "original_bytes") || !strings.Contains(out, "recovery_action") {
+		t.Fatalf("bounded output is missing size/recovery metadata: %q", out[:min(len(out), 200)])
 	}
 
-	// Over the limit → truncated, with head + tail preserved and a marker.
-	content := strings.Repeat("A", 5_000) + "MIDDLE_NEEDLE" + strings.Repeat("B", 5_000)
-	out, trunc := applyOutputCeiling(content, 2_000)
+	content := strings.Repeat("alpha ", 5000) + "MIDDLE_NEEDLE" + strings.Repeat(" omega", 5000)
+	out, trunc = applyOutputCeiling(content, 2000)
 	if !trunc {
 		t.Fatal("expected truncation over the limit")
+	}
+	if len(out) > 2000 {
+		t.Fatalf("rendered envelope exceeds operational limit: %d", len(out))
 	}
 	if strings.Contains(out, "MIDDLE_NEEDLE") {
 		t.Error("the middle should have been dropped")
 	}
-	if !strings.HasPrefix(out, "AAAA") || !strings.HasSuffix(out, "BBBB") {
-		t.Errorf("head and tail must be preserved; got prefix %q suffix %q", out[:8], out[len(out)-8:])
-	}
-	if !strings.Contains(out, "truncated") {
-		t.Error("a truncation marker should be present")
+	if !strings.Contains(out, "alpha") || !strings.Contains(out, "omega") {
+		t.Error("text preview should retain useful head and tail context")
 	}
 }
 
-// TestApplyOutputCeiling_UTF8Safe ensures cuts land on rune boundaries so the
-// result stays valid UTF-8 (a mid-rune cut would corrupt the marshalled JSON).
 func TestApplyOutputCeiling_UTF8Safe(t *testing.T) {
-	// Multi-byte runes (™ is 3 bytes) packed so naive byte cuts land mid-rune.
-	content := strings.Repeat("™", 4_000) // 12_000 bytes
-	out, trunc := applyOutputCeiling(content, 3_000)
+	content := strings.Repeat("™ words ", 4000)
+	out, trunc := applyOutputCeiling(content, 3000)
 	if !trunc {
 		t.Fatal("expected truncation")
 	}
@@ -48,10 +73,204 @@ func TestApplyOutputCeiling_UTF8Safe(t *testing.T) {
 	}
 }
 
-func TestMaxToolOutputBytes_Default(t *testing.T) {
-	// No env override → the default (the once-cache reads env at first call; in a
-	// clean test process FLEET_MAX_TOOL_OUTPUT_BYTES is unset).
-	if got := maxToolOutputBytes(); got != defaultMaxToolOutputBytes {
-		t.Errorf("maxToolOutputBytes() = %d, want default %d", got, defaultMaxToolOutputBytes)
+func TestMaxToolOutputBytes_Normalization(t *testing.T) {
+	if got := normalizeToolOutputLimit(0); got != defaultMaxToolOutputBytes {
+		t.Fatalf("zero = %d, want safe default %d", got, defaultMaxToolOutputBytes)
+	}
+	if got := normalizeToolOutputLimit(-99); got != defaultMaxToolOutputBytes {
+		t.Fatalf("negative = %d, want safe default %d", got, defaultMaxToolOutputBytes)
+	}
+	if got := normalizeToolOutputLimit(1); got != MinMaxToolOutputBytes {
+		t.Fatalf("tiny = %d, want envelope floor %d", got, MinMaxToolOutputBytes)
+	}
+	if got := normalizeToolOutputLimit(HardMaxToolOutputBytes * 100); got != HardMaxToolOutputBytes {
+		t.Fatalf("oversized = %d, want hard cap %d", got, HardMaxToolOutputBytes)
+	}
+}
+
+func TestBoundModelVisibleToolResponse_JSONPythonVarArtifactRoundTrip(t *testing.T) {
+	t.Cleanup(func() { SetMaxToolOutputBytes(-1) })
+	SetMaxToolOutputBytes(4096)
+	stager := &captureOutputStager{}
+	ctx := fleettools.WithModelOutputArtifactStager(context.Background(), stager)
+
+	// Larger than both the operational setting and the non-disableable hard cap.
+	original := `{"status":"success","vars":{"payload":"` + strings.Repeat("QUJD", HardMaxToolOutputBytes) + `"},"stdout":"done"}`
+	resp := boundModelVisibleToolResponse(ctx, "run_python", "python-call-1", fantasy.NewTextResponse(original))
+	if len(resp.Content) > 4096 {
+		t.Fatalf("model-visible Python response = %d bytes, want <= 4096", len(resp.Content))
+	}
+	var envelope toolOutputEnvelope
+	if err := json.Unmarshal([]byte(resp.Content), &envelope); err != nil {
+		t.Fatalf("truncated structured response must remain valid JSON: %v\n%s", err, resp.Content)
+	}
+	if !envelope.Truncated || !envelope.BinarySuppressed {
+		t.Fatalf("unexpected Python envelope: %+v", envelope)
+	}
+	if envelope.OriginalBytes != len(original) || envelope.ShownBytes != 0 {
+		t.Fatalf("size accounting = original %d shown %d, want %d/0", envelope.OriginalBytes, envelope.ShownBytes, len(original))
+	}
+	if envelope.ArtifactPath != "" || strings.Contains(envelope.RecoveryAction, "view_file") || !strings.Contains(envelope.RecoveryAction, "workspace-relative path") {
+		t.Fatalf("binary output advertised recursive artifact recovery: %+v", envelope)
+	}
+	if strings.Contains(resp.Content, strings.Repeat("QUJD", 16)) {
+		t.Fatal("base64 preview leaked into model-visible Python envelope")
+	}
+
+	if stager.content != "" {
+		t.Fatalf("encoded binary unexpectedly consumed an artifact slot: %d bytes", len(stager.content))
+	}
+}
+
+func TestModelOutputArtifactReceivesOnlyGovernedContent(t *testing.T) {
+	t.Cleanup(func() { SetMaxToolOutputBytes(-1) })
+	SetMaxToolOutputBytes(2048)
+	const secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+	original := "export OPENAI_API_KEY=" + secret + "\n" + strings.Repeat("safe report row\n", 1000)
+	tool := fantasy.NewAgentTool("governed_large", "large governed output",
+		func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return fantasy.NewTextResponse(original), nil
+		})
+	registered, err := buildFantasyTools([]fantasy.AgentTool{tool}, nil, nil, nil, nil, nil, nil, toolBuildConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stager := &captureOutputStager{}
+	ctx := fleettools.WithModelOutputArtifactStager(context.Background(), stager)
+	resp, err := findRegisteredTool(registered, "governed_large").Run(ctx, fantasy.ToolCall{ID: "governed-call", Input: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stager.content, secret) || !strings.Contains(stager.content, "[REDACTED]") {
+		t.Fatalf("artifact was staged before secret governance: %.200s", stager.content)
+	}
+	if strings.Contains(resp.Content, secret) {
+		t.Fatal("model-visible envelope leaked the secret")
+	}
+}
+
+func TestBoundModelOutputToolsGovernsRawAuxiliaryRouteBeforeArtifact(t *testing.T) {
+	t.Cleanup(func() { SetMaxToolOutputBytes(-1) })
+	SetMaxToolOutputBytes(2048)
+	const secret = "sk-ZYXWVUTSRQPONMLKJIHGFEDCBA987654"
+	original := "OPENROUTER_API_KEY=" + secret + "\n" + strings.Repeat("auxiliary safe row\n", 1000)
+	raw := fantasy.NewAgentTool("auxiliary_raw", "raw auxiliary route",
+		func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return fantasy.NewTextResponse(original), nil
+		})
+	stager := &captureOutputStager{}
+	ctx := fleettools.WithModelOutputArtifactStager(context.Background(), stager)
+	resp, err := BoundModelOutputTools([]fantasy.AgentTool{raw})[0].Run(ctx, fantasy.ToolCall{ID: "aux-call", Input: "{}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stager.content, secret) || !strings.Contains(stager.content, "[REDACTED]") {
+		t.Fatalf("raw auxiliary output reached retention before governance: %.200s", stager.content)
+	}
+	if strings.Contains(resp.Content, secret) || len(resp.Content) > 2048 {
+		t.Fatalf("raw auxiliary route bypassed final boundary: bytes=%d content=%.200s", len(resp.Content), resp.Content)
+	}
+}
+
+func TestFinalBoundaryDoesNotRunGuardrailTwiceForGovernedRoutes(t *testing.T) {
+	detector := &fakeGuardrailDetector{}
+	SetGuardrail(true, false, "observe", "prompt-injection", detector)
+	t.Cleanup(func() { SetGuardrail(false, false, "off", "", nil) })
+	tool := fantasy.NewAgentTool("governed_once", "guardrail call count",
+		func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return fantasy.NewTextResponse("ordinary result"), nil
+		})
+	registered, err := buildFantasyTools([]fantasy.AgentTool{tool}, nil, nil, nil, nil, nil, nil, toolBuildConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := findRegisteredTool(registered, "governed_once").Run(context.Background(), fantasy.ToolCall{ID: "once", Input: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if detector.calls != 1 {
+		t.Fatalf("governed output was screened %d times, want exactly once", detector.calls)
+	}
+}
+
+func TestBoundModelVisibleToolResponse_MediaNeverInlinesBase64(t *testing.T) {
+	t.Cleanup(func() { SetMaxToolOutputBytes(-1) })
+	SetMaxToolOutputBytes(1024)
+	data := []byte(strings.Repeat("binary", HardMaxToolOutputBytes))
+	input := fantasy.NewImageResponse(data, "image/png")
+	input.Content = "governed caption"
+	resp := boundModelVisibleToolResponse(context.Background(), "media_tool", "media-1", input)
+	if len(resp.Content) > 1024 || len(resp.Data) != 0 || resp.Type != "text" {
+		t.Fatalf("media was not converted to a bounded text envelope: type=%s text=%d data=%d", resp.Type, len(resp.Content), len(resp.Data))
+	}
+	var envelope toolOutputEnvelope
+	if err := json.Unmarshal([]byte(resp.Content), &envelope); err != nil {
+		t.Fatalf("media envelope invalid JSON: %v", err)
+	}
+	if !envelope.BinarySuppressed || envelope.ShownBytes != 0 || envelope.MediaType != "image/png" || envelope.OriginalBytes != len(data)+len(input.Content) {
+		t.Fatalf("unexpected media envelope: %+v", envelope)
+	}
+}
+
+func TestBoundModelVisibleToolResponse_SuppressesURLBase64AndEscapedControls(t *testing.T) {
+	t.Cleanup(func() { SetMaxToolOutputBytes(-1) })
+	SetMaxToolOutputBytes(1024)
+	for name, content := range map[string]string{
+		"url-safe base64": `{"payload":"` + strings.Repeat("Ab-_", 300) + `"}`,
+		"escaped control": `{"payload":"\u0000","rows":"` + strings.Repeat("ordinary row ", 300) + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp := boundModelVisibleToolResponse(context.Background(), "run_python", "call", fantasy.NewTextResponse(content))
+			var envelope toolOutputEnvelope
+			if err := json.Unmarshal([]byte(resp.Content), &envelope); err != nil {
+				t.Fatalf("invalid JSON envelope: %v", err)
+			}
+			if !envelope.BinarySuppressed || envelope.ShownBytes != 0 || envelope.Preview != "" {
+				t.Fatalf("binary/control preview leaked: %+v", envelope)
+			}
+		})
+	}
+}
+
+func TestBoundModelVisibleToolResponse_LargeInputHasBoundedAllocation(t *testing.T) {
+	t.Cleanup(func() { SetMaxToolOutputBytes(-1) })
+	SetMaxToolOutputBytes(4096)
+	content := `{"rows":"` + strings.Repeat("ordinary row value ", (64<<20)/19) + `"}`
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	resp := boundModelVisibleToolResponse(context.Background(), "large_json", "call", fantasy.NewTextResponse(content))
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(content)
+	if len(resp.Content) > 4096 || !json.Valid([]byte(resp.Content)) {
+		t.Fatalf("large result boundary invalid: bytes=%d", len(resp.Content))
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 16<<20 {
+		t.Fatalf("bounding a preallocated 64MiB result allocated %d additional bytes", allocated)
+	}
+}
+
+func TestModelOutputBoundary_BoundsReturnedGoError(t *testing.T) {
+	t.Cleanup(func() { SetMaxToolOutputBytes(-1) })
+	SetMaxToolOutputBytes(2048)
+	original := `{"rows":"` + strings.Repeat("ordinary governed error row ", 2000) + `"}`
+	cause := errors.New(original)
+	wrapped := withModelOutputBoundary(fantasy.NewAgentTool("failing_tool", "returns a large transport error",
+		func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return fantasy.ToolResponse{}, cause
+		}))
+
+	resp, err := wrapped.Run(context.Background(), fantasy.ToolCall{ID: "error-call", Name: "failing_tool", Input: "{}"})
+	if !errors.Is(err, cause) {
+		t.Fatalf("bounded error must preserve its cause: %v", err)
+	}
+	if len(err.Error()) > 2048 || resp.Content != err.Error() || !resp.IsError {
+		t.Fatalf("returned error bypassed boundary: err=%d response=%d is_error=%t", len(err.Error()), len(resp.Content), resp.IsError)
+	}
+	var envelope toolOutputEnvelope
+	if unmarshalErr := json.Unmarshal([]byte(err.Error()), &envelope); unmarshalErr != nil {
+		t.Fatalf("structured Go error must become valid bounded JSON: %v\n%s", unmarshalErr, err.Error())
+	}
+	if envelope.OriginalBytes != len(original) || envelope.RecoveryAction == "" {
+		t.Fatalf("bounded Go error has dishonest metadata: %+v", envelope)
 	}
 }

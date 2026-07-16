@@ -33,7 +33,9 @@ type ModelResolver struct {
 
 type providerNamedModel struct {
 	fantasy.LanguageModel
-	providerName string
+	providerName        string
+	providerType        ProviderType
+	contextWindowTokens int
 }
 
 func (m *providerNamedModel) fleetProviderName() string { return m.providerName }
@@ -69,6 +71,9 @@ func NewModelResolverWithProviders(providers []ProviderConfig, headers ProviderH
 		}
 		if seen[name] {
 			return nil, fmt.Errorf("duplicate provider name %q", name)
+		}
+		if providers[i].ContextWindowTokens < 0 {
+			return nil, fmt.Errorf("provider %q: context window tokens must be positive when set", name)
 		}
 		seen[name] = true
 		p, err := buildProvider(providers[i], headers)
@@ -130,7 +135,10 @@ func (r *ModelResolver) Resolve(ctx context.Context, slug string) (fantasy.Langu
 		return nil, fmt.Errorf("load model %q via provider %q: %w", modelSlug, pc.Name, err)
 	}
 
-	mdl = &providerNamedModel{LanguageModel: mdl, providerName: pc.Name}
+	mdl = &providerNamedModel{
+		LanguageModel: mdl, providerName: pc.Name, providerType: pc.Type,
+		contextWindowTokens: resolvedProviderContextWindow(pc),
+	}
 	r.mu.Lock()
 	r.cache[slug] = mdl
 	r.mu.Unlock()
@@ -212,11 +220,42 @@ func (r *ModelResolver) resolveProviderModel(ctx context.Context, pc ProviderCon
 	if err != nil {
 		return nil, fmt.Errorf("load fallback model %q via provider %q: %w", modelSlug, pc.Name, err)
 	}
-	mdl = &providerNamedModel{LanguageModel: mdl, providerName: pc.Name}
+	mdl = &providerNamedModel{
+		LanguageModel: mdl, providerName: pc.Name, providerType: pc.Type,
+		contextWindowTokens: resolvedProviderContextWindow(pc),
+	}
 	r.mu.Lock()
 	r.cache[key] = mdl
 	r.mu.Unlock()
 	return mdl, nil
+}
+
+func resolvedProviderContextWindow(cfg ProviderConfig) int {
+	if cfg.Type == ProviderTypeOpenRouter {
+		// OpenRouter publishes per-model context_length in its live catalog and
+		// provider context errors refine that value at runtime. A manifest-wide
+		// declaration can only be less specific and, if inflated, would let an
+		// oversized request pass the pre-provider budget. Keep the wrapper unset so
+		// contextWindowForActiveModel must use authoritative model metadata.
+		return 0
+	}
+	if cfg.ContextWindowTokens > 0 {
+		return cfg.ContextWindowTokens
+	}
+	if cfg.Type == ProviderTypeOllama {
+		// Ollama model ids do not appear in OpenRouter's context catalog and the
+		// OpenAI-compatible model handle exposes no context metadata. Fail-safe at
+		// Ollama's conservative baseline unless the operator declares the actual
+		// num_ctx via context_window_tokens.
+		return 4096
+	}
+	// Native and OpenAI-compatible handles do not expose a context limit and
+	// their provider-local slugs need not match OpenRouter's catalog. Avoid
+	// assuming Fleet's 200K OpenRouter fallback for an unknown 32K endpoint.
+	// Operators should declare the exact limit above; 32K keeps an omitted
+	// declaration safe for the common native baseline without pretending the
+	// remote endpoint advertised metadata it did not.
+	return 32_000
 }
 
 // ── exported stream-error classification (for the interactive turn.model_required path) ──

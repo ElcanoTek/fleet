@@ -109,7 +109,7 @@ func TestNewServiceRequiresFullCoverage(t *testing.T) {
 	// a wider range than the admin bounds, and one legacy env value disabling
 	// the whole panel would be a regression (the value is kept verbatim).
 	defaults = testDefaults()
-	defaults["max_tool_output_bytes"] = "512" // legal env ceiling, below admin Min
+	defaults["max_tool_output_bytes"] = "512" // generic service preserves an out-of-bounds env default
 	svc, err := NewService(newFakeStore(), defaults, testHooks(applied))
 	if err != nil {
 		t.Fatalf("out-of-bounds env default must not fail construction: %v", err)
@@ -153,7 +153,7 @@ func TestValidate(t *testing.T) {
 		{"tool_disclosure_threshold", "0", "", true}, // no MinZeroOK: 0 is out of range
 		{"tool_disclosure_threshold", "100001", "", true},
 		{"tool_disclosure_threshold", "abc", "", true},
-		{"max_tool_output_bytes", "0", "0", false}, // MinZeroOK: 0 = no ceiling
+		{"max_tool_output_bytes", "0", "0", false}, // MinZeroOK: 0 = safe runtime default
 		{"pii_redaction_engine", "Rampart", "rampart", false},
 		{"pii_redaction_engine", "onnx", "", true},
 		{"pii_rampart_url", "", "", false}, // empty = not configured
@@ -162,6 +162,8 @@ func TestValidate(t *testing.T) {
 		{"pii_rampart_url", "not a url", "", true},
 		{"max_tool_output_bytes", "512", "", true}, // below Min and not 0
 		{"max_tool_output_bytes", "65536", "65536", false},
+		{"max_tool_output_bytes", "131072", "131072", false},
+		{"max_tool_output_bytes", "131073", "", true},
 	}
 	for _, c := range cases {
 		got, err := Validate(spec(c.key), c.in)

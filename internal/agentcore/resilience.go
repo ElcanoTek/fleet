@@ -323,13 +323,13 @@ func parseSSEStatusCode(raw json.RawMessage) int {
 }
 
 // recordContextFromError writes a provider-reported window size into the
-// observed-context cache (ground truth for the active slug).
-func recordContextFromError(slug string, providerErr *fantasy.ProviderError) {
-	if providerErr == nil || slug == "" {
+// observed-context cache (ground truth for this exact provider+slug pair).
+func recordContextFromError(model fantasy.LanguageModel, providerErr *fantasy.ProviderError) {
+	if providerErr == nil || model == nil || strings.TrimSpace(model.Model()) == "" {
 		return
 	}
 	if providerErr.ContextMaxTokens > 0 {
-		recordContextMax(slug, providerErr.ContextMaxTokens)
+		recordContextMaxForModel(model, providerErr.ContextMaxTokens)
 	}
 }
 
@@ -476,7 +476,7 @@ func (e *engine) streamRoundWithResilience(
 				"Split this task into smaller pieces, move heavy context into a file the agent can "+
 				"view_file on demand, or switch to a model with a larger context window",
 			ErrContextBudgetExhausted, e.consecutiveCompactions, activeModel.Model(),
-			contextWindowForModel(activeModel.Model()),
+			contextWindowForActiveModel(activeModel),
 		)
 	}
 
@@ -577,7 +577,7 @@ func (e *engine) streamRoundWithResilience(
 			return streamRoundOutcome{}, fmt.Errorf("context cancelled: %w", err)
 		case streamErrorContextTooLarge:
 			if activeModel != nil {
-				recordContextFromError(activeModel.Model(), providerErr)
+				recordContextFromError(activeModel, providerErr)
 			}
 			if !forceCompactedThisRound {
 				log.Printf("⚠️  Provider rejected prompt as too large (status=%d); forcing compaction and retrying",

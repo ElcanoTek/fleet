@@ -1641,12 +1641,13 @@ func toAgentcoreProviders(bundle *clientconfig.Bundle) []agentcore.ProviderConfi
 			key = os.Getenv(env)
 		}
 		out = append(out, agentcore.ProviderConfig{
-			Name:              strings.TrimSpace(p.Name),
-			Type:              agentcore.ProviderType(strings.TrimSpace(p.Type)),
-			APIKey:            key,
-			BaseURL:           strings.TrimSpace(p.BaseURL),
-			Models:            p.Models,
-			FallbackProviders: append([]string(nil), bundle.FallbackProviders...),
+			Name:                strings.TrimSpace(p.Name),
+			Type:                agentcore.ProviderType(strings.TrimSpace(p.Type)),
+			APIKey:              key,
+			BaseURL:             strings.TrimSpace(p.BaseURL),
+			Models:              p.Models,
+			ContextWindowTokens: p.ContextWindowTokens,
+			FallbackProviders:   append([]string(nil), bundle.FallbackProviders...),
 		})
 	}
 	return out

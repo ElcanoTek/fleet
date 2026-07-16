@@ -168,6 +168,12 @@ func (t *panicContainedTool) Run(ctx context.Context, call fantasy.ToolCall) (re
 				fantasy.NewTextErrorResponse(containedToolPanicText(event.IncidentID)),
 				map[string]any{"incident_id": event.IncidentID, "possibly_committed": true},
 			)
+			// Containment is deliberately the outermost dispatch wrapper, so a
+			// synthesized panic result cannot flow back through the ordinary inner
+			// model-output wrapper. Apply the deterministic hard cap explicitly;
+			// do not re-enter configurable redaction/guardrail code while recovering
+			// from a panic that may have originated in that code.
+			resp = boundModelVisibleToolResponse(ctx, t.name, call.ID, resp)
 			// Normal wrappers record after execution/output screening. A panic in
 			// either phase skips that line, so repair the logical tool's failed
 			// accounting here. recordAttempted prevents a RecordToolResult panic

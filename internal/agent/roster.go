@@ -3,9 +3,18 @@ package agent
 import (
 	"slices"
 	"sort"
+	"strings"
+
+	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
+
+// These catalog filters remain driver-side data shapes. Tool registration and
+// execution live only in agentcore.Run; keeping the aliases here does not
+// recreate the retired legacy Fantasy builder.
+type mcpAllowlist map[string][]string
+type mcpOptionalSet map[string]bool
 
 // OptionalServerInfo is the catalog-row shape returned by MCPServerCatalog.
 // It mirrors the frontend toggle affordance 1:1 so the HTTP handler can
@@ -102,15 +111,36 @@ func (m *Manager) MCPServerCatalog() []OptionalServerInfo {
 const OptionalNativeImageGenName = "image_generation"
 
 // nativeOptInGate maps a native tool's name to the synthetic optional-server
-// name that controls its visibility, or "" if the tool is always on. Used by
-// buildFantasyTools to drop opt-in tools when the conversation hasn't
-// enabled them, and by buildSystemPrompt to mirror the same gating in the
-// dynamic tool advertisement section.
+// name that controls its visibility, or "" if the tool is always on.
 func nativeOptInGate(toolName string) string {
 	if toolName == "generate_image" {
 		return OptionalNativeImageGenName
 	}
 	return ""
+}
+
+// filterNativeToolsByOptIn applies the interactive native-tool visibility gate
+// before the roster enters the single agentcore.Run builder. Keeping this as a
+// data filter avoids reviving the retired second Fantasy registration loop.
+func filterNativeToolsByOptIn(all []fantasy.AgentTool, enabled []string) []fantasy.AgentTool {
+	optedIn := make(map[string]bool, len(enabled))
+	for _, name := range enabled {
+		if name = strings.TrimSpace(name); name != "" {
+			optedIn[name] = true
+		}
+	}
+	out := make([]fantasy.AgentTool, 0, len(all))
+	for _, tool := range all {
+		if tool == nil {
+			continue
+		}
+		gate := nativeOptInGate(tool.Info().Name)
+		if gate != "" && !optedIn[gate] {
+			continue
+		}
+		out = append(out, tool)
+	}
+	return out
 }
 
 // optionalNativeImageGenInfo is the catalog entry that surfaces the

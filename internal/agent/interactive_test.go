@@ -16,13 +16,17 @@ import (
 // driver wiring tests (finalize hook + compaction summarizer + 1-round
 // collapse). Stream/Generate are pluggable; defaults finish with text.
 type itMockModel struct {
-	mu           sync.Mutex
-	streamCount  int
-	generateText string
-	streamFunc   func(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error)
+	mu            sync.Mutex
+	streamCount   int
+	generateCount int
+	generateText  string
+	streamFunc    func(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error)
 }
 
 func (m *itMockModel) Generate(_ context.Context, _ fantasy.Call) (*fantasy.Response, error) {
+	m.mu.Lock()
+	m.generateCount++
+	m.mu.Unlock()
 	text := m.generateText
 	if text == "" {
 		text = "summary text"
@@ -32,6 +36,21 @@ func (m *itMockModel) Generate(_ context.Context, _ fantasy.Call) (*fantasy.Resp
 		FinishReason: fantasy.FinishReasonStop,
 		Usage:        fantasy.Usage{InputTokens: 10, OutputTokens: 5},
 	}, nil
+}
+
+func TestCompactionSummarizerRefusesOversizedInputBeforeProvider(t *testing.T) {
+	model := &itMockModel{generateText: "must not run"}
+	droppable := []fantasy.Message{fantasy.NewUserMessage(strings.Repeat("ordinary historical prose ", 50_000))}
+	summary := summarizeDroppedMiddle(context.Background(), TurnConfig{Model: model}, droppable)
+	if !strings.Contains(summary, "messages compacted") {
+		t.Fatalf("oversized summarizer did not use deterministic placeholder: %q", summary)
+	}
+	model.mu.Lock()
+	calls := model.generateCount
+	model.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("oversized summarizer reached provider %d times", calls)
+	}
 }
 
 func (m *itMockModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {

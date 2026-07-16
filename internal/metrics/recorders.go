@@ -1,5 +1,7 @@
 package metrics
 
+import "strings"
+
 // Named metric families (#176) + thin record helpers. Kept separate from the
 // registry mechanics so call sites read intent, not plumbing.
 
@@ -9,16 +11,21 @@ const (
 	nameActiveAgents = "fleet_active_agents"
 	nameCostUSD      = "fleet_cost_usd_total"
 	//nolint:gosec // G101: this is a Prometheus metric NAME, not a credential — "token" refers to LLM tokens.
-	nameTokenUsage    = "fleet_token_usage_total"
-	nameSandboxPool   = "fleet_sandbox_pool_size"
-	nameTurnTimeouts  = "fleet_turn_timeouts_total"
-	nameRunsPruned    = "fleet_sched_runs_pruned_total"
-	nameLogsArchived  = "fleet_sched_logs_archived_total"
-	nameLogsArchBytes = "fleet_sched_logs_archived_bytes_saved_total"
-	nameIPBlocked     = "fleet_ip_blocked_total"
-	nameDeadLettered  = "fleet_dead_letter_queued_total"
-	nameTasksSkipped  = "fleet_tasks_skipped_total"
-	nameWebhookTrig   = "fleet_webhook_triggers_total"
+	nameTokenUsage            = "fleet_token_usage_total"
+	nameSandboxPool           = "fleet_sandbox_pool_size"
+	nameTurnTimeouts          = "fleet_turn_timeouts_total"
+	nameRunsPruned            = "fleet_sched_runs_pruned_total"
+	nameLogsArchived          = "fleet_sched_logs_archived_total"
+	nameLogsArchBytes         = "fleet_sched_logs_archived_bytes_saved_total"
+	nameIPBlocked             = "fleet_ip_blocked_total"
+	nameDeadLettered          = "fleet_dead_letter_queued_total"
+	nameTasksSkipped          = "fleet_tasks_skipped_total"
+	nameWebhookTrig           = "fleet_webhook_triggers_total"
+	nameToolOutputTruncations = "fleet_tool_output_truncations_total"
+	nameToolOutputArtifacts   = "fleet_tool_output_artifacts_total"
+	nameToolContextReductions = "fleet_tool_context_reductions_total"
+	nameToolContextTokens     = "fleet_tool_context_estimated_tokens"
+	nameToolContextPressure   = "fleet_tool_context_pressure_ratio"
 
 	// SLA monitoring (#274). Labeled by a BOUNDED task-name (the prompt's first
 	// line truncated to 64 chars — see slamonitor.TaskName), NOT a free-form
@@ -43,6 +50,75 @@ const (
 	nameSandboxPidsPeak     = "fleet_sandbox_pids_peak"
 	nameSandboxRunsObserved = "fleet_sandbox_runs_observed_total"
 )
+
+// RecordToolOutputTruncation counts one result reduced by the final
+// model-visible boundary. The exported `tool` label is a fixed route class,
+// not the catalog-provided name: remote MCP names can be user-controlled and a
+// label per name would retain unbounded Prometheus series. Exact names remain
+// available in the boundary log. format is one of text/json/media.
+func RecordToolOutputTruncation(tool, format string) {
+	tool = toolOutputMetricClass(tool)
+	if format == "" {
+		format = "text"
+	}
+	incCounter(nameToolOutputTruncations, "Tool results reduced by the final model-visible output boundary.",
+		[]string{"tool", "format"}, []string{tool, format}, 1)
+}
+
+func toolOutputMetricClass(tool string) string {
+	tool = strings.TrimSpace(tool)
+	switch {
+	case tool == "":
+		return "unknown"
+	case strings.HasPrefix(tool, "mcp_"):
+		return "mcp"
+	case tool == "tool_search" || tool == "tool_describe" || tool == "tool_call":
+		return "disclosure"
+	default:
+		return "native"
+	}
+}
+
+// RecordToolOutputArtifact counts attempts to retain governed full output in a
+// run-scoped, sandbox-readable workspace artifact. result is success, failure,
+// or unavailable (no confined artifact scope).
+func RecordToolOutputArtifact(result string) {
+	if result == "" {
+		result = "failure"
+	}
+	incCounter(nameToolOutputArtifacts, "Governed full tool-output artifact staging attempts by result.",
+		[]string{"result"}, []string{result}, 1)
+}
+
+// RecordToolContextReduction counts payloads compacted or evicted by the
+// inner-step aggregate budget. kind is a small fixed vocabulary owned by
+// agentcore (result_preview, result_evict, or input_evict).
+func RecordToolContextReduction(kind string, n int) {
+	if n <= 0 {
+		return
+	}
+	if kind == "" {
+		kind = "unknown"
+	}
+	incCounter(nameToolContextReductions, "Tool payload reductions performed before an inner model step.",
+		[]string{"kind"}, []string{kind}, float64(n))
+}
+
+// RecordToolContextPressure publishes the latest estimated inner-step context
+// size and pressure for a model. phase is before, after, target, or reserved;
+// the fixed vocabulary keeps cardinality bounded.
+func RecordToolContextPressure(model, phase string, tokens int, ratio float64) {
+	if model == "" {
+		model = "unknown"
+	}
+	if phase == "" {
+		phase = "before"
+	}
+	labels := []string{"model", "phase"}
+	values := []string{model, phase}
+	setGauge(nameToolContextTokens, "Latest estimated token accounting for the inner model step.", labels, values, float64(tokens))
+	setGauge(nameToolContextPressure, "Latest estimated inner-step context pressure ratio against the model window.", labels, values, ratio)
+}
 
 // RecordIPBlocked counts one request dropped by the IP access-control middleware
 // (#314), labeled by the matching list: "allowlist" (no allowlist match) or

@@ -24,6 +24,15 @@ func makeNativeWithName(name string) fantasy.AgentTool {
 	)
 }
 
+func hasToolNamed(all []fantasy.AgentTool, name string) bool {
+	for _, tool := range all {
+		if tool.Info().Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNativeOptInGate_Mapping(t *testing.T) {
 	if got := nativeOptInGate("generate_image"); got != OptionalNativeImageGenName {
 		t.Errorf("nativeOptInGate(generate_image) = %q, want %q", got, OptionalNativeImageGenName)
@@ -36,18 +45,13 @@ func TestNativeOptInGate_Mapping(t *testing.T) {
 }
 
 func TestBuildFantasyTools_GenerateImage_GatedOff(t *testing.T) {
-	client := mcp.NewClient()
-	orch := newTestOrch()
 	native := []fantasy.AgentTool{
-		makeTestNative("native_always_on"),
+		makeNativeWithName("native_always_on"),
 		makeNativeWithName("generate_image"),
 	}
 
 	// No opt-in for image_generation -> generate_image MUST be filtered out.
-	tools, err := buildFantasyTools(native, client, nil, orch, nil, nil)
-	if err != nil {
-		t.Fatalf("buildFantasyTools: %v", err)
-	}
+	tools := filterNativeToolsByOptIn(native, nil)
 	if !hasToolNamed(tools, "native_always_on") {
 		t.Error("always-on native tool should still be registered")
 	}
@@ -57,19 +61,14 @@ func TestBuildFantasyTools_GenerateImage_GatedOff(t *testing.T) {
 }
 
 func TestBuildFantasyTools_GenerateImage_GatedOn(t *testing.T) {
-	client := mcp.NewClient()
-	orch := newTestOrch()
 	native := []fantasy.AgentTool{
-		makeTestNative("native_always_on"),
+		makeNativeWithName("native_always_on"),
 		makeNativeWithName("generate_image"),
 	}
 
 	// Conversation opted in via the same list used for Optional MCPs.
 	enabled := []string{OptionalNativeImageGenName}
-	tools, err := buildFantasyTools(native, client, nil, orch, nil, enabled)
-	if err != nil {
-		t.Fatalf("buildFantasyTools: %v", err)
-	}
+	tools := filterNativeToolsByOptIn(native, enabled)
 	if !hasToolNamed(tools, "generate_image") {
 		t.Error("generate_image must be registered when image_generation is opted in")
 	}

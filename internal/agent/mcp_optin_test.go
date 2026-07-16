@@ -1,109 +1,11 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
-	"charm.land/fantasy"
-
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
-
-// newTestOrch returns a minimal orchestrationState good enough for
-// buildFantasyTools to wrap native tools in the ceiling guard without
-// tripping the real ceilings.
-func newTestOrch() *orchestrationState {
-	o := newOrchestrationState()
-	o.setCeilings(999, 9_999_999)
-	return o
-}
-
-// makeTestNative returns a single no-op native tool for use in tool-
-// registration tests. Named so we can assert it's still present in the
-// filtered slice.
-func makeTestNative(name string) fantasy.AgentTool {
-	return fantasy.NewAgentTool(
-		name,
-		"test probe",
-		func(_ context.Context, _ struct{}, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return fantasy.NewTextResponse("ok"), nil
-		},
-	)
-}
-
-func hasToolNamed(tools []fantasy.AgentTool, name string) bool {
-	for _, t := range tools {
-		if t.Info().Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func TestBuildFantasyTools_OptionalServer_DroppedWhenNotOptedIn(t *testing.T) {
-	// Empty mcp.Client (no real servers connected) + nil allowlist. The
-	// point of this test is that the optional-gating logic is keyed off
-	// Manager.optionalServers, not off live tools — so we don't need a
-	// running subprocess to exercise it.
-	client := mcp.NewClient()
-	orch := newTestOrch()
-	native := []fantasy.AgentTool{makeTestNative("native_probe")}
-
-	// Server is known-optional; conversation has not opted in.
-	optional := mcpOptionalSet{"gamma": true}
-	var enabled []string // no opt-ins
-
-	tools, err := buildFantasyTools(native, client, nil, orch, optional, enabled)
-	if err != nil {
-		t.Fatalf("buildFantasyTools returned error: %v", err)
-	}
-	if !hasToolNamed(tools, "native_probe") {
-		t.Error("native tool should always be registered")
-	}
-	// Since our fake client has no tools, we can't directly verify that
-	// gamma tools were filtered — but we CAN verify the count is exactly
-	// the native set (no phantom registrations).
-	if got, want := len(tools), 1; got != want {
-		t.Errorf("expected %d tools registered (native only), got %d", want, got)
-	}
-}
-
-func TestBuildFantasyTools_OptionalServer_PassesWhenOptedIn(t *testing.T) {
-	// Smoke-level: opted-in path doesn't error out. With no real MCP
-	// tools in the test client this can't assert gamma tools are PRESENT,
-	// but it confirms the opt-in path is exercised without crashes.
-	client := mcp.NewClient()
-	orch := newTestOrch()
-	native := []fantasy.AgentTool{makeTestNative("native_probe")}
-	optional := mcpOptionalSet{"gamma": true}
-	enabled := []string{"gamma"}
-
-	tools, err := buildFantasyTools(native, client, nil, orch, optional, enabled)
-	if err != nil {
-		t.Fatalf("buildFantasyTools returned error: %v", err)
-	}
-	if !hasToolNamed(tools, "native_probe") {
-		t.Error("native tool should always be registered")
-	}
-}
-
-func TestBuildFantasyTools_NonOptionalAlwaysRegistered(t *testing.T) {
-	// Non-optional servers pass through regardless of the opt-in list.
-	// Same smoke approach as above — confirms no crash and native still
-	// present when no optional servers are configured at all.
-	client := mcp.NewClient()
-	orch := newTestOrch()
-	native := []fantasy.AgentTool{makeTestNative("native_probe")}
-
-	tools, err := buildFantasyTools(native, client, nil, orch, nil, nil)
-	if err != nil {
-		t.Fatalf("buildFantasyTools returned error: %v", err)
-	}
-	if !hasToolNamed(tools, "native_probe") {
-		t.Error("native tool should always be registered")
-	}
-}
 
 func TestMCPServerCatalog_EmptyWhenNoOptionalServers(t *testing.T) {
 	// Manager without any Optional specs — catalog is empty, NOT nil-

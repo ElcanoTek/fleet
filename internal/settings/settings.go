@@ -99,7 +99,11 @@ func Registry() []Spec {
 		// Agent runtime.
 		{Key: "tool_disclosure_threshold", Kind: KindInt, Min: 1, Max: 100000,
 			EnvVar: "FLEET_TOOL_DISCLOSURE_THRESHOLD"},
-		{Key: "max_tool_output_bytes", Kind: KindInt, Min: 1024, Max: 16 * 1024 * 1024, MinZeroOK: true,
+		// Zero is retained as a backwards-compatible spelling of the safe 64KiB
+		// default. Agentcore also clamps every source to the non-disableable 128KiB
+		// hard maximum, but rejecting larger admin writes keeps the persisted/UI
+		// value honest about what the runtime enforces.
+		{Key: "max_tool_output_bytes", Kind: KindInt, Min: 1024, Max: 128 * 1024, MinZeroOK: true,
 			EnvVar: "FLEET_MAX_TOOL_OUTPUT_BYTES"},
 		{Key: "phone_a_friend_enabled", Kind: KindBool,
 			EnvVar: "FLEET_PHONE_A_FRIEND_ENABLED"},
@@ -254,8 +258,8 @@ type Service struct {
 // must cover the registry — a MISSING default or hook is a programming error
 // reported at construction so it can't ship silently. A default that fails
 // registry validation is NOT an error: the registry bounds constrain what an
-// admin may write, but the env accepts a wider range (FLEET_MAX_TOOL_OUTPUT_BYTES=512
-// is a real, enforced 512-byte ceiling) — such a default is kept verbatim
+// admin may write, while some settings accept legacy env spellings outside
+// those bounds — such a default is kept verbatim
 // (with a log) as the display/reset target so one out-of-bounds env value can
 // never disable the whole panel. cmd/fleet derives every default from typed
 // sources, so a kept-verbatim default is always parseable by its hook.

@@ -431,65 +431,15 @@ func checkCommandSafety(command string) error {
 	return nil
 }
 
-// bashOutputTruncateThreshold is the max bytes of stdout or stderr to include
-// inline in the structured response. Outputs larger than this are saved to a
-// temp file and head+tail excerpts are returned inline.
-const bashOutputTruncateThreshold = 32768 // ~8K tokens
-
-// bashTruncateHeadTail controls how many bytes of head and tail to keep inline
-// when truncating large output.
-const bashTruncateHeadTail = 4096
-
-const truncationTempFileMaxAge = 24 * time.Hour
-
 // bashResult is the structured JSON response returned by the bash tool.
 type bashResult struct {
-	ExitCode        int             `json:"exit_code"`
-	Stdout          string          `json:"stdout"`
-	Stderr          string          `json:"stderr"`
-	Command         string          `json:"command"`
-	WorkingDir      string          `json:"working_directory"`
-	ExecutionTimeMs int64           `json:"execution_time_ms"`
-	Error           string          `json:"error,omitempty"`
-	TruncationInfo  *truncationInfo `json:"truncation_info,omitempty"`
-}
-
-type truncationInfo struct {
-	StdoutTruncated bool   `json:"stdout_truncated,omitempty"`
-	StderrTruncated bool   `json:"stderr_truncated,omitempty"`
-	StdoutFullPath  string `json:"stdout_full_path,omitempty"`
-	StderrFullPath  string `json:"stderr_full_path,omitempty"`
-	StdoutFullBytes int    `json:"stdout_full_bytes,omitempty"`
-	StderrFullBytes int    `json:"stderr_full_bytes,omitempty"`
-}
-
-// truncateWithFile saves full output to a host-side spill file and returns
-// head+tail with a truncation marker. Returns the truncated string and the
-// spill file path.
-//
-// The spill lives in the host temp dir. Since #784 the file tools execute
-// INSIDE the sandbox, so this host-side spill is NOT reachable via view_file
-// (the container's /tmp is a private tmpfs); the marker therefore steers the
-// model to the run_python `return_vars` recovery, and the on-disk copy is kept
-// only as an operator-side breadcrumb (swept after truncationTempFileMaxAge).
-// A sandbox-readable, conversation-scoped full-output artifact is #793's job
-// (its ACs cover exactly that), not this PR's.
-func truncateWithFile(output []byte, prefix string) (string, string) {
-	cleanupOldTruncationFiles()
-	tmpFile, err := os.CreateTemp("", fmt.Sprintf("chat-%s-*.txt", prefix))
-	if err != nil {
-		// If we can't create a temp file, return head+tail with a warning
-		head := string(output[:bashTruncateHeadTail])
-		tail := string(output[len(output)-bashTruncateHeadTail:])
-		return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total, temp file creation failed: %v. Re-run with smaller/filtered output, or capture the value via run_python `return_vars` (those are never truncated).]\n\n", len(output), err) + tail, ""
-	}
-	path := tmpFile.Name()
-	_, _ = tmpFile.Write(output)
-	_ = tmpFile.Close()
-
-	head := string(output[:bashTruncateHeadTail])
-	tail := string(output[len(output)-bashTruncateHeadTail:])
-	return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total; head+tail shown above. To recover the FULL bytes, re-run inside run_python and capture via `return_vars` (vars are never truncated), or re-run this command with filtered/paginated output. Do NOT copy-paste the head+tail above as if it were the whole payload.]\n\n", len(output)) + tail, path
+	ExitCode        int    `json:"exit_code"`
+	Stdout          string `json:"stdout"`
+	Stderr          string `json:"stderr"`
+	Command         string `json:"command"`
+	WorkingDir      string `json:"working_directory"`
+	ExecutionTimeMs int64  `json:"execution_time_ms"`
+	Error           string `json:"error,omitempty"`
 }
 
 // auditBashInvocation appends one JSON line describing a bash invocation
@@ -554,36 +504,6 @@ func auditWarnOnce(msg string) {
 		return
 	}
 	log.Printf("bash audit: %s", msg) // msg comes from our own audit code, not user input
-}
-
-func cleanupOldTruncationFiles() {
-	patterns := []string{
-		"chat-stdout-*.txt",
-		"chat-stderr-*.txt",
-		"chat-python-stdout-*.txt",
-		"chat-python-stderr-*.txt",
-		"chat-webfetch-*.txt",
-		"chat-output-*.txt",
-	}
-	now := time.Now()
-	for _, pattern := range patterns {
-		matches, err := filepath.Glob(filepath.Join(os.TempDir(), pattern))
-		if err != nil {
-			continue
-		}
-		for _, path := range matches {
-			info, statErr := os.Stat(path)
-			if statErr != nil {
-				continue
-			}
-			if now.Sub(info.ModTime()) <= truncationTempFileMaxAge {
-				continue
-			}
-			if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
-				log.Printf("Warning: failed to remove old truncation temp file %s: %v", path, removeErr)
-			}
-		}
-	}
 }
 
 // runBashWithSandbox is the production dispatch path. The caller MUST
@@ -668,25 +588,6 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 		} else {
 			result.Error = capNote
 		}
-	}
-
-	if len(out.Stdout) > bashOutputTruncateThreshold || len(out.Stderr) > bashOutputTruncateThreshold {
-		ti := &truncationInfo{}
-		if len(out.Stdout) > bashOutputTruncateThreshold {
-			truncated, path := truncateWithFile(out.Stdout, "stdout")
-			ti.StdoutTruncated = true
-			ti.StdoutFullPath = path
-			ti.StdoutFullBytes = len(out.Stdout)
-			result.Stdout = truncated
-		}
-		if len(out.Stderr) > bashOutputTruncateThreshold {
-			truncated, path := truncateWithFile(out.Stderr, "stderr")
-			ti.StderrTruncated = true
-			ti.StderrFullPath = path
-			ti.StderrFullBytes = len(out.Stderr)
-			result.Stderr = truncated
-		}
-		result.TruncationInfo = ti
 	}
 
 	// Audit is a core governance guarantee, so a dropped write flags the turn.

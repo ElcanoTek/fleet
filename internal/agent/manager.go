@@ -752,6 +752,36 @@ func (m *Manager) ReleaseChatSession(convID string) {
 
 // ── RunTurn ──
 
+func (m *Manager) configureTurnWorkspace(ctx context.Context, sb *sandbox.Sandbox, conversationID string) (context.Context, func(), error) {
+	fileOpRoot := m.config.WorkspaceRoot
+	var err error
+	if conversationID != "" {
+		fileOpRoot, err = tools.EnsureWorkspaceDir(conversationID)
+		if err != nil {
+			return ctx, func() {}, fmt.Errorf("prepare conversation workspace: %w", err)
+		}
+	}
+	if fileOpRoot == "" {
+		fileOpRoot = tools.WorkspaceDirForConversation(conversationID)
+	}
+	if err := sb.BindFileOpRoot(ctx, fileOpRoot); err != nil {
+		return ctx, func() {}, fmt.Errorf("bind conversation file capability: %w", err)
+	}
+	// Retained model-output artifacts are an optional recovery aid, never a
+	// reason to weaken the hard output cap or fall back to host I/O. Install the
+	// writer only after this turn owns its live sandbox and private conversation
+	// workspace; agentcore then uses it after governance for native and MCP tools.
+	if conversationID == "" {
+		return ctx, func() {}, nil
+	}
+	artifactCtx, releaseArtifacts, artifactErr := tools.WithSandboxModelOutputArtifacts(ctx, sb, fileOpRoot)
+	if artifactErr != nil {
+		log.Printf("conversation %s: governed tool-output artifact recovery unavailable: %v", conversationID, artifactErr)
+		return ctx, func() {}, nil
+	}
+	return artifactCtx, releaseArtifacts, nil
+}
+
 // turnSink adapts the httpapi EventSink to an agentcore.Observer, forwarding the
 // run's streamed events as SSE frames. Run-loop events arrive as
 // (eventType, payload) and pass straight through to Emit — the agentcore stream
@@ -833,23 +863,16 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return nil, err
 	}
 	defer sbCleanup()
-	fileOpRoot := m.config.WorkspaceRoot
-	if in.ConversationID != "" {
-		fileOpRoot, err = tools.EnsureWorkspaceDir(in.ConversationID)
-		if err != nil {
-			return nil, fmt.Errorf("prepare conversation workspace: %w", err)
-		}
+	ctx, releaseArtifacts, err := m.configureTurnWorkspace(ctx, sb, in.ConversationID)
+	if err != nil {
+		return nil, err
 	}
-	if fileOpRoot == "" {
-		fileOpRoot = tools.WorkspaceDirForConversation(in.ConversationID)
-	}
-	if err := sb.BindFileOpRoot(ctx, fileOpRoot); err != nil {
-		return nil, fmt.Errorf("bind conversation file capability: %w", err)
-	}
+	defer releaseArtifacts()
 	turnTools := tools.NewTurnTools(sb, tools.WithBrowser(tools.BrowserConfig{
 		Enabled:  m.config.BrowserEnabled,
 		Lockdown: in.Lockdown,
 	}))
+	turnTools.Tools = filterNativeToolsByOptIn(turnTools.Tools, in.OptionalMCPServersEnabled)
 
 	model, providerFallbacks, err := m.modelResolver().ResolveWithFallbacks(ctx, in.Model)
 	if err != nil {
