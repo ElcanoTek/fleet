@@ -7,13 +7,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/metrics"
@@ -56,6 +59,13 @@ type containerImpl struct {
 	statsCancel  context.CancelFunc
 	statsDone    chan struct{}
 	statsSummary ResourceUsageSummary
+
+	// execPoisoned latches when a cancelled/timed-out bash invocation's
+	// in-container process tree could NOT be proved dead (#796). A poisoned
+	// container refuses further work (Sandbox gates on it) and is retired by
+	// its owner — close() podman-kills the container, which is the one
+	// guaranteed way to stop whatever is still running inside.
+	execPoisoned atomic.Bool
 }
 
 // syncBuffer is a goroutine-safe wrapper around bytes.Buffer. We need
@@ -663,6 +673,11 @@ func (c *containerImpl) podmanArgs(rest []string) []string {
 	return out
 }
 
+// execReapTimeout bounds the synchronous container-kill on a cancelled/timed-out
+// bash call (#796). A daemon too wedged to answer in this window still leaves the
+// sandbox poisoned, so it is retired regardless.
+const execReapTimeout = 10 * time.Second
+
 func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResult, error) {
 	timeout := req.Timeout
 	if timeout <= 0 {
@@ -703,14 +718,73 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 	} else {
 		res.ExitCode = -1
 	}
-	if cmdCtx.Err() == context.DeadlineExceeded {
-		res.TimedOut = true
+	if cmdCtx.Err() != nil {
+		// Cancellation/timeout kills only the podman exec CLIENT; the shell
+		// and its descendants keep running inside the container (#796). The
+		// ONLY way to guarantee every straggler dies — a backgrounded
+		// grandchild, a `setsid` daemon that left the process group, a child
+		// that ignores SIGTERM — is to tear down the container's PID
+		// namespace: podman kill signals init, the kernel reaps the whole
+		// namespace. So we kill the container synchronously here (marker can
+		// no longer be written) AND poison the sandbox so the pool never
+		// lends this now-dead container to another turn. This is the issue's
+		// "poison and retire the entire sandbox" default, chosen over
+		// per-process targeting precisely because targeting cannot catch a
+		// process that escaped the group.
+		res.TimedOut = errors.Is(cmdCtx.Err(), context.DeadlineExceeded)
+		res.Cancelled = !res.TimedOut
+		// Pass the containerID captured for this call — killContainerNow must
+		// NOT re-acquire c.mu, which a concurrent long run_python cell holds
+		// for its whole duration; blocking the kill behind it would re-open
+		// the #796 window (the straggler runs while we wait for the lock).
+		res.CleanupConfirmed = c.killContainerNow(c.containerID)
+		res.SandboxRetired = true
+		c.execPoisoned.Store(true)
 		return res, nil
 	}
 	if execErr != nil && cmd.ProcessState == nil {
 		return res, fmt.Errorf("podman exec: %w", execErr)
 	}
 	return res, nil
+}
+
+// killContainerNow SIGKILLs the whole container synchronously on a cancelled or
+// timed-out bash call (#796), destroying its PID namespace and with it every
+// process the call spawned — including ones that escaped the process group. It
+// runs on a fresh context because the caller's is already cancelled, and takes
+// containerID as a parameter so it never touches c.mu — a concurrent
+// run_python cell holds that mutex for its whole runtime, and blocking the kill
+// behind it would leave the straggler running. Reports whether the kill was
+// confirmed; either way the caller poisons the sandbox so close()/retirement
+// removes the container even if this best-effort kill did not land. Idempotent
+// with close()'s own kill (a second kill of a gone container is harmless).
+func (c *containerImpl) killContainerNow(containerID string) bool {
+	if containerID == "" {
+		return true // already torn down by close()
+	}
+	killCtx, cancel := context.WithTimeout(context.Background(), execReapTimeout)
+	defer cancel()
+	args := c.podmanArgs([]string{"kill", "--signal", "KILL", containerID})
+	out, err := exec.CommandContext(killCtx, c.cfg.PodmanBinary, args...).CombinedOutput() //nolint:gosec // containerID is our generated name, not user input
+	if err != nil {
+		// A "no such container"/"already stopped" error means it is already
+		// gone — cleanup is effectively confirmed. Any other error (daemon
+		// wedged, timeout) leaves cleanup unconfirmed; the poison + retirement
+		// below is the backstop.
+		low := strings.ToLower(string(out))
+		if strings.Contains(low, "no such container") || strings.Contains(low, "not running") || strings.Contains(low, "no container") {
+			return true
+		}
+		log.Printf("sandbox: cancelled-bash container kill unconfirmed (%s): %v (%.200s)", containerID, err, string(out))
+		return false
+	}
+	return true
+}
+
+// poisoned reports whether a cancelled/timed-out invocation retired this
+// sandbox (#796); a poisoned container has been killed and must not be reused.
+func (c *containerImpl) poisoned() bool {
+	return c.execPoisoned.Load()
 }
 
 func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {

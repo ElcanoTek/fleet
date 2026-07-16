@@ -14,11 +14,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -82,6 +84,18 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
 	}
+	// Run bash as its own process-group leader and SIGKILL the WHOLE group on
+	// cancel/timeout (#796): Go's default CommandContext kill signals only the
+	// direct child, so backgrounded grandchildren survived a cancelled call.
+	// The container backend holds the same invariant via its in-container
+	// killer; here we have direct process control.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return os.ErrProcessDone // group-killed above; nothing more to signal
+	}
 	// Without WaitDelay, cmd.Run blocks until the stdout/stderr pipes
 	// close — a background grandchild (e.g. `server &`) holding them
 	// open would hang the agent forever, even after the timeout killed
@@ -108,8 +122,19 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 	} else {
 		res.ExitCode = -1
 	}
-	if cmdCtx.Err() == context.DeadlineExceeded {
-		res.TimedOut = true
+	if cmdCtx.Err() != nil {
+		// The cmd.Cancel above SIGKILLed the whole process group, so the
+		// common case (foreground shell + its group) is dead. The host
+		// backend has NO PID namespace to tear down, so a process that
+		// called setsid to leave the group can still survive — but this
+		// backend is the test/dev-only unsandboxed executor (build tag
+		// fleet_host_executor) and is explicitly NOT a security boundary
+		// (see the type doc), so it makes the best-effort group kill and
+		// does not attempt the container backend's namespace-level
+		// guarantee. Production always runs the container backend (#796).
+		res.TimedOut = errors.Is(cmdCtx.Err(), context.DeadlineExceeded)
+		res.Cancelled = !res.TimedOut
+		res.CleanupConfirmed = true
 		return res, nil
 	}
 	if execErr != nil && cmd.ProcessState == nil {
@@ -118,6 +143,11 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 	}
 	return res, nil
 }
+
+// poisoned always reports false for the host backend (#796): there is no
+// container to retire, and this test/dev-only executor is not a hardened
+// boundary. Production uses the container backend, which does poison+retire.
+func (h *hostImpl) poisoned() bool { return false }
 
 func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {
 	if h.bridgeScript == nil {

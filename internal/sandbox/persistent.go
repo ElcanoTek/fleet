@@ -59,6 +59,16 @@ func (p *Pool) TakePersistent(convID string) (*Sandbox, func(), error) {
 		e.lastUsed = p.now()
 		p.persistentMu.Unlock()
 
+		// A poisoned sandbox (#796: a cancelled/timed-out bash whose
+		// in-container cleanup could not be proved) must never serve another
+		// turn — retire it and build a fresh one. Checked before the liveness
+		// probe: the probe itself would refuse (ErrPoisoned) anyway, but the
+		// explicit branch keeps the log honest about WHY it was recreated.
+		if e.sb.Poisoned() {
+			log.Printf("sandbox: persistent sandbox poisoned by a cancelled command; retiring and recreating")
+			p.retireDead(e)
+			continue
+		}
 		if p.sandboxAlive(e.sb) {
 			return e.sb, p.borrow(e), nil
 		}
@@ -103,7 +113,16 @@ func (p *Pool) TakePersistent(convID string) (*Sandbox, func(), error) {
 // container was retired). The last release of a closeRequested entry closes it.
 func (p *Pool) borrow(e *persistentEntry) func() {
 	return func() {
+		// Retire a sandbox this turn poisoned (#796) as soon as the last
+		// borrow releases: closing podman-kills the container, which is the
+		// guaranteed stop for whatever the cancelled command left running.
+		// Marking closeRequested (rather than closing inline) preserves the
+		// existing last-release ordering when another turn still holds it.
+		poisoned := e.sb.Poisoned()
 		p.persistentMu.Lock()
+		if poisoned {
+			e.closeRequested = true
+		}
 		e.inUse--
 		e.lastUsed = p.now()
 		shouldClose := e.inUse <= 0 && e.closeRequested

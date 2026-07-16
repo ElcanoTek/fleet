@@ -197,6 +197,17 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Cancelled or timed-out bash no longer keeps running inside the sandbox**
+  (#796). Cancellation used to kill only the host-side `podman exec` client;
+  the in-container process tree survived — durable in persistent-REPL mode,
+  where the next turn could share the container with a stopped turn's
+  stragglers still mutating files or completing external side effects. On
+  cancel/timeout the container is now SIGKILLed synchronously — tearing down
+  its PID namespace kills every descendant, including a `setsid` daemon or
+  backgrounded grandchild that escaped the process group — and the sandbox is
+  poisoned so the persistent pool retires it and the next turn gets a fresh
+  container. The tool result distinguishes timeout from cancellation and says
+  when the sandbox was reset.
 - **Enforcement rounds no longer restart the task from scratch.** When the
   policy blocked a finish (audit not confirmed, critical actions pending),
   the next round's input carried only the original prompt plus the nudge —

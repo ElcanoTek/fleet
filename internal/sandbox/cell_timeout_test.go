@@ -23,7 +23,8 @@ func (r *recordingImpl) runPython(_ context.Context, req PythonRequest) (PythonR
 func (r *recordingImpl) resourceUsage() (ResourceUsageSummary, bool) {
 	return ResourceUsageSummary{}, false
 }
-func (r *recordingImpl) close() {}
+func (r *recordingImpl) poisoned() bool { return false }
+func (r *recordingImpl) close()         {}
 
 func TestRunPython_CellTimeoutClamp(t *testing.T) {
 	cases := []struct {

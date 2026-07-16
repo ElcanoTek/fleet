@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
 func parseBashResult(t *testing.T, raw string) bashResult {
@@ -563,6 +565,24 @@ func TestBashToolContextCancellation(t *testing.T) {
 	// Should show timeout error since parent context expired
 	if result.Error == "" {
 		t.Error("Expected error field to be set on context cancellation")
+	}
+}
+
+func TestBashCancellationMessageReportsRetirement(t *testing.T) {
+	msg := bashCancellationMessage(sandbox.BashResult{
+		TimedOut:         true,
+		CleanupConfirmed: true,
+		SandboxRetired:   true,
+	}, 12)
+	for _, want := range []string{
+		"timed out after 12 seconds",
+		"child processes were killed",
+		"sandbox is being retired",
+		"persistent kernel/container state will be reset",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q does not contain %q", msg, want)
+		}
 	}
 }
 
