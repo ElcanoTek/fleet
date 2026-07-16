@@ -674,17 +674,6 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 
 	session, runErr := p.runner.Run(runCtx, task)
 
-	if runErr != nil && !transientAgentFailure(runErr) {
-		observability.CaptureException(taskCtx, runErr, func(s *sentry.Scope) {
-			s.SetTag("task_id", task.ID.String())
-			s.SetTag("model", model)
-			s.SetTag("flavor", "native-inprocess")
-			s.SetContext("task", sentry.Context{
-				"attempt": task.AttemptCount,
-			})
-		})
-	}
-
 	// Operator stop (#508): consume the attribution marker StopTask recorded
 	// BEFORE classifying the outcome. This must come first — a cancelled
 	// agentcore run returns a nil error with a partial session (Result.Cancelled
@@ -696,6 +685,22 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	pauseQuestion, wasPaused := p.pauseRequested[task.ID]
 	delete(p.pauseRequested, task.ID)
 	p.mu.Unlock()
+
+	var outputJSON json.RawMessage
+	if runEligibleForStructuredCommit(runErr, wasPaused, wasStopped, taskCtx.Err()) {
+		outputJSON, runErr = validateStructuredRunOutput(task, session)
+	}
+
+	if reportableRunFailure(runErr, wasPaused, wasStopped) {
+		observability.CaptureException(taskCtx, runErr, func(s *sentry.Scope) {
+			s.SetTag("task_id", task.ID.String())
+			s.SetTag("model", model)
+			s.SetTag("flavor", "native-inprocess")
+			s.SetContext("task", sentry.Context{
+				"attempt": task.AttemptCount,
+			})
+		})
+	}
 
 	// Emit a terminal lifecycle status (the always-last frame). The deferred release
 	// seals the buffer so attached clients see EOF; the registry retains it briefly.
@@ -794,87 +799,40 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		if landed {
 			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
 		}
-	case runErr != nil && task.RetryPolicy.ShouldRetryClass(classifyFailure(runErr)) && task.AttemptCount < task.MaxRetries:
-		// Retryable failure class with retries left: re-queue the SAME task for
-		// another whole-task attempt after a backoff, instead of failing terminally.
-		// The next attempt re-binds MCP + runs the SAME governed loop via the normal
-		// claim path. (AttemptCount/MaxRetries: MaxRetries is ADDITIONAL attempts, so
-		// the task runs up to MaxRetries+1 times.) Which classes retry, and the
-		// backoff curve, come from task.RetryPolicy (nil = legacy: transient only,
-		// 30s→10m exponential) — see #201.
-		class := classifyFailure(runErr)
-		backoff := retryBackoff(task.AttemptCount, task.RetryPolicy)
-		when := time.Now().UTC().Add(backoff)
-		msg := fmt.Sprintf("Task attempt %d failed (%s); retrying in %s: %v",
-			task.AttemptCount+1, class, backoff.Round(time.Second), runErr)
-		// The pending Q&A (#582) is deliberately NOT cleared on a successful
-		// requeue: the retried claim re-reads pending_answer so the human's
-		// answer is injected into every attempt of the resumed run.
-		if _, err := p.store.RequeueTaskForRetryWithContext(context.Background(), task.ID, p.leaseOwner, when, msg); err != nil {
-			// Could not re-queue (e.g. lease lost): fall back to a terminal error so
-			// the task never silently strands as running.
-			log.Printf("runner: failed to re-queue task %s for retry: %v; marking error", task.ID, err)
-			p.clearPendingQA(task)
-			if _, rerr := p.reportStatus(task.ID, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
-				log.Printf("runner: failed to report error for task %s: %v", task.ID, rerr)
-			} else {
-				// The fallback DID land a terminal error: fire the failure
-				// notification (#208) and the post-failure diagnosis (#317)
-				// exactly like the other terminal-failure branches (#580).
-				p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
-				p.maybeAnalyzeFailure(task, session, runErr)
-			}
-		} else {
-			log.Printf("runner: task %s attempt %d failed (transient); re-queued for retry at %s",
-				task.ID, task.AttemptCount+1, when.Format(time.RFC3339))
-		}
-		p.submitLog(task, session, msg)
-	case runErr != nil && task.RetryPolicy.ShouldRetryClass(classifyFailure(runErr)):
-		// Transient failure class, but retries are exhausted (the requeue case above
-		// did not match because AttemptCount >= MaxRetries): route to the dead-letter
-		// queue (#253) instead of bare error, so the exhausted task is reviewable and
-		// replayable rather than indistinguishable from a one-off per-attempt error.
-		reason := fmt.Sprintf("retry budget exhausted after %d attempt(s): %v", task.AttemptCount+1, runErr)
-		p.clearPendingQA(task)
-		if p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", start) {
-			// Terminal failure (quarantined): fire the outbound notification (#208)
-			// and the post-failure LLM diagnosis (#317), both off-thread — only
-			// when a terminal state actually landed (#580).
-			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
-			p.maybeAnalyzeFailure(task, session, runErr)
-		}
 	case runErr != nil:
-		// Non-retryable (deterministic) failure: there is no point retrying, so route
-		// straight to the dead-letter queue (#253). This replaces the prior bare-error
-		// terminal write — a deterministic config/validation failure now quarantines
-		// for review rather than silently erroring.
-		reason := "non-retryable failure: " + runErr.Error()
-		p.clearPendingQA(task)
-		if p.sendToDeadLetter(task, session, runErr, reason, "non_retryable", start) {
-			// Terminal failure (quarantined): fire the outbound notification (#208)
-			// and the post-failure LLM diagnosis (#317), both off-thread — only
-			// when a terminal state actually landed (#580).
-			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
-			p.maybeAnalyzeFailure(task, session, runErr)
-		}
+		p.handleRunFailure(task, session, runErr, start)
 	default:
-		// Structured-output mode (#244): if the task declared an output_schema,
-		// validate the agent's final answer against it and persist the validated
-		// JSON BEFORE the terminal success (which clears the lease). Best-effort —
-		// a missing/non-conforming result leaves output_json NULL and the run still
-		// succeeds (the free-form session log retains the text); the
-		// GET /tasks/{id}/output endpoint then 404s.
-		if len(task.OutputSchema) > 0 {
-			p.recordStructuredOutput(task, session)
-		}
 		// Persist the published-artifact manifest (#204) under the held lease,
 		// before the terminal success clears it. No-op when nothing was published.
 		p.recordArtifacts(task.ID, artifactColl.Marshal())
 		p.clearPendingQA(task)
-		landed := true
-		if _, err := p.reportStatus(task.ID, models.TaskStatusSuccess, "Task completed successfully"); err != nil {
-			landed = false
-			log.Printf("runner: failed to report success for task %s: %v; suppressing success side effects", task.ID, err)
+		landedTask, err := p.reportSuccess(task.ID, outputJSON)
+		if err != nil {
+			log.Printf("runner: failed to commit success for task %s: %v; suppressing success side effects", task.ID, err)
+			// A failed commit can be ambiguous. Re-read before classification: if
+			// success+output is visible, the transaction landed and is safe to
+			// notify; if another terminal state won, this stale run does nothing.
+			current, readErr := p.store.GetTask(task.ID)
+			switch {
+			case readErr == nil && current != nil && current.Status == models.TaskStatusSuccess &&
+				(len(task.OutputSchema) == 0 || len(current.OutputJSON) > 0):
+				landedTask = current
+			case readErr == nil && current != nil && current.Status.IsTerminal():
+				return
+			default:
+				// Only a declared structured contract gives this write failure the
+				// structured-output persistence class. Preserve the historical
+				// free-form behavior: a failed terminal status write suppresses
+				// success side effects but is not reclassified as an output failure.
+				if len(task.OutputSchema) == 0 {
+					p.submitLog(task, session, err.Error())
+					return
+				}
+				persistErr := fmt.Errorf("%w: commit validated output and success under lease: %w", agentcore.ErrStructuredOutputPersistence, err)
+				p.submitLog(task, session, persistErr.Error())
+				p.handleRunFailure(task, session, persistErr, start)
+				return
+			}
 		}
 		p.submitLog(task, session, "")
 		log.Printf("runner: task %s completed in %v", task.ID, time.Since(start).Round(time.Second))
@@ -883,7 +841,8 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 		// recovery re-queue), the DB does not record this run as a success — a
 		// "success" notification or an external email reply would be spurious,
 		// and the re-queued run's own reply would make it a duplicate.
-		if landed {
+		if landedTask != nil {
+			task = landedTask
 			// Terminal success: fire the outbound notification off-thread (#208).
 			p.notifyTerminal(task, notify.StatusSuccess, session, time.Since(start))
 			// If this run answered an inbound email (#511), reply to the sender with
@@ -891,6 +850,33 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 			p.maybeReplyToEmailEvent(task, session)
 		}
 	}
+}
+
+func runEligibleForStructuredCommit(runErr error, wasPaused, wasStopped bool, contextErr error) bool {
+	return runErr == nil && !wasPaused && !wasStopped && contextErr == nil
+}
+
+func reportableRunFailure(runErr error, wasPaused, wasStopped bool) bool {
+	return runErr != nil && !wasPaused && !wasStopped && !transientAgentFailure(runErr)
+}
+
+// validateStructuredRunOutput is defense in depth around TaskRunner
+// implementations: production already returns a validated terminal value from
+// agentcore.Run, but a custom runner cannot bypass the persisted contract and
+// manufacture success. Empty schemas preserve free-form behavior.
+func validateStructuredRunOutput(task *models.Task, session *models.LogSession) (json.RawMessage, error) {
+	if task == nil || len(task.OutputSchema) == 0 {
+		return nil, nil
+	}
+	finalText := finalAssistantText(session)
+	if strings.TrimSpace(finalText) == "" {
+		return nil, fmt.Errorf("%w: task produced no terminal assistant output", agentcore.ErrStructuredOutputMissing)
+	}
+	out, err := structuredoutput.ValidateOutput(finalText, task.OutputSchema)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", agentcore.ErrStructuredOutputInvalid, err)
+	}
+	return out, nil
 }
 
 // withWallDeadline derives the per-run wall-clock deadline context (#724) from
@@ -961,8 +947,59 @@ func classifyFailure(err error) string {
 		return models.FailureCostCeiling
 	case errors.Is(err, agentcore.ErrContextBudgetExhausted):
 		return models.FailureContextBudget
+	case errors.Is(err, agentcore.ErrStructuredOutputFormat):
+		return models.FailureOutputFormat
+	case errors.Is(err, agentcore.ErrStructuredOutputPersistence):
+		return models.FailureOutputPersist
 	default:
 		return models.FailureTerminal
+	}
+}
+
+// handleRunFailure is the single retry/DLQ classifier for both agent failures
+// and the post-run atomic output+success commit. Structured formatting and
+// persistence have separate explicit classes and are non-retryable by default;
+// an operator may opt either into retry_on with the same whole-task side-effect
+// caveat as every other explicit retry class.
+func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, runErr error, start time.Time) {
+	class := classifyFailure(runErr)
+	if task.RetryPolicy.ShouldRetryClass(class) && task.AttemptCount < task.MaxRetries {
+		backoff := retryBackoff(task.AttemptCount, task.RetryPolicy)
+		when := time.Now().UTC().Add(backoff)
+		msg := fmt.Sprintf("Task attempt %d failed (%s); retrying in %s: %v",
+			task.AttemptCount+1, class, backoff.Round(time.Second), runErr)
+		// Pending Q&A deliberately survives a successful requeue (#582).
+		if _, err := p.store.RequeueTaskForRetryWithContext(context.Background(), task.ID, p.leaseOwner, when, msg); err != nil {
+			log.Printf("runner: failed to re-queue task %s for retry: %v; marking error", task.ID, err)
+			p.clearPendingQA(task)
+			if _, rerr := p.reportStatus(task.ID, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
+				log.Printf("runner: failed to report error for task %s: %v", task.ID, rerr)
+			} else {
+				p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+				p.maybeAnalyzeFailure(task, session, runErr)
+			}
+		} else {
+			log.Printf("runner: task %s attempt %d failed (%s); re-queued for retry at %s",
+				task.ID, task.AttemptCount+1, class, when.Format(time.RFC3339))
+		}
+		p.submitLog(task, session, msg)
+		return
+	}
+
+	p.clearPendingQA(task)
+	if task.RetryPolicy.ShouldRetryClass(class) {
+		reason := fmt.Sprintf("retry budget exhausted after %d attempt(s) (%s): %v", task.AttemptCount+1, class, runErr)
+		if p.sendToDeadLetter(task, session, runErr, reason, "retry_exhausted", start) {
+			p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+			p.maybeAnalyzeFailure(task, session, runErr)
+		}
+		return
+	}
+
+	reason := fmt.Sprintf("non-retryable failure (%s): %v", class, runErr)
+	if p.sendToDeadLetter(task, session, runErr, reason, class, start) {
+		p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
+		p.maybeAnalyzeFailure(task, session, runErr)
 	}
 }
 
@@ -1055,6 +1092,19 @@ func (p *Pool) reportStatus(taskID uuid.UUID, status models.TaskStatus, message 
 	})
 }
 
+// reportSuccess atomically commits the terminal lifecycle transition together
+// with validated output_json. Storage independently validates the effective
+// value against output_schema, so success can never become visible first.
+func (p *Pool) reportSuccess(taskID uuid.UUID, output json.RawMessage) (*models.Task, error) {
+	msg := "Task completed successfully"
+	return p.store.UpdateTaskStatusAtomicWithContext(context.Background(), taskID, p.leaseOwner, &models.StatusUpdate{
+		TaskID:     taskID,
+		Status:     models.TaskStatusSuccess,
+		Message:    &msg,
+		OutputJSON: output,
+	})
+}
+
 // reportWorkspacePath persists the per-run workspace path (#287) on the task row
 // under our held lease. It rides on a TaskStatusRunning update (the task IS
 // running when the scheduled runner reports its workspace) so the atomic
@@ -1071,32 +1121,6 @@ func (p *Pool) reportWorkspacePath(taskID uuid.UUID, path string) {
 		WorkspacePath: &path,
 	}); err != nil {
 		log.Printf("runner: failed to record workspace path for task %s: %v", taskID, err)
-	}
-}
-
-// recordStructuredOutput validates the agent's final answer against the task's
-// declared output_schema (#244) and persists the validated JSON to output_json
-// under the held lease, riding a TaskStatusRunning update exactly like
-// reportWorkspacePath. Best-effort: anything that goes wrong (no final text, a
-// non-conforming answer, a persist failure) is logged and swallowed so the run
-// still completes successfully — output_json simply stays NULL.
-func (p *Pool) recordStructuredOutput(task *models.Task, session *models.LogSession) {
-	finalText := finalAssistantText(session)
-	if strings.TrimSpace(finalText) == "" {
-		log.Printf("runner: task %s declared output_schema but produced no final text; output_json left null", task.ID)
-		return
-	}
-	out, err := structuredoutput.ValidateOutput(finalText, task.OutputSchema)
-	if err != nil {
-		log.Printf("runner: task %s structured output did not validate: %v; output_json left null", task.ID, err)
-		return
-	}
-	if _, err := p.store.UpdateTaskStatusAtomicWithContext(context.Background(), task.ID, p.leaseOwner, &models.StatusUpdate{
-		TaskID:     task.ID,
-		Status:     models.TaskStatusRunning,
-		OutputJSON: out,
-	}); err != nil {
-		log.Printf("runner: task %s failed to persist output_json: %v", task.ID, err)
 	}
 }
 

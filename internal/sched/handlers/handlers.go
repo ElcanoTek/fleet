@@ -1226,9 +1226,9 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 // GetTaskOutput handles GET /tasks/{task_id}/output (#244): the validated
 // structured JSON result of a structured-output task, returned raw with
 // Content-Type application/json (no envelope) for direct programmatic
-// consumption. 404 when the task has no output_json (no output_schema was
-// declared, or the agent's answer failed validation); 409 while the task has not
-// yet reached a terminal state (the result isn't ready — poll again).
+// consumption. A successful task that declared output_schema always has this
+// value. 404 means the task did not declare a schema; 409 means the value is not
+// ready, the task failed its contract, or a legacy row violates the invariant.
 func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 	p := h.principalFromRequest(r)
 	if !p.hasPermission(models.PermissionViewTasks) {
@@ -1256,14 +1256,33 @@ func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if len(task.OutputJSON) == 0 {
-		// Distinguish "not ready yet" (still pending/running) from "never will be"
-		// (terminal with no structured output) so a poller knows whether to retry.
+	// Never expose a stale candidate from a failed/replayed/active row. A result
+	// becomes public only with the terminal success that committed it.
+	if task.Status != models.TaskStatusSuccess {
 		if !task.Status.IsTerminal() {
 			writeError(w, http.StatusConflict, "Task has not finished; structured output is not yet available")
 			return
 		}
-		writeError(w, http.StatusNotFound, "Task has no structured output (no output_schema declared, or the result failed schema validation)")
+		if len(task.OutputSchema) > 0 {
+			writeError(w, http.StatusConflict, "Task did not complete successfully; declared structured output is unavailable")
+			return
+		}
+		writeError(w, http.StatusNotFound, "Task did not declare output_schema")
+		return
+	}
+	if len(task.OutputSchema) == 0 {
+		writeError(w, http.StatusNotFound, "Task did not declare output_schema")
+		return
+	}
+	if len(task.OutputJSON) == 0 {
+		// Defensive handling for legacy rows created before the fail-closed
+		// storage invariant: this is a contract violation, not a missing optional
+		// resource, and must never masquerade as a 404.
+		writeError(w, http.StatusConflict, "Structured output contract violated: successful task has no output_json")
+		return
+	}
+	if _, err := structuredoutput.ValidateOutput(string(task.OutputJSON), task.OutputSchema); err != nil {
+		writeError(w, http.StatusConflict, "Structured output contract violated: stored output_json is invalid")
 		return
 	}
 

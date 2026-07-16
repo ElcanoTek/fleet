@@ -30,6 +30,46 @@ func TestValidateSchema(t *testing.T) {
 	}
 }
 
+func TestValidateSchema_ComplexityLimits(t *testing.T) {
+	t.Run("bytes", func(t *testing.T) {
+		raw := json.RawMessage(`{"type":"object","description":"` + strings.Repeat("x", MaxSchemaBytes) + `"}`)
+		if err := ValidateSchema(raw); err == nil || !strings.Contains(err.Error(), "maximum") {
+			t.Fatalf("oversized schema error = %v", err)
+		}
+	})
+
+	t.Run("depth", func(t *testing.T) {
+		var nested any = map[string]any{"type": "string"}
+		for range MaxSchemaDepth {
+			nested = map[string]any{"allOf": []any{nested}}
+		}
+		raw, err := json.Marshal(nested)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateSchema(raw); err == nil || !strings.Contains(err.Error(), "depth") {
+			t.Fatalf("over-deep schema error = %v", err)
+		}
+	})
+
+	t.Run("nodes", func(t *testing.T) {
+		values := make([]any, MaxSchemaNodes)
+		for i := range values {
+			values[i] = i
+		}
+		raw, err := json.Marshal(map[string]any{"enum": values})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) >= MaxSchemaBytes {
+			t.Fatalf("node fixture unexpectedly hit byte limit first: %d", len(raw))
+		}
+		if err := ValidateSchema(raw); err == nil || !strings.Contains(err.Error(), "nodes") {
+			t.Fatalf("over-complex schema error = %v", err)
+		}
+	})
+}
+
 // TestValidateSchema_RejectsExternalRef (#585): an untrusted output_schema with
 // an external $ref must be rejected by the compiler's loader — WITHOUT the host
 // opening the target. The proof is in the error: it is our "must be

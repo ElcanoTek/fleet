@@ -301,6 +301,13 @@ prior versions are listed because none have shipped.
   poisoned so the persistent pool retires it and the next turn gets a fresh
   container. The tool result distinguishes timeout from cancellation and says
   when the sandbox was reset.
+- **Declared structured output now fails closed.** A scheduled task with
+  `output_schema` can reach success only when schema-valid `output_json` is
+  committed in the same lease-checked transaction. The active OpenRouter model
+  uses strict native schema mode; other providers use a forced terminal schema
+  tool with two correction attempts and no ordinary tools. Format and
+  persistence failures have distinct retry/DLQ classes, and success
+  notifications/recurrence happen only after the output is durable.
 - **Enforcement rounds no longer restart the task from scratch.** When the
   policy blocked a finish (audit not confirmed, critical actions pending),
   the next round's input carried only the original prompt plus the nudge —

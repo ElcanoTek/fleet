@@ -293,15 +293,18 @@ func (l *TaskSandboxLimits) IsZero() bool {
 // distinguishable; everything else is FailureTerminal. (Finer classes —
 // timeout / governance / validation — need new agentcore sentinels: a follow-up.)
 const (
-	FailureTransient     = "transient"      // retry budget / stream blip — a fresh run may succeed
-	FailureCostCeiling   = "cost_ceiling"   // cost/token ceiling hit — will recur; default no-retry
-	FailureContextBudget = "context_budget" // context exhausted after compaction — default no-retry
-	FailureTerminal      = "terminal"       // unknown / deterministic — never retried
+	FailureTransient     = "transient"                     // retry budget / stream blip — a fresh run may succeed
+	FailureCostCeiling   = "cost_ceiling"                  // cost/token ceiling hit — will recur; default no-retry
+	FailureContextBudget = "context_budget"                // context exhausted after compaction — default no-retry
+	FailureOutputFormat  = "structured_output_format"      // model failed the declared machine-output contract
+	FailureOutputPersist = "structured_output_persistence" // validated output could not commit under lease
+	FailureTerminal      = "terminal"                      // unknown / deterministic — never retried
 )
 
 // retryFailureClasses is the set a retry_on/no_retry_on list may name.
 var retryFailureClasses = map[string]struct{}{
 	FailureTransient: {}, FailureCostCeiling: {}, FailureContextBudget: {}, FailureTerminal: {},
+	FailureOutputFormat: {}, FailureOutputPersist: {},
 }
 
 // Backoff strategies + defaults for RetryPolicy (#201).
@@ -349,7 +352,7 @@ func (rp *RetryPolicy) Validate() error {
 	for _, list := range [][]string{rp.RetryOn, rp.NoRetryOn} {
 		for _, c := range list {
 			if _, ok := retryFailureClasses[c]; !ok {
-				return fmt.Errorf("unknown failure class %q (allowed: transient, cost_ceiling, context_budget, terminal)", c)
+				return fmt.Errorf("unknown failure class %q (allowed: transient, cost_ceiling, context_budget, structured_output_format, structured_output_persistence, terminal)", c)
 			}
 		}
 	}
@@ -812,11 +815,11 @@ type TaskCreate struct {
 	// ceilings for this task's container (#205). nil = use the global defaults.
 	SandboxLimits *TaskSandboxLimits `json:"sandbox_limits,omitempty"`
 	// OutputSchema, when non-nil, enables structured-output mode (#244): it is a
-	// draft-07 JSON Schema object the agent's final answer must conform to. The
-	// scheduled driver appends the schema to the system prompt and, after the run,
-	// validates the final text as JSON against it (storing the result in the
-	// task's OutputJSON). Validated at create time (must compile). nil = free-form
-	// text mode (the default).
+	// bounded draft-07 JSON Schema object the task's terminal result must conform
+	// to. The governed run uses native strict generation when supported or one
+	// forced terminal schema tool otherwise, validates locally, then commits the
+	// JSON atomically with success. Any exhausted format/persistence failure is a
+	// non-success outcome. nil = free-form text mode (the default).
 	OutputSchema           json.RawMessage `json:"output_schema,omitempty"`
 	Priority               int             `json:"priority"`
 	InstructionSelfImprove bool            `json:"instruction_self_improve,omitempty"`
@@ -974,9 +977,10 @@ type Task struct {
 	// OutputSchema is the draft-07 JSON Schema enabling structured-output mode
 	// (#244). nil = free-form text mode. See TaskCreate.OutputSchema.
 	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
-	// OutputJSON is the validated structured result when OutputSchema was set and
-	// the agent produced conforming JSON (#244). nil when no schema was declared
-	// or validation failed (the free-form Result still holds the text either way).
+	// OutputJSON is the validated structured result when OutputSchema was set
+	// (#244). It is non-empty for every successful structured task and committed
+	// under the same lease/transaction as terminal success. nil when no schema was
+	// declared or the structured task did not complete successfully.
 	OutputJSON json.RawMessage `json:"output_json,omitempty"`
 	// Artifacts is the manifest of named output files the run's agent explicitly
 	// PUBLISHED via the publish_artifact tool (#204) — a curated list of

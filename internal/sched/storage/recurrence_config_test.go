@@ -71,7 +71,10 @@ func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
 	if err != nil {
 		t.Fatalf("leaseTaskToOwner: %v", err)
 	}
-	if _, err := store.UpdateTaskStatusAtomic(assigned.ID, owner, &models.StatusUpdate{Status: models.TaskStatusSuccess, Message: strPtr("done")}); err != nil {
+	assertMissingStructuredOutputDoesNotRecur(t, store, assigned.ID, owner)
+	if _, err := store.UpdateTaskStatusAtomic(assigned.ID, owner, &models.StatusUpdate{
+		Status: models.TaskStatusSuccess, Message: strPtr("done"), OutputJSON: json.RawMessage(`{}`),
+	}); err != nil {
 		t.Fatalf("UpdateTaskStatusAtomic: %v", err)
 	}
 
@@ -125,6 +128,7 @@ func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
 	if len(next.OutputSchema) == 0 {
 		t.Error("output_schema was lost on the recurrence")
 	}
+	assertNoStructuredOutput(t, next)
 	if next.SandboxLimits == nil || next.SandboxLimits.MemoryMB != 512 || next.SandboxLimits.CPUs != 2 || next.SandboxLimits.Pids != 128 {
 		t.Errorf("sandbox_limits were lost/altered on the recurrence: %+v", next.SandboxLimits)
 	}
@@ -148,5 +152,28 @@ func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
 	}
 	if next.Description != "runbook" {
 		t.Errorf("description was lost on the recurrence: %q", next.Description)
+	}
+}
+
+func assertMissingStructuredOutputDoesNotRecur(t *testing.T, store *Storage, taskID, owner uuid.UUID) {
+	t.Helper()
+	if _, err := store.UpdateTaskStatusAtomic(taskID, owner, &models.StatusUpdate{
+		Status: models.TaskStatusSuccess, Message: strPtr("missing output"),
+	}); err == nil {
+		t.Fatal("structured recurrence succeeded without output_json")
+	}
+	tasks, err := store.GetAllTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("refused structured success spawned recurrence: got %d tasks", len(tasks))
+	}
+}
+
+func assertNoStructuredOutput(t *testing.T, task *models.Task) {
+	t.Helper()
+	if len(task.OutputJSON) != 0 {
+		t.Errorf("next occurrence inherited prior output_json: %s", task.OutputJSON)
 	}
 }
