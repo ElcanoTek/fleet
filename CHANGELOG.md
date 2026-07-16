@@ -197,6 +197,20 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Orchestrator (scheduled) runs no longer offer the interactive
+  staging-card tools** (`preview_email`, `schedule_task`,
+  `suggest_advanced_model`, `propose_memory`). Only the interactive chat
+  orchestration guard gives them behavior; headless, three of them are
+  mis-wiring tripwires whose non-nil error is fatal to the run — a scheduled
+  agent that finished its report and called `preview_email` to present it
+  dead-lettered the entire task. The docs always said these were
+  interactive-only; the scheduled roster now actually excludes them.
+- **`publish_artifact` works for non-worktree scheduled tasks.** It resolved
+  paths only via the worktree-isolation working dir, so every task without
+  worktree isolation got "no workspace is configured for this run" on every
+  publish attempt. The tool now falls back to the run's effective workspace
+  root (the same directory the workspace file browser serves); worktree runs
+  keep their narrower scoping.
 - **A transient mid-stream provider failure no longer dead-letters a whole
   run once any text has streamed** (ADR-0035). The ADR-0033 commitment guard
   suppressed the in-place stream-blip retry and the fallback chain after any

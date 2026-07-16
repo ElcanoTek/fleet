@@ -14,6 +14,37 @@ type TurnTools struct {
 	Cleanup func()
 }
 
+// interactiveOnlyToolNames lists the native tools whose ENTIRE behavior is an
+// interactive staging card: the orchestration guard in internal/agent
+// intercepts each call and stages an approval/preview/proposal for the human
+// at the keyboard. Their raw Run is either a deliberate mis-wiring tripwire
+// (preview_email, schedule_task, suggest_advanced_model return a NON-NIL Go
+// error — fatal to the whole agent loop) or a fake success that goes nowhere
+// (propose_memory). A headless scheduled run has neither the interceptor nor
+// a user to review a card, so these tools must not be offered there at all:
+// a scheduled model that called preview_email to present its report killed
+// its entire run as a non-retryable failure.
+var interactiveOnlyToolNames = map[string]bool{
+	"preview_email":              true,
+	ScheduleTaskToolName:         true,
+	SuggestAdvancedModelToolName: true,
+	"propose_memory":             true,
+}
+
+// ExcludeInteractiveOnly returns the tools minus the interactive-staging-card
+// set above. The scheduled driver applies it to the shared turn bundle so the
+// interactive roster (and its prompt-prefix byte stability) is untouched.
+func ExcludeInteractiveOnly(all []fantasy.AgentTool) []fantasy.AgentTool {
+	out := make([]fantasy.AgentTool, 0, len(all))
+	for _, t := range all {
+		if interactiveOnlyToolNames[t.Info().Name] {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 // DefaultTools returns the stateless native-tool set, plus bash and
 // run_python entries bound to a nil sandbox. Those two surface a
 // clear "no sandbox" error if ever invoked through this slice —
