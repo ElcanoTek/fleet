@@ -489,6 +489,7 @@ function ConversationKebab({
   onRename,
   onDownload,
   onPromote,
+  onSavePrompt,
   onSetLabels,
   onSetProject,
   onShare,
@@ -506,6 +507,7 @@ function ConversationKebab({
   onRename: () => void;
   onDownload: () => void;
   onPromote: () => void;
+  onSavePrompt: () => void;
   onSetLabels: (labels: string[]) => void;
   onSetProject: (projectID: string | null) => void;
   onShare: () => void;
@@ -665,6 +667,15 @@ function ConversationKebab({
           }}
         >
           Make recurring task…
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name="book" className="size-4" />}
+          onClick={() => {
+            onSavePrompt();
+            close();
+          }}
+        >
+          Save to prompt library…
         </MenuItem>
         {isShared ? (
           <>
@@ -975,6 +986,7 @@ export function ConversationSidebar({
   renameConversation,
   downloadConversation,
   promoteConversation,
+  savePromptFromConversation,
   setPendingDeleteConversation,
   setConversationLabels,
   shareConversation,
@@ -1047,6 +1059,7 @@ export function ConversationSidebar({
   ) => Promise<boolean>;
   downloadConversation: (conversation: ConversationSummary) => Promise<void>;
   promoteConversation: (conversation: ConversationSummary) => Promise<void>;
+  savePromptFromConversation: (conversation: ConversationSummary) => void;
   setPendingDeleteConversation: Dispatch<
     SetStateAction<PendingDeleteConversation | null>
   >;
@@ -1259,6 +1272,7 @@ export function ConversationSidebar({
       onRename={() => setEditingId(conversation.id)}
       onDownload={() => void downloadConversation(conversation)}
       onPromote={() => void promoteConversation(conversation)}
+      onSavePrompt={() => savePromptFromConversation(conversation)}
       onSetLabels={(labels) => setConversationLabels(conversation.id, labels)}
       onSetProject={(projectID) =>
         onMoveToProject(conversation.id, projectID ?? "")

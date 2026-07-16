@@ -1808,6 +1808,10 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		// Synthesize a recurring-task proposal from this chat + stage it as a
 		// schedule_task approval card (#455).
 		s.handlePromoteToTask(w, r, id, user)
+	case sub == "suggest-prompt" && r.Method == http.MethodPost:
+		// Distill this chat into a prompt-library draft the user reviews and
+		// saves client-side via the orchestrator's POST /prompts.
+		s.handleSuggestPrompt(w, r, id, user)
 	case sub == "share" && r.Method == http.MethodPost:
 		// Issue (or rotate) a public read-only share token (#226).
 		s.handleConversationShare(w, r, id, user)

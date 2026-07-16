@@ -19,6 +19,16 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Save a chat to the prompt library**: a per-conversation kebab action
+  ("Save to prompt library…") distills a conversation into a reusable
+  prompt-library draft. `POST /conversations/{id}/suggest-prompt` (chat server)
+  renders the user/assistant transcript and calls the host-side synthesizer
+  `SuggestLibraryPrompt` (`FLEET_LIBRARY_PROMPT_MODEL`, defaulting to the
+  metadata/title model) to write a clean, self-contained prompt plus a short
+  name and description. Nothing is persisted server-side: the client opens the
+  draft in an editable review dialog, and saving goes through the orchestrator's
+  existing `POST /prompts` (private by default, optionally workspace-shared), so
+  library permissions apply unchanged.
 - **Safer `edit_file`** (#787, `docs/FILE-EDIT-SAFETY.md`): `old_text` must now
   match exactly one location unless `replace_all` is set (an ambiguous match is
   rejected with the count instead of silently editing the first occurrence);

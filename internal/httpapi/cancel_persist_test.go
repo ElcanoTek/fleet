@@ -28,6 +28,9 @@ type fakeTurnEngine struct {
 
 	recurringProposal *agent.RecurringTaskProposal // returned by SuggestRecurringTask (#455 promote tests)
 	recurringErr      error
+
+	libraryDraft    *agent.LibraryPromptDraft // returned by SuggestLibraryPrompt (suggest-prompt tests)
+	libraryDraftErr error
 }
 
 func (f *fakeTurnEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
@@ -62,6 +65,9 @@ func (f *fakeTurnEngine) ExtractMemories(context.Context, string, string, []stri
 }
 func (f *fakeTurnEngine) SuggestRecurringTask(context.Context, string, []string) (*agent.RecurringTaskProposal, error) {
 	return f.recurringProposal, f.recurringErr
+}
+func (f *fakeTurnEngine) SuggestLibraryPrompt(context.Context, string) (*agent.LibraryPromptDraft, error) {
+	return f.libraryDraft, f.libraryDraftErr
 }
 func (f *fakeTurnEngine) MCPClient() *mcp.Client                       { return nil }
 func (f *fakeTurnEngine) SandboxPool() *sandbox.Pool                   { return nil }
