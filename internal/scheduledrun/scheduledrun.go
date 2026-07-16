@@ -596,9 +596,17 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 
 	turnTools := tools.NewTurnTools(sb)
 
+	// Drop the interactive staging-card tools (preview_email, schedule_task,
+	// suggest_advanced_model, propose_memory). Only the interactive
+	// orchestration guard gives them behavior; headless they are a tripwire
+	// that FAILS the whole run on first call (a model that finished a 16-minute
+	// report and called preview_email to present it dead-lettered the task).
+	// A scheduled task that needs to spawn tasks opts into create_task below.
+	scheduledTools := tools.ExcludeInteractiveOnly(turnTools.Tools)
+
 	// create_task (#277) is appended ONLY for a task that opted in. See
 	// maybeAppendCreateTaskTool for the gate rationale.
-	nativeTools := r.maybeAppendCreateTaskTool(turnTools.Tools, task)
+	nativeTools := r.maybeAppendCreateTaskTool(scheduledTools, task)
 
 	// #191 git-metadata tools (suggest_branch_name / suggest_commit_message /
 	// suggest_pr_description) are wired into the SCHEDULED native set only:
@@ -631,7 +639,10 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// unchanged. Scheduled-only and ungated — it only records files in the run's own
 	// workspace, granting no access the operator didn't already have.
 	if ac := ArtifactCollectorFromContext(ctx); ac != nil {
-		nativeTools = append(nativeTools, tools.NewPublishArtifactTool(ac))
+		// The workspace root is the non-worktree run's effective workspace (the
+		// dir the #287 file browser serves); a worktree run's forced working dir
+		// takes precedence inside the tool.
+		nativeTools = append(nativeTools, tools.NewPublishArtifactTool(ac, r.workspaceRoot()))
 	}
 
 	maxIter := r.cfg.LiveMaxIterations()
