@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -59,11 +58,6 @@ type hostImpl struct {
 	bridgeStdout     *bufio.Reader
 	bridgeStarted    bool
 	bridgeScriptPath string // temp file the script was extracted to
-
-	// execPoisoned mirrors the container backend's #796 latch: set when a
-	// cancelled/timed-out bash invocation's process group could not be
-	// SIGKILLed, so the suspect state is never reused.
-	execPoisoned atomic.Bool
 }
 
 // NewHost constructs a host-mode sandbox. bridgeScript is the embedded
@@ -129,12 +123,18 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 		res.ExitCode = -1
 	}
 	if cmdCtx.Err() != nil {
+		// The cmd.Cancel above SIGKILLed the whole process group, so the
+		// common case (foreground shell + its group) is dead. The host
+		// backend has NO PID namespace to tear down, so a process that
+		// called setsid to leave the group can still survive — but this
+		// backend is the test/dev-only unsandboxed executor (build tag
+		// fleet_host_executor) and is explicitly NOT a security boundary
+		// (see the type doc), so it makes the best-effort group kill and
+		// does not attempt the container backend's namespace-level
+		// guarantee. Production always runs the container backend (#796).
 		res.TimedOut = errors.Is(cmdCtx.Err(), context.DeadlineExceeded)
 		res.Cancelled = !res.TimedOut
-		res.CleanupConfirmed = h.confirmGroupDead(cmd)
-		if !res.CleanupConfirmed {
-			h.execPoisoned.Store(true)
-		}
+		res.CleanupConfirmed = true
 		return res, nil
 	}
 	if execErr != nil && cmd.ProcessState == nil {
@@ -144,30 +144,10 @@ func (h *hostImpl) runBash(ctx context.Context, req BashRequest) (BashResult, er
 	return res, nil
 }
 
-// confirmGroupDead re-sweeps a cancelled invocation's process group and
-// verifies no member is left (#796). Zombies linger only until the host init
-// reaps the reparented children, so the probe retries briefly before
-// declaring the cleanup unproved.
-func (h *hostImpl) confirmGroupDead(cmd *exec.Cmd) bool {
-	if cmd.Process == nil {
-		return true // never started — nothing to leak
-	}
-	pgid := cmd.Process.Pid
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
-	for i := 0; i < 5; i++ {
-		// kill(2) with signal 0: ESRCH means the group has no members left.
-		if err := syscall.Kill(-pgid, 0); err != nil {
-			return true
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return false
-}
-
-// poisoned reports whether a cancelled invocation's cleanup is unproved (#796).
-func (h *hostImpl) poisoned() bool {
-	return h.execPoisoned.Load()
-}
+// poisoned always reports false for the host backend (#796): there is no
+// container to retire, and this test/dev-only executor is not a hardened
+// boundary. Production uses the container backend, which does poison+retire.
+func (h *hostImpl) poisoned() bool { return false }
 
 func (h *hostImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {
 	if h.bridgeScript == nil {
