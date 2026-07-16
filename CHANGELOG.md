@@ -228,9 +228,10 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
-- **A panic in any tool no longer crashes the whole fleet process** (#795).
+- **A panic in any tool no longer crashes the whole fleet process**
+  ([ADR-0037](docs/adr/0037-agent-tool-panic-containment.md), #795).
   fantasy runs streamed tool calls in unsupervised goroutines with no
-  `recover`, so a panic in a tool (native/loader/pre-gated/MCP), a policy gate,
+  `recover`, so a panic in a tool (native/loader/MCP), a policy gate,
   an output guardrail, or an Observer callback would take the entire
   single-host process down — beyond the reach of the runner/httpapi
   goroutine-local recovers. Every tool fleet registers is now wrapped in an
@@ -238,8 +239,18 @@ prior versions are listed because none have shipped.
   error result (paired to the call so the run continues), is recorded to
   PanicCounts/Sentry/`panic_events` with tool + boundary attribution, and is
   surfaced to the model as a stable incident id with a "possibly executed"
-  warning (never the raw panic/stack). Observer panics degrade the event and
-  keep the run alive.
+  warning. Raw recovered values and stacks are discarded before telemetry;
+  only an opaque incident and value-free class are retained. Before-call,
+  execution, and output panics receive exactly one failed logical-tool policy record, including
+  deferred MCP. Observer panics are recorded and disabled, then surface as an
+  ordinary run error only after Fantasy's tool goroutines settle.
+  Tool-supplied Go errors are now flattened under the same boundary, screened
+  and bounded before Fantasy sees them, so credential-bearing or panicking
+  `Error()` methods cannot leak or break transcript pairing.
+  The unused arbitrary `PreGatedTools` bypass was removed because a black-box
+  tool that owned policy accounting internally made exactly-once recovery
+  impossible to prove. Fleet now owns policy accounting for every externally
+  supplied tool route.
 
 - **Cancelled or timed-out bash no longer keeps running inside the sandbox**
   (#796). Cancellation used to kill only the host-side `podman exec` client;

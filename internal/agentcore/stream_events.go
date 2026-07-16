@@ -1,13 +1,10 @@
 package agentcore
 
 import (
-	"runtime/debug"
 	"strings"
 	"sync"
 
 	"charm.land/fantasy"
-
-	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // The streaming bridge: forwards a round's fantasy streaming callbacks into the
@@ -85,7 +82,8 @@ const toolResultMaxStreamBytes = 4000
 // neutral RunEntry, so the loop ends with both a live-streamed UI and a
 // persistable history of the round's reasoning/text/tool work.
 type streamSink struct {
-	observer Observer
+	observer    Observer
+	attribution panicAttribution
 
 	mu sync.Mutex
 	// entries is the ordered accumulation of this run's reasoning / text /
@@ -104,29 +102,24 @@ type streamSink struct {
 	toolEvents int
 }
 
-func newStreamSink(obs Observer) *streamSink {
-	return &streamSink{
+func newStreamSink(obs Observer, attribution ...panicAttribution) *streamSink {
+	sink := &streamSink{
 		observer:      obs,
 		reasoningBufs: make(map[string]*strings.Builder),
 	}
+	if len(attribution) > 0 {
+		sink.attribution = attribution[0]
+	}
+	return sink
 }
 
-// emit forwards an event to the Observer when one is wired (nil-safe).
-//
-// A panic in the Observer is CONTAINED here (#795): these callbacks fire inside
-// fantasy's unsupervised tool-exec goroutines, where an escaping panic would
-// kill the process. Record-then-degrade — the event is dropped and the run
-// continues; observation is best-effort, tool execution is not.
+// emit forwards an event to the Observer when one is wired (nil-safe). Run
+// installs one panicContainedObserver around the seam before constructing a
+// streamSink, including non-stream persona/enforcement callbacks.
 func (s *streamSink) emit(eventType string, payload map[string]any) {
-	if s.observer == nil {
-		return
+	if s.observer != nil {
+		s.observer.Observe(eventType, payload)
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			safe.EmitPanic("agentcore.observer."+eventType, r, debug.Stack())
-		}
-	}()
-	s.observer.Observe(eventType, payload)
 }
 
 // onTextDelta forwards a text chunk to the Observer and accumulates it.
@@ -191,10 +184,12 @@ func (s *streamSink) onToolCall(id, name, input string) {
 
 // onToolResult forwards (truncated) + records (full) a tool result.
 func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
-	// Backstop redaction for the observer/SSE + recorded-entry path. The tool
-	// wrappers already redact resp.Content, but pre-gated tools register verbatim
-	// and reach here directly — so scrub again before anything is recorded,
-	// streamed to the browser, or persisted to turn_events.
+	// Every externally sourced result crosses its secret/PII/output boundary
+	// before the ToolResponse reaches Fantasy; disclosure-bridge corrections are
+	// Fleet-generated. Reapply only the deterministic secret scrubber as a final
+	// backstop for Fantasy-generated validation/not-found errors. Configurable PII
+	// and guardrail passes stay at the governed tool boundary, so a panic in one
+	// cannot recur here and drop the outer boundary's safe incident response.
 	text = toolRedactor().Redact(text)
 	s.mu.Lock()
 	s.toolEvents++

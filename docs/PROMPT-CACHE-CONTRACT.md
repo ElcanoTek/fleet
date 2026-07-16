@@ -32,7 +32,7 @@ turn (and one process) to the next for the same conversation/config.
 ### Tool definitions (agentcore-owned — guarded)
 
 - **Tool order.** `buildFantasyTools` appends to a slice in a fixed order: native
-  tools (in the order given) → loader tools → pre-gated tools → MCP tools **in
+  tools (in the order given) → loader tools → MCP tools **in
   catalog order** → optional `confirm_audit`. The MCP catalog must be a stable,
   ordered slice — never sourced from a Go `map` whose iteration order is random.
 - **Schema serialization.** A tool's `parameters` is a `map[string]any`.

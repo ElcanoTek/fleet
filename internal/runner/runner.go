@@ -546,9 +546,10 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			// whole single-host process. Registered last → runs first on unwind:
 			// mark the task errored (if still owned) so it isn't stuck running
 			// until lease expiry, then the cleanup defers free the slot. The
-			// Sentry capture ships a structured event with task_id / model /
-			// attempt tags so the issue is filterable in the Sentry UI (#193).
-			// observability.CapturePanic is a cheap no-op when FLEET_SENTRY_DSN
+			// Sentry capture ships only a value-free panic class with task_id /
+			// model / attempt tags. A recovered value may contain connector
+			// credentials, so it never crosses the telemetry seam (#193, #795).
+			// observability.CapturePanicClass is a cheap no-op when FLEET_SENTRY_DSN
 			// is unset (the SDK checks internally), so the default config pays
 			// nothing for the call.
 			defer safe.Recover("runner.worker", func(val any) {
@@ -561,7 +562,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 				if task.Model != nil {
 					model = *task.Model
 				}
-				observability.CapturePanic(ctx, val, func(s *sentry.Scope) {
+				observability.CapturePanicClass(ctx, safe.PanicClass(val), func(s *sentry.Scope) {
 					s.SetTag("task_id", task.ID.String())
 					s.SetTag("model", model)
 					s.SetTag("flavor", "native-inprocess")

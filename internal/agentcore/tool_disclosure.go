@@ -18,7 +18,7 @@ import (
 // exceed the disclosure threshold, the deferrable (MCP) tools are hidden behind
 // three bridge tools — tool_search → tool_describe → tool_call — backed by an
 // in-process BM25 index (internal/tools). Core tools (native, loader,
-// pre-gated, confirm_audit) are NEVER deferred, so bash/python/approvals/etc.
+// confirm_audit) are NEVER deferred, so bash/python/approvals/etc.
 // stay directly callable.
 //
 // A deferred call routes through the SAME *mcpTool wrapper a direct call would:

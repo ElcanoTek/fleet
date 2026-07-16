@@ -36,6 +36,9 @@ type TurnConfig struct {
 	// (built by replayHistory from the stored HistoryEntry rows).
 	Messages []fantasy.Message
 	Label    string
+	// ConversationID is operator-only panic attribution for the governed run.
+	// It is never added to the model prompt or tool arguments.
+	ConversationID string
 
 	Model          fantasy.LanguageModel
 	FallbackModel  fantasy.LanguageModel
@@ -167,6 +170,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	ApplyMCPOverlay(&deps, tc.MCPClient, tc.Overlay)
 
 	cfg := agentcore.RunConfig{
+		ConversationID:      tc.ConversationID,
 		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         tc.Temperature,
 		MaxCompletionTokens: tc.MaxTokens,
@@ -226,11 +230,10 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 	convo := append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(interactiveLeakedToolCallNudge))
 	agent := fantasy.NewAgent(tc.Model,
 		fantasy.WithSystemPrompt(in.SystemPrompt),
-		// Contain tool panics here too (#795): this retry agent registers the
-		// RAW per-turn native tools directly, bypassing buildFantasyTools' own
-		// containment, so wrap them or a panic in a leaked-call retry escapes
-		// fantasy's tool-exec goroutine and kills the process.
-		fantasy.WithTools(agentcore.ContainToolPanics(tc.NativeTools)...),
+		// Reuse agentcore.Run's final governed roster. This keeps the finalize
+		// retry inside the same policy/credential/panic boundaries as the main
+		// stream instead of re-registering raw driver tools.
+		fantasy.WithTools(in.Tools...),
 		fantasy.WithPrepareStep(chainPrepareSteps(
 			overflowTruncationStep(),
 			agentcore.PromptCachingStep(tc.Model.Model()),
@@ -250,6 +253,8 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 			}
 			return nil
 		},
+		OnToolCall:   in.OnToolCall,
+		OnToolResult: in.OnToolResult,
 		// Meter this recovery call into the run's accounting so its tokens/cost
 		// are not invisible to the cost chip (#83). Nil-safe.
 		OnStepFinish: func(step fantasy.StepResult) error {

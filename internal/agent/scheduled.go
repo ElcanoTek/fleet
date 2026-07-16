@@ -603,6 +603,10 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	}
 
 	allow, optional := a.mcpGates()
+	taskID := ""
+	if a.taskID != uuid.Nil {
+		taskID = a.taskID.String()
+	}
 
 	deps := agentcore.Deps{
 		Input: scheduledInput{systemPrompt: systemPrompt, task: task, label: a.logSession.Title},
@@ -633,6 +637,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	deps.Policy = policy
 
 	cfg := agentcore.RunConfig{
+		TaskID:              taskID,
 		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         temp,
 		MaxCompletionTokens: maxTokens,

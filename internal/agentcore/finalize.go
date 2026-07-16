@@ -16,11 +16,21 @@ import (
 // finish. The hook may produce recovered final text (e.g. after forcing a
 // summary out of a model that ended with tool calls and no prose).
 type FinalizeInput struct {
-	Mode         Mode
-	FinalText    string
-	Messages     []fantasy.Message
+	Mode      Mode
+	FinalText string
+	Messages  []fantasy.Message
+	// Tools is the already-governed final roster used by the main run. A finalize
+	// retry must reuse it rather than rebuilding raw driver tools outside policy,
+	// credential, output-screening, and panic boundaries.
+	Tools        []fantasy.AgentTool
 	Observer     Observer
 	SystemPrompt string
+	// OnToolCall/OnToolResult route a finalize retry's tool events back into the
+	// SAME run sink as the ordinary loop. A retry that executes (or contains a
+	// panic from) a tool must persist one call/result pair and participate in the
+	// run's side-effect gate; it cannot become an unaudited auxiliary loop.
+	OnToolCall   fantasy.OnToolCallFunc
+	OnToolResult fantasy.OnToolResultFunc
 	// RecordUsage meters a recovery model call's tokens/cost into the SAME run
 	// accounting the main loop uses. It is a capability closure over the run's
 	// orchestration state (the state itself never escapes Run), so a finalize
