@@ -44,6 +44,17 @@ def do_read(req):
             "size": total, "count": 0}
 
 def _atomic_write(path, data):
+    # Preserve an existing file's mode on overwrite/edit; default 0600 only when
+    # creating a new file. os.replace() gives the target a NEW inode, so without
+    # this the file's mode would reset to the mkstemp default (0600) on every
+    # overwrite — dropping e.g. a +x bit an agent had chmod'd. Matches the
+    # pre-#784 os.WriteFile behavior (perm applied on create, untouched on
+    # overwrite).
+    mode = 0o600
+    try:
+        mode = os.stat(path).st_mode & 0o777
+    except FileNotFoundError:
+        pass
     d = os.path.dirname(path) or "."
     os.makedirs(d, 0o750, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".fleet-fileop-")
@@ -52,8 +63,8 @@ def _atomic_write(path, data):
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
+        os.chmod(tmp, mode)
         os.replace(tmp, path)
-        os.chmod(path, 0o600)
     except BaseException:
         try:
             os.unlink(tmp)

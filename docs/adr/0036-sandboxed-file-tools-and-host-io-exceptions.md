@@ -38,10 +38,21 @@ untagged release build contains no host file-op implementation at all (the
 INPUT (identical error strings, all traversal/symlink/`..` tests unchanged);
 it is no longer the execution mechanism.
 
-Truncation spill files (bash/run_python/web_fetch large-output overflow) move
-from host `/tmp` into the per-turn workspace, which is bind-mounted at the same
-absolute path in the container, so the now-sandboxed `view_file` recovery hint
-can still read them.
+Because `view_file` now reads inside the sandbox, it can no longer read a
+truncation spill file left on the host `/tmp` (the container's `/tmp` is a
+private tmpfs). This PR does **not** relocate the spill: the truncation marker
+now steers the model to the `run_python`/`return_vars` (or re-run-filtered)
+recovery instead of a `view_file` path, and the on-disk host copy is kept only
+as an operator breadcrumb. A sandbox-readable, conversation-scoped,
+cleanup-bound full-output artifact is issue #793's job — its acceptance
+criteria cover exactly that — so relocating spill here would duplicate and
+pre-empt that design (an earlier revision that wrote spills into the workspace
+was reverted after review found it polluted the workspace inventory and file
+browser and could be git-committed inside a scheduled run's worktree).
+
+The seam preserves an existing file's mode on overwrite/edit (defaulting to
+`0600` only when creating), matching the pre-#784 `os.WriteFile` behavior, so a
+`chmod +x`'d script keeps its execute bit through an edit.
 
 **Documented host-side exception classes.** The remaining native tools that do
 host I/O are, by design, host-side **control-plane / broker** operations, not
@@ -72,7 +83,9 @@ the operator also mounts them into the sandbox (documented). A write under a
 read-only supporting-doc mount now fails with an in-container EROFS-style error
 instead of a host pathsec error — same containment, different text. Each
 container file op adds one short-lived `podman exec` (~50–150 ms); a persistent
-in-container fileops session to amortize it is deferred.
+in-container fileops session to amortize it is deferred. The truncation spill
+stays on host `/tmp` and is no longer agent-readable; recovery is via
+`run_python`/re-run (see #793 for the sandbox-readable artifact).
 
 ## Deferred
 

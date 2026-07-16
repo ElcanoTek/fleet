@@ -79,6 +79,38 @@ func TestFileOp_ReadWriteEditRoundtrip(t *testing.T) {
 	}
 }
 
+func TestFileOp_PreservesModeOnOverwriteAndEdit(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "run.sh")
+
+	// New file → 0600.
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Data: []byte("#!/bin/sh\necho a\n")}); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+		t.Fatalf("new file mode = %o, want 600", info.Mode().Perm())
+	}
+	// Agent makes it executable.
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Overwrite must keep 0755 (pre-#784 os.WriteFile behavior).
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpWrite, Path: path, Data: []byte("#!/bin/sh\necho b\n")}); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o755 {
+		t.Errorf("mode after overwrite = %o, want 755 preserved", info.Mode().Perm())
+	}
+	// Edit must also keep 0755.
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpEdit, Path: path, OldText: "b", NewText: "c"}); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o755 {
+		t.Errorf("mode after edit = %o, want 755 preserved", info.Mode().Perm())
+	}
+}
+
 func TestFileOp_TypedErrors(t *testing.T) {
 	sb := fileopTestSandbox(t)
 	ctx := context.Background()

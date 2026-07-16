@@ -463,40 +463,25 @@ type truncationInfo struct {
 	StderrFullBytes int    `json:"stderr_full_bytes,omitempty"`
 }
 
-// truncationSpillDir resolves the per-turn sandbox-visible workspace directory
-// truncation spill files must land in (#784), so the sandboxed view_file can
-// read them back. Prefers the scheduled worktree's forced working dir, then the
-// per-conversation workspace; returns "" (→ os.TempDir fallback) when neither
-// is set (host/CLI, tests).
-func truncationSpillDir(ctx context.Context) string {
-	if d := ForcedWorkingDirFromContext(ctx); d != "" {
-		return d
-	}
-	if convID := ConversationIDFromContext(ctx); convID != "" {
-		if dir, err := EnsureWorkspaceDir(convID); err == nil {
-			return dir
-		}
-	}
-	return ""
-}
-
-// truncateWithFile saves full output to a spill file and returns head+tail with
-// a truncation marker. Returns the truncated string and the spill file path.
+// truncateWithFile saves full output to a host-side spill file and returns
+// head+tail with a truncation marker. Returns the truncated string and the
+// spill file path.
 //
-// spillDir is the per-turn sandbox-visible workspace (bind-mounted at the same
-// absolute path host and container). Since #784 the view_file recovery hint
-// reads INSIDE the sandbox, so the spill must live where the sandbox can see
-// it; a host /tmp spill would be invisible to the container's private tmpfs.
-// An empty spillDir (host/CLI backend, tests) falls back to os.TempDir, where
-// host-side reads still work.
-func truncateWithFile(output []byte, prefix, spillDir string) (string, string) {
-	cleanupOldTruncationFiles(spillDir)
-	tmpFile, err := os.CreateTemp(spillDir, fmt.Sprintf("chat-%s-*.txt", prefix))
+// The spill lives in the host temp dir. Since #784 the file tools execute
+// INSIDE the sandbox, so this host-side spill is NOT reachable via view_file
+// (the container's /tmp is a private tmpfs); the marker therefore steers the
+// model to the run_python `return_vars` recovery, and the on-disk copy is kept
+// only as an operator-side breadcrumb (swept after truncationTempFileMaxAge).
+// A sandbox-readable, conversation-scoped full-output artifact is #793's job
+// (its ACs cover exactly that), not this PR's.
+func truncateWithFile(output []byte, prefix string) (string, string) {
+	cleanupOldTruncationFiles()
+	tmpFile, err := os.CreateTemp("", fmt.Sprintf("chat-%s-*.txt", prefix))
 	if err != nil {
 		// If we can't create a temp file, return head+tail with a warning
 		head := string(output[:bashTruncateHeadTail])
 		tail := string(output[len(output)-bashTruncateHeadTail:])
-		return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total, temp file creation failed: %v. Re-run with smaller output, or capture the value via run_python `return_vars` (those are never truncated).]\n\n", len(output), err) + tail, ""
+		return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total, temp file creation failed: %v. Re-run with smaller/filtered output, or capture the value via run_python `return_vars` (those are never truncated).]\n\n", len(output), err) + tail, ""
 	}
 	path := tmpFile.Name()
 	_, _ = tmpFile.Write(output)
@@ -504,7 +489,7 @@ func truncateWithFile(output []byte, prefix, spillDir string) (string, string) {
 
 	head := string(output[:bashTruncateHeadTail])
 	tail := string(output[len(output)-bashTruncateHeadTail:])
-	return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total; head+tail shown above. Recover the FULL bytes with `view_file path=%s` (best for inspecting), or — if you need to feed them back to another tool — re-run inside run_python and capture via `return_vars` (vars are never truncated; do NOT copy-paste the head+tail above as if it were the whole payload).]\n\n", len(output), path) + tail, path
+	return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total; head+tail shown above. To recover the FULL bytes, re-run inside run_python and capture via `return_vars` (vars are never truncated), or re-run this command with filtered/paginated output. Do NOT copy-paste the head+tail above as if it were the whole payload.]\n\n", len(output)) + tail, path
 }
 
 // auditBashInvocation appends one JSON line describing a bash invocation
@@ -571,7 +556,7 @@ func auditWarnOnce(msg string) {
 	log.Printf("bash audit: %s", msg) // msg comes from our own audit code, not user input
 }
 
-func cleanupOldTruncationFiles(spillDir string) {
+func cleanupOldTruncationFiles() {
 	patterns := []string{
 		"chat-stdout-*.txt",
 		"chat-stderr-*.txt",
@@ -580,38 +565,23 @@ func cleanupOldTruncationFiles(spillDir string) {
 		"chat-webfetch-*.txt",
 		"chat-output-*.txt",
 	}
-	// Sweep both the legacy host temp dir and the per-turn workspace spill dir
-	// (#784): spill files moved into the bind-mounted workspace so the
-	// sandboxed view_file can read them, but old host /tmp spills may still
-	// linger from before, so keep sweeping there too.
-	dirs := []string{os.TempDir()}
-	if spillDir != "" && spillDir != os.TempDir() {
-		dirs = append(dirs, spillDir)
-	}
 	now := time.Now()
-	for _, dir := range dirs {
-		for _, pattern := range patterns {
-			cleanupTruncationGlob(filepath.Join(dir, pattern), now)
-		}
-	}
-}
-
-// cleanupTruncationGlob removes spill files matching glob older than the max age.
-func cleanupTruncationGlob(glob string, now time.Time) {
-	matches, err := filepath.Glob(glob)
-	if err != nil {
-		return
-	}
-	for _, path := range matches {
-		info, statErr := os.Stat(path)
-		if statErr != nil {
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(os.TempDir(), pattern))
+		if err != nil {
 			continue
 		}
-		if now.Sub(info.ModTime()) <= truncationTempFileMaxAge {
-			continue
-		}
-		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
-			log.Printf("Warning: failed to remove old truncation temp file %s: %v", path, removeErr)
+		for _, path := range matches {
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				continue
+			}
+			if now.Sub(info.ModTime()) <= truncationTempFileMaxAge {
+				continue
+			}
+			if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+				log.Printf("Warning: failed to remove old truncation temp file %s: %v", path, removeErr)
+			}
 		}
 	}
 }
@@ -703,14 +673,14 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 	if len(out.Stdout) > bashOutputTruncateThreshold || len(out.Stderr) > bashOutputTruncateThreshold {
 		ti := &truncationInfo{}
 		if len(out.Stdout) > bashOutputTruncateThreshold {
-			truncated, path := truncateWithFile(out.Stdout, "stdout", workingDir)
+			truncated, path := truncateWithFile(out.Stdout, "stdout")
 			ti.StdoutTruncated = true
 			ti.StdoutFullPath = path
 			ti.StdoutFullBytes = len(out.Stdout)
 			result.Stdout = truncated
 		}
 		if len(out.Stderr) > bashOutputTruncateThreshold {
-			truncated, path := truncateWithFile(out.Stderr, "stderr", workingDir)
+			truncated, path := truncateWithFile(out.Stderr, "stderr")
 			ti.StderrTruncated = true
 			ti.StderrFullPath = path
 			ti.StderrFullBytes = len(out.Stderr)

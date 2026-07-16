@@ -62,9 +62,9 @@ prior versions are listed because none have shipped.
   seam (`Sandbox.RunFileOp`) that runs a one-shot `python3` in the same
   per-turn container as bash/run_python, inheriting the full isolation posture;
   host-side path validation stays as defense-in-depth input, and there is no
-  host-execution fallback (they fail closed without a sandbox). Truncation
-  spill files moved into the bind-mounted workspace so the now-sandboxed
-  `view_file` recovery hint still reads them. ADR-0036 also documents the
+  host-execution fallback (they fail closed without a sandbox). Overwrite/edit
+  preserves an existing file's mode (a `chmod +x`'d script keeps its execute
+  bit). ADR-0036 also documents the
   remaining host-side control-plane/broker tools (network fetch, brokered
   credentials, governed datastore writes) as explicit, threat-modelled
   exceptions rather than a silent contradiction of the invariant.
