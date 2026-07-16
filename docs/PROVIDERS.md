@@ -93,8 +93,11 @@ So in the example above: `gpt-4o` → `openai-direct`; `claude-opus-4-8` →
   runs** — only the token ceiling (`FLEET_MAX_TOTAL_TOKENS`) does. Add a pricing
   override to track native USD cost and re-enable the USD ceiling.
 - **Cross-provider failover.** `fallback_providers` retries the same model on the
-  next eligible provider after a transient failure, but only before any semantic
-  stream event is visible. Explicit `provider-name/model` slugs remain pinned and
+  next eligible provider after a transient failure — including mid-stream, as
+  long as the failing attempt has not executed a tool (its partial text/reasoning
+  is rolled back and regenerated from scratch; ADR-0035). Once a tool has run in
+  the attempt, in-run failover is suppressed and the task's RetryPolicy decides.
+  Explicit `provider-name/model` slugs remain pinned and
   never use the workspace chain. A scheduled task's explicit `fallback_model`
   remains a separate model substitution and takes precedence.
 - **No per-task `preferred_provider` field.** Per-task pinning is available via

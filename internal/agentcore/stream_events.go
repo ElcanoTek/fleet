@@ -92,8 +92,13 @@ type streamSink struct {
 	// the loop can recover it for the finalize hook + the Result.
 	finalText strings.Builder
 	// reasoningBufs buffers reasoning deltas per id; committed on End.
-	reasoningBufs  map[string]*strings.Builder
-	semanticEvents int
+	reasoningBufs map[string]*strings.Builder
+	// toolEvents counts observable tool side effects (tool_call/tool_result).
+	// The resilience layer compares it against a per-attempt mark to decide
+	// whether a failed stream attempt may be re-driven: text/reasoning output is
+	// regenerable, an executed tool is not (re-driving the round could repeat
+	// its side effect). See streamRoundWithResilience.
+	toolEvents int
 }
 
 func newStreamSink(obs Observer) *streamSink {
@@ -113,7 +118,6 @@ func (s *streamSink) emit(eventType string, payload map[string]any) {
 // onTextDelta forwards a text chunk to the Observer and accumulates it.
 func (s *streamSink) onTextDelta(text string) {
 	s.mu.Lock()
-	s.semanticEvents++
 	s.finalText.WriteString(text)
 	s.mu.Unlock()
 	s.emit("text.delta", map[string]any{evtFieldText: text})
@@ -123,7 +127,6 @@ func (s *streamSink) onTextDelta(text string) {
 // block on the start event (Gemini), others stream deltas — capture both.
 func (s *streamSink) onReasoningStart(id, text string) {
 	s.mu.Lock()
-	s.semanticEvents++
 	b := &strings.Builder{}
 	if text != "" {
 		b.WriteString(text)
@@ -163,7 +166,7 @@ func (s *streamSink) onReasoningEnd(id, content string) {
 // onToolCall forwards + records an assistant tool call.
 func (s *streamSink) onToolCall(id, name, input string) {
 	s.mu.Lock()
-	s.semanticEvents++
+	s.toolEvents++
 	s.entries = append(s.entries, RunEntry{
 		Role: roleAssistant, Type: "tool_call",
 		ToolCallID: id, ToolName: name, ToolInput: input,
@@ -180,7 +183,7 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 	// streamed to the browser, or persisted to turn_events.
 	text = toolRedactor().Redact(text)
 	s.mu.Lock()
-	s.semanticEvents++
+	s.toolEvents++
 	s.entries = append(s.entries, RunEntry{
 		Role: roleTool, Type: "tool_result",
 		ToolCallID: id, ToolName: name, Text: text, IsErr: isErr,
@@ -194,10 +197,52 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 	})
 }
 
-func (s *streamSink) semanticEventCount() int {
+func (s *streamSink) toolEventCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.semanticEvents
+	return s.toolEvents
+}
+
+// sinkMark captures the sink's accumulation point at the start of a stream
+// attempt so a failed attempt's partial output can be rolled back before the
+// attempt is re-driven (in-place stream-blip retry or fallback swap). The
+// re-driven attempt regenerates the round from scratch — without the rollback
+// its output would be appended AFTER the failed attempt's partial text,
+// duplicating it in both the persisted history and the final answer.
+type sinkMark struct {
+	entries    int
+	finalText  int
+	toolEvents int
+}
+
+// mark snapshots the current accumulation point.
+func (s *streamSink) mark() sinkMark {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return sinkMark{entries: len(s.entries), finalText: s.finalText.Len(), toolEvents: s.toolEvents}
+}
+
+// rollbackTo discards everything accumulated after the mark: partial entries,
+// partial final text, and any in-flight (uncommitted) reasoning buffers. Only
+// called on a failed attempt that produced NO tool events past the mark — the
+// resilience layer suppresses recovery otherwise — so no tool_call/tool_result
+// entries are ever dropped, and no tool execution can be racing the rollback.
+// Events already forwarded to the Observer cannot be recalled; the observer
+// stream shows the abandoned partial followed by the retry note, while the
+// accumulated history (what persists) stays clean.
+func (s *streamSink) rollbackTo(m sinkMark) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.entries) > m.entries {
+		s.entries = s.entries[:m.entries]
+	}
+	if s.finalText.Len() > m.finalText {
+		kept := s.finalText.String()[:m.finalText]
+		s.finalText.Reset()
+		s.finalText.WriteString(kept)
+	}
+	s.toolEvents = m.toolEvents
+	clear(s.reasoningBufs)
 }
 
 // snapshot returns a copy of the accumulated entries plus the accumulated final
