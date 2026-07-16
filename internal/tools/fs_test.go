@@ -317,6 +317,88 @@ func TestFileToolsRejectCrossConversationTraversal(t *testing.T) {
 	}
 }
 
+func TestFileToolsRejectAbsoluteSiblingConversationPaths(t *testing.T) {
+	sb := fsTestSandbox(t)
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	victimDir := filepath.Join(root, "conv-victim")
+	if err := os.MkdirAll(victimDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(victimDir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("victim secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithConversationID(context.Background(), "conv-attacker")
+
+	if out, err := runViewFile(ctx, sb, ViewFileParams{Path: secret}); err == nil {
+		t.Fatalf("absolute sibling read succeeded: %q", out)
+	}
+	if _, err := runEditFile(ctx, sb, EditFileParams{Path: secret, OldText: "victim", NewText: "stolen"}); err == nil {
+		t.Fatal("absolute sibling edit succeeded")
+	}
+	if _, err := runWriteFile(ctx, sb, WriteFileParams{Path: filepath.Join(victimDir, "planted.txt"), Content: "pwn"}); err == nil {
+		t.Fatal("absolute sibling write succeeded")
+	}
+	if got, err := os.ReadFile(secret); err != nil || string(got) != "victim secret" {
+		t.Fatalf("victim changed: %q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(victimDir, "planted.txt")); !os.IsNotExist(err) {
+		t.Fatalf("absolute sibling planted file: %v", err)
+	}
+}
+
+func TestFileToolsSupportingDocsAreReadOnlyCapability(t *testing.T) {
+	sb := fsTestSandbox(t)
+	workspace := t.TempDir()
+	docs, err := os.MkdirTemp("/var/tmp", "fleet-doc-capability-")
+	if err != nil {
+		t.Skipf("create supporting-doc fixture outside host allowlist: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(docs) })
+	t.Setenv("FLEET_WORKSPACE_ROOT", workspace)
+	protocol := filepath.Join(docs, "policy.md")
+	if err := os.WriteFile(protocol, []byte("governed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Preserve the process-global boot registry for other tests.
+	supportingDocDirsMu.RLock()
+	previous := make(map[string]string, len(supportingDocDirs))
+	for k, v := range supportingDocDirs {
+		previous[k] = v
+	}
+	supportingDocDirsMu.RUnlock()
+	SetSupportingDocDirs(map[string]string{"protocols": docs})
+	t.Cleanup(func() {
+		supportingDocDirsMu.Lock()
+		supportingDocDirs = previous
+		supportingDocDirsMu.Unlock()
+	})
+
+	ctx := WithConversationID(context.Background(), "conv-docs")
+	dir, err := EnsureWorkspaceDir("conv-docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sb.BindFileOpRoot(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runViewFile(ctx, sb, ViewFileParams{Path: "protocols/policy.md"})
+	if err != nil || !strings.HasPrefix(got, "governed\n\n(file metadata: sha256=") {
+		t.Fatalf("supporting-doc view = %q err=%v", got, err)
+	}
+	if _, err := runEditFile(ctx, sb, EditFileParams{Path: "protocols/policy.md", OldText: "governed", NewText: "mutated"}); err == nil {
+		t.Fatal("supporting-doc edit succeeded")
+	}
+	if _, err := runWriteFile(ctx, sb, WriteFileParams{Path: "protocols/policy.md", Content: "mutated"}); err == nil {
+		t.Fatal("supporting-doc overwrite succeeded")
+	}
+	if data, err := os.ReadFile(protocol); err != nil || string(data) != "governed" {
+		t.Fatalf("supporting doc changed: %q err=%v", data, err)
+	}
+}
+
 // TestFileToolsPoisonedSandbox pins that a poisoned sandbox (#796) refuses file
 // ops fail-closed rather than falling back to the host.
 func TestFileToolsPoisonedSandbox(t *testing.T) {

@@ -31,6 +31,9 @@ func (p *poisonableImpl) resourceUsage() (ResourceUsageSummary, bool) {
 func (p *poisonableImpl) runFileOp(context.Context, FileOpRequest) (FileOpResult, error) {
 	return FileOpResult{}, nil
 }
+func (p *poisonableImpl) bindFileOpRoot(context.Context, string) (FileOpRootIdentity, error) {
+	return FileOpRootIdentity{Dev: 1, Ino: 1}, nil
+}
 func (p *poisonableImpl) poisoned() bool { return p.poison.Load() }
 func (p *poisonableImpl) close()         { p.closed.Store(true) }
 

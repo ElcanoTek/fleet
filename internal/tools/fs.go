@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"charm.land/fantasy"
 
@@ -57,9 +59,14 @@ func runWriteFile(ctx context.Context, sb *sandbox.Sandbox, params WriteFilePara
 	if err != nil {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
+	root, err := fileOpRoot(ctx, resolved, validPath, true)
+	if err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
 	res, err := sb.RunFileOp(ctx, sandbox.FileOpRequest{
 		Op:   sandbox.FileOpWrite,
 		Path: validPath,
+		Root: root,
 		Data: []byte(params.Content),
 	})
 	if err != nil {
@@ -118,9 +125,14 @@ func runEditFile(ctx context.Context, sb *sandbox.Sandbox, params EditFileParams
 	if err != nil {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
+	root, err := fileOpRoot(ctx, resolved, validPath, true)
+	if err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
 	res, err := sb.RunFileOp(ctx, sandbox.FileOpRequest{
 		Op:             sandbox.FileOpEdit,
 		Path:           validPath,
+		Root:           root,
 		OldText:        params.OldText,
 		NewText:        params.NewText,
 		ReplaceAll:     params.ReplaceAll,
@@ -135,6 +147,32 @@ func runEditFile(ctx context.Context, sb *sandbox.Sandbox, params EditFileParams
 		out += "\n\n" + res.Diff
 	}
 	return out, nil
+}
+
+// validateFileOpReadPath admits the boot-registered supporting-document mounts
+// as a narrow read-only capability. Managed deployments intentionally exclude
+// client-config directories from the general host AllowedBaseDirs, so routing
+// `protocols/...` through ordinary ValidatePathForRead rejects the very
+// read-only mounts the sandbox exposes. Resolve the configured symlink, verify
+// the final target remains beneath one registered doc root, and never use this
+// exception for write/edit.
+func validateFileOpReadPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		if resolvedPath, evalErr := filepath.EvalSymlinks(abs); evalErr == nil {
+			if root := supportingDocRootForPath(resolvedPath); root != "" {
+				info, statErr := os.Stat(resolvedPath)
+				if statErr != nil {
+					return "", fmt.Errorf("cannot access file: %w", statErr)
+				}
+				if info.IsDir() {
+					return "", fmt.Errorf("path is a directory, not a file: %s", path)
+				}
+				return filepath.Clean(resolvedPath), nil
+			}
+		}
+	}
+	return ValidatePathForRead(path)
 }
 
 // ── view_file ──
@@ -176,7 +214,11 @@ func runViewFile(ctx context.Context, sb *sandbox.Sandbox, params ViewFileParams
 	if err != nil {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
-	validPath, err := ValidatePathForRead(resolved)
+	validPath, err := validateFileOpReadPath(resolved)
+	if err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
+	root, err := fileOpRoot(ctx, resolved, validPath, false)
 	if err != nil {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
@@ -190,6 +232,7 @@ func runViewFile(ctx context.Context, sb *sandbox.Sandbox, params ViewFileParams
 	res, err := sb.RunFileOp(ctx, sandbox.FileOpRequest{
 		Op:     sandbox.FileOpRead,
 		Path:   validPath,
+		Root:   root,
 		Offset: params.Offset,
 		Limit:  limit,
 	})
@@ -215,6 +258,86 @@ func runViewFile(ctx context.Context, sb *sandbox.Sandbox, params ViewFileParams
 	return content, nil
 }
 
+// fileOpRoot turns host policy into the narrow capability the in-container
+// executor receives. Interactive turns are confined to their own conversation
+// directory even though Podman bind-mounts the shared workspace root. A
+// host-resolved supporting-doc symlink may cross that directory only into one
+// of the explicitly registered read-only document mounts. Scheduled worktree
+// runs are confined to their forced worktree; unscoped scheduled/CLI calls use
+// the most-specific configured allowlist root containing the validated path.
+func fileOpRoot(ctx context.Context, resolved, valid string, writable bool) (string, error) {
+	validAbs, err := filepath.Abs(valid)
+	if err != nil {
+		return "", err
+	}
+	resolvedAbs, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", err
+	}
+	if docsRoot := supportingDocRootForPath(validAbs); writable && docsRoot != "" {
+		return "", &PathSecurityError{Path: valid, Reason: "supporting-document mounts are read-only", BaseDir: docsRoot}
+	}
+
+	if forced := ForcedWorkingDirFromContext(ctx); forced != "" {
+		root, absErr := filepath.Abs(forced)
+		if absErr != nil {
+			return "", absErr
+		}
+		if !isSubPath(root, validAbs) {
+			return "", &PathSecurityError{Path: valid, Reason: "path escapes the scheduled-run worktree", BaseDir: root}
+		}
+		return root, nil
+	}
+
+	if convID := ConversationIDFromContext(ctx); convID != "" {
+		root, absErr := filepath.Abs(WorkspaceDirForConversation(convID))
+		if absErr != nil {
+			return "", absErr
+		}
+		if isSubPath(root, validAbs) {
+			return root, nil
+		}
+		// Host validation resolves a legitimate `protocols/...` (etc.)
+		// symlink to the read-only supporting-doc mount. Only honor that
+		// exception when the model's unresolved path originated beneath its
+		// own workspace and the resolved target is in a registered mount.
+		if isSubPath(root, resolvedAbs) {
+			if docsRoot := supportingDocRootForPath(validAbs); docsRoot != "" {
+				return docsRoot, nil
+			}
+		}
+		return "", &PathSecurityError{Path: valid, Reason: "path escapes the per-conversation workspace", BaseDir: root}
+	}
+
+	allowed, err := AllowedBaseDirs()
+	if err != nil {
+		return "", err
+	}
+	best := ""
+	for _, dir := range allowed {
+		abs, absErr := filepath.Abs(dir)
+		if absErr == nil && isSubPath(abs, validAbs) && len(abs) > len(best) {
+			best = filepath.Clean(abs)
+		}
+	}
+	if best == "" {
+		return "", &PathSecurityError{Path: valid, Reason: "path is outside allowed directories"}
+	}
+	return best, nil
+}
+
+func supportingDocRootForPath(path string) string {
+	supportingDocDirsMu.RLock()
+	defer supportingDocDirsMu.RUnlock()
+	best := ""
+	for _, root := range supportingDocDirs {
+		if isSubPath(root, path) && len(root) > len(best) {
+			best = filepath.Clean(root)
+		}
+	}
+	return best
+}
+
 // fileOpError maps the sandbox FileOp sentinels back to the exact model-facing
 // strings the host-side implementation used before #784, so the tool contract
 // is unchanged.
@@ -234,6 +357,8 @@ func fileOpError(op string, err error) error {
 		// Ambiguous/stale/no-op edits (#787): the seam's message already
 		// explains the recovery (add context / set replace_all / re-read).
 		return fmt.Errorf("%s", err.Error())
+	case errors.Is(err, sandbox.ErrFileOpUnsafePath):
+		return fmt.Errorf("%s_file refused an unsafe path change", op)
 	case errors.Is(err, sandbox.ErrPoisoned):
 		return fmt.Errorf("the sandbox was reset after a cancelled command; retry this %s", op)
 	default:

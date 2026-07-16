@@ -577,21 +577,34 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	}
 	defer cleanup()
 
-	// Git worktree isolation (#180): scope this run's tool calls into the per-run
-	// worktree (prepared once per task in Run; a subdir of the bind-mounted
-	// workspace root, reachable at the same absolute path inside the sandbox).
+	// Scope every scheduled run to a concrete directory inside the bind-mounted
+	// workspace. Worktree-enabled runs use their exact per-run worktree (#180);
+	// ordinary runs use the configured workspace root. Previously the latter
+	// left relative file tools resolving against Fleet's process cwd while the
+	// container used the workspace mount, breaking parity and making a narrow
+	// FileOp capability impossible (#784).
 	// Two complementary seams cover the tool surface:
 	//   - Sandbox.SetDefaultWorkingDir fills the cwd of any bash/run_python call
 	//     that arrives with an empty WorkingDir, so the default applies host-side.
 	//   - WithForcedWorkingDir scopes the IN-PROCESS tool layer (bash/run_python/
 	//     file tools), whose resolvers otherwise default an empty working dir to
 	//     the process cwd before the sandbox seam can fill it.
-	// Both are no-ops when wtPath == "" (non-worktree task), so behaviour there is
-	// unchanged.
-	if wtPath != "" {
-		sb.SetDefaultWorkingDir(wtPath)
-		ctx = tools.WithForcedWorkingDir(ctx, wtPath)
-		log.Printf("scheduled task %s: git worktree isolation active; tool calls scoped to %s", task.ID, wtPath)
+	toolRoot := wtPath
+	if toolRoot == "" {
+		toolRoot = r.workspaceRoot()
+	}
+	if abs, absErr := filepath.Abs(toolRoot); absErr == nil {
+		toolRoot = abs
+	}
+	if toolRoot != "" {
+		sb.SetDefaultWorkingDir(toolRoot)
+		ctx = tools.WithForcedWorkingDir(ctx, toolRoot)
+		if err := sb.BindFileOpRoot(ctx, toolRoot); err != nil {
+			return nil, false, "", fmt.Errorf("bind scheduled file capability: %w", err)
+		}
+		if wtPath != "" {
+			log.Printf("scheduled task %s: git worktree isolation active; tool calls scoped to %s", task.ID, toolRoot)
+		}
 	}
 
 	turnTools := tools.NewTurnTools(sb)

@@ -158,10 +158,27 @@ func (h *hostImpl) poisoned() bool { return false }
 // Podman. python3 is a hard dependency of the run_python bridge, so it is
 // present wherever this test/dev-only backend is used.
 func (h *hostImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error) {
+	return h.executeFileOp(ctx, req)
+}
+
+func (h *hostImpl) bindFileOpRoot(ctx context.Context, root string) (FileOpRootIdentity, error) {
+	res, err := h.executeFileOp(ctx, FileOpRequest{Op: fileOpBindRoot, Path: root, Root: root})
+	if err != nil {
+		return FileOpRootIdentity{}, err
+	}
+	return res.rootIdentity, nil
+}
+
+func (h *hostImpl) executeFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	wire := map[string]any{"op": string(req.Op), "path": req.Path}
+	wire := map[string]any{
+		"op":     string(req.Op),
+		"path":   req.Path,
+		"root":   req.Root,
+		"anchor": req.Root,
+	}
 	switch req.Op {
 	case FileOpRead:
 		wire["offset"] = req.Offset
@@ -175,8 +192,17 @@ func (h *hostImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileOpResu
 		if req.ExpectedSHA256 != "" {
 			wire["expected_sha256"] = req.ExpectedSHA256
 		}
+	case fileOpBindRoot:
 	default:
 		return FileOpResult{}, fmt.Errorf("unknown fileop %q", req.Op)
+	}
+	if req.testPause > 0 {
+		wire["test_pause_ms"] = req.testPause.Milliseconds()
+		wire["test_ready_name"] = req.testReadyName
+	}
+	if req.rootBound {
+		wire["expected_dev"] = req.expectedDev
+		wire["expected_ino"] = req.expectedIno
 	}
 	reqJSON, err := json.Marshal(wire)
 	if err != nil {

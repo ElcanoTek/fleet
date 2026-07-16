@@ -26,6 +26,9 @@ func (r *recordingImpl) resourceUsage() (ResourceUsageSummary, bool) {
 func (r *recordingImpl) runFileOp(context.Context, FileOpRequest) (FileOpResult, error) {
 	return FileOpResult{}, nil
 }
+func (r *recordingImpl) bindFileOpRoot(context.Context, string) (FileOpRootIdentity, error) {
+	return FileOpRootIdentity{Dev: 1, Ino: 1}, nil
+}
 func (r *recordingImpl) poisoned() bool { return false }
 func (r *recordingImpl) close()         {}
 
