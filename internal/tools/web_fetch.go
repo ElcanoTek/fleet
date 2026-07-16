@@ -310,7 +310,8 @@ func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 	return string(jsonBytes), nil
 }
 
-// truncateWebFetchResult handles large content by saving to temp file.
+// truncateWebFetchResult handles large content by saving to a spill file in the
+// per-turn workspace (#784) so the sandboxed view_file recovery hint can read it.
 func truncateWebFetchResult(result *webFetchResult) {
 	contentBytes := []byte(result.Stdout)
 	if len(contentBytes) <= webFetchTruncateThreshold {

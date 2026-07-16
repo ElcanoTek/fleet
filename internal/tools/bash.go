@@ -463,8 +463,17 @@ type truncationInfo struct {
 	StderrFullBytes int    `json:"stderr_full_bytes,omitempty"`
 }
 
-// truncateWithFile saves full output to a temp file and returns head+tail with
-// a truncation marker. Returns the truncated string and the temp file path.
+// truncateWithFile saves full output to a host-side spill file and returns
+// head+tail with a truncation marker. Returns the truncated string and the
+// spill file path.
+//
+// The spill lives in the host temp dir. Since #784 the file tools execute
+// INSIDE the sandbox, so this host-side spill is NOT reachable via view_file
+// (the container's /tmp is a private tmpfs); the marker therefore steers the
+// model to the run_python `return_vars` recovery, and the on-disk copy is kept
+// only as an operator-side breadcrumb (swept after truncationTempFileMaxAge).
+// A sandbox-readable, conversation-scoped full-output artifact is #793's job
+// (its ACs cover exactly that), not this PR's.
 func truncateWithFile(output []byte, prefix string) (string, string) {
 	cleanupOldTruncationFiles()
 	tmpFile, err := os.CreateTemp("", fmt.Sprintf("chat-%s-*.txt", prefix))
@@ -472,7 +481,7 @@ func truncateWithFile(output []byte, prefix string) (string, string) {
 		// If we can't create a temp file, return head+tail with a warning
 		head := string(output[:bashTruncateHeadTail])
 		tail := string(output[len(output)-bashTruncateHeadTail:])
-		return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total, temp file creation failed: %v. Re-run with smaller output, or capture the value via run_python `return_vars` (those are never truncated).]\n\n", len(output), err) + tail, ""
+		return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total, temp file creation failed: %v. Re-run with smaller/filtered output, or capture the value via run_python `return_vars` (those are never truncated).]\n\n", len(output), err) + tail, ""
 	}
 	path := tmpFile.Name()
 	_, _ = tmpFile.Write(output)
@@ -480,7 +489,7 @@ func truncateWithFile(output []byte, prefix string) (string, string) {
 
 	head := string(output[:bashTruncateHeadTail])
 	tail := string(output[len(output)-bashTruncateHeadTail:])
-	return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total; head+tail shown above. Recover the FULL bytes with `view_file path=%s` (best for inspecting), or — if you need to feed them back to another tool — re-run inside run_python and capture via `return_vars` (vars are never truncated; do NOT copy-paste the head+tail above as if it were the whole payload).]\n\n", len(output), path) + tail, path
+	return head + fmt.Sprintf("\n\n[TRUNCATED — %d bytes total; head+tail shown above. To recover the FULL bytes, re-run inside run_python and capture via `return_vars` (vars are never truncated), or re-run this command with filtered/paginated output. Do NOT copy-paste the head+tail above as if it were the whole payload.]\n\n", len(output)) + tail, path
 }
 
 // auditBashInvocation appends one JSON line describing a bash invocation

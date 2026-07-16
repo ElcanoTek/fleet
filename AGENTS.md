@@ -64,12 +64,18 @@ that adds, weakens, or reverses an invariant must add or supersede an ADR in the
 same PR.
 
 - **The sandbox is mandatory.** The agent loop runs in the fleet process, but
-  every agent tool call (bash, Python, file I/O, MCP) runs inside the
-  rootless-Podman sandbox — there is **no** fast path that skips it, and the host
-  enforces all policy. The loop holds no privileged local executor of its own:
-  each tool call is handed to the sandbox under host policy. MCP credentials are
-  brokered **out-of-process** (issue #167) and **never** enter the sandbox — the
-  broker injects them only when it runs a delegated MCP call host-side.
+  every agent tool call's data-plane execution — bash, Python, **and file I/O
+  (`view_file`/`write_file`/`edit_file`, via the sandbox FileOp seam, #784)** —
+  runs inside the rootless-Podman sandbox; there is **no** fast path that skips
+  it and no host-execution fallback (they fail closed without a sandbox). The
+  loop holds no privileged local executor of its own: each tool call is handed
+  to the sandbox under host policy. A small set of native tools are host-side
+  **control-plane / broker** operations by design (host network fetch, brokered
+  credentials, governed datastore writes) — enumerated and threat-modelled in
+  [ADR-0036](docs/adr/0036-sandboxed-file-tools-and-host-io-exceptions.md), not
+  a silent exception. MCP credentials are brokered **out-of-process** (issue
+  #167) and **never** enter the sandbox — the broker injects them only when it
+  runs a delegated MCP call host-side.
 - **Credentials stay host-side.** MCP/connector credentials are brokered on the
   host and **never** enter the sandbox, the agent container, the model context, or
   logs. Never ship a secret into a container or print one.
