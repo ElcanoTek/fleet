@@ -673,7 +673,8 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 
 	session, runErr := p.runner.Run(runCtx, task)
 
-	if runErr != nil && !errors.Is(runErr, agentcore.ErrRetryBudgetExhausted) && !errors.Is(runErr, agentcore.ErrStreamBlipPersisted) {
+	if runErr != nil && !errors.Is(runErr, agentcore.ErrRetryBudgetExhausted) && !errors.Is(runErr, agentcore.ErrStreamBlipPersisted) &&
+		!errors.Is(runErr, agentcore.ErrCommittedSideEffects) {
 		observability.CaptureException(taskCtx, runErr, func(s *sentry.Scope) {
 			s.SetTag("task_id", task.ID.String())
 			s.SetTag("model", model)
@@ -942,7 +943,12 @@ func logSafeRunner(s string) string {
 // sentinels; until then they fall through to terminal.
 func classifyFailure(err error) string {
 	switch {
-	case errors.Is(err, agentcore.ErrRetryBudgetExhausted), errors.Is(err, agentcore.ErrStreamBlipPersisted):
+	case errors.Is(err, agentcore.ErrRetryBudgetExhausted), errors.Is(err, agentcore.ErrStreamBlipPersisted),
+		errors.Is(err, agentcore.ErrCommittedSideEffects):
+		// ErrCommittedSideEffects is a transient provider failure whose IN-RUN
+		// recovery was suppressed (tools had executed mid-round). Whether the
+		// whole task re-runs — repeating those side effects — is exactly what
+		// the operator's RetryPolicy decides, so it classifies transient.
 		return models.FailureTransient
 	case errors.Is(err, agentcore.ErrCostCeilingExceeded):
 		return models.FailureCostCeiling
