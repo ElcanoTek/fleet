@@ -77,6 +77,10 @@ type toolBuildConfig struct {
 	personaName   string
 	personaPolicy *PersonaToolPermissions
 	observer      Observer
+	// runMode / runLabel are carried as DATA into the panic-containment wrapper
+	// (#795) for incident attribution — never branched on (TestSeamPurity).
+	runMode  string
+	runLabel string
 }
 
 // buildFantasyTools combines native tools with discovered MCP tools into the
@@ -191,7 +195,12 @@ func buildFantasyTools(
 		if len(allTools) > maxToolsPerRequest {
 			return nil, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
 		}
-		return allTools, nil
+		// Outermost containment (#795): a panic in ANY registered tool — or in a
+		// policy gate / guardrail it calls, or the deferred-MCP bridge dispatch —
+		// becomes an in-band error instead of killing the fantasy tool-exec
+		// goroutine (and the process). Wrapping the deferred bridges covers the
+		// deferred MCP tools too, since their dispatch runs inside the bridge Run.
+		return containToolPanics(allTools, policy, cfg.runMode, cfg.runLabel), nil
 	}
 
 	allTools = append(allTools, mcpTools...)
@@ -203,7 +212,7 @@ func buildFantasyTools(
 	if len(allTools) > maxToolsPerRequest {
 		return nil, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
 	}
-	return allTools, nil
+	return containToolPanics(allTools, policy, cfg.runMode, cfg.runLabel), nil
 }
 
 // buildConfirmAuditPolicyTool returns the scheduled confirm_audit tool wired to
@@ -277,7 +286,15 @@ func (g *policyGuardedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	name := g.inner.Info().Name
 	if g.policy != nil {
-		if blocked, msg := g.policy.BeforeToolCall(name, params.ID, params.Input); blocked {
+		// atBoundary attributes a panic in the policy gate to
+		// "policy.before_tool_call" (via the outer panicContainedTool) instead
+		// of the generic "tool" location (#795).
+		var blocked bool
+		var msg string
+		atBoundary("policy.before_tool_call", func() {
+			blocked, msg = g.policy.BeforeToolCall(name, params.ID, params.Input)
+		})
+		if blocked {
 			return fantasy.NewTextErrorResponse(msg), nil
 		}
 	}
@@ -286,20 +303,25 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 	// re-enters the model context next turn, what RecordToolResult/the policy sees,
 	// what the stream sink records, and what the session log persists.
 	if resp.Content != "" {
-		resp.Content = toolRedactor().Redact(resp.Content)
-		// Optional PII pass (#450), layered after the secret scrubber. In block
-		// mode the content is withheld and the result is marked an error so the
-		// model treats it as a failed call rather than silently losing data.
-		var piiBlocked bool
-		resp.Content, piiBlocked = redactPII(name, resp.Content)
-		if piiBlocked {
-			resp.IsError = true
-		}
-		var guardrailBlocked bool
-		resp.Content, guardrailBlocked = screenToolOutput(ctx, name, resp.Content)
-		if guardrailBlocked {
-			resp.IsError = true
-		}
+		// The secret scrubber + PII + guardrail passes share the
+		// "output_guardrail" boundary for panic attribution (#795).
+		atBoundary("output_guardrail", func() {
+			resp.Content = toolRedactor().Redact(resp.Content)
+			// Optional PII pass (#450), layered after the secret scrubber. In
+			// block mode the content is withheld and the result is marked an
+			// error so the model treats it as a failed call rather than
+			// silently losing data.
+			var piiBlocked bool
+			resp.Content, piiBlocked = redactPII(name, resp.Content)
+			if piiBlocked {
+				resp.IsError = true
+			}
+			var guardrailBlocked bool
+			resp.Content, guardrailBlocked = screenToolOutput(ctx, name, resp.Content)
+			if guardrailBlocked {
+				resp.IsError = true
+			}
+		})
 	}
 	// Output ceiling (#199): cap any single tool result before it enters the
 	// transcript so one oversized output can't overflow the context window (which
@@ -317,7 +339,9 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 		// pre-gated tools. Without this the scheduled task-tracker finish gate
 		// (latestTaskTracker.Seen) never fired in production. A transport error or
 		// an is-error response counts as a failed call.
-		g.policy.RecordToolResult(name, params.Input, resp.Content, err == nil && !resp.IsError)
+		atBoundary("policy.record_tool_result", func() {
+			g.policy.RecordToolResult(name, params.Input, resp.Content, err == nil && !resp.IsError)
+		})
 	}
 	return resp, err
 }

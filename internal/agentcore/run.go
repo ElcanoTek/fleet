@@ -281,6 +281,10 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (Result, erro
 		personaName:   cfg.PersonaName,
 		personaPolicy: cfg.PersonaPolicy,
 		observer:      deps.Observer,
+		// Panic-containment attribution (#795): mode + label flow as DATA into
+		// the wrapper so a contained tool panic's incident names the run.
+		runMode:  mode.String(),
+		runLabel: label,
 	}
 
 	mcpClient := deps.MCPClient

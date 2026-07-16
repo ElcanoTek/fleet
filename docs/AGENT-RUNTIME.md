@@ -310,6 +310,34 @@ tools and the owner knows to reconnect.
 
 ---
 
+## Tool-dispatch panic containment (#795)
+
+fleet is a single-host process running interactive chat, scheduled tasks,
+sandboxes, and workers together, and fantasy executes streamed tool calls in
+unsupervised goroutines (a coordinator goroutine plus per-tool goroutines for
+parallel calls) with no `recover`. So a panic in ANY tool — native, loader,
+pre-gated, direct-MCP, or deferred-MCP — or in a policy gate, an output
+guardrail, or an Observer callback would escape and terminate the whole
+process; `internal/safe`'s per-goroutine recover in the runner/httpapi callers
+is goroutine-local and cannot catch it.
+
+Every tool fleet hands fantasy is wrapped in an **outermost** panic-containment
+wrapper (`panic_containment.go`). A panic becomes exactly **one in-band tool
+error result** — `err == nil`, so fantasy pairs one result to the call id and
+the round continues instead of aborting the stream — recorded via
+`safe.EmitPanic` (PanicCounts + Sentry + `panic_events`) with tool/mode/label
+and a stable incident id. The model sees only the incident id and a note to
+treat the call as **possibly executed** (do not blindly repeat side-effecting
+work); the panic value and stack never reach it, and the existing ADR-0035
+tool-side-effect gate already blocks in-round provider re-drive once a tool has
+run. Panics in the policy `BeforeToolCall`/`RecordToolResult` gates and the
+output-guardrail pass are attributed to their own boundary (`atBoundary`); an
+Observer panic is contained record-then-degrade (the event is dropped, the run
+continues). The wrapper is outermost by design, so #788's lifecycle hooks (when
+they land) run inside it, never around it.
+
+---
+
 ## Per-persona tool allowlist (least-privilege by role)
 
 Different personas have different roles and risk surfaces. A `code-reviewer`

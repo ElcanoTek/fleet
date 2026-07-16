@@ -212,6 +212,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A panic in any tool no longer crashes the whole fleet process** (#795).
+  fantasy runs streamed tool calls in unsupervised goroutines with no
+  `recover`, so a panic in a tool (native/loader/pre-gated/MCP), a policy gate,
+  an output guardrail, or an Observer callback would take the entire
+  single-host process down — beyond the reach of the runner/httpapi
+  goroutine-local recovers. Every tool fleet registers is now wrapped in an
+  outermost panic-containment layer: a panic becomes exactly one in-band tool
+  error result (paired to the call so the run continues), is recorded to
+  PanicCounts/Sentry/`panic_events` with tool + boundary attribution, and is
+  surfaced to the model as a stable incident id with a "possibly executed"
+  warning (never the raw panic/stack). Observer panics degrade the event and
+  keep the run alive.
+
 - **Cancelled or timed-out bash no longer keeps running inside the sandbox**
   (#796). Cancellation used to kill only the host-side `podman exec` client;
   the in-container process tree survived — durable in persistent-REPL mode,
