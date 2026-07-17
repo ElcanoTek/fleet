@@ -1255,6 +1255,10 @@ func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if len(task.OutputSchema) == 0 {
+		writeError(w, http.StatusNotFound, "Task did not declare output_schema")
+		return
+	}
 
 	// Never expose a stale candidate from a failed/replayed/active row. A result
 	// becomes public only with the terminal success that committed it.
@@ -1263,15 +1267,7 @@ func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "Task has not finished; structured output is not yet available")
 			return
 		}
-		if len(task.OutputSchema) > 0 {
-			writeError(w, http.StatusConflict, "Task did not complete successfully; declared structured output is unavailable")
-			return
-		}
-		writeError(w, http.StatusNotFound, "Task did not declare output_schema")
-		return
-	}
-	if len(task.OutputSchema) == 0 {
-		writeError(w, http.StatusNotFound, "Task did not declare output_schema")
+		writeError(w, http.StatusConflict, "Task did not complete successfully; declared structured output is unavailable")
 		return
 	}
 	if len(task.OutputJSON) == 0 {
@@ -1288,8 +1284,9 @@ func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	// output_json is schema-validated JSON (compiled at create, validated post-run)
-	// served as application/json — not HTML — so there is no XSS sink here.
+	// output_json was locally schema-validated before the atomic success commit
+	// and was revalidated above before serving. It is application/json — not HTML
+	// — so there is no XSS sink here.
 	_, _ = w.Write(task.OutputJSON) //nolint:gosec // G705: validated JSON served as application/json, not an HTML/XSS context
 }
 

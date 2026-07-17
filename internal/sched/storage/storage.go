@@ -42,6 +42,16 @@ var ErrTaskNotDeadLettered = errors.New("task is not dead-lettered")
 // without a declared schema).
 var ErrStructuredOutputContract = errors.New("structured output contract violation")
 
+// ErrTaskLeaseNotHeld identifies a status write rejected before mutation
+// because the supplied per-claim owner no longer owns the row.
+var ErrTaskLeaseNotHeld = errors.New("worker does not hold the lease on this task")
+
+// ErrTaskCommitOutcomeUnknown is returned only when the terminal transaction
+// reached Commit and Commit returned an error. The caller may re-read to learn
+// whether the transaction landed; earlier lease/validation/write errors are
+// definite failures and must never borrow another worker's terminal result.
+var ErrTaskCommitOutcomeUnknown = errors.New("task transaction commit outcome unknown")
+
 // MatchGlob implements simple glob matching similar to Python's fnmatch. It
 // survives the node-routing removal because scoped API keys / users still match
 // node-name scope patterns for visibility checks.
@@ -986,7 +996,7 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 
 	hasValidLease := task.LeaseOwner != nil && *task.LeaseOwner == nodeID.String()
 	if !hasValidLease {
-		return nil, fmt.Errorf("worker does not hold the lease on this task")
+		return nil, ErrTaskLeaseNotHeld
 	}
 
 	if task.Status == models.TaskStatusSuccess || task.Status == models.TaskStatusError || task.Status == models.TaskStatusCancelled {
@@ -994,8 +1004,12 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 	}
 
 	// Validate the effective output BEFORE mutating lifecycle state. In
-	// particular, success + output_json are written by the same transaction:
-	// there is no observable success window in which GET /output can be absent.
+	// particular, a structured success must carry output_json on THIS update:
+	// a candidate left by a legacy two-step writer or crashed prior lease cannot
+	// authorize a later worker's success transition.
+	if update.Status == models.TaskStatusSuccess && len(task.OutputSchema) > 0 && len(update.OutputJSON) == 0 {
+		return nil, fmt.Errorf("%w: a structured success update requires output_json from the current lease", ErrStructuredOutputContract)
+	}
 	effectiveOutput := task.OutputJSON
 	if len(update.OutputJSON) > 0 {
 		effectiveOutput = update.OutputJSON
@@ -1009,9 +1023,6 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 			return nil, fmt.Errorf("%w: output_json: %w", ErrStructuredOutputContract, validationErr)
 		}
 		effectiveOutput = validated
-	}
-	if update.Status == models.TaskStatusSuccess && len(task.OutputSchema) > 0 && len(effectiveOutput) == 0 {
-		return nil, fmt.Errorf("%w: a successful task with output_schema requires output_json", ErrStructuredOutputContract)
 	}
 	if len(update.OutputJSON) > 0 {
 		update.OutputJSON = effectiveOutput
@@ -1040,10 +1051,10 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 		task.WorkspacePath = update.WorkspacePath
 	}
 
-	// Record the validated structured output (#244) when the runner supplies it,
-	// on the running-status update it sends just before terminal success. Empty
-	// leaves the existing value untouched (so the later success update, which
-	// carries no OutputJSON, doesn't wipe it).
+	// Record the validated structured output (#244) when the runner supplies it.
+	// The fail-closed path supplies it on the success update itself, so this write
+	// shares the lifecycle transaction. Empty leaves an existing value untouched
+	// for compatibility with older targeted status updates.
 	if len(update.OutputJSON) > 0 {
 		task.OutputJSON = update.OutputJSON
 	}
@@ -1061,7 +1072,7 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrTaskCommitOutcomeUnknown, err)
 	}
 
 	if (update.Status == models.TaskStatusSuccess || update.Status == models.TaskStatusError) && task.Recurrence != "" {
@@ -1080,6 +1091,11 @@ func applySuccessOrErrorTransition(task *models.Task, update *models.StatusUpdat
 	if update.Status == models.TaskStatusError {
 		task.OutputJSON = nil
 	}
+	// A terminal transition consumes any resumed ask/answer state. Doing this in
+	// the same transaction is important for structured persistence retries: a
+	// refused success must leave the answer intact for the next whole-task attempt.
+	task.PendingQuestion = ""
+	task.PendingAnswer = ""
 	task.LeaseOwner = nil
 	task.LeaseExpiresAt = nil
 	if update.Message == nil {

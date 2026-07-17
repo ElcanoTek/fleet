@@ -1611,8 +1611,8 @@ type StatusUpdate struct {
 	WorkspacePath *string `json:"workspace_path,omitempty"`
 	// OutputJSON carries the validated structured result (#244). When non-empty the
 	// storage layer persists it on the task's output_json; empty leaves the
-	// existing value untouched. Set on a running-status update by the runner before
-	// the terminal success, mirroring WorkspacePath.
+	// existing value untouched. The runner supplies it on the terminal success
+	// update so output_json and success share one lease-checked transaction.
 	OutputJSON json.RawMessage `json:"output_json,omitempty"`
 	// Artifacts carries the published-artifact manifest (#204), a marshaled
 	// []TaskArtifact. When non-empty the storage layer persists it on the task's

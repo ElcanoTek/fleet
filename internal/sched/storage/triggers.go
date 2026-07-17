@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -93,9 +94,11 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 		AllowNetwork:           template.AllowNetwork,
 		AllowDelegation:        template.AllowDelegation,
 		ThinkingBudgetTokens:   template.ThinkingBudgetTokens,
+		OutputSchema:           append(json.RawMessage(nil), template.OutputSchema...),
 		Files:                  template.Files,
 		FileNames:              template.FileNames,
 		MaxRetries:             &template.MaxRetries,
+		RetryPolicy:            template.RetryPolicy,
 		Timezone:               template.Timezone,
 	}
 	// Connector inheritance is the event-trigger security boundary: an untrusted
@@ -115,7 +118,9 @@ func (s *Storage) buildTriggerRun(ctx context.Context, taskID uuid.UUID, prompt 
 	// against the template owner's spending caps.
 	run.CreatedByKeyID = template.CreatedByKeyID
 
-	if err := s.db.AddTask(ctx, run); err != nil {
+	// Route every spawned run through the same schema/contract gate as public
+	// enqueue paths. Event triggers must not create a task the API would reject.
+	if _, err := s.AddTaskWithContext(ctx, run); err != nil {
 		return uuid.Nil, fmt.Errorf("create trigger run: %w", err)
 	}
 	return run.ID, nil

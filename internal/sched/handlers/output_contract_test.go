@@ -50,8 +50,18 @@ func TestGetTaskOutputTerminalContract(t *testing.T) {
 	if _, err := store.AddTask(failed); err != nil {
 		t.Fatal(err)
 	}
+	pendingStructured := &models.Task{
+		ID: uuid.New(), Prompt: "pending structured", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC(), OutputSchema: schema,
+	}
+	if _, err := store.AddTask(pendingStructured); err != nil {
+		t.Fatal(err)
+	}
 	freeform := &models.Task{ID: uuid.New(), Prompt: "free", Status: models.TaskStatusSuccess, CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(freeform); err != nil {
+		t.Fatal(err)
+	}
+	pendingFreeform := &models.Task{ID: uuid.New(), Prompt: "pending free", Status: models.TaskStatusPending, CreatedAt: time.Now().UTC()}
+	if _, err := store.AddTask(pendingFreeform); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,8 +73,13 @@ func TestGetTaskOutputTerminalContract(t *testing.T) {
 		return w
 	}
 
-	if w := get(valid.ID); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"ok":true}` {
+	if w := get(valid.ID); w.Code != http.StatusOK {
 		t.Fatalf("valid output: status=%d body=%s", w.Code, w.Body.String())
+	} else {
+		var body map[string]bool
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || !body["ok"] {
+			t.Fatalf("valid output body=%s err=%v", w.Body.String(), err)
+		}
 	}
 	if w := get(legacy.ID); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "contract violated") {
 		t.Fatalf("legacy impossible success: status=%d body=%s", w.Code, w.Body.String())
@@ -75,7 +90,13 @@ func TestGetTaskOutputTerminalContract(t *testing.T) {
 	if w := get(failed.ID); w.Code != http.StatusConflict {
 		t.Fatalf("failed structured task with stale output: status=%d body=%s", w.Code, w.Body.String())
 	}
+	if w := get(pendingStructured.ID); w.Code != http.StatusConflict {
+		t.Fatalf("pending structured task: status=%d body=%s", w.Code, w.Body.String())
+	}
 	if w := get(freeform.ID); w.Code != http.StatusNotFound {
 		t.Fatalf("free-form task: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := get(pendingFreeform.ID); w.Code != http.StatusNotFound {
+		t.Fatalf("pending free-form task: status=%d body=%s", w.Code, w.Body.String())
 	}
 }

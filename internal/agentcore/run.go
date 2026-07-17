@@ -258,6 +258,11 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	if deps.Input == nil || deps.Policy == nil {
 		return Result{}, fmt.Errorf("run requires an InputSource and a Policy")
 	}
+	// Fail before the first provider/tool side effect if a direct caller or a
+	// legacy database row bypassed the enqueue-time schema gate.
+	if err := validateDeclaredOutputSchema(cfg.OutputSchema); err != nil {
+		return Result{}, err
+	}
 
 	// Observer callbacks can originate inside Fantasy's coordinator and parallel
 	// tool goroutines. Wrap the seam once for the whole run, then pass only that
@@ -451,6 +456,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 			if errors.Is(serr, ErrCostCeilingExceeded) {
 				res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round)
 				res.StoppedByBudget = true
+				// Free-form chat keeps its historical clean-stop semantics. A declared
+				// output contract cannot: this branch occurs before finish/audit gates
+				// and before the strict/tool terminal phase, so accepting schema-looking
+				// ordinary text would bypass the contract entirely.
+				if len(cfg.OutputSchema) > 0 {
+					return res, serr
+				}
 				return res, nil
 			}
 			return Result{}, serr

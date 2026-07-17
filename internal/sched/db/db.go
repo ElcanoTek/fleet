@@ -2588,7 +2588,9 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			output_json = $53,
 			artifacts = $54,
 			thinking_budget_tokens = $55,
-			file_names = $56
+			file_names = $56,
+			pending_question = $57,
+			pending_answer = $58
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -2646,6 +2648,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		marshalRawJSON(task.Artifacts),
 		thinkingBudgetValue(task.ThinkingBudgetTokens),
 		marshalJSON(task.FileNames),
+		nullableString(task.PendingQuestion),
+		nullableString(task.PendingAnswer),
 	)
 	return err
 }
@@ -2778,6 +2782,7 @@ func (db *Database) RecoverExpiredLeases(ctx context.Context, now time.Time) (in
 			lease_owner = NULL,
 			lease_expires_at = NULL,
 			started_at = NULL,
+			output_json = NULL,
 			artifacts = NULL,
 			attempt_count = attempt_count + 1
 		WHERE status IN ($2, $3, $4)

@@ -23,7 +23,7 @@ func TestValidateSchema(t *testing.T) {
 		t.Errorf("valid schema rejected: %v", err)
 	}
 	// A schema must be a JSON object, not an array/scalar, and must be valid JSON.
-	for _, bad := range []string{`[]`, `"a string"`, `42`, `{not json`, ``} {
+	for _, bad := range []string{`[]`, `"a string"`, `42`, `null`, `{not json`, ``} {
 		if err := ValidateSchema(json.RawMessage(bad)); err == nil {
 			t.Errorf("expected %q to be rejected as a schema", bad)
 		}
@@ -129,6 +129,25 @@ func TestValidateOutput_Conforming(t *testing.T) {
 	}
 	if got["name"] != "Ada" {
 		t.Errorf("got %v", got)
+	}
+}
+
+func TestValidateOutput_PreservesLargeInteger(t *testing.T) {
+	schema := json.RawMessage(`{
+	  "type":"object",
+	  "properties":{"value":{"type":"integer","const":9007199254740993}},
+	  "required":["value"],
+	  "additionalProperties":false
+	}`)
+	out, err := ValidateOutput(`{"value":9007199254740993}`, schema)
+	if err != nil {
+		t.Fatalf("large integer output rejected: %v", err)
+	}
+	if string(out) != `{"value":9007199254740993}` {
+		t.Fatalf("large integer was rounded: %s", out)
+	}
+	if _, err := ValidateOutput(`{"value":9007199254740992}`, schema); err == nil {
+		t.Fatal("adjacent rounded integer unexpectedly satisfied exact const")
 	}
 }
 

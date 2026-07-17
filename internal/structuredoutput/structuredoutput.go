@@ -42,8 +42,16 @@ func CompileSchema(raw json.RawMessage) (*jsonschema.Schema, error) {
 	}
 	// A JSON Schema must itself be a JSON object — reject arrays/scalars early
 	// with a clearer message than the compiler's.
+	if !json.Valid(raw) {
+		return nil, fmt.Errorf("must be a JSON object: invalid JSON")
+	}
 	var obj map[string]any
-	if err := json.Unmarshal(raw, &obj); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&obj); err != nil || obj == nil {
+		if err == nil {
+			err = fmt.Errorf("null is not an object")
+		}
 		return nil, fmt.Errorf("must be a JSON object: %w", err)
 	}
 	if err := validateComplexity(obj, 1, new(int)); err != nil {
@@ -107,7 +115,7 @@ func ValidateSchema(raw json.RawMessage) error {
 }
 
 // PromptAugmentation returns the system-prompt addendum that instructs the agent
-// to emit ONLY a JSON object conforming to schema (#244). An empty schema yields
+// to emit ONLY a JSON value conforming to schema (#244). An empty schema yields
 // the empty string so the caller can append unconditionally.
 func PromptAugmentation(schema json.RawMessage) string {
 	if len(schema) == 0 {
@@ -122,8 +130,8 @@ func PromptAugmentation(schema json.RawMessage) string {
 		return ""
 	}
 	return "\n\n--- STRUCTURED OUTPUT REQUIREMENT ---\n" +
-		"Your final response MUST be a valid JSON object conforming to the following JSON Schema. " +
-		"Do not include any text, markdown fences, or explanation outside the JSON object itself.\n\n" +
+		"Your final response MUST be a valid JSON value conforming to the following JSON Schema. " +
+		"Do not include any text, markdown fences, or explanation outside the JSON value itself.\n\n" +
 		"JSON Schema:\n" + compact.String()
 }
 
@@ -145,7 +153,12 @@ func ValidateOutput(finalText string, schema json.RawMessage) (json.RawMessage, 
 	var lastValidationErr error
 	for i := len(candidates) - 1; i >= 0; i-- {
 		var v any
-		if err := json.Unmarshal([]byte(candidates[i]), &v); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(candidates[i]))
+		// Keep JSON numbers exact through validation and persistence. Decoding
+		// through float64 would silently round integers above 2^53, allowing the
+		// stored value to differ from the provider's schema-valid candidate.
+		decoder.UseNumber()
+		if err := decoder.Decode(&v); err != nil {
 			continue
 		}
 		parsedAny = true

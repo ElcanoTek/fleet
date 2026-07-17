@@ -21,7 +21,7 @@ const storageOutputSchema = `{
 }`
 
 func TestStructuredOutputSuccessIsAtomicAndFailClosed(t *testing.T) {
-	store, _ := newTestStore(t)
+	store, database := newTestStore(t)
 	owner := uuid.New()
 	task := &models.Task{
 		ID:           uuid.New(),
@@ -37,6 +37,10 @@ func TestStructuredOutputSuccessIsAtomicAndFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.Conn().ExecContext(t.Context(), `
+		UPDATE tasks SET pending_question = 'which value?', pending_answer = 'true' WHERE id = $1`, task.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := store.UpdateTaskStatusAtomic(leased.ID, owner, &models.StatusUpdate{
 		Status: models.TaskStatusSuccess,
@@ -44,8 +48,10 @@ func TestStructuredOutputSuccessIsAtomicAndFailClosed(t *testing.T) {
 		t.Fatalf("success without output error = %v", err)
 	}
 	stillRunning, _ := store.GetTask(task.ID)
-	if stillRunning.Status == models.TaskStatusSuccess || stillRunning.LeaseOwner == nil {
-		t.Fatalf("refused write mutated lifecycle: status=%s lease=%v", stillRunning.Status, stillRunning.LeaseOwner)
+	if stillRunning.Status == models.TaskStatusSuccess || stillRunning.LeaseOwner == nil ||
+		stillRunning.PendingQuestion == "" || stillRunning.PendingAnswer == "" {
+		t.Fatalf("refused write mutated lifecycle/Q&A: status=%s lease=%v question=%q answer=%q",
+			stillRunning.Status, stillRunning.LeaseOwner, stillRunning.PendingQuestion, stillRunning.PendingAnswer)
 	}
 
 	if _, err := store.UpdateTaskStatusAtomic(leased.ID, owner, &models.StatusUpdate{
@@ -63,9 +69,67 @@ func TestStructuredOutputSuccessIsAtomicAndFailClosed(t *testing.T) {
 	if completed.Status != models.TaskStatusSuccess || string(completed.OutputJSON) != `{"ok":true}` || completed.LeaseOwner != nil {
 		t.Fatalf("completed = %+v", completed)
 	}
+	if completed.PendingQuestion != "" || completed.PendingAnswer != "" {
+		t.Fatalf("successful transaction retained consumed Q&A: question=%q answer=%q", completed.PendingQuestion, completed.PendingAnswer)
+	}
 	reread, _ := store.GetTask(task.ID)
-	if reread.Status != models.TaskStatusSuccess || string(reread.OutputJSON) != `{"ok":true}` {
+	var rereadOutput map[string]bool
+	decodeErr := json.Unmarshal(reread.OutputJSON, &rereadOutput)
+	if reread.Status != models.TaskStatusSuccess || decodeErr != nil || !rereadOutput["ok"] {
 		t.Fatalf("atomic result not persisted: status=%s output=%s", reread.Status, reread.OutputJSON)
+	}
+}
+
+func TestStructuredSuccessRejectsStaleOutputAndRecoveryClearsIt(t *testing.T) {
+	store, database := newTestStore(t)
+	owner := uuid.New()
+	task := &models.Task{
+		ID:           uuid.New(),
+		Prompt:       "structured task",
+		Status:       models.TaskStatusPending,
+		CreatedAt:    time.Now().UTC(),
+		OutputSchema: json.RawMessage(storageOutputSchema),
+	}
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+	leased, err := store.leaseTaskToOwner(task.ID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the pre-contract two-step writer: it persisted a candidate while
+	// still running, then crashed before the terminal status transition.
+	if _, err := database.Conn().ExecContext(t.Context(), `
+		UPDATE tasks
+		SET output_json = '{"ok":true}'::jsonb,
+		    lease_expires_at = now() - interval '1 second'
+		WHERE id = $1`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.UpdateTaskStatusAtomic(leased.ID, owner, &models.StatusUpdate{
+		Status: models.TaskStatusSuccess,
+	}); !errors.Is(err, ErrStructuredOutputContract) {
+		t.Fatalf("stale output authorized success: %v", err)
+	}
+	beforeRecovery, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeRecovery.Status == models.TaskStatusSuccess || len(beforeRecovery.OutputJSON) == 0 {
+		t.Fatalf("refused transition changed/omitted fixture: status=%s output=%s", beforeRecovery.Status, beforeRecovery.OutputJSON)
+	}
+
+	if recovered, err := store.RecoverExpiredLeases(); err != nil || recovered != 1 {
+		t.Fatalf("RecoverExpiredLeases = %d, %v", recovered, err)
+	}
+	afterRecovery, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRecovery.Status != models.TaskStatusPending || len(afterRecovery.OutputJSON) != 0 || afterRecovery.LeaseOwner != nil {
+		t.Fatalf("recovered task retained stale state: status=%s output=%s lease=%v",
+			afterRecovery.Status, afterRecovery.OutputJSON, afterRecovery.LeaseOwner)
 	}
 }
 

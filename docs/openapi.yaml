@@ -246,6 +246,8 @@ components:
               type: array
               items: { type: string, enum: [transient, cost_ceiling, context_budget, structured_output_format, structured_output_persistence, terminal] }
         output_schema:
+          type: object
+          additionalProperties: true
           description: >-
             Required terminal machine-output contract. Must be a self-contained
             JSON Schema object no larger than 65,536 encoded bytes, 32 nesting
@@ -279,8 +281,8 @@ components:
         scheduled_for: { type: string, format: date-time }
         recurrence: { type: string }
         result: { type: string }
-        output_schema: { description: "Declared terminal JSON Schema contract, when structured-output mode is enabled." }
-        output_json: { description: "Compact, locally schema-validated result. Non-null on every successful task that declares output_schema." }
+        output_schema: { type: object, additionalProperties: true, description: "Declared terminal JSON Schema contract, when structured-output mode is enabled." }
+        output_json: { nullable: true, description: "Locally schema-validated result. Non-null on every successful task that declares output_schema." }
         error_message: { type: string }
         files: { type: array, items: { type: string } }
         file_names: { type: array, items: { type: string } }

@@ -7,7 +7,8 @@ with the success transition.
 
 ## Create a structured task
 
-`output_schema` is a self-contained JSON Schema object. Internal `#/...` refs
+`output_schema` is a self-contained JSON Schema document object. The declared
+result itself may be an object, array, scalar, or union. Internal `#/...` refs
 are supported; external refs are rejected because schema compilation runs in the
 host process and must never read a task-selected URL or file.
 
@@ -49,13 +50,18 @@ after the ordinary tools have finished and the policy permits completion does
 that same run enter its terminal formatting phase over the completed
 transcript.
 
-- An active OpenRouter model receives the full raw schema through strict
+- An active OpenRouter model receives the declared schema through strict
   `response_format: {type: "json_schema", ...}`. Fleet also sets OpenRouter's
   `require_parameters` routing constraint so it cannot silently choose an
   upstream that ignores the requested parameter.
 - Other provider adapters receive exactly one forced `structured_output`
   function tool whose input schema is the declared schema. No ordinary task,
   MCP, or native tools are exposed in this phase.
+- Provider schema protocols require an object at the top level. Fleet passes a
+  definitely object-root declaration directly; an array, scalar, union, or
+  `$ref` root is placed under one deterministic `value` property and unwrapped
+  before local validation and persistence, so the public result shape is still
+  exactly the declared shape.
 - If in-run failover selected a fallback model, the terminal phase uses that
   active model and its provider capability path; it does not return to the
   failed primary.
@@ -72,11 +78,11 @@ output all end the run unsuccessfully with an actionable diagnostic.
 
 The runner defensively validates the final assistant value again. Storage then
 validates it a third time and writes `output_json` and `status=success` in one
-lease-checked database transaction. Success notifications, replies, downstream
-triggers, and creation of the next recurring occurrence happen only after that
-commit. A lost lease cannot publish output, success, or success side effects.
+lease-checked database transaction. Success notifications, email replies, and
+creation of the next recurring occurrence happen only after that commit. A lost
+lease cannot publish output, success, or success side effects.
 
-`GET /tasks/{id}/output` returns the compact validated JSON directly with
+`GET /tasks/{id}/output` returns the validated JSON directly with
 `Content-Type: application/json`:
 
 - `200`: validated output is available. Every successful task with
