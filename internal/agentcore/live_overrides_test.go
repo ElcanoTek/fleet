@@ -1,11 +1,13 @@
 package agentcore
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Admin-settings live overrides for the two per-turn agentcore knobs. The
 // load-bearing assertions: an override wins over the env resolution, clearing
-// reverts to it, and 0 keeps its documented per-knob meaning ("unset" for the
-// disclosure threshold, "no ceiling" for the output cap).
+// reverts to it, and zero cannot disable the output boundary.
 
 func TestSetToolDisclosureThresholdOverride(t *testing.T) {
 	t.Cleanup(func() { SetToolDisclosureThreshold(0) })
@@ -37,17 +39,22 @@ func TestSetMaxToolOutputBytesOverride(t *testing.T) {
 	base := maxToolOutputBytes() // whatever env/default resolved to in this process
 
 	SetMaxToolOutputBytes(10)
-	if got := maxToolOutputBytes(); got != 10 {
-		t.Errorf("override: got %d want 10", got)
+	if got := maxToolOutputBytes(); got != MinMaxToolOutputBytes {
+		t.Errorf("small override: got %d want envelope floor %d", got, MinMaxToolOutputBytes)
 	}
-	// 0 is a legal override meaning "no ceiling" — applyOutputCeiling treats it
-	// as disabled — so it must NOT read as "unset".
+	// Zero is accepted for backward compatibility but now means the safe default,
+	// never "no ceiling".
 	SetMaxToolOutputBytes(0)
-	if got := maxToolOutputBytes(); got != 0 {
-		t.Errorf("zero override: got %d want 0", got)
+	if got := maxToolOutputBytes(); got != defaultMaxToolOutputBytes {
+		t.Errorf("zero override: got %d want safe default %d", got, defaultMaxToolOutputBytes)
 	}
-	if out, truncated := applyOutputCeiling("some long content", 0); truncated || out != "some long content" {
-		t.Errorf("limit 0 must disable truncation")
+	big := strings.Repeat("large prose ", defaultMaxToolOutputBytes)
+	if out, truncated := applyOutputCeiling(big, 0); !truncated || len(out) > defaultMaxToolOutputBytes {
+		t.Errorf("limit 0 must retain the safe boundary, truncated=%t bytes=%d", truncated, len(out))
+	}
+	SetMaxToolOutputBytes(HardMaxToolOutputBytes * 2)
+	if got := maxToolOutputBytes(); got != HardMaxToolOutputBytes {
+		t.Errorf("oversized override: got %d want hard cap %d", got, HardMaxToolOutputBytes)
 	}
 
 	// Negative clears the override back to the env resolution.

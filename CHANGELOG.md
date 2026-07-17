@@ -107,6 +107,21 @@ prior versions are listed because none have shipped.
   remaining host-side control-plane/broker tools (network fetch, brokered
   credentials, governed datastore writes) as explicit, threat-modelled
   exceptions rather than a silent contradiction of the invariant.
+
+- **Bounded model-visible tool output**
+  ([docs/TOOL-OUTPUT-BOUNDARY.md](docs/TOOL-OUTPUT-BOUNDARY.md)): every native,
+  loader, direct/deferred MCP, and media result now crosses a
+  non-disableable 128 KiB hard boundary with valid structured envelopes,
+  binary suppression, and dedicated metrics. Governed full-output recovery now
+  writes only through the confined sandbox FileOp seam into 16 immutable,
+  8-MiB workspace slots for private conversations and isolated worktree tasks;
+  shared-root non-worktree tasks remain cap-only because they do not own the
+  root. The old host `/tmp` bash/Python/web-fetch spills and 6 MiB
+  overflow-file pass are gone. Fantasy's inner PrepareStep now budgets
+  accumulated tool results and call inputs against the active model window
+  while reserving the system prompt, tool schemas, completion, and provider
+  framing.
+
 - **Removed the stale Projects button from the collapsed sidebar**: the ≥sm
   icon strip carried a standalone briefcase button that opened the old
   Projects modal — leftover from before the rail's own Projects section

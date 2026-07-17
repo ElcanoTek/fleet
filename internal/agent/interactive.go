@@ -20,8 +20,8 @@ import (
 //   - the finalize hook (leaked-tool-call retry + forced final summary) wired
 //     through agentcore.Run's Deps.Finalize; and
 //   - chat's head/summary/tail compaction wired through agentcore.Run's
-//     Deps.CompactionSummarizer (overflow-file spill stays in overflow.go's
-//     PrepareStep, which the native tools attach).
+//     Deps.CompactionSummarizer. The shared model-aware PrepareStep independently
+//     bounds replay and inner-loop tool context before every provider request.
 //
 // The interactive turn-loop's SSE streaming, store persistence, and approval
 // staging belong to the httpapi/store layers (P6); here we provide the loop
@@ -235,7 +235,7 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		// stream instead of re-registering raw driver tools.
 		fantasy.WithTools(in.Tools...),
 		fantasy.WithPrepareStep(chainPrepareSteps(
-			overflowTruncationStep(),
+			agentcore.ModelContextBudgetStep(in.SystemPrompt, in.Tools, tc.MaxTokens),
 			agentcore.PromptCachingStep(tc.Model.Model()),
 		)),
 	)
@@ -281,7 +281,7 @@ func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.Fi
 	agent := fantasy.NewAgent(tc.Model,
 		fantasy.WithSystemPrompt(in.SystemPrompt),
 		fantasy.WithPrepareStep(chainPrepareSteps(
-			overflowTruncationStep(),
+			agentcore.ModelContextBudgetStep(in.SystemPrompt, nil, tc.MaxTokens),
 			agentcore.PromptCachingStep(tc.Model.Model()),
 		)),
 	)
@@ -346,7 +346,10 @@ func summarizeDroppedMiddle(ctx context.Context, tc TurnConfig, droppable []fant
 	if tc.Model == nil || len(droppable) == 0 {
 		return placeholderCompactionSummary(len(droppable))
 	}
-	agent := fantasy.NewAgent(tc.Model, fantasy.WithSystemPrompt(compactionSummarizeSystemPrompt))
+	agent := fantasy.NewAgent(tc.Model,
+		fantasy.WithSystemPrompt(compactionSummarizeSystemPrompt),
+		fantasy.WithPrepareStep(agentcore.ModelContextBudgetStep(compactionSummarizeSystemPrompt, nil, 4096)),
+	)
 	convo := append(append([]fantasy.Message{}, droppable...), fantasy.NewUserMessage("Produce the summary as instructed above."))
 	maxTokens := int64(4096)
 	out, err := agent.Generate(ctx, fantasy.AgentCall{

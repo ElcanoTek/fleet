@@ -57,6 +57,10 @@ type ProviderConfig struct {
 	APIKey  string
 	BaseURL string
 	Models  []string
+	// ContextWindowTokens is the provider/model's actual input+output context
+	// limit when no authoritative catalog is available. Zero selects a
+	// conservative provider-specific fail-safe; negative values are invalid.
+	ContextWindowTokens int
 	// FallbackProviders is the workspace's ordered provider failover chain.
 	// cmd/fleet attaches the same immutable slice to bundle-backed entries.
 	FallbackProviders []string

@@ -234,19 +234,15 @@ func NewWebFetchTool() fantasy.AgentTool {
 
 // webFetchResult is the structured JSON response returned by the web_fetch tool.
 type webFetchResult struct {
-	URL             string          `json:"url"`
-	Stdout          string          `json:"stdout"`
-	StatusCode      int             `json:"status_code"`
-	ContentType     string          `json:"content_type,omitempty"`
-	Cached          bool            `json:"cached"`
-	ExecutionTimeMs int64           `json:"execution_time_ms"`
-	ContentBytes    int             `json:"content_bytes"`
-	Error           string          `json:"error,omitempty"`
-	TruncationInfo  *truncationInfo `json:"truncation_info,omitempty"`
+	URL             string `json:"url"`
+	Stdout          string `json:"stdout"`
+	StatusCode      int    `json:"status_code"`
+	ContentType     string `json:"content_type,omitempty"`
+	Cached          bool   `json:"cached"`
+	ExecutionTimeMs int64  `json:"execution_time_ms"`
+	ContentBytes    int    `json:"content_bytes"`
+	Error           string `json:"error,omitempty"`
 }
-
-// webFetchTruncateThreshold matches bash/python thresholds.
-const webFetchTruncateThreshold = 32768 // ~8K tokens
 
 func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 	if url == "" {
@@ -265,7 +261,6 @@ func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 			ExecutionTimeMs: time.Since(start).Milliseconds(),
 			ContentBytes:    len(cached),
 		}
-		truncateWebFetchResult(&result)
 		jsonBytes, err := json.Marshal(result)
 		if err != nil {
 			return cached, err
@@ -298,8 +293,6 @@ func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 		t.cache.set(url, content)
 	}
 
-	truncateWebFetchResult(&result)
-
 	jsonBytes, marshalErr := json.Marshal(result)
 	if marshalErr != nil {
 		if err != nil {
@@ -308,22 +301,6 @@ func (t *webFetchTool) run(ctx context.Context, url string) (string, error) {
 		return content, nil
 	}
 	return string(jsonBytes), nil
-}
-
-// truncateWebFetchResult handles large content by saving to a spill file in the
-// per-turn workspace (#784) so the sandboxed view_file recovery hint can read it.
-func truncateWebFetchResult(result *webFetchResult) {
-	contentBytes := []byte(result.Stdout)
-	if len(contentBytes) <= webFetchTruncateThreshold {
-		return
-	}
-	truncated, path := truncateWithFile(contentBytes, "webfetch")
-	result.TruncationInfo = &truncationInfo{
-		StdoutTruncated: true,
-		StdoutFullPath:  path,
-		StdoutFullBytes: len(contentBytes),
-	}
-	result.Stdout = truncated
 }
 
 // fetchURLAndConvertStructured fetches a URL and returns content along with HTTP metadata.

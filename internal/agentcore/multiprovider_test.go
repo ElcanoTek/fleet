@@ -3,6 +3,9 @@ package agentcore
 import (
 	"context"
 	"testing"
+	"time"
+
+	"charm.land/fantasy"
 )
 
 func TestSelectProvider(t *testing.T) {
@@ -169,6 +172,14 @@ func TestNewModelResolverWithProviders(t *testing.T) {
 			t.Error("a provider that fails to build must error at construction, not at first turn")
 		}
 	})
+	t.Run("negative context window fails construction at boot", func(t *testing.T) {
+		_, err := NewModelResolverWithProviders([]ProviderConfig{
+			{Name: "local", Type: ProviderTypeOllama, ContextWindowTokens: -1},
+		}, DefaultProviderHeaders)
+		if err == nil {
+			t.Error("a negative context window must fail resolver construction")
+		}
+	})
 	t.Run("valid multi-provider builds all", func(t *testing.T) {
 		r, err := NewModelResolverWithProviders([]ProviderConfig{
 			{Name: "openrouter", Type: ProviderTypeOpenRouter, APIKey: "k"},
@@ -184,6 +195,115 @@ func TestNewModelResolverWithProviders(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestResolvedProviderContextWindow(t *testing.T) {
+	if got := resolvedProviderContextWindow(ProviderConfig{Type: ProviderTypeOllama}); got != 4096 {
+		t.Fatalf("unknown Ollama context window = %d, want conservative 4096", got)
+	}
+	if got := resolvedProviderContextWindow(ProviderConfig{Type: ProviderTypeOpenAI}); got != 32_000 {
+		t.Fatalf("unknown native OpenAI context window = %d, want conservative 32000", got)
+	}
+	if got := resolvedProviderContextWindow(ProviderConfig{Type: ProviderTypeOllama, ContextWindowTokens: 32_768}); got != 32_768 {
+		t.Fatalf("declared Ollama context window = %d, want 32768", got)
+	}
+	if got := resolvedProviderContextWindow(ProviderConfig{Type: ProviderTypeOpenRouter}); got != 0 {
+		t.Fatalf("OpenRouter override = %d, want catalog resolution", got)
+	}
+	if got := resolvedProviderContextWindow(ProviderConfig{Type: ProviderTypeOpenRouter, ContextWindowTokens: 1_000_000}); got != 0 {
+		t.Fatalf("inflated OpenRouter declaration = %d, want authoritative catalog resolution", got)
+	}
+}
+
+func TestContextWindowForActiveModel_OpenRouterCatalogOverridesDeclaration(t *testing.T) {
+	const slug = "review-fixture/catalog-authoritative-128k"
+	t.Setenv("FLEET_DISABLE_OPENROUTER_MODELS", "0")
+	base := &namedMockModel{name: slug}
+	openRouter := &providerNamedModel{
+		LanguageModel:       base,
+		providerName:        "openrouter",
+		providerType:        ProviderTypeOpenRouter,
+		contextWindowTokens: 1_000_000, // deliberately inflated wrapper declaration
+	}
+	native := &providerNamedModel{
+		LanguageModel:       base,
+		providerName:        "local",
+		providerType:        ProviderTypeOllama,
+		contextWindowTokens: 32_768,
+	}
+
+	// Seed the already-fetched public catalog directly so this regression is
+	// deterministic and never performs a network request.
+	sharedModelsCache.mu.Lock()
+	oldMap := sharedModelsCache.contextMap
+	oldFetchedAt := sharedModelsCache.fetchedAt
+	sharedModelsCache.contextMap = map[string]int{slug: 128 * 1024}
+	sharedModelsCache.fetchedAt = time.Now()
+	sharedModelsCache.mu.Unlock()
+	type priorObservation struct {
+		value int
+		had   bool
+	}
+	keys := []observedContextKey{
+		observedContextKeyForModel(openRouter),
+		observedContextKeyForModel(native),
+		{slug: slug}, // legacy unwrapped-model observation
+	}
+	prior := make(map[observedContextKey]priorObservation, len(keys))
+	observedContextWindows.mu.Lock()
+	for _, key := range keys {
+		value, had := observedContextWindows.m[key]
+		prior[key] = priorObservation{value: value, had: had}
+		delete(observedContextWindows.m, key)
+	}
+	observedContextWindows.mu.Unlock()
+	t.Cleanup(func() {
+		sharedModelsCache.mu.Lock()
+		sharedModelsCache.contextMap = oldMap
+		sharedModelsCache.fetchedAt = oldFetchedAt
+		sharedModelsCache.mu.Unlock()
+		observedContextWindows.mu.Lock()
+		for _, key := range keys {
+			if old := prior[key]; old.had {
+				observedContextWindows.m[key] = old.value
+			} else {
+				delete(observedContextWindows.m, key)
+			}
+		}
+		observedContextWindows.mu.Unlock()
+	})
+
+	// Even the legacy unwrapped-model cache is isolated from a provider-wrapped
+	// model. This exercises OpenRouter's static/live fallback path without
+	// reintroducing a slug-only observation after the scoped lookup misses.
+	recordContextMax(slug, 2_000_000)
+	if got := contextWindowForActiveModel(openRouter); got != 128*1024 {
+		t.Fatalf("OpenRouter active window = %d, want authoritative catalog 131072", got)
+	}
+
+	// Provider-local handles do not expose authoritative OpenRouter metadata;
+	// their manifest declaration remains the active limit for the same slug.
+	if got := contextWindowForActiveModel(native); got != 32_768 {
+		t.Fatalf("native active window = %d, want declared 32768", got)
+	}
+
+	// Provider-reported ground truth is scoped to the exact provider+slug pair.
+	// A large native observation must not inflate OpenRouter's 128K catalog
+	// window, and a later OpenRouter observation must not shrink the native one.
+	recordContextFromError(native, &fantasy.ProviderError{ContextMaxTokens: 1_000_000})
+	if got := contextWindowForActiveModel(openRouter); got != 128*1024 {
+		t.Fatalf("native same-slug observation contaminated OpenRouter: got %d, want 131072", got)
+	}
+	if got := contextWindowForActiveModel(native); got != 1_000_000 {
+		t.Fatalf("native observed window = %d, want 1000000", got)
+	}
+	recordContextFromError(openRouter, &fantasy.ProviderError{ContextMaxTokens: 64 * 1024})
+	if got := contextWindowForActiveModel(openRouter); got != 64*1024 {
+		t.Fatalf("OpenRouter observed window = %d, want 65536", got)
+	}
+	if got := contextWindowForActiveModel(native); got != 1_000_000 {
+		t.Fatalf("OpenRouter same-slug observation contaminated native: got %d, want 1000000", got)
+	}
 }
 
 func TestResolveWithFallbackChainAndExplicitPin(t *testing.T) {

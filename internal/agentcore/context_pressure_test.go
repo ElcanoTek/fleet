@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -243,9 +244,11 @@ func TestEstimateMessagesTokens(t *testing.T) {
 
 // ── run-loop integration ──
 
-// testContextWindow is the small, fixed window the run-loop pressure tests pin
-// for their mock model's slug, so the token estimates land at precise fractions.
-const testContextWindow = 1000
+// testContextWindow is the fixed window the run-loop pressure tests pin for
+// their mock model's slug. It must be large enough for the production completion
+// and provider-framing reserves enforced before every call (#793), while the
+// token estimates still land at precise fractions.
+const testContextWindow = 100_000
 
 // newStopModel builds a named mock whose stream finishes immediately, and pins a
 // test-controlled context window for its slug so the pressure ratios are
@@ -268,9 +271,10 @@ func newStopModel(slug string) *namedMockModel {
 func TestRun_ContextPressure_InteractiveWarns(t *testing.T) {
 	model := newStopModel("ctx209-inter-warn")
 	obs := &captureObserver{}
-	// 6 × 520 chars = 6 × 130 = 780 tokens → 0.78 of 1000: warn band [0.75,0.90).
+	// 6 × 52K chars = 6 × 13K = 78K tokens → 0.78: warn band
+	// [0.75,0.90), and just below the reserved inner-call target.
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
-		Input:    historyInput{system: "s", msgs: fillerMessages(6, 520), label: "warn"},
+		Input:    historyInput{system: "s", msgs: fillerMessages(6, 52_000), label: "warn"},
 		Observer: obs,
 		Policy:   NewInteractivePolicy(0, 0, nil, nil),
 		Executor: &stubExecutor{},
@@ -292,9 +296,9 @@ func TestRun_ContextPressure_InteractiveWarns(t *testing.T) {
 func TestRun_ContextPressure_InteractiveCompacts(t *testing.T) {
 	model := newStopModel("ctx209-inter-compact")
 	obs := &captureObserver{}
-	// 6 × 640 chars = 6 × 160 = 960 tokens → 0.96 of 1000: compaction band.
+	// 6 × 64K chars = 96K tokens → 0.96: compaction band.
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
-		Input:    historyInput{system: "s", msgs: fillerMessages(6, 640), label: "compact"},
+		Input:    historyInput{system: "s", msgs: fillerMessages(6, 64_000), label: "compact"},
 		Observer: obs,
 		Policy:   NewInteractivePolicy(0, 0, nil, nil),
 		Executor: &stubExecutor{},
@@ -327,14 +331,14 @@ func TestRun_ContextPressure_ScheduledWarnsOnlyWithoutFlag(t *testing.T) {
 	obs := &captureObserver{}
 	session := NewLogSession()
 	_, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true}, Deps{
-		Input:      historyInput{system: "s", msgs: fillerMessages(6, 640), label: "sched"},
+		Input:      historyInput{system: "s", msgs: fillerMessages(6, 64_000), label: "sched"},
 		Observer:   obs,
 		Policy:     finishableScheduledPolicy(session),
 		Model:      model,
 		LogSession: session,
 	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	if !errors.Is(err, ErrInnerContextBudgetExceeded) {
+		t.Fatalf("Run error = %v, want fail-closed %v after warning without compaction", err, ErrInnerContextBudgetExceeded)
 	}
 	if !hasEvent(obs.events, evtContextPressure) {
 		t.Errorf("expected %s, got %v", evtContextPressure, obs.events)
@@ -361,7 +365,7 @@ func TestRun_ContextPressure_ScheduledCompactsWithFlag(t *testing.T) {
 	obs := &captureObserver{}
 	session := NewLogSession()
 	_, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true}, Deps{
-		Input:      historyInput{system: "s", msgs: fillerMessages(6, 640), label: "sched"},
+		Input:      historyInput{system: "s", msgs: fillerMessages(6, 64_000), label: "sched"},
 		Observer:   obs,
 		Policy:     finishableScheduledPolicy(session),
 		Model:      model,
@@ -390,7 +394,7 @@ func TestCheckContextPressure_DrivenByLastStepNotCumulative(t *testing.T) {
 	sink := newStreamSink(obs)
 
 	// Tiny history: the estimate fallback alone is far below any threshold.
-	msgs := fillerMessages(4, 20) // 4 × 5 = 20 tokens → 0.02 of 1000
+	msgs := fillerMessages(4, 20)
 
 	// A large CUMULATIVE total with a zero per-call size must stay silent.
 	e.logSession.PromptTokens = 50_000
@@ -400,7 +404,7 @@ func TestCheckContextPressure_DrivenByLastStepNotCumulative(t *testing.T) {
 	}
 
 	// A real per-call input size near the window DOES drive compaction.
-	e.logSession.LastStepPromptTokens = 950 // 0.95 of 1000
+	e.logSession.LastStepPromptTokens = 95_000 // 0.95 of the window
 	e.checkContextPressure(context.Background(), msgs, model, sink, false)
 	if !hasEvent(obs.events, evtContextCompacted) {
 		t.Errorf("ground-truth LastStepPromptTokens should drive compaction, got %v", obs.events)
@@ -409,7 +413,7 @@ func TestCheckContextPressure_DrivenByLastStepNotCumulative(t *testing.T) {
 
 // TestRun_ContextPressure_MultiRoundCompactsFromGroundTruthAndFeedsForward drives
 // two rounds: round 0's estimate is trivially small, round 1 reads the real
-// 950-token LastStepPromptTokens reported by round 0's stream and compacts. It
+// 95K-token LastStepPromptTokens reported by round 0's stream and compacts. It
 // asserts the compacted, summary-spliced history is what actually REACHED the
 // model on round 1 (not just that the event fired) — i.e. that the run loop
 // wires `messages = pressure.messages` forward.
@@ -417,7 +421,7 @@ func TestRun_ContextPressure_MultiRoundCompactsFromGroundTruthAndFeedsForward(t 
 	slug := "ctx209-multiround-compact"
 	recordContextMax(slug, testContextWindow)
 	session := NewLogSession()
-	model := &capturingModel{slug: slug, inputByCall: []int{950, 950}}
+	model := &capturingModel{slug: slug, inputByCall: []int{95_000, 95_000}}
 	obs := &captureObserver{}
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
 		Input:      historyInput{system: "s", msgs: fillerMessages(10, 20), label: "mr"}, // ~0.05 estimate at round 0
@@ -453,17 +457,17 @@ func TestRun_ContextPressure_MultiRoundCompactsFromGroundTruthAndFeedsForward(t 
 // TestRun_ContextPressure_MultiRoundWarnDedupAndReset pins the cross-round warn
 // contract: a hovering run surfaces ONE banner, and a compaction RESETS the
 // dedup so a later climb warns again. Round 0 warns off the estimate; round 1's
-// real 950 tokens compact (resetting the flag); round 2's real 800 tokens warn
+// real 95K tokens compact (resetting the flag); round 2's real 80K tokens warn
 // again. Exactly two warn events ⇒ both the dedup (no third) and the reset (the
 // second) hold; without the reset the second warn would be suppressed.
 func TestRun_ContextPressure_MultiRoundWarnDedupAndReset(t *testing.T) {
 	slug := "ctx209-multiround-warn"
 	recordContextMax(slug, testContextWindow)
 	session := NewLogSession()
-	model := &capturingModel{slug: slug, inputByCall: []int{950, 800, 800}}
+	model := &capturingModel{slug: slug, inputByCall: []int{95_000, 80_000, 80_000}}
 	obs := &captureObserver{}
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
-		Input:      historyInput{system: "s", msgs: fillerMessages(8, 400), label: "warn"}, // 8 × 100 = 800 tokens → 0.80 estimate
+		Input:      historyInput{system: "s", msgs: fillerMessages(8, 38_000), label: "warn"}, // 76K tokens → 0.76 estimate, inside the reserved target
 		Observer:   obs,
 		Policy:     newRoundsPolicy(session, 2), // rounds 0, 1, 2
 		Executor:   &stubExecutor{},
@@ -495,14 +499,14 @@ func TestRun_ContextPressure_UnsplittableHistoryStillWarns(t *testing.T) {
 	model := newStopModel("ctx209-unsplittable")
 	obs := &captureObserver{}
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
-		Input:    historyInput{system: "s", msgs: fillerMessages(1, 8000), label: "huge"}, // 2000 tokens vs 1000 window
+		Input:    historyInput{system: "s", msgs: fillerMessages(1, 800_000), label: "huge"}, // 200K tokens vs 100K window
 		Observer: obs,
 		Policy:   NewInteractivePolicy(0, 0, nil, nil),
 		Executor: &stubExecutor{},
 		Model:    model,
 	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	if !errors.Is(err, ErrInnerContextBudgetExceeded) {
+		t.Fatalf("Run error = %v, want fail-closed %v for unsplittable history", err, ErrInnerContextBudgetExceeded)
 	}
 	if !hasEvent(obs.events, evtContextPressure) {
 		t.Errorf("an un-splittable over-limit history must still warn, got %v", obs.events)

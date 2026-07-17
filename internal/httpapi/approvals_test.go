@@ -8,9 +8,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
+
+func TestGovernApprovalResultBoundsApprovedBashBeforePersistence(t *testing.T) {
+	t.Cleanup(func() { agentcore.SetMaxToolOutputBytes(-1) })
+	agentcore.SetMaxToolOutputBytes(2048)
+	approval := &store.Approval{ID: "approval-1", ToolCallID: "bash-call", ToolName: "bash"}
+	text, isErr := governApprovalResult(context.Background(), approval, strings.Repeat("approved command output row ", 20_000), false)
+	if isErr || len(text) > 2048 || !strings.Contains(text, "original_bytes") || !strings.Contains(text, "recovery_action") {
+		t.Fatalf("approved bash persistence bypassed boundary: is_err=%t bytes=%d content=%.200s", isErr, len(text), text)
+	}
+}
 
 // resolutionCallID picks the id under which the post-approval
 // tool_result row is written: the original tool_call id when it was

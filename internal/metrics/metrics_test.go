@@ -125,3 +125,34 @@ func TestRender_TurnTimeoutAndLabelEscaping(t *testing.T) {
 		t.Errorf("label not escaped:\n%s", out)
 	}
 }
+
+func TestRender_ToolOutputBoundaryMetrics(t *testing.T) {
+	RecordToolOutputTruncation("run_python", "json")
+	RecordToolOutputArtifact("success")
+	RecordToolContextReduction("result_preview", 2)
+	RecordToolContextPressure("deepseek/test", "before", 120000, 0.9375)
+	out := Render()
+	for _, want := range []string{
+		`fleet_tool_output_truncations_total{tool="native",format="json"} 1`,
+		`fleet_tool_output_artifacts_total{result="success"} 1`,
+		`fleet_tool_context_reductions_total{kind="result_preview"} 2`,
+		`fleet_tool_context_estimated_tokens{model="deepseek/test",phase="before"} 120000`,
+		`fleet_tool_context_pressure_ratio{model="deepseek/test",phase="before"} 0.9375`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestToolOutputMetricUsesBoundedToolClasses(t *testing.T) {
+	RecordToolOutputTruncation("mcp_tenant_supplied_random_name", "text")
+	RecordToolOutputTruncation("mcp_another_catalog_name", "text")
+	out := Render()
+	if !strings.Contains(out, `fleet_tool_output_truncations_total{tool="mcp",format="text"} 2`) {
+		t.Fatalf("remote names did not collapse to bounded class:\n%s", out)
+	}
+	if strings.Contains(out, "tenant_supplied") || strings.Contains(out, "another_catalog") {
+		t.Fatalf("untrusted catalog name leaked into metric labels:\n%s", out)
+	}
+}

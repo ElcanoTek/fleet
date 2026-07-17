@@ -80,14 +80,10 @@ const runPythonDescription = "Executes Python code in a per-turn IPython kernel 
 	"  ⚠️  There is NO `${tool:...}`, `${var.name}`, or any other server-side placeholder substitution. " +
 	"If you write `\"content_base64\": \"${tool:abc123.vars.payload}\"` into a downstream argument, that literal string is what the next tool receives — fast.io and friends will reject it as malformed input. " +
 	"This is the single most common chaining mistake; do not make it.\n" +
-	"  Correct pattern: set `return_vars=[\"payload\"]` on run_python. The full untruncated value comes back in the response's `vars` field — e.g. `\"vars\": {\"payload\": \"UEsDBBQ…the actual bytes…\"}`. " +
-	"In your NEXT tool call you must take that exact string and inline it verbatim as the JSON value of the downstream parameter. `vars` values are NEVER truncated, so the copy is safe even for large payloads.\n" +
-	"  When the payload is large (>10 KB) and the destination tool offers a path/URL/blob-id alternative (`fastio_upload_file path=...` for fast.io uploads, image tools that accept a workspace path, etc.), prefer that over inline base64 — it skips a round-trip through this model's context and is much harder to corrupt. The chat-server actively rejects oversized inline base64 uploads to fast.io; do not try to drive the upload yourself via `mcp_fast_io_upload action=stream-upload`."
+	"  For SMALL values, set `return_vars=[\"payload\"]` and use the returned `vars` value in the next call. All tool results share a final model-visible size boundary: a large `vars` response is always replaced by a valid bounded envelope with byte counts, never partial JSON/base64. Governed non-binary text may offer a `view_file` recovery path; encoded/binary values intentionally do not.\n" +
+	"  For payloads larger than about 10 KB, write them to a workspace file and pass the path/URL/blob id (`fastio_upload_file path=...` for fast.io uploads, image tools that accept a workspace path, etc.). This keeps bytes out of model context and avoids corruption. The chat-server actively rejects oversized inline base64 uploads to fast.io; do not try to drive the upload yourself via `mcp_fast_io_upload action=stream-upload`."
 
 const defaultPythonTimeoutSeconds = 300
-
-// pythonOutputTruncateThreshold matches the bash tool threshold.
-const pythonOutputTruncateThreshold = 32768 // ~8K tokens
 
 // NewRunPythonTool returns a run_python tool bound to the given
 // per-turn sandbox. The caller MUST pass a non-nil sandbox from the
@@ -118,7 +114,6 @@ type pythonResponse struct {
 	Hint             string                       `json:"hint,omitempty"`
 	BridgeTruncation map[string]bridgeCaptureInfo `json:"bridge_truncation,omitempty"`
 	ExecutionTimeMs  int64                        `json:"execution_time_ms,omitempty"`
-	TruncationInfo   *truncationInfo              `json:"truncation_info,omitempty"`
 	// ImageFiles are workspace-relative paths to figures the kernel produced
 	// (matplotlib etc.), saved by the bridge so the chat UI renders them inline
 	// (#213). Small path strings only — never base64 — so the model can
@@ -216,7 +211,6 @@ func runPythonWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params RunPy
 		}
 	}
 
-	truncatePythonResponse(&resp)
 	maybeAddEmptyOutputHint(&resp)
 
 	jsonBytes, marshalErr := json.Marshal(resp)
@@ -226,31 +220,4 @@ func runPythonWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params RunPy
 		return resp.Output, nil //nolint:nilerr // intentional: marshal failure falls back to raw output rather than erroring the turn; the marshal error is opaque to the model.
 	}
 	return string(jsonBytes), nil
-}
-
-// truncatePythonResponse handles large stdout/stderr by saving full
-// content to temp files and replacing inline content with head+tail
-// excerpts. Same shape the legacy implementation produced.
-func truncatePythonResponse(resp *pythonResponse) {
-	stdoutBytes := []byte(resp.Stdout)
-	stderrBytes := []byte(resp.Stderr)
-	if len(stdoutBytes) <= pythonOutputTruncateThreshold && len(stderrBytes) <= pythonOutputTruncateThreshold {
-		return
-	}
-	ti := &truncationInfo{}
-	if len(stdoutBytes) > pythonOutputTruncateThreshold {
-		truncated, path := truncateWithFile(stdoutBytes, "python-stdout")
-		ti.StdoutTruncated = true
-		ti.StdoutFullPath = path
-		ti.StdoutFullBytes = len(stdoutBytes)
-		resp.Stdout = truncated
-	}
-	if len(stderrBytes) > pythonOutputTruncateThreshold {
-		truncated, path := truncateWithFile(stderrBytes, "python-stderr")
-		ti.StderrTruncated = true
-		ti.StderrFullPath = path
-		ti.StderrFullBytes = len(stderrBytes)
-		resp.Stderr = truncated
-	}
-	resp.TruncationInfo = ti
 }

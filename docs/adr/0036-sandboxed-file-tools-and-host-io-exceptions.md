@@ -58,13 +58,16 @@ Fleet synchronously SIGKILLs the whole container and poisons/retires it, as for
 bash (#796); killing only the host-side `podman exec` client would allow a
 helper to finish a late rename.
 
-Because `view_file` now reads inside the sandbox, it cannot read a truncation
-spill left on host `/tmp` (the container has a private `/tmp`). This PR does
-not pretend otherwise: the marker directs the model to re-run with filtering or
-capture through `run_python`, while the host copy is an operator breadcrumb
-swept after 24 hours. Issue #793 owns a bounded, conversation-scoped,
-sandbox-readable artifact lifecycle; moving spill files ad hoc here would
-pre-empt its inventory and retention design.
+At #784's landing, the older truncation spill remained on host `/tmp` and was
+therefore no longer readable by sandboxed `view_file`. Issue #793 subsequently
+removed that host spill rather than granting the sandbox access to it. One final
+model-output boundary now retains only post-governance text through the confined
+`RunFileOp` seam, under a fixed-slot workspace lifecycle. Interactive and
+isolated-worktree scheduled drivers bind the artifact writer and `view_file` to
+the same private root. Shared non-worktree scheduled runs bind the sandbox and
+file-tool root but deliberately install no artifact writer because concurrent
+tasks do not own that root; their hard model-output cap still applies. See
+[`TOOL-OUTPUT-BOUNDARY.md`](../TOOL-OUTPUT-BOUNDARY.md).
 
 **Documented host-side exception classes.** The remaining native tools that do
 host I/O are, by design, host-side **control-plane / broker** operations, not
@@ -92,14 +95,10 @@ host-brokered credentials/network that by invariant never enter the sandbox:
 - **Host datastore / control state**: `task_tracker`, `notes`, `memory`, and
   `publish_artifact` write governed database/control records, not arbitrary
   model-selected host files.
-- **Host observability and temporary spill**: bash writes its operator audit
-  log; bash/run_python/web_fetch currently write per-capture-size-limited,
-  24-hour-swept truncation files to host temp, and the agent history compactor
-  writes overflow breadcrumbs beneath its configured data root. These are fixed
-  post-processing paths, never code execution, but there is no aggregate byte
-  quota in this pre-#793 implementation. #793 removes the model-output spill
-  exception in favor of a quota/retention-governed sandbox artifact lifecycle;
-  audit/session logs intentionally remain host control-plane state.
+- **Host observability/control state**: bash audit and agent audit/session logs
+  remain host control-plane state. The former bash/run_python/web_fetch temp
+  spills and agent-history overflow breadcrumbs are removed; governed recovery
+  bytes are written only through the bound sandbox FileOp capability.
 
 ## Consequences
 
@@ -107,16 +106,16 @@ ADR-0002 now states the enforceable boundary precisely: general model-authored
 local execution is sandboxed, while the fixed control-plane exceptions above
 are documented rather than silently contradicted.
 File tools can no longer reach host paths that are not sandbox mounts even when
-host validation would allow them. In particular, the current host `/tmp` spill
-is not agent-readable (the #793 artifact contract replaces it); operator
-`FLEET_ALLOWED_DIRS` dirs are reachable through the file tools only if
+host validation would allow them; model-output retention is instead rooted in
+the effective sandbox workspace;
+operator `FLEET_ALLOWED_DIRS` dirs are reachable through the file tools only if
 the operator also mounts them into the sandbox (documented). A write under a
 read-only supporting-doc mount now fails with an in-container EROFS-style error
 instead of a host pathsec error — same containment, different text. Each
 container file op adds one short-lived `podman exec` (~50–150 ms); a persistent
-in-container fileops session to amortize it is deferred. The truncation spill
-stays on host `/tmp` and is no longer agent-readable; recovery is via
-`run_python`/re-run (see #793 for the sandbox-readable artifact).
+in-container fileops session to amortize it is deferred. Governed large-output
+recovery uses 16 immutable workspace slots through this same seam (capacity is
+never reused within the workspace lifecycle); there is no host-temp fallback.
 
 ## Deferred
 

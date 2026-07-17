@@ -1003,13 +1003,14 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		// show it.
 		resultText = fmt.Sprintf("%s failed: %v", actionVerb(approval.ToolName), toolErr)
 	}
+	isErr := toolErr != nil
+	resultText, isErr = governApprovalResult(execCtx, approval, resultText, isErr)
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText); err != nil {
 		log.Printf("SetApprovalResult: %v", err)
 	}
 	// Write the real tool_result into history so the next turn's model
 	// sees what happened — and so the existing chip in the UI updates
 	// from "APPROVAL_REQUIRED..." to the real outcome on reload.
-	isErr := toolErr != nil
 	appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
 		resolutionCallID(approval), resultText, isErr)
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
@@ -1019,6 +1020,13 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request, convID, 
 		"result_text": resultText,
 		"is_err":      isErr,
 	})
+}
+
+func governApprovalResult(ctx context.Context, approval *store.Approval, text string, isErr bool) (string, bool) {
+	if approval == nil {
+		return agentcore.GovernAndBoundModelVisibleToolText(ctx, "approval", "", text, isErr)
+	}
+	return agentcore.GovernAndBoundModelVisibleToolText(ctx, approval.ToolName, resolutionCallID(approval), text, isErr)
 }
 
 // writeResolvedApprovalState answers a request that lost the claim race

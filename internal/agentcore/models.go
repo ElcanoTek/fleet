@@ -4,6 +4,8 @@ import (
 	"log"
 	"strings"
 	"sync"
+
+	"charm.land/fantasy"
 )
 
 // Default model identifiers + context-window resolution (reconciled from chat
@@ -74,6 +76,14 @@ func contextWindowForModel(slug string) int {
 	if n := contextLengthFromOpenRouter(slug); n > 0 {
 		return n
 	}
+	return contextWindowForOpenRouterCatalog(slug)
+}
+
+// contextWindowForOpenRouterCatalog resolves only OpenRouter's per-model
+// metadata and conservative static fallback. Provider-wrapped OpenRouter models
+// use this after their provider-scoped observation lookup; consulting the
+// legacy unscoped observed cache here would reintroduce same-slug contamination.
+func contextWindowForOpenRouterCatalog(slug string) int {
 	if n := contextLengthFromOpenRouterLive(slug); n > 0 {
 		return n
 	}
@@ -84,6 +94,32 @@ func contextWindowForModel(slug string) int {
 		}
 	}
 	return defaultModelContextWindow
+}
+
+func contextWindowForActiveModel(model fantasy.LanguageModel) int {
+	if model == nil {
+		return defaultModelContextWindow
+	}
+	// Provider context errors are request-ground-truth and override both an
+	// operator declaration and the conservative Ollama fallback. The lookup is
+	// scoped to provider identity as well as slug: fallback providers commonly
+	// expose the same slug with different limits.
+	if observed := observedContextWindowForModel(model); observed > 0 {
+		return observed
+	}
+	if named, ok := model.(*providerNamedModel); ok {
+		if named.providerType == ProviderTypeOpenRouter {
+			// Never let a generic manifest declaration outrank OpenRouter's
+			// per-model live catalog. This branch also protects manually composed
+			// wrappers; the production resolver leaves the OpenRouter declaration
+			// unset in resolvedProviderContextWindow.
+			return contextWindowForOpenRouterCatalog(model.Model())
+		}
+		if named.contextWindowTokens > 0 {
+			return named.contextWindowTokens
+		}
+	}
+	return contextWindowForModel(model.Model())
 }
 
 const (
@@ -126,17 +162,35 @@ func clampFraction(v, def float64) float64 {
 
 // observedContextWindows is the process-wide cache of context windows learned
 // from provider context-too-large errors (ground truth for the active slug).
+type observedContextKey struct {
+	providerName string
+	providerType ProviderType
+	slug         string
+}
+
 var observedContextWindows = struct {
 	mu sync.RWMutex
-	m  map[string]int
-}{m: make(map[string]int)}
+	m  map[observedContextKey]int
+}{m: make(map[observedContextKey]int)}
 
-// contextLengthFromOpenRouter returns the observed context_length for slug, or 0
-// when unknown. The live network fetch is deferred to P3; this reads only the
-// self-correcting cache populated by recordContextMax.
-func contextLengthFromOpenRouter(slug string) int {
-	key := strings.ToLower(strings.TrimSpace(slug))
-	if key == "" {
+func observedContextKeyForModel(model fantasy.LanguageModel) observedContextKey {
+	if model == nil {
+		return observedContextKey{}
+	}
+	key := observedContextKey{slug: strings.ToLower(strings.TrimSpace(model.Model()))}
+	if named, ok := model.(*providerNamedModel); ok {
+		key.providerName = strings.ToLower(strings.TrimSpace(named.providerName))
+		key.providerType = named.providerType
+	}
+	return key
+}
+
+func observedContextWindowForModel(model fantasy.LanguageModel) int {
+	return observedContextWindow(observedContextKeyForModel(model))
+}
+
+func observedContextWindow(key observedContextKey) int {
+	if key.slug == "" {
 		return 0
 	}
 	observedContextWindows.mu.RLock()
@@ -144,14 +198,29 @@ func contextLengthFromOpenRouter(slug string) int {
 	return observedContextWindows.m[key]
 }
 
+// contextLengthFromOpenRouter returns the observed context_length for slug, or 0
+// when unknown for an unwrapped historical OpenRouter model. Provider-wrapped
+// production models use observedContextWindowForModel so same-slug fallbacks
+// cannot contaminate each other's learned limits.
+func contextLengthFromOpenRouter(slug string) int {
+	return observedContextWindow(observedContextKey{slug: strings.ToLower(strings.TrimSpace(slug))})
+}
+
 // recordContextMax writes an observed context_max back into the cache. Called
-// from resilience.go when a provider error surfaces ContextMaxTokens — ground
-// truth for the current request that self-corrects staleness.
+// directly only by historical unwrapped-model tests. Production provider errors
+// call recordContextMaxForModel so the provider identity is part of the key.
 func recordContextMax(slug string, tokens int) {
-	if tokens <= 0 || strings.TrimSpace(slug) == "" {
+	recordObservedContextWindow(observedContextKey{slug: strings.ToLower(strings.TrimSpace(slug))}, tokens)
+}
+
+func recordContextMaxForModel(model fantasy.LanguageModel, tokens int) {
+	recordObservedContextWindow(observedContextKeyForModel(model), tokens)
+}
+
+func recordObservedContextWindow(key observedContextKey, tokens int) {
+	if tokens <= 0 || key.slug == "" {
 		return
 	}
-	key := strings.ToLower(strings.TrimSpace(slug))
 	observedContextWindows.mu.Lock()
 	defer observedContextWindows.mu.Unlock()
 	existing := observedContextWindows.m[key]
@@ -159,5 +228,6 @@ func recordContextMax(slug string, tokens int) {
 		return
 	}
 	observedContextWindows.m[key] = tokens
-	log.Printf("📏 Recorded ContextMaxTokens for %s: %d (was %d)", key, tokens, existing)
+	log.Printf("📏 Recorded ContextMaxTokens for provider=%s type=%s model=%s: %d (was %d)",
+		key.providerName, key.providerType, key.slug, tokens, existing)
 }
