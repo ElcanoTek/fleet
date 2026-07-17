@@ -19,6 +19,26 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A lifecycle hook's reason-only trailer no longer downgrades its block**:
+  `parseHookDecision` let any later contract-key line replace the verdict, so
+  `{"decision":"block",…}` followed by `{"status":"ok","reason":"scan
+  complete"}` executed the tool despite `enforce: true` — the fail-open class
+  the parser exists to prevent, one key narrower. A line without an explicit
+  `decision` key can no longer replace a seen verdict.
+- **Turns that fail with `turn.model_required` are sealed as errors, not
+  completed**: the engine deliberately emits it instead of `turn.error` (the
+  user can fix it by switching models), but `inferTerminalStatus` didn't know
+  it — the failed turn was sealed `completed` with `history_committed_at`
+  NULL, breaking the turn journal's "gates terminal success" contract and
+  hiding it from `RecoverStrandedTurns`.
+- **A stale schema-invalid `output_json` candidate no longer blocks every
+  lease-checked status write**: the structured-output gate re-validated the
+  row's existing value on all updates (lease renewals, error/interrupt
+  transitions included), stranding such tasks `running` until lease expiry
+  requeued them — a duplicate side-effect window. Validation now applies only
+  to output the current update supplies; the success gate still refuses to
+  promote a stale candidate.
+
 - **Env-file keys boot actually reads are now allowlisted**: `loadEnvFile`
   silently dropped non-allowlisted keys, and the list was missing ~16 names
   boot reads via `os.Getenv` — including `FLEET_CHAT_DATABASE_URL` /

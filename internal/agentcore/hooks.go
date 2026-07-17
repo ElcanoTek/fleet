@@ -437,6 +437,14 @@ func parseHookDecision(out string) (hookDecision, bool) {
 		if !hasDecision && !hasReason && !hasContext {
 			continue
 		}
+		// A reason/context-only line (no explicit "decision" key) must never
+		// REPLACE an already-seen verdict: a hook printing its block and then
+		// a `{"status":"ok","reason":"scan complete"}` trailer would have the
+		// trailer overwrite the block with an empty decision — the same
+		// fail-open this probe exists to prevent, one key narrower.
+		if !hasDecision && ok {
+			continue
+		}
 		var d hookDecision
 		if json.Unmarshal([]byte(line), &d) == nil {
 			found, ok = d, true

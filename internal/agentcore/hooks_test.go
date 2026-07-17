@@ -232,6 +232,15 @@ func TestHookEngine_DecisionThenNoiseStillBlocks(t *testing.T) {
 	if b, _ := e2.preToolUse(context.Background(), "bash", "c", "{}"); !b {
 		t.Error("diagnostic-only output should be treated as malformed and blocked (enforce)")
 	}
+	// The narrower fail-open: the trailer carries a CONTRACT key (reason) but
+	// no explicit decision. It must not overwrite the block with an empty
+	// decision either.
+	out3 := "{\"decision\":\"block\",\"reason\":\"denied\"}\n{\"status\":\"ok\",\"reason\":\"scan complete\"}"
+	e3 := engineWith(t, &scriptExecutor{out: out3}, nil,
+		LifecycleHook{ID: "g3", Event: HookPreToolUse, Command: "c", Enforce: true})
+	if b, reason := e3.preToolUse(context.Background(), "bash", "c", "{}"); !b {
+		t.Errorf("reason-only trailer downgraded the block: blocked=%v reason=%q", b, reason)
+	}
 }
 
 func TestHookEngine_ContextBudget(t *testing.T) {

@@ -394,6 +394,13 @@ func inferTerminalStatus(events []bufferedEvent) store.TurnStatus {
 			return store.TurnStatusCancelled
 		case "turn.error":
 			return store.TurnStatusError
+		case "turn.model_required":
+			// The engine deliberately emits turn.model_required INSTEAD of a
+			// generic turn.error (the user can fix it by picking another
+			// model). It is still a failed turn: sealing it `completed` with
+			// history_committed_at NULL would break the journal's "gates
+			// terminal success" contract and make RecoverStrandedTurns skip it.
+			return store.TurnStatusError
 		}
 	}
 	return store.TurnStatusCompleted
