@@ -36,3 +36,8 @@ internal/redact/redact_test.go:gitlab-pat:20
 # fake: fabricated Web Push subscription placeholder ("fake-p256dh-refreshed")
 # compared in TestUpsertPushSubscription's refresh assertion (#292).
 internal/store/push_subscriptions_test.go:generic-api-key:50
+
+# fake: fabricated sk- fixture in TestBoundModelOutputToolsGovernsRawAuxiliaryRouteBeforeArtifact
+# (#793), fed through output governance to assert the secret is redacted before
+# artifact staging. Never a real credential.
+internal/agentcore/tool_output_limit_test.go:generic-api-key:155
