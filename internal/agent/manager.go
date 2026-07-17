@@ -107,6 +107,21 @@ type TurnInput struct {
 	// per-conversation override or the global default before the call; nil = off.
 	// A non-Claude model silently ignores it (see agentcore.supportsExtendedThinking).
 	ThinkingConfig *agentcore.ThinkingConfig
+
+	// Durable turn journal + gated terminal commit (#798). All three are
+	// optional (evals/tests leave them nil, preserving legacy behavior).
+	//
+	// TurnJournal persists tool intents/results from inside the run loop.
+	// CommitUser durably persists the user entry BEFORE the first provider
+	// call; an error fails the turn before any side effect.
+	// CommitTerminal transactionally projects the turn's transcript (everything
+	// AFTER the already-committed user entry) into canonical history. RunTurn
+	// calls it BEFORE emitting turn.completed / turn.cancelled — a failure
+	// yields ErrHistoryCommitFailed and a visible turn.error instead of a
+	// completed answer that disappears on reload.
+	TurnJournal    agentcore.TurnJournal
+	CommitUser     func(ctx context.Context, entry HistoryEntry) error
+	CommitTerminal func(entries []HistoryEntry, cancelled bool) error
 }
 
 // TurnResult is returned after a turn completes.
@@ -893,6 +908,16 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	// the turn; the run loop's accumulated entries follow.
 	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs})
 
+	// Durable-before-execution (#798): the user message commits to canonical
+	// history before the first provider or tool call. A store failure fails
+	// the turn HERE — with no side effects yet — instead of surfacing later
+	// as a completed answer with no question above it.
+	if in.CommitUser != nil {
+		if err := in.CommitUser(ctx, userEntry); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrHistoryCommitFailed, err)
+		}
+	}
+
 	sink.Emit("turn.started", map[string]any{"persona": persona})
 
 	maxTokens := m.config.LLMMaxTokens
@@ -979,6 +1004,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		SkillProposer:   in.SkillProposer,
 		HealthRegistry:  m.health,
 		ThinkingConfig:  in.ThinkingConfig,
+		TurnJournal:     in.TurnJournal,
 	}
 	tc.Overlay = overlay
 
@@ -989,7 +1015,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		// loop returns a partial result) from a genuine stream failure that the
 		// user can fix by choosing another model.
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctxErr, sink), nil
+			return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctxErr, sink, in.CommitTerminal)
 		}
 		if errors.Is(runErr, agentcore.ErrGuardrailBlocked) {
 			sink.Emit("turn.policy_blocked", map[string]any{"policy": "prompt-injection"})
@@ -1002,7 +1028,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 
 	if res.Cancelled {
-		return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctx.Err(), sink), nil
+		return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctx.Err(), sink, in.CommitTerminal)
 	}
 
 	newHistory := make([]HistoryEntry, 0, len(res.Entries)+2)
@@ -1022,6 +1048,17 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		Model:                modelSlug,
 	}
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
+
+	// Terminal gate (#798): canonical history commits BEFORE turn.completed is
+	// advertised. The user entry (newHistory[0]) was committed up-front and is
+	// excluded. On failure the turn errors visibly — the SSE ledger and the
+	// journal keep the evidence, and startup recovery does not re-project a
+	// turn that ended alive (the driver records a terminal error state).
+	if in.CommitTerminal != nil {
+		if err := in.CommitTerminal(newHistory[1:], false); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrHistoryCommitFailed, err)
+		}
+	}
 
 	sink.Emit("turn.completed", map[string]any{
 		"cost_usd":                usage.CostUSD,
@@ -1048,7 +1085,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 
 // cancelledTurnResult builds the partial TurnResult for a cancelled turn,
 // persisting whatever transcript accumulated and emitting turn.cancelled.
-func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEntry, modelSlug string, startedAt time.Time, ctxErr error, sink EventSink) *TurnResult {
+func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEntry, modelSlug string, startedAt time.Time, ctxErr error, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
 	newHistory := make([]HistoryEntry, 0, len(res.Entries)+2)
 	newHistory = append(newHistory, userEntry)
 	newHistory = append(newHistory, mapRunEntries(res.Entries)...)
@@ -1065,6 +1102,13 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 		Model:                modelSlug,
 	}
 	newHistory = append(newHistory, mustEntry("assistant", "turn_summary", summary))
+	// Same terminal gate as the completed path (#798): partial work commits
+	// before turn.cancelled is advertised, so a Stop never loses transcript.
+	if commitTerminal != nil {
+		if err := commitTerminal(newHistory[1:], true); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrHistoryCommitFailed, err)
+		}
+	}
 	reason := "cancelled"
 	switch {
 	case res.StoppedByBudget:
@@ -1096,7 +1140,7 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 		CostUSD:             usage.CostUSD,
 		Model:               modelSlug,
 		Cancelled:           true,
-	}
+	}, nil
 }
 
 // mapRunEntries converts the agentcore run transcript into agent.HistoryEntry
@@ -1166,6 +1210,12 @@ func humanMessageForReason(reason agentcore.StreamErrorReason, status int) strin
 // layer detects it with errors.Is and does NOT emit a generic turn.error
 // (turn.model_required was already emitted). Mirrors chat's sentinel.
 var ErrModelSelectionRequired = fmt.Errorf("model selection required")
+
+// ErrHistoryCommitFailed marks a turn that failed because its canonical
+// history could not be durably committed (#798) — before the first provider
+// call (user commit) or at terminal projection. The turn surfaces a visible
+// error; it never advertises success for work that would vanish on reload.
+var ErrHistoryCommitFailed = fmt.Errorf("conversation history could not be saved")
 
 // interactiveAdmitWait bounds how long an interactive turn waits for a free
 // concurrency slot before giving up. Short, because a human is watching: it

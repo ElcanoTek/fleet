@@ -37,31 +37,48 @@ type fakeEngine struct {
 	providerHealth []agentcore.ModelHealth
 }
 
-func (f *fakeEngine) RunTurn(_ context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
+func (f *fakeEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
 	f.mu.Lock()
 	f.lastHistory = in.History
 	f.turns++
 	f.mu.Unlock()
+
+	newHistory := []agent.HistoryEntry{
+		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"` + in.UserMessage + `"}`)},
+		// A tool_call + tool_result pair so the audit-ledger derivation
+		// (deriveToolCallEntries) in runTurnAsync has something to record —
+		// this is what proves the in-process write path fires end to end.
+		{Role: "assistant", Type: "tool_call", Content: json.RawMessage(`{"id":"call_1","name":"bash","input":"{\"command\":\"ls\"}"}`)},
+		{Role: "tool", Type: "tool_result", Content: json.RawMessage(`{"id":"call_1","name":"bash","text":"ok","is_err":false}`)},
+		{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"fake reply"}`)},
+	}
+
+	// Honor the engine's #798 commit contract exactly like agent.Manager: the
+	// user entry commits before any work, the terminal projection commits
+	// BEFORE turn.completed is emitted, and a failure is a turn error.
+	if in.CommitUser != nil {
+		if err := in.CommitUser(ctx, newHistory[0]); err != nil {
+			return nil, err
+		}
+	}
 
 	// Stream the vocabulary the SSE layer + frontend depend on.
 	sink.Emit("turn.started", map[string]any{"persona": in.Persona})
 	sink.Emit("tool.call", map[string]any{"name": "bash", "id": "call_1"})
 	sink.Emit("tool.result", map[string]any{"id": "call_1", "text": "ok"})
 	sink.Emit("text.delta", map[string]any{"text": "fake reply"})
+
+	if in.CommitTerminal != nil {
+		if err := in.CommitTerminal(newHistory[1:], false); err != nil {
+			return nil, err
+		}
+	}
 	sink.Emit("turn.completed", map[string]any{"model": in.Model})
 
 	return &TurnResult{
-		FinalText: "fake reply",
-		Model:     in.Model,
-		NewHistory: []agent.HistoryEntry{
-			{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"` + in.UserMessage + `"}`)},
-			// A tool_call + tool_result pair so the audit-ledger derivation
-			// (deriveToolCallEntries) in runTurnAsync has something to record —
-			// this is what proves the in-process write path fires end to end.
-			{Role: "assistant", Type: "tool_call", Content: json.RawMessage(`{"id":"call_1","name":"bash","input":"{\"command\":\"ls\"}"}`)},
-			{Role: "tool", Type: "tool_result", Content: json.RawMessage(`{"id":"call_1","name":"bash","text":"ok","is_err":false}`)},
-			{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"fake reply"}`)},
-		},
+		FinalText:  "fake reply",
+		Model:      in.Model,
+		NewHistory: newHistory,
 	}, nil
 }
 
@@ -161,6 +178,23 @@ func (s *fakeChatStore) AppendHistory(_ context.Context, convID string, entries 
 	}
 	return ids, nil
 }
+
+// Durable turn journal + gated projection (#798): the fake routes both commit
+// paths into the same in-memory history AppendHistory feeds, so history and
+// ordering assertions cover the new commit-before-terminal flow.
+func (s *fakeChatStore) CommitUserMessage(ctx context.Context, convID, _ string, entry agent.HistoryEntry) (int64, error) {
+	ids, err := s.AppendHistory(ctx, convID, []agent.HistoryEntry{entry})
+	if err != nil {
+		return 0, err
+	}
+	return ids[0], nil
+}
+
+func (s *fakeChatStore) CommitTurnHistory(ctx context.Context, convID, _ string, entries []agent.HistoryEntry) ([]int64, error) {
+	return s.AppendHistory(ctx, convID, entries)
+}
+
+func (s *fakeChatStore) InsertTurnJournal(context.Context, store.TurnJournalRow) error { return nil }
 
 func (s *fakeChatStore) ListMemories(context.Context, string) ([]store.Memory, error) {
 	return nil, nil
@@ -334,8 +368,10 @@ func TestChatTurnPersistsTranscript_NoDBNoProvider(t *testing.T) {
 	if turnRows != 1 {
 		t.Errorf("CreateTurn calls = %d, want 1", turnRows)
 	}
-	if appends != 1 {
-		t.Errorf("AppendHistory calls = %d, want 1", appends)
+	// Two commits per turn since #798: the user entry before the first
+	// provider call, then the terminal projection before turn.completed.
+	if appends != 2 {
+		t.Errorf("history commits = %d, want 2 (user pre-run + terminal projection)", appends)
 	}
 	if recorded != 1 {
 		t.Errorf("RecordTurn calls = %d, want 1", recorded)

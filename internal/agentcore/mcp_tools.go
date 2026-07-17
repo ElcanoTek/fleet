@@ -83,6 +83,10 @@ type toolBuildConfig struct {
 	// fires the hook under its real name, so a bridge-level hook would
 	// double-fire a "*" matcher).
 	hooks *hookEngine
+	// journal is the durable turn journal seam (#798), nil when the driver has
+	// none (scheduled/evals). Same placement contract as hooks: on the real
+	// tools, never the disclosure bridge wrappers, so one call journals once.
+	journal TurnJournal
 }
 
 // buildFantasyTools combines native tools with discovered MCP tools into the
@@ -110,10 +114,10 @@ func buildFantasyTools(
 	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+1)
 
 	for _, t := range nativeTools {
-		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy, hooks: cfg.hooks})
+		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy, hooks: cfg.hooks, journal: cfg.journal})
 	}
 	for _, t := range cfg.loaderTools {
-		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy, hooks: cfg.hooks})
+		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy, hooks: cfg.hooks, journal: cfg.journal})
 	}
 	// The MCP tools that pass gates 1+2 — these are the DEFERRABLE set (#506):
 	// registered directly when the roster fits, or hidden behind the disclosure
@@ -145,6 +149,7 @@ func buildFantasyTools(
 			broker:     broker,
 			policy:     policy,
 			hooks:      cfg.hooks,
+			journal:    cfg.journal,
 		}
 		// Gate 4 (persona tool allowlist, #294): applied HERE — to the logical
 		// mcp_<server>_<tool> identity, before the disclosure decision below —
@@ -172,7 +177,7 @@ func buildFantasyTools(
 
 	confirmAudit := []fantasy.AgentTool{}
 	if cfg.includeConfirmAudit {
-		confirmAudit = append(confirmAudit, &policyGuardedTool{inner: buildConfirmAuditPolicyTool(policy), policy: policy, hooks: cfg.hooks})
+		confirmAudit = append(confirmAudit, &policyGuardedTool{inner: buildConfirmAuditPolicyTool(policy), policy: policy, hooks: cfg.hooks, journal: cfg.journal})
 	}
 
 	// Progressive tool disclosure (#506): core (already in allTools) + confirm
@@ -265,6 +270,7 @@ type policyGuardedTool struct {
 	policy                Policy
 	outputAlreadyGoverned bool
 	hooks                 *hookEngine // #788; nil = no hooks (nil-safe methods)
+	journal               TurnJournal // #798; nil = no durable journal (scheduled/evals)
 }
 
 func (g *policyGuardedTool) Info() fantasy.ToolInfo { return g.inner.Info() }
@@ -296,6 +302,17 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 			markOutputGoverned(ctx)
 			return resp, nil
 		}
+	}
+	// Durable tool-intent barrier (#798): the intent record commits BEFORE the
+	// tool can produce a side effect, after the gates above so blocked calls
+	// never journal. A failed write refuses dispatch (fail closed) — a crash
+	// may then leave an un-run journaled call, which startup recovery pairs
+	// with an explicit unknown-outcome result rather than losing the record.
+	if refusal, ok := journalToolIntent(ctx, g.journal, name, params.ID, params.Input); !ok {
+		refusal, _ = governToolOutput(ctx, name, refusal)
+		resp := boundModelVisibleToolResponse(ctx, name, params.ID, fantasy.NewTextErrorResponse(refusal))
+		markOutputGoverned(ctx)
+		return resp, nil
 	}
 	setToolPanicPhase(ctx, panicPhaseToolExecute)
 	resp, err := g.inner.Run(ctx, params)
@@ -338,6 +355,9 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 	resp = boundModelVisibleToolResponse(ctx, name, params.ID, resp)
 	markOutputGoverned(ctx)
 	policyResult := resp.Content
+	// Durable outcome record (#798): the exact bounded model-visible bytes,
+	// before the response re-enters the provider loop.
+	journalToolOutcome(ctx, g.journal, name, params.ID, resp.Content, err != nil || resp.IsError)
 	if g.policy != nil {
 		// Record the outcome so policies that gate on tool RESULTS observe native
 		// tool calls (bash/python/task_tracker/...), not just the MCP and
@@ -449,6 +469,7 @@ type mcpTool struct {
 	policy          Policy
 	providerOptions fantasy.ProviderOptions
 	hooks           *hookEngine // #788; fires under the real mcp_<server>_<tool> name (also on the deferred route)
+	journal         TurnJournal // #798; nil = no durable journal (scheduled/evals)
 }
 
 func (m *mcpTool) Name() string {
@@ -512,6 +533,15 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 		return resp, nil
 	}
 
+	// Durable tool-intent barrier (#798), after the gates so blocked calls
+	// never journal — same placement contract as policyGuardedTool.Run.
+	if refusal, ok := journalToolIntent(ctx, m.journal, toolName, params.ID, params.Input); !ok {
+		refusal, _ = governToolOutput(ctx, toolName, refusal)
+		resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(refusal))
+		markOutputGoverned(ctx)
+		return resp, nil
+	}
+
 	// The broker owns the call itself — the fast.io inline-upload guard, the
 	// transport against the credentialed client, the content flatten, and the
 	// fast.io response trim. mcpTool keeps only the per-call framing.
@@ -540,6 +570,7 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 		errText = m.appendPostHook(ctx, toolName, params.ID, params.Input, errText, true)
 		resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(errText))
 		markOutputGoverned(ctx)
+		journalToolOutcome(ctx, m.journal, toolName, params.ID, resp.Content, true)
 		m.record(ctx, toolName, params.Input, resp.Content, false)
 		return resp, nil
 	}
@@ -572,6 +603,7 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 		resultText = m.appendPostHook(ctx, toolName, params.ID, params.Input, resultText, true)
 		resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(resultText))
 		markOutputGoverned(ctx)
+		journalToolOutcome(ctx, m.journal, toolName, params.ID, resp.Content, true)
 		m.record(ctx, toolName, params.Input, resp.Content, false)
 		return resp, nil
 	}
@@ -582,6 +614,7 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	resultText = m.appendPostHook(ctx, toolName, params.ID, params.Input, resultText, false)
 	resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextResponse(resultText))
 	markOutputGoverned(ctx)
+	journalToolOutcome(ctx, m.journal, toolName, params.ID, resp.Content, false)
 	m.record(ctx, toolName, params.Input, resp.Content, true)
 	return resp, nil
 }

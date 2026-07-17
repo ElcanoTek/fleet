@@ -112,6 +112,11 @@ type TurnConfig struct {
 	// (#220) for the turn. nil = off. Resolved by the Manager from the
 	// per-conversation override or the global default.
 	ThinkingConfig *agentcore.ThinkingConfig
+
+	// TurnJournal is the durable side-effect journal (#798): tool intents
+	// commit before dispatch, governed results before the next provider step.
+	// nil (evals, tests) = no journaling.
+	TurnJournal agentcore.TurnJournal
 }
 
 // messagesInput adapts a pre-built message slice to agentcore.InputSource.
@@ -160,6 +165,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		Finalize:             buildInteractiveFinalize(tc),
 		CompactionSummarizer: buildInteractiveCompactionSummarizer(tc),
 		HealthRegistry:       tc.HealthRegistry,
+		TurnJournal:          tc.TurnJournal,
 	}
 
 	// Per-user remote-MCP overlay (#443): advertise the shared catalog merged
