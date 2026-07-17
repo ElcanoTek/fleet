@@ -149,11 +149,11 @@ func journalIntent(t *testing.T, s *Store, turnID string, seq int64, callID, nam
 	}
 }
 
-func journalResult(t *testing.T, s *Store, turnID string, seq int64, callID, name, text string, isErr bool) {
+func journalResult(t *testing.T, s *Store, turnID string, seq int64, callID, text string) {
 	t.Helper()
 	if err := s.InsertTurnJournal(context.Background(), TurnJournalRow{
 		TurnID: turnID, Seq: seq, Kind: TurnJournalResult, CallID: callID,
-		ToolName: name, Content: text, IsErr: isErr, CreatedAt: time.Now().Unix(),
+		ToolName: "bash", Content: text, CreatedAt: time.Now().Unix(),
 	}); err != nil {
 		t.Fatalf("insert result: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestRecovery_CrashAfterIntentSynthesizesUnknownOutcome(t *testing.T) {
 	if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "send the email")); err != nil {
 		t.Fatal(err)
 	}
-	journalIntent(t, s, "t1", 1, "call-1", "mcp_sendgrid_send", `{"to":"x@y.z"}`)
+	journalIntent(t, s, "t1", 1, "call-9", "mcp_sendgrid_send", `{"to":"x@y.z"}`)
 	// No result row, no tool.call SSE event (async write lost in the crash).
 
 	got := recoveredHistory(t, s, convID)
@@ -256,7 +256,7 @@ func TestRecovery_CrashAfterIntentSynthesizesUnknownOutcome(t *testing.T) {
 	}
 	var marker bool
 	for _, r := range rows {
-		if r.Kind == TurnJournalResult && r.CallID == "call-1" && r.Synthesized {
+		if r.Kind == TurnJournalResult && r.CallID == "call-9" && r.Synthesized {
 			marker = true
 		}
 	}
@@ -277,7 +277,7 @@ func TestRecovery_JournaledResultAndTextProjected(t *testing.T) {
 	seedEvent(t, s, "t1", 2, "tool.call", map[string]any{"id": "call-1", "name": "bash", "input": `{"cmd":"ls"}`})
 	journalIntent(t, s, "t1", 1, "call-1", "bash", `{"cmd":"ls"}`)
 	full := strings.Repeat("full governed output line\n", 400) // ≫ 4 KB SSE preview
-	journalResult(t, s, "t1", 2, "call-1", "bash", full, false)
+	journalResult(t, s, "t1", 2, "call-1", full)
 	seedEvent(t, s, "t1", 3, "text.delta", map[string]any{"text": "Found it"})
 
 	got := recoveredHistory(t, s, convID)
@@ -312,8 +312,8 @@ func TestRecovery_IdempotentAcrossRepeatedRuns(t *testing.T) {
 	if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "q")); err != nil {
 		t.Fatal(err)
 	}
-	journalIntent(t, s, "t1", 1, "call-1", "bash", `{}`)
-	journalResult(t, s, "t1", 2, "call-1", "bash", "ok", false)
+	journalIntent(t, s, "t1", 1, "call-2", "bash", `{}`)
+	journalResult(t, s, "t1", 2, "call-2", "ok")
 
 	first := recoveredHistory(t, s, convID)
 
@@ -355,5 +355,139 @@ func TestRecovery_TurnRetryDropsAbandonedText(t *testing.T) {
 	}
 	if !kept {
 		t.Fatal("post-retry text lost")
+	}
+}
+
+func TestRecovery_CommittedButUnfinishedTurnCompletes(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "q")); err != nil {
+		t.Fatal(err)
+	}
+	// Crash AFTER CommitTurnHistory but BEFORE FinishTurn: history is whole,
+	// only the turn ledger is stale.
+	if _, err := s.CommitTurnHistory(ctx, convID, "t1", []agent.HistoryEntry{
+		{Role: "assistant", Type: "text", Content: mustJSON(t, agent.TextContent{Text: "done"})},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := s.RecoverStrandedTurns(ctx)
+	if err != nil {
+		t.Fatalf("RecoverStrandedTurns: %v", err)
+	}
+	if len(recs) != 1 || recs[0].Projected != 0 {
+		t.Fatalf("recs = %+v, want 1 rec with nothing projected", recs)
+	}
+	turn, err := s.LookupTurn(ctx, "t1")
+	if err != nil || turn == nil {
+		t.Fatal(err)
+	}
+	// Not a zombie 'running' row, and not an error either — the answer landed.
+	if turn.Status != TurnStatusCompleted {
+		t.Fatalf("status = %s, want completed", turn.Status)
+	}
+	if got := loadEntries(t, s, convID); len(got) != 2 {
+		t.Fatalf("history rows = %d, want 2 (no duplicate projection)", len(got))
+	}
+}
+
+func TestRecovery_SkipsProjectionWhenConversationMovedOn(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t0")
+	if _, err := s.CommitUserMessage(ctx, convID, "t0", userEntry(t, "old question")); err != nil {
+		t.Fatal(err)
+	}
+	journalIntent(t, s, "t0", 1, "call-1", "bash", `{}`)
+	journalResult(t, s, "t0", 2, "call-1", "stale result")
+	// Recovery failed on the first boot; the user then completed a NEWER turn.
+	if err := s.CreateTurn(ctx, "t2", convID, time.Now().Unix()+10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CommitUserMessage(ctx, convID, "t2", userEntry(t, "new question")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CommitTurnHistory(ctx, convID, "t2", []agent.HistoryEntry{
+		{Role: "assistant", Type: "text", Content: mustJSON(t, agent.TextContent{Text: "new answer"})},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishTurn(ctx, "t2", TurnStatusCompleted, time.Now().Unix(), false); err != nil {
+		t.Fatal(err)
+	}
+
+	recs, err := s.RecoverStrandedTurns(ctx)
+	if err != nil {
+		t.Fatalf("RecoverStrandedTurns: %v", err)
+	}
+	if len(recs) != 1 || recs[0].Projected != 0 {
+		t.Fatalf("stale turn must terminate WITHOUT projecting: %+v", recs)
+	}
+	// The stale content must not appear after the newer exchange.
+	for _, e := range loadEntries(t, s, convID) {
+		if strings.Contains(string(e.Content), "stale result") {
+			t.Fatalf("stale turn content projected after newer traffic: %s", e.Content)
+		}
+	}
+	turn, _ := s.LookupTurn(ctx, "t0")
+	if turn == nil || turn.Status != TurnStatusError {
+		t.Fatalf("stale turn not terminated: %+v", turn)
+	}
+}
+
+func TestInsertTurnJournal_AmbiguousRetryAbsorbed(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedConvAndTurn(t, s, "t1")
+	row := TurnJournalRow{TurnID: "t1", Seq: 1, Kind: TurnJournalIntent, CallID: "c1",
+		ToolName: "bash", Content: `{}`, CreatedAt: time.Now().Unix()}
+	if err := s.InsertTurnJournal(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	// A verbatim retry after an ambiguous write outcome must be a no-op
+	// success — not a unique-key error that latches the degraded flag.
+	if err := s.InsertTurnJournal(ctx, row); err != nil {
+		t.Fatalf("ambiguous-outcome retry must be absorbed: %v", err)
+	}
+	rows, err := s.LoadTurnJournal(ctx, "t1")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %d err=%v, want exactly 1", len(rows), err)
+	}
+}
+
+func TestRecovery_BlockedCallGetsNeverDispatchedNotUnknown(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "q")); err != nil {
+		t.Fatal(err)
+	}
+	// Journal ACTIVE (call-1 dispatched and completed); call-2 has a tool.call
+	// SSE event but NO intent row — the barrier proves it never dispatched.
+	journalIntent(t, s, "t1", 3, "call-1", "bash", `{}`)
+	journalResult(t, s, "t1", 4, "call-1", "ok")
+	seedEvent(t, s, "t1", 1, "tool.call", map[string]any{"id": "call-1", "name": "bash", "input": `{}`})
+	seedEvent(t, s, "t1", 2, "tool.call", map[string]any{"id": "call-2", "name": "send_email", "input": `{}`})
+
+	got := recoveredHistory(t, s, convID)
+	assertPaired(t, got)
+	var sawNeverDispatched, sawUnknown bool
+	for _, e := range got {
+		if e.Type != "tool_result" {
+			continue
+		}
+		if strings.Contains(string(e.Content), "did NOT execute") {
+			sawNeverDispatched = true
+		}
+		if strings.Contains(string(e.Content), "outcome is UNKNOWN") {
+			sawUnknown = true
+		}
+	}
+	if !sawNeverDispatched {
+		t.Fatal("blocked call not classified as never-dispatched")
+	}
+	if sawUnknown {
+		t.Fatal("never-dispatched call misclassified as unknown outcome")
 	}
 }

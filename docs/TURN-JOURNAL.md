@@ -51,10 +51,20 @@ rebuild entries from the journal (authoritative for calls/results) interleaved
 with `turn_events` text/reasoning (`turn.retry` drops the abandoned attempt's
 text); pair every call with a result — synthesizing an explicit
 unknown-outcome error (`synthesized=TRUE` journal marker, model-visible
-"verify before retrying" warning) when the real result never landed; append a
+"verify before retrying" warning) when the real result never landed, or a
+"did NOT execute" marker when the journal was active and the call has no
+intent row (the barrier proves it was blocked before dispatch); append a
 model-visible interruption marker + a cancelled `turn_summary`; project with
 provenance; flip the turn to `error` with `recovered_at` and a synthetic
 `turn.error` SSE frame. Idempotent across repeated/interrupted recoveries.
+
+Two guarded special cases: a turn whose history committed but whose process
+died before `FinishTurn` is flipped to `completed` (nothing to project — the
+answer is whole; without the flip it would stay a zombie `running` row
+forever), and a stale turn recovered only on a LATER boot — after the
+conversation already moved on to newer turns — terminates WITHOUT projecting
+(late projection would append old content after newer exchanges; the journal
+keeps the evidence).
 
 ## What is deliberately NOT here (honest scope)
 

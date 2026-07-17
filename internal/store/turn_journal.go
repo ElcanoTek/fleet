@@ -54,16 +54,19 @@ type TurnJournalRow struct {
 	CreatedAt   int64
 }
 
-// InsertTurnJournal appends one journal row. A (turn_id, kind, call_id)
-// duplicate is a loud constraint violation, not silently absorbed: the
-// per-turn writer assigns each call exactly one intent and one result, so a
-// conflict means a bug upstream, never a benign retry (retries happen above
-// this call, before seq assignment).
+// InsertTurnJournal appends one journal row. ON CONFLICT DO NOTHING: the
+// writer retries a row verbatim after an AMBIGUOUS failure (a write timeout
+// whose INSERT actually landed), and that retry must be absorbed as success —
+// without it, the retry's unique-key collision would latch the degraded flag
+// and fail the turn precisely because a journal write SUCCEEDED. A genuine
+// double-write bug still cannot corrupt anything: the (turn_id, kind,
+// call_id) index keeps exactly one record per call either way.
 func (s *Store) InsertTurnJournal(ctx context.Context, r TurnJournalRow) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO turn_journal
 		   (turn_id, seq, kind, call_id, tool_name, content, is_err, synthesized, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 ON CONFLICT DO NOTHING`,
 		r.TurnID, r.Seq, r.Kind, r.CallID, r.ToolName, r.Content, r.IsErr, r.Synthesized, r.CreatedAt,
 	)
 	return err
@@ -210,8 +213,9 @@ func (s *Store) appendHistoryProvenanceTx(ctx context.Context, tx *sql.Tx, convI
 // model reads BEFORE it can repeat a possibly side-effectful call; the
 // interrupted marker explains the (possibly truncated) reply above it.
 const (
-	recoveredUnknownOutcomeText = "[fleet] The server restarted while this tool call was in flight; its outcome is UNKNOWN. It may or may not have executed. Do not assume it ran and do not silently retry it if it has side effects - verify the outcome first."
-	recoveredInterruptedText    = "[fleet] This turn was interrupted by a server restart before completion. The reply above may be incomplete."
+	recoveredUnknownOutcomeText  = "[fleet] The server restarted while this tool call was in flight; its outcome is UNKNOWN. It may or may not have executed. Do not assume it ran and do not silently retry it if it has side effects - verify the outcome first."
+	recoveredNeverDispatchedText = "[fleet] This tool call was refused or blocked before execution and then the server restarted. It did NOT execute; no side effect occurred."
+	recoveredInterruptedText     = "[fleet] This turn was interrupted by a server restart before completion. The reply above may be incomplete."
 )
 
 // RecoveredTurn reports one turn projected by RecoverStrandedTurns.
@@ -303,9 +307,43 @@ func (s *Store) recoverOneTurn(ctx context.Context, turnID, convID string) (Reco
 		turnID).Scan(&status, &committed); err != nil {
 		return rec, err
 	}
-	if status != string(TurnStatusRunning) || committed.Valid {
+	if status != string(TurnStatusRunning) {
 		return rec, tx.Commit()
 	}
+	if committed.Valid {
+		// The canonical history landed but the process died before FinishTurn:
+		// the answer is whole, only the turn ledger is stale. Without this flip
+		// the turn stays 'running' forever — never swept, and a reattaching
+		// client hangs on a stream that will never end. Complete it; nothing
+		// to project.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE turns SET status = 'completed', finished_at = $1 WHERE turn_id = $2 AND status = 'running'`,
+			now, turnID); err != nil {
+			return rec, err
+		}
+		if err := appendSyntheticTurnEvent(ctx, tx, turnID, "turn.completed",
+			`{"recovered":true,"message":"server restarted after this turn's history was saved"}`, now); err != nil {
+			return rec, err
+		}
+		return rec, tx.Commit()
+	}
+
+	// Ordering guard: recovery normally runs at boot before any new traffic,
+	// but a recovery that failed on an earlier boot can meet a conversation
+	// that has MOVED ON (newer turns after the crash). messages.id is the
+	// global replay order, so projecting the stale turn NOW would append its
+	// old content after newer exchanges and corrupt the conversation. Flip the
+	// turn terminal without projecting; the journal keeps the evidence.
+	var newerTurns int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM turns
+		  WHERE conversation_id = $1 AND turn_id <> $2
+		    AND started_at >= (SELECT started_at FROM turns WHERE turn_id = $2)
+		    AND status <> 'running'`,
+		convID, turnID).Scan(&newerTurns); err != nil {
+		return rec, err
+	}
+	staleBehindNewerTraffic := newerTurns > 0
 
 	// The user entry commits with turn_seq=1 before RunTurn; a crash before
 	// that commit leaves nothing for the model to recover (tool calls cannot
@@ -316,7 +354,7 @@ func (s *Store) recoverOneTurn(ctx context.Context, turnID, convID string) (Reco
 		return rec, err
 	}
 	userCommitted := maxSeq.Valid
-	if userCommitted && len(entries) > 0 {
+	if userCommitted && !staleBehindNewerTraffic && len(entries) > 0 {
 		ids, err := s.appendHistoryProvenanceTx(ctx, tx, convID, turnID, maxSeq.Int64+1, entries)
 		if err != nil {
 			return rec, err
@@ -347,29 +385,39 @@ func (s *Store) recoverOneTurn(ctx context.Context, turnID, convID string) (Reco
 		now, turnID); err != nil {
 		return rec, err
 	}
+	if err := appendSyntheticTurnEvent(ctx, tx, turnID, "turn.error",
+		`{"message":"server restarted mid-turn; partial work was recovered into history"}`, now); err != nil {
+		return rec, err
+	}
+	return rec, tx.Commit()
+}
+
+// appendSyntheticTurnEvent writes one recovery-authored terminal SSE frame
+// inside the caller's transaction, deriving the pagination columns from the
+// owning turn the same way InsertTurnEvents does, so a reattaching client
+// sees clean EOF instead of hanging on a stream that will never end.
+func appendSyntheticTurnEvent(ctx context.Context, tx *sql.Tx, turnID, name, payload string, now int64) error {
 	var maxEventID sql.NullInt64
 	if err := tx.QueryRowContext(ctx,
 		`SELECT MAX(event_id) FROM turn_events WHERE turn_id = $1`, turnID).Scan(&maxEventID); err != nil {
-		return rec, err
+		return err
 	}
 	nextEventID := int64(1)
 	if maxEventID.Valid {
 		nextEventID = maxEventID.Int64 + 1
 	}
-	if _, err := tx.ExecContext(ctx,
+	_, err := tx.ExecContext(ctx,
 		`INSERT INTO turn_events
 		   (turn_id, conversation_id, turn_index, sequence, event_id, event_name, data_json, created_at)
 		 SELECT t.turn_id, t.conversation_id, t.turn_index,
 		        (SELECT COALESCE(MAX(te.sequence), 0)
 		           FROM turn_events te
 		          WHERE te.conversation_id = t.conversation_id) + 1,
-		        $2, 'turn.error', $3, $4
+		        $2, $3, $4, $5
 		   FROM turns t WHERE t.turn_id = $1`,
-		turnID, nextEventID, `{"message":"server restarted mid-turn; partial work was recovered into history"}`, now,
-	); err != nil {
-		return rec, err
-	}
-	return rec, tx.Commit()
+		turnID, nextEventID, name, payload, now,
+	)
+	return err
 }
 
 // synthesizedResult carries a recovery-synthesized unknown-outcome result so
@@ -438,9 +486,20 @@ func buildRecoveredEntries(journal []TurnJournalRow, events []TurnEvent) ([]agen
 			appendJSON("tool", "tool_result", agent.ToolResultContent{ID: callID, Name: name, Text: r.Content, IsErr: r.IsErr})
 			return
 		}
+		// No result row. When the journal was ACTIVE for this turn (any rows
+		// exist) and this call has no INTENT row either, the intent barrier
+		// proves the call never dispatched — it was blocked or refused before
+		// execution. Warning the model it "may have executed" would be false
+		// and could suppress legitimately needed work.
+		text := recoveredUnknownOutcomeText
+		if len(journal) > 0 {
+			if _, dispatched := intents[callID]; !dispatched {
+				text = recoveredNeverDispatchedText
+			}
+		}
 		maxSeq++
-		synthesized = append(synthesized, synthesizedResult{Seq: maxSeq, CallID: callID, ToolName: name, Content: recoveredUnknownOutcomeText})
-		appendJSON("tool", "tool_result", agent.ToolResultContent{ID: callID, Name: name, Text: recoveredUnknownOutcomeText, IsErr: true})
+		synthesized = append(synthesized, synthesizedResult{Seq: maxSeq, CallID: callID, ToolName: name, Content: text})
+		appendJSON("tool", "tool_result", agent.ToolResultContent{ID: callID, Name: name, Text: text, IsErr: true})
 	}
 
 	for _, ev := range events {
@@ -496,6 +555,9 @@ func buildRecoveredEntries(journal []TurnJournalRow, events []TurnEvent) ([]agen
 
 	if len(entries) > 0 {
 		appendJSON("assistant", "text", agent.TextContent{Text: recoveredInterruptedText})
+		// A zero-usage cancelled summary so the UI shows the interrupted badge;
+		// per-step usage checkpointing is deliberately out of scope (ADR-0039).
+		appendJSON("assistant", "turn_summary", agent.TurnSummaryContent{Cancelled: true})
 	}
 	return entries, synthesized
 }
