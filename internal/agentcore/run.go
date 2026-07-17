@@ -442,30 +442,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// an ordinary run error, after every sibling has settled and paired.
 		serr = observerBoundary.prefer(serr)
 		if serr != nil {
-			// A ctx-cancellation surfaced as a stream error is still a clean
-			// cancel: return the partial transcript instead of a hard error so
-			// the interactive Stop path persists partial work.
-			if ctx.Err() != nil {
-				return cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), nil
-			}
-			// A cost/token ceiling hit is a clean STOP, not a failure: the
-			// budget-guarded PrepareStep aborted before the next paid completion.
-			// Finish gracefully with the transcript accumulated so far (same
-			// partial-result contract as a cancel) so the budget bounds the run
-			// without erroring the turn.
-			if errors.Is(serr, ErrCostCeilingExceeded) {
-				res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round)
-				res.StoppedByBudget = true
-				// Free-form chat keeps its historical clean-stop semantics. A declared
-				// output contract cannot: this branch occurs before finish/audit gates
-				// and before the strict/tool terminal phase, so accepting schema-looking
-				// ordinary text would bypass the contract entirely.
-				if len(cfg.OutputSchema) > 0 {
-					return res, serr
-				}
-				return res, nil
-			}
-			return Result{}, serr
+			return streamErrorResult(ctx, serr, cfg, sink, usageOrch, label, activeModel, swappedToFallback, round)
 		}
 		finalResult = outcome.result
 		messages = outcome.messages
@@ -561,6 +538,31 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 // completion seam. Keeping result assembly here leaves Run focused on its
 // governed control loop and makes the structured/free-form finish paths share
 // exactly the same transcript and usage snapshot behavior.
+// streamErrorResult maps a round's stream error to its terminal Result.
+// A ctx-cancellation surfaced as a stream error is still a clean cancel: the
+// partial transcript returns without a hard error so the interactive Stop path
+// persists partial work. A cost/token ceiling hit is a clean STOP, not a
+// failure — the budget-guarded PrepareStep aborted before the next paid
+// completion — EXCEPT under a declared output contract: that branch occurs
+// before the finish/audit gates and the strict/tool terminal phase, so
+// accepting schema-looking ordinary text would bypass the contract entirely.
+// Everything else is a hard error.
+func streamErrorResult(ctx context.Context, serr error, cfg RunConfig, sink *streamSink, usageOrch *orchestrationState, label string, activeModel fantasy.LanguageModel, swappedToFallback bool, round int) (Result, error) {
+	if ctx.Err() != nil {
+		//nolint:nilerr // deliberate: a cancel is a clean stop — partial transcript, no error.
+		return cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), nil
+	}
+	if errors.Is(serr, ErrCostCeilingExceeded) {
+		res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round)
+		res.StoppedByBudget = true
+		if len(cfg.OutputSchema) > 0 {
+			return res, serr
+		}
+		return res, nil
+	}
+	return Result{}, serr
+}
+
 type runCompletion struct {
 	engine            *engine
 	config            RunConfig
