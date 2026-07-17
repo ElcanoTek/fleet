@@ -23,6 +23,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // steerMailbox is the one-slot handoff between the HTTP layer and the running
@@ -100,10 +101,7 @@ func (m *steerMailbox) emitQueueSnapshot() {
 func queueItemsPayload(items []store.InputQueueRow) []map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	for _, it := range items {
-		preview := it.Message
-		if len(preview) > 160 {
-			preview = preview[:160] + "…"
-		}
+		preview := truncate.Clamp(it.Message, 160, "…")
 		out = append(out, map[string]any{
 			"id":              it.ID,
 			"client_input_id": it.ClientInputID,
@@ -134,6 +132,26 @@ func (s *Server) emitQueueUpdate(ctx context.Context, user, convID string) {
 	entry.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayload(items)})
 }
 
+// maxPendingInputs caps how many still-queued rows one conversation may hold.
+// Each row later drains as a full governed turn, so the cap bounds unattended
+// LLM spend the same way boot recovery's no-auto-drain rule does.
+const maxPendingInputs = 20
+
+// writeQueueAck writes the JSON acknowledgement for an accepted (202) or
+// replayed (200) queue row.
+func writeQueueAck(w http.ResponseWriter, status int, convID string, row store.InputQueueRow) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"queued": true,
+		"input": map[string]any{
+			"id": row.ID, "client_input_id": row.ClientInputID,
+			"mode": row.Mode, "state": row.State, "position": row.Position,
+		},
+		"conversation_id": convID,
+	})
+}
+
 // handleBusySubmit is postChat's queue branch: the conversation has a running
 // turn, so the submission becomes a durable queue row and the client gets a
 // 202 JSON acknowledgement instead of an SSE stream (200 on an idempotent
@@ -155,6 +173,20 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	clientID := strings.TrimSpace(req.InputID)
 	if clientID == "" {
 		clientID = uuid.NewString()
+	}
+	// Depth cap: every queued row later runs as a full governed turn, so an
+	// unbounded queue is unbounded unattended LLM spend (a retrying client
+	// minting fresh input_ids can enqueue hundreds during one long turn).
+	// Idempotent replays of an already-accepted input still pass through —
+	// EnqueueInput's conflict path returns the existing row without growing
+	// the queue.
+	if pending, cerr := s.store.CountPendingInputs(r.Context(), conv.ID); cerr == nil && pending >= maxPendingInputs {
+		if existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID); lerr == nil && existing != nil {
+			writeQueueAck(w, http.StatusOK, conv.ID, *existing)
+			return
+		}
+		http.Error(w, fmt.Sprintf("input queue is full (%d pending); wait for the queue to drain or remove queued inputs", maxPendingInputs), http.StatusTooManyRequests)
+		return
 	}
 	row, created, err := s.store.EnqueueInput(r.Context(), store.InputQueueRow{
 		ID: uuid.NewString(), ConversationID: conv.ID, UserEmail: user,
@@ -180,16 +212,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	if !created {
 		status = http.StatusOK
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"queued": true,
-		"input": map[string]any{
-			"id": row.ID, "client_input_id": row.ClientInputID,
-			"mode": row.Mode, "state": row.State, "position": row.Position,
-		},
-		"conversation_id": conv.ID,
-	})
+	writeQueueAck(w, status, conv.ID, row)
 }
 
 // rekickDrainAfter schedules a bounded retry kick for rows that went back to
@@ -204,21 +227,37 @@ func (s *Server) rekickDrainAfter(convID string, d time.Duration) {
 // BEFORE it must not launch even if they were in claim-limbo (claimed by a
 // drain but not yet registered) when CancelQueuedInputs swept the queued set.
 func (s *Server) markStopAll(convID string) {
+	now := time.Now().Unix()
 	s.inflightMu.Lock()
 	if s.stopEpochs == nil {
 		s.stopEpochs = make(map[string]int64)
 	}
-	s.stopEpochs[convID] = time.Now().Unix()
+	// An epoch only gates rows that were already accepted when Stop fired;
+	// once the max turn lifetime has passed nothing can still be in
+	// claim-limbo from that instant, so prune stale entries here instead of
+	// letting the map grow for the process lifetime.
+	horizon := now - int64(s.turnTimeout()/time.Second) - 60
+	for k, v := range s.stopEpochs {
+		if v < horizon {
+			delete(s.stopEpochs, k)
+		}
+	}
+	s.stopEpochs[convID] = now
 	s.inflightMu.Unlock()
 }
 
-// stoppedSince reports whether a Stop scope=all was issued at or after the
-// row's acceptance — the launch gate for claim-limbo rows.
+// stoppedSince reports whether a Stop scope=all was issued after the row's
+// acceptance — the launch gate for claim-limbo rows. The comparison is STRICT:
+// created_at has second granularity, so a row accepted in the same second as
+// (but after) the Stop is a fresh post-Stop submission that must run, not be
+// silently discarded after its 202 acknowledgement. A pre-Stop row in that
+// same second is still swept by CancelQueuedInputs in the common (unclaimed)
+// case — only the sub-second claim-limbo overlap trades the other way.
 func (s *Server) stoppedSince(convID string, createdAt int64) bool {
 	s.inflightMu.Lock()
 	epoch, ok := s.stopEpochs[convID]
 	s.inflightMu.Unlock()
-	return ok && createdAt <= epoch
+	return ok && createdAt < epoch
 }
 
 // maybeDrainQueue claims and launches the conversation's next queued input

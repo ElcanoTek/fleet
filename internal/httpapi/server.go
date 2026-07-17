@@ -2339,6 +2339,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		}
 		log.Printf("queued turn launch (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		s.terminalizeQueueRow(queueRowID, store.InputStateQueued)
+		// No turn launched, so no completion tail will re-drain: without an
+		// explicit re-kick a 202-acknowledged row stalls until the next
+		// submission on this conversation (possibly forever).
+		s.rekickDrainAfter(conv.ID, 3*time.Second)
 	}
 
 	// Load history before we even allocate a buffer — if this errors, the

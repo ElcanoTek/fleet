@@ -112,6 +112,17 @@ func (s *Store) ListQueuedInputs(ctx context.Context, userEmail, convID string) 
 	return out, rows.Err()
 }
 
+// CountPendingInputs returns how many rows are still waiting to drain
+// (state='queued') for one conversation — the admission check behind the
+// per-conversation queue depth cap.
+func (s *Store) CountPendingInputs(ctx context.Context, convID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM chat_input_queue WHERE conversation_id = $1 AND state = 'queued'`,
+		convID).Scan(&n)
+	return n, err
+}
+
 // ClaimNextQueuedInput atomically claims the head of the conversation's
 // pending queue for turnID (queued -> running). SKIP LOCKED makes concurrent
 // drainers safe without process-level coordination; nil means the queue is

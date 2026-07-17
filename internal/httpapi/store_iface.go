@@ -86,6 +86,7 @@ type chatStore interface {
 	InsertTurnJournal(ctx context.Context, r store.TurnJournalRow) error
 	// Conversation input queue + mid-turn steering (#785).
 	EnqueueInput(ctx context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error)
+	CountPendingInputs(ctx context.Context, convID string) (int, error)
 	ListQueuedInputs(ctx context.Context, userEmail, convID string) ([]store.InputQueueRow, error)
 	ClaimNextQueuedInput(ctx context.Context, convID, turnID string) (*store.InputQueueRow, error)
 	MarkInputInjected(ctx context.Context, id, turnID string) (bool, error)
