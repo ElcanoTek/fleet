@@ -2402,48 +2402,11 @@ func (s *Server) runTurnAsync(
 
 	// Durable turn journal + gated terminal commit (#798). The journal writer
 	// runs inside the agent loop (tool intent before dispatch, governed result
-	// before the next provider step); the two closures bracket the turn: the
+	// before the next provider step); the commit pair brackets the turn: the
 	// user entry commits before the first provider call, and the terminal
 	// projection commits before turn.completed / turn.cancelled is advertised.
-	// Every write uses a fresh context — turnCtx is already dead on Stop, and
-	// a cancelled turn still owes its partial history.
 	journal := newTurnJournalWriter(s.store, buf.turnID)
-	var persistedUserID int64
-	var persistedIDs []int64
-	commitUser := func(_ context.Context, entry agent.HistoryEntry) error {
-		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		id, err := s.store.CommitUserMessage(cctx, conv.ID, buf.turnID, entry)
-		if err != nil {
-			return err
-		}
-		persistedUserID = id
-		return nil
-	}
-	commitTerminal := func(entries []agent.HistoryEntry, cancelled bool) error {
-		if journal.Degraded() {
-			return fmt.Errorf("the turn journal lost a write; refusing to record success for an incompletely journaled turn")
-		}
-		var err error
-		for attempt := 1; attempt <= 3; attempt++ {
-			cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			var ids []int64
-			ids, err = s.store.CommitTurnHistory(cctx, conv.ID, buf.turnID, entries)
-			cancel()
-			if err == nil {
-				persistedIDs = ids
-				return nil
-			}
-			if errors.Is(err, store.ErrTurnHistoryCommitted) {
-				// A retry after an ambiguous commit outcome: the projection
-				// landed; only the row ids are unknown (dbId backfill for this
-				// turn arrives on reload instead of live — benign).
-				return nil
-			}
-			time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
-		}
-		return err
-	}
+	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
 
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:               userMessage,
@@ -2483,8 +2446,8 @@ func (s *Server) runTurnAsync(
 			origin:         "tool",
 		},
 		TurnJournal:    journal,
-		CommitUser:     commitUser,
-		CommitTerminal: commitTerminal,
+		CommitUser:     commits.commitUser,
+		CommitTerminal: commits.commitTerminal,
 	}, buf)
 	if err != nil {
 		log.Printf("RunTurn error (user=%s conv=%s): %v", user, conv.ID, err)
@@ -2516,10 +2479,9 @@ func (s *Server) runTurnAsync(
 	// Message.dbId without a reload — the Branch button (#454) only renders
 	// for persisted messages. Emitted after turn.completed and before
 	// finishTurn seals the buffer, so live AND replayed streams carry it.
-	if persistedUserID > 0 {
-		allIDs := append([]int64{persistedUserID}, persistedIDs...)
+	if userID, ids := commits.persisted(); userID > 0 {
 		buf.Emit("history.persisted", map[string]any{
-			"entries": historyPersistedEntries(res.NewHistory, allIDs),
+			"entries": historyPersistedEntries(res.NewHistory, append([]int64{userID}, ids...)),
 		})
 	}
 

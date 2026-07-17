@@ -333,13 +333,13 @@ func TestRecovery_IdempotentAcrossRepeatedRuns(t *testing.T) {
 func TestRecovery_TurnRetryDropsAbandonedText(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	convID := seedConvAndTurn(t, s, "t1")
-	if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "q")); err != nil {
+	convID := seedConvAndTurn(t, s, "t2")
+	if _, err := s.CommitUserMessage(ctx, convID, "t2", userEntry(t, "q")); err != nil {
 		t.Fatal(err)
 	}
-	seedEvent(t, s, "t1", 1, "text.delta", map[string]any{"text": "abandoned attempt text"})
-	seedEvent(t, s, "t1", 2, "turn.retry", map[string]any{"attempt": 2})
-	seedEvent(t, s, "t1", 3, "text.delta", map[string]any{"text": "kept text"})
+	seedEvent(t, s, "t2", 1, "text.delta", map[string]any{"text": "abandoned attempt text"})
+	seedEvent(t, s, "t2", 2, "turn.retry", map[string]any{"attempt": 2})
+	seedEvent(t, s, "t2", 3, "text.delta", map[string]any{"text": "kept text"})
 
 	got := recoveredHistory(t, s, convID)
 	for _, e := range got {

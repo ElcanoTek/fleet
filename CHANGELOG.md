@@ -19,6 +19,22 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Durable turn journal + commit-gated terminal success** (#798,
+  `docs/TURN-JOURNAL.md`, ADR-0039): interactive turns now preserve the causal
+  chain user input → tool intent → governed tool outcome → conclusion
+  durably, BEFORE terminal success is advertised. The user message commits to
+  canonical history before the first provider call; every tool route journals
+  its call intent before dispatch (fail closed — no side effect without a
+  durable record) and its exact governed model-visible result before the next
+  provider step (the 4 KB SSE preview is never the persistence limit);
+  `turn.completed`/`turn.cancelled` gate on the transactional history commit,
+  so a failed write is a visible turn error instead of a completed answer
+  that disappears on reload. Startup recovery projects crashed turns into one
+  explicit interrupted turn with provider-valid call/result pairing —
+  unmatched calls get a synthesized unknown-outcome error marked for
+  reconciliation, so the next model verifies instead of silently repeating a
+  possibly side-effectful call. Migration 041.
+
 - **Governed lifecycle hooks** (#788, `docs/HOOKS.md`, ADR-0038): a client
   bundle can declare `hooks:` — commands run at fixed run lifecycle points
   (`user_prompt_submit`, `pre_tool_use`, `post_tool_use`, `turn_end`) **inside
