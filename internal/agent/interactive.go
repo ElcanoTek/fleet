@@ -234,16 +234,24 @@ func buildInteractiveFinalize(tc TurnConfig) agentcore.FinalizeHook {
 // appending the leaked-call nudge, and returns the recovered final text.
 func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.FinalizeInput) (string, error) {
 	convo := append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(interactiveLeakedToolCallNudge))
+	prepare := chainPrepareSteps(
+		agentcore.ModelContextBudgetStep(in.SystemPrompt, in.Tools, tc.MaxTokens),
+		agentcore.PromptCachingStep(tc.Model.Model()),
+	)
+	// Stream under the run's own ceilings: the budget guard blocks the next
+	// paid completion once the cost/token ceiling is hit — without it this
+	// retry could keep buying steps unboundedly (its tool calls are only
+	// soft-blocked by policy, which doesn't stop the paid completions).
+	if in.GuardStep != nil {
+		prepare = in.GuardStep(prepare)
+	}
 	agent := fantasy.NewAgent(tc.Model,
 		fantasy.WithSystemPrompt(in.SystemPrompt),
 		// Reuse agentcore.Run's final governed roster. This keeps the finalize
 		// retry inside the same policy/credential/panic boundaries as the main
 		// stream instead of re-registering raw driver tools.
 		fantasy.WithTools(in.Tools...),
-		fantasy.WithPrepareStep(chainPrepareSteps(
-			agentcore.ModelContextBudgetStep(in.SystemPrompt, in.Tools, tc.MaxTokens),
-			agentcore.PromptCachingStep(tc.Model.Model()),
-		)),
+		fantasy.WithPrepareStep(prepare),
 	)
 	maxTokens := int64(tc.MaxTokens)
 	temp := tc.Temperature
@@ -252,6 +260,9 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		Messages:        convo,
 		MaxOutputTokens: &maxTokens,
 		Temperature:     &temp,
+		// The run's step cap (CHAT_MAX_ITERATIONS) applies to the retry too —
+		// it streams with tools, so it is a real loop, not a single call.
+		StopWhen: in.StopWhen,
 		OnTextDelta: func(_, text string) error {
 			sb.WriteString(text)
 			if in.Observer != nil {

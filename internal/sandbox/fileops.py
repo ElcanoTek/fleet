@@ -258,9 +258,14 @@ def _atomic_write(parent_fd, name, data, expected=None,
             if (current_owner.st_uid, current_owner.st_gid) != owner:
                 try:
                     os.fchown(fd, owner[0], owner[1])
-                except PermissionError as exc:
-                    raise OSError(
-                        "cannot preserve destination ownership") from exc
+                except PermissionError:
+                    # Best effort: preserving the destination's ownership on an
+                    # overwrite is a nicety, not a safety property. The executor
+                    # runs unprivileged and cannot chown to a foreign uid (e.g.
+                    # a host-seeded workspace file mapping to container-root),
+                    # so keep the executor-owned replacement rather than
+                    # aborting a legitimate edit.
+                    pass
         os.fchmod(fd, mode)
         os.fsync(fd)
         os.close(fd)

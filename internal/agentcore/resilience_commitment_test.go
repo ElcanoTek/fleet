@@ -225,6 +225,70 @@ func TestStreamRoundSuppressesRecoveryAfterToolExecution(t *testing.T) {
 	}
 }
 
+// Context-too-large rides the same side-effect gate: it typically fires
+// mid-round right after a large tool result balloons the next request, so the
+// compact-and-re-drive recovery would re-issue the executed call. Once a tool
+// ran in the attempt, the round must surface ErrCommittedSideEffects instead
+// of compacting and re-driving in-run.
+func TestStreamRoundSuppressesContextTooLargeRecoveryAfterToolExecution(t *testing.T) {
+	sink := newStreamSink(nil)
+	primaryCalls := int32(0)
+	primary := &namedMockModel{
+		mockModel: mockModel{
+			streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+				atomic.AddInt32(&primaryCalls, 1)
+				// A tool EXECUTED during this attempt (side effect committed),
+				// then the provider rejects the ballooned follow-up request.
+				sink.onToolCall("call-1", "bash", `{"command":"send the email"}`)
+				sink.onToolResult("call-1", "bash", strings.Repeat("huge result ", 100), false)
+				return nil, &fantasy.ProviderError{ContextTooLargeErr: true, Message: "prompt too large"}
+			},
+		},
+		name: "primary-model",
+	}
+	fallbackCalls := int32(0)
+	fallback := &namedMockModel{
+		mockModel: mockModel{
+			streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+				atomic.AddInt32(&fallbackCalls, 1)
+				return streamStop()(nil, call)
+			},
+		},
+		name: "fallback-model",
+	}
+
+	e := newMockEngine(t, primary)
+	e.fallbackModel = fallback
+	e.resilience = resilienceConfig{maxAttempts: 0}
+
+	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
+		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
+	}
+	messages := []fantasy.Message{fantasy.NewUserMessage("test task")}
+
+	_, err := e.streamRoundWithResilience(
+		context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+		messages, buildAgent(e.model), e.model, false, buildAgent,
+	)
+	if err == nil {
+		t.Fatal("expected suppressed recovery to surface an error")
+	}
+	if !errors.Is(err, ErrCommittedSideEffects) {
+		t.Errorf("error = %v, want errors.Is ErrCommittedSideEffects (whole-task RetryPolicy owns the re-run)", err)
+	}
+	if got := atomic.LoadInt32(&primaryCalls); got != 1 {
+		t.Errorf("primary called %d times, want 1 (no compact-and-re-drive after a tool ran)", got)
+	}
+	if got := atomic.LoadInt32(&fallbackCalls); got != 0 {
+		t.Errorf("fallback called %d times, want 0", got)
+	}
+	// The executed tool's record must survive for the audit trail.
+	entries, _ := sink.snapshot()
+	if len(entries) != 2 || entries[0].Type != "tool_call" || entries[1].Type != "tool_result" {
+		t.Errorf("entries = %+v, want the executed tool_call + tool_result preserved", entries)
+	}
+}
+
 func TestStreamSinkMarkRollback(t *testing.T) {
 	sink := newStreamSink(nil)
 	sink.onTextDelta("kept text ")

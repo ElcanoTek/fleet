@@ -548,8 +548,15 @@ func (e *engine) streamRoundWithResilience(
 		// providers and nothing re-executes (ADR-0035; the previous any-semantic-
 		// event gate dead-lettered every long round whose provider hiccuped
 		// mid-answer, with the fallback model configured but never consulted).
+		// Context-too-large is gated too: it typically fires MID-round, right
+		// after a large tool result balloons the next request — exactly the
+		// committed-side-effect case. The compact-and-re-drive below restarts
+		// the round from its input messages, so the model could re-issue the
+		// executed call. (ADR-0035's "no partial exists to roll back" holds
+		// only for rounds with no tool events.)
 		if sink.toolEventCount() > attemptMark.toolEvents &&
-			(class == streamErrorRetryExhausted || class == streamErrorStreamBlip) {
+			(class == streamErrorRetryExhausted || class == streamErrorStreamBlip ||
+				class == streamErrorContextTooLarge) {
 			return streamRoundOutcome{}, fmt.Errorf("%w: %w", ErrCommittedSideEffects, err)
 		}
 		// Safe to re-drive (no tool side effects past the mark): drop the failed
@@ -582,6 +589,11 @@ func (e *engine) streamRoundWithResilience(
 			if !forceCompactedThisRound {
 				log.Printf("⚠️  Provider rejected prompt as too large (status=%d); forcing compaction and retrying",
 					providerErrStatus(providerErr))
+				// Discard the failed attempt's partial output BEFORE compacting,
+				// so the re-driven round replaces — not duplicates — it in the
+				// sink and the message history (same contract as the blip/
+				// exhausted re-drives below).
+				rollbackAttempt()
 				messages = e.forceCompactMessageHistory(ctx, messages)
 				forceCompactedThisRound = true
 				continue
@@ -592,7 +604,7 @@ func (e *engine) streamRoundWithResilience(
 				activeModel = e.takeFallback()
 				currentAgent = buildAgent(activeModel)
 				swappedToFallback = true
-				messages = dropTrailingAssistant(messages)
+				rollbackAttempt()
 				continue
 			}
 			return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (context still too large after forced compaction): %w", err)

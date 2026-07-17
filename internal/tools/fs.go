@@ -241,7 +241,10 @@ func runViewFile(ctx context.Context, sb *sandbox.Sandbox, params ViewFileParams
 	}
 	totalSize := res.Size
 	if params.Offset >= totalSize {
-		if totalSize == 0 {
+		// offset == size is a clean EOF read (offset += limit paging that
+		// lands exactly on the file size), not an error — only an offset
+		// strictly past the end signals a caller arithmetic bug.
+		if totalSize == 0 || params.Offset == totalSize {
 			return "", nil
 		}
 		return "", fmt.Errorf("offset %d is beyond file size %d", params.Offset, totalSize)
