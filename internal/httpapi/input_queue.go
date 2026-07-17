@@ -174,7 +174,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	// Close the submit-vs-completion race: if the running turn finished
 	// between our busy check and the durable insert, this kick drains the row
 	// immediately instead of leaving it stranded until the next submission.
-	s.maybeDrainQueue(user, conv.ID)
+	s.maybeDrainQueue(conv.ID)
 
 	status := http.StatusAccepted
 	if !created {
@@ -196,7 +196,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 // when no turn is running. Re-entrant and race-safe: the claim is DB-atomic,
 // registerTurn refuses while a turn runs (the loser un-claims), and each
 // launched turn tail-calls back here on completion.
-func (s *Server) maybeDrainQueue(user, convID string) {
+func (s *Server) maybeDrainQueue(convID string) {
 	if s.shuttingDown.Load() {
 		return // rows stay durable; boot recovery re-queues, never auto-runs
 	}
@@ -214,7 +214,7 @@ func (s *Server) maybeDrainQueue(user, convID string) {
 	if row == nil {
 		return
 	}
-	if !s.launchQueuedTurn(user, convID, row) {
+	if !s.launchQueuedTurn(convID, row) {
 		// A direct submission won the registerTurn race; put the row back —
 		// the winner's completion re-drains it.
 		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -228,7 +228,10 @@ func (s *Server) maybeDrainQueue(user, convID string) {
 // launchQueuedTurn runs one claimed queue row as an ordinary turn — the same
 // prep, buffer, and runTurnAsync path as a direct submission, so every
 // governance and persistence property (#798 included) holds unchanged.
-func (s *Server) launchQueuedTurn(user, convID string, row *store.InputQueueRow) bool {
+func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool {
+	// The ROW's owner is authoritative — the drain kick may come from another
+	// actor's request path (e.g. a different session's /cancel bookkeeping).
+	user := row.UserEmail
 	lctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	conv, err := s.store.Get(lctx, user, convID)
@@ -334,7 +337,7 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 			}
 		}
 		s.emitQueueUpdate(r.Context(), user, convID)
-		s.maybeDrainQueue(user, convID)
+		s.maybeDrainQueue(convID)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

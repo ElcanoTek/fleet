@@ -2297,6 +2297,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		reqCtx = r.Context()
 	}
 	fail := func(status int, err error) {
+		// The turn goroutine never launches on this path, so the concurrency
+		// slot admitted before startTurn must be released HERE (the original
+		// pre-#785 flow errored before admission; the extraction inverted it).
+		releaseSlot()
 		if w != nil {
 			http.Error(w, err.Error(), status)
 			return
@@ -2434,7 +2438,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			s.terminalizeQueueRow(queueRowID, store.InputStateCompleted)
 			s.emitQueueUpdate(context.Background(), user, conv.ID)
 		}
-		s.maybeDrainQueue(user, conv.ID)
+		s.maybeDrainQueue(conv.ID)
 	}()
 
 	if w != nil && r != nil {
