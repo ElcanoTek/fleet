@@ -663,7 +663,9 @@ func (c *containerImpl) startStatsCollector() {
 // the cgroup driver chosen at `podman run` time — it re-resolves from
 // the global default (which on a stock Fedora install is "systemd").
 func (c *containerImpl) podmanArgs(rest []string) []string {
-	out := make([]string, 0, len(rest)+1)
+	// No manual capacity arithmetic (len(rest)+1 trips CodeQL's
+	// allocation-size-overflow check); append sizes the backing array itself.
+	var out []string
 	// --cgroup-manager=cgroupfs is needed on Linux where chat-server runs as a
 	// systemd unit (system.slice) but rootless podman defaults to the systemd
 	// cgroup driver, causing cgroup migration permission errors on every exec.
@@ -671,8 +673,7 @@ func (c *containerImpl) podmanArgs(rest []string) []string {
 	if runtime.GOOS == "linux" {
 		out = append(out, "--cgroup-manager=cgroupfs")
 	}
-	out = append(out, rest...)
-	return out
+	return append(out, rest...)
 }
 
 // execReapTimeout bounds the synchronous container-kill on a cancelled/timed-out
