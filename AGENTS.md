@@ -177,6 +177,9 @@ same PR.
 - **Evals & regression gating** (golden capture, the `evals/` bundle contract,
   scorers + LLM-judge, `fleet eval` CLI):
   [`docs/EVALS.md`](docs/EVALS.md) + [`docs/adr/0018-self-hosted-eval-harness.md`](docs/adr/0018-self-hosted-eval-harness.md)
+- **Governed lifecycle hooks** (bundle-declared `hooks:` run in the sandbox at
+  prompt-submit / pre+post-tool / turn-end; observe-or-narrow only, never widen):
+  [`docs/HOOKS.md`](docs/HOOKS.md) + [ADR-0038](docs/adr/0038-governed-lifecycle-hooks.md)
 - **Reporting a vulnerability:** [`SECURITY.md`](SECURITY.md)
 
 ## Repo Boundaries & Coupling Doctrine (owner direction, 2026-07-11)

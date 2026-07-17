@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Governed lifecycle hooks** (#788, `docs/HOOKS.md`, ADR-0038): a client
+  bundle can declare `hooks:` — commands run at fixed run lifecycle points
+  (`user_prompt_submit`, `pre_tool_use`, `post_tool_use`, `turn_end`) **inside
+  the per-turn sandbox**. A hook receives a bounded, redacted, credential-free
+  JSON payload on stdin and prints a JSON decision (continue / block-with-reason
+  / bounded additional-context). Hooks can only observe or NARROW — fleet's
+  existing policy/approval/audit gates evaluate after them on the same
+  unmodified input, so a hook can never widen authority, add tools, or grant
+  network/budget/approval. Enforcing hooks fail closed; advisory hooks fail
+  observable; every invocation emits a `hook.decision` audit event. The generic
+  bundle ships none (zero-overhead default). Both interactive and scheduled runs
+  invoke hooks through the one governed core.
+
 - **Save a chat to the prompt library**: a per-conversation kebab action
   ("Save to prompt library…") distills a conversation into a reusable
   prompt-library draft. `POST /conversations/{id}/suggest-prompt` (chat server)

@@ -334,6 +334,11 @@ func run() error {
 		CriticalToolTimeouts:    bundlePolicy.CriticalToolTimeouts,
 	})
 
+	// Governed lifecycle hooks (#788): translate the bundle's declared hooks into
+	// the agentcore form and install them process-wide. The generic bundle ships
+	// none, so this is a no-op by default. Must run before any turn starts.
+	agentcore.ConfigureLifecycleHooks(toAgentcoreHooks(bundle.Hooks()))
+
 	// Install the bundle's custom model-pricing overrides (#297). The generic
 	// bundle ships none, so cost accounting stays on the OpenRouter-returned
 	// price (the pre-#297 default). Must run before any turn starts.
@@ -1540,6 +1545,27 @@ func toAgentcorePricing(p clientconfig.PricingConfig) agentcore.PricingConfig {
 				CacheWriteCostPerMillionTokens: o.CacheWriteCostPerMillionTokens,
 			})
 		}
+	}
+	return out
+}
+
+// toAgentcoreHooks translates the bundle's declared lifecycle hooks (#788) into
+// the agentcore form. Returns nil when the bundle declares none (the generic
+// default), which ConfigureLifecycleHooks treats as "no hooks".
+func toAgentcoreHooks(hooks []clientconfig.HookDef) []agentcore.LifecycleHook {
+	if len(hooks) == 0 {
+		return nil
+	}
+	out := make([]agentcore.LifecycleHook, 0, len(hooks))
+	for _, h := range hooks {
+		out = append(out, agentcore.LifecycleHook{
+			ID:      h.ID,
+			Event:   agentcore.HookEvent(h.Event),
+			Matcher: h.Matcher,
+			Command: h.Command,
+			Timeout: time.Duration(h.EffectiveTimeoutSeconds()) * time.Second,
+			Enforce: h.Enforce,
+		})
 	}
 	return out
 }
