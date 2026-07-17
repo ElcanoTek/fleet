@@ -230,7 +230,12 @@ func applyUserPromptSubmitHooks(ctx context.Context, e *hookEngine, messages []f
 		return nil, fmt.Errorf("%w: %s", ErrBlockedByHook, reason)
 	}
 	if extra != "" {
-		messages = append(messages, fantasy.NewUserMessage(extra))
+		// Govern the hook-supplied context through the same output choke point
+		// before it enters the model input (secret/PII/guardrail), so a hook
+		// fragment cannot bypass output governance. A guardrail block drops it.
+		if governed, dropped := governToolOutput(ctx, "user_prompt_submit_hook", extra); !dropped {
+			messages = append(messages, fantasy.NewUserMessage(governed))
+		}
 	}
 	return messages, nil
 }
@@ -405,6 +410,22 @@ func parseHookDecision(out string) (hookDecision, bool) {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
+			continue
+		}
+		// Only accept a line as THE decision when it actually carries one of the
+		// contract keys. Otherwise a hook that prints its verdict and then a
+		// diagnostic/completion JSON line (e.g. {"event":"done"}) would have the
+		// noise line silently override the verdict — a fail-OPEN that downgrades
+		// a block to allow. A pure-diagnostic JSON object is ignored, not treated
+		// as an empty "continue".
+		var probe map[string]json.RawMessage
+		if json.Unmarshal([]byte(line), &probe) != nil {
+			continue
+		}
+		_, hasDecision := probe["decision"]
+		_, hasReason := probe["reason"]
+		_, hasContext := probe["additional_context"]
+		if !hasDecision && !hasReason && !hasContext {
 			continue
 		}
 		var d hookDecision

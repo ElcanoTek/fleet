@@ -215,6 +215,25 @@ func TestHookEngine_LastJSONLineWins(t *testing.T) {
 	}
 }
 
+func TestHookEngine_DecisionThenNoiseStillBlocks(t *testing.T) {
+	// Fail-open regression: a hook prints its block verdict then a trailing
+	// diagnostic JSON line. The noise line must NOT downgrade the block.
+	out := "{\"decision\":\"block\",\"reason\":\"denied\"}\n{\"event\":\"done\"}"
+	e := engineWith(t, &scriptExecutor{out: out}, nil,
+		LifecycleHook{ID: "gate", Event: HookPreToolUse, Command: "c", Enforce: true})
+	blocked, reason := e.preToolUse(context.Background(), "bash", "c", "{}")
+	if !blocked || !strings.Contains(reason, "denied") {
+		t.Fatalf("decision-then-noise must preserve the block: blocked=%v reason=%q", blocked, reason)
+	}
+	// A pure-diagnostic-only output (no decision-bearing line) is malformed →
+	// enforce blocks.
+	e2 := engineWith(t, &scriptExecutor{out: `{"event":"done"}`}, nil,
+		LifecycleHook{ID: "g2", Event: HookPreToolUse, Command: "c", Enforce: true})
+	if b, _ := e2.preToolUse(context.Background(), "bash", "c", "{}"); !b {
+		t.Error("diagnostic-only output should be treated as malformed and blocked (enforce)")
+	}
+}
+
 func TestHookEngine_ContextBudget(t *testing.T) {
 	// A post hook returns a large fragment repeatedly; the per-run budget caps it.
 	big := strings.Repeat("z", hookContextFragCap) // exactly the per-fragment cap

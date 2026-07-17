@@ -315,10 +315,15 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 	}
 	// post_tool_use hooks (#788): append any bounded context fragment to the
 	// governed result BEFORE RecordToolResult so the policy, session log, and
-	// model all see identical bytes.
+	// model all see identical bytes. The fragment itself passes through the same
+	// governToolOutput choke point (secret/PII/guardrail) so hook-supplied text
+	// cannot bypass output governance on its way into the model context or the
+	// transcript.
 	if frag := g.hooks.postToolUse(ctx, name, params.ID, params.Input, policyResult, err != nil || resp.IsError); frag != "" {
-		resp.Content = appendHookContext(resp.Content, frag)
-		policyResult = resp.Content
+		if governed, blocked := governToolOutput(ctx, name, frag); !blocked {
+			resp.Content = appendHookContext(resp.Content, governed)
+			policyResult = resp.Content
+		}
 	}
 	if g.policy != nil {
 		// Record the outcome so policies that gate on tool RESULTS observe native
@@ -492,6 +497,7 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 		// output governance without emitting an incident.
 		errText := "Error calling " + toolName + ": " + err.Error()
 		errText, _ = governToolOutput(ctx, toolName, errText)
+		errText = m.appendPostHook(ctx, toolName, params.ID, params.Input, errText, true)
 		m.record(ctx, toolName, params.Input, errText, false)
 		return fantasy.NewTextErrorResponse(errText), nil
 	}
@@ -518,17 +524,34 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 		if errText == "" {
 			errText = fmt.Sprintf("MCP tool %s returned isError=true with no text content", toolName)
 		}
+		// Fire post_tool_use on the failure path too (#788): native tools
+		// (policyGuardedTool) run post regardless of success, so MCP must match.
+		errText = m.appendPostHook(ctx, toolName, params.ID, params.Input, errText, true)
 		m.record(ctx, toolName, params.Input, errText, false)
 		return fantasy.NewTextErrorResponse(errText), nil
 	}
 
-	// post_tool_use hooks (#788): append any bounded context to the governed
-	// result before recording, so policy/log/model see identical bytes.
-	if frag := m.hooks.postToolUse(ctx, toolName, params.ID, params.Input, resultText, false); frag != "" {
-		resultText = appendHookContext(resultText, frag)
-	}
+	// post_tool_use hooks (#788) on the success path.
+	resultText = m.appendPostHook(ctx, toolName, params.ID, params.Input, resultText, false)
 	m.record(ctx, toolName, params.Input, resultText, true)
 	return fantasy.NewTextResponse(resultText), nil
+}
+
+// appendPostHook runs post_tool_use hooks and appends any bounded context to
+// text, passing the hook fragment through the governToolOutput choke point
+// (secret/PII/guardrail) so hook-supplied bytes are governed like every other
+// tool output. Fires on both success and failure paths (symmetry with native
+// tools, #788).
+func (m *mcpTool) appendPostHook(ctx context.Context, toolName, callID, rawInput, text string, isErr bool) string {
+	frag := m.hooks.postToolUse(ctx, toolName, callID, rawInput, text, isErr)
+	if frag == "" {
+		return text
+	}
+	governed, blocked := governToolOutput(ctx, toolName, frag)
+	if blocked {
+		return text
+	}
+	return appendHookContext(text, governed)
 }
 
 func (m *mcpTool) record(ctx context.Context, toolName, rawInput, resultText string, succeeded bool) {

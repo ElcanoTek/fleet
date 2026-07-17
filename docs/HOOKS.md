@@ -71,9 +71,19 @@ JSON-object line wins, so diagnostics printed earlier are fine):
 
 - `reason` is capped at 1 KiB; `additional_context` at 4 KiB per fragment, with
   a 32 KiB per-run budget (over-budget fragments are dropped and audited).
-- A hook that exits nonzero, times out, or prints no valid decision is a
+- `additional_context` is itself run through fleet's output governance (secret
+  scrubber, optional PII pass, workspace guardrail) before it enters the model
+  context or the transcript — a hook fragment cannot bypass that choke point.
+- A hook that exits nonzero, times out, or prints no valid decision (including a
+  JSON line that carries none of `decision`/`reason`/`additional_context`) is a
   **failure**: an `enforce: true` hook **blocks**; an advisory hook is audited
-  and the operation **continues**.
+  and the operation **continues**. A hook's *last* decision-bearing JSON line
+  wins, so a verdict followed by a diagnostic line still applies (a trailing
+  non-decision line never downgrades a block).
+- **Only `pre_tool_use` and `user_prompt_submit` can block.** A `block` decision
+  from `post_tool_use` or `turn_end` is audited but not enforced — the tool has
+  already run / the turn has already completed, so those events are
+  observe-or-annotate only.
 
 ## Audit
 
