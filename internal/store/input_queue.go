@@ -254,3 +254,75 @@ func (s *Store) RecoverInputQueue(ctx context.Context) (requeued, completed int,
 	n, _ = res.RowsAffected()
 	return int(n), completed, nil
 }
+
+// BindInputTurn stamps the REAL turn id on a claimed row once registerTurn
+// mints it (the claim used a placeholder). Without this the settle/recovery
+// predicates — which check the turn's durable #798 record — can never match,
+// and a crash would re-queue (double-run) an already-committed input.
+func (s *Store) BindInputTurn(ctx context.Context, id, turnID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET turn_id = $2, updated_at = $3
+		  WHERE id = $1 AND state IN ('running','injected')`,
+		id, turnID, time.Now().Unix())
+	return err
+}
+
+// LookupInput returns the row for a caller idempotency key in any state, or
+// nil. The direct submit path consults it so a retry of an ACCEPTED input_id
+// that lands while the conversation is idle cannot run a duplicate turn.
+func (s *Store) LookupInput(ctx context.Context, convID, clientID string) (*InputQueueRow, error) {
+	row, err := s.getInputByClientID(ctx, convID, clientID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// SettleTurnInputs reconciles a finished turn's queue rows against the #798
+// durable record — the same predicates boot recovery uses, applied at turn
+// end so no row waits for a restart:
+//   - the drained row (drainedID, if any): completed when the turn's user
+//     entry committed (messages turn_seq=1), otherwise back to queued — a
+//     202-acknowledged input whose turn failed pre-commit is never lost.
+//   - injected steer rows: completed when the turn's history committed
+//     (normally already done post-commit), otherwise back to queued.
+//
+// Returns how many rows went back to queued so the caller can re-kick.
+func (s *Store) SettleTurnInputs(ctx context.Context, turnID, drainedID string) (int, error) {
+	now := time.Now().Unix()
+	requeued := 0
+	if drainedID != "" {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE chat_input_queue SET
+			    state = CASE WHEN EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = $2 AND m.turn_seq = 1)
+			                 THEN 'completed' ELSE 'queued' END,
+			    turn_id = CASE WHEN EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = $2 AND m.turn_seq = 1)
+			                   THEN turn_id ELSE NULL END,
+			    updated_at = $3
+			  WHERE id = $1 AND state = 'running'`,
+			drainedID, turnID, now)
+		if err != nil {
+			return 0, err
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			var state string
+			if err := s.db.QueryRowContext(ctx,
+				`SELECT state FROM chat_input_queue WHERE id = $1`, drainedID).Scan(&state); err == nil && state == InputStateQueued {
+				requeued++
+			}
+		}
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'queued', turn_id = NULL, updated_at = $2
+		  WHERE turn_id = $1 AND state = 'injected'
+		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id = $1 AND t.history_committed_at IS NOT NULL)`,
+		turnID, now)
+	if err != nil {
+		return requeued, err
+	}
+	n, _ := res.RowsAffected()
+	return requeued + int(n), nil
+}

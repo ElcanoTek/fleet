@@ -71,6 +71,13 @@ func steeringStep(source SteerSource, state *steerState, sink *streamSink) fanta
 			if pos > len(messages) {
 				pos = len(messages)
 			}
+			// Never split a tool exchange: a mid-slice position (rollback or
+			// compaction rebuilt the history shorter) advances past any tool
+			// messages so a ToolCallPart keeps its results adjacent —
+			// provider-valid at the cost of, at worst, one cache-miss step.
+			for pos < len(messages) && messages[pos].Role == fantasy.MessageRoleTool {
+				pos++
+			}
 			if steerAlreadyPresent(messages, m.text, pos) {
 				continue
 			}
@@ -80,6 +87,14 @@ func steeringStep(source SteerSource, state *steerState, sink *streamSink) fanta
 			injected = append(injected, messages[pos:]...)
 			messages = injected
 			changed = true
+			// Re-record the transcript entry too: a resilience rollback
+			// truncated the sink to the attempt mark, erasing the original
+			// user_text entry — without this the model acts on steered text
+			// the committed transcript never shows. The sink dedupes by
+			// SteerID, so intact entries are not duplicated.
+			if sink != nil {
+				sink.onUserInjected(m.id, m.text)
+			}
 		}
 
 		// Accept at most one NEW message per step boundary: the durable

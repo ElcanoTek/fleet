@@ -192,6 +192,35 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	})
 }
 
+// rekickDrainAfter schedules a bounded retry kick for rows that went back to
+// 'queued' with no natural kicker (concurrency cap full, transient launch
+// failure, race-loser un-claim). Without it those rows stall until the next
+// submission; with it the queue self-heals a few seconds later.
+func (s *Server) rekickDrainAfter(convID string, d time.Duration) {
+	time.AfterFunc(d, func() { s.maybeDrainQueue(convID) })
+}
+
+// markStopAll records a Stop scope=all instant for convID. Rows accepted
+// BEFORE it must not launch even if they were in claim-limbo (claimed by a
+// drain but not yet registered) when CancelQueuedInputs swept the queued set.
+func (s *Server) markStopAll(convID string) {
+	s.inflightMu.Lock()
+	if s.stopEpochs == nil {
+		s.stopEpochs = make(map[string]int64)
+	}
+	s.stopEpochs[convID] = time.Now().Unix()
+	s.inflightMu.Unlock()
+}
+
+// stoppedSince reports whether a Stop scope=all was issued at or after the
+// row's acceptance — the launch gate for claim-limbo rows.
+func (s *Server) stoppedSince(convID string, createdAt int64) bool {
+	s.inflightMu.Lock()
+	epoch, ok := s.stopEpochs[convID]
+	s.inflightMu.Unlock()
+	return ok && createdAt <= epoch
+}
+
 // maybeDrainQueue claims and launches the conversation's next queued input
 // when no turn is running. Re-entrant and race-safe: the claim is DB-atomic,
 // registerTurn refuses while a turn runs (the loser un-claims), and each
@@ -215,13 +244,15 @@ func (s *Server) maybeDrainQueue(convID string) {
 		return
 	}
 	if !s.launchQueuedTurn(convID, row) {
-		// A direct submission won the registerTurn race; put the row back —
-		// the winner's completion re-drains it.
+		// A direct submission won the registerTurn race; put the row back.
+		// The winner's completion re-drains it, and the bounded re-kick
+		// covers a winner whose tail already ran before our un-claim landed.
 		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := s.store.MarkInputTerminal(rctx, row.ID, store.InputStateQueued); err != nil {
 			log.Printf("input queue unclaim (conv=%s input=%s): %v", convID, row.ID, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
 		}
 		rcancel()
+		s.rekickDrainAfter(convID, 2*time.Second)
 	}
 }
 
@@ -229,16 +260,31 @@ func (s *Server) maybeDrainQueue(convID string) {
 // prep, buffer, and runTurnAsync path as a direct submission, so every
 // governance and persistence property (#798 included) holds unchanged.
 func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool {
+	// Stop scope=all gate: a row accepted before the Stop instant must not
+	// launch, even if it was claimed (invisible to CancelQueuedInputs) while
+	// the sweep ran.
+	if s.stoppedSince(convID, row.CreatedAt) {
+		s.terminalizeQueueRow(row.ID, store.InputStateCancelled)
+		return true
+	}
 	// The ROW's owner is authoritative — the drain kick may come from another
 	// actor's request path (e.g. a different session's /cancel bookkeeping).
 	user := row.UserEmail
 	lctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	conv, err := s.store.Get(lctx, user, convID)
-	if err != nil || conv == nil {
-		log.Printf("input queue: conversation %s unavailable: %v", convID, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+	if err != nil {
+		// TRANSIENT store failure: the 202-acknowledged input must survive.
+		// Back to queued + a bounded re-kick; never cancelled for weather.
+		log.Printf("input queue: conversation %s load failed: %v", convID, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+		s.terminalizeQueueRow(row.ID, store.InputStateQueued)
+		s.rekickDrainAfter(convID, 3*time.Second)
+		return true
+	}
+	if conv == nil {
+		// Definitively gone (deleted/expired): cancel is honest.
 		s.terminalizeQueueRow(row.ID, store.InputStateCancelled)
-		return true // consumed (cancelled); don't unclaim into a loop
+		return true
 	}
 	var attachments []chatAttachment
 	if row.Attachments != "" {
@@ -248,7 +294,11 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	// happened when the input was accepted); the per-user concurrency cap
 	// still applies. A full limiter leaves the row queued for the next kick.
 	if s.concurrent != nil && !s.concurrent.Acquire(user) {
+		// Cap full (often because the just-completed turn's own slot releases
+		// AFTER its tail drain). Re-queue with a bounded re-kick so the row
+		// drains once a slot frees instead of stalling until the next submit.
 		s.terminalizeQueueRow(row.ID, store.InputStateQueued)
+		s.rekickDrainAfter(convID, 2*time.Second)
 		return true
 	}
 	releaseSlot := func() {
@@ -329,7 +379,11 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 			items, lerr := s.store.ListQueuedInputs(r.Context(), user, convID)
 			if lerr == nil {
 				for _, it := range items {
-					if it.ID == inputID && it.State == store.InputStateQueued {
+					// Only text-only steer rows inject mid-turn: offering a
+					// queued row with attachments would silently drop them
+					// (steering is text-only; the row drains as a full turn).
+					if it.ID == inputID && it.State == store.InputStateQueued &&
+						it.Mode == store.InputModeSteer && (it.Attachments == "" || it.Attachments == "[]") {
 						entry.steer.offer(it.ID, it.Message)
 						break
 					}

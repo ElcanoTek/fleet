@@ -18,6 +18,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
@@ -294,4 +295,94 @@ func TestQueue_SteerInjectsMidTurnExactlyOnce(t *testing.T) {
 	if eng.turns.Load() != 1 {
 		t.Fatalf("steered input also drained as a turn: %d turns", eng.turns.Load())
 	}
+}
+
+// failFirstEngine fails RunTurn before any commit for the first N turns, then
+// behaves like gatedEngine — the drained-turn pre-commit failure scenario.
+type failFirstEngine struct {
+	gatedEngine
+	failuresLeft atomic.Int32
+}
+
+func (f *failFirstEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
+	if f.failuresLeft.Add(-1) >= 0 {
+		f.turns.Add(1)
+		select {
+		case f.started <- struct{}{}:
+		default:
+		}
+		return nil, context.DeadlineExceeded // fails BEFORE CommitUser
+	}
+	return f.gatedEngine.RunTurn(ctx, in, sink)
+}
+
+func TestQueue_DrainedTurnPreCommitFailureRequeuesNotCompletes(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &failFirstEngine{gatedEngine: gatedEngine{started: make(chan struct{}, 8), release: make(chan struct{}, 8)}}
+	s.agent = eng
+
+	// Turn 1 succeeds normally (no scripted failure yet).
+	go postChatJSON(t, s, user, map[string]any{"message": "first", "conversation_id": conv.ID})
+	<-eng.started
+	// Queue a follow-up, then make the NEXT (drained) turn fail pre-commit.
+	if w := postChatJSON(t, s, user, map[string]any{"message": "precious follow-up", "conversation_id": conv.ID, "input_id": "keep-me"}); w.Code != http.StatusAccepted {
+		t.Fatalf("queue submit: %d", w.Code)
+	}
+	eng.failuresLeft.Store(1)
+	eng.release <- struct{}{} // finish turn 1; the drain launches the failing turn
+
+	// The 202-acknowledged input must come back to 'queued' — never a silent
+	// 'completed' with its text absent from history.
+	waitFor(t, "failed drained turn re-queues the row", func() bool {
+		items, _ := s.store.ListQueuedInputs(context.Background(), user, conv.ID)
+		for _, it := range items {
+			if it.ClientInputID == "keep-me" && it.State == "queued" {
+				return true
+			}
+		}
+		return false
+	})
+	// And the bounded re-kick eventually drains it successfully.
+	eng.release <- struct{}{}
+	waitFor(t, "re-kicked row eventually persists", func() bool {
+		h, herr := s.store.LoadHistory(context.Background(), conv.ID)
+		if herr != nil {
+			return false
+		}
+		for _, e := range h {
+			if strings.Contains(string(e.Content), "precious follow-up") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestQueue_DrainWorksAtConcurrencyCapOne(t *testing.T) {
+	s := serverFixture(t)
+	const user = "alice@x.com"
+	// The regression: with cap=1 the completion tail drained BEFORE the
+	// completing turn released its own slot — every drain failed Acquire and
+	// nothing ever re-kicked.
+	s.concurrent = ratelimit.NewConcurrencyLimiter(1)
+	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := &gatedEngine{started: make(chan struct{}, 8), release: make(chan struct{}, 8)}
+	s.agent = eng
+
+	go postChatJSON(t, s, user, map[string]any{"message": "first", "conversation_id": conv.ID})
+	<-eng.started
+	if w := postChatJSON(t, s, user, map[string]any{"message": "second", "conversation_id": conv.ID}); w.Code != http.StatusAccepted {
+		t.Fatalf("queue submit: %d", w.Code)
+	}
+	eng.release <- struct{}{}
+	eng.release <- struct{}{}
+	waitFor(t, "queued turn drains at cap=1", func() bool { return eng.turns.Load() == 2 })
 }

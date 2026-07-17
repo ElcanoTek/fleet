@@ -181,3 +181,69 @@ func TestSteeringStep_NilSourceIsNil(t *testing.T) {
 		t.Fatal("nil source must produce a nil step (chain skips it)")
 	}
 }
+
+func TestSteeringStep_RollbackReRecordsTranscriptEntry(t *testing.T) {
+	source := &fakeSteerSource{pending: []SteerMessage{{ID: "in-1", Text: "steered guidance"}}}
+	state := &steerState{}
+	sink := newStreamSink(nil)
+	step := steeringStep(source, state, sink)
+
+	base := []fantasy.Message{fantasy.NewUserMessage("ask")}
+	if _, _, err := step(context.Background(), steerOpts(base)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A resilience re-drive rolled the sink back past the injection point:
+	// the user_text entry is gone, but the model WILL see the steered text
+	// again on the retried attempt (re-application). The transcript entry
+	// must come back with it — a committed transcript missing text the model
+	// acted on would be a lie.
+	sink.rollbackTo(sinkMark{})
+
+	if _, _, err := step(context.Background(), steerOpts(base)); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := sink.snapshot()
+	count := 0
+	for _, e := range entries {
+		if e.Type == "user_text" && e.SteerID == "in-1" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("user_text entries after rollback + re-apply = %d, want exactly 1", count)
+	}
+}
+
+func TestSteeringStep_ReapplyNeverSplitsToolExchange(t *testing.T) {
+	source := &fakeSteerSource{pending: []SteerMessage{{ID: "in-1", Text: "steered guidance"}}}
+	state := &steerState{}
+	step := steeringStep(source, state, nil)
+
+	// Accept at position 1 (after one message).
+	if _, _, err := step(context.Background(), steerOpts([]fantasy.Message{fantasy.NewUserMessage("ask")})); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rebuilt slice where position 1 would land BETWEEN a tool call and its
+	// results — the re-application must advance past the tool messages.
+	rebuilt := []fantasy.Message{
+		fantasy.NewUserMessage("ask"),
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: "c1", Output: fantasy.ToolResultOutputContentText{Text: "res"}},
+		}},
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: "thinking"}}},
+	}
+	_, res, err := step(context.Background(), steerOpts(rebuilt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Messages == nil {
+		t.Fatal("expected re-application")
+	}
+	// The injected user message must not sit at index 1 (before the tool
+	// result) — that would break call/result adjacency.
+	if res.Messages[1].Role == fantasy.MessageRoleUser {
+		t.Fatalf("steer injected between tool call and result: %+v", res.Messages)
+	}
+}

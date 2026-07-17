@@ -651,6 +651,46 @@ func (s *fakeChatStore) RemoveQueuedInput(_ context.Context, _, convID, id strin
 	return false, nil
 }
 
+func (s *fakeChatStore) BindInputTurn(_ context.Context, id, turnID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id {
+			s.queue[i].TurnID = turnID
+		}
+	}
+	return nil
+}
+
+func (s *fakeChatStore) LookupInput(_ context.Context, convID, clientID string) (*store.InputQueueRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, it := range s.queue {
+		if it.ConversationID == convID && it.ClientInputID == clientID {
+			row := it
+			return &row, nil
+		}
+	}
+	return nil, nil
+}
+
+// SettleTurnInputs mirrors the store's commit-state reconciliation: the fake
+// treats any turn whose engine committed (history rows exist) as committed.
+func (s *fakeChatStore) SettleTurnInputs(_ context.Context, turnID, drainedID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	requeued := 0
+	for i := range s.queue {
+		if drainedID != "" && s.queue[i].ID == drainedID && s.queue[i].State == store.InputStateRunning {
+			s.queue[i].State = store.InputStateCompleted
+		}
+		if s.queue[i].TurnID == turnID && s.queue[i].State == store.InputStateInjected {
+			s.queue[i].State = store.InputStateCompleted
+		}
+	}
+	return requeued, nil
+}
+
 func (s *fakeChatStore) PromoteQueuedInput(_ context.Context, _, convID, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

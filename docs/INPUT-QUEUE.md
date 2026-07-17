@@ -50,6 +50,21 @@ it persists exactly once; its queue row completes only with that commit. A
 turn that ends before injecting leaves the row queued — the durable fallback
 runs it as the next turn. User input is never silently dropped.
 
+## Failure handling
+
+A drained turn settles its rows against the #798 durable record at turn end:
+the row completes ONLY if the turn's user entry committed; a pre-commit
+failure (model resolution, DB blip) re-queues it — a 202-acknowledged input
+is never silently lost. Uncommitted injected steers equally return to the
+queue when their turn hard-errors. Re-queued rows (including
+concurrency-cap refusals and transient launch failures) get a bounded
+delayed re-kick so the queue self-heals without waiting for the next
+submission. Stop scope=all records a per-conversation epoch before sweeping,
+so a row in claim-limbo (claimed by a racing drain, invisible to the sweep)
+still cannot launch after Stop. The `input_id` idempotency key is honored on
+the direct path too: a retry that lands after the conversation went idle
+returns the accepted item instead of running a duplicate turn.
+
 ## Drain & recovery
 
 There is no per-conversation goroutine: every enqueue and every turn
@@ -67,7 +82,8 @@ are visible in the queue UI and run on send-now or the next submission.
 
 - Steer with attachments (downgrades to queue); steering for scheduled runs.
 - Queue reorder beyond send-now promotion; drag-and-drop in the UI.
-- Cross-restart idempotency for immediate (non-queued) submissions.
+- Cross-restart idempotency for immediate submissions that never carried an
+  `input_id` (clients that send one are covered).
 - An injected-then-crashed steer re-queues (its turn's history never
   committed); if the turn's tools had side effects before the crash, the
   #798 recovery markers carry the evidence — the re-run is visible, not

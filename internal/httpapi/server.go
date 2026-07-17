@@ -104,8 +104,11 @@ type Server struct {
 	// Each entry carries a monotonic token so a turn whose handler is
 	// cleaning up doesn't accidentally clobber a fresher entry that
 	// another submit installed in the meantime.
-	inflightMu      sync.Mutex
-	inflight        map[string]inflightEntry
+	inflightMu sync.Mutex
+	inflight   map[string]inflightEntry
+	// stopEpochs records the last Stop scope=all instant per conversation
+	// (#785) so claim-limbo rows accepted before it can never launch after it.
+	stopEpochs      map[string]int64
 	inflightCounter uint64
 
 	// clientConfig is the loaded client bundle that backs GET /client-config
@@ -2015,13 +2018,23 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 				scope = "turn"
 			}
 		}
+		if scope == "all" {
+			// Epoch BEFORE the sweep: a row claimed by a racing drain is
+			// invisible to CancelQueuedInputs, but launchQueuedTurn gates on
+			// the epoch, so claim-limbo rows accepted before Stop still die.
+			s.markStopAll(id)
+		}
 		s.cancelInflight(id)
 		if scope == "all" {
-			if n, err := s.store.CancelQueuedInputs(r.Context(), user, id); err != nil {
+			// Fresh context: Stop must sweep the queue even when the client
+			// aborts the request the moment the button is pressed.
+			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if n, err := s.store.CancelQueuedInputs(qctx, user, id); err != nil {
 				log.Printf("cancel queued inputs (conv=%s): %v", id, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
 			} else if n > 0 {
-				s.emitQueueUpdate(r.Context(), user, id)
+				s.emitQueueUpdate(qctx, user, id)
 			}
+			qcancel()
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case sub == "summarize" && r.Method == http.MethodPost:
@@ -2256,6 +2269,25 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Idempotent replay (#785): an input_id that was already ACCEPTED (queued,
+	// running, or terminal) never runs a duplicate turn — even when the retry
+	// lands after the conversation went idle.
+	if clientID := strings.TrimSpace(req.InputID); clientID != "" {
+		if existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID); lerr == nil && existing != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"queued": true,
+				"input": map[string]any{
+					"id": existing.ID, "client_input_id": existing.ClientInputID,
+					"mode": existing.Mode, "state": existing.State, "position": existing.Position,
+				},
+				"conversation_id": conv.ID,
+			})
+			return
+		}
+	}
+
 	// Busy path (#785): a running turn means this submission QUEUES — never an
 	// implicit cancel. The row is durable before the 202 acknowledgement;
 	// steer-mode rows are additionally offered to the running turn's next
@@ -2350,6 +2382,17 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// The run goroutine (the only Poll consumer) has not launched yet, so no
 	// injection can precede the binding.
 	steer.turnID, steer.buf = turnID, buf
+	if queueRowID != "" {
+		// Stamp the REAL turn id on the drained row (the claim used a
+		// placeholder): the settle/recovery predicates check THIS turn's
+		// durable #798 record, and a stale placeholder would re-queue —
+		// double-run — an already-committed input after a crash.
+		bctx, bcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.store.BindInputTurn(bctx, queueRowID, turnID); err != nil {
+			log.Printf("bind input turn (input=%s turn=%s): %v", queueRowID, turnID, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+		}
+		bcancel()
+	}
 
 	// Wire incremental persistence so a crash mid-turn leaves a
 	// recoverable ledger in turn_events. Non-fatal — if the DB is
@@ -2423,22 +2466,37 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// (#278). The counter mirrors the WaitGroup for the SIGUSR1 status log.
 	s.activeTurns.Add(1)
 	s.activeTurnCount.Add(1)
+	// releaseSlot must run exactly once, and BEFORE the tail drain — the
+	// completing turn's own slot is what the next drained turn needs, and a
+	// deferred-only release would deterministically starve the queue at cap.
+	var releasedOnce sync.Once
+	releaseOnce := func() { releasedOnce.Do(releaseSlot) }
 	go func() { //nolint:gosec // G118: deliberate — the turn must outlive the HTTP request (see the detachment comment above); Stop routes through /cancel.
 		defer func() {
 			s.activeTurnCount.Add(-1)
 			s.activeTurns.Done()
 		}()
-		// Release the concurrent-turn slot when the turn actually completes, not
-		// when the HTTP handler returns (the turn outlives the request).
-		defer releaseSlot()
+		defer releaseOnce()
 		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, userMessage, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer)
-		// The turn (and its deferred finishTurn) is done: settle this input's
-		// queue row and drain whatever queued up while we ran (#785).
-		if queueRowID != "" {
-			s.terminalizeQueueRow(queueRowID, store.InputStateCompleted)
-			s.emitQueueUpdate(context.Background(), user, conv.ID)
+		// The turn (and its deferred finishTurn) is done: settle this turn's
+		// queue rows against the durable #798 record — the drained row
+		// completes only if its user entry committed (a pre-commit failure
+		// re-queues it; a 202-acknowledged input is never silently lost),
+		// and uncommitted injected steers return to the queue.
+		sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
+		requeued, serr := s.store.SettleTurnInputs(sctx, turnID, queueRowID)
+		scancel()
+		if serr != nil {
+			log.Printf("settle turn inputs (turn=%s): %v", turnID, serr)
 		}
+		s.emitQueueUpdate(context.Background(), user, conv.ID)
+		releaseOnce()
 		s.maybeDrainQueue(conv.ID)
+		if requeued > 0 {
+			// The re-queued row may be the FIFO head the drain just re-claimed
+			// into the same failure; the bounded re-kick breaks livelock.
+			s.rekickDrainAfter(conv.ID, 3*time.Second)
+		}
 	}()
 
 	if w != nil && r != nil {
