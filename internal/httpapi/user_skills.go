@@ -137,8 +137,8 @@ func (s *Server) materializeUserSkills(ctx context.Context, user, conversationID
 		}
 		md := store.RenderUserSkillMarkdown(&sk)
 		path := filepath.Join(dir, "SKILL.md")
-		if cur, rerr := os.ReadFile(path); rerr != nil || string(cur) != md { // #nosec G304 — path built from validated skill name
-			if werr := os.WriteFile(path, []byte(md), 0o644); werr != nil { // #nosec G306 — non-secret instructions
+		if cur, rerr := os.ReadFile(path); rerr != nil || string(cur) != md { //nolint:gosec // G304/G703: path = workspace root + server-generated conv UUID + store-validated skill name — no request-authored path segment
+			if werr := os.WriteFile(path, []byte(md), 0o644); werr != nil { //nolint:gosec // G306/G703: non-secret instructions under the validated workspace path above
 				continue
 			}
 		}
@@ -152,7 +152,7 @@ func (s *Server) materializeUserSkills(ctx context.Context, user, conversationID
 	if dirs, err := os.ReadDir(root); err == nil {
 		for _, d := range dirs {
 			if !want[d.Name()] {
-				_ = os.RemoveAll(filepath.Join(root, d.Name()))
+				_ = os.RemoveAll(filepath.Join(root, d.Name())) //nolint:gosec // G703: root is workspace + server conv UUID; d.Name comes from ReadDir of that root
 			}
 		}
 	}

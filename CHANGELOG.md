@@ -113,6 +113,18 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Input queue + mid-turn steering** (#785, `docs/INPUT-QUEUE.md`): a
+  submission during an active turn now QUEUES durably (stable ids, idempotent
+  `input_id` replay, FIFO drain as separate turns) instead of implicitly
+  cancelling the running turn — explicit Stop is the only cancellation, and
+  it now covers queued follow-ups too (`scope=all` default). Optional
+  `mode=steer` injects the message at the next safe step boundary inside the
+  same governed loop: budget-accounted, cache-friendly append, durable
+  queued→injected flip before model visibility, persisted exactly once via
+  the #798 terminal commit, with a queued-turn fallback when the turn ends
+  first. Queue chips under the composer (remove / send-now) ride the new
+  `queue.updated` SSE snapshots. Migration 042.
+
 - **Durable turn journal + commit-gated terminal success** (#798,
   `docs/TURN-JOURNAL.md`, ADR-0039): interactive turns now preserve the causal
   chain user input → tool intent → governed tool outcome → conclusion

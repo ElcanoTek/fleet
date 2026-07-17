@@ -86,6 +86,11 @@ type engine struct {
 	// accumulated usage so a driver can ship it out-of-band to an external
 	// accountant. Nil for the in-process loop.
 	usageReporter func(RunUsage)
+	// steerSource is the #785 mid-turn input seam (nil = no steering); its
+	// accepted-message state lives on the engine so injections survive
+	// enforcement rounds and resilience re-drives within one run.
+	steerSource SteerSource
+	steerState  steerState
 
 	// modelContextPrefix holds exact-ish token reserves for the run's system
 	// prompt and currently registered tool schemas. roundState combines it with
@@ -604,8 +609,13 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			return nil
 		},
 		PrepareStep: budgetGuardedStep(r.orch, chainPrepareStepFunctions(
-			// Runs FIRST: prompt-cache markers must be attached to the reduced
-			// message slice, and no provider call may observe the pre-reduction
+			// Steering (#785) runs before the reducers so an injected user
+			// message is budget-accounted and cache-marked like any other
+			// history — and never observed by a provider before its durable
+			// queued->injected flip landed. nil-safe (nil when no source).
+			steeringStep(r.engine.steerSource, &r.engine.steerState, sink),
+			// Prompt-cache markers must be attached to the reduced message
+			// slice, and no provider call may observe the pre-reduction
 			// history. opts.Model makes fallback swaps use their own window.
 			modelContextBudgetStep(r.engine.modelContextPrefix, int(r.maxTokens), sink),
 			promptCachingStep(modelSlug,

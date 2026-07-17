@@ -291,6 +291,17 @@ func (b *turnBuffer) markNeedsBackfill() {
 // The terminal status (`completed` / `cancelled` / `error`) is
 // inferred from the last terminal event in the log so the caller
 // doesn't have to pass it in — it's already there in the stream.
+// Sealed reports whether Finish has run. The inflight entry's finishedAt is
+// stamped shortly AFTER the seal (finishTurn seals first, then flips the
+// entry), so "sealed" is the earliest reliable this-turn-is-over signal — the
+// #785 busy check uses it to avoid queueing a submission that raced the last
+// microseconds of the previous turn's bookkeeping.
+func (b *turnBuffer) Sealed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.closed
+}
+
 func (b *turnBuffer) Finish() {
 	b.mu.Lock()
 	if b.closed {

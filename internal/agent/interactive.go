@@ -117,6 +117,10 @@ type TurnConfig struct {
 	// commit before dispatch, governed results before the next provider step.
 	// nil (evals, tests) = no journaling.
 	TurnJournal agentcore.TurnJournal
+
+	// SteerSource is the mid-turn input seam (#785): acknowledged messages
+	// inject at PrepareStep boundaries. nil = no steering.
+	SteerSource agentcore.SteerSource
 }
 
 // messagesInput adapts a pre-built message slice to agentcore.InputSource.
@@ -166,6 +170,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		CompactionSummarizer: buildInteractiveCompactionSummarizer(tc),
 		HealthRegistry:       tc.HealthRegistry,
 		TurnJournal:          tc.TurnJournal,
+		SteerSource:          tc.SteerSource,
 	}
 
 	// Per-user remote-MCP overlay (#443): advertise the shared catalog merged

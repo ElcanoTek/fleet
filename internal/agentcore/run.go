@@ -180,6 +180,13 @@ type Deps struct {
 	// Driver-supplied data, not a Mode branch (see TestSeamPurity).
 	TurnJournal TurnJournal
 
+	// SteerSource, when set, is the mid-turn input seam (#785): the loop polls
+	// it at every PrepareStep boundary and appends acknowledged user messages
+	// between provider steps — never mid-tool. The interactive driver backs it
+	// with the conversation's durable input queue; scheduled/evals leave it
+	// nil. Driver-supplied data, not a Mode branch (see TestSeamPurity).
+	SteerSource SteerSource
+
 	// UsageReporter, when set, is invoked after each LLM step with that step's
 	// accumulated run usage (the SAME counters usageSnapshot returns). A driver
 	// may wire this to ship a per-step usage event out-of-band so an external
@@ -671,6 +678,7 @@ func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 		envPrefix:              cfg.EnvPrefix,
 		compactionSummarizer:   deps.CompactionSummarizer,
 		usageReporter:          deps.UsageReporter,
+		steerSource:            deps.SteerSource,
 		maxIterations:          cfg.MaxIterations,
 		healthRegistry:         deps.HealthRegistry,
 		requireCompactionOptIn: cfg.RequireCompactionOptIn,

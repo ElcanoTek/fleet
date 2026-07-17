@@ -54,7 +54,7 @@ func TestPersister_BackfillHealsDropsUnderLatency(t *testing.T) {
 
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	buf, turnID, tok := s.registerTurn(conv.ID, cancel)
+	buf, turnID, tok, _ := s.registerTurn(conv.ID, cancel, nil)
 
 	ctx, cc := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cc()
@@ -117,7 +117,7 @@ func TestPersister_LossyWhenBackfillFails(t *testing.T) {
 
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	buf, turnID, tok := s.registerTurn(conv.ID, cancel)
+	buf, turnID, tok, _ := s.registerTurn(conv.ID, cancel, nil)
 
 	ctx, cc := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cc()
@@ -167,7 +167,7 @@ func TestPersister_EventsPersistThenFinish(t *testing.T) {
 
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	buf, turnID, tok := s.registerTurn(conv.ID, cancel)
+	buf, turnID, tok, _ := s.registerTurn(conv.ID, cancel, nil)
 
 	ctx, cc := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cc()
@@ -231,7 +231,7 @@ func TestStreamEndpoint_DBFallback(t *testing.T) {
 	// inflight map so /stream has to go to the DB.
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	buf, turnID, tok := s.registerTurn(conv.ID, cancel)
+	buf, turnID, tok, _ := s.registerTurn(conv.ID, cancel, nil)
 	ctx, cc := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cc()
 	if err := buf.attachPersister(ctx, s.store); err != nil {

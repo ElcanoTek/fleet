@@ -2420,4 +2420,14 @@ func recoverStrandedTurns(chatStore *store.Store) {
 		log.Printf("stranded-turn recovery: turn %s (conv %s) projected %d entries, %d unknown-outcome tool calls",
 			r.TurnID, r.ConversationID, r.Projected, r.Synthesized)
 	}
+	// Input-queue recovery (#785) resolves rows claimed/injected by the dead
+	// process against the #798 durable record: durably-persisted ones complete,
+	// the rest return to 'queued' — visible and addressable, deliberately NOT
+	// auto-drained (a restart must not start unattended LLM spend).
+	requeued, completed, qerr := chatStore.RecoverInputQueue(recCtx)
+	if qerr != nil {
+		log.Printf("input-queue recovery: %v", qerr)
+	} else if requeued+completed > 0 {
+		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed", requeued, completed) //nolint:gosec // G706: two int counts — no request input.
+	}
 }
