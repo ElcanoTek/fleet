@@ -81,13 +81,21 @@ func TestGetTaskOutputTerminalContract(t *testing.T) {
 			t.Fatalf("valid output body=%s err=%v", w.Body.String(), err)
 		}
 	}
-	if w := get(legacy.ID); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "contract violated") {
+	// An invariant-violating success row (no output_json) is a storage fault:
+	// 500, never a retriable 409 or a missing-resource 404.
+	if w := get(legacy.ID); w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "contract violated") {
 		t.Fatalf("legacy impossible success: status=%d body=%s", w.Code, w.Body.String())
 	}
-	if w := get(corrupt.ID); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "invalid") {
-		t.Fatalf("legacy corrupt success: status=%d body=%s", w.Code, w.Body.String())
+	// Schema validation is a COMMIT-time invariant. Read serves committed bytes
+	// verbatim (well-formedness only) so today's schema/bounds are never applied
+	// retroactively to rows committed under earlier validators — a directly
+	// seeded schema-invalid row therefore serves rather than 409ing forever.
+	if w := get(corrupt.ID); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "not-a-boolean") {
+		t.Fatalf("committed row not served: status=%d body=%s", w.Code, w.Body.String())
 	}
-	if w := get(failed.ID); w.Code != http.StatusConflict {
+	// Terminal failure is permanent: 410 tells a polling client to stop, where
+	// 409 (below) means not-yet-terminal, poll again.
+	if w := get(failed.ID); w.Code != http.StatusGone {
 		t.Fatalf("failed structured task with stale output: status=%d body=%s", w.Code, w.Body.String())
 	}
 	if w := get(pendingStructured.ID); w.Code != http.StatusConflict {
