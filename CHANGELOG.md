@@ -19,6 +19,26 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Env-file keys boot actually reads are now allowlisted**: `loadEnvFile`
+  silently dropped non-allowlisted keys, and the list was missing ~16 names
+  boot reads via `os.Getenv` — including `FLEET_CHAT_DATABASE_URL` /
+  `FLEET_SCHED_DATABASE_URL` (documented in `deploy/fleet.service` as env-file
+  keys; boot failed with an empty-DSN error despite a correct file) and
+  `ADMIN_API_KEY` (admin API rejected everything while the startup warning
+  claimed the key was unset).
+- **`fleet mcp test` now reads the env file like a real boot**: it loaded the
+  bundle without registering connector env-var names or calling
+  `config.Load`, so `.env`-only credentials were invisible — credential-gated
+  servers were reported as "enable gate is off" or probed with empty creds,
+  the exact failure class the verb diagnoses.
+- **MCP hot reload is bounded (60s, like boot)**: a stdio server that starts
+  but never answers `initialize` blocked SIGHUP reload forever under the
+  reload mutexes — wedging all future reloads and leaving the already-published
+  new tool gates running against the old catalog indefinitely.
+- **`export KEY=…` lines load from the env file** for parity with
+  `internal/creds/envfile.go`, whose docs promise the two parsers agree.
+- **Spawn-time `${ VAR }` interpolation trims the name** like the load-time
+  pass, so a whitespace-padded reference resolves instead of going blank.
 - **Editing a task's `carry_context` toggle now persists**: the column was
   missing from `UpdateTaskTx`'s SET list (the `PUT /tasks/{id}` edit path), so
   the toggle was acknowledged with 200 and silently reverted on the next read —

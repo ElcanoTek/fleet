@@ -113,6 +113,28 @@ var allowedEnvVars = map[string]bool{
 
 	// ── database (chat) ──
 	"DATABASE_URL": true,
+	// Explicit per-store DSNs (read by cmd/fleet main; deploy/fleet.service
+	// documents them as env-file keys). Missing from the allowlist they were
+	// silently dropped when supplied via FLEET_ENV_FILE — boot then failed
+	// with an empty-DSN error despite a correct env file.
+	"FLEET_CHAT_DATABASE_URL":  true,
+	"FLEET_SCHED_DATABASE_URL": true,
+	// Other keys boot reads via os.Getenv that predated this allowlist (an
+	// env-file value was silently ignored; only the process env worked).
+	"ADMIN_API_KEY":                        true,
+	"CUTLASS_LOG_FILE":                     true,
+	"FLEET_BACKUP_DIR":                     true,
+	"FLEET_BACKUP_RETENTION_DAYS":          true,
+	"FLEET_DEFAULT_TIMEZONE":               true,
+	"FLEET_TIMEZONE":                       true,
+	"FLEET_ORCHESTRATOR_ADDR":              true,
+	"FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS":  true,
+	"FLEET_OTEL_ENDPOINT":                  true,
+	"FLEET_OTEL_SAMPLE_RATIO":              true,
+	"FLEET_SERVICE_NAME":                   true,
+	"FLEET_SANDBOX_STATS_INTERVAL_SECONDS": true,
+	"FLEET_TOOL_DISCLOSURE_THRESHOLD":      true,
+	"FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES":   true,
 	// DB connection-pool tuning (#276), per pool.
 	"FLEET_CHAT_DB_MAX_CONNS":           true,
 	"FLEET_CHAT_DB_MIN_CONNS":           true,
@@ -1607,6 +1629,9 @@ func loadEnvFile(path string) error {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		// Tolerate `export KEY=…` for parity with internal/creds/envfile.go,
+		// whose docs promise the two parsers agree byte-for-byte.
+		line = strings.TrimPrefix(line, "export ")
 		eq := strings.IndexByte(line, '=')
 		if eq <= 0 {
 			continue

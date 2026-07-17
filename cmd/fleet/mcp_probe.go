@@ -107,6 +107,16 @@ func runMCPTest(args []string) int {
 		fmt.Fprintf(os.Stderr, "load bundle: %v\n", err)
 		return 1
 	}
+	// Read the env file (FLEET_ENV_FILE) with the bundle's connector env-var
+	// names registered first — the SAME ordering a real boot (and
+	// validate-config) uses. Without this, .env-only credentials are invisible
+	// here: credential-gated servers get reported as "enable gate is off" or
+	// probed with empty creds — the exact failure class this verb diagnoses.
+	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
+	if _, err := config.Load(os.Getenv("FLEET_ENV_FILE")); err != nil {
+		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
+		return 1
+	}
 	// The SAME resolved catalog a boot registers: enable gate applied, env
 	// interpolated, stdio Dir pinned to the bundle root.
 	catalog := bundle.MCPServerConfigs()
