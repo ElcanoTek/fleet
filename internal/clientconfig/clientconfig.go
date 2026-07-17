@@ -2063,8 +2063,11 @@ func interpolate(v string) string {
 			sb.WriteString(v[start:])
 			break
 		}
-		name := v[start+2 : start+end]
-		if reservedRuntimeVar(strings.TrimSpace(name)) {
+		// Trim the var name for parity with lookupNonEmpty/envRefs — the load
+		// pass registers "${ FOO }" as FOO, so spawn-time resolution must
+		// read the same key.
+		name := strings.TrimSpace(v[start+2 : start+end])
+		if reservedRuntimeVar(name) {
 			sb.WriteString(v[start : start+end+1]) // preserve the reserved token verbatim
 		} else {
 			sb.WriteString(strings.TrimSpace(os.Getenv(name)))

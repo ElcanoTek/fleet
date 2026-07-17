@@ -325,3 +325,31 @@ func TestInterpolateManifestUnit(t *testing.T) {
 		})
 	}
 }
+
+// TestInterpolateSpawnTimeTrimsVarName: a "${ FOO }" reference (interior
+// whitespace) registers as FOO at load time, so spawn-time resolution must
+// read the same trimmed key — regression: interpolate() called os.Getenv on
+// the untrimmed name and resolved blank while validate-config passed.
+func TestInterpolateSpawnTimeTrimsVarName(t *testing.T) {
+	// Unset at Load so the reference DEFERS to spawn-time resolution — the
+	// path under test. (Set at load, the load-time pass resolves it.)
+	os.Unsetenv("PUBMATIC_OWNER_ID")
+	dir := writeManifest(t, `
+mcp_servers:
+  - name: pm
+    command: python3
+    args: ["mcp/pm.py"]
+    always: true
+    env:
+      PUBMATIC_OWNER_ID: "${ PUBMATIC_OWNER_ID }"
+`)
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	t.Setenv("PUBMATIC_OWNER_ID", "12345")
+	got := b.MCPServerConfigs()["pm"].Env["PUBMATIC_OWNER_ID"]
+	if got != "12345" {
+		t.Errorf("PUBMATIC_OWNER_ID = %q, want 12345 (trimmed spawn-time lookup)", got)
+	}
+}
