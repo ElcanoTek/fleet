@@ -45,6 +45,7 @@ import {
 } from "./history";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { Icon } from "./Icon";
+import { QueuedInputs } from "./QueuedInputs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
 import { ProjectHome } from "./ProjectHome";
 import { MemoryGraphView } from "./MemoryGraphView";
@@ -3106,6 +3107,9 @@ export function ChatExperience({
     regenerateLastAssistant,
     resendUserMessage,
     retryLastUserMessage,
+    queuedInputs,
+    removeQueuedInput,
+    sendNowQueuedInput,
   } = useTurnStream(turnStreamDeps);
 
   // Latest-callback refs for the two mount-once effects below. reattachToConv
@@ -4388,6 +4392,13 @@ export function ChatExperience({
                   </a>
                   .
                 </div>
+              ) : null}
+              {activeConversationId ? (
+                <QueuedInputs
+                  items={queuedInputs[activeConversationId] ?? []}
+                  onRemove={(inputId) => void removeQueuedInput(activeConversationId, inputId)}
+                  onSendNow={(inputId) => void sendNowQueuedInput(activeConversationId, inputId)}
+                />
               ) : null}
               <Composer
                 prompt={prompt}

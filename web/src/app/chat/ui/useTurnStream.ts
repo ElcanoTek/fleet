@@ -1,4 +1,5 @@
 import type { Dispatch, RefObject, SetStateAction } from "react";
+import { useState } from "react";
 import {
   applyContextCompacted,
   applyContextPressure,
@@ -20,6 +21,18 @@ import {
 import { parseSseChunk, stepStreamDedup, type ServerEvent } from "@/app/lib/sse";
 import { DEFAULT_MODEL } from "@/app/lib/modelAliases";
 import { PENDING_CONV_KEY } from "./workspaceHref";
+
+// One pending input in a conversation's #785 queue (wire shape of
+// queue.updated / GET /queue items).
+export type QueuedInput = {
+  id: string;
+  client_input_id: string;
+  mode: "queued" | "steer";
+  state: string;
+  position: number;
+  message_preview: string;
+  has_attachments: boolean;
+};
 import { formatBytes } from "./formatters";
 import type { ConversationSummary, MCPServerInfo } from "./chat-experience";
 import type { PerConvComposerState } from "./usePerConvComposerState";
@@ -150,6 +163,11 @@ export interface UseTurnStream {
   regenerateLastAssistant: () => Promise<void>;
   resendUserMessage: (userMessageId: number, editedContent: string) => Promise<void>;
   retryLastUserMessage: () => Promise<void>;
+  // #785 pending-input queue: per-conversation snapshot + mutations.
+  queuedInputs: Record<string, QueuedInput[]>;
+  refreshQueue: (convId: string) => Promise<void>;
+  removeQueuedInput: (convId: string, inputId: string) => Promise<void>;
+  sendNowQueuedInput: (convId: string, inputId: string) => Promise<void>;
 }
 
 export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
@@ -205,6 +223,40 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     streamingConvsRef,
     isStreaming,
   } = deps;
+
+  // #785: per-conversation pending-input queue, fed by queue.updated events
+  // on the live stream and by GET /queue on submit/reconnect.
+  const [queuedInputs, setQueuedInputs] = useState<Record<string, QueuedInput[]>>({});
+  const refreshQueue = async (convId: string) => {
+    try {
+      const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}/queue`);
+      if (!res.ok) return;
+      const body = (await res.json()) as { items?: QueuedInput[] };
+      setQueuedInputs((cur) => ({ ...cur, [convId]: body.items ?? [] }));
+    } catch {
+      // snapshot refresh is best-effort; the next queue.updated self-heals
+    }
+  };
+  const removeQueuedInput = async (convId: string, inputId: string) => {
+    try {
+      await fetch(
+        `/api/conversations/${encodeURIComponent(convId)}/queue/${encodeURIComponent(inputId)}`,
+        { method: "DELETE" },
+      );
+    } finally {
+      void refreshQueue(convId);
+    }
+  };
+  const sendNowQueuedInput = async (convId: string, inputId: string) => {
+    try {
+      await fetch(
+        `/api/conversations/${encodeURIComponent(convId)}/queue/${encodeURIComponent(inputId)}/send-now`,
+        { method: "POST" },
+      );
+    } finally {
+      void refreshQueue(convId);
+    }
+  };
 
   const applyStreamEvent = async (
     event: ServerEvent,
@@ -547,6 +599,30 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           model: p.model,
         },
       }));
+      return;
+    }
+
+    if (event.event === "queue.updated") {
+      // Full snapshot on every queue mutation (#785) — no event sourcing.
+      const p = payload as { items?: QueuedInput[] };
+      setQueuedInputs((cur) => ({ ...cur, [ctx.target]: p.items ?? [] }));
+      return;
+    }
+
+    if (event.event === "user.message" && (payload as { steered?: boolean }).steered) {
+      // A steered mid-turn input was accepted at a step boundary (#785):
+      // render its user bubble above the streaming assistant slot.
+      const p = payload as { text?: string };
+      if (p.text) {
+        setConvMessages(ctx.target, (current) => {
+          const next = current.slice();
+          const aIdx = next.findIndex((m) => m.id === ctx.assistantId);
+          const bubble = { id: nowMs(), role: "user" as const, content: p.text as string, state: "done" as const };
+          if (aIdx >= 0) next.splice(aIdx, 0, bubble);
+          else next.push(bubble);
+          return next;
+        });
+      }
       return;
     }
 
@@ -1036,11 +1112,35 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     // Submit.
     const convId = activeConversationIdRef.current;
     const composerKey = convId ?? PENDING_CONV_KEY;
-    // Per-conv streaming gate: only block when the conv the user is
-    // about to submit into is itself busy. Other in-flight chats
-    // (sidebar dots) keep running undisturbed.
-    if (!value || (convId && streamingConvsRef.current.has(convId)) || !userEmail) return;
+    if (!value || !userEmail) return;
     if (modelError) return;
+    // Busy conversation (#785): the submission QUEUES server-side instead of
+    // being dropped (and instead of the old implicit cancel). The composer
+    // clears; the chip strip under it tracks the queued input's lifecycle.
+    if (convId && streamingConvsRef.current.has(convId)) {
+      setPromptForKey(composerKey, "");
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: value,
+            conversation_id: convId,
+            input_id: crypto.randomUUID(),
+            mode: "queue",
+          }),
+        });
+        if (!res.ok && res.status !== 202) {
+          setPromptForKey(composerKey, value); // give the text back
+          return;
+        }
+      } catch {
+        setPromptForKey(composerKey, value);
+        return;
+      }
+      void refreshQueue(convId);
+      return;
+    }
 
     // Upload any pending attachments FIRST. If it fails, we bail out with
     // the text still in the composer so the user can retry without losing
@@ -1317,5 +1417,9 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     regenerateLastAssistant,
     resendUserMessage,
     retryLastUserMessage,
+    queuedInputs,
+    refreshQueue,
+    removeQueuedInput,
+    sendNowQueuedInput,
   };
 }

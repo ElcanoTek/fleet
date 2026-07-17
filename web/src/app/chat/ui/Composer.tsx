@@ -1105,8 +1105,14 @@ export function Composer({
                         : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
                     }`}
                     type="submit"
-                    disabled={!prompt.trim() || isStreaming || isUploadingAttachments}
-                    title={isUploadingAttachments ? "Uploading attachments…" : "Send message"}
+                    disabled={!prompt.trim() || isUploadingAttachments}
+                    title={
+                      isUploadingAttachments
+                        ? "Uploading attachments…"
+                        : isStreaming
+                          ? "Queue message (runs after the current turn)"
+                          : "Send message"
+                    }
                   >
                     {isUploadingAttachments ? (
                       <span aria-hidden="true">…</span>
