@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Editing a task's `carry_context` toggle now persists**: the column was
+  missing from `UpdateTaskTx`'s SET list (the `PUT /tasks/{id}` edit path), so
+  the toggle was acknowledged with 200 and silently reverted on the next read —
+  every later occurrence of the recurring task ran with the stale setting.
+- **ask-pause / progress notification emails now carry the message**: the
+  `Event.Message` field (for a paused task, the agent's question — the reason
+  the notification exists) was documented as "rendered into the email body"
+  but never referenced by the text or HTML builders; operators got a
+  status-only email with no question. Rendered escaped in both parts.
+- **Notification task names clamp at a rune boundary**: the 60-char display
+  label was a byte slice, so a multi-byte prompt could put invalid UTF-8 into
+  email subjects and the webhook JSON payload (`truncate.Clamp`, the #595
+  class).
 - **Context-too-large recovery no longer re-executes committed tool side
   effects.** The forced-compact-and-re-drive (and its fallback-model swap) now
   ride the same ADR-0035 side-effect gate as the blip/retry-exhausted paths:
