@@ -1021,6 +1021,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 			sink.Emit("turn.policy_blocked", map[string]any{"policy": "prompt-injection"})
 			return nil, runErr
 		}
+		commitPartialSideEffects(runErr, res, in.CommitTerminal)
 		reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
 		log.Printf("RunTurn stream failed (reason=%s model=%s status=%d): %v", reason, modelSlug, status, runErr)
 		emitModelSelectionRequired(sink, reason, modelSlug, status, runErr)
@@ -1085,6 +1086,23 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 
 // cancelledTurnResult builds the partial TurnResult for a cancelled turn,
 // persisting whatever transcript accumulated and emitting turn.cancelled.
+// commitPartialSideEffects terminally commits a failed turn's executed tool
+// records. A mid-stream failure AFTER a committed tool side effect (ADR-0035)
+// carries the partial transcript back with the error; dropping it left the
+// executed call visible only in the turn journal — never projected into
+// canonical history (the turn seals non-`running`, so RecoverStrandedTurns
+// skips it) — and the retried turn re-issued the side effect blind, the exact
+// hazard the #798 journal closes. Best-effort: a commit failure is logged,
+// the original stream error still surfaces.
+func commitPartialSideEffects(runErr error, res agentcore.Result, commit func([]HistoryEntry, bool) error) {
+	if !errors.Is(runErr, agentcore.ErrCommittedSideEffects) || len(res.Entries) == 0 || commit == nil {
+		return
+	}
+	if cerr := commit(mapRunEntries(res.Entries), false); cerr != nil {
+		log.Printf("RunTurn: committing partial side-effect transcript failed: %v", cerr)
+	}
+}
+
 func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEntry, modelSlug string, startedAt time.Time, ctxErr error, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
 	newHistory := make([]HistoryEntry, 0, len(res.Entries)+2)
 	newHistory = append(newHistory, userEntry)
