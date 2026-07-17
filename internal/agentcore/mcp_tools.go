@@ -13,6 +13,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/observability"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // MCP tool wrapping + the ONE buildFantasyTools skeleton both modes feed
@@ -36,8 +37,9 @@ import (
 const maxToolsPerRequest = 128
 
 // toolCallTimeout bounds a single MCP tool call so a hung stdio server can't
-// block the agent loop.
-const toolCallTimeout = 5 * time.Minute
+// block the agent loop. Var, not const: tests shrink it to prove post-call
+// governance survives an expired callCtx.
+var toolCallTimeout = 5 * time.Minute
 
 // mcpAllowlist maps server name → allowed tool names. Empty/missing = allow all.
 type mcpAllowlist map[string][]string
@@ -63,10 +65,6 @@ type toolBuildConfig struct {
 	loaderTools []fantasy.AgentTool
 	// remediationHints configures the fast.io inline-upload guard hint.
 	remediationHints RemediationHints
-	// preGatedTools are already-policy-aware tools registered verbatim. They call
-	// BeforeToolCall + RecordToolResult themselves, so they are NOT wrapped in
-	// policyGuardedTool.
-	preGatedTools []fantasy.AgentTool
 	// personaName/personaPolicy/observer carry Gate-4 (#294) into the tool build
 	// so the persona allowlist is applied to the deferrable MCP set BEFORE the
 	// disclosure decision (#570) — the roster-level resolvePersonaTools pass in
@@ -76,6 +74,19 @@ type toolBuildConfig struct {
 	personaName   string
 	personaPolicy *PersonaToolPermissions
 	observer      Observer
+	// panicAttribution is copied into the universal dispatch wrapper for every
+	// advertised route and into deferred logical MCP tools before registration.
+	panicAttribution panicAttribution
+	// hooks is the per-run lifecycle-hook engine (#788), nil when no hooks are
+	// configured. Set on native/loader/confirm_audit/direct+deferred MCP tools;
+	// deliberately NOT on the disclosure bridge wrappers (the deferred tool
+	// fires the hook under its real name, so a bridge-level hook would
+	// double-fire a "*" matcher).
+	hooks *hookEngine
+	// journal is the durable turn journal seam (#798), nil when the driver has
+	// none (scheduled/evals). Same placement contract as hooks: on the real
+	// tools, never the disclosure bridge wrappers, so one call journals once.
+	journal TurnJournal
 }
 
 // buildFantasyTools combines native tools with discovered MCP tools into the
@@ -100,21 +111,14 @@ func buildFantasyTools(
 	// an injected out-of-process broker — issue #167). They are deliberately
 	// separate: where a call runs is decoupled from where the catalog is read, so
 	// the broker can own the client while the loop just advertises what it fetched.
-	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+len(cfg.preGatedTools)+1)
+	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+1)
 
 	for _, t := range nativeTools {
-		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy})
+		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy, hooks: cfg.hooks, journal: cfg.journal})
 	}
 	for _, t := range cfg.loaderTools {
-		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy})
+		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy, hooks: cfg.hooks, journal: cfg.journal})
 	}
-	// Pre-gated tools own their policy handling (BeforeToolCall +
-	// RecordToolResult), exactly like the built-in mcpTool, so they register
-	// VERBATIM — wrapping them would double the gate and drop RecordToolResult.
-	for _, t := range cfg.preGatedTools {
-		allTools = append(allTools, &guardrailOnlyTool{inner: t})
-	}
-
 	// The MCP tools that pass gates 1+2 — these are the DEFERRABLE set (#506):
 	// registered directly when the roster fits, or hidden behind the disclosure
 	// bridges when it would blow the ceiling.
@@ -144,6 +148,8 @@ func buildFantasyTools(
 			tool:       st.Tool,
 			broker:     broker,
 			policy:     policy,
+			hooks:      cfg.hooks,
+			journal:    cfg.journal,
 		}
 		// Gate 4 (persona tool allowlist, #294): applied HERE — to the logical
 		// mcp_<server>_<tool> identity, before the disclosure decision below —
@@ -162,12 +168,16 @@ func buildFantasyTools(
 				continue
 			}
 		}
-		mcpTools = append(mcpTools, mt)
+		// Install the final model-visible boundary before the tool enters the
+		// deferred registry. That makes direct and tool_call dispatch identical;
+		// wrapping only the advertised bridge would leave the hidden tool itself
+		// as a future bypass route.
+		mcpTools = append(mcpTools, withModelOutputBoundary(mt))
 	}
 
 	confirmAudit := []fantasy.AgentTool{}
 	if cfg.includeConfirmAudit {
-		confirmAudit = append(confirmAudit, &policyGuardedTool{inner: buildConfirmAuditPolicyTool(policy), policy: policy})
+		confirmAudit = append(confirmAudit, &policyGuardedTool{inner: buildConfirmAuditPolicyTool(policy), policy: policy, hooks: cfg.hooks, journal: cfg.journal})
 	}
 
 	// Progressive tool disclosure (#506): core (already in allTools) + confirm
@@ -179,10 +189,25 @@ func buildFantasyTools(
 	threshold := disclosureThreshold()
 	directTotal := len(allTools) + len(mcpTools) + len(confirmAudit)
 	if directTotal > threshold && len(mcpTools) > 0 {
-		reg := newDeferredToolRegistry(mcpTools)
+		// Deferred MCP calls execute inside the advertised tool_call bridge. Wrap
+		// each LOGICAL tool here as well as wrapping the final bridge roster below,
+		// so an MCP panic is attributed and accounted to mcp_<server>_<tool>, not
+		// only to the disclosure plumbing. containToolRoster is idempotent.
+		reg := newDeferredToolRegistry(containToolRoster(mcpTools, cfg.panicAttribution, policy))
 		bridges := reg.bridgeTools()
 		for _, b := range bridges {
-			allTools = append(allTools, &policyGuardedTool{inner: b, policy: policy})
+			guarded := &policyGuardedTool{inner: b, policy: policy}
+			if _, isCallBridge := b.(*deferredToolCall); isCallBridge {
+				// The call bridge returns either a Fleet-generated correction or the
+				// verbatim response of a logical MCP tool that already crossed its
+				// redaction/PII/guardrail boundary. Screening that response again is
+				// not merely redundant: if the screen itself panicked, it would turn
+				// one logical incident into a second bridge incident and replace the
+				// original reference. The structural type assertion cannot be forged
+				// by tool response metadata.
+				guarded.outputAlreadyGoverned = true
+			}
+			allTools = append(allTools, guarded)
 		}
 		allTools = append(allTools, confirmAudit...)
 		log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d bridges; %d MCP tools DEFERRED behind tool_search/describe/call [#506], %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona)",
@@ -190,7 +215,11 @@ func buildFantasyTools(
 		if len(allTools) > maxToolsPerRequest {
 			return nil, fmt.Errorf("registered %d core+bridge tools, exceeds the %d-tool ceiling even after deferral", len(allTools), maxToolsPerRequest)
 		}
-		return allTools, nil
+		// The model-output boundary sits inside the universal panic boundary: a
+		// panic in a tool, policy hook, output screen, artifact stager, or bridge
+		// dispatch becomes one paired in-band result, while every ordinary result
+		// crosses the hard byte cap before Fantasy can retain it.
+		return containToolRoster(BoundModelOutputTools(allTools), cfg.panicAttribution, policy), nil
 	}
 
 	allTools = append(allTools, mcpTools...)
@@ -202,7 +231,7 @@ func buildFantasyTools(
 	if len(allTools) > maxToolsPerRequest {
 		return nil, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
 	}
-	return allTools, nil
+	return containToolRoster(BoundModelOutputTools(allTools), cfg.panicAttribution, policy), nil
 }
 
 // buildConfirmAuditPolicyTool returns the scheduled confirm_audit tool wired to
@@ -237,32 +266,11 @@ func buildConfirmAuditPolicyTool(policy Policy) fantasy.AgentTool {
 // block (returns the message as the tool result without executing); on
 // execution, RecordToolResult records the outcome.
 type policyGuardedTool struct {
-	inner  fantasy.AgentTool
-	policy Policy
-}
-
-// guardrailOnlyTool screens pre-gated tools without re-running their Policy
-// hooks. Those tools deliberately own BeforeToolCall/RecordToolResult, but they
-// still share the host-side untrusted-output boundary.
-type guardrailOnlyTool struct{ inner fantasy.AgentTool }
-
-func (g *guardrailOnlyTool) Info() fantasy.ToolInfo { return g.inner.Info() }
-func (g *guardrailOnlyTool) ProviderOptions() fantasy.ProviderOptions {
-	return g.inner.ProviderOptions()
-}
-func (g *guardrailOnlyTool) SetProviderOptions(opts fantasy.ProviderOptions) {
-	g.inner.SetProviderOptions(opts)
-}
-func (g *guardrailOnlyTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	resp, err := g.inner.Run(ctx, params)
-	if resp.Content != "" {
-		var blocked bool
-		resp.Content, blocked = screenToolOutput(ctx, g.inner.Info().Name, resp.Content)
-		if blocked {
-			resp.IsError = true
-		}
-	}
-	return resp, err
+	inner                 fantasy.AgentTool
+	policy                Policy
+	outputAlreadyGoverned bool
+	hooks                 *hookEngine // #788; nil = no hooks (nil-safe methods)
+	journal               TurnJournal // #798; nil = no durable journal (scheduled/evals)
 }
 
 func (g *policyGuardedTool) Info() fantasy.ToolInfo { return g.inner.Info() }
@@ -274,51 +282,139 @@ func (g *policyGuardedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 }
 
 func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	ctx = ensureOutputGovernanceState(ctx)
 	name := g.inner.Info().Name
+	// pre_tool_use hooks (#788) run BEFORE fleet's own gates, on the unmodified
+	// input. A block short-circuits without executing the tool or recording a
+	// result (matching the policy-block behavior below). Existing gates then
+	// evaluate after hooks, so a hook can only narrow, never widen.
+	if blocked, reason := g.hooks.preToolUse(ctx, name, params.ID, params.Input); blocked {
+		reason, _ = governToolOutput(ctx, name, reason)
+		resp := boundModelVisibleToolResponse(ctx, name, params.ID, fantasy.NewTextErrorResponse(reason))
+		markOutputGoverned(ctx)
+		return resp, nil
+	}
 	if g.policy != nil {
+		setToolPanicPhase(ctx, panicPhasePolicyBefore)
 		if blocked, msg := g.policy.BeforeToolCall(name, params.ID, params.Input); blocked {
-			return fantasy.NewTextErrorResponse(msg), nil
+			msg, _ = governToolOutput(ctx, name, msg)
+			resp := boundModelVisibleToolResponse(ctx, name, params.ID, fantasy.NewTextErrorResponse(msg))
+			markOutputGoverned(ctx)
+			return resp, nil
 		}
 	}
+	// Durable tool-intent barrier (#798): the intent record commits BEFORE the
+	// tool can produce a side effect, after the gates above so blocked calls
+	// never journal. A failed write refuses dispatch (fail closed) — a crash
+	// may then leave an un-run journaled call, which startup recovery pairs
+	// with an explicit unknown-outcome result rather than losing the record.
+	if refusal, ok := journalToolIntent(ctx, g.journal, name, params.ID, params.Input); !ok {
+		refusal, _ = governToolOutput(ctx, name, refusal)
+		resp := boundModelVisibleToolResponse(ctx, name, params.ID, fantasy.NewTextErrorResponse(refusal))
+		markOutputGoverned(ctx)
+		return resp, nil
+	}
+	setToolPanicPhase(ctx, panicPhaseToolExecute)
 	resp, err := g.inner.Run(ctx, params)
-	// Scrub secrets from tool output at the choke point: the redacted text is what
-	// re-enters the model context next turn, what RecordToolResult/the policy sees,
-	// what the stream sink records, and what the session log persists.
-	if resp.Content != "" {
-		resp.Content = toolRedactor().Redact(resp.Content)
-		// Optional PII pass (#450), layered after the secret scrubber. In block
-		// mode the content is withheld and the result is marked an error so the
-		// model treats it as a failed call rather than silently losing data.
-		var piiBlocked bool
-		resp.Content, piiBlocked = redactPII(name, resp.Content)
-		if piiBlocked {
-			resp.IsError = true
+	if err != nil {
+		// Fantasy persists a non-nil Go error as the model-visible tool result.
+		// Evaluate it under the outer panic boundary, then govern and cap it here
+		// so policy audit, the stream sink, and provider replay all receive the
+		// exact same bytes. The typed wrapper preserves errors.Is/As without ever
+		// exposing the original Error implementation beyond this boundary.
+		cause := err
+		setToolPanicPhase(ctx, panicPhaseOutputRedact)
+		errText := cause.Error()
+		errText, _ = governToolOutput(ctx, name, errText)
+		if errText == "" {
+			errText = "Tool execution failed without an error message."
 		}
-		var guardrailBlocked bool
-		resp.Content, guardrailBlocked = screenToolOutput(ctx, name, resp.Content)
-		if guardrailBlocked {
+		// post_tool_use hooks (#788) fire on failures too; the fragment joins
+		// BEFORE the boundary so err and resp.Content stay byte-identical.
+		errText = g.appendPostHook(ctx, name, params, errText, true)
+		resp = boundModelVisibleToolResponse(ctx, name, params.ID, fantasy.NewTextErrorResponse(errText))
+		err = &boundedModelToolError{cause: cause, message: resp.Content}
+	} else if resp.Content != "" && !g.outputAlreadyGoverned {
+		var outputBlocked bool
+		resp.Content, outputBlocked = governToolOutput(ctx, name, resp.Content)
+		if outputBlocked {
 			resp.IsError = true
 		}
 	}
-	// Output ceiling (#199): cap any single tool result before it enters the
-	// transcript so one oversized output can't overflow the context window (which
-	// otherwise triggers reactive compaction that drops the WRONG messages). Done
-	// after redaction (the cap counts the text that actually flows on) and before
-	// RecordToolResult (the policy + session log see the same bytes).
-	if ceil := maxToolOutputBytes(); ceil > 0 && len(resp.Content) > ceil {
-		orig := len(resp.Content)
-		resp.Content, _ = applyOutputCeiling(resp.Content, ceil)
-		log.Printf("agentcore: truncated %s output from %d to %d bytes (FLEET_MAX_TOOL_OUTPUT_BYTES)", name, orig, len(resp.Content))
+	// post_tool_use hooks (#788): append any bounded context fragment to the
+	// governed result BEFORE the model-output boundary and RecordToolResult so
+	// the policy, session log, and model all see identical bytes — and so a
+	// hook fragment can never push a response past the model-visible ceiling.
+	// The failure path appends inside the err branch above for the same reason.
+	if err == nil {
+		resp.Content = g.appendPostHook(ctx, name, params, resp.Content, resp.IsError)
 	}
+	// Bound every response, including media and Fleet-generated deferred-bridge
+	// corrections, before policy records it. The outer registration boundary
+	// repeats this as an idempotent route-proof backstop.
+	resp = boundModelVisibleToolResponse(ctx, name, params.ID, resp)
+	markOutputGoverned(ctx)
+	policyResult := resp.Content
+	// Durable outcome record (#798): the exact bounded model-visible bytes,
+	// before the response re-enters the provider loop.
+	journalToolOutcome(ctx, g.journal, name, params.ID, resp.Content, err != nil || resp.IsError)
 	if g.policy != nil {
 		// Record the outcome so policies that gate on tool RESULTS observe native
 		// tool calls (bash/python/task_tracker/...), not just the MCP and
-		// pre-gated tools. Without this the scheduled task-tracker finish gate
+		// built-in MCP tools. Without this the scheduled task-tracker finish gate
 		// (latestTaskTracker.Seen) never fired in production. A transport error or
 		// an is-error response counts as a failed call.
-		g.policy.RecordToolResult(name, params.Input, resp.Content, err == nil && !resp.IsError)
+		recordPolicyToolResult(ctx, g.policy, name, params.Input, policyResult, err == nil && !resp.IsError)
 	}
 	return resp, err
+}
+
+// appendHookContext appends a post-tool hook fragment to a tool result.
+func appendHookContext(content, frag string) string {
+	if content == "" {
+		return frag
+	}
+	return content + "\n\n" + frag
+}
+
+// appendPostHook runs post_tool_use hooks (#788) and appends any bounded
+// context fragment to text, passing the fragment through the governToolOutput
+// choke point (secret/PII/guardrail) so hook-supplied bytes are governed like
+// every other tool output. Callers run this BEFORE the model-output boundary
+// so a hook fragment can never push a response past the model-visible ceiling.
+func (g *policyGuardedTool) appendPostHook(ctx context.Context, name string, params fantasy.ToolCall, text string, isErr bool) string {
+	frag := g.hooks.postToolUse(ctx, name, params.ID, params.Input, text, isErr)
+	if frag == "" {
+		return text
+	}
+	governed, blocked := governToolOutput(ctx, name, frag)
+	if blocked || containsEncodedBinary(governed) {
+		// A base64-heavy fragment (e.g. a JWT attestation) would trip the
+		// model-output boundary's binary detector against the COMBINED result,
+		// suppressing the tool's legitimate output. Drop the fragment instead.
+		return text
+	}
+	return appendHookContext(text, governed)
+}
+
+// governToolOutput is the one text-governance choke point for native, loader,
+// and direct MCP tools. It applies secret and optional PII screening plus the
+// workspace guardrail. The separate model-output boundary then renders and caps
+// the governed response before it can become model context, transcript/SSE data,
+// or policy accounting. The caller's outer panicContainedTool attributes and
+// contains a panic in any configurable pass.
+func governToolOutput(ctx context.Context, toolName, text string) (string, bool) {
+	if text == "" {
+		return "", false
+	}
+	setToolPanicPhase(ctx, panicPhaseOutputRedact)
+	text = toolRedactor().Redact(text)
+	var piiBlocked bool
+	text, piiBlocked = redactPII(toolName, text)
+	setToolPanicPhase(ctx, panicPhaseOutputGuardrail)
+	var guardrailBlocked bool
+	text, guardrailBlocked = screenToolOutput(ctx, toolName, text)
+	return text, piiBlocked || guardrailBlocked
 }
 
 // sanitizeSchemaProperties deep-copies a JSON-schema "properties" map and strips
@@ -372,6 +468,8 @@ type mcpTool struct {
 	broker          MCPBroker
 	policy          Policy
 	providerOptions fantasy.ProviderOptions
+	hooks           *hookEngine // #788; fires under the real mcp_<server>_<tool> name (also on the deferred route)
+	journal         TurnJournal // #798; nil = no durable journal (scheduled/evals)
 }
 
 func (m *mcpTool) Name() string {
@@ -405,17 +503,43 @@ func (m *mcpTool) Info() fantasy.ToolInfo {
 }
 
 func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	ctx = ensureOutputGovernanceState(ctx)
 	toolName := m.Name()
 
+	// pre_tool_use hooks (#788) fire under the real mcp_<server>_<tool> name,
+	// before fleet's own gates — this also covers the deferred-disclosure route,
+	// where the bridge dispatches straight to this Run.
+	if blocked, reason := m.hooks.preToolUse(ctx, toolName, params.ID, params.Input); blocked {
+		reason, _ = governToolOutput(ctx, toolName, reason)
+		resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(reason))
+		markOutputGoverned(ctx)
+		return resp, nil
+	}
 	if m.policy != nil {
+		setToolPanicPhase(ctx, panicPhasePolicyBefore)
 		if blocked, msg := m.policy.BeforeToolCall(toolName, params.ID, params.Input); blocked {
-			return fantasy.NewTextErrorResponse(msg), nil
+			msg, _ = governToolOutput(ctx, toolName, msg)
+			resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(msg))
+			markOutputGoverned(ctx)
+			return resp, nil
 		}
 	}
 
 	var args map[string]any
 	if err := json.Unmarshal([]byte(params.Input), &args); err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid arguments: %v", err)), nil
+		msg, _ := governToolOutput(ctx, toolName, fmt.Sprintf("invalid arguments: %v", err))
+		resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(msg))
+		markOutputGoverned(ctx)
+		return resp, nil
+	}
+
+	// Durable tool-intent barrier (#798), after the gates so blocked calls
+	// never journal — same placement contract as policyGuardedTool.Run.
+	if refusal, ok := journalToolIntent(ctx, m.journal, toolName, params.ID, params.Input); !ok {
+		refusal, _ = governToolOutput(ctx, toolName, refusal)
+		resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(refusal))
+		markOutputGoverned(ctx)
+		return resp, nil
 	}
 
 	// The broker owns the call itself — the fast.io inline-upload guard, the
@@ -429,56 +553,94 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	// BeforeSend hook is the last-line scrubber, but breadcrumbs stay lean.
 	// No-op when FLEET_SENTRY_DSN is unset.
 	observability.AddBreadcrumb(callCtx, "mcp", "mcp call: "+toolName, nil)
+	setToolPanicPhase(ctx, panicPhaseToolExecute)
 	resultText, isErr, err := m.broker.CallMCP(callCtx, m.serverName, m.tool.Name, args)
+	// Everything after the call runs on ctx, never callCtx: when CallMCP fails
+	// on its own timeout, callCtx is expired by definition, and a dead context
+	// would fail-close the guardrail (rewriting a timeout into a fake guardrail
+	// block), skip post_tool_use hooks, and abort artifact staging inside
+	// boundModelVisibleToolResponse. callCtx scopes the broker call only.
 	if err != nil {
-		m.record(toolName, params.Input, "", false)
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("Error calling %s: %v", toolName, err)), nil
+		setToolPanicPhase(ctx, panicPhaseOutputRedact)
+		// Transport errors are untrusted connector output. Evaluate Error directly
+		// while the universal MCP wrapper can recover; fmt's %v would swallow a
+		// panicking Error method into a raw %!v(PANIC=...) diagnostic.
+		errText := "Error calling " + toolName + ": " + err.Error()
+		errText, _ = governToolOutput(ctx, toolName, errText)
+		errText = m.appendPostHook(ctx, toolName, params.ID, params.Input, errText, true)
+		resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(errText))
+		markOutputGoverned(ctx)
+		journalToolOutcome(ctx, m.journal, toolName, params.ID, resp.Content, true)
+		m.record(ctx, toolName, params.Input, resp.Content, false)
+		return resp, nil
 	}
-	// Scrub secrets from MCP output before it is recorded, returned to the model,
+	// Fast.io returns short-lived bearer URLs from download.file-url/zip-url.
+	// Vault them before the generic secret scrubber sees `token=...`: redaction
+	// alone makes the documented mcp_fast_io_download -> download_url chain
+	// unusable, while passing the raw token through would leak direct file access
+	// into provider context and logs. The model receives only an opaque handle;
+	// download_url redeems it inside this process.
+	if !isErr && m.serverName == mcpServerFastIO && m.tool.Name == "download" {
+		resultText = tools.ProtectFastIODownloadURLs(resultText)
+	}
+	// Scrub/screen/cap MCP output before it is recorded, returned to the model,
 	// or streamed/persisted downstream.
-	resultText = toolRedactor().Redact(resultText)
-	// Optional PII pass (#450): connector results are the highest-volume vector
-	// for PII entering the model context. In block mode the result is withheld and
-	// treated as an error (isErr) so the raw value never reaches the model.
-	var piiBlocked bool
-	resultText, piiBlocked = redactPII(toolName, resultText)
-	var guardrailBlocked bool
-	resultText, guardrailBlocked = screenToolOutput(callCtx, toolName, resultText)
-	// Output ceiling (#199): the direct-registration path must cap oversized
-	// results exactly like policyGuardedTool.Run does, or the SAME MCP call would
-	// be truncated above the tool-disclosure threshold (where it dispatches via
-	// the wrapped tool_call) but enter the transcript untruncated below it — the
-	// context-window overflow #199 exists to prevent (#576). Applied after
-	// redaction (the cap counts the bytes that actually flow on) and before the
-	// isError mapping + record so the policy, session log, and model all see the
-	// same capped text, error results included.
-	if ceil := maxToolOutputBytes(); ceil > 0 && len(resultText) > ceil {
-		orig := len(resultText)
-		resultText, _ = applyOutputCeiling(resultText, ceil)
-		log.Printf("agentcore: truncated %s output from %d to %d bytes (FLEET_MAX_TOOL_OUTPUT_BYTES)", toolName, orig, len(resultText))
-	}
+	var outputBlocked bool
+	resultText, outputBlocked = governToolOutput(ctx, toolName, resultText)
 
 	// Map MCP isError to a fantasy error response so both the LLM and the log
 	// know the call failed (per MCP 2025-06-18 spec, tool-level errors arrive as
 	// a successful JSON-RPC response with isError=true). The fast.io guard above
 	// also surfaces through this path (it returns isError=true with the hint text).
-	if isErr || piiBlocked || guardrailBlocked {
-		errText := resultText
-		if errText == "" {
-			errText = fmt.Sprintf("MCP tool %s returned isError=true with no text content", toolName)
+	if isErr || outputBlocked {
+		if resultText == "" {
+			resultText = fmt.Sprintf("MCP tool %s returned isError=true with no text content", toolName)
 		}
-		m.record(toolName, params.Input, errText, false)
-		return fantasy.NewTextErrorResponse(errText), nil
+		// Fire post_tool_use on the failure path too (#788): native tools
+		// (policyGuardedTool) run post regardless of success, so MCP must match.
+		// Appended BEFORE the boundary so the fragment lands inside the capped
+		// envelope; on ctx so an expiring callCtx can't skip the hook.
+		resultText = m.appendPostHook(ctx, toolName, params.ID, params.Input, resultText, true)
+		resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(resultText))
+		markOutputGoverned(ctx)
+		journalToolOutcome(ctx, m.journal, toolName, params.ID, resp.Content, true)
+		m.record(ctx, toolName, params.Input, resp.Content, false)
+		return resp, nil
 	}
 
-	m.record(toolName, params.Input, resultText, true)
-	return fantasy.NewTextResponse(resultText), nil
+	// post_tool_use hooks (#788) on the success path, appended BEFORE the
+	// model-output boundary so a hook fragment can never push the response
+	// past the model-visible ceiling.
+	resultText = m.appendPostHook(ctx, toolName, params.ID, params.Input, resultText, false)
+	resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextResponse(resultText))
+	markOutputGoverned(ctx)
+	journalToolOutcome(ctx, m.journal, toolName, params.ID, resp.Content, false)
+	m.record(ctx, toolName, params.Input, resp.Content, true)
+	return resp, nil
 }
 
-func (m *mcpTool) record(toolName, rawInput, resultText string, succeeded bool) {
-	if m.policy != nil {
-		m.policy.RecordToolResult(toolName, rawInput, resultText, succeeded)
+// appendPostHook runs post_tool_use hooks and appends any bounded context to
+// text, passing the hook fragment through the governToolOutput choke point
+// (secret/PII/guardrail) so hook-supplied bytes are governed like every other
+// tool output. Fires on both success and failure paths (symmetry with native
+// tools, #788).
+func (m *mcpTool) appendPostHook(ctx context.Context, toolName, callID, rawInput, text string, isErr bool) string {
+	frag := m.hooks.postToolUse(ctx, toolName, callID, rawInput, text, isErr)
+	if frag == "" {
+		return text
 	}
+	governed, blocked := governToolOutput(ctx, toolName, frag)
+	if blocked || containsEncodedBinary(governed) {
+		// A base64-heavy fragment (e.g. a JWT attestation) would trip the
+		// model-output boundary's binary detector against the COMBINED result,
+		// suppressing the tool's legitimate output. Drop the fragment instead.
+		return text
+	}
+	return appendHookContext(text, governed)
+}
+
+func (m *mcpTool) record(ctx context.Context, toolName, rawInput, resultText string, succeeded bool) {
+	recordPolicyToolResult(ctx, m.policy, toolName, rawInput, resultText, succeeded)
 }
 
 func (m *mcpTool) ProviderOptions() fantasy.ProviderOptions     { return m.providerOptions }

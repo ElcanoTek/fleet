@@ -50,7 +50,7 @@ func TestMCPDirectPathAppliesOutputCeiling(t *testing.T) {
 	}
 
 	ceil := maxToolOutputBytes()
-	if len(resp.Content) > ceil+512 { // + marker slack
+	if len(resp.Content) > ceil {
 		t.Fatalf("direct path did not truncate: %d bytes flowed on (ceiling %d)", len(resp.Content), ceil)
 	}
 	if strings.Contains(resp.Content, "MIDDLE_NEEDLE") {
@@ -63,14 +63,8 @@ func TestMCPDirectPathAppliesOutputCeiling(t *testing.T) {
 		t.Error("truncated output must remain valid UTF-8")
 	}
 
-	// The exact bytes must match what the shared ceiling produces — one cap, one
-	// behavior, no drift between paths.
-	want, truncated := applyOutputCeiling(payload, ceil)
-	if !truncated {
-		t.Fatal("test payload must exceed the ceiling")
-	}
-	if resp.Content != want {
-		t.Errorf("direct-path truncation diverges from applyOutputCeiling (len %d vs %d)", len(resp.Content), len(want))
+	if !strings.Contains(resp.Content, "original_bytes: 200013") || !strings.Contains(resp.Content, "recovery_action:") {
+		t.Errorf("direct-path envelope is missing size/recovery metadata: %q", resp.Content[:min(len(resp.Content), 300)])
 	}
 }
 
@@ -110,8 +104,49 @@ func TestMCPCeilingParityDirectVsDeferred(t *testing.T) {
 			len(directResp.Content), len(deferredResp.Content))
 	}
 	ceil := maxToolOutputBytes()
-	if len(directResp.Content) > ceil+512 || len(deferredResp.Content) > ceil+512 {
+	if len(directResp.Content) > ceil || len(deferredResp.Content) > ceil {
 		t.Errorf("both paths must be capped near the %d-byte ceiling; got direct=%d deferred=%d",
 			ceil, len(directResp.Content), len(deferredResp.Content))
+	}
+}
+
+func TestMCPGuardrailRunsExactlyOnceDirectAndDeferred(t *testing.T) {
+	t.Cleanup(func() {
+		SetGuardrail(false, false, "off", "", nil)
+		SetToolDisclosureThreshold(0)
+	})
+	catalog := []mcp.ServerTool{{ServerName: "srv", Tool: mcp.Tool{
+		Name: "dump", Description: "result", InputSchema: map[string]any{"type": "object"},
+	}}}
+	broker := &hugeBroker{payload: "ordinary connector result"}
+	core := fantasy.NewAgentTool("core", "core", func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		return fantasy.NewTextResponse("ok"), nil
+	})
+
+	for _, tc := range []struct {
+		name      string
+		threshold int
+		native    []fantasy.AgentTool
+		tool      string
+		input     string
+	}{
+		{name: "direct", threshold: 100, tool: "mcp_srv_dump", input: `{}`},
+		{name: "deferred", threshold: 1, native: []fantasy.AgentTool{core}, tool: "tool_call", input: `{"name":"mcp_srv_dump","arguments":{}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			detector := &fakeGuardrailDetector{}
+			SetGuardrail(true, false, "observe", "prompt-injection", detector)
+			SetToolDisclosureThreshold(tc.threshold)
+			registered, err := buildFantasyTools(tc.native, catalog, broker, nil, nil, nil, nil, toolBuildConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := findRegisteredTool(registered, tc.tool).Run(context.Background(), fantasy.ToolCall{ID: tc.name, Name: tc.tool, Input: tc.input}); err != nil {
+				t.Fatal(err)
+			}
+			if detector.calls != 1 {
+				t.Fatalf("guardrail calls=%d, want exactly one", detector.calls)
+			}
+		})
 	}
 }

@@ -1,14 +1,40 @@
 "use client";
 
-import { memo, useCallback, useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import type { Task, TaskStreamFrame, TaskLearnedInstruction } from "@/app/shared/lib/orchestratorApi";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import type {
+  LogMessage,
+  LogSession,
+  Task,
+  TaskStreamFrame,
+  TaskLearnedInstruction,
+} from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
-import { stripAnsiCodes } from "@/app/shared/lib/format";
+import { formatTimeFirst, stripAnsiCodes } from "@/app/shared/lib/format";
+import { useToast } from "@/app/shared/ui/Toast";
+import { createdByLabel, scheduleLabel, TaskSlaBadge } from "./taskDisplay";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
-import { resolveTaskWorkspaceHref } from "@/app/chat/ui/workspaceHref";
-import { Checklist, parseTaskTrackerOutput, type ChecklistState } from "./Checklist";
+import {
+  Checklist,
+  parseTaskTrackerOutput,
+  type ChecklistState,
+} from "./Checklist";
+
+// The ReactMarkdown pipeline (micromark + remark-gfm, ~43 KiB transfer) and
+// the workspace img/a rewrites live in LogMarkdown, lazy-loaded so the
+// initial /orchestrator bundle doesn't pay for them — the modal is the only
+// consumer and it opens on user action. Until the chunk arrives the log shows
+// raw text with preserved whitespace, then upgrades in place. Same split as
+// chat's AssistantContent (#757).
+const LogMarkdown = lazy(() => import("./LogMarkdown"));
 
 // LogViewer — the task log modal. React port of moc modals.js openLogModal().
 // moc rendered logs with marked + DOMPurify + highlight.js; per the migration
@@ -39,48 +65,405 @@ export type LogViewerProps = {
   // canStop shows the Stop button on a live run. The server enforces the real
   // permission (admin or the task's creator); this only gates the affordance.
   canStop?: boolean;
+  // Called after a successful Resubmit so the dashboard can refetch and show
+  // the new run immediately.
+  onResubmitted?: () => void;
+  // Opens the edit form for this task (parent closes the log modal first).
+  onEdit?: (task: Task) => void;
+  // Swaps the modal to another task (the History panel's row click).
+  onSelectTask?: (task: Task) => void;
 };
 
-export function LogViewer({ task, onClose, canStop }: LogViewerProps) {
+export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSelectTask }: LogViewerProps) {
   if (!task) return null;
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
   // change" behavior cleanly, without a manual reset effect.
   const live = task.status === "running" || task.status === "assigned";
   if (live) {
-    return <LiveTaskView key={task.id} task={task} onClose={onClose} canStop={!!canStop} />;
+    return (
+      <LiveTaskView
+        key={task.id}
+        task={task}
+        onClose={onClose}
+        canStop={!!canStop}
+      />
+    );
   }
-  return <LogViewerBody key={task.id} task={task} onClose={onClose} canStop={!!canStop} />;
+  return (
+    <LogViewerBody
+      key={task.id}
+      task={task}
+      onClose={onClose}
+      canStop={!!canStop}
+      onResubmitted={onResubmitted}
+      onEdit={onEdit}
+      onSelectTask={onSelectTask}
+    />
+  );
+}
+
+// Terminal statuses that make sense to resubmit as a fresh one-off run. A
+// pending/scheduled task will run on its own; a running one already is.
+const RESUBMITTABLE = new Set(["success", "error", "cancelled", "dead_lettered"]);
+
+// TaskSummary mirrors the Recent Tasks row the user clicked (ID / Status /
+// SLA / Schedule / Created By / Created) so the modal carries the row's
+// context — which in turn lets the phone card view drop those columns.
+function TaskSummary({ task }: { task: Task }) {
+  const schedule = scheduleLabel(task);
+  const items: Array<{ label: string; node: ReactNode }> = [
+    {
+      label: "ID",
+      node: (
+        <code title={task.id}>{task.id.slice(0, 8)}…</code>
+      ),
+    },
+    {
+      label: "Status",
+      node: (
+        <span className={`status-badge status-${task.status ?? "unknown"}`}>
+          {task.status ?? "-"}
+        </span>
+      ),
+    },
+    { label: "SLA", node: <TaskSlaBadge task={task} /> },
+    {
+      label: "Schedule",
+      node: (
+        <span title={task.recurrence || undefined}>{schedule}</span>
+      ),
+    },
+    { label: "Created by", node: <span>{createdByLabel(task)}</span> },
+    { label: "Created", node: <span>{formatTimeFirst(task.created_at)}</span> },
+  ];
+  return (
+    <div className="task-summary" data-testid="task-summary">
+      {items.map((it) => (
+        <div key={it.label} className="task-summary-item">
+          <span className="task-summary-label">{it.label}</span>
+          <span className="task-summary-value">{it.node}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// SessionMetrics — the moc-style strip over the transcript: cumulative token
+// and cost figures recorded on the captain's-log session.
+function SessionMetrics({ session }: { session: LogSession }) {
+  const num = (n: number | undefined) =>
+    typeof n === "number" ? n.toLocaleString() : undefined;
+  const tiles: Array<{ label: string; value: string | undefined }> = [
+    { label: "Session", value: session.title || undefined },
+    { label: "Messages", value: num(session.messages?.length) },
+    { label: "Prompt tokens", value: num(session.prompt_tokens) },
+    { label: "Completion tokens", value: num(session.completion_tokens) },
+    { label: "Cached tokens", value: num(session.cached_tokens) },
+    {
+      label: "Cost",
+      value:
+        typeof session.cost === "number" && session.cost > 0
+          ? `$${session.cost.toFixed(4)}`
+          : undefined,
+    },
+  ];
+  const shown = tiles.filter((t) => t.value !== undefined);
+  if (shown.length === 0) return null;
+  return (
+    <div className="log-metrics" data-testid="log-metrics">
+      {shown.map((t) => (
+        <div key={t.label} className="log-metric">
+          <span className="log-metric-label">{t.label}</span>
+          <span className="log-metric-value">{t.value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function deferredToolDisplay(name: string | undefined, input: string | undefined) {
+  const fallback = { name: name || "tool", input: input ?? "" };
+  if (name !== "tool_call" || !input) return fallback;
+  try {
+    const envelope = JSON.parse(input) as { name?: unknown; arguments?: unknown };
+    if (typeof envelope.name !== "string" || !envelope.name) return fallback;
+    let args = envelope.arguments;
+    // Calls emitted from the old incorrect schema wrapped the argument object
+    // in a singleton array. Display the nested call as it will be repaired by
+    // the server during a rolling deployment.
+    if (Array.isArray(args) && args.length === 1 && args[0] && typeof args[0] === "object") {
+      args = args[0];
+    }
+    return { name: envelope.name, input: JSON.stringify(args ?? {}, null, 2) };
+  } catch {
+    return fallback;
+  }
+}
+
+function readableToolError(raw: string) {
+  if (/cannot unmarshal array into Go value of type map\[string\]interface/i.test(raw)) {
+    return "Invalid tool arguments: Fleet expected a JSON object but received an array.";
+  }
+  return raw;
+}
+
+// ── interaction filters ──────────────────────────────────────────────────────
+// Chip taxonomy computed once per session: highlight kinds, tool names,
+// models, providers. Selecting chips narrows the transcript to messages
+// matching ANY selected chip (union); no selection shows everything.
+
+type FilterChip = { key: string; label: string; count: number };
+type FilterGroups = Array<{ title: string; chips: FilterChip[] }>;
+
+function buildFilterIndex(messages: LogMessage[]): {
+  tags: Array<Set<string>>;
+  groups: FilterGroups;
+  toolNames: Map<number, string>;
+} {
+  // Resolve a tool-result message's tool name through the assistant tool_call
+  // it answers (LogMessage carries only tool_call_id).
+  const callName = new Map<string, string>();
+  for (const m of messages) {
+    for (const tc of m.tool_calls ?? []) {
+      if (tc.id && tc.name) {
+        callName.set(tc.id, deferredToolDisplay(tc.name, tc.arguments).name);
+      }
+    }
+  }
+  const toolNames = new Map<number, string>();
+  const tags = messages.map((m, i) => {
+    const t = new Set<string>();
+    const role = m.role ?? "";
+    if ((m.reasoning ?? "").trim()) t.add("hl:reasoning");
+    if (role === "assistant" && (m.content ?? "").trim()) t.add("hl:responses");
+    if ((m.tool_calls?.length ?? 0) > 0) t.add("hl:tool-calls");
+    if (role === "tool") t.add("hl:tool-results");
+    const names = new Set<string>();
+    for (const tc of m.tool_calls ?? []) {
+      if (tc.name) names.add(deferredToolDisplay(tc.name, tc.arguments).name);
+    }
+    if (role === "tool") {
+      const n = (m.tool_call_id ? callName.get(m.tool_call_id) : undefined) || m.tool_name;
+      if (n) {
+        names.add(n);
+        toolNames.set(i, n);
+      }
+    }
+    for (const n of names) {
+      t.add(`tool:${n}`);
+      if (n === "task_tracker") t.add("hl:task-tracker");
+    }
+    if (m.model) t.add(`model:${m.model}`);
+    if (m.provider) t.add(`provider:${m.provider}`);
+    return t;
+  });
+
+  const count = (key: string) => tags.filter((t) => t.has(key)).length;
+  const collect = (prefix: string) => {
+    const keys = new Set<string>();
+    for (const t of tags)
+      for (const k of t) if (k.startsWith(prefix)) keys.add(k);
+    return [...keys]
+      .sort()
+      .map((k) => ({ key: k, label: k.slice(prefix.length), count: count(k) }));
+  };
+  const highlights: FilterChip[] = [
+    { key: "hl:reasoning", label: "Reasoning", count: count("hl:reasoning") },
+    { key: "hl:responses", label: "Responses", count: count("hl:responses") },
+    { key: "hl:tool-calls", label: "Tool calls", count: count("hl:tool-calls") },
+    { key: "hl:tool-results", label: "Tool results", count: count("hl:tool-results") },
+    { key: "hl:task-tracker", label: "Task tracker", count: count("hl:task-tracker") },
+  ].filter((c) => c.count > 0);
+  const groups: FilterGroups = [
+    { title: "Highlights", chips: highlights },
+    { title: "Tool types", chips: collect("tool:") },
+    { title: "Models", chips: collect("model:") },
+    { title: "Providers", chips: collect("provider:") },
+  ].filter((g) => g.chips.length > 0);
+  return { tags, groups, toolNames };
+}
+
+function LogFilters({
+  groups,
+  selected,
+  onToggle,
+  onClear,
+  shown,
+  total,
+}: {
+  groups: FilterGroups;
+  selected: Set<string>;
+  onToggle: (key: string) => void;
+  onClear: () => void;
+  shown: number;
+  total: number;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <div className="log-filters" data-testid="log-filters">
+      <div className="log-filters-head">
+        <span className="log-filters-title">Interaction filters</span>
+        {selected.size > 0 ? (
+          <button type="button" className="btn btn-small" onClick={onClear}>
+            Clear all
+          </button>
+        ) : null}
+      </div>
+      {groups.map((g) => (
+        <div key={g.title} className="log-filter-group">
+          <span className="log-filter-group-title">{g.title}</span>
+          <div className="log-filter-chips">
+            {g.chips.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                className={`log-chip${selected.has(c.key) ? " log-chip--active" : ""}`}
+                aria-pressed={selected.has(c.key)}
+                onClick={() => onToggle(c.key)}
+              >
+                {c.label} <span className="log-chip-count">{c.count}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div className="log-filters-shown">
+        {selected.size === 0
+          ? `Showing all ${total} messages`
+          : `Showing ${shown} of ${total} messages`}
+      </div>
+    </div>
+  );
+}
+
+// LogMessageCard — one transcript entry, moc-style: a role-tinted header bar
+// (avatar initial, role, model, timestamp) over the rendered content.
+// Reasoning and tool arguments sit behind disclosures; tool OUTPUT renders as
+// preformatted text (it is machine output, not markdown).
+function LogMessageCard({
+  msg,
+  taskId,
+  toolName,
+}: {
+  msg: LogMessage;
+  taskId: string;
+  toolName?: string;
+}) {
+  const role = msg.role ?? "unknown";
+  const ts = msg.created_at
+    ? new Date(msg.created_at * 1000).toLocaleTimeString()
+    : null;
+  const initial =
+    role === "user" ? "U" : role === "assistant" ? "A" : role === "tool" ? "T" : "?";
+  const roleLabel =
+    role === "tool" && toolName ? `tool · ${toolName}` : role;
+  const content = stripAnsiCodes(msg.content ?? "");
+  return (
+    <div className={`log-message log-message--${role}`}>
+      <div className="log-message-head">
+        <span className={`log-avatar log-avatar--${role}`} aria-hidden="true">
+          {initial}
+        </span>
+        <span className="log-message-role">{roleLabel}</span>
+        {msg.model ? <span className="log-message-model">{msg.model}</span> : null}
+        {ts ? <span className="log-message-time">{ts}</span> : null}
+      </div>
+      <div className="log-message-content">
+        {(msg.reasoning ?? "").trim() ? (
+          <details className="log-reasoning">
+            <summary>Reasoning</summary>
+            <pre className="log-pre">{stripAnsiCodes(msg.reasoning ?? "")}</pre>
+          </details>
+        ) : null}
+        {(msg.tool_calls?.length ?? 0) > 0 ? (
+          <div className="log-tool-calls">
+            {msg.tool_calls!.map((tc, i) => {
+              const display = deferredToolDisplay(tc.name, tc.arguments);
+              return (
+                <details key={tc.id ?? i} className="log-tool-call" data-testid="stored-tool-call">
+                  <summary>{display.name}</summary>
+                  <pre className="log-pre">{display.input}</pre>
+                </details>
+              );
+            })}
+          </div>
+        ) : null}
+        {content ? (
+          role === "tool" ? (
+            msg.is_error ? (
+              <p className="log-tool-error" data-testid="stored-tool-result">
+                {readableToolError(content)}
+              </p>
+            ) : content.length > 1200 ? (
+              <details className="log-tool-output">
+                <summary>
+                  Tool output ({content.length.toLocaleString()} characters)
+                </summary>
+                <pre className="log-pre">{content}</pre>
+              </details>
+            ) : (
+              <pre className="log-pre">{content}</pre>
+            )
+          ) : (
+            <Suspense
+              fallback={<div className="whitespace-pre-wrap">{content}</div>}
+            >
+              <LogMarkdown content={content} taskId={taskId} />
+            </Suspense>
+          )
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 // ── #508 live activity view ──────────────────────────────────────────────────
 
 type ActivityEntry = {
   key: string;
-  kind: "message" | "tool_call" | "tool_result";
+  kind: "message" | "tool";
+  callId?: string;
   name?: string;
   text: string;
+  result?: string;
   isError?: boolean;
-  // checklist is set for a task_tracker tool_result whose JSON parsed into a
-  // plan (#518); the entry then renders as a checklist instead of raw text.
-  checklist?: ChecklistState;
+  pending?: boolean;
+  repeats?: number;
 };
+
+function sameFailedCall(a: ActivityEntry, b: ActivityEntry) {
+  return a.kind === "tool" && b.kind === "tool" && a.isError && b.isError &&
+    a.name === b.name && a.text === b.text && a.result === b.result;
+}
 
 // Keep enough tool output for real debugging without letting a pathological
 // result pin an unbounded amount of browser memory. Long entries render behind
 // a disclosure below; the old 600-character clamp hid the useful error tail.
-const clampText = (s: string, max = 20_000) => (s.length > max ? s.slice(0, max) + "\n… output capped at 20,000 characters" : s);
+const clampText = (s: string, max = 20_000) =>
+  s.length > max
+    ? s.slice(0, max) + "\n… output capped at 20,000 characters"
+    : s;
 
 // LiveTaskView attaches to GET /tasks/{id}/stream and renders the run's
 // tool-by-tool activity as it happens (#508): each tool call, its result, and
 // the assistant's text, chronologically, with an optional Stop control that
 // interrupts the governed run at its next checkpoint (with who-stopped-it
 // attribution recorded server-side).
-function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => void; canStop: boolean }) {
+function LiveTaskView({
+  task,
+  onClose,
+  canStop,
+}: {
+  task: Task;
+  onClose: () => void;
+  canStop: boolean;
+}) {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   // checklist holds the LATEST task_tracker plan (#518) for the live progress
   // panel; it updates each time the agent revises its plan mid-run.
   const [checklist, setChecklist] = useState<ChecklistState | null>(null);
+  const [checklistOpen, setChecklistOpen] = useState(false);
   const [runStatus, setRunStatus] = useState<string>("running");
   const [stoppedBy, setStoppedBy] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -103,29 +486,78 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
         }
         return;
       }
-      const key = `e${seq.current++}`;
-      let entry: ActivityEntry | null = null;
       if (frame.type === "agent_message" && frame.content) {
-        entry = { key, kind: "message", text: frame.content };
+        const content = frame.content;
+        // Coalesce adjacent text deltas into one readable assistant entry.
+        setEntries((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.kind === "message") {
+            return [...prev.slice(0, -1), { ...last, text: clampText(last.text + content) }];
+          }
+          const entry: ActivityEntry = { key: `e${seq.current++}`, kind: "message", text: content };
+          return [...prev, entry].slice(-1000);
+        });
+        return;
       } else if (frame.type === "tool_call") {
-        entry = { key, kind: "tool_call", name: frame.name, text: clampText(frame.input ?? "") };
+        // task_tracker is represented once by the dedicated progress panel.
+        if (frame.name === "task_tracker") return;
+        const display = deferredToolDisplay(frame.name, frame.input);
+        const entry: ActivityEntry = {
+          key: `e${seq.current++}`,
+          kind: "tool",
+          callId: frame.call_id,
+          name: display.name,
+          text: clampText(display.input),
+          pending: true,
+          repeats: 1,
+        };
+        setEntries((prev) => [...prev, entry].slice(-1000));
+        return;
       } else if (frame.type === "tool_result") {
-        // A task_tracker result carries the structured plan as JSON; parse it
-        // (raw, before clamping) into a checklist for the live progress panel and
-        // a readable history entry, falling back to raw text if it doesn't parse.
         const parsedChecklist =
-          frame.name === "task_tracker" ? parseTaskTrackerOutput(frame.output ?? "") : null;
+          frame.name === "task_tracker"
+            ? parseTaskTrackerOutput(frame.output ?? "")
+            : null;
         if (parsedChecklist) {
           setChecklist(parsedChecklist);
-          entry = { key, kind: "tool_result", name: frame.name, text: "", checklist: parsedChecklist };
-        } else {
-          entry = { key, kind: "tool_result", name: frame.name, text: clampText(frame.output ?? ""), isError: !!frame.error };
+          return;
         }
-      }
-      if (entry) {
-        // Bound the DOM/history for extremely chatty runs while retaining the
-        // most recent activity where failures and final output appear.
-        setEntries((prev) => [...prev, entry!].slice(-1000));
+        setEntries((prev) => {
+          let idx = -1;
+          if (frame.call_id) {
+            for (let i = prev.length - 1; i >= 0; i -= 1) {
+              if (prev[i].kind === "tool" && prev[i].callId === frame.call_id) {
+                idx = i;
+                break;
+              }
+            }
+          }
+          const result = clampText(frame.output ?? "");
+          if (idx < 0) {
+            const entry: ActivityEntry = {
+              key: `e${seq.current++}`,
+              kind: "tool",
+              callId: frame.call_id,
+              name: frame.name || "tool",
+              text: "",
+              result,
+              isError: !!frame.error,
+              pending: false,
+              repeats: 1,
+            };
+            return [...prev, entry].slice(-1000);
+          }
+          const updated = { ...prev[idx], result, isError: !!frame.error, pending: false };
+          const next = [...prev.slice(0, idx), updated, ...prev.slice(idx + 1)];
+          const before = next[idx - 1];
+          if (idx === next.length - 1 && before && sameFailedCall(before, updated)) {
+            return [...next.slice(0, idx - 1), {
+              ...before,
+              repeats: (before.repeats ?? 1) + 1,
+            }].slice(-1000);
+          }
+          return next.slice(-1000);
+        });
       }
     };
     // fetch streams do not reconnect like EventSource. Keep reattaching with
@@ -135,14 +567,27 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
       let failures = 0;
       while (!ac.signal.aborted && !terminalRef.current) {
         try {
-          await orchestratorApi.streamTaskActivity(task.id, onFrame, ac.signal, lastEventID.current);
+          await orchestratorApi.streamTaskActivity(
+            task.id,
+            onFrame,
+            ac.signal,
+            lastEventID.current,
+          );
           failures = 0;
-          if (!terminalRef.current) await new Promise((resolve) => window.setTimeout(resolve, 500));
+          if (!terminalRef.current)
+            await new Promise((resolve) => window.setTimeout(resolve, 500));
         } catch (err) {
           if (ac.signal.aborted) return;
           failures += 1;
-          setStreamError(`${err instanceof Error ? err.message : "stream failed"}; reconnecting…`);
-          await new Promise((resolve) => window.setTimeout(resolve, Math.min(5000, 500 * 2 ** Math.min(failures, 4))));
+          setStreamError(
+            `${err instanceof Error ? err.message : "stream failed"}; reconnecting…`,
+          );
+          await new Promise((resolve) =>
+            window.setTimeout(
+              resolve,
+              Math.min(5000, 500 * 2 ** Math.min(failures, 4)),
+            ),
+          );
         }
       }
       if (terminalRef.current) setStreamError(null);
@@ -169,12 +614,21 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
 
   const terminal = runStatus !== "running";
   return (
-    <div className="modal-overlay is-open" role="dialog" aria-modal="true" aria-label="Live task activity">
-      <div className="modal">
+    <div
+      className="modal-overlay is-open"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Live task activity"
+    >
+      <div className="modal modal-log live-activity-modal">
         <div className="modal-header">
-          <h3>
+          <h3 className="modal-log-title" title={task.prompt ?? ""}>
             Live activity
-            <span className={`status-badge status-${terminal ? (runStatus === "succeeded" ? "success" : runStatus === "stopped" ? "cancelled" : "error") : "running"}`} style={{ marginLeft: 8 }} data-testid="live-run-status">
+            <span
+              className={`status-badge status-${terminal ? (runStatus === "succeeded" ? "success" : runStatus === "stopped" ? "cancelled" : "error") : "running"}`}
+              style={{ marginLeft: 8 }}
+              data-testid="live-run-status"
+            >
               {runStatus}
               {stoppedBy ? ` by ${stoppedBy}` : ""}
             </span>
@@ -191,17 +645,54 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
                 {stopping ? "Stopping…" : "Stop run"}
               </button>
             ) : null}
-            <button type="button" className="icon-action modal-close" aria-label="Close modal" onClick={onClose}>
+            <button
+              type="button"
+              className="icon-action modal-close"
+              aria-label="Close modal"
+              onClick={onClose}
+            >
               ×
             </button>
           </div>
         </div>
-        <div className="modal-body" data-testid="live-activity-body">
-          {streamError ? <div className="table-error">Live stream error: {streamError}</div> : null}
-          {checklist ? (
-            <div className="live-checklist-panel">
-              <Checklist state={checklist} live />
+        <TaskSummary task={task} />
+        {checklist ? (
+          <div className="live-progress-panel" data-testid="live-progress-panel">
+            <button
+              type="button"
+              className="live-progress-toggle"
+              aria-expanded={checklistOpen}
+              onClick={() => setChecklistOpen((open) => !open)}
+            >
+              <span className="live-progress-copy">
+                <span className="live-progress-meta">
+                  Progress · {checklist.summary.done}/{checklist.summary.total} done
+                </span>
+                <span className="live-progress-active">
+                  {checklist.activeTask || "Plan complete"}
+                </span>
+              </span>
+              <span className="live-progress-chevron" aria-hidden="true">
+                {checklistOpen ? "▴" : "▾"}
+              </span>
+            </button>
+            <div className="live-progress-track" aria-hidden="true">
+              <span
+                style={{
+                  width: `${checklist.summary.total ? (checklist.summary.done / checklist.summary.total) * 100 : 0}%`,
+                }}
+              />
             </div>
+            {checklistOpen ? (
+              <div className="live-progress-details">
+                <Checklist state={checklist} live showSummary={false} />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="modal-body" data-testid="live-activity-body">
+          {streamError ? (
+            <div className="table-error">Live stream error: {streamError}</div>
           ) : null}
           {entries.length === 0 && !streamError ? (
             <div className="loading">
@@ -209,24 +700,34 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
             </div>
           ) : (
             <div className="log-session" aria-live="polite">
-              {entries.map((e) => (
-                <div key={e.key} className={`log-message log-message--${e.kind === "message" ? "assistant" : "tool"}`}>
-                  <div className="log-message-role">
-                    {e.kind === "tool_call" ? `▶ ${e.name ?? "tool"}` : e.kind === "tool_result" ? `${e.isError ? "✗" : "✓"} ${e.name ?? "result"}` : "assistant"}
-                  </div>
-                  <div className="log-message-content">
-                    {e.checklist ? (
-                      <Checklist state={e.checklist} />
-                    ) : e.kind !== "message" && e.text.length > 1200 ? (
-                      <details>
-                        <summary style={{ cursor: "pointer" }}>Show tool details ({e.text.length.toLocaleString()} characters)</summary>
-                        <pre style={{ whiteSpace: "pre-wrap", margin: "0.5rem 0 0" }}>{e.text}</pre>
-                      </details>
-                    ) : (
-                      <pre style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: e.kind === "message" ? "inherit" : undefined }}>{e.text}</pre>
-                    )}
-                  </div>
+              {entries.map((e) => e.kind === "message" ? (
+                <div key={e.key} className="live-activity-message" data-testid="live-assistant-message">
+                  {e.text}
                 </div>
+              ) : (
+                <article
+                  key={e.key}
+                  className={`live-tool-entry${e.isError ? " live-tool-entry--error" : ""}`}
+                  data-testid="live-tool-entry"
+                >
+                  <div className="live-tool-heading">
+                    <code>{e.name ?? "tool"}</code>
+                    <span className={`live-tool-status${e.isError ? " live-tool-status--error" : ""}`}>
+                      {e.pending ? "Running…" : e.isError ? "Failed" : "Done"}
+                      {(e.repeats ?? 1) > 1 ? ` · ${e.repeats} attempts` : ""}
+                    </span>
+                  </div>
+                  {e.isError && e.result ? (
+                    <p className="live-tool-error">{readableToolError(e.result)}</p>
+                  ) : null}
+                  {e.text || (!e.isError && e.result) ? (
+                    <details className="live-tool-details">
+                      <summary>Details</summary>
+                      {e.text ? <pre>{e.text}</pre> : null}
+                      {!e.isError && e.result ? <pre>{e.result}</pre> : null}
+                    </details>
+                  ) : null}
+                </article>
               ))}
               <div ref={bottomRef} />
             </div>
@@ -237,7 +738,21 @@ function LiveTaskView({ task, onClose, canStop }: { task: Task; onClose: () => v
   );
 }
 
-function LogViewerBody({ task, onClose, canStop }: { task: Task; onClose: () => void; canStop: boolean }) {
+function LogViewerBody({
+  task,
+  onClose,
+  canStop,
+  onResubmitted,
+  onEdit,
+  onSelectTask,
+}: {
+  task: Task;
+  onClose: () => void;
+  canStop: boolean;
+  onResubmitted?: () => void;
+  onEdit?: (task: Task) => void;
+  onSelectTask?: (task: Task) => void;
+}) {
   // The shared hook owns the cancelled-ref guard and the lone setState after
   // the await, so this component no longer needs its own one-shot load-flag
   // setState-in-effect disable.
@@ -249,18 +764,152 @@ function LogViewerBody({ task, onClose, canStop }: { task: Task; onClose: () => 
     useCallback(() => orchestratorApi.taskLogs(task.id), [task.id]),
     [task.id],
   );
+  const { showToast } = useToast();
+  const [resubmitting, setResubmitting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const messages = useMemo(() => session?.messages ?? [], [session]);
+  const { tags, groups, toolNames } = useMemo(
+    () => buildFilterIndex(messages),
+    [messages],
+  );
+  const visibleIdx = useMemo(
+    () =>
+      messages
+        .map((_, i) => i)
+        .filter(
+          (i) =>
+            selected.size === 0 || [...selected].some((k) => tags[i].has(k)),
+        ),
+    [messages, tags, selected],
+  );
+
+  const toggleChip = (key: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const resubmit = async () => {
+    if (resubmitting) return;
+    setResubmitting(true);
+    try {
+      const created = await orchestratorApi.rerunTask(task.id);
+      showToast(
+        `Resubmitted as task ${created.id.slice(0, 8)}… — running now`,
+        "success",
+      );
+      onResubmitted?.();
+    } catch (err) {
+      showToast(
+        `Resubmit failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        "error",
+      );
+    } finally {
+      setResubmitting(false);
+    }
+  };
+
+  // Download the stored session (plus the task row for context) as JSON — the
+  // full fidelity record, not the filtered view.
+  const download = () => {
+    const payload = { task, session };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `fleet-task-${task.id.slice(0, 8)}-logs.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const canResubmit = RESUBMITTABLE.has(task.status ?? "");
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   return (
-    <div className="modal-overlay is-open" role="dialog" aria-modal="true" aria-label="Task Logs">
-      <div className="modal">
+    <div
+      className="modal-overlay is-open"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Task Logs"
+    >
+      <div className="modal modal-log">
         <div className="modal-header">
-          <h3>Task Logs</h3>
-          <button type="button" className="icon-action modal-close" aria-label="Close modal" onClick={onClose}>
+          <h3 className="modal-log-title" title={task.prompt ?? ""}>
+            Task: {(task.prompt ?? "").trim().slice(0, 90) || task.id.slice(0, 8)}
+            {(task.prompt ?? "").trim().length > 90 ? "…" : ""}
+          </h3>
+          <button
+            type="button"
+            className="icon-action modal-close"
+            aria-label="Close modal"
+            onClick={onClose}
+          >
             ×
           </button>
         </div>
+        <TaskSummary task={task} />
         {task.expected_duration_minutes ? <SLADetail task={task} /> : null}
         <div className="modal-body" data-testid="log-modal-body">
+          <div className="task-detail-bar" data-testid="task-detail-bar">
+            <span className="task-detail-status">
+              Status:{" "}
+              <span className={`status-badge status-${task.status ?? "unknown"}`}>
+                {task.status ?? "-"}
+              </span>
+            </span>
+            <span className="task-detail-actions">
+              {onEdit && ["pending", "scheduled", ...RESUBMITTABLE].includes(task.status ?? "") ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="edit-task-button"
+                  onClick={() => onEdit(task)}
+                >
+                  Edit
+                </button>
+              ) : null}
+              {canResubmit ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="resubmit-task-button"
+                  disabled={resubmitting}
+                  onClick={() => void resubmit()}
+                >
+                  {resubmitting ? "Resubmitting…" : "Resubmit"}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-testid="history-button"
+                aria-expanded={historyOpen}
+                onClick={() => setHistoryOpen((v) => !v)}
+              >
+                History
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-testid="download-logs-button"
+                disabled={!session}
+                onClick={download}
+              >
+                Download logs
+              </button>
+            </span>
+          </div>
+          {historyOpen ? (
+            <TaskRunHistory task={task} onSelectTask={onSelectTask} />
+          ) : null}
+          {session ? <SessionMetrics session={session} /> : null}
           <SelfImprovePanel task={task} canManage={canStop} />
           <TaskRunIfBanner task={task} />
           {loading ? (
@@ -272,63 +921,26 @@ function LogViewerBody({ task, onClose, canStop }: { task: Task; onClose: () => 
           ) : !session || !session.messages || session.messages.length === 0 ? (
             <div className="table-empty">No logs for this task.</div>
           ) : (
-            <div className="log-session">
-              {session.title ? <h4 className="log-session-title">{session.title}</h4> : null}
-              {session.messages.map((msg, idx) => (
-                <div key={msg.id ?? idx} className={`log-message log-message--${msg.role ?? "unknown"}`}>
-                  <div className="log-message-role">{msg.role ?? "—"}</div>
-                  <div className="log-message-content">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        // Rewrite relative <img> srcs to the task workspace file
-                        // proxy so agent-generated images render inline (#271).
-                        // Absolute http(s)/data URLs pass through unchanged, so a
-                        // log can't make the browser fetch an arbitrary remote URL.
-                        img: ({ src, alt, title }) => {
-                          const { href, isWorkspaceFile, downloadFilename } = resolveTaskWorkspaceHref(
-                            typeof src === "string" ? src : "",
-                            task.id,
-                          );
-                          return (
-                            <LogImage
-                              src={href}
-                              alt={alt ?? ""}
-                              title={title ?? undefined}
-                              isWorkspaceFile={isWorkspaceFile}
-                              downloadFilename={downloadFilename}
-                            />
-                          );
-                        },
-                        // Same rewrite for <a href>: a link to a workspace file
-                        // (e.g. the agent links the image instead of embedding it)
-                        // gets a working href + a download attribute; external
-                        // links open in a new tab. Mirrors chat's anchor handling.
-                        a: ({ href, title, children }) => {
-                          const { href: resolved, isWorkspaceFile, downloadFilename } =
-                            resolveTaskWorkspaceHref(typeof href === "string" ? href : "", task.id);
-                          const isExternal = /^https?:\/\//i.test(resolved);
-                          const extraProps: { target?: string; rel?: string; download?: string } = {};
-                          if (isWorkspaceFile) {
-                            extraProps.download = downloadFilename || "";
-                          } else if (isExternal) {
-                            extraProps.target = "_blank";
-                            extraProps.rel = "noopener noreferrer";
-                          }
-                          return (
-                            <a href={resolved || undefined} title={title ?? undefined} {...extraProps}>
-                              {children}
-                            </a>
-                          );
-                        },
-                      }}
-                    >
-                      {stripAnsiCodes(msg.content ?? "")}
-                    </ReactMarkdown>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <>
+              <LogFilters
+                groups={groups}
+                selected={selected}
+                onToggle={toggleChip}
+                onClear={() => setSelected(new Set())}
+                shown={visibleIdx.length}
+                total={messages.length}
+              />
+              <div className="log-session">
+                {visibleIdx.map((i) => (
+                  <LogMessageCard
+                    key={messages[i].id ?? i}
+                    msg={messages[i]}
+                    taskId={task.id}
+                    toolName={toolNames.get(i)}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -336,61 +948,93 @@ function LogViewerBody({ task, onClose, canStop }: { task: Task; onClose: () => 
   );
 }
 
-// LogImage renders an agent-produced image from a task's workspace, with a
-// graceful fallback (#271). A workspace image that fails to load — the file was
-// GC'd, the task is mid-run, or the referenced path isn't actually renderable —
-// degrades to a plain download link (or, for a non-workspace href, the original
-// reference) instead of a broken image icon. memo + eager/async decoding mirror
-// chat's WorkspaceImage so the modal doesn't re-fetch on every parent render.
-const LogImage = memo(function LogImage({
-  src,
-  alt,
-  title,
-  isWorkspaceFile,
-  downloadFilename,
+// TaskRunHistory lists the other runs of this task. Fleet has no first-class
+// lineage for recurring occurrences (each firing is a fresh row with name
+// blanked and no source_task_id — see storage.scheduleNextRecurrence), so
+// runs are grouped the same way the SLA report buckets them: exact prompt
+// equality. The server-side q= search narrows by prompt substring; the exact
+// match is enforced client-side (ILIKE wildcards in a prompt can over-match,
+// never under-match).
+function TaskRunHistory({
+  task,
+  onSelectTask,
 }: {
-  src: string;
-  alt: string;
-  title?: string;
-  isWorkspaceFile: boolean;
-  downloadFilename: string;
+  task: Task;
+  onSelectTask?: (task: Task) => void;
 }) {
-  const [errored, setErrored] = useState(false);
+  const prompt = (task.prompt ?? "").trim();
+  const {
+    data,
+    loading,
+    error,
+  } = useCancellableFetch(
+    useCallback(() => {
+      const p = new URLSearchParams();
+      // The first 120 chars keep the query URL sane for very long prompts;
+      // the exact-equality filter below does the real matching.
+      p.set("q", prompt.slice(0, 120));
+      p.set("limit", "50");
+      // orchestratorApi.tasks prepends the "?" itself.
+      return orchestratorApi.tasks(p.toString());
+    }, [prompt]),
+    [prompt],
+  );
 
-  if (!src) {
-    return <span className="log-image-fallback">{alt || "image"}</span>;
-  }
-
-  if (errored) {
-    // Degrade to a link rather than a broken image. Workspace files get a
-    // download attribute with the agent-chosen basename; everything else is a
-    // bare link to the original reference.
-    return (
-      <a
-        className="log-image-fallback"
-        href={src}
-        title={title}
-        {...(isWorkspaceFile ? { download: downloadFilename || "" } : {})}
-      >
-        {alt || downloadFilename || "image (not available)"}
-      </a>
+  const runs = (data?.data ?? [])
+    .filter((t) => (t.prompt ?? "").trim() === prompt)
+    .sort(
+      (a, b) =>
+        new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime(),
     );
-  }
 
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      data-testid="log-image"
-      className="log-image"
-      src={src}
-      alt={alt}
-      title={title}
-      loading="eager"
-      decoding="async"
-      onError={() => setErrored(true)}
-    />
+    <div className="task-history" data-testid="task-history">
+      <div className="task-history-title">
+        Run history <span className="task-history-hint">(same task prompt)</span>
+      </div>
+      {loading ? (
+        <div className="loading">
+          <p>Loading history…</p>
+        </div>
+      ) : error ? (
+        <div className="table-error">Failed to load history: {error}</div>
+      ) : runs.length <= 1 ? (
+        <div className="task-history-empty">No other runs of this task yet.</div>
+      ) : (
+        <ul className="task-history-list">
+          {runs.map((run) => {
+            const current = run.id === task.id;
+            return (
+              <li key={run.id}>
+                <button
+                  type="button"
+                  className={`task-history-row${current ? " task-history-row--current" : ""}`}
+                  data-testid="task-history-row"
+                  disabled={current || !onSelectTask}
+                  onClick={() => onSelectTask?.(run)}
+                >
+                  <span className="task-history-time">
+                    {formatTimeFirst(run.created_at)}
+                  </span>
+                  <span className={`status-badge status-${run.status ?? "unknown"}`}>
+                    {run.status ?? "-"}
+                  </span>
+                  <TaskSlaBadge task={run} />
+                  <code className="task-history-id">{run.id.slice(0, 8)}</code>
+                  {current ? (
+                    <span className="task-history-current">viewing</span>
+                  ) : (
+                    <span className="task-history-open">view →</span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
-});
+}
 
 // SLADetail renders the task's actual vs. expected duration as a labeled
 // progress bar (#274). Shown in the log modal header only when the task has an
@@ -408,15 +1052,17 @@ function SLADetail({ task }: { task: Task }) {
   const failMin = expected * failMul;
 
   let tone = "ok";
-  if (task.sla_breached || (expected > 0 && actualMin >= failMin)) tone = "fail";
+  if (task.sla_breached || (expected > 0 && actualMin >= failMin))
+    tone = "fail";
   else if (expected > 0 && actualMin >= warnMin) tone = "warn";
 
   // Bar width: 100% == actual === expected. Cap at 200% so a runaway task
   // doesn't blow out the modal layout; the numeric label still shows the truth.
   const pct = expected > 0 ? Math.min((actualMin / expected) * 100, 200) : 0;
-  const label = actualSecs > 0
-    ? `${actualMin.toFixed(1)}m / ${expected}m expected`
-    : `${expected}m expected (not yet complete)`;
+  const label =
+    actualSecs > 0
+      ? `${actualMin.toFixed(1)}m / ${expected}m expected`
+      : `${expected}m expected (not yet complete)`;
 
   return (
     <div className="sla-detail" data-testid="sla-detail" data-sla-tone={tone}>
@@ -424,10 +1070,28 @@ function SLADetail({ task }: { task: Task }) {
         <span>SLA</span>
         <span>{label}</span>
       </div>
-      <div className="sla-progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={200} aria-label="Actual vs expected duration">
-        <div className={`sla-progress-bar sla-progress-${tone}`} style={{ width: `${pct}%` }} />
-        <div className="sla-progress-mark sla-progress-mark-warn" style={{ left: `${Math.min(warnMul * 100, 200)}%` }} title={`warn @ ${warnMul}×`} />
-        <div className="sla-progress-mark sla-progress-mark-fail" style={{ left: `${Math.min(failMul * 100, 200)}%` }} title={`fail @ ${failMul}×`} />
+      <div
+        className="sla-progress"
+        role="progressbar"
+        aria-valuenow={Math.round(pct)}
+        aria-valuemin={0}
+        aria-valuemax={200}
+        aria-label="Actual vs expected duration"
+      >
+        <div
+          className={`sla-progress-bar sla-progress-${tone}`}
+          style={{ width: `${pct}%` }}
+        />
+        <div
+          className="sla-progress-mark sla-progress-mark-warn"
+          style={{ left: `${Math.min(warnMul * 100, 200)}%` }}
+          title={`warn @ ${warnMul}×`}
+        />
+        <div
+          className="sla-progress-mark sla-progress-mark-fail"
+          style={{ left: `${Math.min(failMul * 100, 200)}%` }}
+          title={`fail @ ${failMul}×`}
+        />
       </div>
     </div>
   );
@@ -448,7 +1112,9 @@ function TaskRunIfBanner({ task }: { task: Task }) {
     <div className="task-run-if-banner" data-testid="task-run-if-banner">
       <div className="task-run-if-banner__header">
         <span className="task-run-if-banner__title">Pre-run gate</span>
-        <code className="task-run-if-banner__command">{task.run_if.command}</code>
+        <code className="task-run-if-banner__command">
+          {task.run_if.command}
+        </code>
         <span className="task-run-if-banner__meta">
           exit={exitCode} · timeout={timeout}s · on_error={onError}
         </span>
@@ -465,8 +1131,16 @@ function TaskRunIfBanner({ task }: { task: Task }) {
         ) : null}
       </div>
       {skipped && expanded ? (
-        <div id="task-run-if-skip-detail" className="task-run-if-banner__skip-detail">
-          <div>Last skip: {task.last_skip_at ? new Date(task.last_skip_at).toLocaleString() : "—"}</div>
+        <div
+          id="task-run-if-skip-detail"
+          className="task-run-if-banner__skip-detail"
+        >
+          <div>
+            Last skip:{" "}
+            {task.last_skip_at
+              ? new Date(task.last_skip_at).toLocaleString()
+              : "—"}
+          </div>
           <div>Reason: {task.last_skip_reason ?? "—"}</div>
         </div>
       ) : null}
@@ -478,8 +1152,16 @@ function TaskRunIfBanner({ task }: { task: Task }) {
 // output, and the versioned learned instructions distilled from that feedback
 // — activate a version, or revert (deactivate). Operators (canManage) see the
 // activate/revert controls; anyone who can view can leave feedback.
-function SelfImprovePanel({ task, canManage }: { task: Task; canManage: boolean }) {
-  const [instructions, setInstructions] = useState<TaskLearnedInstruction[]>([]);
+function SelfImprovePanel({
+  task,
+  canManage,
+}: {
+  task: Task;
+  canManage: boolean;
+}) {
+  const [instructions, setInstructions] = useState<TaskLearnedInstruction[]>(
+    [],
+  );
   const [critique, setCritique] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -510,9 +1192,17 @@ function SelfImprovePanel({ task, canManage }: { task: Task; canManage: boolean 
     setBusy(true);
     setNote(null);
     try {
-      await orchestratorApi.submitFeedback(task.id, rating, rating === "down" ? critique : "");
+      await orchestratorApi.submitFeedback(
+        task.id,
+        rating,
+        rating === "down" ? critique : "",
+      );
       setCritique("");
-      setNote(rating === "up" ? "Thanks — recorded." : "Recorded. Enough down-votes distills a learned instruction to review.");
+      setNote(
+        rating === "up"
+          ? "Thanks — recorded."
+          : "Recorded. Enough down-votes distills a learned instruction to review.",
+      );
       if (open) await reload();
     } catch (err) {
       setNote(`Failed: ${(err as Error).message}`);
@@ -546,34 +1236,121 @@ function SelfImprovePanel({ task, canManage }: { task: Task; canManage: boolean 
   };
 
   return (
-    <div className="self-improve-panel" data-testid="self-improve-panel" style={{ borderBottom: "1px solid var(--color-border)", paddingBottom: "0.75rem", marginBottom: "0.75rem" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-        <span style={{ fontSize: "0.8125rem", color: "var(--color-text-secondary)" }}>Was this run useful?</span>
-        <button type="button" className="btn btn-small" disabled={busy} onClick={() => void feedback("up")}>👍</button>
-        <button type="button" className="btn btn-small" disabled={busy} onClick={() => void feedback("down")}>👎</button>
+    <div
+      className="self-improve-panel"
+      data-testid="self-improve-panel"
+      style={{
+        borderBottom: "1px solid var(--color-border)",
+        paddingBottom: "0.75rem",
+        marginBottom: "0.75rem",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <span
+          style={{
+            fontSize: "0.8125rem",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          Was this run useful?
+        </span>
+        <button
+          type="button"
+          className="btn btn-small"
+          disabled={busy}
+          onClick={() => void feedback("up")}
+        >
+          👍
+        </button>
+        <button
+          type="button"
+          className="btn btn-small"
+          disabled={busy}
+          onClick={() => void feedback("down")}
+        >
+          👎
+        </button>
         <input
           aria-label="Critique (optional)"
           placeholder="what to improve (optional)"
           value={critique}
           onChange={(e) => setCritique(e.target.value)}
-          style={{ flex: "1 1 12rem", minWidth: 0, fontSize: "0.8rem", padding: "0.25rem 0.5rem", borderRadius: "0.5rem", border: "1px solid var(--color-border-strong)", background: "transparent", color: "var(--color-text-primary)" }}
+          style={{
+            flex: "1 1 12rem",
+            minWidth: 0,
+            fontSize: "0.8rem",
+            padding: "0.25rem 0.5rem",
+            borderRadius: "0.5rem",
+            border: "1px solid var(--color-border-strong)",
+            background: "transparent",
+            color: "var(--color-text-primary)",
+          }}
         />
-        <button type="button" className="btn btn-small" onClick={() => setOpen((v) => !v)}>
+        <button
+          type="button"
+          className="btn btn-small"
+          onClick={() => setOpen((v) => !v)}
+        >
           {open ? "Hide" : "Learned instructions"}
         </button>
       </div>
-      {note ? <div style={{ marginTop: "0.4rem", fontSize: "0.75rem", color: "var(--color-text-muted)" }}>{note}</div> : null}
+      {note ? (
+        <div
+          style={{
+            marginTop: "0.4rem",
+            fontSize: "0.75rem",
+            color: "var(--color-text-muted)",
+          }}
+        >
+          {note}
+        </div>
+      ) : null}
       {open ? (
         instructions.length === 0 ? (
-          <div style={{ marginTop: "0.5rem", fontSize: "0.78rem", color: "var(--color-text-muted)" }}>
-            No learned instructions yet. Down-votes with critique distill into a reviewable instruction once self-improvement is enabled.
+          <div
+            style={{
+              marginTop: "0.5rem",
+              fontSize: "0.78rem",
+              color: "var(--color-text-muted)",
+            }}
+          >
+            No learned instructions yet. Down-votes with critique distill into a
+            reviewable instruction once self-improvement is enabled.
           </div>
         ) : (
-          <ul style={{ marginTop: "0.5rem", display: "grid", gap: "0.35rem", listStyle: "none", padding: 0 }}>
+          <ul
+            style={{
+              marginTop: "0.5rem",
+              display: "grid",
+              gap: "0.35rem",
+              listStyle: "none",
+              padding: 0,
+            }}
+          >
             {instructions.map((li) => (
-              <li key={li.id} style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", display: "flex", gap: "0.5rem", alignItems: "flex-start", justifyContent: "space-between" }}>
+              <li
+                key={li.id}
+                style={{
+                  fontSize: "0.78rem",
+                  color: "var(--color-text-secondary)",
+                  display: "flex",
+                  gap: "0.5rem",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                }}
+              >
                 <span>
-                  <span className={`status-badge status-${li.status === "active" ? "success" : li.status === "proposed" ? "running" : "cancelled"}`} style={{ marginRight: 6 }}>
+                  <span
+                    className={`status-badge status-${li.status === "active" ? "success" : li.status === "proposed" ? "running" : "cancelled"}`}
+                    style={{ marginRight: 6 }}
+                  >
                     v{li.version} {li.status}
                   </span>
                   {li.content}
@@ -581,9 +1358,23 @@ function SelfImprovePanel({ task, canManage }: { task: Task; canManage: boolean 
                 {canManage ? (
                   <span style={{ whiteSpace: "nowrap" }}>
                     {li.status !== "active" ? (
-                      <button type="button" className="btn btn-small" disabled={busy} onClick={() => void activate(li.version)}>Activate</button>
+                      <button
+                        type="button"
+                        className="btn btn-small"
+                        disabled={busy}
+                        onClick={() => void activate(li.version)}
+                      >
+                        Activate
+                      </button>
                     ) : (
-                      <button type="button" className="btn btn-small" disabled={busy} onClick={() => void deactivate()}>Deactivate</button>
+                      <button
+                        type="button"
+                        className="btn btn-small"
+                        disabled={busy}
+                        onClick={() => void deactivate()}
+                      >
+                        Deactivate
+                      </button>
                     )}
                   </span>
                 ) : null}

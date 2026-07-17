@@ -23,11 +23,51 @@ func TestValidateSchema(t *testing.T) {
 		t.Errorf("valid schema rejected: %v", err)
 	}
 	// A schema must be a JSON object, not an array/scalar, and must be valid JSON.
-	for _, bad := range []string{`[]`, `"a string"`, `42`, `{not json`, ``} {
+	for _, bad := range []string{`[]`, `"a string"`, `42`, `null`, `{not json`, ``} {
 		if err := ValidateSchema(json.RawMessage(bad)); err == nil {
 			t.Errorf("expected %q to be rejected as a schema", bad)
 		}
 	}
+}
+
+func TestValidateSchema_ComplexityLimits(t *testing.T) {
+	t.Run("bytes", func(t *testing.T) {
+		raw := json.RawMessage(`{"type":"object","description":"` + strings.Repeat("x", MaxSchemaBytes) + `"}`)
+		if err := ValidateSchema(raw); err == nil || !strings.Contains(err.Error(), "maximum") {
+			t.Fatalf("oversized schema error = %v", err)
+		}
+	})
+
+	t.Run("depth", func(t *testing.T) {
+		var nested any = map[string]any{"type": "string"}
+		for range MaxSchemaDepth {
+			nested = map[string]any{"allOf": []any{nested}}
+		}
+		raw, err := json.Marshal(nested)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateSchema(raw); err == nil || !strings.Contains(err.Error(), "depth") {
+			t.Fatalf("over-deep schema error = %v", err)
+		}
+	})
+
+	t.Run("nodes", func(t *testing.T) {
+		values := make([]any, MaxSchemaNodes)
+		for i := range values {
+			values[i] = i
+		}
+		raw, err := json.Marshal(map[string]any{"enum": values})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) >= MaxSchemaBytes {
+			t.Fatalf("node fixture unexpectedly hit byte limit first: %d", len(raw))
+		}
+		if err := ValidateSchema(raw); err == nil || !strings.Contains(err.Error(), "nodes") {
+			t.Fatalf("over-complex schema error = %v", err)
+		}
+	})
 }
 
 // TestValidateSchema_RejectsExternalRef (#585): an untrusted output_schema with
@@ -89,6 +129,25 @@ func TestValidateOutput_Conforming(t *testing.T) {
 	}
 	if got["name"] != "Ada" {
 		t.Errorf("got %v", got)
+	}
+}
+
+func TestValidateOutput_PreservesLargeInteger(t *testing.T) {
+	schema := json.RawMessage(`{
+	  "type":"object",
+	  "properties":{"value":{"type":"integer","const":9007199254740993}},
+	  "required":["value"],
+	  "additionalProperties":false
+	}`)
+	out, err := ValidateOutput(`{"value":9007199254740993}`, schema)
+	if err != nil {
+		t.Fatalf("large integer output rejected: %v", err)
+	}
+	if string(out) != `{"value":9007199254740993}` {
+		t.Fatalf("large integer was rounded: %s", out)
+	}
+	if _, err := ValidateOutput(`{"value":9007199254740992}`, schema); err == nil {
+		t.Fatal("adjacent rounded integer unexpectedly satisfied exact const")
 	}
 }
 

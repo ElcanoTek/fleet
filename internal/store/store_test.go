@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,6 +126,66 @@ func TestAppendAndLoadHistory(t *testing.T) {
 	}
 	if first.Text != "hi" {
 		t.Errorf("first text: got %q", first.Text)
+	}
+}
+
+func TestContainedPanicPair_DBAppendLoadRoundTrip(t *testing.T) {
+	const (
+		callID = "db-panic-call"
+		secret = "Authorization: Bearer fake-db-panic-secret"
+	)
+	s := newTestStore(t)
+	ctx := context.Background()
+	conversation, err := s.CreateConversation(ctx, "u@x.com", "panic pair", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callJSON, _ := json.Marshal(agent.ToolCallContent{ID: callID, Name: "panicking_tool", Input: `{}`})
+	resultJSON, _ := json.Marshal(agent.ToolResultContent{
+		ID: callID, Name: "panicking_tool",
+		Text: "Tool execution failed unexpectedly. Reference: inc_0123456789abcdef0123456789abcdef.", IsErr: true,
+	})
+	entries := []agent.HistoryEntry{
+		{Role: "assistant", Type: "tool_call", Content: callJSON},
+		{Role: "tool", Type: "tool_result", Content: resultJSON},
+	}
+	if _, err := s.AppendHistory(ctx, conversation.ID, entries); err != nil {
+		t.Fatalf("AppendHistory: %v", err)
+	}
+	stored, err := s.LoadHistory(ctx, conversation.ID)
+	if err != nil {
+		t.Fatalf("LoadHistory: %v", err)
+	}
+	encoded, _ := json.Marshal(stored)
+	if strings.Contains(string(encoded), secret) {
+		t.Fatalf("DB history leaked panic value: %s", encoded)
+	}
+	var calls, results int
+	for _, entry := range stored {
+		switch entry.Type {
+		case "tool_call":
+			var call agent.ToolCallContent
+			if err := json.Unmarshal(entry.Content, &call); err != nil {
+				t.Fatal(err)
+			}
+			if call.ID == callID {
+				calls++
+			}
+		case "tool_result":
+			var result agent.ToolResultContent
+			if err := json.Unmarshal(entry.Content, &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.ID == callID {
+				results++
+				if !result.IsErr || !strings.Contains(result.Text, "inc_") {
+					t.Fatalf("stored result = %+v", result)
+				}
+			}
+		}
+	}
+	if calls != 1 || results != 1 {
+		t.Fatalf("DB pair counts: calls=%d results=%d stored=%+v", calls, results, stored)
 	}
 }
 

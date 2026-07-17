@@ -67,7 +67,7 @@ type SettingMeta = {
   description: string;
   // Per-enum-option one-liners, shown for the selected option (PII modes).
   optionHelp?: Record<string, string>;
-  // Suffix hint for numeric fields ("bytes — 0 disables the ceiling").
+  // Suffix hint for numeric fields ("bytes — 0 uses 64 KiB; hard max 128 KiB").
   unitHint?: string;
 };
 
@@ -121,8 +121,8 @@ const META: Record<string, SettingMeta> = {
   max_tool_output_bytes: {
     label: "Tool output ceiling",
     description:
-      "Cap any single tool result before it enters the context window; oversized output keeps its head and tail. Protects against a cat of a huge file blowing out the conversation.",
-    unitHint: "bytes — 0 removes the ceiling",
+      "Cap any single tool result before it enters the context window. Oversized structured output stays valid and points to governed workspace recovery when available; binary is never inlined.",
+    unitHint: "bytes — 0 uses 64 KiB; hard max 128 KiB",
   },
   phone_a_friend_enabled: {
     label: "Phone-a-friend review",

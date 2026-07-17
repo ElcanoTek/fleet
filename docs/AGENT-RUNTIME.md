@@ -1,9 +1,10 @@
 # The fleet agent runtime
 
-fleet runs **one** native agent loop, in the fleet process. Every tool call it
-makes — `bash`, `run_python`, file I/O, MCP — executes inside a rootless-Podman
-sandbox, and the credentials those calls need are brokered **host-side** and
-never enter the sandbox. There is no flavor picker and no external-agent
+fleet runs **one** native agent loop, in the fleet process. Model-authored local
+execution — `bash`, `run_python`, and file I/O — runs inside a rootless-Podman
+sandbox. MCP and the explicitly inventoried native broker/control-plane tools
+execute fixed host code so their credentials remain **host-side** and never
+enter the sandbox. There is no flavor picker and no external-agent
 delegation: the loop, the sandbox, and the credential broker are the whole story.
 
 This guide documents the runtime mechanics an operator needs: the per-turn
@@ -15,12 +16,25 @@ MCP credential allowlist, the scheduled end-of-run verifier, the optional
 
 ## The per-turn execution sandbox
 
-Every `bash` / `run_python` call runs inside an ephemeral rootless-Podman
-container over a persistent per-conversation workspace. The agent loop itself
-runs in the fleet process, but it holds no privileged executor — each tool call
-is handed to the sandbox under full host policy (cost ceilings, repeat
-detection, critical-tool approval staging, the email send gate, …), and fleet
-records the real, executed tool calls as the audit trail, not a self-report.
+Every `bash` / `run_python` call — and every `view_file` / `write_file` /
+`edit_file` call, via the sandbox FileOp seam (#784, `Sandbox.RunFileOp`) —
+runs inside an ephemeral rootless-Podman container over a persistent
+per-conversation workspace. The file tools do host-side path validation as
+defense-in-depth input, then execute the actual read/write/edit **in** the
+sandbox (a one-shot `podman exec python3`), so they inherit the same runtime,
+seccomp, caps, cgroups, disk/PID limits, and lockdown network posture as bash;
+the helper is confined to the narrow conversation/worktree root with
+descriptor-relative no-follow traversal, and cancellation kills + retires the
+container before returning. With no sandbox they fail closed (no host fallback).
+The agent loop itself runs in the fleet process, but it holds no privileged
+local executor: local data-plane calls are handed to the sandbox under full host
+policy (cost ceilings, repeat detection, critical-tool approval staging, the
+email send gate, …), and fleet
+records the real, executed tool calls as the audit trail, not a self-report. A
+small set of native tools are deliberately host-side control-plane/broker
+operations (host network fetch, brokered credentials, governed datastore
+writes) — enumerated in
+[ADR-0036](adr/0036-sandboxed-file-tools-and-host-io-exceptions.md).
 
 **MCP credentials never enter the sandbox.** MCP tools are advertised to the
 model, but every `mcp_*` call is executed host-side against the per-task
@@ -297,6 +311,37 @@ re-prompt the user to log in, so a needs-reauth server is skipped AND surfaced
 to the owner: a notice naming the unavailable connectors is prepended to the run
 (visible in the task transcript) so the agent doesn't silently rely on missing
 tools and the owner knows to reconnect.
+
+---
+
+## Tool-dispatch panic containment (#795)
+
+fleet is a single-host process running interactive chat, scheduled tasks,
+sandboxes, and workers together, and fantasy executes streamed tool calls in
+unsupervised goroutines (a coordinator goroutine plus per-tool goroutines for
+parallel calls) with no `recover`. So a panic in ANY tool — native, loader,
+direct-MCP, or deferred-MCP — or in a policy gate, an output
+guardrail, or an Observer callback would escape and terminate the whole
+process; `internal/safe`'s per-goroutine recover in the runner/httpapi callers
+is goroutine-local and cannot catch it.
+
+Every tool fleet hands fantasy is wrapped in an **outermost** panic-containment
+wrapper (`panic_containment.go`). A panic becomes exactly **one in-band tool
+error result** — `err == nil`, so fantasy pairs one result to the call id and
+the round continues instead of aborting the stream. Logs, Sentry, and
+`panic_events` receive only an opaque incident id, a value-free panic class,
+and non-content tool/run attribution; the recovered value and stack are
+discarded before telemetry. The model sees only the incident id and a
+**possibly executed** marker, and ADR-0035 blocks in-round provider re-drive
+once a tool ran.
+
+Invocation-local phase state attributes policy/output failures and marks a
+`RecordToolResult` attempt before calling it. Before-call, execution, and output
+panics therefore receive one failed logical-tool policy record (including deferred MCP), while a
+panic in the record hook itself is never retried. The run wraps its Observer
+once, disables it after its first panic, and returns an ordinary opaque run
+error only after Fantasy's tool goroutines settle. See
+[ADR-0037](adr/0037-agent-tool-panic-containment.md) for the complete boundary.
 
 ---
 

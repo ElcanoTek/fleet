@@ -17,8 +17,161 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Committed tool side effects survive a mid-round provider failure in
+  canonical history**: when ADR-0035 suppresses recovery after a tool ran,
+  the run's partial transcript was discarded with the error — the executed
+  call existed only in the turn journal, was never projected into `messages`
+  (the turn seals non-`running`, so recovery skips it), and the retried turn
+  could re-execute the side effect blind. `streamErrorResult` now returns the
+  partial transcript alongside `ErrCommittedSideEffects`, and the interactive
+  manager commits it terminally before surfacing the failure.
+- **Data race on a server's tool list during a mid-call stdio restart**:
+  `initialize` reassigns `Server.tools` under `Server.mu` while catalog
+  readers (`GetAllTools` and friends) hold only `Client.mu` — a torn read
+  under concurrent conversations. The slice now has a dedicated RWMutex
+  (readers deliberately do not take `Server.mu`, which is held for the whole
+  restart including the network round-trip).
+
+- **A lifecycle hook's reason-only trailer no longer downgrades its block**:
+  `parseHookDecision` let any later contract-key line replace the verdict, so
+  `{"decision":"block",…}` followed by `{"status":"ok","reason":"scan
+  complete"}` executed the tool despite `enforce: true` — the fail-open class
+  the parser exists to prevent, one key narrower. A line without an explicit
+  `decision` key can no longer replace a seen verdict.
+- **Turns that fail with `turn.model_required` are sealed as errors, not
+  completed**: the engine deliberately emits it instead of `turn.error` (the
+  user can fix it by switching models), but `inferTerminalStatus` didn't know
+  it — the failed turn was sealed `completed` with `history_committed_at`
+  NULL, breaking the turn journal's "gates terminal success" contract and
+  hiding it from `RecoverStrandedTurns`.
+- **A stale schema-invalid `output_json` candidate no longer blocks every
+  lease-checked status write**: the structured-output gate re-validated the
+  row's existing value on all updates (lease renewals, error/interrupt
+  transitions included), stranding such tasks `running` until lease expiry
+  requeued them — a duplicate side-effect window. Validation now applies only
+  to output the current update supplies; the success gate still refuses to
+  promote a stale candidate.
+
+- **Env-file keys boot actually reads are now allowlisted**: `loadEnvFile`
+  silently dropped non-allowlisted keys, and the list was missing ~16 names
+  boot reads via `os.Getenv` — including `FLEET_CHAT_DATABASE_URL` /
+  `FLEET_SCHED_DATABASE_URL` (documented in `deploy/fleet.service` as env-file
+  keys; boot failed with an empty-DSN error despite a correct file) and
+  `ADMIN_API_KEY` (admin API rejected everything while the startup warning
+  claimed the key was unset).
+- **`fleet mcp test` now reads the env file like a real boot**: it loaded the
+  bundle without registering connector env-var names or calling
+  `config.Load`, so `.env`-only credentials were invisible — credential-gated
+  servers were reported as "enable gate is off" or probed with empty creds,
+  the exact failure class the verb diagnoses.
+- **MCP hot reload is bounded (60s, like boot)**: a stdio server that starts
+  but never answers `initialize` blocked SIGHUP reload forever under the
+  reload mutexes — wedging all future reloads and leaving the already-published
+  new tool gates running against the old catalog indefinitely.
+- **`export KEY=…` lines load from the env file** for parity with
+  `internal/creds/envfile.go`, whose docs promise the two parsers agree.
+- **Spawn-time `${ VAR }` interpolation trims the name** like the load-time
+  pass, so a whitespace-padded reference resolves instead of going blank.
+- **Editing a task's `carry_context` toggle now persists**: the column was
+  missing from `UpdateTaskTx`'s SET list (the `PUT /tasks/{id}` edit path), so
+  the toggle was acknowledged with 200 and silently reverted on the next read —
+  every later occurrence of the recurring task ran with the stale setting.
+- **ask-pause / progress notification emails now carry the message**: the
+  `Event.Message` field (for a paused task, the agent's question — the reason
+  the notification exists) was documented as "rendered into the email body"
+  but never referenced by the text or HTML builders; operators got a
+  status-only email with no question. Rendered escaped in both parts.
+- **Notification task names clamp at a rune boundary**: the 60-char display
+  label was a byte slice, so a multi-byte prompt could put invalid UTF-8 into
+  email subjects and the webhook JSON payload (`truncate.Clamp`, the #595
+  class).
+- **Context-too-large recovery no longer re-executes committed tool side
+  effects.** The forced-compact-and-re-drive (and its fallback-model swap) now
+  ride the same ADR-0035 side-effect gate as the blip/retry-exhausted paths:
+  once a tool ran in the failing attempt — the typical case, since a large
+  tool result is what balloons the next request — the round surfaces
+  `ErrCommittedSideEffects` so the whole-task RetryPolicy (the operator's
+  explicit opt-in) owns the re-run instead of the loop silently repeating a
+  send-email-class call in-run. The no-tool-events compaction retry also rolls
+  back the failed attempt's partial output first, so the re-driven round
+  replaces — not duplicates — it in the transcript.
+- **The interactive leaked-tool-call finalize retry now streams under the
+  run's ceilings**: the budget guard (pre-completion cost/token check) and the
+  `CHAT_MAX_ITERATIONS` step cap are threaded into the retry via
+  `FinalizeInput.GuardStep`/`StopWhen` — previously it could keep buying paid
+  completions unboundedly, with tool calls only soft-blocked by policy.
+- **`edit_file`/`write_file` no longer abort when the destination's ownership
+  can't be preserved**: the sandbox executor's `fchown` on overwrite is now
+  best-effort — an unprivileged executor overwriting a foreign-owned (e.g.
+  host-seeded) workspace file keeps the executor-owned replacement instead of
+  failing the whole edit with "cannot preserve destination ownership".
+- **`view_file` with `offset` exactly at the file size returns a clean empty
+  read** instead of an "offset is beyond file size" error — `offset += limit`
+  paging that lands on the size no longer trips a spurious failure.
+
 ### Added
 
+- **Input queue + mid-turn steering** (#785, `docs/INPUT-QUEUE.md`): a
+  submission during an active turn now QUEUES durably (stable ids, idempotent
+  `input_id` replay, FIFO drain as separate turns) instead of implicitly
+  cancelling the running turn — explicit Stop is the only cancellation, and
+  it now covers queued follow-ups too (`scope=all` default). Optional
+  `mode=steer` injects the message at the next safe step boundary inside the
+  same governed loop: budget-accounted, cache-friendly append, durable
+  queued→injected flip before model visibility, persisted exactly once via
+  the #798 terminal commit, with a queued-turn fallback when the turn ends
+  first. Queue chips under the composer (remove / send-now) ride the new
+  `queue.updated` SSE snapshots. Migration 042.
+
+- **Durable turn journal + commit-gated terminal success** (#798,
+  `docs/TURN-JOURNAL.md`, ADR-0039): interactive turns now preserve the causal
+  chain user input → tool intent → governed tool outcome → conclusion
+  durably, BEFORE terminal success is advertised. The user message commits to
+  canonical history before the first provider call; every tool route journals
+  its call intent before dispatch (fail closed — no side effect without a
+  durable record) and its exact governed model-visible result before the next
+  provider step (the 4 KB SSE preview is never the persistence limit);
+  `turn.completed`/`turn.cancelled` gate on the transactional history commit,
+  so a failed write is a visible turn error instead of a completed answer
+  that disappears on reload. Startup recovery projects crashed turns into one
+  explicit interrupted turn with provider-valid call/result pairing —
+  unmatched calls get a synthesized unknown-outcome error marked for
+  reconciliation, so the next model verifies instead of silently repeating a
+  possibly side-effectful call. Migration 041.
+
+- **Governed lifecycle hooks** (#788, `docs/HOOKS.md`, ADR-0038): a client
+  bundle can declare `hooks:` — commands run at fixed run lifecycle points
+  (`user_prompt_submit`, `pre_tool_use`, `post_tool_use`, `turn_end`) **inside
+  the per-turn sandbox**. A hook receives a bounded, redacted, credential-free
+  JSON payload on stdin and prints a JSON decision (continue / block-with-reason
+  / bounded additional-context). Hooks can only observe or NARROW — fleet's
+  existing policy/approval/audit gates evaluate after them on the same
+  unmodified input, so a hook can never widen authority, add tools, or grant
+  network/budget/approval. Enforcing hooks fail closed; advisory hooks fail
+  observable; every invocation emits a `hook.decision` audit event. The generic
+  bundle ships none (zero-overhead default). Both interactive and scheduled runs
+  invoke hooks through the one governed core.
+
+- **Save a chat to the prompt library**: a per-conversation kebab action
+  ("Save to prompt library…") distills a conversation into a reusable
+  prompt-library draft. `POST /conversations/{id}/suggest-prompt` (chat server)
+  renders the user/assistant transcript and calls the host-side synthesizer
+  `SuggestLibraryPrompt` (`FLEET_LIBRARY_PROMPT_MODEL`, defaulting to the
+  metadata/title model) to write a clean, self-contained prompt plus a short
+  name and description. Nothing is persisted server-side: the client opens the
+  draft in an editable review dialog, and saving goes through the orchestrator's
+  existing `POST /prompts` (private by default, optionally workspace-shared), so
+  library permissions apply unchanged.
+- **Safer `edit_file`** (#787, `docs/FILE-EDIT-SAFETY.md`): `old_text` must now
+  match exactly one location unless `replace_all` is set (an ambiguous match is
+  rejected with the count instead of silently editing the first occurrence);
+  no-op edits are rejected; an optional `expected_hash` (SHA-256 from
+  `view_file`) fails the edit safely if the file changed since it was read; and
+  a successful edit returns a bounded unified diff plus old/new content hashes.
+  `view_file` and `write_file` now report the content SHA-256 so the model can
+  round-trip it as `expected_hash`.
 - **Admin server status**: Settings now includes an admin-only **Server** tab
   with a lightweight, auto-refreshing view of CPU/load, memory, root-disk,
   uptime, and aggregate non-loopback network traffic. The read-only endpoint is
@@ -52,6 +205,52 @@ prior versions are listed because none have shipped.
   `isError` result.
 
 ### Changed
+
+- **File tools (`view_file`/`write_file`/`edit_file`) now execute inside the
+  sandbox** (#784, ADR-0036). They previously ran `os.ReadFile`/`os.WriteFile`
+  directly in the Fleet host process, contradicting the ADR-0002 "every tool
+  call runs in the sandbox" invariant — a configured Kata/libkrun runtime,
+  seccomp, dropped caps, cgroups, and disk/PID limits did not apply to them.
+  The three tools now dispatch read/write/edit through a new sandbox FileOp
+  seam (`Sandbox.RunFileOp`) that runs a one-shot `python3` in the same
+  per-turn container as bash/run_python, inheriting the full isolation posture;
+  the executor also confines each call to a narrow conversation/worktree root
+  with a boot-bound root identity and dirfd-relative no-follow traversal,
+  defeating both interior symlink swaps and whole conversation-directory
+  exchanges against the shared workspace mount. Atomic replacements preserve
+  existing modes and fsync the parent; cancellation synchronously kills and
+  retires the container so a helper cannot land a late rename. Host-side path
+  validation stays as defense-in-depth input, and there is no host-execution
+  fallback (the tools fail closed without a sandbox). Scheduled non-worktree
+  turns now resolve relative tools against that same workspace root. The
+  existing host-temp truncation spill remains an honestly documented temporary
+  exception pending #793's governed artifact lifecycle. ADR-0036 also documents
+  the
+  remaining host-side control-plane/broker tools (network fetch, brokered
+  credentials, governed datastore writes) as explicit, threat-modelled
+  exceptions rather than a silent contradiction of the invariant.
+
+- **Bounded model-visible tool output**
+  ([docs/TOOL-OUTPUT-BOUNDARY.md](docs/TOOL-OUTPUT-BOUNDARY.md)): every native,
+  loader, direct/deferred MCP, and media result now crosses a
+  non-disableable 128 KiB hard boundary with valid structured envelopes,
+  binary suppression, and dedicated metrics. Governed full-output recovery now
+  writes only through the confined sandbox FileOp seam into 16 immutable,
+  8-MiB workspace slots for private conversations and isolated worktree tasks;
+  shared-root non-worktree tasks remain cap-only because they do not own the
+  root. The old host `/tmp` bash/Python/web-fetch spills and 6 MiB
+  overflow-file pass are gone. Fantasy's inner PrepareStep now budgets
+  accumulated tool results and call inputs against the active model window
+  while reserving the system prompt, tool schemas, completion, and provider
+  framing.
+
+- **Removed the stale Projects button from the collapsed sidebar**: the ≥sm
+  icon strip carried a standalone briefcase button that opened the old
+  Projects modal — leftover from before the rail's own Projects section
+  (#509) became the entry point. Dropped the button and its `onOpenProjects`
+  wiring; creating, opening, and pinning projects from the expanded rail is
+  unchanged.
+
 
 - **Fleet application icons**: browser favicons, iOS/Android install icons, and
   the maskable launcher icon now derive from one checked-in Fleet mark. App
@@ -167,8 +366,108 @@ prior versions are listed because none have shipped.
   the task (user) portion only — the cached system prefix stays byte-stable.
   See [ADR-0034](docs/adr/0034-audit-gate-commitment-binding.md).
 
+### Changed
+
+- **Ops Center loads without the markdown pipeline**: the /orchestrator
+  bundle statically shipped react-markdown (~43 KiB transfer) for the task-log
+  modal only. `LogMarkdown` (renderer + workspace img/a rewrites, moved
+  verbatim from LogViewer) is now lazy-loaded when a log modal actually opens,
+  with a raw-text fallback until the chunk arrives — the same split #757 gave
+  chat. Note: the ~13 KiB of legacy polyfills Lighthouse flags in the main
+  chunk is Next's own baseline polyfill module, injected regardless of
+  browserslist targets — verified by building with modern targets — so there
+  is no supported way to drop it and no config was added for it.
+- **Faster first paint on mobile (Lighthouse)**: the initial /chat bundle no
+  longer ships the syntax highlighter (~75 KiB transfer; now lazy-loaded on
+  first tool-chip expand with a plain `<pre>` fallback) or the ReactMarkdown
+  pipeline (~43 KiB; lazy-loaded when a transcript message renders, showing
+  raw text until the chunk arrives), and cold boot skips the serial
+  `/api/session` round-trip by reusing the session the /chat server component
+  already resolved. Together: ~40% fewer JS bytes and one less blocking RTT
+  before the largest contentful paint.
+
 ### Fixed
 
+- **A panic in any tool no longer crashes the whole fleet process**
+  ([ADR-0037](docs/adr/0037-agent-tool-panic-containment.md), #795).
+  fantasy runs streamed tool calls in unsupervised goroutines with no
+  `recover`, so a panic in a tool (native/loader/MCP), a policy gate,
+  an output guardrail, or an Observer callback would take the entire
+  single-host process down — beyond the reach of the runner/httpapi
+  goroutine-local recovers. Every tool fleet registers is now wrapped in an
+  outermost panic-containment layer: a panic becomes exactly one in-band tool
+  error result (paired to the call so the run continues), is recorded to
+  PanicCounts/Sentry/`panic_events` with tool + boundary attribution, and is
+  surfaced to the model as a stable incident id with a "possibly executed"
+  warning. Raw recovered values and stacks are discarded before telemetry;
+  only an opaque incident and value-free class are retained. Before-call,
+  execution, and output panics receive exactly one failed logical-tool policy record, including
+  deferred MCP. Observer panics are recorded and disabled, then surface as an
+  ordinary run error only after Fantasy's tool goroutines settle.
+  Tool-supplied Go errors are now flattened under the same boundary, screened
+  and bounded before Fantasy sees them, so credential-bearing or panicking
+  `Error()` methods cannot leak or break transcript pairing.
+  The unused arbitrary `PreGatedTools` bypass was removed because a black-box
+  tool that owned policy accounting internally made exactly-once recovery
+  impossible to prove. Fleet now owns policy accounting for every externally
+  supplied tool route.
+
+- **Cancelled or timed-out bash no longer keeps running inside the sandbox**
+  (#796). Cancellation used to kill only the host-side `podman exec` client;
+  the in-container process tree survived — durable in persistent-REPL mode,
+  where the next turn could share the container with a stopped turn's
+  stragglers still mutating files or completing external side effects. On
+  cancel/timeout the container is now SIGKILLed synchronously — tearing down
+  its PID namespace kills every descendant, including a `setsid` daemon or
+  backgrounded grandchild that escaped the process group — and the sandbox is
+  poisoned so the persistent pool retires it and the next turn gets a fresh
+  container. The tool result distinguishes timeout from cancellation and says
+  when the sandbox was reset.
+- **Declared structured output now fails closed.** A scheduled task with
+  `output_schema` can reach success only when schema-valid `output_json` is
+  committed in the same lease-checked transaction. The active OpenRouter model
+  uses strict native schema mode; other providers use a forced terminal schema
+  tool with two correction attempts and no ordinary tools. Format and
+  persistence failures have distinct retry/DLQ classes, and success
+  notifications/recurrence happen only after the output is durable.
+- **Enforcement rounds no longer restart the task from scratch.** When the
+  policy blocked a finish (audit not confirmed, critical actions pending),
+  the next round's input carried only the original prompt plus the nudge —
+  the blocked round's assistant/tool transcript was dropped, so the model
+  re-ran its entire analysis on every nudge (observed as a 31-minute
+  scheduled run doing its full pipeline twice). The round transcript is now
+  carried forward (reasoning stripped, tool call/result pairing preserved)
+  so a nudged round continues the work instead of repeating it.
+- **Orchestrator (scheduled) runs no longer offer the interactive
+  staging-card tools** (`preview_email`, `schedule_task`,
+  `suggest_advanced_model`, `propose_memory`). Only the interactive chat
+  orchestration guard gives them behavior; headless, three of them are
+  mis-wiring tripwires whose non-nil error is fatal to the run — a scheduled
+  agent that finished its report and called `preview_email` to present it
+  dead-lettered the entire task. The docs always said these were
+  interactive-only; the scheduled roster now actually excludes them.
+- **`publish_artifact` works for non-worktree scheduled tasks.** It resolved
+  paths only via the worktree-isolation working dir, so every task without
+  worktree isolation got "no workspace is configured for this run" on every
+  publish attempt. The tool now falls back to the run's effective workspace
+  root (the same directory the workspace file browser serves); worktree runs
+  keep their narrower scoping.
+- **A transient mid-stream provider failure no longer dead-letters a whole
+  run once any text has streamed** (ADR-0035). The ADR-0033 commitment guard
+  suppressed the in-place stream-blip retry and the fallback chain after any
+  semantic event, so a single 504 while the model composed its answer killed
+  the task as `non_retryable`. Recovery is now gated on tool side effects:
+  a text/reasoning-only attempt rolls its partial output back and re-drives
+  (in-place retry, then fallback); an attempt that already executed a tool
+  still suppresses in-run recovery but surfaces the transient
+  `ErrCommittedSideEffects` sentinel so the task's RetryPolicy — not a
+  deterministic-failure dead-letter — decides the re-run.
+- Deferred MCP tools now advertise `arguments` as a JSON object instead of a
+  byte array, preventing models from repeatedly sending array-wrapped arguments
+  that every nested tool rejects. Live scheduled-run activity now keeps the
+  task plan in a compact expandable progress panel, groups repeated failures,
+  and persists structured tool calls/results so terminal logs retain the real
+  cause of an incomplete run.
 - **`fleet update` no longer breaks sandbox starts after a bundle pull**: the
   updater runs as root, so files a client-bundle `git pull` created or rewrote
   came out root-owned — and the sandbox bind-mounts bundle dirs with an SELinux

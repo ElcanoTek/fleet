@@ -31,6 +31,7 @@ go.work.sum
 # Operator lifecycle runtime artifacts (scripts/bootstrap.sh + scripts/update.sh)
 .fleet-state/
 .fleet-client/
+.fleet/tool-output/
 
 # cutlass one-shot run workspaces + logs (scripts/run_workflow_live.sh)
 .fleet-runs/

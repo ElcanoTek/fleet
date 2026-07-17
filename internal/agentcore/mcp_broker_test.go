@@ -83,6 +83,24 @@ func TestMCPTool_RoutesCallThroughBroker(t *testing.T) {
 	}
 }
 
+func TestMCPTool_BoundsGovernedTransportErrorBeforePolicyRecord(t *testing.T) {
+	t.Cleanup(func() { SetMaxToolOutputBytes(-1) })
+	SetMaxToolOutputBytes(2048)
+	broker := &recordingBroker{err: errors.New(strings.Repeat("upstream transport body ", 20_000))}
+	policy := &gatePolicy{}
+	tool := newTestMCPTool(broker, policy)
+	resp, err := tool.Run(context.Background(), fantasy.ToolCall{ID: "transport-error", Input: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !policy.recorded || policy.recordOK || len(policy.recordText) > 2048 {
+		t.Fatalf("policy saw unbounded transport error: recorded=%t ok=%t bytes=%d", policy.recorded, policy.recordOK, len(policy.recordText))
+	}
+	if resp.Content != policy.recordText || len(resp.Content) > 2048 {
+		t.Fatalf("policy/model bytes drift: policy=%d model=%d", len(policy.recordText), len(resp.Content))
+	}
+}
+
 // TestMCPTool_IsErrorMapsToErrorResponse: a tool-level isError from the broker
 // (MCP 2025-06-18: a successful response with isError=true) becomes a fantasy
 // error response carrying the broker's text — not a Go error.

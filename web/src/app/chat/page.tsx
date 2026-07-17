@@ -25,5 +25,7 @@ export default async function Home() {
       redirect("/no-access");
     }
   }
-  return <PageClient />;
+  // Hand the already-resolved session email to the client so cold boot skips
+  // its serial /api/session round-trip (see ChatExperience.initialUserEmail).
+  return <PageClient initialEmail={session?.email ?? null} />;
 }

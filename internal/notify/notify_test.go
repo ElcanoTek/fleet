@@ -435,3 +435,25 @@ func TestRenderEmail(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderEmailMessage pins the ask-pause (#510) / progress Message into both
+// body parts: for a paused task the Message IS the agent's question — an email
+// without it tells the operator nothing actionable. HTML-escaped like every
+// other prompt-derived value; absent events render no Message line.
+func TestRenderEmailMessage(t *testing.T) {
+	ev := sampleEvent()
+	ev.Status = StatusProgress
+	ev.Message = `Task is paused and needs your answer: deploy <now> or wait?`
+	msg := string(renderEmail("fleet@example.com", []string{"a@example.com"}, ev))
+	for _, want := range []string{
+		"Message: Task is paused and needs your answer: deploy <now> or wait?",
+		"<b>Message:</b> Task is paused and needs your answer: deploy &lt;now&gt; or wait?",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rendered email missing %q\n%s", want, msg)
+		}
+	}
+	if plain := string(renderEmail("fleet@example.com", []string{"a@example.com"}, sampleEvent())); strings.Contains(plain, "Message:") {
+		t.Error("event without Message must not render a Message line")
+	}
+}

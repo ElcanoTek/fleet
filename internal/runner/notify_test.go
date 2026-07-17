@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -137,5 +138,19 @@ func TestNotifyTerminal_AudienceEmptyWithoutOwner(t *testing.T) {
 	owner := uuid.New()
 	if got := p.ownerEmail(context.Background(), &models.Task{ID: uuid.New(), CreatedBy: &owner}); got != "" {
 		t.Errorf("ownerEmail without a store = %q, want empty", got)
+	}
+}
+
+// notifyTaskName must clamp at a rune boundary: a byte slice can cut a
+// multi-byte rune in half, sending invalid UTF-8 into email subjects and the
+// webhook JSON template (the same class truncate.Clamp fixed in #595).
+func TestNotifyTaskNameRuneSafe(t *testing.T) {
+	// 1 ASCII byte + 3-byte runes: byte 60 lands mid-rune (59 % 3 != 0).
+	name := notifyTaskName("a" + strings.Repeat("中", 40))
+	if !utf8.ValidString(name) {
+		t.Errorf("notifyTaskName produced invalid UTF-8: %q", name)
+	}
+	if short := notifyTaskName("short prompt"); short != "short prompt" {
+		t.Errorf("short prompt altered: %q", short)
 	}
 }

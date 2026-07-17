@@ -51,6 +51,15 @@ var (
 	// retry and there was no fallback to swap to — also transient.
 	ErrStreamBlipPersisted = errors.New("stream blip persisted")
 	ErrFirstChunkTimeout   = errors.New("provider first-chunk timeout")
+	// ErrCommittedSideEffects: the provider failed mid-round after the attempt
+	// had already executed at least one tool. In-run recovery (in-place retry or
+	// fallback swap) is deliberately suppressed — a re-driven round restarts
+	// from its input messages, so the model could re-issue the executed tool
+	// calls and repeat their side effects (ADR-0035). The provider failure
+	// itself is still transient infra, so the scheduler's whole-task RetryPolicy
+	// (an explicit operator opt-in to re-running a task's side effects) decides
+	// whether the task re-runs; it must NOT be classed as deterministic.
+	ErrCommittedSideEffects = errors.New("provider failed after tool execution began; failover suppressed")
 )
 
 const (
@@ -314,13 +323,13 @@ func parseSSEStatusCode(raw json.RawMessage) int {
 }
 
 // recordContextFromError writes a provider-reported window size into the
-// observed-context cache (ground truth for the active slug).
-func recordContextFromError(slug string, providerErr *fantasy.ProviderError) {
-	if providerErr == nil || slug == "" {
+// observed-context cache (ground truth for this exact provider+slug pair).
+func recordContextFromError(model fantasy.LanguageModel, providerErr *fantasy.ProviderError) {
+	if providerErr == nil || model == nil || strings.TrimSpace(model.Model()) == "" {
 		return
 	}
 	if providerErr.ContextMaxTokens > 0 {
-		recordContextMax(slug, providerErr.ContextMaxTokens)
+		recordContextMaxForModel(model, providerErr.ContextMaxTokens)
 	}
 }
 
@@ -467,7 +476,7 @@ func (e *engine) streamRoundWithResilience(
 				"Split this task into smaller pieces, move heavy context into a file the agent can "+
 				"view_file on demand, or switch to a model with a larger context window",
 			ErrContextBudgetExhausted, e.consecutiveCompactions, activeModel.Model(),
-			contextWindowForModel(activeModel.Model()),
+			contextWindowForActiveModel(activeModel),
 		)
 	}
 
@@ -488,10 +497,7 @@ func (e *engine) streamRoundWithResilience(
 		recoveryLimit += len(e.fallbackModels)
 	}
 	for attempt := 0; attempt < recoveryLimit; attempt++ {
-		semanticBefore := 0
-		if sink != nil {
-			semanticBefore = sink.semanticEventCount()
-		}
+		attemptMark := sink.mark()
 		rs := newRoundState(e, orch, maxTokens)
 		rs.sink = sink
 		result, err := rs.stream(ctx, currentAgent, activeModel, messages)
@@ -532,12 +538,34 @@ func (e *engine) streamRoundWithResilience(
 		lastErr = err
 
 		class, providerErr := classifyStreamError(err)
-		// Never splice providers (or repeat a tool side effect) after any semantic
-		// output from this attempt became observable. Provider failover is safe only
-		// before the first text/reasoning/tool event.
-		if sink != nil && sink.semanticEventCount() > semanticBefore &&
-			(class == streamErrorRetryExhausted || class == streamErrorStreamBlip) {
-			return streamRoundOutcome{}, fmt.Errorf("provider failed after streaming began; failover suppressed: %w", err)
+		// Never repeat a tool side effect: once THIS attempt has executed a tool
+		// (a tool_call/tool_result became observable), neither the in-place retry
+		// nor a fallback swap can safely re-drive the round — the re-driven round
+		// restarts from its input messages, so the model could re-issue the
+		// executed calls and repeat their side effects. Text/reasoning-only
+		// output is regenerable: rollbackAttempt below discards the partial and
+		// the attempt is re-driven from scratch, so nothing is spliced across
+		// providers and nothing re-executes (ADR-0035; the previous any-semantic-
+		// event gate dead-lettered every long round whose provider hiccuped
+		// mid-answer, with the fallback model configured but never consulted).
+		// Context-too-large is gated too: it typically fires MID-round, right
+		// after a large tool result balloons the next request — exactly the
+		// committed-side-effect case. The compact-and-re-drive below restarts
+		// the round from its input messages, so the model could re-issue the
+		// executed call. (ADR-0035's "no partial exists to roll back" holds
+		// only for rounds with no tool events.)
+		if sink.toolEventCount() > attemptMark.toolEvents &&
+			(class == streamErrorRetryExhausted || class == streamErrorStreamBlip ||
+				class == streamErrorContextTooLarge) {
+			return streamRoundOutcome{}, fmt.Errorf("%w: %w", ErrCommittedSideEffects, err)
+		}
+		// Safe to re-drive (no tool side effects past the mark): drop the failed
+		// attempt's partial text/reasoning accumulation and its trailing
+		// assistant message so the regeneration replaces — not duplicates — the
+		// abandoned partial output.
+		rollbackAttempt := func() {
+			sink.rollbackTo(attemptMark)
+			messages = dropTrailingAssistant(messages)
 		}
 		// Feed genuine provider failures into the circuit breaker (#267) so error
 		// frequency accumulates across runs. Cancellation, the cost ceiling, and
@@ -556,11 +584,16 @@ func (e *engine) streamRoundWithResilience(
 			return streamRoundOutcome{}, fmt.Errorf("context cancelled: %w", err)
 		case streamErrorContextTooLarge:
 			if activeModel != nil {
-				recordContextFromError(activeModel.Model(), providerErr)
+				recordContextFromError(activeModel, providerErr)
 			}
 			if !forceCompactedThisRound {
 				log.Printf("⚠️  Provider rejected prompt as too large (status=%d); forcing compaction and retrying",
 					providerErrStatus(providerErr))
+				// Discard the failed attempt's partial output BEFORE compacting,
+				// so the re-driven round replaces — not duplicates — it in the
+				// sink and the message history (same contract as the blip/
+				// exhausted re-drives below).
+				rollbackAttempt()
 				messages = e.forceCompactMessageHistory(ctx, messages)
 				forceCompactedThisRound = true
 				continue
@@ -571,7 +604,7 @@ func (e *engine) streamRoundWithResilience(
 				activeModel = e.takeFallback()
 				currentAgent = buildAgent(activeModel)
 				swappedToFallback = true
-				messages = dropTrailingAssistant(messages)
+				rollbackAttempt()
 				continue
 			}
 			return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (context still too large after forced compaction): %w", err)
@@ -584,7 +617,7 @@ func (e *engine) streamRoundWithResilience(
 			activeModel = e.takeFallback()
 			currentAgent = buildAgent(activeModel)
 			swappedToFallback = true
-			messages = dropTrailingAssistant(messages)
+			rollbackAttempt()
 			continue
 		case streamErrorStreamBlip:
 			if !streamBlipRetryUsed {
@@ -597,7 +630,7 @@ func (e *engine) streamRoundWithResilience(
 				case <-ctx.Done():
 					return streamRoundOutcome{}, fmt.Errorf("context cancelled during stream-blip retry: %w", ctx.Err())
 				}
-				messages = dropTrailingAssistant(messages)
+				rollbackAttempt()
 				continue
 			}
 			if !canSwapFallback(e, activeModel, swappedToFallback) {
@@ -608,7 +641,7 @@ func (e *engine) streamRoundWithResilience(
 			activeModel = e.takeFallback()
 			currentAgent = buildAgent(activeModel)
 			swappedToFallback = true
-			messages = dropTrailingAssistant(messages)
+			rollbackAttempt()
 			continue
 		case streamErrorFatal:
 			return streamRoundOutcome{}, fmt.Errorf("fantasy agent error: %w", err)

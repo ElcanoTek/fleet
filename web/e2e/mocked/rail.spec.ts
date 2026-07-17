@@ -210,6 +210,13 @@ test("the rail collapses to an icon strip, persists, and repositions the account
   // The account menu still opens — avatar-only anchor; the menu takes the
   // design's 15rem base width, growing to its content (the Theme segmented
   // control) so nothing clips, and lands fully on-screen.
+  //
+  // Local `next dev` only: the Next.js dev-overlay indicator (<nextjs-portal>,
+  // the floating "N" chip) sits bottom-left — exactly over the collapsed
+  // rail's account button — and intercepts the click, timing the test out.
+  // CI runs `next start` (no overlay), so strip it rather than force-click:
+  // force would also mask a REAL overlap regression.
+  await page.evaluate(() => document.querySelector("nextjs-portal")?.remove());
   await page.getByTestId("account-menu-button").click();
   const menu = page.getByRole("menu", { name: "Account" });
   await expect(menu).toBeVisible();

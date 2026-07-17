@@ -489,6 +489,7 @@ function ConversationKebab({
   onRename,
   onDownload,
   onPromote,
+  onSavePrompt,
   onSetLabels,
   onSetProject,
   onShare,
@@ -506,6 +507,7 @@ function ConversationKebab({
   onRename: () => void;
   onDownload: () => void;
   onPromote: () => void;
+  onSavePrompt: () => void;
   onSetLabels: (labels: string[]) => void;
   onSetProject: (projectID: string | null) => void;
   onShare: () => void;
@@ -665,6 +667,15 @@ function ConversationKebab({
           }}
         >
           Make recurring task…
+        </MenuItem>
+        <MenuItem
+          icon={<Icon name="book" className="size-4" />}
+          onClick={() => {
+            onSavePrompt();
+            close();
+          }}
+        >
+          Save to prompt library…
         </MenuItem>
         {isShared ? (
           <>
@@ -975,6 +986,7 @@ export function ConversationSidebar({
   renameConversation,
   downloadConversation,
   promoteConversation,
+  savePromptFromConversation,
   setPendingDeleteConversation,
   setConversationLabels,
   shareConversation,
@@ -994,7 +1006,6 @@ export function ConversationSidebar({
   onBulkPin,
   onBulkAddLabel,
   searchShortcut,
-  onOpenProjects,
   onCreateProject,
   onOpenProjectHome,
   onPinProject,
@@ -1048,6 +1059,7 @@ export function ConversationSidebar({
   ) => Promise<boolean>;
   downloadConversation: (conversation: ConversationSummary) => Promise<void>;
   promoteConversation: (conversation: ConversationSummary) => Promise<void>;
+  savePromptFromConversation: (conversation: ConversationSummary) => void;
   setPendingDeleteConversation: Dispatch<
     SetStateAction<PendingDeleteConversation | null>
   >;
@@ -1076,7 +1088,6 @@ export function ConversationSidebar({
   searchShortcut: string;
   // Opens the Projects modal (#509). Lives in the rail (like Claude/ChatGPT)
   // rather than the page header; ChatExperience owns the modal state.
-  onOpenProjects: () => void;
   // Opens the modal straight into the new-project form (the section
   // header's + button).
   onCreateProject: () => void;
@@ -1261,6 +1272,7 @@ export function ConversationSidebar({
       onRename={() => setEditingId(conversation.id)}
       onDownload={() => void downloadConversation(conversation)}
       onPromote={() => void promoteConversation(conversation)}
+      onSavePrompt={() => savePromptFromConversation(conversation)}
       onSetLabels={(labels) => setConversationLabels(conversation.id, labels)}
       onSetProject={(projectID) =>
         onMoveToProject(conversation.id, projectID ?? "")
@@ -1337,7 +1349,7 @@ export function ConversationSidebar({
           ariaLabel="Create project"
           icon="plus"
           iconClassName="size-4"
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           onClick={onCreateProject}
         />
       </div>
@@ -1674,7 +1686,7 @@ export function ConversationSidebar({
           ariaLabel="New chat"
           icon="plus"
           iconClassName="size-4"
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
           onClick={() =>
             clearConversation(
               serverConfig.lockdownOnly ? { lockdown: true } : undefined,
@@ -1692,7 +1704,7 @@ export function ConversationSidebar({
         ].join(" ")}
       >
         {/* The full-size New-chat row is gone (the Chats heading's + owns it);
-            the ≥sm collapsed strip still needs an icon, like Projects below. */}
+            the ≥sm collapsed strip still needs an icon. */}
         {railCollapsed ? (
           <button
             type="button"
@@ -1710,27 +1722,6 @@ export function ConversationSidebar({
               name={serverConfig.lockdownOnly ? "lock" : "plus"}
               className="size-4"
             />
-          </button>
-        ) : null}
-
-        {/* Projects (#509) — in the expanded rail (and the <sm drawer) the
-          Projects SECTION in the list below is the entry point, so this
-          standalone row only exists for the collapsed (≥sm) icon strip,
-          where the list is hidden: an icon-only square with a data-tip,
-          matching the New-chat row above. */}
-        {railCollapsed ? (
-          <button
-            type="button"
-            className="mt-1.5 hidden w-full items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:flex sm:size-10 sm:justify-center sm:p-0"
-            title="Projects"
-            aria-label="Projects"
-            data-tip="Projects"
-            onClick={() => {
-              setSidebarOpen(false);
-              onOpenProjects();
-            }}
-          >
-            <Icon name="briefcase" className="size-4" />
           </button>
         ) : null}
 

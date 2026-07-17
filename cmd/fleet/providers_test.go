@@ -26,7 +26,7 @@ func TestToAgentcoreProviders(t *testing.T) {
 		t.Setenv("TEST_ANTHROPIC_KEY", "sk-ant-secret")
 		bundle := &clientconfig.Bundle{Providers: []clientconfig.ProviderDef{
 			{Name: "  anthropic-direct  ", Type: " anthropic ", APIKeyEnv: "TEST_ANTHROPIC_KEY", Models: []string{"claude-opus-4-8"}},
-			{Name: "local", Type: "ollama", BaseURL: " http://localhost:11434/v1 "}, // no key env
+			{Name: "local", Type: "ollama", BaseURL: " http://localhost:11434/v1 ", ContextWindowTokens: 32_768}, // no key env
 		}}
 		got := toAgentcoreProviders(bundle)
 		if len(got) != 2 {
@@ -48,6 +48,9 @@ func TestToAgentcoreProviders(t *testing.T) {
 		}
 		if got[1].BaseURL != "http://localhost:11434/v1" {
 			t.Errorf("provider[1] BaseURL = %q, want trimmed", got[1].BaseURL)
+		}
+		if got[1].ContextWindowTokens != 32_768 {
+			t.Errorf("provider[1] ContextWindowTokens = %d, want 32768", got[1].ContextWindowTokens)
 		}
 	})
 	t.Run("unset api_key_env yields empty key", func(t *testing.T) {

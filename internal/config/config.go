@@ -113,6 +113,28 @@ var allowedEnvVars = map[string]bool{
 
 	// ── database (chat) ──
 	"DATABASE_URL": true,
+	// Explicit per-store DSNs (read by cmd/fleet main; deploy/fleet.service
+	// documents them as env-file keys). Missing from the allowlist they were
+	// silently dropped when supplied via FLEET_ENV_FILE — boot then failed
+	// with an empty-DSN error despite a correct env file.
+	"FLEET_CHAT_DATABASE_URL":  true,
+	"FLEET_SCHED_DATABASE_URL": true,
+	// Other keys boot reads via os.Getenv that predated this allowlist (an
+	// env-file value was silently ignored; only the process env worked).
+	"ADMIN_API_KEY":                        true,
+	"CUTLASS_LOG_FILE":                     true,
+	"FLEET_BACKUP_DIR":                     true,
+	"FLEET_BACKUP_RETENTION_DAYS":          true,
+	"FLEET_DEFAULT_TIMEZONE":               true,
+	"FLEET_TIMEZONE":                       true,
+	"FLEET_ORCHESTRATOR_ADDR":              true,
+	"FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS":  true,
+	"FLEET_OTEL_ENDPOINT":                  true,
+	"FLEET_OTEL_SAMPLE_RATIO":              true,
+	"FLEET_SERVICE_NAME":                   true,
+	"FLEET_SANDBOX_STATS_INTERVAL_SECONDS": true,
+	"FLEET_TOOL_DISCLOSURE_THRESHOLD":      true,
+	"FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES":   true,
 	// DB connection-pool tuning (#276), per pool.
 	"FLEET_CHAT_DB_MAX_CONNS":           true,
 	"FLEET_CHAT_DB_MIN_CONNS":           true,
@@ -631,6 +653,13 @@ type Config struct {
 	// defaulting to MetadataModel (then TitleModel) so deployments need zero new
 	// config; point it at a larger model for richer prompt synthesis.
 	RecurringTaskModel string
+	// LibraryPromptModel is the model the "save a chat to the prompt library"
+	// synthesizer uses to distill a conversation transcript into a clean,
+	// reusable prompt-library draft (name + description + content).
+	// FLEET_LIBRARY_PROMPT_MODEL, defaulting to MetadataModel (then TitleModel)
+	// so deployments need zero new config; point it at a larger model for
+	// richer prompt synthesis.
+	LibraryPromptModel string
 	// MemoryAutoIndexEnabled gates the memory auto-indexer (#234). Default
 	// FALSE (opt-in): when off, the only memory-write paths are the manual
 	// propose_memory tool + POST /memories, exactly as before. When on, each
@@ -1160,6 +1189,7 @@ func Load(envFile string) (*Config, error) {
 		AutoTitle:              getenvFleetBool("AUTO_TITLE", true),
 		MemoryModel:            getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		RecurringTaskModel:     getenvFleetDefault("RECURRING_TASK_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
+		LibraryPromptModel:     getenvFleetDefault("LIBRARY_PROMPT_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel))),
 		MemoryAutoIndexEnabled: getenvFleetBool("MEMORY_AUTOINDEX_ENABLED", false),
 		MemoryGraphModel:       getenvFleetDefault("MEMORY_GRAPH_MODEL", getenvFleetDefault("MEMORY_MODEL", getenvFleetDefault("METADATA_MODEL", getenvFleetDefault("TITLE_MODEL", DefaultTitleModel)))),
 		MemoryGraphEnabled:     getenvFleetBool("MEMORY_GRAPH_ENABLED", false),
@@ -1599,6 +1629,9 @@ func loadEnvFile(path string) error {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		// Tolerate `export KEY=…` for parity with internal/creds/envfile.go,
+		// whose docs promise the two parsers agree byte-for-byte.
+		line = strings.TrimPrefix(line, "export ")
 		eq := strings.IndexByte(line, '=')
 		if eq <= 0 {
 			continue

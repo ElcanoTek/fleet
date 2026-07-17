@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/react";
 import { TasksTable, type TasksTableProps } from "./TasksTable";
 import type { TaskFilters } from "@/app/shared/hooks/useDashboardData";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
@@ -92,17 +92,48 @@ describe("TasksTable SLA badge (#274)", () => {
   it("renders an SLA breached badge and tags the row when sla_breached is true", () => {
     const breached: Task = { ...baseTask, expected_duration_minutes: 15, sla_breached: true, actual_duration_seconds: 1200 };
     renderWithTasks([breached]);
-    const badge = screen.getByText("SLA breached");
-    expect(badge).toBeTruthy();
+    // The badge renders in both the desktop table row and the phone card
+    // (CSS decides which is visible).
+    const badges = screen.getAllByText("SLA breached");
+    expect(badges.length).toBe(2);
     // The row carrying the breach should expose the data attribute for
     // operator-facing styling / E2E selection.
-    const tr = badge.closest("tr");
+    const tr = badges.map((b) => b.closest("tr")).find(Boolean);
     expect(tr?.dataset.slaBreached).toBe("true");
   });
 
   it("renders the actual/expected ratio when an SLA is set but not breached", () => {
     const ok: Task = { ...baseTask, expected_duration_minutes: 20, actual_duration_seconds: 600 }; // 10m / 20m
     renderWithTasks([ok]);
-    expect(screen.getByText("10m / 20m")).toBeTruthy();
+    expect(screen.getAllByText("10m / 20m").length).toBe(2);
+  });
+
+  it("describes a recurrence in plain English instead of raw cron", () => {
+    const recurring: Task = { ...baseTask, recurrence: "0 9 * * 6,0" };
+    renderWithTasks([recurring]);
+    // Rendered in both the table row and the phone card; raw cron only in title.
+    const labels = screen.getAllByText(/9:00 AM · Sat, Sun/);
+    expect(labels.length).toBe(2);
+    expect(screen.queryByText(/0 9 \* \* 6,0/)).toBeNull();
+  });
+
+  it("phone cards click through to the log viewer", () => {
+    const onOpenLogs = vi.fn();
+    render(
+      <TasksTable
+        tasks={[baseTask]}
+        total={1}
+        page={1}
+        pageSize={20}
+        filters={FILTERS}
+        onFilters={() => {}}
+        onPage={() => {}}
+        onPageSize={() => {}}
+        onOpenLogs={onOpenLogs}
+      />,
+    );
+    const cards = screen.getByTestId("task-cards");
+    fireEvent.click(within(cards).getByRole("button", { name: /view task/i }));
+    expect(onOpenLogs).toHaveBeenCalledWith(baseTask);
   });
 });

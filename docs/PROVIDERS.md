@@ -37,6 +37,7 @@ providers:
     type: ollama
     base_url: http://localhost:11434/v1
     models: ["llama3.2", "qwen2.5-coder"]
+    context_window_tokens: 32768 # match Ollama num_ctx for these models
 
 # Optional ordered availability chain. Each target must serve the same slug.
 fallback_providers: ["anthropic-direct", "openrouter"]
@@ -60,6 +61,7 @@ OPENAI_API_KEY=…
 | `api_key_env` | all but `ollama` | Env var holding the credential (value read host-side, never in the manifest). |
 | `base_url` | no | Endpoint override (e.g. the Ollama URL, or an OpenAI-compatible gateway). |
 | `models` | no | Slugs this provider serves. Empty = catch-all (matches any slug). |
+| `context_window_tokens` | no | Actual input-plus-output context limit for provider-local models. Set this to Ollama's `num_ctx` (and for custom OpenAI-compatible gateways). Omitted Ollama entries fail safe at 4096 tokens; other native entries use a conservative 32000-token fallback. OpenRouter ignores this field: observed provider limits and its public per-model catalog are more authoritative than a manifest-wide declaration. |
 
 ## How a model slug is routed
 
@@ -93,10 +95,21 @@ So in the example above: `gpt-4o` → `openai-direct`; `claude-opus-4-8` →
   runs** — only the token ceiling (`FLEET_MAX_TOTAL_TOKENS`) does. Add a pricing
   override to track native USD cost and re-enable the USD ceiling.
 - **Cross-provider failover.** `fallback_providers` retries the same model on the
-  next eligible provider after a transient failure, but only before any semantic
-  stream event is visible. Explicit `provider-name/model` slugs remain pinned and
+  next eligible provider after a transient failure — including mid-stream, as
+  long as the failing attempt has not executed a tool (its partial text/reasoning
+  is rolled back and regenerated from scratch; ADR-0035). Once a tool has run in
+  the attempt, in-run failover is suppressed and the task's RetryPolicy decides.
+  Explicit `provider-name/model` slugs remain pinned and
   never use the workspace chain. A scheduled task's explicit `fallback_model`
   remains a separate model substitution and takes precedence.
 - **No per-task `preferred_provider` field.** Per-task pinning is available via
   the explicit `provider-name/model` slug form.
 - A **misconfigured provider fails at boot**, not on first use.
+- **Declare native context limits.** Native and OpenAI-compatible model handles
+  do not advertise a reliable context window. Set `context_window_tokens` to the
+  endpoint's real limit—especially Ollama's configured `num_ctx`—so Fleet can
+  reserve tool schemas, completion headroom, and accumulated tool history before
+  each provider call. The omission fallbacks are deliberately conservative, not
+  claims about the model's actual capacity. For `type: openrouter`, Fleet always
+  prefers a context limit learned from a provider error and then OpenRouter's
+  public per-model catalog; `context_window_tokens` cannot raise that limit.

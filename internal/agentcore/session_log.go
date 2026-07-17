@@ -72,6 +72,11 @@ type LogSession struct {
 	CreatedAt            int64        `json:"created_at"`
 	UpdatedAt            int64        `json:"updated_at"`
 	Messages             []LogMessage `json:"messages"`
+	// OutputJSON is the schema-validated terminal structured output (#797),
+	// set by the scheduled driver from Result.OutputJSON. It is the exact
+	// bytes agentcore validated — the runner commits THESE (post-redaction),
+	// never a re-parse of the redacted final message text.
+	OutputJSON string `json:"output_json,omitempty"`
 }
 
 // LogToolCall represents a structured tool call in logs.
@@ -94,6 +99,8 @@ type LogMessage struct {
 	MessageType *string       `json:"message_type,omitempty"`
 	ToolCalls   []LogToolCall `json:"tool_calls,omitempty"`
 	ToolCallID  *string       `json:"tool_call_id,omitempty"`
+	ToolName    string        `json:"tool_name,omitempty"`
+	IsError     bool          `json:"is_error,omitempty"`
 }
 
 // SnapshotMessages returns a copy of the session's messages taken under lock,
@@ -108,6 +115,26 @@ func (ls *LogSession) SnapshotMessages() []LogMessage {
 	out := make([]LogMessage, len(ls.Messages))
 	copy(out, ls.Messages)
 	return out
+}
+
+// SetOutputJSON records the validated terminal structured output (#797).
+func (ls *LogSession) SetOutputJSON(v string) {
+	if ls == nil {
+		return
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	ls.OutputJSON = v
+}
+
+// SnapshotOutputJSON returns the validated terminal structured output.
+func (ls *LogSession) SnapshotOutputJSON() string {
+	if ls == nil {
+		return ""
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	return ls.OutputJSON
 }
 
 // CumulativeCacheHitRate returns the session-wide cache hit rate as a percentage.
@@ -157,5 +184,37 @@ func (ls *LogSession) AddMessageWithMetadata(role, content string, model, provid
 		ToolCallID:  toolCallID,
 	}
 	ls.Messages = append(ls.Messages, msg)
+	ls.UpdatedAt = now
+}
+
+// AddToolCall records the structured assistant invocation in the scheduled
+// session log. Keeping this separate from the text accumulator makes persisted
+// logs replayable after the short-lived live SSE buffer expires.
+func (ls *LogSession) AddToolCall(id, name, arguments string) {
+	ls.AddMessageWithMetadata(roleAssistant, "", nil, nil, nil, []LogToolCall{{
+		ID: id, Name: name, Arguments: arguments,
+	}}, nil, "")
+}
+
+// AddToolResult records the matching tool response, including its explicit
+// error bit. Error text is not reliably self-describing (the Fast.io schema
+// failure was plain "invalid arguments: ..."), so inferring status from content
+// would make failed calls look successful to stored-log replay and verification.
+func (ls *LogSession) AddToolResult(id, name, content string, isError bool) {
+	if ls == nil {
+		return
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	now := time.Now().Unix()
+	ls.Messages = append(ls.Messages, LogMessage{
+		ID:         fmt.Sprintf("msg-%d-%d", now, len(ls.Messages)),
+		Role:       roleTool,
+		Content:    content,
+		CreatedAt:  now,
+		ToolCallID: &id,
+		ToolName:   name,
+		IsError:    isError,
+	})
 	ls.UpdatedAt = now
 }

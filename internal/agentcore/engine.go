@@ -86,6 +86,17 @@ type engine struct {
 	// accumulated usage so a driver can ship it out-of-band to an external
 	// accountant. Nil for the in-process loop.
 	usageReporter func(RunUsage)
+	// steerSource is the #785 mid-turn input seam (nil = no steering); its
+	// accepted-message state lives on the engine so injections survive
+	// enforcement rounds and resilience re-drives within one run.
+	steerSource SteerSource
+	steerState  steerState
+
+	// modelContextPrefix holds exact-ish token reserves for the run's system
+	// prompt and currently registered tool schemas. roundState combines it with
+	// the active model window, completion allowance, provider headroom, and the
+	// live inner-step messages before every Fantasy provider call (#793).
+	modelContextPrefix modelContextPrefixBudget
 }
 
 // ErrContextBudgetExhausted is returned when a force-compaction has fired on
@@ -311,7 +322,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	if activeModel == nil || e.logSession == nil {
 		return out
 	}
-	window := contextWindowForModel(activeModel.Model())
+	window := contextWindowForActiveModel(activeModel)
 	if window <= 0 {
 		return out
 	}
@@ -357,6 +368,49 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 		if !out.warned {
 			sink.emit(evtContextPressure, pressure)
 			out.warned = true
+		}
+	}
+	return out
+}
+
+// carryRoundMessages flattens a finished round's step transcript — the
+// assistant text/tool-call messages and their tool results, in provider form —
+// so the enforcement loop can append it to the NEXT round's input. Reasoning
+// parts are dropped, the same rule as the interactive replay path (reasoning
+// is UI-only: several providers reject re-sent reasoning blocks and they only
+// burn prompt tokens).
+//
+// Without this carry, a blocked finish fed the next round ONLY the original
+// input plus the nudges: the model saw no record of the tool work it had just
+// completed, so it would rationally start the whole task over — observed as a
+// 31-minute scheduled run re-downloading and re-computing its entire analysis
+// after the audit-confirmation nudge (task 401172db).
+func carryRoundMessages(result *fantasy.AgentResult) []fantasy.Message {
+	if result == nil {
+		return nil
+	}
+	var out []fantasy.Message
+	for _, step := range result.Steps {
+		for _, msg := range step.Messages {
+			if msg.Role != fantasy.MessageRoleAssistant {
+				out = append(out, msg)
+				continue
+			}
+			parts := make([]fantasy.MessagePart, 0, len(msg.Content))
+			for _, p := range msg.Content {
+				if _, isReasoning := p.(fantasy.ReasoningPart); isReasoning {
+					continue
+				}
+				parts = append(parts, p)
+			}
+			// An assistant message that was ONLY reasoning has nothing the
+			// next round can use; dropping it keeps the carried sequence
+			// provider-valid.
+			if len(parts) == 0 {
+				continue
+			}
+			msg.Content = parts
+			out = append(out, msg)
 		}
 	}
 	return out
@@ -542,7 +596,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		OnToolResult: func(tr fantasy.ToolResultContent) error {
 			markFirst()
 			if sink != nil {
-				text, isErr := toolResultText(tr)
+				text, isErr := safeToolResultText(tr, sink.attribution)
 				sink.onToolResult(tr.ToolCallID, tr.ToolName, text, isErr)
 			}
 			return nil
@@ -554,14 +608,25 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			}
 			return nil
 		},
-		PrepareStep: budgetGuardedStep(r.orch, promptCachingStep(modelSlug,
-			WithCacheEnvPrefix(r.engine.envPrefix),
-			// The shared loop is where compaction summaries live (the engine's
-			// compaction paths insert them into this history), so the optional
-			// 4th breakpoint anchors the summary as a stable boundary between
-			// the cached head and the evolving tail. nil = default prefix
-			// matcher (isCompactionSummaryMessage).
-			WithCompactionSummaryBreakpoint(nil),
+		PrepareStep: budgetGuardedStep(r.orch, chainPrepareStepFunctions(
+			// Steering (#785) runs before the reducers so an injected user
+			// message is budget-accounted and cache-marked like any other
+			// history — and never observed by a provider before its durable
+			// queued->injected flip landed. nil-safe (nil when no source).
+			steeringStep(r.engine.steerSource, &r.engine.steerState, sink),
+			// Prompt-cache markers must be attached to the reduced message
+			// slice, and no provider call may observe the pre-reduction
+			// history. opts.Model makes fallback swaps use their own window.
+			modelContextBudgetStep(r.engine.modelContextPrefix, int(r.maxTokens), sink),
+			promptCachingStep(modelSlug,
+				WithCacheEnvPrefix(r.engine.envPrefix),
+				// The shared loop is where compaction summaries live (the engine's
+				// compaction paths insert them into this history), so the optional
+				// 4th breakpoint anchors the summary as a stable boundary between
+				// the cached head and the evolving tail. nil = default prefix
+				// matcher (isCompactionSummaryMessage).
+				WithCompactionSummaryBreakpoint(nil),
+			),
 		)),
 	})
 	if err != nil && firstTimedOut.Load() && ctx.Err() == nil {

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/google/uuid"
@@ -14,7 +15,14 @@ func TestTriggerCRUDAndSpawn(t *testing.T) {
 	ctx := context.Background()
 
 	// A webhook template task (inert) + a cron task to verify scoping.
-	template := models.NewTask(models.TaskCreate{Prompt: "template prompt", TriggerType: models.TriggerTypeWebhook})
+	maxRetries := 2
+	template := models.NewTask(models.TaskCreate{
+		Prompt:       "template prompt",
+		TriggerType:  models.TriggerTypeWebhook,
+		OutputSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`),
+		MaxRetries:   &maxRetries,
+		RetryPolicy:  &models.RetryPolicy{RetryOn: []string{models.FailureOutputFormat}},
+	})
 	if _, err := store.AddTask(template); err != nil {
 		t.Fatalf("add template: %v", err)
 	}
@@ -83,6 +91,12 @@ func TestTriggerCRUDAndSpawn(t *testing.T) {
 	}
 	if run.Prompt != "rendered prompt" {
 		t.Errorf("run prompt = %q", run.Prompt)
+	}
+	if len(run.OutputSchema) == 0 {
+		t.Error("trigger run lost the template's structured-output contract")
+	}
+	if run.MaxRetries != 2 || run.RetryPolicy == nil || !run.RetryPolicy.ShouldRetryClass(models.FailureOutputFormat) {
+		t.Errorf("trigger run lost structured-output retry policy: retries=%d policy=%+v", run.MaxRetries, run.RetryPolicy)
 	}
 
 	// Empty rendered prompt falls back to the template task's own prompt.

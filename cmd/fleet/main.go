@@ -250,6 +250,21 @@ func run() error {
 	if sentryActive {
 		defer observability.Flush(2 * time.Second)
 	}
+	// safe owns recovery and remains SDK-independent; this structured hook is the
+	// single adapter into Sentry. It carries only opaque IDs and boundary names —
+	// never tool arguments/output, recovered values, stacks, or credentials.
+	safe.PanicEventHook = func(event safe.PanicEvent, _ any) {
+		observability.CapturePanicClassWithTags(context.Background(), event.Class, map[string]string{
+			"incident_id":     event.IncidentID,
+			"panic_location":  event.Location,
+			"panic_boundary":  event.Boundary,
+			"tool_name":       event.ToolName,
+			"tool_call_id":    event.ToolCallID,
+			"run_mode":        event.RunMode,
+			"task_id":         event.TaskID,
+			"conversation_id": event.ConversationID,
+		})
+	}
 
 	// Process log file sink (#298): OPT-IN. With FLEET_LOG_FILE unset (the
 	// default) this is a no-op and the process logs only to stderr — which
@@ -318,6 +333,11 @@ func run() error {
 		CriticalToolSubstitutes: bundlePolicy.CriticalToolSubstitutes,
 		CriticalToolTimeouts:    bundlePolicy.CriticalToolTimeouts,
 	})
+
+	// Governed lifecycle hooks (#788): translate the bundle's declared hooks into
+	// the agentcore form and install them process-wide. The generic bundle ships
+	// none, so this is a no-op by default. Must run before any turn starts.
+	agentcore.ConfigureLifecycleHooks(toAgentcoreHooks(bundle.Hooks()))
 
 	// Install the bundle's custom model-pricing overrides (#297). The generic
 	// bundle ships none, so cost accounting stays on the OpenRouter-returned
@@ -398,6 +418,10 @@ func run() error {
 	if cfg.ConversationSoftDelete {
 		log.Printf("conversation soft-delete: ENABLED (deleted rows tombstoned, purged after 30 days)")
 	}
+	// Stranded-turn recovery (#798): project any turn left 'running' by a crash
+	// into canonical history. Runs AFTER SetSearchEnabled (projection writes
+	// FTS rows) and BEFORE the HTTP server serves.
+	recoverStrandedTurns(chatStore)
 	if cfg.SearchEnabled {
 		safe.Go("store.fts-backfill", func() {
 			bfCtx, bfCancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -416,14 +440,24 @@ func run() error {
 		log.Printf("full-text search: DISABLED (FLEET_SEARCH_ENABLED=false)")
 	}
 
-	// Persist every recovered panic (#241) to the chat DB's panic_events table so
-	// operators can query crashes even if stdout/journald lost the line. The hook
-	// is best-effort and bounded so it never stalls or re-panics inside recovery.
-	safe.PanicEventWriter = func(location, message string, stack []byte) {
+	// Persist every recovered panic (#241, #795) to the chat DB's panic_events
+	// table. Only the value-free class and opaque attribution cross this seam.
+	safe.StructuredPanicEventWriter = func(event safe.PanicEvent) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := chatStore.RecordPanic(ctx, location, message, string(stack)); err != nil {
-			log.Printf("panic event persist failed (location=%s): %v", location, err)
+		record := store.PanicEventRecord{
+			IncidentID:     event.IncidentID,
+			Location:       event.Location,
+			Boundary:       event.Boundary,
+			ToolName:       event.ToolName,
+			ToolCallID:     event.ToolCallID,
+			RunMode:        event.RunMode,
+			TaskID:         event.TaskID,
+			ConversationID: event.ConversationID,
+			Class:          event.Class,
+		}
+		if err := chatStore.RecordPanicEvent(ctx, record); err != nil {
+			log.Printf("panic event persist failed (location=%s incident=%s): %v", event.Location, event.IncidentID, err)
 		}
 	}
 
@@ -794,6 +828,9 @@ func run() error {
 	// process now interrupts the governed run at its next checkpoint, with
 	// who-stopped-it attribution on the terminal record.
 	h.SetTaskStopper(pool.StopTask)
+	// Dashboard agent cards: live pool occupancy (active scheduled agents /
+	// schedulable slots), stamped onto GET /stats at response time.
+	h.SetAgentPoolStats(pool.ActiveTasks, pool.Cap)
 	// Self-improving memory (#516): the feedback→learned-instruction distiller,
 	// gated on FLEET_SELF_IMPROVE_ENABLED (default off; nil leaves feedback
 	// recorded but never auto-distilled).
@@ -1516,6 +1553,27 @@ func toAgentcorePricing(p clientconfig.PricingConfig) agentcore.PricingConfig {
 	return out
 }
 
+// toAgentcoreHooks translates the bundle's declared lifecycle hooks (#788) into
+// the agentcore form. Returns nil when the bundle declares none (the generic
+// default), which ConfigureLifecycleHooks treats as "no hooks".
+func toAgentcoreHooks(hooks []clientconfig.HookDef) []agentcore.LifecycleHook {
+	if len(hooks) == 0 {
+		return nil
+	}
+	out := make([]agentcore.LifecycleHook, 0, len(hooks))
+	for _, h := range hooks {
+		out = append(out, agentcore.LifecycleHook{
+			ID:      h.ID,
+			Event:   agentcore.HookEvent(h.Event),
+			Matcher: h.Matcher,
+			Command: h.Command,
+			Timeout: time.Duration(h.EffectiveTimeoutSeconds()) * time.Second,
+			Enforce: h.Enforce,
+		})
+	}
+	return out
+}
+
 // listBundlePersonas returns the persona names (basenames of personas/*.yaml,
 // without the extension) currently on disk in the bundle's personas dir (#720).
 // Read live per call — personas hot-reload with the bundle, so caching here
@@ -1587,12 +1645,13 @@ func toAgentcoreProviders(bundle *clientconfig.Bundle) []agentcore.ProviderConfi
 			key = os.Getenv(env)
 		}
 		out = append(out, agentcore.ProviderConfig{
-			Name:              strings.TrimSpace(p.Name),
-			Type:              agentcore.ProviderType(strings.TrimSpace(p.Type)),
-			APIKey:            key,
-			BaseURL:           strings.TrimSpace(p.BaseURL),
-			Models:            p.Models,
-			FallbackProviders: append([]string(nil), bundle.FallbackProviders...),
+			Name:                strings.TrimSpace(p.Name),
+			Type:                agentcore.ProviderType(strings.TrimSpace(p.Type)),
+			APIKey:              key,
+			BaseURL:             strings.TrimSpace(p.BaseURL),
+			Models:              p.Models,
+			ContextWindowTokens: p.ContextWindowTokens,
+			FallbackProviders:   append([]string(nil), bundle.FallbackProviders...),
 		})
 	}
 	return out
@@ -2341,4 +2400,34 @@ func (a *taskMemoryAdapter) ListTaskMemories(ctx context.Context, taskID uuid.UU
 		out[i] = tools.TaskMemory{Key: m.Key, Value: m.Value}
 	}
 	return out, nil
+}
+
+// recoverStrandedTurns projects turns left 'running' by a crash into canonical
+// history at boot (#798): journal-authoritative tool calls paired with results
+// (unknown-outcome synthesized when missing), best-effort assistant text from
+// turn_events, one explicit interrupted turn per crash. A failure logs loudly
+// but does not abort boot: the DB may be degraded, and the affected turns stay
+// 'running' for the next boot to retry. See docs/TURN-JOURNAL.md + ADR-0039.
+func recoverStrandedTurns(chatStore *store.Store) {
+	recCtx, recCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer recCancel()
+	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
+	if err != nil {
+		//nolint:gosec // G706: err wraps internal DB errors and an int count — no request input.
+		log.Printf("stranded-turn recovery: %v (recovered %d before failing)", err, len(recovered))
+	}
+	for _, r := range recovered {
+		log.Printf("stranded-turn recovery: turn %s (conv %s) projected %d entries, %d unknown-outcome tool calls",
+			r.TurnID, r.ConversationID, r.Projected, r.Synthesized)
+	}
+	// Input-queue recovery (#785) resolves rows claimed/injected by the dead
+	// process against the #798 durable record: durably-persisted ones complete,
+	// the rest return to 'queued' — visible and addressable, deliberately NOT
+	// auto-drained (a restart must not start unattended LLM spend).
+	requeued, completed, qerr := chatStore.RecoverInputQueue(recCtx)
+	if qerr != nil {
+		log.Printf("input-queue recovery: %v", qerr)
+	} else if requeued+completed > 0 {
+		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed", requeued, completed) //nolint:gosec // G706: two int counts — no request input.
+	}
 }

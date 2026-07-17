@@ -49,13 +49,13 @@ Useful create-time fields (see `TaskCreate` in openapi.yaml for all of them):
 | `recurrence` | 5-field cron; omit for one-shot (`scheduled_for` for a delayed one-shot) |
 | `priority` | 0–100, lower = more urgent; anti-starvation promotion built in |
 | `mcp_selection` | which catalog connectors this task may use (least privilege) |
-| `output_schema` | draft-07 JSON Schema → the run's final answer is validated and stored as machine-readable JSON |
+| `output_schema` | bounded JSON Schema → success requires atomically committed, schema-valid machine output |
 | `sandbox_limits` | per-task memory/cpu/pids override, bounded by operator ceilings |
 | `allow_network` | unseal the sandbox's egress for this task (default sealed) |
 | `carry_context` | recurring runs start with the prior run's final answer |
 | `expected_duration_minutes` | SLA warn/fail tracking |
 | `allow_task_creation` | let the run enqueue follow-up tasks (agents scheduling agents) |
-| `max_retries` / `retry_policy` | transient-failure retries with backoff |
+| `max_retries` / `retry_policy` | class-selective whole-task retries with backoff |
 
 Batch up to 100 at once with `POST /tasks/batch` (`atomic: true` for
 all-or-nothing), estimate cost first with `POST /tasks/estimate`, and version
@@ -73,7 +73,14 @@ curl -s "$FLEET/tasks/$ID/error-analysis" -H "X-API-Key: $KEY"  # LLM failure di
 
 `output_schema` + `GET /tasks/{id}/output` is the composition primitive: your
 caller gets **validated JSON**, not prose to re-parse — pipe it into the next
-system (or into the next task).
+system (or into the next task). This is fail-closed: the JSON and terminal
+success are one lease-checked database commit, and success notifications fire
+only afterward. Invalid/missing model output gets two terminal-only correction
+attempts with no ordinary tools available; exhaustion or persistence failure is
+a non-success outcome. `GET /output` returns `409` while pending or after a
+structured contract failure, and `404` only when no schema was declared. See
+[`STRUCTURED-OUTPUT.md`](STRUCTURED-OUTPUT.md) for provider behavior, limits,
+retry classes, and recurrence semantics.
 
 ## 4. Let events kick off work (instead of polling)
 

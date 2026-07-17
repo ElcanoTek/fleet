@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
@@ -219,5 +222,163 @@ func TestMapRunEntries_RoundTrip(t *testing.T) {
 	}
 	if out[0].Type != "reasoning" || out[1].Type != entryTypeToolCall || out[2].Type != "tool_result" || out[3].Type != "text" {
 		t.Errorf("unexpected mapped types: %+v", out)
+	}
+}
+
+type persistedPanicInput struct{}
+
+// TestContainedPanicResult_PersistsAndReplaysPaired exercises the actual
+// agentcore -> HistoryEntry mapping used immediately before AppendHistory,
+// serializes it exactly as the JSONB persistence path does, and then replays
+// the stored rows for the next provider turn.
+func TestContainedPanicResult_PersistsAndReplaysPaired(t *testing.T) {
+	const secret = "Authorization: Bearer fake-transcript-regression-secret"
+	var streams atomic.Int32
+	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		step := streams.Add(1)
+		return func(yield func(fantasy.StreamPart) bool) {
+			if step == 1 {
+				yield(fantasy.StreamPart{
+					Type:          fantasy.StreamPartTypeToolCall,
+					ID:            "persisted-panic-call",
+					ToolCallName:  "persisted_panic",
+					ToolCallInput: "{}",
+				})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+				return
+			}
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "continued safely"})
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+		}, nil
+	}}
+	panicTool := fantasy.NewAgentTool("persisted_panic", "panic persistence regression",
+		func(context.Context, persistedPanicInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			panic(secret)
+		})
+
+	res, err := RunInteractiveTurn(context.Background(), TurnConfig{
+		SystemPrompt:   "system",
+		Messages:       []fantasy.Message{fantasy.NewUserMessage("run the panic tool")},
+		Label:          "persisted-panic",
+		ConversationID: "conv-persisted-panic",
+		Model:          model,
+		NativeTools:    []fantasy.AgentTool{panicTool},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+
+	history := mapRunEntries(res.Entries)
+	storedJSON, err := json.Marshal(history)
+	if err != nil {
+		t.Fatalf("marshal persisted history: %v", err)
+	}
+	if strings.Contains(string(storedJSON), secret) {
+		t.Fatalf("persisted transcript leaked panic secret: %s", storedJSON)
+	}
+	var stored []HistoryEntry
+	if err := json.Unmarshal(storedJSON, &stored); err != nil {
+		t.Fatalf("unmarshal persisted history: %v", err)
+	}
+
+	var calls, results int
+	var persistedResult ToolResultContent
+	for _, entry := range stored {
+		switch entry.Type {
+		case entryTypeToolCall:
+			var call ToolCallContent
+			if err := json.Unmarshal(entry.Content, &call); err != nil {
+				t.Fatalf("decode stored tool call: %v", err)
+			}
+			if call.ID == "persisted-panic-call" {
+				calls++
+			}
+		case "tool_result":
+			var result ToolResultContent
+			if err := json.Unmarshal(entry.Content, &result); err != nil {
+				t.Fatalf("decode stored tool result: %v", err)
+			}
+			if result.ID == "persisted-panic-call" {
+				results++
+				persistedResult = result
+			}
+		}
+	}
+	if calls != 1 || results != 1 || !persistedResult.IsErr ||
+		!strings.Contains(persistedResult.Text, "inc_") {
+		t.Fatalf("persisted panic pair: calls=%d results=%d result=%+v", calls, results, persistedResult)
+	}
+
+	replayed, err := replayHistory(stored)
+	if err != nil {
+		t.Fatalf("replay persisted panic history: %v", err)
+	}
+	assertWellFormedToolPairs(t, replayed)
+	text, isErr, found := toolResultTextFor(t, replayed, "persisted-panic-call")
+	if !found || !isErr || !strings.Contains(text, "inc_") || strings.Contains(text, secret) {
+		t.Fatalf("replayed panic result: found=%v isErr=%v text=%q", found, isErr, text)
+	}
+}
+
+// TestFinalizeRetryContainedPanicJoinsRunTranscript proves the leaked-call
+// recovery agent reuses the governed roster AND routes its tool callbacks into
+// agentcore.Run's original sink. A panic in this auxiliary Fantasy stream must
+// therefore persist exactly one opaque call/result pair, not become invisible
+// tool work outside the run audit.
+func TestFinalizeRetryContainedPanicJoinsRunTranscript(t *testing.T) {
+	const secret = "finalize retry raw panic secret"
+	var modelCalls atomic.Int32
+	model := &itMockModel{streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		call := modelCalls.Add(1)
+		return func(yield func(fantasy.StreamPart) bool) {
+			switch call {
+			case 1:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "call:default_api:download_url{url:https://example.invalid}"})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			case 2:
+				yield(fantasy.StreamPart{
+					Type: fantasy.StreamPartTypeToolCall, ID: "finalize-panic-call",
+					ToolCallName: "finalize_panic", ToolCallInput: "{}",
+				})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls})
+			default:
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "recovered after contained panic"})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+			}
+		}, nil
+	}}
+	panicTool := fantasy.NewAgentTool("finalize_panic", "finalize panic regression",
+		func(context.Context, persistedPanicInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			panic(secret)
+		})
+
+	res, err := RunInteractiveTurn(context.Background(), TurnConfig{
+		SystemPrompt: "system", Messages: []fantasy.Message{fantasy.NewUserMessage("recover the leaked call")},
+		Label: "finalize-panic", ConversationID: "conv-finalize-panic", Model: model, MaxTokens: 1024,
+		NativeTools: []fantasy.AgentTool{panicTool},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunInteractiveTurn: %v", err)
+	}
+	if res.FinalText != "recovered after contained panic" {
+		t.Fatalf("final text = %q", res.FinalText)
+	}
+
+	var calls, results int
+	var result agentcore.RunEntry
+	for _, entry := range res.Entries {
+		if entry.ToolCallID != "finalize-panic-call" {
+			continue
+		}
+		switch entry.Type {
+		case entryTypeToolCall:
+			calls++
+		case "tool_result":
+			results++
+			result = entry
+		}
+	}
+	if calls != 1 || results != 1 || !result.IsErr || !strings.Contains(result.Text, "inc_") || strings.Contains(result.Text, secret) {
+		t.Fatalf("finalize panic pair: calls=%d results=%d result=%+v entries=%+v", calls, results, result, res.Entries)
 	}
 }

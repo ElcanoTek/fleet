@@ -6,6 +6,7 @@ package httpapi
 // is exempt from the orchestrator OpenAPI parity test — no openapi.yaml entries.
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -402,16 +403,16 @@ func projectMemoryContents(memories []store.Memory) []string {
 // standing instructions plus the shared memories as tagged bullets. Empty for
 // non-project conversations; best-effort (a load failure degrades to no
 // project context rather than failing the turn).
-func (s *Server) projectTurnContext(r *http.Request, conv *store.Conversation) (string, []string) {
+func (s *Server) projectTurnContext(ctx context.Context, conv *store.Conversation) (string, []string) {
 	if conv.ProjectID == "" {
 		return "", nil
 	}
-	proj, err := s.store.GetProject(r.Context(), conv.ProjectID)
+	proj, err := s.store.GetProject(ctx, conv.ProjectID)
 	if err != nil || proj == nil {
 		return "", nil
 	}
 	var bullets []string
-	if pm, merr := s.store.ListProjectMemories(r.Context(), conv.ProjectID); merr == nil {
+	if pm, merr := s.store.ListProjectMemories(ctx, conv.ProjectID); merr == nil {
 		bullets = projectMemoryContents(pm)
 	}
 	return proj.Instructions, bullets

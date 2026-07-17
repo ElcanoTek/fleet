@@ -37,31 +37,48 @@ type fakeEngine struct {
 	providerHealth []agentcore.ModelHealth
 }
 
-func (f *fakeEngine) RunTurn(_ context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
+func (f *fakeEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
 	f.mu.Lock()
 	f.lastHistory = in.History
 	f.turns++
 	f.mu.Unlock()
+
+	newHistory := []agent.HistoryEntry{
+		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"` + in.UserMessage + `"}`)},
+		// A tool_call + tool_result pair so the audit-ledger derivation
+		// (deriveToolCallEntries) in runTurnAsync has something to record —
+		// this is what proves the in-process write path fires end to end.
+		{Role: "assistant", Type: "tool_call", Content: json.RawMessage(`{"id":"call_1","name":"bash","input":"{\"command\":\"ls\"}"}`)},
+		{Role: "tool", Type: "tool_result", Content: json.RawMessage(`{"id":"call_1","name":"bash","text":"ok","is_err":false}`)},
+		{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"fake reply"}`)},
+	}
+
+	// Honor the engine's #798 commit contract exactly like agent.Manager: the
+	// user entry commits before any work, the terminal projection commits
+	// BEFORE turn.completed is emitted, and a failure is a turn error.
+	if in.CommitUser != nil {
+		if err := in.CommitUser(ctx, newHistory[0]); err != nil {
+			return nil, err
+		}
+	}
 
 	// Stream the vocabulary the SSE layer + frontend depend on.
 	sink.Emit("turn.started", map[string]any{"persona": in.Persona})
 	sink.Emit("tool.call", map[string]any{"name": "bash", "id": "call_1"})
 	sink.Emit("tool.result", map[string]any{"id": "call_1", "text": "ok"})
 	sink.Emit("text.delta", map[string]any{"text": "fake reply"})
+
+	if in.CommitTerminal != nil {
+		if err := in.CommitTerminal(newHistory[1:], false); err != nil {
+			return nil, err
+		}
+	}
 	sink.Emit("turn.completed", map[string]any{"model": in.Model})
 
 	return &TurnResult{
-		FinalText: "fake reply",
-		Model:     in.Model,
-		NewHistory: []agent.HistoryEntry{
-			{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"` + in.UserMessage + `"}`)},
-			// A tool_call + tool_result pair so the audit-ledger derivation
-			// (deriveToolCallEntries) in runTurnAsync has something to record —
-			// this is what proves the in-process write path fires end to end.
-			{Role: "assistant", Type: "tool_call", Content: json.RawMessage(`{"id":"call_1","name":"bash","input":"{\"command\":\"ls\"}"}`)},
-			{Role: "tool", Type: "tool_result", Content: json.RawMessage(`{"id":"call_1","name":"bash","text":"ok","is_err":false}`)},
-			{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"fake reply"}`)},
-		},
+		FinalText:  "fake reply",
+		Model:      in.Model,
+		NewHistory: newHistory,
 	}, nil
 }
 
@@ -76,6 +93,9 @@ func (f *fakeEngine) ExtractMemories(context.Context, string, string, []string) 
 	return nil
 }
 func (f *fakeEngine) SuggestRecurringTask(context.Context, string, []string) (*agent.RecurringTaskProposal, error) {
+	return nil, nil
+}
+func (f *fakeEngine) SuggestLibraryPrompt(context.Context, string) (*agent.LibraryPromptDraft, error) {
 	return nil, nil
 }
 func (f *fakeEngine) MCPClient() *mcp.Client                       { return nil }
@@ -103,6 +123,7 @@ type fakeChatStore struct {
 	setModels  int
 	turnEvents int
 	toolCalls  []store.ToolCallEntry
+	queue      []store.InputQueueRow
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -158,6 +179,23 @@ func (s *fakeChatStore) AppendHistory(_ context.Context, convID string, entries 
 	}
 	return ids, nil
 }
+
+// Durable turn journal + gated projection (#798): the fake routes both commit
+// paths into the same in-memory history AppendHistory feeds, so history and
+// ordering assertions cover the new commit-before-terminal flow.
+func (s *fakeChatStore) CommitUserMessage(ctx context.Context, convID, _ string, entry agent.HistoryEntry) (int64, error) {
+	ids, err := s.AppendHistory(ctx, convID, []agent.HistoryEntry{entry})
+	if err != nil {
+		return 0, err
+	}
+	return ids[0], nil
+}
+
+func (s *fakeChatStore) CommitTurnHistory(ctx context.Context, convID, _ string, entries []agent.HistoryEntry) ([]int64, error) {
+	return s.AppendHistory(ctx, convID, entries)
+}
+
+func (s *fakeChatStore) InsertTurnJournal(context.Context, store.TurnJournalRow) error { return nil }
 
 func (s *fakeChatStore) ListMemories(context.Context, string) ([]store.Memory, error) {
 	return nil, nil
@@ -331,8 +369,10 @@ func TestChatTurnPersistsTranscript_NoDBNoProvider(t *testing.T) {
 	if turnRows != 1 {
 		t.Errorf("CreateTurn calls = %d, want 1", turnRows)
 	}
-	if appends != 1 {
-		t.Errorf("AppendHistory calls = %d, want 1", appends)
+	// Two commits per turn since #798: the user entry before the first
+	// provider call, then the terminal projection before turn.completed.
+	if appends != 2 {
+		t.Errorf("history commits = %d, want 2 (user pre-run + terminal projection)", appends)
 	}
 	if recorded != 1 {
 		t.Errorf("RecordTurn calls = %d, want 1", recorded)
@@ -507,4 +547,158 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 			t.Errorf("non-lockdown override not persisted: stored model = %q", model)
 		}
 	})
+}
+
+// In-memory input queue (#785): the fake mirrors the store's state machine so
+// the busy-path, drain, and steer flows are exercised without Postgres.
+func (s *fakeChatStore) EnqueueInput(_ context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, it := range s.queue {
+		if it.ConversationID == r.ConversationID && it.ClientInputID == r.ClientInputID {
+			return it, false, nil
+		}
+	}
+	r.State = store.InputStateQueued
+	r.Position = int64(len(s.queue) + 1)
+	s.queue = append(s.queue, r)
+	return r, true, nil
+}
+
+func (s *fakeChatStore) ListQueuedInputs(_ context.Context, _, convID string) ([]store.InputQueueRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.InputQueueRow
+	for _, it := range s.queue {
+		if it.ConversationID == convID && it.State != store.InputStateCompleted && it.State != store.InputStateCancelled {
+			out = append(out, it)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeChatStore) ClaimNextQueuedInput(_ context.Context, convID, turnID string) (*store.InputQueueRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued {
+			s.queue[i].State = store.InputStateRunning
+			s.queue[i].TurnID = turnID
+			row := s.queue[i]
+			return &row, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *fakeChatStore) MarkInputInjected(_ context.Context, id, turnID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id && s.queue[i].State == store.InputStateQueued {
+			s.queue[i].State = store.InputStateInjected
+			s.queue[i].TurnID = turnID
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *fakeChatStore) MarkInputTerminal(_ context.Context, id, state string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id {
+			s.queue[i].State = state
+		}
+	}
+	return nil
+}
+
+func (s *fakeChatStore) CompleteInjectedInputs(_ context.Context, turnID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].TurnID == turnID && s.queue[i].State == store.InputStateInjected {
+			s.queue[i].State = store.InputStateCompleted
+		}
+	}
+	return nil
+}
+
+func (s *fakeChatStore) CancelQueuedInputs(_ context.Context, _, convID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for i := range s.queue {
+		if s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued {
+			s.queue[i].State = store.InputStateCancelled
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *fakeChatStore) RemoveQueuedInput(_ context.Context, _, convID, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id && s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued {
+			s.queue[i].State = store.InputStateCancelled
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *fakeChatStore) BindInputTurn(_ context.Context, id, turnID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id {
+			s.queue[i].TurnID = turnID
+		}
+	}
+	return nil
+}
+
+func (s *fakeChatStore) LookupInput(_ context.Context, convID, clientID string) (*store.InputQueueRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, it := range s.queue {
+		if it.ConversationID == convID && it.ClientInputID == clientID {
+			row := it
+			return &row, nil
+		}
+	}
+	return nil, nil
+}
+
+// SettleTurnInputs mirrors the store's commit-state reconciliation: the fake
+// treats any turn whose engine committed (history rows exist) as committed.
+func (s *fakeChatStore) SettleTurnInputs(_ context.Context, turnID, drainedID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	requeued := 0
+	for i := range s.queue {
+		if drainedID != "" && s.queue[i].ID == drainedID && s.queue[i].State == store.InputStateRunning {
+			s.queue[i].State = store.InputStateCompleted
+		}
+		if s.queue[i].TurnID == turnID && s.queue[i].State == store.InputStateInjected {
+			s.queue[i].State = store.InputStateCompleted
+		}
+	}
+	return requeued, nil
+}
+
+func (s *fakeChatStore) PromoteQueuedInput(_ context.Context, _, convID, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id && s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued {
+			s.queue[i].Position = -1
+			return true, nil
+		}
+	}
+	return false, nil
 }

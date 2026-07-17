@@ -111,6 +111,21 @@ type BashResult struct {
 	// TimedOut means the context deadline (Timeout) fired before the
 	// process exited. ExitCode is undefined in that case.
 	TimedOut bool
+	// Cancelled means the CALLER's context was cancelled (user Stop, turn
+	// teardown) before the process exited — distinct from TimedOut so the
+	// tool layer can tell the model which one happened. ExitCode is
+	// undefined in that case.
+	Cancelled bool
+	// CleanupConfirmed is meaningful only when TimedOut or Cancelled is set:
+	// true when the backend PROVED this invocation's process tree is dead
+	// (#796). False means processes may still be running; the sandbox is
+	// poisoned and refuses further work until retired.
+	CleanupConfirmed bool
+	// SandboxRetired reports that cancellation/timeout invalidated the whole
+	// sandbox, including persistent Python kernel state. Production container
+	// sandboxes set this after tearing down the PID namespace; the test-only
+	// host executor does not have a container to retire.
+	SandboxRetired bool
 	// StdoutDiscarded / StderrDiscarded count bytes dropped because the
 	// stream exceeded BashOutputCaptureCap. The tool layer surfaces a
 	// note when either is non-zero.
@@ -190,6 +205,12 @@ type Sandbox struct {
 	// seam is a scheduled-run concern and the two never combine.
 	defaultWorkingDir string
 
+	// fileOpRoot/fileOpRootIdentity are the writable filesystem capability
+	// bound before a turn exposes tools to the model (#784). The identity is
+	// captured inside the selected runtime so it works with runc, Kata and krun.
+	fileOpRoot         string
+	fileOpRootIdentity FileOpRootIdentity
+
 	// pythonCellTimeout is the host-operator ceiling on a single run_python cell
 	// (FLEET_PYTHON_CELL_TIMEOUT, #213). Zero disables it. When > 0, RunPython
 	// clamps the per-call Timeout to min(Timeout, pythonCellTimeout) before
@@ -222,13 +243,29 @@ func (s *Sandbox) SetDefaultWorkingDir(dir string) {
 type impl interface {
 	runBash(ctx context.Context, req BashRequest) (BashResult, error)
 	runPython(ctx context.Context, req PythonRequest) (PythonResult, error)
+	// runFileOp executes a view/write/edit file operation inside the backend
+	// (#784) so model-authored filesystem mutations run in the sandbox, not the
+	// host process. See fileops.go.
+	runFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error)
+	bindFileOpRoot(ctx context.Context, root string) (FileOpRootIdentity, error)
 	// resourceUsage returns the per-run resource telemetry rollup (#263) and
 	// whether any was collected. Populated only after close() for the container
 	// backend (the poller publishes its rollup on teardown); the host backend
 	// has no container to sample and always returns ok=false.
 	resourceUsage() (ResourceUsageSummary, bool)
+	// poisoned reports whether a cancelled/timed-out invocation may have left
+	// processes running in the backend (#796: cleanup could not be proved).
+	// A poisoned backend refuses further work — the owner must retire it
+	// (close kills the container and with it anything still running).
+	poisoned() bool
 	close()
 }
+
+// ErrPoisoned is returned by RunBash/RunPython on a sandbox whose earlier
+// cancelled/timed-out invocation could not be proved dead (#796). The sandbox
+// must be retired; the persistent pool does so automatically at the next
+// borrow/release boundary.
+var ErrPoisoned = errors.New("sandbox poisoned: a cancelled command may still be running; the sandbox is being retired")
 
 // HostExecutorCompiledIn reports whether the unsandboxed host executor (ModeHost,
 // host.go) was compiled into this binary — true only with the
@@ -251,7 +288,10 @@ func (s *Sandbox) ModeName() string {
 }
 
 // RunBash dispatches one bash invocation through the active backend.
-// Returns ErrClosed if the sandbox has already been torn down.
+// Returns ErrClosed if the sandbox has already been torn down, and
+// ErrPoisoned if an earlier cancelled/timed-out invocation could not be
+// proved dead (fail closed: the suspect container must be retired, not
+// reused, so a stopped turn's stragglers can't overlap fresh work).
 func (s *Sandbox) RunBash(ctx context.Context, req BashRequest) (BashResult, error) {
 	s.mu.Lock()
 	if s.closed {
@@ -262,7 +302,17 @@ func (s *Sandbox) RunBash(ctx context.Context, req BashRequest) (BashResult, err
 		req.WorkingDir = s.defaultWorkingDir
 	}
 	s.mu.Unlock()
+	if s.impl.poisoned() {
+		return BashResult{}, ErrPoisoned
+	}
 	return s.impl.runBash(ctx, req)
+}
+
+// Poisoned reports whether a cancelled/timed-out invocation may have left
+// processes running in this sandbox (#796). The persistent pool retires a
+// poisoned sandbox instead of lending it to another turn.
+func (s *Sandbox) Poisoned() bool {
+	return s.impl.poisoned()
 }
 
 // RunPython dispatches one run_python invocation through the active
@@ -283,6 +333,9 @@ func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (PythonResul
 		req.Timeout = s.pythonCellTimeout
 	}
 	s.mu.Unlock()
+	if s.impl.poisoned() {
+		return PythonResult{}, ErrPoisoned
+	}
 	return s.impl.runPython(ctx, req)
 }
 

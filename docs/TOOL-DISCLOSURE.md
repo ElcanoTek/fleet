@@ -15,7 +15,7 @@ tunable live from Settings → Admin → Feature settings, see
 [ADMIN-SETTINGS.md](ADMIN-SETTINGS.md)), it:
 
 - keeps **core tools** directly registered — native (bash/python/files/…),
-  loader, pre-gated, and confirm_audit are NEVER deferred;
+  loader, and confirm_audit are NEVER deferred;
 - hides the **MCP tools** (those that already passed the opt-in + allowlist
   gates) behind three bridges:
   - `tool_search {query}` — BM25 keyword search over `{name, description}` →

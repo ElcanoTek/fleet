@@ -22,11 +22,11 @@ internal/agentcore/mcp_fastio_response_test.go:jwt:117
 
 # fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithQuotedEnvFromPodman
 # (double-quote-stripping test).
-internal/config/config_test.go:generic-api-key:1136
+internal/config/config_test.go:generic-api-key:1146
 
 # fake: fabricated "sk-or-v1-..."-shaped string in TestLoadWithSingleQuotedEnvFromPodman
 # (single-quote-stripping test).
-internal/config/config_test.go:generic-api-key:1154
+internal/config/config_test.go:generic-api-key:1164
 
 # fake: fabricated secrets in the redact package table tests (TestRedactor_*),
 # fed to Redactor.Redact to assert they are scrubbed. All fabricated fixtures.
@@ -36,3 +36,8 @@ internal/redact/redact_test.go:gitlab-pat:20
 # fake: fabricated Web Push subscription placeholder ("fake-p256dh-refreshed")
 # compared in TestUpsertPushSubscription's refresh assertion (#292).
 internal/store/push_subscriptions_test.go:generic-api-key:50
+
+# fake: fabricated sk- fixture in TestBoundModelOutputToolsGovernsRawAuxiliaryRouteBeforeArtifact
+# (#793), fed through output governance to assert the secret is redacted before
+# artifact staging. Never a real credential.
+internal/agentcore/tool_output_limit_test.go:generic-api-key:155

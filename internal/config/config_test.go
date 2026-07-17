@@ -880,14 +880,24 @@ func TestIsAllowedEnvVar(t *testing.T) {
 		"OPENX_API_KEY":               true,
 		"OPENX_API_KEY_REKLAIM":       true,
 		// rejections
-		"INDEXEXCHANGE_BASE_URL": false, // base not registered
-		"PATH":                   false,
-		"PATH_REKLAIM":           false,
-		"LD_PRELOAD":             false,
-		"OPENX_API_KEY_reklaim":  false, // suffix must be uppercase
-		"OPENX_API_KEY_":         false, // empty suffix
-		"":                       false,
-		"_REKLAIM":               false,
+		// boot-read operator keys (regression: these were read via os.Getenv
+		// at boot but missing from the allowlist, so an env-file value was
+		// silently dropped — e.g. FLEET_CHAT_DATABASE_URL from
+		// deploy/fleet.service failed boot with an empty-DSN error)
+		"FLEET_CHAT_DATABASE_URL":             true,
+		"FLEET_SCHED_DATABASE_URL":            true,
+		"ADMIN_API_KEY":                       true,
+		"FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS": true,
+		"FLEET_OTEL_ENDPOINT":                 true,
+		"FLEET_TIMEZONE":                      true,
+		"INDEXEXCHANGE_BASE_URL":              false, // base not registered
+		"PATH":                                false,
+		"PATH_REKLAIM":                        false,
+		"LD_PRELOAD":                          false,
+		"OPENX_API_KEY_reklaim":               false, // suffix must be uppercase
+		"OPENX_API_KEY_":                      false, // empty suffix
+		"":                                    false,
+		"_REKLAIM":                            false,
 	}
 	for input, want := range cases {
 		got := isAllowedEnvVar(input)
@@ -1328,4 +1338,30 @@ func TestLoad_PythonREPLModeFailsClosed(t *testing.T) {
 	if !cfg.PersistentPythonREPL() {
 		t.Errorf("mixed-case 'Persistent' must be accepted; got %q", cfg.PythonREPLMode)
 	}
+}
+
+// `export KEY=…` lines must load for parity with internal/creds/envfile.go,
+// whose docs promise the two parsers agree byte-for-byte (regression: the
+// creds writer/reader tolerated the prefix, this loader silently skipped it).
+func TestLoadEnvFileExportPrefix(t *testing.T) {
+	clearEnvVars()
+	defer clearEnvVars()
+
+	tmpfile, err := os.CreateTemp("", "test-export.env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+	if _, err := tmpfile.WriteString("export TAVILY_API_KEY=exported-value\n"); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	if _, err := Load(tmpfile.Name()); err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+	if val := os.Getenv("TAVILY_API_KEY"); val != "exported-value" {
+		t.Errorf("export-prefixed key = %q, want %q", val, "exported-value")
+	}
+	t.Cleanup(func() { os.Unsetenv("TAVILY_API_KEY") })
 }

@@ -14,7 +14,11 @@ Center task form. It deliberately combines two ownership models:
 
 The picker supports search, inserting an entry into the current chat/task draft,
 creating a prompt from that draft, editing UI-owned entries, and exporting the
-visible hybrid library as a versioned JSON backup. Export is intentionally a
+visible hybrid library as a versioned JSON backup. A conversation's kebab menu
+also offers "Save to prompt library…", which distills the chat into a
+self-contained draft (a host-side model call, `FLEET_LIBRARY_PROMPT_MODEL`) that
+the user reviews and edits before it is saved through the same `POST /prompts`
+path. Export is intentionally a
 plain file download so it can be placed in OneDrive, Dropbox, or any ordinary
 backup folder without a vendor integration.
 

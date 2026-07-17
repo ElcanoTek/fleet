@@ -55,7 +55,7 @@ func TestPublishArtifact(t *testing.T) {
 
 	t.Run("publishes an existing file with size + description", func(t *testing.T) {
 		rec := &fakeRecorder{}
-		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec), `{"path":"report.csv","description":"Q3 revenue"}`)
+		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec, ""), `{"path":"report.csv","description":"Q3 revenue"}`)
 		if resp.IsError {
 			t.Fatalf("expected success, got %q", resp.Content)
 		}
@@ -70,7 +70,7 @@ func TestPublishArtifact(t *testing.T) {
 
 	t.Run("publishes a file in a subdir; name is the base", func(t *testing.T) {
 		rec := &fakeRecorder{}
-		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec), `{"path":"out/summary.txt"}`)
+		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec, ""), `{"path":"out/summary.txt"}`)
 		if resp.IsError {
 			t.Fatalf("expected success, got %q", resp.Content)
 		}
@@ -81,7 +81,7 @@ func TestPublishArtifact(t *testing.T) {
 
 	t.Run("missing path is rejected", func(t *testing.T) {
 		rec := &fakeRecorder{}
-		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec), `{"path":"  "}`)
+		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec, ""), `{"path":"  "}`)
 		if !resp.IsError || len(rec.calls) != 0 {
 			t.Fatalf("expected error + no record, got isErr=%v calls=%d", resp.IsError, len(rec.calls))
 		}
@@ -89,7 +89,7 @@ func TestPublishArtifact(t *testing.T) {
 
 	t.Run("nonexistent file is rejected (must write first)", func(t *testing.T) {
 		rec := &fakeRecorder{}
-		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec), `{"path":"nope.bin"}`)
+		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec, ""), `{"path":"nope.bin"}`)
 		if !resp.IsError || len(rec.calls) != 0 {
 			t.Fatalf("expected error + no record, got isErr=%v calls=%d", resp.IsError, len(rec.calls))
 		}
@@ -97,7 +97,7 @@ func TestPublishArtifact(t *testing.T) {
 
 	t.Run("path traversal is rejected", func(t *testing.T) {
 		rec := &fakeRecorder{}
-		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec), `{"path":"../escape.txt"}`)
+		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec, ""), `{"path":"../escape.txt"}`)
 		if !resp.IsError || len(rec.calls) != 0 {
 			t.Fatalf("expected traversal rejection + no record, got isErr=%v calls=%d", resp.IsError, len(rec.calls))
 		}
@@ -105,7 +105,7 @@ func TestPublishArtifact(t *testing.T) {
 
 	t.Run("a directory is rejected", func(t *testing.T) {
 		rec := &fakeRecorder{}
-		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec), `{"path":"out"}`)
+		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec, ""), `{"path":"out"}`)
 		if !resp.IsError || len(rec.calls) != 0 {
 			t.Fatalf("expected directory rejection + no record, got isErr=%v calls=%d", resp.IsError, len(rec.calls))
 		}
@@ -113,14 +113,39 @@ func TestPublishArtifact(t *testing.T) {
 
 	t.Run("no workspace in context is rejected", func(t *testing.T) {
 		rec := &fakeRecorder{}
-		resp := runPublish(context.Background(), t, NewPublishArtifactTool(rec), `{"path":"report.csv"}`)
+		resp := runPublish(context.Background(), t, NewPublishArtifactTool(rec, ""), `{"path":"report.csv"}`)
 		if !resp.IsError {
 			t.Fatalf("expected error with no workspace, got %q", resp.Content)
 		}
 	})
 
+	t.Run("workspaceRoot serves a non-worktree run (no forced working dir)", func(t *testing.T) {
+		rec := &fakeRecorder{}
+		resp := runPublish(context.Background(), t, NewPublishArtifactTool(rec, work), `{"path":"report.csv"}`)
+		if resp.IsError {
+			t.Fatalf("expected workspaceRoot fallback to publish, got %q", resp.Content)
+		}
+		if len(rec.calls) != 1 || rec.calls[0].relPath != "report.csv" {
+			t.Fatalf("recorded %+v, want report.csv via workspaceRoot", rec.calls)
+		}
+	})
+
+	t.Run("forced working dir (worktree) takes precedence over workspaceRoot", func(t *testing.T) {
+		other := t.TempDir() // stands in for the workspace root; must NOT be used
+		rec := &fakeRecorder{}
+		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec, other), `{"path":"report.csv"}`)
+		if resp.IsError {
+			t.Fatalf("expected worktree-scoped publish, got %q", resp.Content)
+		}
+		// report.csv exists only under work (the forced dir), not under other:
+		// success proves resolution used the forced dir.
+		if len(rec.calls) != 1 {
+			t.Fatalf("expected 1 record, got %d", len(rec.calls))
+		}
+	})
+
 	t.Run("nil recorder is rejected", func(t *testing.T) {
-		resp := runPublish(ctxWork, t, NewPublishArtifactTool(nil), `{"path":"report.csv"}`)
+		resp := runPublish(ctxWork, t, NewPublishArtifactTool(nil, ""), `{"path":"report.csv"}`)
 		if !resp.IsError {
 			t.Fatalf("expected error with nil recorder, got %q", resp.Content)
 		}
@@ -128,7 +153,7 @@ func TestPublishArtifact(t *testing.T) {
 
 	t.Run("recorder error is surfaced (e.g. cap reached)", func(t *testing.T) {
 		rec := &fakeRecorder{err: errors.New("artifact limit reached")}
-		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec), `{"path":"report.csv"}`)
+		resp := runPublish(ctxWork, t, NewPublishArtifactTool(rec, ""), `{"path":"report.csv"}`)
 		if !resp.IsError {
 			t.Fatalf("expected error surfaced from recorder, got %q", resp.Content)
 		}

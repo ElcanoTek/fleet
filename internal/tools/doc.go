@@ -8,9 +8,11 @@
 //     denylist is third-layer defense.
 //   - NewViewFileTool,
 //     NewWriteFileTool,
-//     NewEditFileTool      — filesystem ops scoped by pathsec.go;
-//     operate on the host workspace, which is
-//     bind-mounted into the sandbox.
+//     NewEditFileTool      — filesystem ops path-scoped by pathsec.go and
+//     EXECUTED inside the per-turn sandbox via the
+//     FileOp seam (#784). edit_file is unique-match /
+//     stale-guarded / diff-returning (#787,
+//     docs/FILE-EDIT-SAFETY.md).
 //   - NewRunPythonTool     — IPython kernel hosted by the per-turn
 //     sandbox. Same JSON wire shape as before;
 //     implementation moved into the [sandbox]

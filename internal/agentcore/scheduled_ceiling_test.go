@@ -2,6 +2,8 @@ package agentcore
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -100,5 +102,34 @@ func TestCeiling_HardAbortBeforeNextCompletion(t *testing.T) {
 	}
 	if res.FinalText == "" {
 		t.Error("graceful ceiling stop should still return the partial transcript")
+	}
+}
+
+func TestStructuredCeilingStopCannotBypassTerminalContract(t *testing.T) {
+	policy := NewScheduledPolicy(NewLogSession(), 50, 0, 10)
+	model := &terminalTestModel{provider: "anthropic", model: "budget-stop"}
+	model.streamFunc = func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+		return func(yield func(fantasy.StreamPart) bool) {
+			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "t", Delta: `{"answer":42}`})
+			yield(fantasy.StreamPart{
+				Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop,
+				Usage: fantasy.Usage{InputTokens: 50, OutputTokens: 10},
+			})
+		}, nil
+	}
+	res, err := Run(t.Context(), ModeScheduled, RunConfig{
+		EnvPrefix: CanonicalEnvPrefix, OutputSchema: json.RawMessage(terminalTestSchema),
+	}, Deps{
+		Input: stubInput{system: "sys", user: "go", label: "structured"}, Observer: &captureObserver{},
+		Policy: policy, Executor: &stubExecutor{}, Model: model,
+	})
+	if !errors.Is(err, ErrCostCeilingExceeded) {
+		t.Fatalf("structured ceiling error = %v, want cost ceiling", err)
+	}
+	if !res.StoppedByBudget || res.FinalText == "" {
+		t.Fatalf("partial result lost: stopped=%t text=%q", res.StoppedByBudget, res.FinalText)
+	}
+	if len(model.calls()) != 0 {
+		t.Fatal("budget-stopped run unexpectedly reached terminal generation")
 	}
 }

@@ -61,3 +61,27 @@ func TestExecute_ScheduledDoesNotCollapseToOneRound(t *testing.T) {
 		t.Errorf("scheduled run must NOT collapse to 1 round; streamed %d times", got)
 	}
 }
+
+func TestScheduledObserverPersistsToolCallAndErrorResult(t *testing.T) {
+	session := NewLogSession()
+	observer := &scheduledObserver{session: session}
+
+	observer.Observe("tool.call", map[string]any{
+		"id": "call-1", "name": "tool_call", "input": `{"name":"mcp_fast_io_download","arguments":{}}`,
+	})
+	observer.Observe("tool.result", map[string]any{
+		"id": "call-1", "name": "tool_call", "text": "invalid arguments", "is_err": true,
+	})
+
+	msgs := session.SnapshotMessages()
+	if len(msgs) != 2 {
+		t.Fatalf("persisted messages = %d, want call + result", len(msgs))
+	}
+	if len(msgs[0].ToolCalls) != 1 || msgs[0].ToolCalls[0].Name != "tool_call" {
+		t.Fatalf("tool call not preserved: %+v", msgs[0])
+	}
+	if msgs[1].Role != roleTool || msgs[1].ToolCallID == nil || *msgs[1].ToolCallID != "call-1" ||
+		msgs[1].ToolName != "tool_call" || !msgs[1].IsError {
+		t.Fatalf("tool error result not preserved: %+v", msgs[1])
+	}
+}

@@ -2,6 +2,8 @@ package agentcore
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -46,5 +48,40 @@ func TestPolicyGuardedTool_RecordsNativeTaskTrackerResult(t *testing.T) {
 	}
 	if len(msgs) == 0 {
 		t.Fatal("expected an enforcement message naming the pending tasks")
+	}
+}
+
+func TestPolicyGuardedTool_RecordsExactBoundedGoError(t *testing.T) {
+	t.Cleanup(func() { SetMaxToolOutputBytes(-1) })
+	SetMaxToolOutputBytes(2048)
+	detector := &fakeGuardrailDetector{}
+	SetGuardrail(true, false, "observe", "prompt-injection", detector)
+	t.Cleanup(func() { SetGuardrail(false, false, "off", "", nil) })
+	cause := errors.New(strings.Repeat("provider transport response ", 20_000))
+	inner := fantasy.NewAgentTool(
+		"native_failure",
+		"returns an oversized Go error",
+		func(context.Context, taskTrackerTestInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return fantasy.ToolResponse{}, cause
+		},
+	)
+	policy := &gatePolicy{}
+	guarded := withModelOutputBoundary(&policyGuardedTool{inner: inner, policy: policy})
+
+	resp, err := guarded.Run(context.Background(), fantasy.ToolCall{ID: "native-error", Input: "{}"})
+	if !errors.Is(err, cause) {
+		t.Fatalf("bounded error lost original cause: %v", err)
+	}
+	if !policy.recorded || policy.recordOK {
+		t.Fatalf("policy record = recorded:%t ok:%t, want true/false", policy.recorded, policy.recordOK)
+	}
+	if len(resp.Content) > 2048 || policy.recordText != resp.Content || err.Error() != resp.Content {
+		t.Fatalf("policy/model/error bytes drift: policy=%d response=%d error=%d", len(policy.recordText), len(resp.Content), len(err.Error()))
+	}
+	if !strings.Contains(resp.Content, "truncated") || !resp.IsError {
+		t.Fatalf("model-visible error is not an honest bounded envelope: %.200s", resp.Content)
+	}
+	if detector.calls != 1 {
+		t.Fatalf("governed Go error was screened %d times, want exactly once", detector.calls)
 	}
 }

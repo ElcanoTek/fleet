@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
 func parseBashResult(t *testing.T, raw string) bashResult {
@@ -215,7 +217,9 @@ func TestBashToolTimeout(t *testing.T) {
 }
 
 func TestBashToolLargeOutput(t *testing.T) {
-	// Generate output larger than the truncation threshold (32KB)
+	// Tool-local execution retains the governed response. The universal
+	// model-output boundary is solely responsible for staging and truncation,
+	// after governance has run.
 	raw, err := runBash(context.Background(), BashParams{
 		Command: "python3 -c \"print('x' * 50000)\"",
 	})
@@ -230,37 +234,8 @@ func TestBashToolLargeOutput(t *testing.T) {
 		t.Errorf("Expected exit code 0, got %d", result.ExitCode)
 	}
 
-	if result.TruncationInfo == nil {
-		t.Fatal("Expected truncation_info to be present for large output")
-	}
-
-	if !result.TruncationInfo.StdoutTruncated {
-		t.Error("Expected stdout_truncated to be true")
-	}
-
-	if result.TruncationInfo.StdoutFullBytes < 50000 {
-		t.Errorf("Expected stdout_full_bytes >= 50000, got %d", result.TruncationInfo.StdoutFullBytes)
-	}
-
-	if result.TruncationInfo.StdoutFullPath == "" {
-		t.Error("Expected stdout_full_path to be set")
-	}
-
-	// Verify the temp file exists and contains full output
-	if result.TruncationInfo.StdoutFullPath != "" {
-		data, readErr := os.ReadFile(result.TruncationInfo.StdoutFullPath)
-		if readErr != nil {
-			t.Fatalf("Failed to read temp file: %v", readErr)
-		}
-		if len(data) < 50000 {
-			t.Errorf("Temp file should contain full output, got %d bytes", len(data))
-		}
-		_ = os.Remove(result.TruncationInfo.StdoutFullPath)
-	}
-
-	// Verify the inline output contains the TRUNCATED marker
-	if !strings.Contains(result.Stdout, "[TRUNCATED") {
-		t.Error("Expected inline stdout to contain [TRUNCATED marker")
+	if len(result.Stdout) < 50000 {
+		t.Fatalf("tool-local output was unexpectedly truncated: got %d bytes", len(result.Stdout))
 	}
 }
 
@@ -563,6 +538,24 @@ func TestBashToolContextCancellation(t *testing.T) {
 	// Should show timeout error since parent context expired
 	if result.Error == "" {
 		t.Error("Expected error field to be set on context cancellation")
+	}
+}
+
+func TestBashCancellationMessageReportsRetirement(t *testing.T) {
+	msg := bashCancellationMessage(sandbox.BashResult{
+		TimedOut:         true,
+		CleanupConfirmed: true,
+		SandboxRetired:   true,
+	}, 12)
+	for _, want := range []string{
+		"timed out after 12 seconds",
+		"child processes were killed",
+		"sandbox is being retired",
+		"persistent kernel/container state will be reset",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q does not contain %q", msg, want)
+		}
 	}
 }
 

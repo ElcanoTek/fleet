@@ -50,6 +50,10 @@ type turnEngine interface {
 	// cron + name) from a conversation transcript (#455), avoiding names in
 	// existingNames. Returns an error on failure (user-initiated action).
 	SuggestRecurringTask(ctx context.Context, transcript string, existingNames []string) (*agent.RecurringTaskProposal, error)
+	// SuggestLibraryPrompt distills a conversation transcript into a
+	// prompt-library draft (name + description + content) the user reviews
+	// before saving. Returns an error on failure (user-initiated action).
+	SuggestLibraryPrompt(ctx context.Context, transcript string) (*agent.LibraryPromptDraft, error)
 	// MCPClient exposes the shared MCP client for the out-of-band approval
 	// execution path (runStagedTool).
 	MCPClient() *mcp.Client

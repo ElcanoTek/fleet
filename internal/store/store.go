@@ -263,13 +263,43 @@ func (s *Store) TruncateAllForTest(ctx context.Context) error {
 	return err
 }
 
-// RecordPanic appends a recovered-panic row (#241). Called best-effort from the
-// safe.PanicEventWriter hook that cmd/fleet registers; failures are logged by the
-// caller, never propagated into the recovery path.
-func (s *Store) RecordPanic(ctx context.Context, location, message, stack string) error {
+// RecordPanic appends a legacy recovered-panic row (#241). New production
+// recovery paths use RecordPanicEvent through safe.StructuredPanicEventWriter.
+// Its diagnostic arguments are deliberately ignored so legacy callers cannot
+// persist a secret-bearing panic value or stack.
+func (s *Store) RecordPanic(ctx context.Context, location, _, _ string) error {
+	return s.RecordPanicEvent(ctx, PanicEventRecord{
+		Location: location,
+		Class:    "legacy",
+	})
+}
+
+// PanicEventRecord is the secret-safe persistence shape for one contained
+// panic. Raw recovered values, stacks, tool arguments, and results are
+// intentionally absent; only opaque attribution and a bounded class cross it.
+type PanicEventRecord struct {
+	IncidentID     string
+	Location       string
+	Boundary       string
+	ToolName       string
+	ToolCallID     string
+	RunMode        string
+	TaskID         string
+	ConversationID string
+	Class          string
+}
+
+// RecordPanicEvent appends a fully attributed recovered panic (#795). It is
+// called best-effort from safe.StructuredPanicEventWriter.
+func (s *Store) RecordPanicEvent(ctx context.Context, event PanicEventRecord) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO panic_events (ts, location, message, stack) VALUES ($1, $2, $3, $4)`,
-		time.Now().Unix(), location, message, stack,
+		`INSERT INTO panic_events (
+			ts, incident_id, location, boundary, tool_name, tool_call_id,
+			run_mode, task_id, conversation_id, message, stack
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		time.Now().Unix(), event.IncidentID, event.Location, event.Boundary,
+		event.ToolName, event.ToolCallID, event.RunMode, event.TaskID,
+		event.ConversationID, event.Class, "",
 	)
 	return err
 }

@@ -70,6 +70,11 @@ func newFakeLLMManager(t *testing.T, fake *fakellm.Server) *Manager {
 	// Minimal in-repo-free prompt bundle: buildSystemPrompt requires a chat.md
 	// and a persona YAML; protocols may be empty.
 	dir := t.TempDir()
+	workspaceRoot := filepath.Join(dir, "workspace")
+	t.Setenv("FLEET_WORKSPACE_ROOT", workspaceRoot)
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
 	writePromptFile(t, filepath.Join(dir, "system_prompts", "chat.md"), "# Test system prompt\n\nBe brief.\n")
 	writePromptFile(t, filepath.Join(dir, "personas", "generic.yaml"), "name: Generic\n")
 	if err := os.MkdirAll(filepath.Join(dir, "protocols"), 0o755); err != nil {
@@ -80,6 +85,7 @@ func newFakeLLMManager(t *testing.T, fake *fakellm.Server) *Manager {
 		MockMode:         true, // → host-mode sandbox pool (no podman)
 		OpenRouterAPIKey: "test-key",
 		PersonaDefault:   "generic",
+		WorkspaceRoot:    workspaceRoot,
 	}
 	mgr, err := New(ManagerOptions{
 		Config:           cfg,

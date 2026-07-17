@@ -257,6 +257,11 @@ export type DashboardStats = {
   running_tasks?: number;
   completed_tasks_today?: number;
   failed_tasks_today?: number;
+  // Live agent-pool occupancy (absent on servers that predate the field or
+  // when the pool isn't wired): agents executing scheduled tasks right now,
+  // and the pool's schedulable slot count.
+  active_agents?: number;
+  agent_slots?: number;
 };
 
 export type Paginated<T> = { data: T[]; total: number; limit: number; offset: number };
@@ -323,22 +328,41 @@ export type McpServer = {
   remote?: boolean;
 };
 
+export type LogToolCall = {
+  id?: string;
+  name?: string;
+  arguments?: string;
+};
+
 export type LogMessage = {
   id?: string;
   role?: string;
   content?: string;
+  reasoning?: string;
   model?: string;
   provider?: string;
   created_at?: number;
   finished_at?: number;
+  message_type?: string;
+  tool_calls?: LogToolCall[];
+  tool_call_id?: string;
+  tool_name?: string;
+  is_error?: boolean;
 };
 
+// Token fields are CUMULATIVE across the whole session (billing/display
+// numbers — see agentcore.LogSession). cached_tokens is the cache-read subset
+// of prompt_tokens.
 export type LogSession = {
   id?: string;
   title?: string;
   prompt_tokens?: number;
   completion_tokens?: number;
+  cached_tokens?: number;
+  cache_creation_tokens?: number;
   cost?: number;
+  created_at?: number;
+  updated_at?: number;
   messages?: LogMessage[];
 };
 
@@ -461,6 +485,22 @@ export const orchestratorApi = {
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  // Edit (PUT /tasks/{id}): rewrites a pending/scheduled task's definition —
+  // for a recurring task that means every future run. The server re-checks
+  // editability transactionally (409 when the task started meanwhile).
+  updateTask: (taskId: string, body: TaskCreate) =>
+    request<Task>(`/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  // Resubmit (#TBD): POST /tasks/{id}/rerun creates a NEW one-time task copied
+  // from this one (recurrence cleared, runs now); optional overrides replace
+  // fields on the copy. The source task is untouched.
+  rerunTask: (taskId: string, overrides?: Record<string, unknown>) =>
+    request<Task>(`/tasks/${encodeURIComponent(taskId)}/rerun`, {
+      method: "POST",
+      body: JSON.stringify(overrides ? { overrides } : {}),
+    }),
   upcomingRuns: (limit = 50) => request<{ upcoming: UpcomingRun[] }>(`/tasks/upcoming?limit=${limit}`),
   // #516 self-improving memory: feedback + versioned learned instructions.
   submitFeedback: (taskId: string, rating: "up" | "down", critique?: string) =>

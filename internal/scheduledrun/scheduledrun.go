@@ -473,6 +473,10 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 		effectiveWorkspace = abs
 	}
 	reportWorkspacePath(ctx, effectiveWorkspace)
+	// Thread the same effective root into every worker pass, including
+	// non-worktree tasks and loop retries. Relative file-tool recovery paths must
+	// resolve to the workspace the file browser reports, not the server cwd.
+	ctx = tools.WithForcedWorkingDir(ctx, effectiveWorkspace)
 	// Cleanup is scheduled in a defer so its clock starts at run COMPLETION, never
 	// run start: the agent executes synchronously below (a loop can run for many
 	// minutes), and arming the delay timer up-front would let a delay shorter than
@@ -508,6 +512,45 @@ func (r *Runner) workspaceRoot() string {
 		return abs
 	}
 	return "workspace"
+}
+
+// configureRunWorkspace binds every sandbox and in-process file resolver to
+// the same effective root, then installs the governed output-artifact writer.
+// Keeping this as one seam prevents non-worktree scheduled runs from returning
+// a relative recovery path that view_file resolves against the server cwd.
+func configureRunWorkspace(ctx context.Context, sb *sandbox.Sandbox, wtPath, sharedRoot string) (context.Context, func(), string, error) {
+	if sb == nil {
+		return ctx, func() {}, "", fmt.Errorf("configure scheduled workspace: nil sandbox")
+	}
+	effectiveRoot := tools.ForcedWorkingDirFromContext(ctx)
+	if effectiveRoot == "" {
+		effectiveRoot = wtPath
+		if effectiveRoot == "" {
+			effectiveRoot = sharedRoot
+		}
+	}
+	if abs, err := filepath.Abs(effectiveRoot); err == nil {
+		effectiveRoot = abs
+	} else {
+		return ctx, func() {}, "", fmt.Errorf("resolve scheduled workspace root: %w", err)
+	}
+	ctx = tools.WithForcedWorkingDir(ctx, effectiveRoot)
+	sb.SetDefaultWorkingDir(effectiveRoot)
+	if err := sb.BindFileOpRoot(ctx, effectiveRoot); err != nil {
+		return ctx, func() {}, "", fmt.Errorf("bind scheduled file capability: %w", err)
+	}
+	// A non-worktree task shares effectiveRoot with other scheduled tasks. Fixed
+	// artifact paths there could be replaced by another live run and leak its
+	// governed result through this run's recovery hint. Keep the hard output cap
+	// but disable retention unless the task owns an isolated worktree root.
+	if wtPath == "" {
+		return ctx, func() {}, effectiveRoot, nil
+	}
+	artifactCtx, release, err := tools.WithSandboxModelOutputArtifacts(ctx, sb, effectiveRoot)
+	if err != nil {
+		return ctx, func() {}, "", fmt.Errorf("install governed tool-output artifact scope: %w", err)
+	}
+	return artifactCtx, release, effectiveRoot, nil
 }
 
 // runWorker executes ONE worker pass: it resolves the model, acquires the
@@ -577,28 +620,44 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	}
 	defer cleanup()
 
-	// Git worktree isolation (#180): scope this run's tool calls into the per-run
-	// worktree (prepared once per task in Run; a subdir of the bind-mounted
-	// workspace root, reachable at the same absolute path inside the sandbox).
+	// Scope every scheduled run to a concrete directory inside the bind-mounted
+	// workspace. Worktree-enabled runs use their exact per-run worktree (#180);
+	// ordinary runs use the configured workspace root. Previously the latter
+	// left relative file tools resolving against Fleet's process cwd while the
+	// container used the workspace mount, breaking parity and making a narrow
+	// FileOp capability impossible (#784). The same root also scopes governed,
+	// sandbox-readable model-output recovery (#793).
 	// Two complementary seams cover the tool surface:
 	//   - Sandbox.SetDefaultWorkingDir fills the cwd of any bash/run_python call
 	//     that arrives with an empty WorkingDir, so the default applies host-side.
 	//   - WithForcedWorkingDir scopes the IN-PROCESS tool layer (bash/run_python/
 	//     file tools), whose resolvers otherwise default an empty working dir to
 	//     the process cwd before the sandbox seam can fill it.
-	// Both are no-ops when wtPath == "" (non-worktree task), so behaviour there is
-	// unchanged.
+	// Run normally threads the absolute root in context; configureRunWorkspace
+	// also derives it for focused runWorker/one-shot callers that bypass Run.
+	artifactCtx, releaseArtifacts, toolRoot, artifactErr := configureRunWorkspace(ctx, sb, wtPath, r.workspaceRoot())
+	if artifactErr != nil {
+		return nil, false, "", artifactErr
+	}
+	ctx = artifactCtx
+	defer releaseArtifacts()
 	if wtPath != "" {
-		sb.SetDefaultWorkingDir(wtPath)
-		ctx = tools.WithForcedWorkingDir(ctx, wtPath)
-		log.Printf("scheduled task %s: git worktree isolation active; tool calls scoped to %s", task.ID, wtPath)
+		log.Printf("scheduled task %s: git worktree isolation active; tool calls scoped to %s", task.ID, toolRoot)
 	}
 
 	turnTools := tools.NewTurnTools(sb)
 
+	// Drop the interactive staging-card tools (preview_email, schedule_task,
+	// suggest_advanced_model, propose_memory). Only the interactive
+	// orchestration guard gives them behavior; headless they are a tripwire
+	// that FAILS the whole run on first call (a model that finished a 16-minute
+	// report and called preview_email to present it dead-lettered the task).
+	// A scheduled task that needs to spawn tasks opts into create_task below.
+	scheduledTools := tools.ExcludeInteractiveOnly(turnTools.Tools)
+
 	// create_task (#277) is appended ONLY for a task that opted in. See
 	// maybeAppendCreateTaskTool for the gate rationale.
-	nativeTools := r.maybeAppendCreateTaskTool(turnTools.Tools, task)
+	nativeTools := r.maybeAppendCreateTaskTool(scheduledTools, task)
 
 	// #191 git-metadata tools (suggest_branch_name / suggest_commit_message /
 	// suggest_pr_description) are wired into the SCHEDULED native set only:
@@ -631,7 +690,10 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// unchanged. Scheduled-only and ungated — it only records files in the run's own
 	// workspace, granting no access the operator didn't already have.
 	if ac := ArtifactCollectorFromContext(ctx); ac != nil {
-		nativeTools = append(nativeTools, tools.NewPublishArtifactTool(ac))
+		// The workspace root is the non-worktree run's effective workspace (the
+		// dir the #287 file browser serves); a worktree run's forced working dir
+		// takes precedence inside the tool.
+		nativeTools = append(nativeTools, tools.NewPublishArtifactTool(ac, r.workspaceRoot()))
 	}
 
 	maxIter := r.cfg.LiveMaxIterations()
@@ -736,6 +798,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		CredentialAllowlist: taskCredentialAllowlist(task),
 		ThinkingBudget:      task.ThinkingBudgetTokens,
 		PersonaPolicy:       r.personaPolicy(taskPersona),
+		OutputSchema:        task.OutputSchema,
 		Overlay:             remoteOverlay,
 		PhoneAFriendEnabled: phoneAFriend,
 		ReviewerModel:       reviewer,
@@ -1040,6 +1103,11 @@ func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession 
 		CreatedAt:           ls.CreatedAt,
 		UpdatedAt:           ls.UpdatedAt,
 		Messages:            make([]models.LogMessage, 0, len(msgs)),
+		// Redacted like message content: output_json is persisted task output
+		// and must never carry raw secret material. If redaction alters the
+		// bytes, the runner fails the contract loudly rather than committing
+		// corrupted-but-schema-shaped output.
+		OutputJSON: agentcore.RedactSecrets(ls.SnapshotOutputJSON()),
 	}
 	for _, m := range msgs {
 		mm := models.LogMessage{
@@ -1053,6 +1121,8 @@ func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession 
 			FinishedAt:  m.FinishedAt,
 			MessageType: m.MessageType,
 			ToolCallID:  m.ToolCallID,
+			ToolName:    m.ToolName,
+			IsError:     m.IsError,
 		}
 		for _, tc := range m.ToolCalls {
 			mm.ToolCalls = append(mm.ToolCalls, models.LogToolCall{

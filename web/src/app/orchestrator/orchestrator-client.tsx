@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Task } from "@/app/shared/lib/orchestratorApi";
 import { useOrchestratorSession } from "@/app/shared/hooks/useOrchestratorSession";
 import { useDashboardData } from "@/app/shared/hooks/useDashboardData";
@@ -60,6 +60,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
 
   const [statFilter, setStatFilter] = useState<StatFilter | null>(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [editTask, setEditTask] = useState<Task | null>(null);
   const [logTask, setLogTask] = useState<Task | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
@@ -68,6 +69,25 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   // "sla" swaps in the SLA report panel. Defaults to tasks so the existing
   // dashboard shape is unchanged on load.
   const [tab, setTab] = useState<"tasks" | "upcoming" | "sla" | "datasets" | "usage">("tasks");
+  const tabsRef = useRef<HTMLDivElement | null>(null);
+  // switchTab pins the tab row to the top of the scroll container when the
+  // user had scrolled: the new tab then starts at its beginning instead of
+  // the scroller clamping to the page top when the outgoing (taller) content
+  // unmounts — the "jumps to the top" bug on phones.
+  const switchTab = (next: typeof tab) => {
+    setTab(next);
+    // Pin after React commits the swapped panel (rAF): pinning against the
+    // OLD layout would be undone when the taller outgoing content unmounts
+    // and the scroller clamps.
+    requestAnimationFrame(() => {
+      const bar = tabsRef.current;
+      const scroller = bar?.closest(".overflow-y-auto");
+      if (!bar || !(scroller instanceof HTMLElement)) return;
+      if (scroller.scrollTop <= 1) return; // already at the top — don't move
+      const delta = bar.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTop = Math.max(0, scroller.scrollTop + delta - 8);
+    });
+  };
 
   // #458 symptom 2: the SLA tab + panel are admin-only. role may be absent (an
   // admin-API-key principal carries no role) — treat absent as non-admin for
@@ -171,20 +191,41 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
       </NavRail>
 
       <main className="flex min-h-0 flex-col overflow-hidden">
-        <PageTopBar title="Operations Center" onMenu={() => setSidebarOpen(true)} />
+        <PageTopBar
+          title="Operations Center"
+          onMenu={() => setSidebarOpen(true)}
+          actions={
+            /* Mobile-only New task: on phones the rail's button is inside the
+               off-canvas drawer, so surface the primary action in the bar. */
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:hidden"
+              data-testid="new-task-btn-topbar"
+              onClick={() => setTaskModalOpen(true)}
+            >
+              <Icon name="plus" className="size-4" />
+              New task
+            </button>
+          }
+        />
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="container">
             <div className="dashboard-content visible" data-testid="orchestrator-dashboard">
               <StatsGrid stats={dashboard.stats} activeFilter={statFilter} onFilter={applyStatFilter} />
 
-              <div className="dashboard-tabs" role="tablist" aria-label="Operations Center view">
+              <div
+                className="dashboard-tabs"
+                role="tablist"
+                aria-label="Operations Center view"
+                ref={tabsRef}
+              >
                 <button
                   type="button"
                   role="tab"
                   aria-selected={tab === "tasks"}
                   className={`tab-btn${tab === "tasks" ? " tab-btn-active" : ""}`}
-                  onClick={() => setTab("tasks")}
+                  onClick={() => switchTab("tasks")}
                 >
                   Recent Tasks
                 </button>
@@ -193,7 +234,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                   role="tab"
                   aria-selected={tab === "upcoming"}
                   className={`tab-btn${tab === "upcoming" ? " tab-btn-active" : ""}`}
-                  onClick={() => setTab("upcoming")}
+                  onClick={() => switchTab("upcoming")}
                 >
                   Upcoming
                 </button>
@@ -205,7 +246,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                   role="tab"
                   aria-selected={tab === "datasets"}
                   className={`tab-btn${tab === "datasets" ? " tab-btn-active" : ""}`}
-                  onClick={() => setTab("datasets")}
+                  onClick={() => switchTab("datasets")}
                 >
                   Datasets
                 </button>
@@ -215,7 +256,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                     role="tab"
                     aria-selected={tab === "sla"}
                     className={`tab-btn${tab === "sla" ? " tab-btn-active" : ""}`}
-                    onClick={() => setTab("sla")}
+                    onClick={() => switchTab("sla")}
                   >
                     SLA
                   </button>
@@ -228,13 +269,19 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                     role="tab"
                     aria-selected={tab === "usage"}
                     className={`tab-btn${tab === "usage" ? " tab-btn-active" : ""}`}
-                    onClick={() => setTab("usage")}
+                    onClick={() => switchTab("usage")}
                   >
                     Usage
                   </button>
                 ) : null}
               </div>
 
+              {/* The tab-panel wrapper keeps a floor under the content: when a
+                  tab switches, the incoming panel briefly renders a tiny
+                  loading state, and without the floor the page's height
+                  collapses under the scroll position — the browser clamps to
+                  the top, which reads as a jarring jump on phones. */}
+              <div className="dashboard-tab-panel">
               {tab === "datasets" ? (
                 <DatasetsPanel />
               ) : tab === "upcoming" ? (
@@ -254,26 +301,42 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                   onPage={dashboard.setPage}
                   onPageSize={dashboard.setPageSize}
                   onOpenLogs={setLogTask}
+                  onEdit={setEditTask}
                 />
               )}
+              </div>
 
-              <p className="refresh-note">Auto-refresh every 30 seconds</p>
+              <p className="refresh-note">
+                Auto-refresh every {dashboard.refreshSeconds} seconds
+              </p>
             </div>
           </div>
         </div>
       </main>
 
       <TaskCreateModal
-        open={taskModalOpen}
+        key={editTask ? `edit-${editTask.id}` : "create"}
+        open={taskModalOpen || !!editTask}
         servers={servers}
         serversLoading={serversLoading}
-        onClose={() => setTaskModalOpen(false)}
+        onClose={() => {
+          setTaskModalOpen(false);
+          setEditTask(null);
+        }}
         onCreated={() => void dashboard.reload()}
+        editTask={editTask}
+        onUpdated={() => void dashboard.reload()}
       />
       <LogViewer
         task={logTask}
         onClose={() => setLogTask(null)}
         canStop={isAdmin || (!!session.username && logTask?.created_by_username === session.username)}
+        onResubmitted={() => void dashboard.reload()}
+        onEdit={(t) => {
+          setLogTask(null);
+          setEditTask(t);
+        }}
+        onSelectTask={setLogTask}
       />
     </div>
   );

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // Notifier is the runner's narrow view of the outbound completion notifier
@@ -88,10 +89,10 @@ const notifyFanoutBudget = 90 * time.Second
 // prompt) shared by terminal and progress (#510) notifications.
 func notifyTaskName(prompt string) string {
 	const maxName = 60
-	if len(prompt) > maxName {
-		return prompt[:maxName] + "…"
-	}
-	return prompt
+	// Rune-boundary clamp (#595): a byte slice can cut a multi-byte rune in
+	// half, sending invalid UTF-8 into email subjects and the webhook JSON
+	// template.
+	return truncate.Clamp(prompt, maxName, "…")
 }
 
 func (p *Pool) buildEvent(task *models.Task, status notify.Status, session *models.LogSession, dur time.Duration) notify.Event {

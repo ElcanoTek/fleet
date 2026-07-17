@@ -28,28 +28,44 @@ type fakeTurnEngine struct {
 
 	recurringProposal *agent.RecurringTaskProposal // returned by SuggestRecurringTask (#455 promote tests)
 	recurringErr      error
+
+	libraryDraft    *agent.LibraryPromptDraft // returned by SuggestLibraryPrompt (suggest-prompt tests)
+	libraryDraftErr error
 }
 
 func (f *fakeTurnEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
 	if f.started != nil {
 		close(f.started)
 	}
+	newHistory := []agent.HistoryEntry{
+		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"` + in.UserMessage + `"}`)},
+		{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"` + f.partialText + `"}`)},
+	}
+	// Honor the #798 commit contract like agent.Manager: user entry durable
+	// before work starts, partial transcript committed BEFORE turn.cancelled.
+	if in.CommitUser != nil {
+		if err := in.CommitUser(ctx, newHistory[0]); err != nil {
+			return nil, err
+		}
+	}
 	// Stream a little partial output so a disconnecting client could have seen
 	// it, then block until the run is cancelled (Stop button → turnCancel).
 	sink.Emit("text.delta", map[string]any{"text": f.partialText})
 	<-ctx.Done()
+	if in.CommitTerminal != nil {
+		if err := in.CommitTerminal(newHistory[1:], true); err != nil {
+			return nil, err
+		}
+	}
 	if f.emitOnCancel {
 		sink.Emit("turn.cancelled", map[string]any{})
 	}
 	// The real driver returns a partial TurnResult with Cancelled=true and the
 	// work done so far, NOT an error, so the HTTP layer persists it.
 	return &TurnResult{
-		FinalText: f.partialText,
-		NewHistory: []agent.HistoryEntry{
-			{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"` + in.UserMessage + `"}`)},
-			{Role: "assistant", Type: "text", Content: json.RawMessage(`{"text":"` + f.partialText + `"}`)},
-		},
-		Cancelled: true,
+		FinalText:  f.partialText,
+		NewHistory: newHistory,
+		Cancelled:  true,
 	}, nil
 }
 
@@ -62,6 +78,9 @@ func (f *fakeTurnEngine) ExtractMemories(context.Context, string, string, []stri
 }
 func (f *fakeTurnEngine) SuggestRecurringTask(context.Context, string, []string) (*agent.RecurringTaskProposal, error) {
 	return f.recurringProposal, f.recurringErr
+}
+func (f *fakeTurnEngine) SuggestLibraryPrompt(context.Context, string) (*agent.LibraryPromptDraft, error) {
+	return f.libraryDraft, f.libraryDraftErr
 }
 func (f *fakeTurnEngine) MCPClient() *mcp.Client                       { return nil }
 func (f *fakeTurnEngine) SandboxPool() *sandbox.Pool                   { return nil }

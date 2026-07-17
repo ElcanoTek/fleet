@@ -88,6 +88,11 @@ func buildTextBody(ev Event) string {
 	fmt.Fprintf(&b, "Status: %s\r\n", ev.Status)
 	fmt.Fprintf(&b, "Cost: $%s\r\n", ev.CostUSD)
 	fmt.Fprintf(&b, "Duration: %ds\r\n", ev.DurationSeconds)
+	if ev.Message != "" {
+		// The ask-pause (#510) / progress message — for a paused task this IS
+		// the agent's question, the reason the notification exists.
+		fmt.Fprintf(&b, "Message: %s\r\n", ev.Message)
+	}
 	if ev.LogURL != "" {
 		fmt.Fprintf(&b, "Log: %s\r\n", ev.LogURL)
 	}
@@ -102,6 +107,13 @@ func buildHTMLBody(ev Event) string {
 		u := htmlEscape(ev.LogURL)
 		logLine = fmt.Sprintf("<p><a href=\"%s\">View run log</a></p>", u)
 	}
+	// The ask-pause (#510) / progress message — for a paused task this IS the
+	// agent's question, the reason the notification exists. Escaped like every
+	// other prompt-derived value.
+	messageLine := ""
+	if ev.Message != "" {
+		messageLine = fmt.Sprintf("<p><b>Message:</b> %s</p>", htmlEscape(ev.Message))
+	}
 	return fmt.Sprintf(
 		"<html><body>"+
 			"<h2>Fleet task %s</h2>"+
@@ -111,13 +123,14 @@ func buildHTMLBody(ev Event) string {
 			"<tr><td><b>Status</b></td><td>%s</td></tr>"+
 			"<tr><td><b>Cost</b></td><td>$%s</td></tr>"+
 			"<tr><td><b>Duration</b></td><td>%ds</td></tr>"+
-			"</table>%s</body></html>",
+			"</table>%s%s</body></html>",
 		htmlEscape(string(ev.Status)),
 		htmlEscape(ev.Name),
 		htmlEscape(ev.TaskID),
 		htmlEscape(string(ev.Status)),
 		htmlEscape(ev.CostUSD),
 		ev.DurationSeconds,
+		messageLine,
 		logLine,
 	)
 }

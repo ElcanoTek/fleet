@@ -20,8 +20,8 @@ import (
 //   - the finalize hook (leaked-tool-call retry + forced final summary) wired
 //     through agentcore.Run's Deps.Finalize; and
 //   - chat's head/summary/tail compaction wired through agentcore.Run's
-//     Deps.CompactionSummarizer (overflow-file spill stays in overflow.go's
-//     PrepareStep, which the native tools attach).
+//     Deps.CompactionSummarizer. The shared model-aware PrepareStep independently
+//     bounds replay and inner-loop tool context before every provider request.
 //
 // The interactive turn-loop's SSE streaming, store persistence, and approval
 // staging belong to the httpapi/store layers (P6); here we provide the loop
@@ -36,6 +36,9 @@ type TurnConfig struct {
 	// (built by replayHistory from the stored HistoryEntry rows).
 	Messages []fantasy.Message
 	Label    string
+	// ConversationID is operator-only panic attribution for the governed run.
+	// It is never added to the model prompt or tool arguments.
+	ConversationID string
 
 	Model          fantasy.LanguageModel
 	FallbackModel  fantasy.LanguageModel
@@ -109,6 +112,15 @@ type TurnConfig struct {
 	// (#220) for the turn. nil = off. Resolved by the Manager from the
 	// per-conversation override or the global default.
 	ThinkingConfig *agentcore.ThinkingConfig
+
+	// TurnJournal is the durable side-effect journal (#798): tool intents
+	// commit before dispatch, governed results before the next provider step.
+	// nil (evals, tests) = no journaling.
+	TurnJournal agentcore.TurnJournal
+
+	// SteerSource is the mid-turn input seam (#785): acknowledged messages
+	// inject at PrepareStep boundaries. nil = no steering.
+	SteerSource agentcore.SteerSource
 }
 
 // messagesInput adapts a pre-built message slice to agentcore.InputSource.
@@ -157,6 +169,8 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		Finalize:             buildInteractiveFinalize(tc),
 		CompactionSummarizer: buildInteractiveCompactionSummarizer(tc),
 		HealthRegistry:       tc.HealthRegistry,
+		TurnJournal:          tc.TurnJournal,
+		SteerSource:          tc.SteerSource,
 	}
 
 	// Per-user remote-MCP overlay (#443): advertise the shared catalog merged
@@ -167,6 +181,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	ApplyMCPOverlay(&deps, tc.MCPClient, tc.Overlay)
 
 	cfg := agentcore.RunConfig{
+		ConversationID:      tc.ConversationID,
 		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         tc.Temperature,
 		MaxCompletionTokens: tc.MaxTokens,
@@ -224,13 +239,24 @@ func buildInteractiveFinalize(tc TurnConfig) agentcore.FinalizeHook {
 // appending the leaked-call nudge, and returns the recovered final text.
 func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.FinalizeInput) (string, error) {
 	convo := append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(interactiveLeakedToolCallNudge))
+	prepare := chainPrepareSteps(
+		agentcore.ModelContextBudgetStep(in.SystemPrompt, in.Tools, tc.MaxTokens),
+		agentcore.PromptCachingStep(tc.Model.Model()),
+	)
+	// Stream under the run's own ceilings: the budget guard blocks the next
+	// paid completion once the cost/token ceiling is hit — without it this
+	// retry could keep buying steps unboundedly (its tool calls are only
+	// soft-blocked by policy, which doesn't stop the paid completions).
+	if in.GuardStep != nil {
+		prepare = in.GuardStep(prepare)
+	}
 	agent := fantasy.NewAgent(tc.Model,
 		fantasy.WithSystemPrompt(in.SystemPrompt),
-		fantasy.WithTools(tc.NativeTools...),
-		fantasy.WithPrepareStep(chainPrepareSteps(
-			overflowTruncationStep(),
-			agentcore.PromptCachingStep(tc.Model.Model()),
-		)),
+		// Reuse agentcore.Run's final governed roster. This keeps the finalize
+		// retry inside the same policy/credential/panic boundaries as the main
+		// stream instead of re-registering raw driver tools.
+		fantasy.WithTools(in.Tools...),
+		fantasy.WithPrepareStep(prepare),
 	)
 	maxTokens := int64(tc.MaxTokens)
 	temp := tc.Temperature
@@ -239,6 +265,9 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		Messages:        convo,
 		MaxOutputTokens: &maxTokens,
 		Temperature:     &temp,
+		// The run's step cap (CHAT_MAX_ITERATIONS) applies to the retry too —
+		// it streams with tools, so it is a real loop, not a single call.
+		StopWhen: in.StopWhen,
 		OnTextDelta: func(_, text string) error {
 			sb.WriteString(text)
 			if in.Observer != nil {
@@ -246,6 +275,8 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 			}
 			return nil
 		},
+		OnToolCall:   in.OnToolCall,
+		OnToolResult: in.OnToolResult,
 		// Meter this recovery call into the run's accounting so its tokens/cost
 		// are not invisible to the cost chip (#83). Nil-safe.
 		OnStepFinish: func(step fantasy.StepResult) error {
@@ -272,7 +303,7 @@ func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.Fi
 	agent := fantasy.NewAgent(tc.Model,
 		fantasy.WithSystemPrompt(in.SystemPrompt),
 		fantasy.WithPrepareStep(chainPrepareSteps(
-			overflowTruncationStep(),
+			agentcore.ModelContextBudgetStep(in.SystemPrompt, nil, tc.MaxTokens),
 			agentcore.PromptCachingStep(tc.Model.Model()),
 		)),
 	)
@@ -337,7 +368,10 @@ func summarizeDroppedMiddle(ctx context.Context, tc TurnConfig, droppable []fant
 	if tc.Model == nil || len(droppable) == 0 {
 		return placeholderCompactionSummary(len(droppable))
 	}
-	agent := fantasy.NewAgent(tc.Model, fantasy.WithSystemPrompt(compactionSummarizeSystemPrompt))
+	agent := fantasy.NewAgent(tc.Model,
+		fantasy.WithSystemPrompt(compactionSummarizeSystemPrompt),
+		fantasy.WithPrepareStep(agentcore.ModelContextBudgetStep(compactionSummarizeSystemPrompt, nil, 4096)),
+	)
 	convo := append(append([]fantasy.Message{}, droppable...), fantasy.NewUserMessage("Produce the summary as instructed above."))
 	maxTokens := int64(4096)
 	out, err := agent.Generate(ctx, fantasy.AgentCall{

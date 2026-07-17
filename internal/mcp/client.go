@@ -67,7 +67,14 @@ type Server struct {
 	mu        sync.Mutex // protects transport during restart
 	name      string
 	transport Transport
-	tools     []Tool
+	// toolsMu guards tools separately from mu: initialize reassigns the slice
+	// during a mid-call stdio restart (which holds mu for the whole restart,
+	// network round-trip included), while catalog readers (GetAllTools and
+	// friends) hold only Client.mu. Guarding reads with mu would block every
+	// catalog snapshot behind a hung restart; a dedicated RWMutex makes the
+	// assignment race-free without coupling readers to restart latency.
+	toolsMu sync.RWMutex
+	tools   []Tool
 
 	// def is the descriptor this server was built from, retained so a hot
 	// reload (#218) can diff the live server against a new manifest and decide
@@ -358,7 +365,7 @@ func (c *Client) GetAllTools() []ServerTool {
 
 	var allTools []ServerTool
 	for _, server := range c.servers {
-		for _, tool := range server.tools {
+		for _, tool := range server.toolsSnapshot() {
 			allTools = append(allTools, ServerTool{
 				ServerName: server.name,
 				Tool:       tool,
@@ -384,7 +391,7 @@ func (c *Client) CallTool(ctx context.Context, toolName string, arguments map[st
 	var target *Server
 	for _, name := range names {
 		server := c.servers[name]
-		for _, tool := range server.tools {
+		for _, tool := range server.toolsSnapshot() {
 			if tool.Name == toolName {
 				target = server
 				break
@@ -440,7 +447,7 @@ func (c *Client) CallToolPrefixed(ctx context.Context, fullName string, argument
 			continue
 		}
 		has := false
-		for _, tool := range server.tools {
+		for _, tool := range server.toolsSnapshot() {
 			if tool.Name == rest {
 				has = true
 				break
@@ -526,8 +533,19 @@ func (s *Server) initialize(ctx context.Context) error {
 		return fmt.Errorf("failed to parse tools response: %w", err)
 	}
 
+	s.toolsMu.Lock()
 	s.tools = toolsResponse.Tools
+	s.toolsMu.Unlock()
 	return nil
+}
+
+// toolsSnapshot returns the server's current tool slice under the tools lock.
+// Catalog readers must use this instead of touching s.tools directly — a
+// mid-call stdio restart reassigns the slice concurrently (see toolsMu).
+func (s *Server) toolsSnapshot() []Tool {
+	s.toolsMu.RLock()
+	defer s.toolsMu.RUnlock()
+	return s.tools
 }
 
 func (s *Server) callTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
@@ -613,7 +631,7 @@ func (s *Server) restartLocked(ctx context.Context) error {
 		return fmt.Errorf("failed to reinitialize server: %w", err)
 	}
 
-	log.Printf("MCP server %s restarted and reinitialized (%d tools)", s.name, len(s.tools))
+	log.Printf("MCP server %s restarted and reinitialized (%d tools)", s.name, len(s.toolsSnapshot()))
 	return nil
 }
 

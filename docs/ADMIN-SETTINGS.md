@@ -23,9 +23,10 @@ needs a restart, ever.
   not served — the default is — but it stays visible in the panel as an
   **"Ignored override"** with its attribution, so it can be Reset rather than
   lingering invisibly. The registry bounds constrain what an admin may write;
-  an env-var default outside those bounds (e.g. a legacy
-  `FLEET_MAX_TOOL_OUTPUT_BYTES=512`) is honored verbatim as the default — one
-  out-of-range env value never disables the panel.
+  an env-var default is normalized by the owning runtime before it reaches the
+  panel. In particular, `FLEET_MAX_TOOL_OUTPUT_BYTES` is clamped to 1 KiB–128 KiB
+  and zero/negative values select the safe 64 KiB default; no setting can
+  disable the hard model-visible boundary.
 - **Applied live.** At boot (after the store is ready) and after every admin
   edit, the effective value is pushed into the running system: the PII
   redactor is hot-swapped (`agentcore.SetPIIRedactor`), the two agentcore
@@ -63,7 +64,7 @@ needs a restart, ever.
 | `guardrail_mode` | `off`/`observe`/`block` | `FLEET_GUARDRAIL_MODE` | Host-side untrusted-ingress screening ([GUARDRAILS.md](GUARDRAILS.md)) |
 | `guardrail_url` | http(s) URL (or empty) | `FLEET_GUARDRAIL_URL` | Prompt-injection detector endpoint |
 | `tool_disclosure_threshold` | int 1–100000 | `FLEET_TOOL_DISCLOSURE_THRESHOLD` | Roster size that triggers BM25 tool disclosure ([TOOL-DISCLOSURE.md](TOOL-DISCLOSURE.md)) |
-| `max_tool_output_bytes` | int 1024–16 MiB, or 0 = no ceiling | `FLEET_MAX_TOOL_OUTPUT_BYTES` | Per-tool-call output cap before the transcript (#199) |
+| `max_tool_output_bytes` | int 1024–128 KiB, or 0 = 64 KiB default | `FLEET_MAX_TOOL_OUTPUT_BYTES` | Operational per-tool result cap inside the non-disableable 128 KiB model-visible boundary ([TOOL-OUTPUT-BOUNDARY.md](TOOL-OUTPUT-BOUNDARY.md)) |
 | `phone_a_friend_enabled` | bool | `FLEET_PHONE_A_FRIEND_ENABLED` | One-time super-LLM review of scheduled runs ([AGENT-RUNTIME.md](AGENT-RUNTIME.md)) |
 | `subagents_enabled` | bool | `FLEET_SUBAGENTS_ENABLED` | Fleet-wide sub-agent delegation (per-task `allow_delegation` still works) |
 | `memory_autoindex_enabled` | bool | `FLEET_MEMORY_AUTOINDEX_ENABLED` | Post-turn memory auto-indexer ([MEMORY.md](MEMORY.md)) |

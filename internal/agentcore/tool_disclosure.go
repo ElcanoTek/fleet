@@ -18,7 +18,7 @@ import (
 // exceed the disclosure threshold, the deferrable (MCP) tools are hidden behind
 // three bridge tools — tool_search → tool_describe → tool_call — backed by an
 // in-process BM25 index (internal/tools). Core tools (native, loader,
-// pre-gated, confirm_audit) are NEVER deferred, so bash/python/approvals/etc.
+// confirm_audit) are NEVER deferred, so bash/python/approvals/etc.
 // stay directly callable.
 //
 // A deferred call routes through the SAME *mcpTool wrapper a direct call would:
@@ -173,29 +173,100 @@ func (r *deferredToolRegistry) describeTool() fantasy.AgentTool {
 		})
 }
 
-type toolCallParams struct {
-	Name      string          `json:"name" description:"The exact tool name from tool_search/tool_describe."`
-	Arguments json.RawMessage `json:"arguments" description:"The tool's arguments as a JSON object, matching its parameter schema."`
+func (r *deferredToolRegistry) callTool() fantasy.AgentTool {
+	return &deferredToolCall{registry: r}
 }
 
-func (r *deferredToolRegistry) callTool() fantasy.AgentTool {
-	return fantasy.NewAgentTool(toolNameToolCall,
-		"Invoke a deferred tool by name with its arguments (from tool_describe). The call runs under the same policy, credential, and audit controls as any tool.",
-		func(ctx context.Context, p toolCallParams, tc fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			name := strings.TrimSpace(p.Name)
-			t, ok := r.byName[name]
-			if !ok {
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("tool_call: no tool named %q — use tool_search to find the right name.", name)), nil
-			}
-			args := string(p.Arguments)
-			if strings.TrimSpace(args) == "" {
-				args = "{}"
-			}
-			// Dispatch through the real tool's Run with the SAME call id, so its
-			// policy gate + broker + audit + redaction all apply as if it had been
-			// called directly. The result is returned verbatim.
-			return t.Run(ctx, fantasy.ToolCall{ID: tc.ID, Name: name, Input: args})
-		})
+// deferredToolCall is implemented explicitly rather than through
+// fantasy.NewAgentTool. json.RawMessage's underlying Go type is []byte, so the
+// reflection-based schema generator advertises it as an integer ARRAY even
+// though a deferred tool's arguments must be a JSON OBJECT. Models that obeyed
+// that schema wrapped the object in an array and then looped forever on the MCP
+// decoder's "cannot unmarshal array into map" error (#606).
+//
+// Owning Info here makes the provider-facing contract truthful. Run also
+// accepts the legacy singleton-array shape so an in-flight/cached model response
+// generated from the old schema recovers immediately after a rolling deploy.
+type deferredToolCall struct {
+	registry        *deferredToolRegistry
+	providerOptions fantasy.ProviderOptions
+}
+
+func (t *deferredToolCall) Info() fantasy.ToolInfo {
+	return fantasy.ToolInfo{
+		Name: "tool_call",
+		Description: "Invoke a deferred tool by name with its arguments (from tool_describe). " +
+			"The call runs under the same policy, credential, and audit controls as any tool.",
+		Parameters: map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "The exact tool name from tool_search/tool_describe.",
+			},
+			"arguments": map[string]any{
+				"type":                 "object",
+				"description":          "The tool's arguments as a JSON object, matching its parameter schema.",
+				"additionalProperties": true,
+			},
+		},
+		Required: []string{"name", "arguments"},
+	}
+}
+
+func (t *deferredToolCall) ProviderOptions() fantasy.ProviderOptions {
+	return t.providerOptions
+}
+
+func (t *deferredToolCall) SetProviderOptions(opts fantasy.ProviderOptions) {
+	t.providerOptions = opts
+}
+
+func (t *deferredToolCall) Run(ctx context.Context, tc fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	var p struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(tc.Input), &p); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid parameters: %s", err)), nil
+	}
+
+	name := strings.TrimSpace(p.Name)
+	tool, ok := t.registry.byName[name]
+	if !ok {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool_call: no tool named %q — use tool_search to find the right name.", name)), nil
+	}
+
+	args, err := normalizeDeferredArguments(p.Arguments)
+	if err != nil {
+		//nolint:nilerr // intentional: a malformed arguments payload is reported to the MODEL as a text error response (like the two rejections above) so it can correct the call; a non-nil Go error would abort the run.
+		return fantasy.NewTextErrorResponse("tool_call: " + err.Error()), nil
+	}
+
+	// Dispatch through the real tool's Run with the SAME call id, so its policy
+	// gate + broker + audit + redaction all apply as if called directly.
+	return tool.Run(ctx, fantasy.ToolCall{ID: tc.ID, Name: name, Input: string(args)})
+}
+
+func normalizeDeferredArguments(raw json.RawMessage) (json.RawMessage, error) {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage(`{}`), nil
+	}
+	if raw[0] == '{' {
+		return raw, nil
+	}
+	if raw[0] != '[' {
+		return nil, fmt.Errorf("arguments must be a JSON object")
+	}
+
+	var legacy []json.RawMessage
+	if err := json.Unmarshal(raw, &legacy); err != nil || len(legacy) != 1 {
+		return nil, fmt.Errorf("arguments must be a JSON object")
+	}
+	one := json.RawMessage(strings.TrimSpace(string(legacy[0])))
+	if len(one) == 0 || one[0] != '{' {
+		return nil, fmt.Errorf("arguments must be a JSON object")
+	}
+	return one, nil
 }
 
 // oneLine collapses whitespace and clamps a description for the search listing.

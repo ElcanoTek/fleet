@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -104,7 +105,15 @@ func (m *Manager) ReloadMCPServers(ctx context.Context, newSpecs map[string]MCPS
 	m.optionalServers = optional
 	m.mcpGatingMu.Unlock()
 
-	summary, err := m.mcpClient.Reload(ctx, specsToServerDefs(newSpecs))
+	// Bound the reload like boot bounds initial registration (60s): a stdio
+	// server that starts but never answers `initialize` would otherwise block
+	// under reloadMu forever with the ctx being app-lifetime — wedging every
+	// future reload AND leaving the just-published new gates running against
+	// the old catalog indefinitely. On timeout the client reload fails
+	// all-or-nothing and the gate revert below restores consistency.
+	reloadCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	summary, err := m.mcpClient.Reload(reloadCtx, specsToServerDefs(newSpecs))
 	if err != nil {
 		m.mcpGatingMu.Lock()
 		m.allowlist = prevAllow

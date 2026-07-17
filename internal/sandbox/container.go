@@ -5,15 +5,20 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/metrics"
@@ -56,6 +61,13 @@ type containerImpl struct {
 	statsCancel  context.CancelFunc
 	statsDone    chan struct{}
 	statsSummary ResourceUsageSummary
+
+	// execPoisoned latches when a cancelled/timed-out bash invocation's
+	// in-container process tree could NOT be proved dead (#796). A poisoned
+	// container refuses further work (Sandbox gates on it) and is retired by
+	// its owner — close() podman-kills the container, which is the one
+	// guaranteed way to stop whatever is still running inside.
+	execPoisoned atomic.Bool
 }
 
 // syncBuffer is a goroutine-safe wrapper around bytes.Buffer. We need
@@ -651,7 +663,9 @@ func (c *containerImpl) startStatsCollector() {
 // the cgroup driver chosen at `podman run` time — it re-resolves from
 // the global default (which on a stock Fedora install is "systemd").
 func (c *containerImpl) podmanArgs(rest []string) []string {
-	out := make([]string, 0, len(rest)+1)
+	// No manual capacity arithmetic (len(rest)+1 trips CodeQL's
+	// allocation-size-overflow check); append sizes the backing array itself.
+	var out []string
 	// --cgroup-manager=cgroupfs is needed on Linux where chat-server runs as a
 	// systemd unit (system.slice) but rootless podman defaults to the systemd
 	// cgroup driver, causing cgroup migration permission errors on every exec.
@@ -659,9 +673,13 @@ func (c *containerImpl) podmanArgs(rest []string) []string {
 	if runtime.GOOS == "linux" {
 		out = append(out, "--cgroup-manager=cgroupfs")
 	}
-	out = append(out, rest...)
-	return out
+	return append(out, rest...)
 }
+
+// execReapTimeout bounds the synchronous container-kill on a cancelled/timed-out
+// bash call (#796). A daemon too wedged to answer in this window still leaves the
+// sandbox poisoned, so it is retired regardless.
+const execReapTimeout = 10 * time.Second
 
 func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResult, error) {
 	timeout := req.Timeout
@@ -703,14 +721,228 @@ func (c *containerImpl) runBash(ctx context.Context, req BashRequest) (BashResul
 	} else {
 		res.ExitCode = -1
 	}
-	if cmdCtx.Err() == context.DeadlineExceeded {
-		res.TimedOut = true
+	if cmdCtx.Err() != nil {
+		// Cancellation/timeout kills only the podman exec CLIENT; the shell
+		// and its descendants keep running inside the container (#796). The
+		// ONLY way to guarantee every straggler dies — a backgrounded
+		// grandchild, a `setsid` daemon that left the process group, a child
+		// that ignores SIGTERM — is to tear down the container's PID
+		// namespace: podman kill signals init, the kernel reaps the whole
+		// namespace. So we kill the container synchronously here (marker can
+		// no longer be written) AND poison the sandbox so the pool never
+		// lends this now-dead container to another turn. This is the issue's
+		// "poison and retire the entire sandbox" default, chosen over
+		// per-process targeting precisely because targeting cannot catch a
+		// process that escaped the group.
+		res.TimedOut = errors.Is(cmdCtx.Err(), context.DeadlineExceeded)
+		res.Cancelled = !res.TimedOut
+		// Pass the containerID captured for this call — killContainerNow must
+		// NOT re-acquire c.mu, which a concurrent long run_python cell holds
+		// for its whole duration; blocking the kill behind it would re-open
+		// the #796 window (the straggler runs while we wait for the lock).
+		c.execPoisoned.Store(true)
+		res.CleanupConfirmed = c.killContainerNow(c.containerID)
+		res.SandboxRetired = true
 		return res, nil
 	}
 	if execErr != nil && cmd.ProcessState == nil {
 		return res, fmt.Errorf("podman exec: %w", execErr)
 	}
 	return res, nil
+}
+
+// killContainerNow SIGKILLs the whole container synchronously on a cancelled or
+// timed-out bash call (#796), destroying its PID namespace and with it every
+// process the call spawned — including ones that escaped the process group. It
+// runs on a fresh context because the caller's is already cancelled, and takes
+// containerID as a parameter so it never touches c.mu — a concurrent
+// run_python cell holds that mutex for its whole runtime, and blocking the kill
+// behind it would leave the straggler running. Reports whether the kill was
+// confirmed; either way the caller poisons the sandbox so close()/retirement
+// removes the container even if this best-effort kill did not land. Idempotent
+// with close()'s own kill (a second kill of a gone container is harmless).
+func (c *containerImpl) killContainerNow(containerID string) bool {
+	if containerID == "" {
+		return true // already torn down by close()
+	}
+	killCtx, cancel := context.WithTimeout(context.Background(), execReapTimeout)
+	defer cancel()
+	args := c.podmanArgs([]string{"kill", "--signal", "KILL", containerID})
+	out, err := exec.CommandContext(killCtx, c.cfg.PodmanBinary, args...).CombinedOutput() //nolint:gosec // containerID is our generated name, not user input
+	if err != nil {
+		// A "no such container"/"already stopped" error means it is already
+		// gone — cleanup is effectively confirmed. Any other error (daemon
+		// wedged, timeout) leaves cleanup unconfirmed; the poison + retirement
+		// below is the backstop.
+		low := strings.ToLower(string(out))
+		if strings.Contains(low, "no such container") || strings.Contains(low, "not running") || strings.Contains(low, "no container") {
+			return true
+		}
+		log.Printf("sandbox: cancelled-exec container kill unconfirmed (%s): %v (%.200s)", containerID, err, string(out))
+		return false
+	}
+	return true
+}
+
+// poisoned reports whether a cancelled/timed-out invocation retired this
+// sandbox (#796); a poisoned container has been killed and must not be reused.
+func (c *containerImpl) poisoned() bool {
+	return c.execPoisoned.Load()
+}
+
+// fileOpTimeout bounds a single sandboxed file operation (#784). Generous
+// enough for a 10 MB view read, short enough that a wedged container surfaces
+// an error instead of hanging the turn.
+const fileOpTimeout = 60 * time.Second
+
+// runFileOp executes one file operation INSIDE the container via a one-shot
+// `podman exec -i python3 -c <fileops.py>` (#784), so read/write/edit inherit
+// the container's runtime, seccomp, caps, cgroups, disk/PID limits, and network
+// posture exactly like bash/run_python. It does not use the run_python bridge
+// (no kernel boot, no c.mu serialization, works in lockdown).
+func (c *containerImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error) {
+	anchor, readOnly, err := c.fileOpAnchor(req.Root)
+	if err != nil {
+		return FileOpResult{}, err
+	}
+	if readOnly && req.Op != FileOpRead {
+		return FileOpResult{}, fmt.Errorf("fileop write requested beneath a read-only mount: %w", ErrFileOpUnsafePath)
+	}
+	if !readOnly && !req.rootBound {
+		return FileOpResult{}, fmt.Errorf("writable fileop root was not bound before the turn: %w", ErrFileOpUnsafePath)
+	}
+	return c.executeFileOp(ctx, req, anchor)
+}
+
+func (c *containerImpl) bindFileOpRoot(ctx context.Context, root string) (FileOpRootIdentity, error) {
+	anchor, readOnly, err := c.fileOpAnchor(root)
+	if err != nil {
+		return FileOpRootIdentity{}, err
+	}
+	if readOnly {
+		return FileOpRootIdentity{}, fmt.Errorf("cannot bind a read-only mount as the writable fileop root: %w", ErrFileOpUnsafePath)
+	}
+	res, err := c.executeFileOp(ctx, FileOpRequest{
+		Op: fileOpBindRoot, Path: root, Root: root,
+	}, anchor)
+	if err != nil {
+		return FileOpRootIdentity{}, err
+	}
+	return res.rootIdentity, nil
+}
+
+func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor string) (FileOpResult, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
+	defer cancel()
+
+	wire := map[string]any{
+		"op":     string(req.Op),
+		"path":   req.Path,
+		"root":   req.Root,
+		"anchor": anchor,
+	}
+	switch req.Op {
+	case FileOpRead:
+		wire["offset"] = req.Offset
+		wire["limit"] = req.Limit
+	case FileOpWrite:
+		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
+	case FileOpEdit:
+		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
+		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))
+		wire["replace_all"] = req.ReplaceAll
+		if req.ExpectedSHA256 != "" {
+			wire["expected_sha256"] = req.ExpectedSHA256
+		}
+	case fileOpBindRoot:
+		// Root + anchor are the complete request.
+	default:
+		return FileOpResult{}, fmt.Errorf("unknown fileop %q", req.Op)
+	}
+	if req.testPause > 0 {
+		wire["test_pause_ms"] = req.testPause.Milliseconds()
+		wire["test_ready_name"] = req.testReadyName
+	}
+	if req.rootBound {
+		wire["expected_dev"] = req.expectedDev
+		wire["expected_ino"] = req.expectedIno
+	}
+	reqJSON, err := json.Marshal(wire)
+	if err != nil {
+		return FileOpResult{}, fmt.Errorf("marshal fileop: %w", err)
+	}
+
+	args := c.podmanArgs([]string{"exec", "-i", c.containerID, "python3", "-c", string(fileOpsScript)})
+	cmd := exec.CommandContext(cmdCtx, c.cfg.PodmanBinary, args...) //nolint:gosec // fixed embedded script; container is our isolated sandbox
+	cmd.Stdin = bytes.NewReader(reqJSON)
+	cmd.WaitDelay = BashWaitDelay
+	out, err := cmd.Output()
+	if err != nil {
+		if cmdCtx.Err() != nil {
+			// CommandContext only kills the host-side podman client. Exactly like
+			// bash (#796), the helper may still be alive inside the persistent
+			// container and could complete a rename after the turn stopped. Tear
+			// down the PID namespace synchronously and poison the handle so the
+			// pool retires it before another turn can borrow it.
+			c.execPoisoned.Store(true)
+			_ = c.killContainerNow(c.containerID)
+			return FileOpResult{}, fmt.Errorf("fileop %s interrupted (%w); sandbox retired: %w", req.Op, cmdCtx.Err(), ErrPoisoned)
+		}
+		return FileOpResult{}, fmt.Errorf("fileop %s exec: %w%s", req.Op, err, stderrOf(err))
+	}
+	return decodeFileOpResponse(out)
+}
+
+// fileOpAnchor returns the most specific trusted bind mount containing root.
+// The helper opens this mount with O_NOFOLLOW, then walks Root and Path beneath
+// it using directory descriptors. A model-controlled Root can therefore never
+// turn the shared workspace mount into authority over a sibling conversation.
+func (c *containerImpl) fileOpAnchor(root string) (anchor string, readOnly bool, err error) {
+	type mount struct {
+		path     string
+		readOnly bool
+	}
+	candidates := make([]mount, 0, len(c.cfg.ReadOnlyMounts)+1)
+	candidates = append(candidates, mount{path: c.cfg.WorkspaceHostDir})
+	for _, path := range c.cfg.ReadOnlyMounts {
+		candidates = append(candidates, mount{path: path, readOnly: true})
+	}
+	best := ""
+	for _, candidate := range candidates {
+		if candidate.path == "" {
+			continue
+		}
+		abs, absErr := filepath.Abs(candidate.path)
+		if absErr != nil {
+			continue
+		}
+		inside, withinErr := pathWithin(abs, root)
+		if withinErr == nil && inside && len(abs) > len(best) {
+			best = filepath.Clean(abs)
+			readOnly = candidate.readOnly
+		}
+	}
+	if best == "" {
+		return "", false, fmt.Errorf("fileop root is not inside a sandbox bind mount: %w", ErrFileOpUnsafePath)
+	}
+	return best, readOnly, nil
+}
+
+// stderrOf appends a captured stderr tail from an *exec.ExitError, if any.
+func stderrOf(err error) string {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+		return " (" + summarizeBytes(ee.Stderr, 200) + ")"
+	}
+	return ""
+}
+
+func summarizeBytes(b []byte, n int) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
 
 func (c *containerImpl) runPython(ctx context.Context, req PythonRequest) (PythonResult, error) {

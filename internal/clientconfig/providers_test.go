@@ -17,6 +17,8 @@ func TestValidateProviders(t *testing.T) {
 		{"valid anthropic", []ProviderDef{valid}, ""},
 		{"valid openrouter catch-all", []ProviderDef{{Name: "or", Type: "openrouter", APIKeyEnv: "OPENROUTER_API_KEY"}}, ""},
 		{"ollama needs no key", []ProviderDef{{Name: "local", Type: "ollama"}}, ""},
+		{"positive context window", []ProviderDef{{Name: "local", Type: "ollama", ContextWindowTokens: 32_768}}, ""},
+		{"negative context window", []ProviderDef{{Name: "local", Type: "ollama", ContextWindowTokens: -1}}, "context_window_tokens must be positive"},
 		{"blank name", []ProviderDef{{Type: "anthropic", APIKeyEnv: "K"}}, "name is required"},
 		{"duplicate name", []ProviderDef{valid, valid}, "duplicate provider name"},
 		{"missing type", []ProviderDef{{Name: "x", APIKeyEnv: "K"}}, "type is required"},

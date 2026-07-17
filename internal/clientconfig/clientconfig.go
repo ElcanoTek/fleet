@@ -108,6 +108,11 @@ type Bundle struct {
 	// in the generic bundle. cmd/fleet translates it into agentcore.AgentPolicy.
 	AgentPolicyConfig AgentPolicy
 
+	// HooksConfig carries the bundle's optional governed lifecycle hooks (#788).
+	// nil/empty in the generic bundle. cmd/fleet translates it into
+	// []agentcore.LifecycleHook at startup. Read via Bundle.Hooks().
+	HooksConfig *HooksConfig
+
 	// Personas carries the manifest's optional per-persona tool-permission
 	// policies (#294), in manifest order. Empty in the generic bundle (defaults
 	// unchanged). Look one up via PersonaToolPolicy. cmd/fleet translates each
@@ -674,11 +679,12 @@ func (t WebhookTriggerDef) SignatureHeader() string {
 // the model resolver. The secret never enters the manifest, the sandbox, the
 // model context, or the logs.
 type ProviderDef struct {
-	Name      string   `yaml:"name"`        // routing name; unique within the manifest
-	Type      string   `yaml:"type"`        // openrouter | anthropic | openai | ollama
-	APIKeyEnv string   `yaml:"api_key_env"` // env var holding the credential (not needed for ollama)
-	BaseURL   string   `yaml:"base_url"`    // optional endpoint override
-	Models    []string `yaml:"models"`      // slugs this provider serves; empty = catch-all
+	Name                string   `yaml:"name"`                  // routing name; unique within the manifest
+	Type                string   `yaml:"type"`                  // openrouter | anthropic | openai | ollama
+	APIKeyEnv           string   `yaml:"api_key_env"`           // env var holding the credential (not needed for ollama)
+	BaseURL             string   `yaml:"base_url"`              // optional endpoint override
+	Models              []string `yaml:"models"`                // slugs this provider serves; empty = catch-all
+	ContextWindowTokens int      `yaml:"context_window_tokens"` // provider-local context; OpenRouter uses authoritative per-model metadata
 }
 
 // RemoteMCPCatalogEntry is one curated third-party hosted MCP server from the
@@ -797,6 +803,7 @@ type manifest struct {
 	Personas          []PersonaDef     `yaml:"personas"`
 	Pricing           PricingConfig    `yaml:"pricing"`
 	Sandbox           *sandboxManifest `yaml:"sandbox"`
+	Hooks             *HooksConfig     `yaml:"hooks"`
 }
 
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
@@ -865,6 +872,7 @@ func Load(dir string) (*Bundle, error) {
 		Providers:         m.Providers,
 		FallbackProviders: m.FallbackProviders,
 		AgentPolicyConfig: m.AgentPolicy,
+		HooksConfig:       m.Hooks,
 		Personas:          m.Personas,
 		PricingConfig:     m.Pricing,
 		SandboxConfig:     resolveSandbox(m.Sandbox, abs),
@@ -1079,6 +1087,9 @@ func (b *Bundle) validate() error {
 	if err := validatePricing(b.PricingConfig); err != nil {
 		return err
 	}
+	if err := validateHooks(b.HooksConfig); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1289,6 +1300,9 @@ func (b *Bundle) validateProviders() error {
 		}
 		if typ != "ollama" && strings.TrimSpace(p.APIKeyEnv) == "" {
 			return fmt.Errorf("providers[%q]: api_key_env is required for a %q provider", name, typ)
+		}
+		if p.ContextWindowTokens < 0 {
+			return fmt.Errorf("providers[%q]: context_window_tokens must be positive when set", name)
 		}
 	}
 	chainSeen := map[string]bool{}
@@ -2049,8 +2063,11 @@ func interpolate(v string) string {
 			sb.WriteString(v[start:])
 			break
 		}
-		name := v[start+2 : start+end]
-		if reservedRuntimeVar(strings.TrimSpace(name)) {
+		// Trim the var name for parity with lookupNonEmpty/envRefs — the load
+		// pass registers "${ FOO }" as FOO, so spawn-time resolution must
+		// read the same key.
+		name := strings.TrimSpace(v[start+2 : start+end])
+		if reservedRuntimeVar(name) {
 			sb.WriteString(v[start : start+end+1]) // preserve the reserved token verbatim
 		} else {
 			sb.WriteString(strings.TrimSpace(os.Getenv(name)))

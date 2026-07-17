@@ -40,6 +40,10 @@ type RunEntry struct {
 	ToolName   string
 	ToolInput  string // raw JSON the model emitted (tool_call only)
 	IsErr      bool   // tool_result only
+
+	// SteerID marks a mid-turn injected user message (#785, Type "user_text");
+	// the sink dedupes on it across resilience re-drives.
+	SteerID string
 }
 
 // SSE event-payload field keys, matching the names the chat frontend reads off
@@ -82,7 +86,8 @@ const toolResultMaxStreamBytes = 4000
 // neutral RunEntry, so the loop ends with both a live-streamed UI and a
 // persistable history of the round's reasoning/text/tool work.
 type streamSink struct {
-	observer Observer
+	observer    Observer
+	attribution panicAttribution
 
 	mu sync.Mutex
 	// entries is the ordered accumulation of this run's reasoning / text /
@@ -92,28 +97,56 @@ type streamSink struct {
 	// the loop can recover it for the finalize hook + the Result.
 	finalText strings.Builder
 	// reasoningBufs buffers reasoning deltas per id; committed on End.
-	reasoningBufs  map[string]*strings.Builder
-	semanticEvents int
+	reasoningBufs map[string]*strings.Builder
+	// toolEvents counts observable tool side effects (tool_call/tool_result).
+	// The resilience layer compares it against a per-attempt mark to decide
+	// whether a failed stream attempt may be re-driven: text/reasoning output is
+	// regenerable, an executed tool is not (re-driving the round could repeat
+	// its side effect). See streamRoundWithResilience.
+	toolEvents int
 }
 
-func newStreamSink(obs Observer) *streamSink {
-	return &streamSink{
+func newStreamSink(obs Observer, attribution ...panicAttribution) *streamSink {
+	sink := &streamSink{
 		observer:      obs,
 		reasoningBufs: make(map[string]*strings.Builder),
 	}
+	if len(attribution) > 0 {
+		sink.attribution = attribution[0]
+	}
+	return sink
 }
 
-// emit forwards an event to the Observer when one is wired (nil-safe).
+// emit forwards an event to the Observer when one is wired (nil-safe). Run
+// installs one panicContainedObserver around the seam before constructing a
+// streamSink, including non-stream persona/enforcement callbacks.
 func (s *streamSink) emit(eventType string, payload map[string]any) {
 	if s.observer != nil {
 		s.observer.Observe(eventType, payload)
 	}
 }
 
+// onUserInjected records a steered mid-turn user message (#785) exactly once
+// per steer id: the entry rides Result.Entries into the terminal history
+// commit (persisted once, like every other entry), and the event tells live +
+// replayed streams to render the user bubble mid-turn. Idempotent by SteerID
+// so a resilience rollback + re-drive cannot double-record it.
+func (s *streamSink) onUserInjected(id, text string) {
+	s.mu.Lock()
+	for _, e := range s.entries {
+		if e.Type == "user_text" && e.SteerID == id {
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.entries = append(s.entries, RunEntry{Role: "user", Type: "user_text", Text: text, SteerID: id})
+	s.mu.Unlock()
+	s.emit("user.message", map[string]any{evtFieldText: text, "steered": true, "input_id": id})
+}
+
 // onTextDelta forwards a text chunk to the Observer and accumulates it.
 func (s *streamSink) onTextDelta(text string) {
 	s.mu.Lock()
-	s.semanticEvents++
 	s.finalText.WriteString(text)
 	s.mu.Unlock()
 	s.emit("text.delta", map[string]any{evtFieldText: text})
@@ -123,7 +156,6 @@ func (s *streamSink) onTextDelta(text string) {
 // block on the start event (Gemini), others stream deltas — capture both.
 func (s *streamSink) onReasoningStart(id, text string) {
 	s.mu.Lock()
-	s.semanticEvents++
 	b := &strings.Builder{}
 	if text != "" {
 		b.WriteString(text)
@@ -163,7 +195,7 @@ func (s *streamSink) onReasoningEnd(id, content string) {
 // onToolCall forwards + records an assistant tool call.
 func (s *streamSink) onToolCall(id, name, input string) {
 	s.mu.Lock()
-	s.semanticEvents++
+	s.toolEvents++
 	s.entries = append(s.entries, RunEntry{
 		Role: roleAssistant, Type: "tool_call",
 		ToolCallID: id, ToolName: name, ToolInput: input,
@@ -174,13 +206,15 @@ func (s *streamSink) onToolCall(id, name, input string) {
 
 // onToolResult forwards (truncated) + records (full) a tool result.
 func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
-	// Backstop redaction for the observer/SSE + recorded-entry path. The tool
-	// wrappers already redact resp.Content, but pre-gated tools register verbatim
-	// and reach here directly — so scrub again before anything is recorded,
-	// streamed to the browser, or persisted to turn_events.
+	// Every externally sourced result crosses its secret/PII/output boundary
+	// before the ToolResponse reaches Fantasy; disclosure-bridge corrections are
+	// Fleet-generated. Reapply only the deterministic secret scrubber as a final
+	// backstop for Fantasy-generated validation/not-found errors. Configurable PII
+	// and guardrail passes stay at the governed tool boundary, so a panic in one
+	// cannot recur here and drop the outer boundary's safe incident response.
 	text = toolRedactor().Redact(text)
 	s.mu.Lock()
-	s.semanticEvents++
+	s.toolEvents++
 	s.entries = append(s.entries, RunEntry{
 		Role: roleTool, Type: "tool_result",
 		ToolCallID: id, ToolName: name, Text: text, IsErr: isErr,
@@ -194,10 +228,63 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 	})
 }
 
-func (s *streamSink) semanticEventCount() int {
+// toolEventCount is nil-safe (0): the resilience loop tolerates a nil sink
+// (the lifted parity tests build rounds without one).
+func (s *streamSink) toolEventCount() int {
+	if s == nil {
+		return 0
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.semanticEvents
+	return s.toolEvents
+}
+
+// sinkMark captures the sink's accumulation point at the start of a stream
+// attempt so a failed attempt's partial output can be rolled back before the
+// attempt is re-driven (in-place stream-blip retry or fallback swap). The
+// re-driven attempt regenerates the round from scratch — without the rollback
+// its output would be appended AFTER the failed attempt's partial text,
+// duplicating it in both the persisted history and the final answer.
+type sinkMark struct {
+	entries    int
+	finalText  int
+	toolEvents int
+}
+
+// mark snapshots the current accumulation point. Nil-safe (zero mark).
+func (s *streamSink) mark() sinkMark {
+	if s == nil {
+		return sinkMark{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return sinkMark{entries: len(s.entries), finalText: s.finalText.Len(), toolEvents: s.toolEvents}
+}
+
+// rollbackTo discards everything accumulated after the mark: partial entries,
+// partial final text, and any in-flight (uncommitted) reasoning buffers. Only
+// called on a failed attempt that produced NO tool events past the mark — the
+// resilience layer suppresses recovery otherwise — so no tool_call/tool_result
+// entries are ever dropped, and no tool execution can be racing the rollback.
+// Events already forwarded to the Observer cannot be recalled; the observer
+// stream shows the abandoned partial followed by the retry note, while the
+// accumulated history (what persists) stays clean. Nil-safe (no-op).
+func (s *streamSink) rollbackTo(m sinkMark) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.entries) > m.entries {
+		s.entries = s.entries[:m.entries]
+	}
+	if s.finalText.Len() > m.finalText {
+		kept := s.finalText.String()[:m.finalText]
+		s.finalText.Reset()
+		s.finalText.WriteString(kept)
+	}
+	s.toolEvents = m.toolEvents
+	clear(s.reasoningBufs)
 }
 
 // snapshot returns a copy of the accumulated entries plus the accumulated final

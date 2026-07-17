@@ -44,7 +44,14 @@ Returns a confirmation. The published file is downloadable via the task's worksp
 // run's workspace (no traversal / symlink escape) and names an existing regular
 // file, then records it; it never reads, moves, or copies the file (the bytes
 // stay in the workspace the file-browser endpoints already serve).
-func NewPublishArtifactTool(rec ArtifactRecorder) fantasy.AgentTool {
+//
+// workspaceRoot is the run's effective workspace for a NON-worktree task (the
+// same directory the #287 file browser serves for it). A worktree run's forced
+// working dir takes precedence so published paths stay scoped to the worktree.
+// Resolving ONLY via the forced working dir — which the scheduled driver sets
+// exclusively for worktree isolation — left every non-worktree task with
+// "no workspace is configured" on every publish attempt.
+func NewPublishArtifactTool(rec ArtifactRecorder, workspaceRoot string) fantasy.AgentTool {
 	return fantasy.NewAgentTool(PublishArtifactToolName, publishArtifactDescription,
 		func(ctx context.Context, in publishArtifactParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if rec == nil {
@@ -55,6 +62,9 @@ func NewPublishArtifactTool(rec ArtifactRecorder) fantasy.AgentTool {
 				return fantasy.NewTextErrorResponse("publish_artifact requires a non-empty path."), nil
 			}
 			workdir := ForcedWorkingDirFromContext(ctx)
+			if workdir == "" {
+				workdir = strings.TrimSpace(workspaceRoot)
+			}
 			if workdir == "" {
 				return fantasy.NewTextErrorResponse("publish_artifact: no workspace is configured for this run."), nil
 			}
