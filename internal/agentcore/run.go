@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -90,6 +91,13 @@ type RunConfig struct {
 	NativeTools []fantasy.AgentTool
 	// ProviderHeaders identify the run to OpenRouter.
 	ProviderHeaders ProviderHeaders
+
+	// OutputSchema enables the fail-closed terminal structured-output contract.
+	// The ordinary governed agent loop runs first with its full sandboxed tool
+	// roster. Once Policy permits finishing, Run performs a bounded terminal
+	// phase over the completed transcript with NO ordinary tools available and
+	// returns only schema-validated JSON. Empty preserves free-form behavior.
+	OutputSchema json.RawMessage
 
 	// ThinkingConfig, when set and Enabled, activates Claude extended thinking
 	// (#220) for this run on a thinking-capable Claude slug. nil = off (the
@@ -182,6 +190,10 @@ type Deps struct {
 type Result struct {
 	// FinalText is the model's final user-visible reply.
 	FinalText string
+	// OutputJSON is the validated terminal value when RunConfig.OutputSchema was
+	// set. A successful structured run always returns a non-empty value here;
+	// generation, refusal, missing output, and validation exhaustion are errors.
+	OutputJSON json.RawMessage
 	// Rounds is how many enforcement rounds executed.
 	Rounds int
 	// SwappedToFallback reports whether the run ended on the fallback model.
@@ -245,6 +257,11 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	}
 	if deps.Input == nil || deps.Policy == nil {
 		return Result{}, fmt.Errorf("run requires an InputSource and a Policy")
+	}
+	// Fail before the first provider/tool side effect if a direct caller or a
+	// legacy database row bypassed the enqueue-time schema gate.
+	if err := validateDeclaredOutputSchema(cfg.OutputSchema); err != nil {
+		return Result{}, err
 	}
 
 	// Observer callbacks can originate inside Fantasy's coordinator and parallel
@@ -425,23 +442,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		// an ordinary run error, after every sibling has settled and paired.
 		serr = observerBoundary.prefer(serr)
 		if serr != nil {
-			// A ctx-cancellation surfaced as a stream error is still a clean
-			// cancel: return the partial transcript instead of a hard error so
-			// the interactive Stop path persists partial work.
-			if ctx.Err() != nil {
-				return cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), nil
-			}
-			// A cost/token ceiling hit is a clean STOP, not a failure: the
-			// budget-guarded PrepareStep aborted before the next paid completion.
-			// Finish gracefully with the transcript accumulated so far (same
-			// partial-result contract as a cancel) so the budget bounds the run
-			// without erroring the turn.
-			if errors.Is(serr, ErrCostCeilingExceeded) {
-				res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round)
-				res.StoppedByBudget = true
-				return res, nil
-			}
-			return Result{}, serr
+			return streamErrorResult(ctx, serr, cfg, sink, usageOrch, label, activeModel, swappedToFallback, round)
 		}
 		finalResult = outcome.result
 		messages = outcome.messages
@@ -491,24 +492,31 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 					return Result{}, err
 				}
 			}
+			res, cerr := completeRun(ctx, runCompletion{
+				engine:            eng,
+				config:            cfg,
+				activeModel:       activeModel,
+				systemPrompt:      systemPrompt,
+				messages:          messages,
+				finalResult:       finalResult,
+				finalText:         finalText,
+				sink:              sink,
+				orchestration:     usageOrch,
+				maxTokens:         maxTokens,
+				rounds:            round + 1,
+				swappedToFallback: swappedToFallback,
+				label:             label,
+			})
+			if cerr != nil {
+				return res, cerr
+			}
 			// turn_end hooks (#788): observational only — a completed turn is not
 			// undone, so the decision is audited but not enforced. Fired only on
 			// normal completion (not cancel/budget, where ctx is dead and a
-			// sandbox exec cannot run).
-			hooks.turnEnd(ctx, finalText, round+1)
-			entries, _ := sink.snapshot()
-			if finalText != "" {
-				entries = append(entries, RunEntry{Role: roleAssistant, Type: "text", Text: finalText})
-			}
-			return Result{
-				FinalText:         finalText,
-				Rounds:            round + 1,
-				SwappedToFallback: swappedToFallback,
-				Label:             label,
-				Entries:           entries,
-				ModelSlug:         slugOf(activeModel),
-				Usage:             usageSnapshot(usageOrch),
-			}, nil
+			// sandbox exec cannot run), and AFTER the terminal structured-output
+			// phase so the audited text is the run's true final output.
+			hooks.turnEnd(ctx, res.FinalText, round+1)
+			return res, nil
 		}
 
 		// Finish blocked: carry this round's transcript into the next round's
@@ -524,6 +532,94 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	}
 
 	return Result{Label: label}, fmt.Errorf("max enforcement rounds (%d) exceeded without task completion", maxEnforcementRounds)
+}
+
+// runCompletion carries the last ordinary round into the single terminal
+// completion seam. Keeping result assembly here leaves Run focused on its
+// governed control loop and makes the structured/free-form finish paths share
+// exactly the same transcript and usage snapshot behavior.
+// streamErrorResult maps a round's stream error to its terminal Result.
+// A ctx-cancellation surfaced as a stream error is still a clean cancel: the
+// partial transcript returns without a hard error so the interactive Stop path
+// persists partial work. A cost/token ceiling hit is a clean STOP, not a
+// failure — the budget-guarded PrepareStep aborted before the next paid
+// completion — EXCEPT under a declared output contract: that branch occurs
+// before the finish/audit gates and the strict/tool terminal phase, so
+// accepting schema-looking ordinary text would bypass the contract entirely.
+// Everything else is a hard error.
+func streamErrorResult(ctx context.Context, serr error, cfg RunConfig, sink *streamSink, usageOrch *orchestrationState, label string, activeModel fantasy.LanguageModel, swappedToFallback bool, round int) (Result, error) {
+	if ctx.Err() != nil {
+		//nolint:nilerr // deliberate: a cancel is a clean stop — partial transcript, no error.
+		return cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round), nil
+	}
+	if errors.Is(serr, ErrCostCeilingExceeded) {
+		res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round)
+		res.StoppedByBudget = true
+		if len(cfg.OutputSchema) > 0 {
+			return res, serr
+		}
+		return res, nil
+	}
+	return Result{}, serr
+}
+
+type runCompletion struct {
+	engine            *engine
+	config            RunConfig
+	activeModel       fantasy.LanguageModel
+	systemPrompt      string
+	messages          []fantasy.Message
+	finalResult       *fantasy.AgentResult
+	finalText         string
+	sink              *streamSink
+	orchestration     *orchestrationState
+	maxTokens         int64
+	rounds            int
+	swappedToFallback bool
+	label             string
+}
+
+func completeRun(ctx context.Context, in runCompletion) (Result, error) {
+	var outputJSON json.RawMessage
+	if len(in.config.OutputSchema) > 0 {
+		// messages is the input to the last ordinary round. Carry its completed
+		// assistant/tool transcript so terminal formatting uses work already done.
+		terminalMessages := append([]fantasy.Message(nil), in.messages...)
+		terminalMessages = append(terminalMessages, carryRoundMessages(in.finalResult)...)
+		var err error
+		outputJSON, err = in.engine.generateTerminalStructuredOutput(
+			ctx, in.activeModel, in.systemPrompt, terminalMessages,
+			in.config.OutputSchema, in.maxTokens, in.orchestration,
+		)
+		if err != nil {
+			entries, _ := in.sink.snapshot()
+			return Result{
+				FinalText:         in.finalText,
+				Rounds:            in.rounds,
+				SwappedToFallback: in.swappedToFallback,
+				Label:             in.label,
+				Entries:           entries,
+				ModelSlug:         slugOf(in.activeModel),
+				Usage:             usageSnapshot(in.orchestration),
+			}, err
+		}
+		in.finalText = string(outputJSON)
+	}
+
+	entries, _ := in.sink.snapshot()
+	if in.finalText != "" {
+		entries = append(entries, RunEntry{Role: roleAssistant, Type: "text", Text: in.finalText})
+	}
+	return Result{
+		FinalText:         in.finalText,
+		OutputJSON:        outputJSON,
+		Rounds:            in.rounds,
+		SwappedToFallback: in.swappedToFallback,
+		Label:             in.label,
+		Entries:           entries,
+		ModelSlug:         slugOf(in.activeModel),
+		Usage:             usageSnapshot(in.orchestration),
+	}, nil
 }
 
 func runFallbackModels(deps Deps) []fantasy.LanguageModel {

@@ -8,7 +8,7 @@ func TestRetryPolicy_Validate(t *testing.T) {
 		{},
 		{Backoff: BackoffExponential, InitialDelaySeconds: 60, MaxDelaySeconds: 3600},
 		{Backoff: BackoffFixed, InitialDelaySeconds: 30, MaxDelaySeconds: 30},
-		{RetryOn: []string{FailureTransient, FailureContextBudget}, NoRetryOn: []string{FailureCostCeiling}},
+		{RetryOn: []string{FailureTransient, FailureContextBudget, FailureOutputFormat, FailureOutputPersist}, NoRetryOn: []string{FailureCostCeiling}},
 	}
 	for i, rp := range valid {
 		if err := rp.Validate(); err != nil {
@@ -36,7 +36,7 @@ func TestRetryPolicy_ShouldRetryClass(t *testing.T) {
 	if !nilp.ShouldRetryClass(FailureTransient) {
 		t.Error("nil policy must retry transient")
 	}
-	for _, c := range []string{FailureCostCeiling, FailureContextBudget, FailureTerminal} {
+	for _, c := range []string{FailureCostCeiling, FailureContextBudget, FailureOutputFormat, FailureOutputPersist, FailureTerminal} {
 		if nilp.ShouldRetryClass(c) {
 			t.Errorf("nil policy must NOT retry %q", c)
 		}

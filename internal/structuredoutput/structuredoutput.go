@@ -1,8 +1,7 @@
 // Package structuredoutput implements the schema side of structured-output mode
-// (#244): compiling a task's declared JSON Schema at create time and validating
-// an agent's final answer against it after a run. It is the single source of
-// truth for both checks so the create-time gate and the post-run validation can
-// never disagree on what "valid" means.
+// (#244): compiling a task's declared JSON Schema at enqueue and validating each
+// terminal, runner, and storage candidate. It is the single source of truth for
+// every gate so no lifecycle layer can disagree on what "valid" means.
 package structuredoutput
 
 import (
@@ -19,6 +18,17 @@ import (
 // under; it never touches the network or filesystem.
 const schemaResourceURL = "fleet://output_schema.json"
 
+// Public task schemas are copied into both a terminal provider request and a
+// prompt instruction. Keep all three dimensions bounded before compilation so
+// an untrusted schema cannot consume unbounded host memory, provider context,
+// or compiler work. These are protocol limits rather than operator knobs: a
+// task accepted on one fleet instance must remain runnable on another.
+const (
+	MaxSchemaBytes = 64 << 10
+	MaxSchemaDepth = 32
+	MaxSchemaNodes = 2048
+)
+
 // CompileSchema validates that raw is a usable draft-07-style JSON Schema object
 // and returns the compiled schema. A nil/empty raw is a programming error here
 // (callers gate on len first); a non-object or uncompilable schema returns an
@@ -27,11 +37,25 @@ func CompileSchema(raw json.RawMessage) (*jsonschema.Schema, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("empty schema")
 	}
+	if len(raw) > MaxSchemaBytes {
+		return nil, fmt.Errorf("schema is %d bytes; maximum is %d bytes", len(raw), MaxSchemaBytes)
+	}
 	// A JSON Schema must itself be a JSON object — reject arrays/scalars early
 	// with a clearer message than the compiler's.
+	if !json.Valid(raw) {
+		return nil, fmt.Errorf("must be a JSON object: invalid JSON")
+	}
 	var obj map[string]any
-	if err := json.Unmarshal(raw, &obj); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&obj); err != nil || obj == nil {
+		if err == nil {
+			err = fmt.Errorf("null is not an object")
+		}
 		return nil, fmt.Errorf("must be a JSON object: %w", err)
+	}
+	if err := validateComplexity(obj, 1, new(int)); err != nil {
+		return nil, err
 	}
 	c := jsonschema.NewCompiler()
 	// output_schema is UNTRUSTED task input (POST /tasks), and the compiler's
@@ -55,6 +79,34 @@ func CompileSchema(raw json.RawMessage) (*jsonschema.Schema, error) {
 	return sch, nil
 }
 
+// validateComplexity counts every JSON value and tracks container nesting. The
+// byte ceiling runs first, so even a schema made mostly of scalar leaves stays
+// bounded while this walk executes.
+func validateComplexity(v any, depth int, nodes *int) error {
+	(*nodes)++
+	if *nodes > MaxSchemaNodes {
+		return fmt.Errorf("schema has more than %d nodes", MaxSchemaNodes)
+	}
+	if depth > MaxSchemaDepth {
+		return fmt.Errorf("schema nesting exceeds maximum depth of %d", MaxSchemaDepth)
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		for _, child := range x {
+			if err := validateComplexity(child, depth+1, nodes); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range x {
+			if err := validateComplexity(child, depth+1, nodes); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // ValidateSchema reports whether raw is a usable JSON Schema. Used at task-create
 // time to reject a malformed schema before it is ever persisted.
 func ValidateSchema(raw json.RawMessage) error {
@@ -63,20 +115,24 @@ func ValidateSchema(raw json.RawMessage) error {
 }
 
 // PromptAugmentation returns the system-prompt addendum that instructs the agent
-// to emit ONLY a JSON object conforming to schema (#244). An empty schema yields
+// to emit ONLY a JSON value conforming to schema (#244). An empty schema yields
 // the empty string so the caller can append unconditionally.
 func PromptAugmentation(schema json.RawMessage) string {
 	if len(schema) == 0 {
 		return ""
 	}
-	indented := []byte(schema)
-	if b, err := json.MarshalIndent(schema, "", "  "); err == nil {
-		indented = b
+	// Do not pretty-print an untrusted schema: indentation grows with both node
+	// count and depth and would make its prompt contribution much larger than
+	// the enqueue-time byte limit. Compact preserves the exact semantics while
+	// keeping this logical copy at or below MaxSchemaBytes.
+	compact := &bytes.Buffer{}
+	if err := json.Compact(compact, schema); err != nil {
+		return ""
 	}
 	return "\n\n--- STRUCTURED OUTPUT REQUIREMENT ---\n" +
-		"Your final response MUST be a valid JSON object conforming to the following JSON Schema. " +
-		"Do not include any text, markdown fences, or explanation outside the JSON object itself.\n\n" +
-		"JSON Schema:\n" + string(indented)
+		"Your final response MUST be a valid JSON value conforming to the following JSON Schema. " +
+		"Do not include any text, markdown fences, or explanation outside the JSON value itself.\n\n" +
+		"JSON Schema:\n" + compact.String()
 }
 
 // ValidateOutput finds the JSON value in finalText that conforms to schema and
@@ -97,7 +153,12 @@ func ValidateOutput(finalText string, schema json.RawMessage) (json.RawMessage, 
 	var lastValidationErr error
 	for i := len(candidates) - 1; i >= 0; i-- {
 		var v any
-		if err := json.Unmarshal([]byte(candidates[i]), &v); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(candidates[i]))
+		// Keep JSON numbers exact through validation and persistence. Decoding
+		// through float64 would silently round integers above 2^53, allowing the
+		// stored value to differ from the provider's schema-valid candidate.
+		decoder.UseNumber()
+		if err := decoder.Decode(&v); err != nil {
 			continue
 		}
 		parsedAny = true

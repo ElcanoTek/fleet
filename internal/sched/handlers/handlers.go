@@ -1226,9 +1226,9 @@ func (h *Handlers) GetTask(w http.ResponseWriter, r *http.Request) {
 // GetTaskOutput handles GET /tasks/{task_id}/output (#244): the validated
 // structured JSON result of a structured-output task, returned raw with
 // Content-Type application/json (no envelope) for direct programmatic
-// consumption. 404 when the task has no output_json (no output_schema was
-// declared, or the agent's answer failed validation); 409 while the task has not
-// yet reached a terminal state (the result isn't ready — poll again).
+// consumption. A successful task that declared output_schema always has this
+// value. 404 means the task did not declare a schema; 409 means the value is not
+// ready, the task failed its contract, or a legacy row violates the invariant.
 func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 	p := h.principalFromRequest(r)
 	if !p.hasPermission(models.PermissionViewTasks) {
@@ -1255,22 +1255,47 @@ func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if len(task.OutputSchema) == 0 {
+		writeError(w, http.StatusNotFound, "Task did not declare output_schema")
+		return
+	}
 
-	if len(task.OutputJSON) == 0 {
-		// Distinguish "not ready yet" (still pending/running) from "never will be"
-		// (terminal with no structured output) so a poller knows whether to retry.
+	// Never expose a stale candidate from a failed/replayed/active row. A result
+	// becomes public only with the terminal success that committed it. The
+	// status codes are deliberately distinct so a polling client can tell
+	// "retry later" (409, non-terminal) from "will never exist" (410, terminal
+	// failure) — collapsing both onto 409 made old-contract clients poll a
+	// dead task forever.
+	if task.Status != models.TaskStatusSuccess {
 		if !task.Status.IsTerminal() {
 			writeError(w, http.StatusConflict, "Task has not finished; structured output is not yet available")
 			return
 		}
-		writeError(w, http.StatusNotFound, "Task has no structured output (no output_schema declared, or the result failed schema validation)")
+		writeError(w, http.StatusGone, "Task failed terminally; the declared structured output will never be available for this run")
+		return
+	}
+	if len(task.OutputJSON) == 0 {
+		// Defensive handling for legacy rows created before the fail-closed
+		// storage invariant: this is a contract violation, not a missing optional
+		// resource, and must never masquerade as a 404 or a retriable 409.
+		writeError(w, http.StatusInternalServerError, "Structured output contract violated: successful task has no output_json")
+		return
+	}
+	// Serve the bytes the atomic success commit validated. Deliberately NOT
+	// re-validated here: re-running the validator on read would apply today's
+	// schema complexity bounds retroactively to rows committed under earlier
+	// bounds, making legacy successful output unreadable. Well-formedness is
+	// still asserted — a corrupt row is a storage fault, not a client error.
+	if !json.Valid(task.OutputJSON) {
+		writeError(w, http.StatusInternalServerError, "Structured output contract violated: stored output_json is not valid JSON")
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	// output_json is schema-validated JSON (compiled at create, validated post-run)
-	// served as application/json — not HTML — so there is no XSS sink here.
+	// output_json was locally schema-validated before the atomic success commit
+	// and was revalidated above before serving. It is application/json — not HTML
+	// — so there is no XSS sink here.
 	_, _ = w.Write(task.OutputJSON) //nolint:gosec // G705: validated JSON served as application/json, not an HTML/XSS context
 }
 

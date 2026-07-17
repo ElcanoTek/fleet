@@ -798,6 +798,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		CredentialAllowlist: taskCredentialAllowlist(task),
 		ThinkingBudget:      task.ThinkingBudgetTokens,
 		PersonaPolicy:       r.personaPolicy(taskPersona),
+		OutputSchema:        task.OutputSchema,
 		Overlay:             remoteOverlay,
 		PhoneAFriendEnabled: phoneAFriend,
 		ReviewerModel:       reviewer,
@@ -1102,6 +1103,11 @@ func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession 
 		CreatedAt:           ls.CreatedAt,
 		UpdatedAt:           ls.UpdatedAt,
 		Messages:            make([]models.LogMessage, 0, len(msgs)),
+		// Redacted like message content: output_json is persisted task output
+		// and must never carry raw secret material. If redaction alters the
+		// bytes, the runner fails the contract loudly rather than committing
+		// corrupted-but-schema-shaped output.
+		OutputJSON: agentcore.RedactSecrets(ls.SnapshotOutputJSON()),
 	}
 	for _, m := range msgs {
 		mm := models.LogMessage{

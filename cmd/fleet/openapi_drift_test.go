@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -473,6 +474,13 @@ func kindGroupForSpecType(specType string) string {
 func kindGroup(t reflect.Type) string {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
+	}
+	// json.RawMessage is []byte in memory but writes its bytes as the JSON value
+	// itself. Its wire kind is therefore determined by the validated payload,
+	// not reflect.Slice; treating it as an OpenAPI array creates a false drift
+	// failure for object-valued contracts such as Task.output_schema.
+	if t == reflect.TypeOf(json.RawMessage{}) {
+		return ""
 	}
 	// Types that marshal to a JSON string despite a non-string Kind: anything
 	// implementing encoding.TextMarshaler or json.Marshaler (uuid.UUID,

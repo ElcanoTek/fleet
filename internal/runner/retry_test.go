@@ -21,6 +21,9 @@ func TestClassifyFailure(t *testing.T) {
 		{fmt.Errorf("%w: mid-stream 504", agentcore.ErrCommittedSideEffects), models.FailureTransient},
 		{agentcore.ErrCostCeilingExceeded, models.FailureCostCeiling},
 		{agentcore.ErrContextBudgetExhausted, models.FailureContextBudget},
+		{agentcore.ErrStructuredOutputInvalid, models.FailureOutputFormat},
+		{fmt.Errorf("wrapped: %w", agentcore.ErrStructuredOutputMissing), models.FailureOutputFormat},
+		{agentcore.ErrStructuredOutputPersistence, models.FailureOutputPersist},
 		{errors.New("no model configured"), models.FailureTerminal},
 		{fmt.Errorf("wrapped: %w", agentcore.ErrCostCeilingExceeded), models.FailureCostCeiling},
 	}

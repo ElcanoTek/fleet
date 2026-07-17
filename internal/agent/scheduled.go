@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -128,6 +129,11 @@ type Agent struct {
 	// narrowing (the persona sees every tool the earlier gates permit); threaded
 	// into RunConfig so denied tools never enter the model's tool list.
 	personaPolicy *agentcore.PersonaToolPermissions
+
+	// outputSchema is the task's required terminal machine-output contract. It
+	// is passed into the one agentcore.Run; the driver never implements a second
+	// generation loop of its own.
+	outputSchema json.RawMessage
 }
 
 // Options configure a scheduled Agent.
@@ -143,6 +149,7 @@ type Options struct {
 	MaxIterations  int
 	Sandbox        *sandbox.Sandbox
 	LogFile        string
+	OutputSchema   json.RawMessage
 
 	// NotesProvider supplies the admin-curated knowledge base appended to the
 	// system prompt at run start (both modes inject the same notes). Nil = none.
@@ -287,6 +294,7 @@ func NewAgent(opts Options) *Agent {
 		credentialAllowlist: opts.CredentialAllowlist,
 		thinkingBudget:      opts.ThinkingBudget,
 		personaPolicy:       opts.PersonaPolicy,
+		outputSchema:        append(json.RawMessage(nil), opts.OutputSchema...),
 		phoneAFriendEnabled: opts.PhoneAFriendEnabled,
 		reviewerModel:       opts.ReviewerModel,
 		subagent:            newSubagentConfig(opts.Subagent),
@@ -660,6 +668,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		LoaderTools:     loaderTools,
 		NativeTools:     nativeTools,
 		ProviderHeaders: agentcore.DefaultProviderHeaders,
+		OutputSchema:    a.outputSchema,
 		// Extended thinking (#220): the per-task override (a.thinkingBudget) wins
 		// when set, else the GLOBAL default (FLEET_DEFAULT_THINKING_BUDGET_TOKENS).
 		// nil config (some test setups) with no override → thinking off.
@@ -672,6 +681,12 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	}
 	if res.FinalText != "" {
 		a.logSession.AddMessage(roleAssistant, res.FinalText, nil, nil)
+	}
+	// Hand the runner the exact validated terminal bytes (#797). The final
+	// message text above is redacted for display; re-parsing it would let
+	// redaction corrupt or fail an already-validated contract.
+	if len(res.OutputJSON) > 0 {
+		a.logSession.SetOutputJSON(string(res.OutputJSON))
 	}
 	return nil
 }
