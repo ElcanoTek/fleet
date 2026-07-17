@@ -2590,7 +2590,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			thinking_budget_tokens = $55,
 			file_names = $56,
 			pending_question = $57,
-			pending_answer = $58
+			pending_answer = $58,
+			carry_context = $59
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -2650,6 +2651,7 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		marshalJSON(task.FileNames),
 		nullableString(task.PendingQuestion),
 		nullableString(task.PendingAnswer),
+		task.CarryContext,
 	)
 	return err
 }
