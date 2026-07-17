@@ -151,3 +151,46 @@ func TestStorageRejectsSchemaLimitsAtEveryEnqueueSeam(t *testing.T) {
 		t.Fatalf("AddTaskBatch = n=%d err=%v", n, err)
 	}
 }
+
+// A stale schema-INVALID output_json candidate on the row (legacy two-step
+// writer / crashed prior lease) must not block non-success lease-checked
+// writes — regression: every update re-validated the row's existing value, so
+// the task could never record an error/interrupt and stranded `running` until
+// lease expiry requeued it (a duplicate side-effect window). The success gate
+// still refuses to promote such a candidate.
+func TestStaleInvalidOutputDoesNotBlockErrorTransition(t *testing.T) {
+	store, database := newTestStore(t)
+	owner := uuid.New()
+	task := &models.Task{
+		ID:           uuid.New(),
+		Prompt:       "structured task",
+		Status:       models.TaskStatusPending,
+		CreatedAt:    time.Now().UTC(),
+		OutputSchema: json.RawMessage(storageOutputSchema),
+	}
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+	leased, err := store.leaseTaskToOwner(task.ID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed a schema-invalid candidate directly (what a crashed pre-#797 writer
+	// leaves behind).
+	if _, err := database.Conn().ExecContext(t.Context(), `
+		UPDATE tasks SET output_json = '{"ok":"not-a-bool"}' WHERE id = $1`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := "boom"
+	if _, err := store.UpdateTaskStatusAtomic(leased.ID, owner, &models.StatusUpdate{
+		Status:  models.TaskStatusError,
+		Message: &msg,
+	}); err != nil {
+		t.Fatalf("error transition blocked by stale candidate: %v", err)
+	}
+	got, _ := store.GetTask(task.ID)
+	if got.Status != models.TaskStatusError {
+		t.Errorf("status = %s, want error", got.Status)
+	}
+}

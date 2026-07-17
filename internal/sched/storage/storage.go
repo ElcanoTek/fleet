@@ -1010,22 +1010,22 @@ func (s *Storage) UpdateTaskStatusAtomicWithContext(ctx context.Context, taskID 
 	if update.Status == models.TaskStatusSuccess && len(task.OutputSchema) > 0 && len(update.OutputJSON) == 0 {
 		return nil, fmt.Errorf("%w: a structured success update requires output_json from the current lease", ErrStructuredOutputContract)
 	}
-	effectiveOutput := task.OutputJSON
+	// Validate only output THIS update supplies. Re-validating the row's
+	// EXISTING output_json here would make a stale schema-invalid candidate
+	// (a legacy two-step writer or crashed prior lease) hard-fail every
+	// lease-checked write — including lease renewals and error/interrupt
+	// transitions — stranding the task `running` until lease expiry requeues
+	// it (a duplicate side-effect window). The success gate above already
+	// refuses to let such a candidate authorize a success transition.
 	if len(update.OutputJSON) > 0 {
-		effectiveOutput = update.OutputJSON
-	}
-	if len(effectiveOutput) > 0 {
 		if len(task.OutputSchema) == 0 {
 			return nil, fmt.Errorf("%w: output_json requires output_schema", ErrStructuredOutputContract)
 		}
-		validated, validationErr := structuredoutput.ValidateOutput(string(effectiveOutput), task.OutputSchema)
+		validated, validationErr := structuredoutput.ValidateOutput(string(update.OutputJSON), task.OutputSchema)
 		if validationErr != nil {
 			return nil, fmt.Errorf("%w: output_json: %w", ErrStructuredOutputContract, validationErr)
 		}
-		effectiveOutput = validated
-	}
-	if len(update.OutputJSON) > 0 {
-		update.OutputJSON = effectiveOutput
+		update.OutputJSON = validated
 	}
 
 	now := time.Now().UTC()
