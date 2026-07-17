@@ -14,6 +14,7 @@ package agentcore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -325,5 +326,27 @@ func TestStreamSinkMarkRollback(t *testing.T) {
 	sink.onTextDelta("regenerated")
 	if _, text := sink.snapshot(); !strings.HasPrefix(text, "kept text ") || !strings.HasSuffix(text, "regenerated") {
 		t.Errorf("post-rollback text = %q", text)
+	}
+}
+
+// The committed-side-effects error must carry the partial transcript with it:
+// the executed tool's records are the driver's only chance to project the
+// side effect into canonical history before the turn seals — discarded, the
+// retried turn re-issues the call blind (#798's exact hazard).
+func TestStreamErrorResultPreservesCommittedSideEffects(t *testing.T) {
+	sink := newStreamSink(nil)
+	sink.onToolCall("c1", "bash", `{"command":"send the email"}`)
+	sink.onToolResult("c1", "bash", "email sent", false)
+	res, err := streamErrorResult(context.Background(),
+		fmt.Errorf("%w: provider died", ErrCommittedSideEffects),
+		RunConfig{}, sink, nil, "label", nil, false, 1)
+	if !errors.Is(err, ErrCommittedSideEffects) {
+		t.Fatalf("error = %v, want ErrCommittedSideEffects preserved", err)
+	}
+	if len(res.Entries) != 2 || res.Entries[0].Type != "tool_call" || res.Entries[1].Type != "tool_result" {
+		t.Errorf("entries = %+v, want the executed tool_call + tool_result", res.Entries)
+	}
+	if res.Cancelled {
+		t.Error("a committed-side-effect failure must not read as a user cancel")
 	}
 }

@@ -19,6 +19,21 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Committed tool side effects survive a mid-round provider failure in
+  canonical history**: when ADR-0035 suppresses recovery after a tool ran,
+  the run's partial transcript was discarded with the error — the executed
+  call existed only in the turn journal, was never projected into `messages`
+  (the turn seals non-`running`, so recovery skips it), and the retried turn
+  could re-execute the side effect blind. `streamErrorResult` now returns the
+  partial transcript alongside `ErrCommittedSideEffects`, and the interactive
+  manager commits it terminally before surfacing the failure.
+- **Data race on a server's tool list during a mid-call stdio restart**:
+  `initialize` reassigns `Server.tools` under `Server.mu` while catalog
+  readers (`GetAllTools` and friends) hold only `Client.mu` — a torn read
+  under concurrent conversations. The slice now has a dedicated RWMutex
+  (readers deliberately do not take `Server.mu`, which is held for the whole
+  restart including the network round-trip).
+
 - **A lifecycle hook's reason-only trailer no longer downgrades its block**:
   `parseHookDecision` let any later contract-key line replace the verdict, so
   `{"decision":"block",…}` followed by `{"status":"ok","reason":"scan
