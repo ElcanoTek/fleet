@@ -2356,7 +2356,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// flaky, live streaming still works; crash recovery just won't.
 	persistCtx, persistCancelAttach := context.WithTimeout(reqCtx, 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
-		log.Printf("attachPersister (user=%s conv=%s): %v", user, conv.ID, err)
+		log.Printf("attachPersister (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 	}
 	persistCancelAttach()
 
@@ -2448,7 +2448,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// full stream.
 		caps := parseClientCapabilities(r.Header.Get(clientCapabilitiesHeaderName))
 		if err := buf.Attach(r.Context(), 0, w, caps); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("Attach (user=%s conv=%s): %v", user, conv.ID, err)
+			log.Printf("Attach (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}
 	}
 	return true
