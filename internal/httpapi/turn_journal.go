@@ -151,7 +151,15 @@ func (c *turnCommits) commitTerminal(entries []agent.HistoryEntry, _ bool) error
 		if errors.Is(err, store.ErrTurnHistoryCommitted) {
 			// A retry after an ambiguous commit outcome: the projection landed;
 			// only the row ids are unknown (dbId backfill for this turn arrives
-			// on reload instead of live — benign).
+			// on reload instead of live — benign). The injected queue rows
+			// still need settling — SettleTurnInputs skips them (history IS
+			// committed), so without this they stay 'injected' in every queue
+			// snapshot until the next boot recovery.
+			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if cerr := c.store.CompleteInjectedInputs(qctx, c.turnID); cerr != nil {
+				log.Printf("complete injected inputs (turn=%s): %v", c.turnID, cerr)
+			}
+			qcancel()
 			return nil
 		}
 		time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)

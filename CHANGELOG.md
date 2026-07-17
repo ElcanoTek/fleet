@@ -19,6 +19,18 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Input-queue hardening (#785 follow-up)**: a per-conversation pending
+  depth cap (20, HTTP 429 above it; idempotent replays still answer 200) so a
+  retrying client can't bank unbounded unattended LLM turns; a transient
+  launch failure of a drained row now schedules a re-kick instead of leaving
+  the 202-acknowledged input stalled until the next submission; the Stop
+  scope=all epoch gate is strictly-before, so a fresh submission accepted in
+  the Stop's own second is no longer silently cancelled; an ambiguous-commit
+  replay (`ErrTurnHistoryCommitted`) now settles the turn's injected steer
+  rows instead of leaving them listed until the next reboot; queue
+  `message_preview` truncates on a rune boundary; stale stop epochs are
+  pruned; and turn-scoped queue lookups gained an index (migration 043).
+
 - **Committed tool side effects survive a mid-round provider failure in
   canonical history**: when ADR-0035 suppresses recovery after a tool ran,
   the run's partial transcript was discarded with the error — the executed

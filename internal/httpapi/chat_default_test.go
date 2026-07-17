@@ -565,6 +565,18 @@ func (s *fakeChatStore) EnqueueInput(_ context.Context, r store.InputQueueRow) (
 	return r, true, nil
 }
 
+func (s *fakeChatStore) CountPendingInputs(_ context.Context, convID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, it := range s.queue {
+		if it.ConversationID == convID && it.State == store.InputStateQueued {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (s *fakeChatStore) ListQueuedInputs(_ context.Context, _, convID string) ([]store.InputQueueRow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
