@@ -17,6 +17,32 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Context-too-large recovery no longer re-executes committed tool side
+  effects.** The forced-compact-and-re-drive (and its fallback-model swap) now
+  ride the same ADR-0035 side-effect gate as the blip/retry-exhausted paths:
+  once a tool ran in the failing attempt — the typical case, since a large
+  tool result is what balloons the next request — the round surfaces
+  `ErrCommittedSideEffects` so the whole-task RetryPolicy (the operator's
+  explicit opt-in) owns the re-run instead of the loop silently repeating a
+  send-email-class call in-run. The no-tool-events compaction retry also rolls
+  back the failed attempt's partial output first, so the re-driven round
+  replaces — not duplicates — it in the transcript.
+- **The interactive leaked-tool-call finalize retry now streams under the
+  run's ceilings**: the budget guard (pre-completion cost/token check) and the
+  `CHAT_MAX_ITERATIONS` step cap are threaded into the retry via
+  `FinalizeInput.GuardStep`/`StopWhen` — previously it could keep buying paid
+  completions unboundedly, with tool calls only soft-blocked by policy.
+- **`edit_file`/`write_file` no longer abort when the destination's ownership
+  can't be preserved**: the sandbox executor's `fchown` on overwrite is now
+  best-effort — an unprivileged executor overwriting a foreign-owned (e.g.
+  host-seeded) workspace file keeps the executor-owned replacement instead of
+  failing the whole edit with "cannot preserve destination ownership".
+- **`view_file` with `offset` exactly at the file size returns a clean empty
+  read** instead of an "offset is beyond file size" error — `offset += limit`
+  paging that lands on the size no longer trips a spurious failure.
+
 ### Added
 
 - **Governed lifecycle hooks** (#788, `docs/HOOKS.md`, ADR-0038): a client

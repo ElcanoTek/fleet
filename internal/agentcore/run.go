@@ -478,6 +478,16 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 					SystemPrompt: systemPrompt,
 					OnToolCall:   finalizeToolCallCallback(sink, panicAttribution),
 					OnToolResult: finalizeToolResultCallback(sink, panicAttribution),
+					// The retry streams under the run's own ceilings: the budget
+					// guard blocks the next paid completion once the cost/token
+					// ceiling is hit, and the step cap bounds the tool loop.
+					GuardStep: func(inner fantasy.PrepareStepFunction) fantasy.PrepareStepFunction {
+						if usageOrch == nil {
+							return inner
+						}
+						return budgetGuardedStep(usageOrch, inner)
+					},
+					StopWhen: stepStopConditions(cfg.MaxIterations),
 					// Meter a recovery model call into the SAME run accounting as
 					// the main loop, so the cost chip isn't undercounted. Capability
 					// closure over usageOrch — the state never escapes Run, and this

@@ -31,6 +31,17 @@ type FinalizeInput struct {
 	// run's side-effect gate; it cannot become an unaudited auxiliary loop.
 	OnToolCall   fantasy.OnToolCallFunc
 	OnToolResult fantasy.OnToolResultFunc
+	// GuardStep wraps a finalize retry's PrepareStep with the run's
+	// pre-completion cost/token ceiling check (the same budgetGuardedStep the
+	// main loop streams under), so a recovery stream cannot keep buying paid
+	// completions past the ceiling. Nil-safe: when unset the inner step runs
+	// unguarded.
+	GuardStep func(fantasy.PrepareStepFunction) fantasy.PrepareStepFunction
+	// StopWhen carries the run's step-cap conditions (MaxIterations) into a
+	// finalize retry's stream — the retry re-runs WITH tools, so without it a
+	// model that keeps issuing (policy-blocked) tool calls loops paid steps
+	// unboundedly.
+	StopWhen []fantasy.StopCondition
 	// RecordUsage meters a recovery model call's tokens/cost into the SAME run
 	// accounting the main loop uses. It is a capability closure over the run's
 	// orchestration state (the state itself never escapes Run), so a finalize
