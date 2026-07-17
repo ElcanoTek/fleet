@@ -80,6 +80,10 @@ type chatStore interface {
 	// History + summaries.
 	LoadHistory(ctx context.Context, convID string) ([]agent.HistoryEntry, error)
 	AppendHistory(ctx context.Context, convID string, entries []agent.HistoryEntry) ([]int64, error)
+	// Durable turn journal + gated canonical projection (#798).
+	CommitUserMessage(ctx context.Context, convID, turnID string, entry agent.HistoryEntry) (int64, error)
+	CommitTurnHistory(ctx context.Context, convID, turnID string, entries []agent.HistoryEntry) ([]int64, error)
+	InsertTurnJournal(ctx context.Context, r store.TurnJournalRow) error
 	ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry) error
 	TruncateAfter(ctx context.Context, userEmail, convID string, afterMessageID int64) error
 	MaxMessageIDForRole(ctx context.Context, convID, role string) (int64, error)

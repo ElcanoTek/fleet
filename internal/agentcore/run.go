@@ -173,6 +173,13 @@ type Deps struct {
 	// Nil falls back to the engine's deterministic placeholder summary.
 	CompactionSummarizer func(ctx context.Context, droppable []fantasy.Message) fantasy.Message
 
+	// TurnJournal, when set, is the durable side-effect journal (#798): tool
+	// intents commit before dispatch (fail closed) and governed results before
+	// the next provider step. The interactive driver persists it to the chat
+	// store; scheduled/evals leave it nil (the session log is their record).
+	// Driver-supplied data, not a Mode branch (see TestSeamPurity).
+	TurnJournal TurnJournal
+
 	// UsageReporter, when set, is invoked after each LLM step with that step's
 	// accumulated run usage (the SAME counters usageSnapshot returns). A driver
 	// may wire this to ship a per-step usage event out-of-band so an external
@@ -319,6 +326,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		observer:         deps.Observer,
 		panicAttribution: panicAttribution,
 		hooks:            hooks,
+		journal:          deps.TurnJournal,
 	}
 
 	mcpClient := deps.MCPClient

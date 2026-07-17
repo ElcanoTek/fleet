@@ -48,3 +48,4 @@ reviewable, and citable. Each record names the file or test that enforces it.
 | [0036](0036-sandboxed-file-tools-and-host-io-exceptions.md) | Sandboxed file tools, and the host-side I/O exception classes | Accepted |
 | [0037](0037-agent-tool-panic-containment.md) | Contain panics at the AgentTool dispatch boundary | Accepted |
 | [0038](0038-governed-lifecycle-hooks.md) | Governed lifecycle hooks (bundle-declared, sandbox-executed) | Accepted |
+| [0039](0039-durable-turn-journal.md) | Durable turn journal gates interactive terminal success | Accepted |

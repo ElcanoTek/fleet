@@ -84,16 +84,9 @@ func runMockTurn(ctx context.Context, st chatStore, conv *store.Conversation, us
 		}
 	}
 
-	sink.Emit("turn.completed", map[string]any{
-		"cost_usd":          0.0,
-		"prompt_tokens":     0,
-		"completion_tokens": 0,
-		"cached_tokens":     0,
-		"model":             "mock/chat-mock",
-	})
-
 	// Persist the user turn + assistant reply so history replay + pin/reload
-	// round-trips look the same as a real turn.
+	// round-trips look the same as a real turn. Committed BEFORE turn.completed
+	// — the same ordering invariant the real path enforces (#798).
 	entries := []agent.HistoryEntry{
 		mustJSONEntry("user", "text", map[string]any{"text": userMessage}),
 		mustJSONEntry("assistant", "reasoning", map[string]any{"text": "Let me think about this for a moment."}),
@@ -116,6 +109,14 @@ func runMockTurn(ctx context.Context, st chatStore, conv *store.Conversation, us
 	if err != nil {
 		return err
 	}
+
+	sink.Emit("turn.completed", map[string]any{
+		"cost_usd":          0.0,
+		"prompt_tokens":     0,
+		"completion_tokens": 0,
+		"cached_tokens":     0,
+		"model":             "mock/chat-mock",
+	})
 	// Mirror the real turn's post-persist id notification (see runTurnAsync)
 	// so Playwright-mocked flows exercise the same Branch-button enablement.
 	sink.Emit("history.persisted", map[string]any{

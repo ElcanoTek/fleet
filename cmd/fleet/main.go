@@ -418,6 +418,10 @@ func run() error {
 	if cfg.ConversationSoftDelete {
 		log.Printf("conversation soft-delete: ENABLED (deleted rows tombstoned, purged after 30 days)")
 	}
+	// Stranded-turn recovery (#798): project any turn left 'running' by a crash
+	// into canonical history. Runs AFTER SetSearchEnabled (projection writes
+	// FTS rows) and BEFORE the HTTP server serves.
+	recoverStrandedTurns(chatStore)
 	if cfg.SearchEnabled {
 		safe.Go("store.fts-backfill", func() {
 			bfCtx, bfCancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -2396,4 +2400,24 @@ func (a *taskMemoryAdapter) ListTaskMemories(ctx context.Context, taskID uuid.UU
 		out[i] = tools.TaskMemory{Key: m.Key, Value: m.Value}
 	}
 	return out, nil
+}
+
+// recoverStrandedTurns projects turns left 'running' by a crash into canonical
+// history at boot (#798): journal-authoritative tool calls paired with results
+// (unknown-outcome synthesized when missing), best-effort assistant text from
+// turn_events, one explicit interrupted turn per crash. A failure logs loudly
+// but does not abort boot: the DB may be degraded, and the affected turns stay
+// 'running' for the next boot to retry. See docs/TURN-JOURNAL.md + ADR-0039.
+func recoverStrandedTurns(chatStore *store.Store) {
+	recCtx, recCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer recCancel()
+	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
+	if err != nil {
+		//nolint:gosec // G706: err wraps internal DB errors and an int count — no request input.
+		log.Printf("stranded-turn recovery: %v (recovered %d before failing)", err, len(recovered))
+	}
+	for _, r := range recovered {
+		log.Printf("stranded-turn recovery: turn %s (conv %s) projected %d entries, %d unknown-outcome tool calls",
+			r.TurnID, r.ConversationID, r.Projected, r.Synthesized)
+	}
 }

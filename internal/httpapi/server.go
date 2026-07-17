@@ -2400,6 +2400,14 @@ func (s *Server) runTurnAsync(
 	// prompt builder. Best-effort — a failure runs the turn without them.
 	userSkills := s.materializeUserSkills(turnCtx, user, conv.ID)
 
+	// Durable turn journal + gated terminal commit (#798). The journal writer
+	// runs inside the agent loop (tool intent before dispatch, governed result
+	// before the next provider step); the commit pair brackets the turn: the
+	// user entry commits before the first provider call, and the terminal
+	// projection commits before turn.completed / turn.cancelled is advertised.
+	journal := newTurnJournalWriter(s.store, buf.turnID)
+	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
+
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:               userMessage,
 		Persona:                   conv.Persona,
@@ -2437,6 +2445,9 @@ func (s *Server) runTurnAsync(
 			sink:           buf,
 			origin:         "tool",
 		},
+		TurnJournal:    journal,
+		CommitUser:     commits.commitUser,
+		CommitTerminal: commits.commitTerminal,
 	}, buf)
 	if err != nil {
 		log.Printf("RunTurn error (user=%s conv=%s): %v", user, conv.ID, err)
@@ -2461,18 +2472,16 @@ func (s *Server) runTurnAsync(
 	persistCtx, persistCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer persistCancel()
 
-	persistedIDs, err := s.store.AppendHistory(persistCtx, conv.ID, res.NewHistory)
-	if err != nil {
-		log.Printf("persist history error (user=%s conv=%s): %v", user, conv.ID, err)
-	} else {
-		// Tell the live stream which DB rows this turn's messages became, so
-		// the client can backfill Message.dbId without a reload — the Branch
-		// button (#454) only renders for persisted messages, and without this
-		// it stayed hidden until the conversation was re-opened. Emitted after
-		// turn.completed (ids exist only post-persist) and before finishTurn
-		// seals the buffer, so live AND replayed streams both carry it.
+	// Canonical history was committed INSIDE RunTurn (#798): the user entry
+	// before the first provider call, the rest transactionally before the
+	// terminal event was advertised. Here we only tell the live stream which
+	// DB rows this turn's messages became, so the client can backfill
+	// Message.dbId without a reload — the Branch button (#454) only renders
+	// for persisted messages. Emitted after turn.completed and before
+	// finishTurn seals the buffer, so live AND replayed streams carry it.
+	if userID, ids := commits.persisted(); userID > 0 {
 		buf.Emit("history.persisted", map[string]any{
-			"entries": historyPersistedEntries(res.NewHistory, persistedIDs),
+			"entries": historyPersistedEntries(res.NewHistory, append([]int64{userID}, ids...)),
 		})
 	}
 
