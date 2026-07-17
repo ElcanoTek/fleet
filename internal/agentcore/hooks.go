@@ -344,11 +344,20 @@ func (e *hookEngine) invoke(ctx context.Context, h LifecycleHook, payload map[st
 		return outcome
 	}
 	if dec.Decision == "block" {
-		outcome = hookOutcome{blocked: true, reason: capString(dec.Reason, hookReasonCap)}
+		reason := capString(dec.Reason, hookReasonCap)
+		if containsEncodedBinary(reason) {
+			// A base64-heavy reason (a JWT, a signature blob) would trip the
+			// model-output boundary's binary detector (#793) and replace the
+			// block explanation with a suppression envelope. Withhold it.
+			reason = fmt.Sprintf("hook %q blocked this call (reason withheld: encoded content)", h.ID)
+		}
+		outcome = hookOutcome{blocked: true, reason: reason}
 		decision = "block"
 		return outcome
 	}
-	if frag := capString(dec.AdditionalContext, hookContextFragCap); frag != "" {
+	if frag := capString(dec.AdditionalContext, hookContextFragCap); frag != "" && !containsEncodedBinary(frag) {
+		// Binary-ish fragments are dropped for the same reason: appended to a
+		// tool result they would binary-suppress the ENTIRE combined output.
 		outcome.context = e.chargeContext(frag)
 	}
 	decision = "continue"

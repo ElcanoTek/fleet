@@ -351,7 +351,7 @@ func reduceHistoricalPayloadsToHardCap(messages []fantasy.Message, toolNames map
 				} else {
 					p.Output = replaceToolResultOutput(p.Output, aggregateResultEnvelope(toolNames[p.ToolCallID], text, innerResultPreviewBytes))
 				}
-				messages[mi].Content[pi] = p
+				messages[mi].Content[pi] = p //nolint:gosec // G602 false positive: mi/pi are range indices of these exact slices
 				reduced.resultPreviews++
 				continue
 			}
@@ -360,7 +360,7 @@ func reduceHistoricalPayloadsToHardCap(messages []fantasy.Message, toolNames map
 					continue
 				}
 				p.Input = aggregateInputEnvelope(p.ToolName, len(p.Input), innerInputEvictedBytes)
-				messages[mi].Content[pi] = p
+				messages[mi].Content[pi] = p //nolint:gosec // G602 false positive: mi/pi are range indices of these exact slices
 				reduced.inputEvicts++
 			}
 		}
@@ -407,7 +407,7 @@ func evictOldToolInputs(messages []fantasy.Message, prefix modelContextPrefixBud
 				continue
 			}
 			p.Input = aggregateInputEnvelope(p.ToolName, len(p.Input), innerInputEvictedBytes)
-			messages[mi].Content[pi] = p
+			messages[mi].Content[pi] = p //nolint:gosec // G602 false positive: mi/pi are range indices of these exact slices
 			count++
 		}
 	}
@@ -557,7 +557,7 @@ func aggregateInputEnvelope(toolName string, originalBytes, maxBytes int) string
 		"_fleet_context_evicted": true,
 		"tool":                   boundedToolName(toolName),
 		"original_bytes":         originalBytes,
-		"recovery_action":        "Repeat the call with smaller arguments or pass a workspace-relative file path.",
+		"recovery_action":        "This call already executed; its result follows. The oversized arguments were evicted from history — do NOT repeat the call. If the argument content is needed again, reconstruct it from its source or a workspace file.",
 	}
 	encoded, _ := json.Marshal(envelope)
 	if len(encoded) <= maxBytes {

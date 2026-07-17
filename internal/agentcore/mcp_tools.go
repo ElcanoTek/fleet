@@ -37,8 +37,9 @@ import (
 const maxToolsPerRequest = 128
 
 // toolCallTimeout bounds a single MCP tool call so a hung stdio server can't
-// block the agent loop.
-const toolCallTimeout = 5 * time.Minute
+// block the agent loop. Var, not const: tests shrink it to prove post-call
+// governance survives an expired callCtx.
+var toolCallTimeout = 5 * time.Minute
 
 // mcpAllowlist maps server name → allowed tool names. Empty/missing = allow all.
 type mcpAllowlist map[string][]string
@@ -367,7 +368,10 @@ func (g *policyGuardedTool) appendPostHook(ctx context.Context, name string, par
 		return text
 	}
 	governed, blocked := governToolOutput(ctx, name, frag)
-	if blocked {
+	if blocked || containsEncodedBinary(governed) {
+		// A base64-heavy fragment (e.g. a JWT attestation) would trip the
+		// model-output boundary's binary detector against the COMBINED result,
+		// suppressing the tool's legitimate output. Drop the fragment instead.
 		return text
 	}
 	return appendHookContext(text, governed)
@@ -521,19 +525,22 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	observability.AddBreadcrumb(callCtx, "mcp", "mcp call: "+toolName, nil)
 	setToolPanicPhase(ctx, panicPhaseToolExecute)
 	resultText, isErr, err := m.broker.CallMCP(callCtx, m.serverName, m.tool.Name, args)
+	// Everything after the call runs on ctx, never callCtx: when CallMCP fails
+	// on its own timeout, callCtx is expired by definition, and a dead context
+	// would fail-close the guardrail (rewriting a timeout into a fake guardrail
+	// block), skip post_tool_use hooks, and abort artifact staging inside
+	// boundModelVisibleToolResponse. callCtx scopes the broker call only.
 	if err != nil {
 		setToolPanicPhase(ctx, panicPhaseOutputRedact)
 		// Transport errors are untrusted connector output. Evaluate Error directly
 		// while the universal MCP wrapper can recover; fmt's %v would swallow a
 		// panicking Error method into a raw %!v(PANIC=...) diagnostic.
 		errText := "Error calling " + toolName + ": " + err.Error()
-		errText, _ = governToolOutput(callCtx, toolName, errText)
-		// Hooks run on ctx, not callCtx: a transport error is often a timeout,
-		// and a dead callCtx would silently skip the post_tool_use hook (#788).
+		errText, _ = governToolOutput(ctx, toolName, errText)
 		errText = m.appendPostHook(ctx, toolName, params.ID, params.Input, errText, true)
-		resp := boundModelVisibleToolResponse(callCtx, toolName, params.ID, fantasy.NewTextErrorResponse(errText))
-		markOutputGoverned(callCtx)
-		m.record(callCtx, toolName, params.Input, resp.Content, false)
+		resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(errText))
+		markOutputGoverned(ctx)
+		m.record(ctx, toolName, params.Input, resp.Content, false)
 		return resp, nil
 	}
 	// Fast.io returns short-lived bearer URLs from download.file-url/zip-url.
@@ -548,7 +555,7 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	// Scrub/screen/cap MCP output before it is recorded, returned to the model,
 	// or streamed/persisted downstream.
 	var outputBlocked bool
-	resultText, outputBlocked = governToolOutput(callCtx, toolName, resultText)
+	resultText, outputBlocked = governToolOutput(ctx, toolName, resultText)
 
 	// Map MCP isError to a fantasy error response so both the LLM and the log
 	// know the call failed (per MCP 2025-06-18 spec, tool-level errors arrive as
@@ -563,9 +570,9 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 		// Appended BEFORE the boundary so the fragment lands inside the capped
 		// envelope; on ctx so an expiring callCtx can't skip the hook.
 		resultText = m.appendPostHook(ctx, toolName, params.ID, params.Input, resultText, true)
-		resp := boundModelVisibleToolResponse(callCtx, toolName, params.ID, fantasy.NewTextErrorResponse(resultText))
-		markOutputGoverned(callCtx)
-		m.record(callCtx, toolName, params.Input, resp.Content, false)
+		resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextErrorResponse(resultText))
+		markOutputGoverned(ctx)
+		m.record(ctx, toolName, params.Input, resp.Content, false)
 		return resp, nil
 	}
 
@@ -573,9 +580,9 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	// model-output boundary so a hook fragment can never push the response
 	// past the model-visible ceiling.
 	resultText = m.appendPostHook(ctx, toolName, params.ID, params.Input, resultText, false)
-	resp := boundModelVisibleToolResponse(callCtx, toolName, params.ID, fantasy.NewTextResponse(resultText))
-	markOutputGoverned(callCtx)
-	m.record(callCtx, toolName, params.Input, resp.Content, true)
+	resp := boundModelVisibleToolResponse(ctx, toolName, params.ID, fantasy.NewTextResponse(resultText))
+	markOutputGoverned(ctx)
+	m.record(ctx, toolName, params.Input, resp.Content, true)
 	return resp, nil
 }
 
@@ -590,7 +597,10 @@ func (m *mcpTool) appendPostHook(ctx context.Context, toolName, callID, rawInput
 		return text
 	}
 	governed, blocked := governToolOutput(ctx, toolName, frag)
-	if blocked {
+	if blocked || containsEncodedBinary(governed) {
+		// A base64-heavy fragment (e.g. a JWT attestation) would trip the
+		// model-output boundary's binary detector against the COMBINED result,
+		// suppressing the tool's legitimate output. Drop the fragment instead.
 		return text
 	}
 	return appendHookContext(text, governed)

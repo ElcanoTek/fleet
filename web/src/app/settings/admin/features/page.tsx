@@ -67,7 +67,7 @@ type SettingMeta = {
   description: string;
   // Per-enum-option one-liners, shown for the selected option (PII modes).
   optionHelp?: Record<string, string>;
-  // Suffix hint for numeric fields ("bytes — 0 disables the ceiling").
+  // Suffix hint for numeric fields ("bytes — 0 uses 64 KiB; hard max 128 KiB").
   unitHint?: string;
 };
 
