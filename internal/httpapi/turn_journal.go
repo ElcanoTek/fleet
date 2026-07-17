@@ -137,6 +137,12 @@ func (c *turnCommits) commitTerminal(entries []agent.HistoryEntry, _ bool) error
 			c.mu.Lock()
 			c.ids = ids
 			c.mu.Unlock()
+			// Steered inputs became canonical with this commit (#785): settle
+			// their queue rows now, so injected-but-uncommitted rows keep
+			// their durable next-turn fallback on crash.
+			if cerr := c.store.CompleteInjectedInputs(cctx, c.turnID); cerr != nil {
+				log.Printf("complete injected inputs (turn=%s): %v", c.turnID, cerr)
+			}
 			return nil
 		}
 		if errors.Is(err, store.ErrTurnHistoryCommitted) {

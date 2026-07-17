@@ -40,6 +40,10 @@ type RunEntry struct {
 	ToolName   string
 	ToolInput  string // raw JSON the model emitted (tool_call only)
 	IsErr      bool   // tool_result only
+
+	// SteerID marks a mid-turn injected user message (#785, Type "user_text");
+	// the sink dedupes on it across resilience re-drives.
+	SteerID string
 }
 
 // SSE event-payload field keys, matching the names the chat frontend reads off
@@ -120,6 +124,24 @@ func (s *streamSink) emit(eventType string, payload map[string]any) {
 	if s.observer != nil {
 		s.observer.Observe(eventType, payload)
 	}
+}
+
+// onUserInjected records a steered mid-turn user message (#785) exactly once
+// per steer id: the entry rides Result.Entries into the terminal history
+// commit (persisted once, like every other entry), and the event tells live +
+// replayed streams to render the user bubble mid-turn. Idempotent by SteerID
+// so a resilience rollback + re-drive cannot double-record it.
+func (s *streamSink) onUserInjected(id, text string) {
+	s.mu.Lock()
+	for _, e := range s.entries {
+		if e.Type == "user_text" && e.SteerID == id {
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.entries = append(s.entries, RunEntry{Role: "user", Type: "user_text", Text: text, SteerID: id})
+	s.mu.Unlock()
+	s.emit("user.message", map[string]any{evtFieldText: text, "steered": true, "input_id": id})
 }
 
 // onTextDelta forwards a text chunk to the Observer and accumulates it.

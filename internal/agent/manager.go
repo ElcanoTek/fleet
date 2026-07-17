@@ -122,6 +122,10 @@ type TurnInput struct {
 	TurnJournal    agentcore.TurnJournal
 	CommitUser     func(ctx context.Context, entry HistoryEntry) error
 	CommitTerminal func(entries []HistoryEntry, cancelled bool) error
+
+	// SteerSource feeds mid-turn steer inputs (#785) into the run's
+	// PrepareStep boundary. nil = no steering.
+	SteerSource agentcore.SteerSource
 }
 
 // TurnResult is returned after a turn completes.
@@ -1005,6 +1009,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		HealthRegistry:  m.health,
 		ThinkingConfig:  in.ThinkingConfig,
 		TurnJournal:     in.TurnJournal,
+		SteerSource:     in.SteerSource,
 	}
 	tc.Overlay = overlay
 
@@ -1154,6 +1159,10 @@ func mapRunEntries(entries []agentcore.RunEntry) []HistoryEntry {
 			out = append(out, mustEntry("assistant", "reasoning", ReasoningContent{Text: e.Text}))
 		case "text":
 			out = append(out, mustEntry("assistant", "text", TextContent{Text: e.Text}))
+		case "user_text":
+			// A steered mid-turn user message (#785): persisted in stream order
+			// like every other entry, exactly once (the sink dedupes by SteerID).
+			out = append(out, mustEntry("user", "text", TextContent{Text: e.Text}))
 		case "tool_call":
 			out = append(out, mustEntry("assistant", entryTypeToolCall, ToolCallContent{
 				ID: e.ToolCallID, Name: e.ToolName, Input: e.ToolInput,

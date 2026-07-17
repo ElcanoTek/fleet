@@ -408,11 +408,23 @@ type inflightEntry struct {
 	buf        *turnBuffer
 	turnID     string
 	finishedAt time.Time
+	// steer is the running turn's mid-turn input mailbox (#785); nil for
+	// turns launched before a steer could exist (mock mode, tests).
+	steer *steerMailbox
 }
 
 // IsRunning reports whether the turn is still generating (buffer open).
+// finishedAt flips shortly after the buffer seals, so the sealed state is
+// consulted too — otherwise a submission racing the previous turn's last
+// bookkeeping microseconds would queue (#785) instead of running directly.
 func (e inflightEntry) IsRunning() bool {
-	return e.finishedAt.IsZero()
+	if !e.finishedAt.IsZero() {
+		return false
+	}
+	if e.buf != nil && e.buf.Sealed() {
+		return false
+	}
+	return true
 }
 
 // New wires a Server. Call Routes() to get the http.Handler.
@@ -515,18 +527,21 @@ func envInt(key string, def int) int {
 	return def
 }
 
-// registerTurn installs a fresh turnBuffer + cancel entry for convID.
-// Cancels + evicts any prior in-flight turn for the same conversation
-// (a user submitting a new turn before the previous one finished is a
-// clear "abandon the old one" signal — replay for the old turn is
-// also dropped). Returns the buffer, the turn ID, and a token that
-// finishTurn must present so stale finishers can't clobber a fresher
-// entry.
-func (s *Server) registerTurn(convID string, cancel context.CancelFunc) (*turnBuffer, string, uint64) {
+// registerTurn installs a fresh turnBuffer + cancel entry for convID IF no
+// turn is currently running. A running entry is never cancelled here (#785) —
+// a second submission is not an abandonment signal; it queues, and explicit
+// /cancel stays the only Stop. ok=false reports a running turn (the caller
+// falls back to the queue path). A RETAINED finished entry is still evicted +
+// sealed exactly as before. Returns the buffer, the turn ID, and a token that
+// finishTurn must present so stale finishers can't clobber a fresher entry.
+func (s *Server) registerTurn(convID string, cancel context.CancelFunc, steer *steerMailbox) (*turnBuffer, string, uint64, bool) {
 	s.inflightMu.Lock()
 	prev, hadPrev := s.inflight[convID]
+	if hadPrev && prev.IsRunning() {
+		s.inflightMu.Unlock()
+		return nil, "", 0, false
+	}
 	if hadPrev {
-		prev.cancel()
 		delete(s.inflight, convID)
 	}
 	s.inflightCounter++
@@ -538,6 +553,7 @@ func (s *Server) registerTurn(convID string, cancel context.CancelFunc) (*turnBu
 		token:  token,
 		buf:    buf,
 		turnID: turnID,
+		steer:  steer,
 	}
 	s.inflightMu.Unlock()
 
@@ -551,7 +567,7 @@ func (s *Server) registerTurn(convID string, cancel context.CancelFunc) (*turnBu
 	if hadPrev && prev.buf != nil {
 		prev.buf.Finish()
 	}
-	return buf, turnID, token
+	return buf, turnID, token, true
 }
 
 // finishTurn seals the buffer and marks the entry finished, keeping it
@@ -1986,10 +2002,34 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
 		}
+		// Stop semantics (#785): default scope "all" covers the active turn
+		// AND every still-queued follow-up — Stop means "stop working", not
+		// "stop this one and surprise me with the next". scope=turn cancels
+		// only the active turn and lets the queue drain.
+		scope := "all"
+		if r.Body != nil {
+			var body struct {
+				Scope string `json:"scope"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err == nil && strings.EqualFold(body.Scope, "turn") {
+				scope = "turn"
+			}
+		}
 		s.cancelInflight(id)
+		if scope == "all" {
+			if n, err := s.store.CancelQueuedInputs(r.Context(), user, id); err != nil {
+				log.Printf("cancel queued inputs (conv=%s): %v", id, err)
+			} else if n > 0 {
+				s.emitQueueUpdate(r.Context(), user, id)
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	case sub == "summarize" && r.Method == http.MethodPost:
 		s.handleSummarize(w, r, user, id)
+	case sub == "queue":
+		// Input queue (#785): GET snapshot, DELETE {inputID}, POST
+		// {inputID}/send-now. Ownership is validated inside.
+		s.handleQueueRoutes(w, r, user, id, subArg)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -2020,6 +2060,15 @@ type chatRequest struct {
 	// only when no ConversationID is provided (lockdown is set once
 	// at conversation creation and immutable thereafter).
 	Lockdown bool `json:"lockdown,omitempty"`
+	// InputID is the caller's idempotency key (#785): a re-POST of the same
+	// (conversation, input_id) while queued returns the existing item instead
+	// of duplicating the input. Empty = server-generated.
+	InputID string `json:"input_id,omitempty"`
+	// Mode selects what a submission does when a turn is already running
+	// (#785): "queue" (default) runs it as the next turn; "steer" offers it
+	// to the running turn's next step boundary, falling back to queue if the
+	// turn ends first. Ignored when the conversation is idle.
+	Mode string `json:"mode,omitempty"`
 }
 
 // memoryContents renders the injectable memory bullets (#515): retired and
@@ -2207,22 +2256,71 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Busy path (#785): a running turn means this submission QUEUES — never an
+	// implicit cancel. The row is durable before the 202 acknowledgement;
+	// steer-mode rows are additionally offered to the running turn's next
+	// step boundary. Explicit /cancel remains the only Stop.
+	if entry, ok := s.getInflight(conv.ID); ok && entry.IsRunning() {
+		s.handleBusySubmit(w, r, user, conv, req)
+		return
+	}
+
+	// Concurrent-turn admission: cap simultaneous in-flight turns per user so one
+	// user can't hold every worker slot with parallel long turns. The slot is
+	// held for the turn GOROUTINE's lifetime (released in the goroutine below),
+	// not just this HTTP handler's — postChat returns as soon as the turn is
+	// launched, but the work continues in the background.
+	releaseSlot, admitted := s.admitConcurrentTurn(w, user)
+	if !admitted {
+		return
+	}
+
+	if !s.startTurn(w, r, user, conv, req, "", releaseSlot) {
+		// A concurrent submission won the registerTurn race between our busy
+		// check and now; the input must not be lost — queue it instead.
+		releaseSlot()
+		s.handleBusySubmit(w, r, user, conv, req)
+	}
+}
+
+// startTurn runs one accepted input as a full turn: history + context prep,
+// buffer registration, prompt assembly, and the detached run goroutine. It is
+// the shared launch path for direct submissions (w/r set; the response
+// attaches to the buffer) and queue-drained inputs (#785; w/r nil, queueRowID
+// set). Returns false ONLY when registerTurn refused because a turn is
+// already running — every other failure is handled (responded/logged)
+// internally. releaseSlot is released by the turn goroutine on completion;
+// on false the caller releases it.
+func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, req chatRequest, queueRowID string, releaseSlot func()) bool {
+	reqCtx := context.Background()
+	if r != nil {
+		reqCtx = r.Context()
+	}
+	fail := func(status int, err error) {
+		if w != nil {
+			http.Error(w, err.Error(), status)
+			return
+		}
+		log.Printf("queued turn launch (user=%s conv=%s): %v", user, conv.ID, err)
+		s.terminalizeQueueRow(queueRowID, store.InputStateQueued)
+	}
+
 	// Load history before we even allocate a buffer — if this errors, the
 	// client never sees a partial SSE stream.
-	history, err := s.store.LoadHistory(r.Context(), conv.ID)
+	history, err := s.store.LoadHistory(reqCtx, conv.ID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		fail(http.StatusInternalServerError, err)
+		return true
 	}
 
 	// Project context (#509): a conversation in a project injects the
 	// project's standing instructions plus its SHARED memories (tagged
 	// "[project] ") alongside personal memory.
-	projectInstructions, projectMemoryBullets := s.projectTurnContext(r, conv)
-	memories, err := s.store.ListMemories(r.Context(), user)
+	projectInstructions, projectMemoryBullets := s.projectTurnContext(reqCtx, conv)
+	memories, err := s.store.ListMemories(reqCtx, user)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		fail(http.StatusInternalServerError, err)
+		return true
 	}
 
 	// Detach the turn's lifecycle from the SSE connection. r.Context()
@@ -2237,23 +2335,22 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// Explicit cancellation (the Stop button) routes through
 	// POST /conversations/{id}/cancel, which fires the cancel func we
 	// register here.
-	// Concurrent-turn admission: cap simultaneous in-flight turns per user so one
-	// user can't hold every worker slot with parallel long turns. The slot is
-	// held for the turn GOROUTINE's lifetime (released in the goroutine below),
-	// not just this HTTP handler's — postChat returns as soon as the turn is
-	// launched, but the work continues in the background.
-	releaseSlot, admitted := s.admitConcurrentTurn(w, user)
-	if !admitted {
-		return
-	}
-
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
-	buf, turnID, turnToken := s.registerTurn(conv.ID, turnCancel)
+	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
+	buf, turnID, turnToken, ok := s.registerTurn(conv.ID, turnCancel, steer)
+	if !ok {
+		turnCancel()
+		return false
+	}
+	// Bind the mailbox to its turn identity now that registerTurn minted it.
+	// The run goroutine (the only Poll consumer) has not launched yet, so no
+	// injection can precede the binding.
+	steer.turnID, steer.buf = turnID, buf
 
 	// Wire incremental persistence so a crash mid-turn leaves a
 	// recoverable ledger in turn_events. Non-fatal — if the DB is
 	// flaky, live streaming still works; crash recovery just won't.
-	persistCtx, persistCancelAttach := context.WithTimeout(r.Context(), 5*time.Second)
+	persistCtx, persistCancelAttach := context.WithTimeout(reqCtx, 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
 		log.Printf("attachPersister (user=%s conv=%s): %v", user, conv.ID, err)
 	}
@@ -2289,22 +2386,26 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The
-	// `user.message` event is replay-only — when the client refreshes
-	// mid-turn, the user message slot they see locally is gone (the
-	// Postgres history doesn't have it yet; AppendHistory only fires
-	// after RunTurn completes), and reattach reconstructs it from this
-	// event so the chat doesn't appear as just a stranded "Thinking…"
-	// indicator with no question above it.
+	// `user.message` event is replay-only — reattach reconstructs the
+	// user bubble from it so the chat doesn't appear as just a stranded
+	// "Thinking…" indicator with no question above it.
 	buf.Emit("conversation", map[string]any{
 		"id":      conv.ID,
 		"title":   conv.Title,
 		"persona": conv.Persona,
 		"model":   conv.Model,
 	})
-	buf.Emit("turn.started", map[string]any{
+	turnStarted := map[string]any{
 		"turn_id": turnID,
 		"persona": conv.Persona,
-	})
+	}
+	if queueRowID != "" {
+		// Queue-drained turns carry their input id so clients correlate the
+		// chip that just left the queue with the turn that runs it.
+		turnStarted["input_id"] = queueRowID
+		turnStarted["queued"] = true
+	}
+	buf.Emit("turn.started", turnStarted)
 	buf.Emit("user.message", map[string]any{
 		"text": userMessage,
 	})
@@ -2324,21 +2425,29 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 			s.activeTurns.Done()
 		}()
 		// Release the concurrent-turn slot when the turn actually completes, not
-		// when this HTTP handler returns (the turn outlives the request).
+		// when the HTTP handler returns (the turn outlives the request).
 		defer releaseSlot()
-		// turnCtx is intentionally NOT derived from r.Context() — the turn must
-		// outlive the HTTP request (see the comment above registerTurn).
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, userMessage, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments))
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, req.Message, userMessage, history, append(memoryContents(memories), projectMemoryBullets...), projectInstructions, toAgentImageAttachments(imageAttachments), steer)
+		// The turn (and its deferred finishTurn) is done: settle this input's
+		// queue row and drain whatever queued up while we ran (#785).
+		if queueRowID != "" {
+			s.terminalizeQueueRow(queueRowID, store.InputStateCompleted)
+			s.emitQueueUpdate(context.Background(), user, conv.ID)
+		}
+		s.maybeDrainQueue(user, conv.ID)
 	}()
 
-	// Attach this HTTP response as the initial subscriber. Blocks until
-	// the turn finishes or the client disconnects. The client's declared SSE
-	// capabilities (#194) filter which event types it receives; absent header =
-	// full stream.
-	caps := parseClientCapabilities(r.Header.Get(clientCapabilitiesHeaderName))
-	if err := buf.Attach(r.Context(), 0, w, caps); err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("Attach (user=%s conv=%s): %v", user, conv.ID, err)
+	if w != nil && r != nil {
+		// Attach this HTTP response as the initial subscriber. Blocks until
+		// the turn finishes or the client disconnects. The client's declared SSE
+		// capabilities (#194) filter which event types it receives; absent header =
+		// full stream.
+		caps := parseClientCapabilities(r.Header.Get(clientCapabilitiesHeaderName))
+		if err := buf.Attach(r.Context(), 0, w, caps); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("Attach (user=%s conv=%s): %v", user, conv.ID, err)
+		}
 	}
+	return true
 }
 
 // runTurnAsync executes the agent turn, persists the result, emits the
@@ -2356,6 +2465,7 @@ func (s *Server) runTurnAsync(
 	memories []string,
 	projectInstructions string,
 	imageAttachments []agent.ImageAttachment,
+	steer *steerMailbox,
 ) {
 	// Turn-start timestamp, stamped on every tool-call audit row derived from
 	// this turn (the SDK does not propagate per-call timing, so the turn start is
@@ -2448,6 +2558,7 @@ func (s *Server) runTurnAsync(
 		TurnJournal:    journal,
 		CommitUser:     commits.commitUser,
 		CommitTerminal: commits.commitTerminal,
+		SteerSource:    steerSourceOrNil(steer),
 	}, buf)
 	if err != nil {
 		log.Printf("RunTurn error (user=%s conv=%s): %v", user, conv.ID, err)

@@ -84,6 +84,16 @@ type chatStore interface {
 	CommitUserMessage(ctx context.Context, convID, turnID string, entry agent.HistoryEntry) (int64, error)
 	CommitTurnHistory(ctx context.Context, convID, turnID string, entries []agent.HistoryEntry) ([]int64, error)
 	InsertTurnJournal(ctx context.Context, r store.TurnJournalRow) error
+	// Conversation input queue + mid-turn steering (#785).
+	EnqueueInput(ctx context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error)
+	ListQueuedInputs(ctx context.Context, userEmail, convID string) ([]store.InputQueueRow, error)
+	ClaimNextQueuedInput(ctx context.Context, convID, turnID string) (*store.InputQueueRow, error)
+	MarkInputInjected(ctx context.Context, id, turnID string) (bool, error)
+	MarkInputTerminal(ctx context.Context, id, state string) error
+	CompleteInjectedInputs(ctx context.Context, turnID string) error
+	CancelQueuedInputs(ctx context.Context, userEmail, convID string) (int, error)
+	RemoveQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error)
+	PromoteQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error)
 	ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry) error
 	TruncateAfter(ctx context.Context, userEmail, convID string, afterMessageID int64) error
 	MaxMessageIDForRole(ctx context.Context, convID, role string) (int64, error)

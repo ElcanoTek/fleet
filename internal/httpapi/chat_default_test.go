@@ -123,6 +123,7 @@ type fakeChatStore struct {
 	setModels  int
 	turnEvents int
 	toolCalls  []store.ToolCallEntry
+	queue      []store.InputQueueRow
 }
 
 func newFakeChatStore() *fakeChatStore {
@@ -546,4 +547,118 @@ func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
 			t.Errorf("non-lockdown override not persisted: stored model = %q", model)
 		}
 	})
+}
+
+// In-memory input queue (#785): the fake mirrors the store's state machine so
+// the busy-path, drain, and steer flows are exercised without Postgres.
+func (s *fakeChatStore) EnqueueInput(_ context.Context, r store.InputQueueRow) (store.InputQueueRow, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, it := range s.queue {
+		if it.ConversationID == r.ConversationID && it.ClientInputID == r.ClientInputID {
+			return it, false, nil
+		}
+	}
+	r.State = store.InputStateQueued
+	r.Position = int64(len(s.queue) + 1)
+	s.queue = append(s.queue, r)
+	return r, true, nil
+}
+
+func (s *fakeChatStore) ListQueuedInputs(_ context.Context, _, convID string) ([]store.InputQueueRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.InputQueueRow
+	for _, it := range s.queue {
+		if it.ConversationID == convID && it.State != store.InputStateCompleted && it.State != store.InputStateCancelled {
+			out = append(out, it)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeChatStore) ClaimNextQueuedInput(_ context.Context, convID, turnID string) (*store.InputQueueRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued {
+			s.queue[i].State = store.InputStateRunning
+			s.queue[i].TurnID = turnID
+			row := s.queue[i]
+			return &row, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *fakeChatStore) MarkInputInjected(_ context.Context, id, turnID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id && s.queue[i].State == store.InputStateQueued {
+			s.queue[i].State = store.InputStateInjected
+			s.queue[i].TurnID = turnID
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *fakeChatStore) MarkInputTerminal(_ context.Context, id, state string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id {
+			s.queue[i].State = state
+		}
+	}
+	return nil
+}
+
+func (s *fakeChatStore) CompleteInjectedInputs(_ context.Context, turnID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].TurnID == turnID && s.queue[i].State == store.InputStateInjected {
+			s.queue[i].State = store.InputStateCompleted
+		}
+	}
+	return nil
+}
+
+func (s *fakeChatStore) CancelQueuedInputs(_ context.Context, _, convID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for i := range s.queue {
+		if s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued {
+			s.queue[i].State = store.InputStateCancelled
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *fakeChatStore) RemoveQueuedInput(_ context.Context, _, convID, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id && s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued {
+			s.queue[i].State = store.InputStateCancelled
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *fakeChatStore) PromoteQueuedInput(_ context.Context, _, convID, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		if s.queue[i].ID == id && s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued {
+			s.queue[i].Position = -1
+			return true, nil
+		}
+	}
+	return false, nil
 }

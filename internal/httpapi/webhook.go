@@ -194,7 +194,16 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// runs fire-and-forget in a goroutine and the conversation surfaces in the
 	// notify_user's list the next time they open Fleet.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
-	buf, turnID, turnToken := s.registerTurn(conv.ID, turnCancel)
+	buf, turnID, turnToken, ok := s.registerTurn(conv.ID, turnCancel, nil)
+	if !ok {
+		// Unreachable in practice — the conversation was created just above,
+		// so no turn can be running on it. Fail closed rather than panic.
+		turnCancel()
+		releaseSlot()
+		metrics.RecordWebhookTrigger(trig.Slug, "conflict")
+		writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "conversation is busy"})
+		return
+	}
 
 	persistCtx, persistCancel := context.WithTimeout(r.Context(), 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
@@ -222,7 +231,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 			s.activeTurns.Done()
 		}()
 		defer releaseSlot()
-		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, userMessage, history, memoryContents(memories), "", nil)
+		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, userMessage, history, memoryContents(memories), "", nil, nil)
 	}()
 
 	metrics.RecordWebhookTrigger(trig.Slug, "ok")
