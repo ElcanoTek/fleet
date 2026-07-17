@@ -72,6 +72,11 @@ type LogSession struct {
 	CreatedAt            int64        `json:"created_at"`
 	UpdatedAt            int64        `json:"updated_at"`
 	Messages             []LogMessage `json:"messages"`
+	// OutputJSON is the schema-validated terminal structured output (#797),
+	// set by the scheduled driver from Result.OutputJSON. It is the exact
+	// bytes agentcore validated — the runner commits THESE (post-redaction),
+	// never a re-parse of the redacted final message text.
+	OutputJSON string `json:"output_json,omitempty"`
 }
 
 // LogToolCall represents a structured tool call in logs.
@@ -110,6 +115,26 @@ func (ls *LogSession) SnapshotMessages() []LogMessage {
 	out := make([]LogMessage, len(ls.Messages))
 	copy(out, ls.Messages)
 	return out
+}
+
+// SetOutputJSON records the validated terminal structured output (#797).
+func (ls *LogSession) SetOutputJSON(v string) {
+	if ls == nil {
+		return
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	ls.OutputJSON = v
+}
+
+// SnapshotOutputJSON returns the validated terminal structured output.
+func (ls *LogSession) SnapshotOutputJSON() string {
+	if ls == nil {
+		return ""
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	return ls.OutputJSON
 }
 
 // CumulativeCacheHitRate returns the session-wide cache hit rate as a percentage.

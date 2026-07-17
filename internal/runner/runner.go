@@ -888,16 +888,36 @@ func reportableRunFailure(runErr error, wasPaused, wasStopped bool) bool {
 // implementations: production already returns a validated terminal value from
 // agentcore.Run, but a custom runner cannot bypass the persisted contract and
 // manufacture success. Empty schemas preserve free-form behavior.
+//
+// The session's OutputJSON (#797) is the authoritative candidate: the exact
+// bytes agentcore validated, redacted once at the driver boundary. The final
+// assistant TEXT is a display artifact whose redaction can corrupt or fail an
+// already-valid contract — it is only a fallback for legacy sessions written
+// by drivers that predate the handoff.
 func validateStructuredRunOutput(task *models.Task, session *models.LogSession) (json.RawMessage, error) {
 	if task == nil || len(task.OutputSchema) == 0 {
 		return nil, nil
 	}
-	finalText := finalAssistantText(session)
-	if strings.TrimSpace(finalText) == "" {
+	candidate := ""
+	if session != nil {
+		candidate = session.OutputJSON
+	}
+	fromHandoff := strings.TrimSpace(candidate) != ""
+	if !fromHandoff {
+		candidate = finalAssistantText(session)
+	}
+	if strings.TrimSpace(candidate) == "" {
 		return nil, fmt.Errorf("%w: task produced no terminal assistant output", agentcore.ErrStructuredOutputMissing)
 	}
-	out, err := structuredoutput.ValidateOutput(finalText, task.OutputSchema)
+	out, err := structuredoutput.ValidateOutput(candidate, task.OutputSchema)
 	if err != nil {
+		if fromHandoff {
+			// agentcore validated these bytes before the handoff; the only
+			// process-side mutation since is secret redaction. Fail loudly and
+			// honestly rather than committing corrupted-but-schema-shaped output.
+			return nil, fmt.Errorf("%w: validated output no longer satisfies the schema after redaction (the declared output carried redacted secret material): %w",
+				agentcore.ErrStructuredOutputInvalid, err)
+		}
 		return nil, fmt.Errorf("%w: %w", agentcore.ErrStructuredOutputInvalid, err)
 	}
 	return out, nil

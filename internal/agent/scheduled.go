@@ -682,6 +682,12 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if res.FinalText != "" {
 		a.logSession.AddMessage(roleAssistant, res.FinalText, nil, nil)
 	}
+	// Hand the runner the exact validated terminal bytes (#797). The final
+	// message text above is redacted for display; re-parsing it would let
+	// redaction corrupt or fail an already-validated contract.
+	if len(res.OutputJSON) > 0 {
+		a.logSession.SetOutputJSON(string(res.OutputJSON))
+	}
 	return nil
 }
 

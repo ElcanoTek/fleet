@@ -1261,24 +1261,33 @@ func (h *Handlers) GetTaskOutput(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Never expose a stale candidate from a failed/replayed/active row. A result
-	// becomes public only with the terminal success that committed it.
+	// becomes public only with the terminal success that committed it. The
+	// status codes are deliberately distinct so a polling client can tell
+	// "retry later" (409, non-terminal) from "will never exist" (410, terminal
+	// failure) — collapsing both onto 409 made old-contract clients poll a
+	// dead task forever.
 	if task.Status != models.TaskStatusSuccess {
 		if !task.Status.IsTerminal() {
 			writeError(w, http.StatusConflict, "Task has not finished; structured output is not yet available")
 			return
 		}
-		writeError(w, http.StatusConflict, "Task did not complete successfully; declared structured output is unavailable")
+		writeError(w, http.StatusGone, "Task failed terminally; the declared structured output will never be available for this run")
 		return
 	}
 	if len(task.OutputJSON) == 0 {
 		// Defensive handling for legacy rows created before the fail-closed
 		// storage invariant: this is a contract violation, not a missing optional
-		// resource, and must never masquerade as a 404.
-		writeError(w, http.StatusConflict, "Structured output contract violated: successful task has no output_json")
+		// resource, and must never masquerade as a 404 or a retriable 409.
+		writeError(w, http.StatusInternalServerError, "Structured output contract violated: successful task has no output_json")
 		return
 	}
-	if _, err := structuredoutput.ValidateOutput(string(task.OutputJSON), task.OutputSchema); err != nil {
-		writeError(w, http.StatusConflict, "Structured output contract violated: stored output_json is invalid")
+	// Serve the bytes the atomic success commit validated. Deliberately NOT
+	// re-validated here: re-running the validator on read would apply today's
+	// schema complexity bounds retroactively to rows committed under earlier
+	// bounds, making legacy successful output unreadable. Well-formedness is
+	// still asserted — a corrupt row is a storage fault, not a client error.
+	if !json.Valid(task.OutputJSON) {
+		writeError(w, http.StatusInternalServerError, "Structured output contract violated: stored output_json is not valid JSON")
 		return
 	}
 

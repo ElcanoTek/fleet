@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
@@ -452,5 +454,48 @@ func TestStructuredCommitOutcomeUnknownSameClaimClassifiesPersistence(t *testing
 	}
 	if status := retainedTerminalStatus(t, pool, task.ID); status != "failed" {
 		t.Fatalf("commit-unknown terminal stream status = %q, want failed", status)
+	}
+}
+
+// TestStructuredOutputPrefersDriverHandoffOverRedactedText pins the #797
+// review fix: the runner validates the session's OutputJSON (the exact bytes
+// agentcore validated, redacted once at the driver boundary) — never a
+// re-parse of the redacted display text, which can corrupt or fail an
+// already-valid contract.
+func TestStructuredOutputPrefersDriverHandoffOverRedactedText(t *testing.T) {
+	task := &models.Task{OutputSchema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"]}`)}
+	session := &models.LogSession{
+		OutputJSON: `{"answer":42}`,
+		// Display text mangled by redaction: re-parsing it would fail.
+		Messages: []models.LogMessage{{Role: "assistant", Content: `{"answer":[REDACTED]}`}},
+	}
+	out, err := validateStructuredRunOutput(task, session)
+	if err != nil {
+		t.Fatalf("handoff bytes must win over redacted text: %v", err)
+	}
+	if string(out) != `{"answer":42}` {
+		t.Fatalf("out = %s", out)
+	}
+}
+
+// TestStructuredOutputRedactionCorruptionFailsLoudly pins the fail-closed
+// half: when redaction itself broke the validated JSON (the declared output
+// carried secret material), the run fails with an explicit diagnostic instead
+// of committing corrupted-but-schema-shaped output.
+func TestStructuredOutputRedactionCorruptionFailsLoudly(t *testing.T) {
+	task := &models.Task{OutputSchema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"]}`)}
+	session := &models.LogSession{
+		OutputJSON: `{"answer":"[REDACTED]"}`,
+		Messages:   []models.LogMessage{{Role: "assistant", Content: `{"answer":1}`}},
+	}
+	_, err := validateStructuredRunOutput(task, session)
+	if err == nil {
+		t.Fatal("corrupted handoff must fail")
+	}
+	if !errors.Is(err, agentcore.ErrStructuredOutputInvalid) {
+		t.Fatalf("want ErrStructuredOutputInvalid, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "redacted secret material") {
+		t.Fatalf("diagnostic must name redaction: %v", err)
 	}
 }

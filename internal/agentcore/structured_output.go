@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"charm.land/fantasy"
@@ -90,6 +91,16 @@ func (e *engine) generateTerminalStructuredOutput(
 	}
 	providerSchema, enveloped := terminalProviderSchema(schemaObject)
 
+	// The terminal call is the run's most expensive-to-lose request: it fires
+	// after ALL tool work committed. Apply the same aggregate context reduction
+	// as the inner-step budget guard (#793) so a long transcript cannot
+	// overflow the window exactly at the end (the ordinary rounds were
+	// budget-guarded; this call must not be the one unguarded request).
+	messages, err := boundTerminalPrompt(model, systemPrompt, messages, maxTokens)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrStructuredOutputGeneration, err)
+	}
+
 	prompt := make(fantasy.Prompt, 0, len(messages)+2+StructuredOutputCorrectionAttempts)
 	if strings.TrimSpace(systemPrompt) != "" {
 		prompt = append(prompt, fantasy.NewSystemMessage(systemPrompt))
@@ -104,6 +115,8 @@ func (e *engine) generateTerminalStructuredOutput(
 
 	lastKind := terminalOutputMissing
 	lastDetail := "no structured output was returned"
+	native := supportsNativeStrictStructuredOutput(model)
+	downgraded := false
 	for attempt := 0; attempt <= StructuredOutputCorrectionAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("%w: context cancelled: %w", ErrStructuredOutputGeneration, ctx.Err())
@@ -119,7 +132,6 @@ func (e *engine) generateTerminalStructuredOutput(
 			MaxOutputTokens: &maxTokens,
 			ProviderOptions: e.providerOptions(model.Model()),
 		}
-		native := supportsNativeStrictStructuredOutput(model)
 		if native {
 			call.ProviderOptions = nativeStructuredOutputOptions(call.ProviderOptions, providerSchema)
 		} else {
@@ -132,9 +144,21 @@ func (e *engine) generateTerminalStructuredOutput(
 			call.ToolChoice = &toolChoice
 		}
 
-		resp, err := model.Generate(ctx, call)
+		resp, err := terminalGenerateWithRetry(ctx, model, call)
 		if err != nil {
-			return nil, fmt.Errorf("%w on attempt %d: %w", ErrStructuredOutputGeneration, attempt+1, err)
+			// A fatal provider rejection of the native strict payload (an
+			// upstream whose strict-mode subset excludes this Fleet-valid
+			// draft-07 schema, or an unroutable require_parameters request)
+			// gets ONE structural downgrade to the forced-tool path instead of
+			// deterministically failing every attempt and every replay.
+			// Transient exhaustion (ErrRetryBudgetExhausted) is never a schema
+			// problem, so it surfaces for the runner's transient retry policy.
+			if native && !downgraded && !errors.Is(err, ErrRetryBudgetExhausted) && ctx.Err() == nil {
+				native, downgraded = false, true
+				attempt--
+				continue
+			}
+			return nil, err
 		}
 		if resp == nil {
 			return nil, fmt.Errorf("%w on attempt %d: provider returned no response", ErrStructuredOutputGeneration, attempt+1)
@@ -175,6 +199,81 @@ func (e *engine) generateTerminalStructuredOutput(
 		return nil, fmt.Errorf("%w after %d attempts: %s", ErrStructuredOutputMissing, StructuredOutputCorrectionAttempts+1, lastDetail)
 	}
 	return nil, fmt.Errorf("%w after %d attempts: %s", ErrStructuredOutputInvalid, StructuredOutputCorrectionAttempts+1, lastDetail)
+}
+
+// terminalGenerateAttempts bounds the in-phase transient retries around one
+// terminal completion request. The retry is side-effect-free by construction
+// (the phase has zero ordinary tools), so retrying here is strictly cheaper
+// than the alternative: dead-lettering a run whose tool work already committed
+// and replaying ALL of it.
+const terminalGenerateAttempts = 4
+
+// terminalGenerateWithRetry is the terminal phase's resilience layer. Ordinary
+// rounds run behind streamRoundWithResilience (in-band retries, blip recovery,
+// fallback failover); this non-streaming Generate gets the equivalent bounded
+// treatment: transient provider weather retries in-phase with backoff, and
+// exhaustion surfaces ErrRetryBudgetExhausted — the sentinel the runner
+// already classifies TRANSIENT (re-queue) rather than a format failure (DLQ).
+// Fatal (non-retryable) provider errors return immediately wrapped in
+// ErrStructuredOutputGeneration.
+func terminalGenerateWithRetry(ctx context.Context, model fantasy.LanguageModel, call fantasy.Call) (*fantasy.Response, error) {
+	var lastErr error
+	for i := 0; i < terminalGenerateAttempts; i++ {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: context cancelled: %w", ErrStructuredOutputGeneration, ctx.Err())
+		}
+		resp, err := model.Generate(ctx, call)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		class, _ := classifyStreamError(err)
+		switch class {
+		case streamErrorCancelled:
+			return nil, fmt.Errorf("%w: context cancelled: %w", ErrStructuredOutputGeneration, err)
+		case streamErrorStreamBlip, streamErrorRetryExhausted:
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("%w: context cancelled: %w", ErrStructuredOutputGeneration, ctx.Err())
+			case <-time.After(time.Duration(1<<i) * 500 * time.Millisecond):
+			}
+		default:
+			return nil, fmt.Errorf("%w: %w", ErrStructuredOutputGeneration, err)
+		}
+	}
+	return nil, fmt.Errorf("terminal structured output: %w after %d attempts: %w",
+		ErrRetryBudgetExhausted, terminalGenerateAttempts, lastErr)
+}
+
+// boundTerminalPrompt applies the #793 aggregate reduction ladder to the
+// terminal prompt: normalize legacy payloads to the hard cap, then compact old
+// tool results, evict oversized old tool inputs, and finally evict results —
+// stopping as soon as the estimate fits the model-aware reserved target. An
+// irreducible transcript is a deterministic failure and surfaces as such.
+func boundTerminalPrompt(model fantasy.LanguageModel, systemPrompt string, messages []fantasy.Message, maxTokens int64) ([]fantasy.Message, error) {
+	prefix := buildModelContextPrefixBudget(systemPrompt, nil)
+	window := contextWindowForActiveModel(model)
+	accounting := contextAccounting(prefix, int(maxTokens), window)
+	if accounting.messageTarget <= 0 {
+		return nil, fmt.Errorf("%w: fixed reserves exceed window (window=%d)", ErrInnerContextBudgetExceeded, window)
+	}
+	msgs := cloneFantasyMessages(messages)
+	toolNames := toolNamesByCallID(msgs)
+	reduceHistoricalPayloadsToHardCap(msgs, toolNames)
+	if estimateBudgetMessagesTokens(msgs, prefix) > accounting.messageTarget {
+		compactOldToolResults(msgs, toolNames, prefix, accounting.messageTarget, innerResultPreviewBytes)
+	}
+	if estimateBudgetMessagesTokens(msgs, prefix) > accounting.messageTarget {
+		evictOldToolInputs(msgs, prefix, accounting.messageTarget)
+	}
+	if estimateBudgetMessagesTokens(msgs, prefix) > accounting.messageTarget {
+		compactOldToolResults(msgs, toolNames, prefix, accounting.messageTarget, innerResultEvictedBytes)
+	}
+	if tokens := estimateBudgetMessagesTokens(msgs, prefix); tokens > accounting.messageTarget {
+		return nil, fmt.Errorf("%w: irreducible terminal prompt exceeds reserved target (messages=%d target=%d window=%d)",
+			ErrInnerContextBudgetExceeded, tokens, accounting.messageTarget, window)
+	}
+	return msgs, nil
 }
 
 // supportsNativeStrictStructuredOutput is intentionally conservative. Fleet's

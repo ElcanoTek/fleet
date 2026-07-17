@@ -847,9 +847,10 @@ paths:
         under the worker lease, before success notifications or recurrence side
         effects. Therefore every successful structured task returns 200 here.
         404 means no output_schema was declared. 409 means the task is not yet
-        terminal, ended unsuccessfully under its declared contract, or is a
-        legacy/corrupt invariant-violating success row without schema-valid
-        output_json.
+        terminal — poll again later. 410 means the task failed terminally: the
+        declared output will never exist for this run, so stop polling. 500
+        marks a legacy/corrupt invariant-violating success row (no output_json,
+        or stored bytes that are not valid JSON).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200":
@@ -859,6 +860,8 @@ paths:
               schema: {}
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
   /tasks/{task_id}/error-analysis:
     parameters:
       - name: task_id

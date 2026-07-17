@@ -1700,6 +1700,10 @@ type LogSession struct {
 	CreatedAt           int64        `json:"created_at"`
 	UpdatedAt           int64        `json:"updated_at"`
 	Messages            []LogMessage `json:"messages"`
+	// OutputJSON carries the agentcore-validated terminal structured output
+	// (#797) from the driver to the runner, redacted like every other session
+	// field before it leaves the process boundary.
+	OutputJSON string `json:"output_json,omitempty"`
 }
 
 // MarshalJSON implements custom JSON marshaling for LogSession.
