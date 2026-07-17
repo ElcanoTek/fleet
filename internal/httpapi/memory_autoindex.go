@@ -88,7 +88,7 @@ func (s *Server) autoIndexMemories(ctx context.Context, sink agent.EventSink, co
 			}
 		}
 		if _, err := proposer.propose(params, supersededContent); err != nil {
-			log.Printf("autoIndexMemories: propose (user=%s conv=%s): %v", user, conversationID, err)
+			log.Printf("autoIndexMemories: propose (user=%s conv=%s): %v", user, conversationID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}
 	}
 }

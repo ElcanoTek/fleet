@@ -15,10 +15,10 @@ import (
 )
 
 type fakeSteerSource struct {
-	mu       sync.Mutex
-	pending  []SteerMessage
-	ackErr   error
-	acked    []string
+	mu      sync.Mutex
+	pending []SteerMessage
+	ackErr  error
+	acked   []string
 }
 
 func (f *fakeSteerSource) Poll() (SteerMessage, bool) {

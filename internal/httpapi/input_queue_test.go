@@ -243,7 +243,7 @@ func TestQueue_IdempotentSubmission(t *testing.T) {
 
 func TestQueue_SteerInjectsMidTurnExactlyOnce(t *testing.T) {
 	s := serverFixture(t)
-	const user = "alice@x.com"
+	const user = "bob@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
 	if err != nil {
 		t.Fatal(err)

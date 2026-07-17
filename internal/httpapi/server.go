@@ -2018,7 +2018,7 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		s.cancelInflight(id)
 		if scope == "all" {
 			if n, err := s.store.CancelQueuedInputs(r.Context(), user, id); err != nil {
-				log.Printf("cancel queued inputs (conv=%s): %v", id, err)
+				log.Printf("cancel queued inputs (conv=%s): %v", id, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
 			} else if n > 0 {
 				s.emitQueueUpdate(r.Context(), user, id)
 			}
@@ -2301,7 +2301,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			http.Error(w, err.Error(), status)
 			return
 		}
-		log.Printf("queued turn launch (user=%s conv=%s): %v", user, conv.ID, err)
+		log.Printf("queued turn launch (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		s.terminalizeQueueRow(queueRowID, store.InputStateQueued)
 	}
 
@@ -2419,7 +2419,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// (#278). The counter mirrors the WaitGroup for the SIGUSR1 status log.
 	s.activeTurns.Add(1)
 	s.activeTurnCount.Add(1)
-	go func() {
+	go func() { //nolint:gosec // G118: deliberate — the turn must outlive the HTTP request (see the detachment comment above); Stop routes through /cancel.
 		defer func() {
 			s.activeTurnCount.Add(-1)
 			s.activeTurns.Done()
@@ -2489,7 +2489,7 @@ func (s *Server) runTurnAsync(
 	// Playwright + CI. Skips history replay + provider call entirely.
 	if s.cfg.MockMode {
 		if err := runMockTurn(turnCtx, s.store, conv, userInput, buf); err != nil {
-			log.Printf("runMockTurn error (user=%s conv=%s): %v", user, conv.ID, err)
+			log.Printf("runMockTurn error (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}
 		sweepCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -2561,7 +2561,7 @@ func (s *Server) runTurnAsync(
 		SteerSource:    steerSourceOrNil(steer),
 	}, buf)
 	if err != nil {
-		log.Printf("RunTurn error (user=%s conv=%s): %v", user, conv.ID, err)
+		log.Printf("RunTurn error (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		// The resilience layer inside RunTurn emits `turn.model_required`
 		// itself on any non-cancellation failure (see agent/resilience.go).
 		// Avoid emitting a redundant — and misleading — `turn.error` in
@@ -2604,7 +2604,7 @@ func (s *Server) runTurnAsync(
 	// not a turn-blocking dependency.
 	if entries := deriveToolCallEntries(res.NewHistory, conv.ID, buf.turnID, user, startedAtUnix); len(entries) > 0 {
 		if err := s.store.RecordToolCalls(persistCtx, entries); err != nil {
-			log.Printf("RecordToolCalls (user=%s conv=%s): %v", user, conv.ID, err)
+			log.Printf("RecordToolCalls (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}
 	}
 

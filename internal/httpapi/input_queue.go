@@ -44,14 +44,13 @@ func newSteerMailbox(st chatStore, user, convID, turnID string, buf *turnBuffer)
 		slot: make(chan agentcore.SteerMessage, 1)}
 }
 
-// offer hands a queued steer row to the running turn. False = slot full (one
-// pending steer at a time); the row simply stays queued.
-func (m *steerMailbox) offer(id, text string) bool {
+// offer hands a queued steer row to the running turn. A full slot (one
+// pending steer at a time) silently leaves the row queued — the durable
+// fallback runs it as the next turn.
+func (m *steerMailbox) offer(id, text string) {
 	select {
 	case m.slot <- agentcore.SteerMessage{ID: id, Text: text}:
-		return true
 	default:
-		return false
 	}
 }
 
@@ -209,7 +208,7 @@ func (s *Server) maybeDrainQueue(user, convID string) {
 	claimTurnID := uuid.NewString()
 	row, err := s.store.ClaimNextQueuedInput(dctx, convID, claimTurnID)
 	if err != nil {
-		log.Printf("input queue claim (conv=%s): %v", convID, err)
+		log.Printf("input queue claim (conv=%s): %v", convID, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
 		return
 	}
 	if row == nil {
@@ -220,7 +219,7 @@ func (s *Server) maybeDrainQueue(user, convID string) {
 		// the winner's completion re-drains it.
 		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := s.store.MarkInputTerminal(rctx, row.ID, store.InputStateQueued); err != nil {
-			log.Printf("input queue unclaim (conv=%s input=%s): %v", convID, row.ID, err)
+			log.Printf("input queue unclaim (conv=%s input=%s): %v", convID, row.ID, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
 		}
 		rcancel()
 	}
@@ -234,7 +233,7 @@ func (s *Server) launchQueuedTurn(user, convID string, row *store.InputQueueRow)
 	defer cancel()
 	conv, err := s.store.Get(lctx, user, convID)
 	if err != nil || conv == nil {
-		log.Printf("input queue: conversation %s unavailable: %v", convID, err)
+		log.Printf("input queue: conversation %s unavailable: %v", convID, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
 		s.terminalizeQueueRow(row.ID, store.InputStateCancelled)
 		return true // consumed (cancelled); don't unclaim into a loop
 	}
@@ -272,7 +271,7 @@ func (s *Server) terminalizeQueueRow(id, state string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.store.MarkInputTerminal(ctx, id, state); err != nil {
-		log.Printf("input queue state (%s -> %s): %v", id, state, err)
+		log.Printf("input queue state (%s -> %s): %v", id, state, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
 	}
 }
 

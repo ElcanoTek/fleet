@@ -2428,6 +2428,6 @@ func recoverStrandedTurns(chatStore *store.Store) {
 	if qerr != nil {
 		log.Printf("input-queue recovery: %v", qerr)
 	} else if requeued+completed > 0 {
-		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed", requeued, completed)
+		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed", requeued, completed) //nolint:gosec // G706: two int counts — no request input.
 	}
 }
