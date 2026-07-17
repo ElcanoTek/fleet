@@ -403,3 +403,23 @@ task_templates:
       fallback_model: "anthropic/claude-sonnet-4-6"
       max_iterations: 25
       tags: ["tests"]
+
+# Governed lifecycle hooks (#788) — bundle-declared commands run inside the
+# sandbox at fixed run lifecycle points. The generic bundle ships none; this is
+# a commented schema example. Hooks can only observe or NARROW authority (block
+# / add bounded context), never widen it, and run with no credentials. See
+# docs/HOOKS.md and ADR-0038. Uncomment and adapt in a client bundle:
+#
+# hooks:
+#   version: 1
+#   entries:
+#     - id: block-secret-writes
+#       event: pre_tool_use
+#       matcher: "bash"
+#       command: "jq -e '(.tool_input | test(\"AWS_SECRET_ACCESS_KEY\")) | not'"
+#       enforce: true          # fail-closed: a nonzero exit blocks the tool
+#     - id: note-large-edits
+#       event: post_tool_use
+#       matcher: "edit_file"
+#       command: "/opt/hooks/lint.sh"   # advisory: prints {"additional_context": "..."}
+#       timeout_seconds: 20

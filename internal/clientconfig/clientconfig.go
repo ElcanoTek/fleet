@@ -108,6 +108,11 @@ type Bundle struct {
 	// in the generic bundle. cmd/fleet translates it into agentcore.AgentPolicy.
 	AgentPolicyConfig AgentPolicy
 
+	// HooksConfig carries the bundle's optional governed lifecycle hooks (#788).
+	// nil/empty in the generic bundle. cmd/fleet translates it into
+	// []agentcore.LifecycleHook at startup. Read via Bundle.Hooks().
+	HooksConfig *HooksConfig
+
 	// Personas carries the manifest's optional per-persona tool-permission
 	// policies (#294), in manifest order. Empty in the generic bundle (defaults
 	// unchanged). Look one up via PersonaToolPolicy. cmd/fleet translates each
@@ -797,6 +802,7 @@ type manifest struct {
 	Personas          []PersonaDef     `yaml:"personas"`
 	Pricing           PricingConfig    `yaml:"pricing"`
 	Sandbox           *sandboxManifest `yaml:"sandbox"`
+	Hooks             *HooksConfig     `yaml:"hooks"`
 }
 
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
@@ -865,6 +871,7 @@ func Load(dir string) (*Bundle, error) {
 		Providers:         m.Providers,
 		FallbackProviders: m.FallbackProviders,
 		AgentPolicyConfig: m.AgentPolicy,
+		HooksConfig:       m.Hooks,
 		Personas:          m.Personas,
 		PricingConfig:     m.Pricing,
 		SandboxConfig:     resolveSandbox(m.Sandbox, abs),
@@ -1077,6 +1084,9 @@ func (b *Bundle) validate() error {
 		return err
 	}
 	if err := validatePricing(b.PricingConfig); err != nil {
+		return err
+	}
+	if err := validateHooks(b.HooksConfig); err != nil {
 		return err
 	}
 	return nil

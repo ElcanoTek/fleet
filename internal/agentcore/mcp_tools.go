@@ -77,6 +77,12 @@ type toolBuildConfig struct {
 	// panicAttribution is copied into the universal dispatch wrapper for every
 	// advertised route and into deferred logical MCP tools before registration.
 	panicAttribution panicAttribution
+	// hooks is the per-run lifecycle-hook engine (#788), nil when no hooks are
+	// configured. Set on native/loader/confirm_audit/direct+deferred MCP tools;
+	// deliberately NOT on the disclosure bridge wrappers (the deferred tool
+	// fires the hook under its real name, so a bridge-level hook would
+	// double-fire a "*" matcher).
+	hooks *hookEngine
 }
 
 // buildFantasyTools combines native tools with discovered MCP tools into the
@@ -104,10 +110,10 @@ func buildFantasyTools(
 	allTools := make([]fantasy.AgentTool, 0, len(nativeTools)+len(mcpServerTools)+len(cfg.loaderTools)+1)
 
 	for _, t := range nativeTools {
-		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy})
+		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy, hooks: cfg.hooks})
 	}
 	for _, t := range cfg.loaderTools {
-		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy})
+		allTools = append(allTools, &policyGuardedTool{inner: t, policy: policy, hooks: cfg.hooks})
 	}
 	// The MCP tools that pass gates 1+2 — these are the DEFERRABLE set (#506):
 	// registered directly when the roster fits, or hidden behind the disclosure
@@ -138,6 +144,7 @@ func buildFantasyTools(
 			tool:       st.Tool,
 			broker:     broker,
 			policy:     policy,
+			hooks:      cfg.hooks,
 		}
 		// Gate 4 (persona tool allowlist, #294): applied HERE — to the logical
 		// mcp_<server>_<tool> identity, before the disclosure decision below —
@@ -161,7 +168,7 @@ func buildFantasyTools(
 
 	confirmAudit := []fantasy.AgentTool{}
 	if cfg.includeConfirmAudit {
-		confirmAudit = append(confirmAudit, &policyGuardedTool{inner: buildConfirmAuditPolicyTool(policy), policy: policy})
+		confirmAudit = append(confirmAudit, &policyGuardedTool{inner: buildConfirmAuditPolicyTool(policy), policy: policy, hooks: cfg.hooks})
 	}
 
 	// Progressive tool disclosure (#506): core (already in allTools) + confirm
@@ -249,6 +256,7 @@ type policyGuardedTool struct {
 	inner                 fantasy.AgentTool
 	policy                Policy
 	outputAlreadyGoverned bool
+	hooks                 *hookEngine // #788; nil = no hooks (nil-safe methods)
 }
 
 func (g *policyGuardedTool) Info() fantasy.ToolInfo { return g.inner.Info() }
@@ -261,6 +269,14 @@ func (g *policyGuardedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 
 func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	name := g.inner.Info().Name
+	// pre_tool_use hooks (#788) run BEFORE fleet's own gates, on the unmodified
+	// input. A block short-circuits without executing the tool or recording a
+	// result (matching the policy-block behavior below). Existing gates then
+	// evaluate after hooks, so a hook can only narrow, never widen.
+	if blocked, reason := g.hooks.preToolUse(ctx, name, params.ID, params.Input); blocked {
+		reason, _ = governToolOutput(ctx, name, reason)
+		return fantasy.NewTextErrorResponse(reason), nil
+	}
 	if g.policy != nil {
 		setToolPanicPhase(ctx, panicPhasePolicyBefore)
 		if blocked, msg := g.policy.BeforeToolCall(name, params.ID, params.Input); blocked {
@@ -297,6 +313,13 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 		err = errors.New(errText)
 		policyResult = errText
 	}
+	// post_tool_use hooks (#788): append any bounded context fragment to the
+	// governed result BEFORE RecordToolResult so the policy, session log, and
+	// model all see identical bytes.
+	if frag := g.hooks.postToolUse(ctx, name, params.ID, params.Input, policyResult, err != nil || resp.IsError); frag != "" {
+		resp.Content = appendHookContext(resp.Content, frag)
+		policyResult = resp.Content
+	}
 	if g.policy != nil {
 		// Record the outcome so policies that gate on tool RESULTS observe native
 		// tool calls (bash/python/task_tracker/...), not just the MCP and
@@ -306,6 +329,14 @@ func (g *policyGuardedTool) Run(ctx context.Context, params fantasy.ToolCall) (f
 		recordPolicyToolResult(ctx, g.policy, name, params.Input, policyResult, err == nil && !resp.IsError)
 	}
 	return resp, err
+}
+
+// appendHookContext appends a post-tool hook fragment to a tool result.
+func appendHookContext(content, frag string) string {
+	if content == "" {
+		return frag
+	}
+	return content + "\n\n" + frag
 }
 
 // governToolOutput is the one text-output choke point for native, loader, and
@@ -383,6 +414,7 @@ type mcpTool struct {
 	broker          MCPBroker
 	policy          Policy
 	providerOptions fantasy.ProviderOptions
+	hooks           *hookEngine // #788; fires under the real mcp_<server>_<tool> name (also on the deferred route)
 }
 
 func (m *mcpTool) Name() string {
@@ -418,6 +450,13 @@ func (m *mcpTool) Info() fantasy.ToolInfo {
 func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	toolName := m.Name()
 
+	// pre_tool_use hooks (#788) fire under the real mcp_<server>_<tool> name,
+	// before fleet's own gates — this also covers the deferred-disclosure route,
+	// where the bridge dispatches straight to this Run.
+	if blocked, reason := m.hooks.preToolUse(ctx, toolName, params.ID, params.Input); blocked {
+		reason, _ = governToolOutput(ctx, toolName, reason)
+		return fantasy.NewTextErrorResponse(reason), nil
+	}
 	if m.policy != nil {
 		setToolPanicPhase(ctx, panicPhasePolicyBefore)
 		if blocked, msg := m.policy.BeforeToolCall(toolName, params.ID, params.Input); blocked {
@@ -483,6 +522,11 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 		return fantasy.NewTextErrorResponse(errText), nil
 	}
 
+	// post_tool_use hooks (#788): append any bounded context to the governed
+	// result before recording, so policy/log/model see identical bytes.
+	if frag := m.hooks.postToolUse(ctx, toolName, params.ID, params.Input, resultText, false); frag != "" {
+		resultText = appendHookContext(resultText, frag)
+	}
 	m.record(ctx, toolName, params.Input, resultText, true)
 	return fantasy.NewTextResponse(resultText), nil
 }

@@ -271,6 +271,14 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		return Result{}, err
 	}
 
+	// Lifecycle hooks (#788): one per-run engine, nil (zero-overhead no-op) when
+	// the bundle declares none. Hooks execute inside the sandbox via deps.Executor.
+	hooks := newHookEngine(mode, deps.Executor, deps.Observer, label)
+	messages, err = applyUserPromptSubmitHooks(ctx, hooks, messages)
+	if err != nil {
+		return Result{}, err
+	}
+
 	maxTokens := int64(DefaultMaxCompletionTokens)
 	if cfg.MaxCompletionTokens > 0 {
 		maxTokens = int64(cfg.MaxCompletionTokens)
@@ -293,6 +301,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		personaPolicy:    cfg.PersonaPolicy,
 		observer:         deps.Observer,
 		panicAttribution: panicAttribution,
+		hooks:            hooks,
 	}
 
 	mcpClient := deps.MCPClient
@@ -480,6 +489,11 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 					return Result{}, err
 				}
 			}
+			// turn_end hooks (#788): observational only — a completed turn is not
+			// undone, so the decision is audited but not enforced. Fired only on
+			// normal completion (not cancel/budget, where ctx is dead and a
+			// sandbox exec cannot run).
+			hooks.turnEnd(ctx, finalText, round+1)
 			entries, _ := sink.snapshot()
 			if finalText != "" {
 				entries = append(entries, RunEntry{Role: roleAssistant, Type: "text", Text: finalText})
