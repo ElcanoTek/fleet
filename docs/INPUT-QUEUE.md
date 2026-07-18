@@ -55,8 +55,16 @@ runs it as the next turn. User input is never silently dropped.
 A drained turn settles its rows against the #798 durable record at turn end:
 the row completes ONLY if the turn's user entry committed; a pre-commit
 failure (model resolution, DB blip) re-queues it — a 202-acknowledged input
-is never silently lost. Uncommitted injected steers equally return to the
-queue when their turn hard-errors. Re-queued rows (including
+is never silently lost. An uncommitted injected steer returns to the queue
+when its turn hard-errors ONLY if no tool intent was journaled after the
+row's injection watermark (`injected_seq`, stamped at the durable
+queued → injected flip); a post-injection intent proves the model dispatched
+a tool with the steer in context, and #820 preserves those committed side
+effects, so the row CANCELS instead of re-executing the instruction (#823 —
+at most once, never a double-sent email; the drop is logged and the queue
+snapshot updates). Intents carry the proof because they are journaled
+pre-dispatch and a degraded journal refuses dispatch outright — an
+unjournaled post-injection side effect cannot exist. Re-queued rows (including
 concurrency-cap refusals and transient launch failures) get a bounded
 delayed re-kick so the queue self-heals without waiting for the next
 submission. Stop scope=all records a per-conversation epoch before sweeping,
@@ -74,9 +82,11 @@ DB-atomic `FOR UPDATE SKIP LOCKED` and launches it through the same
 ceilings, #798 commit gating — unchanged). `registerTurn` refuses while a
 turn runs; a lost race un-claims the row. At boot, `RecoverInputQueue`
 resolves rows claimed by a dead process against the #798 durable record
-(committed → completed, otherwise back to queued) and deliberately does NOT
-auto-drain: a restart must not start unattended LLM spend — restored inputs
-are visible in the queue UI and run on send-now or the next submission.
+(committed → completed; injected with a post-watermark tool intent →
+cancelled, same #823 predicate as turn-end settlement; otherwise back to
+queued) and deliberately does NOT auto-drain: a restart must not start
+unattended LLM spend — restored inputs are visible in the queue UI and run
+on send-now or the next submission.
 
 ## Honest scope (deferred)
 
@@ -84,9 +94,12 @@ are visible in the queue UI and run on send-now or the next submission.
 - Queue reorder beyond send-now promotion; drag-and-drop in the UI.
 - Cross-restart idempotency for immediate submissions that never carried an
   `input_id` (clients that send one are covered).
-- An injected-then-crashed steer re-queues (its turn's history never
-  committed); if the turn's tools had side effects before the crash, the
-  #798 recovery markers carry the evidence — the re-run is visible, not
-  silent.
+- An injected steer whose failed turn dispatched a tool after the injection
+  is CANCELLED, not re-run (#823): the watermark can prove a post-steer
+  dispatch happened but not that the steer specifically caused it, so the
+  safe side is dropping a resendable message over duplicating a side effect.
+  The user resends; exactly-once delivery (committing the steered entry at
+  injection time) would need a redesign of the #798 one-commit-per-turn
+  projection contract and is deliberately out of scope.
 - Rate-limit RPM accounting applies at enqueue time; drained turns re-check
   only the per-user concurrency cap.

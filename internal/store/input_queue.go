@@ -150,9 +150,16 @@ func (s *Store) ClaimNextQueuedInput(ctx context.Context, convID, turnID string)
 // MarkInputInjected flips a steer row queued -> injected for turnID. Guarded
 // on state='queued': zero rows means a remove/cancel won the race and the
 // caller must refuse injection (the message is gone, not queued).
+//
+// The flip also stamps injected_seq — the turn journal's max seq at injection
+// time (#823). The read is race-free against the journal writer: Acknowledge
+// runs at the PrepareStep boundary, after every tool goroutine of the prior
+// step settled, so every pre-injection intent is already journaled; any tool
+// intent with a higher seq was dispatched after the model saw the steer.
 func (s *Store) MarkInputInjected(ctx context.Context, id, turnID string) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE chat_input_queue SET state = 'injected', turn_id = $2, updated_at = $3
+		`UPDATE chat_input_queue SET state = 'injected', turn_id = $2, updated_at = $3,
+		        injected_seq = COALESCE((SELECT MAX(seq) FROM turn_journal WHERE turn_id = $2), 0)
 		  WHERE id = $1 AND state = 'queued'`, id, turnID, time.Now().Unix())
 	if err != nil {
 		return false, err
@@ -229,17 +236,21 @@ func (s *Store) PromoteQueuedInput(ctx context.Context, userEmail, convID, id st
 // injected by a process that died resolve against the #798 durable record:
 //   - running/injected rows whose turn committed the user entry / history are
 //     COMPLETED (their text is durably in canonical history);
+//   - injected rows with a tool intent journaled after their injection
+//     watermark are CANCELLED (#823) — the model may have acted on the steer
+//     and the side effects survived (#820), so re-running it could duplicate
+//     them (same predicate as SettleTurnInputs);
 //   - the rest return to QUEUED (visible + addressable; deliberately NOT
 //     auto-drained at boot — restarting the server must not start unattended
 //     LLM spend).
-func (s *Store) RecoverInputQueue(ctx context.Context) (requeued, completed int, err error) {
+func (s *Store) RecoverInputQueue(ctx context.Context) (requeued, completed, cancelled int, err error) {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE chat_input_queue SET state = 'completed', updated_at = $1
 		  WHERE state = 'running'
 		    AND EXISTS (SELECT 1 FROM messages m WHERE m.turn_id = chat_input_queue.turn_id AND m.turn_seq = 1)`,
 		time.Now().Unix())
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	n, _ := res.RowsAffected()
 	completed += int(n)
@@ -250,20 +261,33 @@ func (s *Store) RecoverInputQueue(ctx context.Context) (requeued, completed int,
 		    AND EXISTS (SELECT 1 FROM turns t WHERE t.turn_id = chat_input_queue.turn_id AND t.history_committed_at IS NOT NULL)`,
 		time.Now().Unix())
 	if err != nil {
-		return 0, completed, err
+		return 0, completed, 0, err
 	}
 	n, _ = res.RowsAffected()
 	completed += int(n)
 
 	res, err = s.db.ExecContext(ctx,
-		`UPDATE chat_input_queue SET state = 'queued', turn_id = NULL, updated_at = $1
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $1
+		  WHERE state = 'injected'
+		    AND EXISTS (SELECT 1 FROM turn_journal j
+		                 WHERE j.turn_id = chat_input_queue.turn_id AND j.kind = 'tool_intent'
+		                   AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))`,
+		time.Now().Unix())
+	if err != nil {
+		return 0, completed, 0, err
+	}
+	n, _ = res.RowsAffected()
+	cancelled = int(n)
+
+	res, err = s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'queued', turn_id = NULL, injected_seq = NULL, updated_at = $1
 		  WHERE state IN ('running','injected')`,
 		time.Now().Unix())
 	if err != nil {
-		return 0, completed, err
+		return 0, completed, cancelled, err
 	}
 	n, _ = res.RowsAffected()
-	return int(n), completed, nil
+	return int(n), completed, cancelled, nil
 }
 
 // BindInputTurn stamps the REAL turn id on a claimed row once registerTurn
@@ -299,12 +323,20 @@ func (s *Store) LookupInput(ctx context.Context, convID, clientID string) (*Inpu
 //     entry committed (messages turn_seq=1), otherwise back to queued — a
 //     202-acknowledged input whose turn failed pre-commit is never lost.
 //   - injected steer rows: completed when the turn's history committed
-//     (normally already done post-commit), otherwise back to queued.
+//     (normally already done post-commit); otherwise back to queued ONLY when
+//     no tool intent was journaled after the row's injection watermark, else
+//     CANCELLED (#823) — the model may have acted on the steer before the
+//     turn failed, and #820 preserves those committed side effects, so a
+//     blind requeue would re-execute the instruction. Intents (not results)
+//     carry the proof: they are journaled pre-dispatch, and a degraded
+//     journal refuses dispatch outright, so an unjournaled post-injection
+//     side effect cannot exist. A NULL watermark (row injected before
+//     migration 044) degrades to the coarse gate: any intent blocks requeue.
 //
-// Returns how many rows went back to queued so the caller can re-kick.
-func (s *Store) SettleTurnInputs(ctx context.Context, turnID, drainedID string) (int, error) {
+// Returns how many rows went back to queued (so the caller can re-kick) and
+// how many injected rows were cancelled (so the caller can surface the drop).
+func (s *Store) SettleTurnInputs(ctx context.Context, turnID, drainedID string) (requeued, cancelled int, err error) {
 	now := time.Now().Unix()
-	requeued := 0
 	if drainedID != "" {
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE chat_input_queue SET
@@ -316,7 +348,7 @@ func (s *Store) SettleTurnInputs(ctx context.Context, turnID, drainedID string) 
 			  WHERE id = $1 AND state = 'running'`,
 			drainedID, turnID, now)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		if n, _ := res.RowsAffected(); n == 1 {
 			var state string
@@ -327,13 +359,29 @@ func (s *Store) SettleTurnInputs(ctx context.Context, turnID, drainedID string) 
 		}
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE chat_input_queue SET state = 'queued', turn_id = NULL, updated_at = $2
+		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
 		  WHERE turn_id = $1 AND state = 'injected'
-		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id = $1 AND t.history_committed_at IS NOT NULL)`,
+		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id = $1 AND t.history_committed_at IS NOT NULL)
+		    AND EXISTS (SELECT 1 FROM turn_journal j
+		                 WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
+		                   AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))`,
 		turnID, now)
 	if err != nil {
-		return requeued, err
+		return requeued, 0, err
 	}
 	n, _ := res.RowsAffected()
-	return requeued + int(n), nil
+	cancelled = int(n)
+	res, err = s.db.ExecContext(ctx,
+		`UPDATE chat_input_queue SET state = 'queued', turn_id = NULL, injected_seq = NULL, updated_at = $2
+		  WHERE turn_id = $1 AND state = 'injected'
+		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.turn_id = $1 AND t.history_committed_at IS NOT NULL)
+		    AND NOT EXISTS (SELECT 1 FROM turn_journal j
+		                     WHERE j.turn_id = $1 AND j.kind = 'tool_intent'
+		                       AND j.seq > COALESCE(chat_input_queue.injected_seq, 0))`,
+		turnID, now)
+	if err != nil {
+		return requeued, cancelled, err
+	}
+	n, _ = res.RowsAffected()
+	return requeued + int(n), cancelled, nil
 }
