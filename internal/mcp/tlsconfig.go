@@ -138,5 +138,8 @@ func tlsHTTPClient(cfg *tls.Config) *http.Client {
 	return &http.Client{
 		Timeout:   DefaultMCPHTTPTimeout,
 		Transport: tr,
+		// Same credential guarantee as the default transport client: the
+		// server's headers never follow a redirect off the original origin.
+		CheckRedirect: stripHeadersOnCrossOriginRedirect,
 	}
 }

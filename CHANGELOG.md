@@ -19,6 +19,15 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **MCP HTTP clients no longer forward resolved credential headers across
+  cross-origin redirects (#830)**: inline HTTP tools and the HTTP MCP
+  transport (including the TLS-hardened variant) used Go's default redirect
+  policy, which only strips `Authorization`/`Cookie` — a 30x naming a
+  different host received every custom credential header (`X-Api-Key`,
+  vendor auth headers) verbatim. A shared `CheckRedirect` policy now follows
+  redirects but drops all originally-set headers when a hop leaves the
+  original host:port origin, mirroring the guarantee
+  `mcpoauth.SafeHTTPClient` already gave user-supplied remote servers.
 - **Chat web: a stale busy flag no longer turns a `mode:"queue"` submission
   into an invisible billed turn (#824)**: the composer picks the queue path
   from client-side streaming state, but the server only honors queueing while
