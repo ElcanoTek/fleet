@@ -19,6 +19,13 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Chat submit guard reads now fail closed (#832)**: a store error during
+  the `input_id` idempotent-replay lookup fell through to start a fresh
+  billed turn for an input that may already have been accepted, and on the
+  queue path a `CountPendingInputs` error silently waived the
+  unattended-spend depth cap (with a lookup error at the cap masquerading as
+  a 429 "queue full"). All three reads now surface the error as a 500 so the
+  client can retry the same `input_id` safely.
 - **Shared MCP spawns no longer leak the literal `${FLEET_TASK_ID}`
   placeholder to connectors (#831)**: only the scheduled per-run path called
   `ExpandTaskIDEnv`, so boot-time shared spawns, hot-reload diffs,

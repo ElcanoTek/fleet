@@ -2273,7 +2273,15 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// running, or terminal) never runs a duplicate turn — even when the retry
 	// lands after the conversation went idle.
 	if clientID := strings.TrimSpace(req.InputID); clientID != "" {
-		if existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID); lerr == nil && existing != nil {
+		existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID)
+		if lerr != nil {
+			// Fail closed: proceeding without the lookup could run (and bill) a
+			// duplicate turn for an input_id that was already accepted. A 500
+			// lets the client retry the same input_id safely.
+			http.Error(w, "input lookup failed: "+lerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if existing != nil {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(map[string]any{
