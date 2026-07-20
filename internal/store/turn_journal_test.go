@@ -491,3 +491,100 @@ func TestRecovery_BlockedCallGetsNeverDispatchedNotUnknown(t *testing.T) {
 		t.Fatal("never-dispatched call misclassified as unknown outcome")
 	}
 }
+
+// #826: an interrupted turn's steered user message must be projected into
+// recovered history. Recovery stamps history_committed_at, which makes boot
+// recovery complete the steer's queue row as "durably in canonical history" —
+// without the projection that claim is false and the instruction silently
+// vanishes. Exactly once: a resilience re-drive can re-emit the same steer
+// event, and the turn-start user.message (no steered flag) is committed
+// separately at turn_seq=1 and must not double.
+func TestRecovery_ProjectsSteeredUserMessageExactlyOnce(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "draft the email")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The stream as the crash left it: the turn-start user echo, some text,
+	// the steer (re-emitted once by a resilience re-drive), more text.
+	seedEvent(t, s, "t1", 1, "user.message", map[string]any{"text": "draft the email"})
+	seedEvent(t, s, "t1", 2, "text.delta", map[string]any{"text": "drafting"})
+	seedEvent(t, s, "t1", 3, "user.message", map[string]any{"text": "also CC legal", "steered": true, "input_id": "in-1"})
+	seedEvent(t, s, "t1", 4, "user.message", map[string]any{"text": "also CC legal", "steered": true, "input_id": "in-1"})
+	seedEvent(t, s, "t1", 5, "text.delta", map[string]any{"text": "will do"})
+
+	got := recoveredHistory(t, s, convID)
+	var steers, originals int
+	var steerIdx, preTextIdx, postTextIdx int
+	for i, e := range got {
+		if e.Role == "user" && strings.Contains(string(e.Content), "also CC legal") {
+			steers++
+			steerIdx = i
+		}
+		if e.Role == "user" && strings.Contains(string(e.Content), "draft the email") {
+			originals++
+		}
+		if e.Type == "text" && strings.Contains(string(e.Content), "drafting") {
+			preTextIdx = i
+		}
+		if e.Type == "text" && strings.Contains(string(e.Content), "will do") {
+			postTextIdx = i
+		}
+	}
+	if steers != 1 {
+		t.Fatalf("steered message projected %d times, want exactly 1: %+v", steers, got)
+	}
+	if originals != 1 {
+		t.Fatalf("turn-start user message projected %d times, want exactly 1 (the turn_seq=1 commit)", originals)
+	}
+	if preTextIdx >= steerIdx || steerIdx >= postTextIdx {
+		t.Fatalf("steer out of stream order: pre=%d steer=%d post=%d", preTextIdx, steerIdx, postTextIdx)
+	}
+}
+
+// #826 end to end: after recovery projects the steered text, boot queue
+// recovery's "completed = durably in history" resolution of the injected row
+// is truthful — the row completes AND the text is in canonical history.
+func TestRecovery_InjectedSteerRowCompletesWithTextPreserved(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	if _, err := s.CommitUserMessage(ctx, convID, "t1", userEntry(t, "draft the email")); err != nil {
+		t.Fatal(err)
+	}
+	row, _, err := s.EnqueueInput(ctx, InputQueueRow{
+		ID: "iq-steer", ConversationID: convID, UserEmail: "u@example.com",
+		ClientInputID: "cli-steer", Message: "also CC legal", Attachments: "[]", Mode: InputModeSteer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.MarkInputInjected(ctx, row.ID, "t1"); err != nil || !ok {
+		t.Fatalf("inject: ok=%v err=%v", ok, err)
+	}
+	seedEvent(t, s, "t1", 1, "user.message", map[string]any{"text": "also CC legal", "steered": true, "input_id": "cli-steer"})
+
+	// Boot order: stranded turns first (projects + stamps
+	// history_committed_at), then the queue resolves against that record.
+	if _, err := s.RecoverStrandedTurns(ctx); err != nil {
+		t.Fatal(err)
+	}
+	requeued, completed, cancelled, err := s.RecoverInputQueue(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requeued != 0 || completed != 1 || cancelled != 0 {
+		t.Fatalf("requeued=%d completed=%d cancelled=%d, want 0/1/0", requeued, completed, cancelled)
+	}
+	var found bool
+	for _, e := range loadEntries(t, s, convID) {
+		if e.Role == "user" && strings.Contains(string(e.Content), "also CC legal") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("queue row completed as 'durably in history' but the steered text is not in history")
+	}
+}
