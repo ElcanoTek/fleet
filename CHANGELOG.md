@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Chat web: a stale busy flag no longer turns a `mode:"queue"` submission
+  into an invisible billed turn (#824)**: the composer picks the queue path
+  from client-side streaming state, but the server only honors queueing while
+  a turn is actually running — if the turn finished in the race window, the
+  POST started a direct SSE turn that the client mistook for a queue ack:
+  no user bubble, no stream consumer, nothing in the queue until a page
+  refresh. The queue branch now classifies the response by `Content-Type`;
+  a `text/event-stream` answer cancels the unread body (the turn outlives
+  its originating request by design) and hands off to `reattachToConv`,
+  which attaches to the running turn's buffer and replays from event 0 —
+  the `user.message` echo renders the submission's bubble and tokens stream
+  normally.
+
 - **Crash recovery preserves steered user messages (#826)**: an interrupted
   turn's recovery rebuilt assistant text, reasoning, and tool calls from the
   event ledger but never projected steered `user.message` events — the
