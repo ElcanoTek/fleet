@@ -180,8 +180,23 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	// Idempotent replays of an already-accepted input still pass through —
 	// EnqueueInput's conflict path returns the existing row without growing
 	// the queue.
-	if pending, cerr := s.store.CountPendingInputs(r.Context(), conv.ID); cerr == nil && pending >= maxPendingInputs {
-		if existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID); lerr == nil && existing != nil {
+	pending, cerr := s.store.CountPendingInputs(r.Context(), conv.ID)
+	if cerr != nil {
+		// Fail closed: the depth cap is the unattended-spend guard, so a count
+		// error must not silently waive it.
+		http.Error(w, "input queue check failed: "+cerr.Error(), http.StatusInternalServerError)
+		return
+	}
+	if pending >= maxPendingInputs {
+		existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID)
+		if lerr != nil {
+			// Fail closed, and as a 500 rather than the 429 below: a lookup
+			// error says nothing about whether this input_id was already
+			// accepted, and a false "queue full" would misdirect the client.
+			http.Error(w, "input lookup failed: "+lerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if existing != nil {
 			writeQueueAck(w, http.StatusOK, conv.ID, *existing)
 			return
 		}
