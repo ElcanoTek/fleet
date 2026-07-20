@@ -49,7 +49,10 @@ journal carries the exact governed, bounded model-visible bytes from the
 `SetSearchEnabled`, before serving). Per `running` turn, in one transaction:
 rebuild entries from the journal (authoritative for calls/results) interleaved
 with `turn_events` text/reasoning (`turn.retry` drops the abandoned attempt's
-text); pair every call with a result — synthesizing an explicit
+text; steered `user.message` events project as user entries exactly once by
+`input_id` — recovery stamps `history_committed_at`, which completes the
+steer's queue row as "durably in history", so the text must actually be
+there, #826); pair every call with a result — synthesizing an explicit
 unknown-outcome error (`synthesized=TRUE` journal marker, model-visible
 "verify before retrying" warning) when the real result never landed, or a
 "did NOT execute" marker when the journal was active and the call has no

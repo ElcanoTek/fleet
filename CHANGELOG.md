@@ -19,6 +19,16 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Crash recovery preserves steered user messages (#826)**: an interrupted
+  turn's recovery rebuilt assistant text, reasoning, and tool calls from the
+  event ledger but never projected steered `user.message` events — the
+  mid-turn instruction vanished from canonical history while recovery's
+  `history_committed_at` stamp made boot queue-recovery mark the steer's row
+  completed ("durably in history"). `buildRecoveredEntries` now projects
+  steered user messages in stream order, exactly once per `input_id` (a
+  resilience re-drive can re-emit the event; the turn-start non-steered
+  `user.message` stays excluded — it is committed separately at turn_seq=1).
+
 - **Injected steers are at-most-once, never re-executed after committed side
   effects (#823)**: an injected steer whose turn ended without a history
   commit was blindly re-queued and re-run as the next turn — but the model
