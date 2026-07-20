@@ -2422,12 +2422,14 @@ func recoverStrandedTurns(chatStore *store.Store) {
 	}
 	// Input-queue recovery (#785) resolves rows claimed/injected by the dead
 	// process against the #798 durable record: durably-persisted ones complete,
-	// the rest return to 'queued' — visible and addressable, deliberately NOT
-	// auto-drained (a restart must not start unattended LLM spend).
-	requeued, completed, qerr := chatStore.RecoverInputQueue(recCtx)
+	// injected steers whose turn dispatched tools after the injection cancel
+	// (#823: re-running could duplicate side effects), the rest return to
+	// 'queued' — visible and addressable, deliberately NOT auto-drained (a
+	// restart must not start unattended LLM spend).
+	requeued, completed, cancelled, qerr := chatStore.RecoverInputQueue(recCtx)
 	if qerr != nil {
 		log.Printf("input-queue recovery: %v", qerr)
-	} else if requeued+completed > 0 {
-		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed", requeued, completed) //nolint:gosec // G706: two int counts — no request input.
+	} else if requeued+completed+cancelled > 0 {
+		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed, %d cancelled (post-injection side effects; not re-run)", requeued, completed, cancelled) //nolint:gosec // G706: three int counts — no request input.
 	}
 }

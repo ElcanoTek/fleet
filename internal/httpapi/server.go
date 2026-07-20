@@ -2486,12 +2486,18 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// queue rows against the durable #798 record — the drained row
 		// completes only if its user entry committed (a pre-commit failure
 		// re-queues it; a 202-acknowledged input is never silently lost),
-		// and uncommitted injected steers return to the queue.
+		// and uncommitted injected steers return to the queue unless a tool
+		// dispatched after their injection (#823: the model may have acted on
+		// the steer; re-running it could duplicate side effects, so those
+		// rows cancel instead).
 		sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
-		requeued, serr := s.store.SettleTurnInputs(sctx, turnID, queueRowID)
+		requeued, cancelledSteers, serr := s.store.SettleTurnInputs(sctx, turnID, queueRowID)
 		scancel()
 		if serr != nil {
 			log.Printf("settle turn inputs (turn=%s): %v", turnID, serr)
+		}
+		if cancelledSteers > 0 {
+			log.Printf("input queue: cancelled %d injected steer(s) of failed turn %s — tools dispatched after injection, re-running could duplicate side effects (#823)", cancelledSteers, turnID) //nolint:gosec // G706: int count + server-generated turn UUID — no request-authored text is logged.
 		}
 		s.emitQueueUpdate(context.Background(), user, conv.ID)
 		releaseOnce()

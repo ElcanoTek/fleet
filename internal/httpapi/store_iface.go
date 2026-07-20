@@ -97,7 +97,7 @@ type chatStore interface {
 	PromoteQueuedInput(ctx context.Context, userEmail, convID, id string) (bool, error)
 	BindInputTurn(ctx context.Context, id, turnID string) error
 	LookupInput(ctx context.Context, convID, clientID string) (*store.InputQueueRow, error)
-	SettleTurnInputs(ctx context.Context, turnID, drainedID string) (int, error)
+	SettleTurnInputs(ctx context.Context, turnID, drainedID string) (requeued, cancelled int, err error)
 	ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry) error
 	TruncateAfter(ctx context.Context, userEmail, convID string, afterMessageID int64) error
 	MaxMessageIDForRole(ctx context.Context, convID, role string) (int64, error)

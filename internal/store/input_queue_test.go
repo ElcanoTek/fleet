@@ -141,16 +141,125 @@ func TestRecoverInputQueue_ResolvesAgainstDurableRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	requeued, completed, err := s.RecoverInputQueue(ctx)
+	requeued, completed, cancelled, err := s.RecoverInputQueue(ctx)
 	if err != nil {
 		t.Fatalf("RecoverInputQueue: %v", err)
 	}
-	if requeued != 1 || completed != 1 {
-		t.Fatalf("requeued=%d completed=%d, want 1/1", requeued, completed)
+	if requeued != 1 || completed != 1 || cancelled != 0 {
+		t.Fatalf("requeued=%d completed=%d cancelled=%d, want 1/1/0", requeued, completed, cancelled)
 	}
 	items, _ := s.ListQueuedInputs(ctx, "u@example.com", convID)
 	if len(items) != 1 || items[0].ID != b.ID || items[0].State != InputStateQueued {
 		t.Fatalf("recovery state wrong: %+v", items)
 	}
 	_ = a
+}
+
+// steerIntent journals one pre-dispatch tool intent on turn t1 (the
+// turn_journal_test.go journalIntent helper with the fields the watermark
+// tests don't vary).
+func steerIntent(t *testing.T, s *Store, seq int64, callID string) {
+	t.Helper()
+	journalIntent(t, s, "t1", seq, callID, "send_email", "{}")
+}
+
+// #823: an injected steer of a failed (history-uncommitted) turn re-queues
+// ONLY when nothing dispatched after the injection. Tools that ran BEFORE the
+// steer was injected are below the watermark and must not block the requeue —
+// the durable next-turn fallback stays intact where it is provably safe.
+func TestSettleTurnInputs_SteerRequeuedWhenNoPostInjectionIntent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+
+	// Two tools dispatched BEFORE the steer was injected.
+	steerIntent(t, s, 1, "call-1")
+	steerIntent(t, s, 2, "call-2")
+	row := enqueue(t, s, convID, "cli-steer", "change of plans", InputModeSteer)
+	if ok, err := s.MarkInputInjected(ctx, row.ID, "t1"); err != nil || !ok {
+		t.Fatalf("inject: ok=%v err=%v", ok, err)
+	}
+
+	requeued, cancelled, err := s.SettleTurnInputs(ctx, "t1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requeued != 1 || cancelled != 0 {
+		t.Fatalf("requeued=%d cancelled=%d, want 1/0", requeued, cancelled)
+	}
+	items, _ := s.ListQueuedInputs(ctx, "u@example.com", convID)
+	if len(items) != 1 || items[0].ID != row.ID || items[0].State != InputStateQueued {
+		t.Fatalf("safe steer was not re-queued: %+v", items)
+	}
+}
+
+// #823: a tool intent journaled AFTER the injection watermark proves the model
+// dispatched with the steer in context — its committed side effects survive
+// the failed turn (#820), so re-queuing would re-execute the instruction
+// (at-least-once "send that email"). The row must cancel instead.
+func TestSettleTurnInputs_SteerCancelledAfterPostInjectionIntent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+
+	steerIntent(t, s, 1, "call-1")
+	row := enqueue(t, s, convID, "cli-steer", "actually, email Bob instead", InputModeSteer)
+	if ok, err := s.MarkInputInjected(ctx, row.ID, "t1"); err != nil || !ok {
+		t.Fatalf("inject: ok=%v err=%v", ok, err)
+	}
+	// Dispatched after the model saw the steer; then the turn fails without a
+	// history commit (guardrail block, terminal-commit failure, …).
+	steerIntent(t, s, 2, "call-2")
+
+	requeued, cancelled, err := s.SettleTurnInputs(ctx, "t1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requeued != 0 || cancelled != 1 {
+		t.Fatalf("requeued=%d cancelled=%d, want 0/1", requeued, cancelled)
+	}
+	got, err := s.LookupInput(ctx, convID, "cli-steer")
+	if err != nil || got == nil {
+		t.Fatalf("LookupInput: %+v err=%v", got, err)
+	}
+	if got.State != InputStateCancelled {
+		t.Fatalf("steer state = %s, want cancelled (a requeue would double-execute)", got.State)
+	}
+}
+
+// #823 at boot: RecoverInputQueue applies the same watermark split to rows a
+// dead process left injected on turns that never committed history.
+func TestRecoverInputQueue_SteerWatermarkSplit(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+
+	// Unsafe: a tool dispatched after this steer's injection.
+	steerIntent(t, s, 1, "call-1")
+	unsafe := enqueue(t, s, convID, "cli-unsafe", "send it to Bob", InputModeSteer)
+	if ok, err := s.MarkInputInjected(ctx, unsafe.ID, "t1"); err != nil || !ok {
+		t.Fatalf("inject unsafe: ok=%v err=%v", ok, err)
+	}
+	steerIntent(t, s, 2, "call-2")
+
+	// Safe: injected into a turn that never dispatched afterwards.
+	if err := s.CreateTurn(ctx, "t2", convID, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	safe := enqueue(t, s, convID, "cli-safe", "one more thing", InputModeSteer)
+	if ok, err := s.MarkInputInjected(ctx, safe.ID, "t2"); err != nil || !ok {
+		t.Fatalf("inject safe: ok=%v err=%v", ok, err)
+	}
+
+	requeued, completed, cancelled, err := s.RecoverInputQueue(ctx)
+	if err != nil {
+		t.Fatalf("RecoverInputQueue: %v", err)
+	}
+	if requeued != 1 || completed != 0 || cancelled != 1 {
+		t.Fatalf("requeued=%d completed=%d cancelled=%d, want 1/0/1", requeued, completed, cancelled)
+	}
+	items, _ := s.ListQueuedInputs(ctx, "u@example.com", convID)
+	if len(items) != 1 || items[0].ID != safe.ID || items[0].State != InputStateQueued {
+		t.Fatalf("recovery split wrong: %+v", items)
+	}
 }

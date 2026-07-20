@@ -19,6 +19,19 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Injected steers are at-most-once, never re-executed after committed side
+  effects (#823)**: an injected steer whose turn ended without a history
+  commit was blindly re-queued and re-run as the next turn — but the model
+  may already have ACTED on it (its committed tool side effects survive the
+  failed turn per #820), so "send that email" could execute twice.
+  `MarkInputInjected` now stamps the turn journal's max seq as an injection
+  watermark (`injected_seq`, migration 044); turn-end settlement and boot
+  recovery re-queue the row only when no tool intent was journaled after the
+  watermark (the model provably never dispatched with the steer in context)
+  and otherwise cancel it with a logged reason — dropping a resendable
+  message instead of duplicating a side effect. Rows injected before the
+  migration degrade to the coarse gate (any tool intent blocks the requeue).
+
 - **Input-queue hardening (#785 follow-up)**: a per-conversation pending
   depth cap (20, HTTP 429 above it; idempotent replays still answer 200) so a
   retrying client can't bank unbounded unattended LLM turns; a transient
