@@ -19,6 +19,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Shared MCP spawns no longer leak the literal `${FLEET_TASK_ID}`
+  placeholder to connectors (#831)**: only the scheduled per-run path called
+  `ExpandTaskIDEnv`, so boot-time shared spawns, hot-reload diffs,
+  `BindMCPSelection`, and `fleet mcp test` probes handed a bundle env value
+  mapping to the reserved token through as the raw string
+  `"${FLEET_TASK_ID}"`. All four paths now drop token-bearing keys (the
+  intended no-task-identity fail-safe); the scheduled path, which
+  pre-substitutes the real task ID, is unaffected.
 - **MCP HTTP clients no longer forward resolved credential headers across
   cross-origin redirects (#830)**: inline HTTP tools and the HTTP MCP
   transport (including the TLS-hardened variant) used Go's default redirect

@@ -249,6 +249,9 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 		if agentcore.EnvReferencesWorkspace(env) {
 			env = agentcore.ExpandWorkspaceEnv(env, agentcore.SharedMCPWorkspaceDir())
 		}
+		// Probes have no task identity: drop ${FLEET_TASK_ID}-bearing keys like
+		// the boot-time shared spawn does, so the probe env matches production.
+		env = agentcore.ExpandTaskIDEnv(env, "")
 		addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env, spec.Dir)
 	default:
 		addErr = fmt.Errorf("manifest entry has neither command nor url")

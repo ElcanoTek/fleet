@@ -212,6 +212,11 @@ func BindMCPSelection(ctx context.Context, client *mcp.Client, selection MCPSele
 		// rest of the selection still registers and the run proceeds with the tools
 		// that did come up. A Required server still aborts the run.
 		variantEnv = ExpandWorkspaceEnv(variantEnv, workdir)
+		// ${FLEET_TASK_ID}: the scheduled per-run path already substituted the
+		// real task ID into BaseEnv (scheduledrun), so this is a no-op there.
+		// Every other caller has no task identity — drop token-bearing keys
+		// instead of leaking the literal placeholder to the connector.
+		variantEnv = ExpandTaskIDEnv(variantEnv, "")
 		if err := client.AddStdioServer(ctx, name, base.Command, base.Args, variantEnv, base.Dir); err != nil {
 			if base.Required {
 				return registered, fmt.Errorf("register server %q: %w", name, err)

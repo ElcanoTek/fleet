@@ -251,6 +251,10 @@ func BuildMCPClient(specs map[string]MCPServerSpec, httpTools []config.HTTPToolC
 			if agentcore.EnvReferencesWorkspace(env) {
 				env = agentcore.ExpandWorkspaceEnv(env, agentcore.SharedMCPWorkspaceDir())
 			}
+			// Shared spawn ⇒ no task identity: drop ${FLEET_TASK_ID}-bearing keys
+			// rather than hand the connector a literal placeholder. Only the
+			// scheduled per-run path resolves the token to a real ID.
+			env = agentcore.ExpandTaskIDEnv(env, "")
 			addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env, spec.Dir)
 		default:
 			addErr = fmt.Errorf("spec has neither Command nor URL")
