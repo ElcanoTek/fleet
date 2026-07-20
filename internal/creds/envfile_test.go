@@ -77,3 +77,81 @@ func TestReadEnvValues(t *testing.T) {
 		}
 	})
 }
+
+// #834: SetEnvKey must write values so the shared parser reads back the exact
+// bytes it was given. Before the encode step, literal quotes / edge whitespace
+// / inline-comment sequences silently mangled on the next read, and a newline
+// physically corrupted the file.
+func TestSetEnvKeyRoundTrip(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"plain api key", "plain-value-abc123"},
+		{"empty", ""},
+		{"literal surrounding double quotes", `"hi"`},
+		{"literal surrounding single quotes", `'hi'`},
+		{"interior quote", "it's a secret"},
+		{"leading and trailing spaces", "  padded  "},
+		{"inline comment sequence", "foo #bar"},
+		{"tab comment sequence", "foo\t#bar"},
+		{"hash without space", "abc#def"},
+		{"equals signs", "a=b=c"},
+		{"export lookalike", "export PATH=x"},
+		{"only a quote", `'`},
+		{"mixed quote edges", `'starts"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fleet.env")
+			if err := SetEnvKey(path, "ROUNDTRIP_KEY", tc.value); err != nil {
+				t.Fatalf("SetEnvKey: %v", err)
+			}
+			vals, err := ReadEnvValues(path, "ROUNDTRIP_KEY")
+			if err != nil {
+				t.Fatalf("ReadEnvValues: %v", err)
+			}
+			if got := vals["ROUNDTRIP_KEY"]; got != tc.value {
+				t.Fatalf("round-trip = %q, want %q", got, tc.value)
+			}
+		})
+	}
+}
+
+// A plain value must stay byte-verbatim on disk — no quote churn for the
+// common API-key case (other consumers of the file may read quotes literally).
+func TestSetEnvKeyPlainValueStaysVerbatim(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fleet.env")
+	if err := SetEnvKey(path, "K", "plain-value-123"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "K=plain-value-123\n" {
+		t.Fatalf("on-disk line = %q, want unquoted verbatim", string(raw))
+	}
+}
+
+// A value with a line break cannot be represented in a line-oriented env file;
+// writing it raw would corrupt the file (the tail parses as a bogus key). It
+// must be refused, and the file left untouched.
+func TestSetEnvKeyRefusesLineBreaks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fleet.env")
+	if err := SetEnvKey(path, "GOOD", "keep-me"); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"multi\nline", "carriage\rreturn"} {
+		if err := SetEnvKey(path, "BAD", v); err == nil {
+			t.Fatalf("SetEnvKey(%q) succeeded, want refusal", v)
+		}
+	}
+	vals, err := ReadEnvValues(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vals["GOOD"] != "keep-me" || len(vals) != 1 {
+		t.Fatalf("file mutated by refused writes: %v", vals)
+	}
+}

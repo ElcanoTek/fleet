@@ -19,6 +19,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Env-file writes now survive a read round-trip (#834)**: `SetEnvKey` wrote
+  values verbatim while both parsers (creds and the server's `loadEnvFile`)
+  strip whitespace, surrounding quotes, and ` #`-style inline comments — so a
+  secret containing any of those authenticated when saved and came back
+  mangled after the next restart. The writer now wraps such values in one
+  layer of quotes (which both parsers strip without touching the interior;
+  plain API keys stay byte-verbatim on disk), and refuses values containing
+  line breaks instead of physically corrupting the file.
 - **`turn.retry` events are now actually emitted (#833)**: journal recovery
   and the web client both consumed the event (recovery drops the abandoned
   pre-retry partial text; the client shows an inline "retrying" badge) but no
