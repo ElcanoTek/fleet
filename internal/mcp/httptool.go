@@ -36,7 +36,8 @@ import (
 const HTTPToolServerName = "_http"
 
 // httpToolClientTimeout bounds a single inline-HTTP-tool request. Per the issue
-// spec: 30s, redirects followed (http.DefaultClient's default policy).
+// spec: 30s, redirects followed (credential headers are dropped when a hop
+// leaves the original origin — stripHeadersOnCrossOriginRedirect).
 const httpToolClientTimeout = 30 * time.Second
 
 // HTTPToolSpec is one inline HTTP tool to register, in the credential-bearing
@@ -145,11 +146,16 @@ func (t *httpToolTransport) Notify(context.Context, string, interface{}) error {
 // Close is a no-op: there is no subprocess or socket to tear down.
 func (t *httpToolTransport) Close() error { return nil }
 
-// httpClient lazily builds the bounded client (30s timeout, default redirect
-// policy) the first time a tool is invoked.
+// httpClient lazily builds the bounded client (30s timeout; redirects followed
+// but the tool's resolved credential headers are stripped on a cross-origin
+// hop — see stripHeadersOnCrossOriginRedirect) the first time a tool is
+// invoked.
 func (t *httpToolTransport) httpClient() *http.Client {
 	if t.client == nil {
-		t.client = &http.Client{Timeout: httpToolClientTimeout}
+		t.client = &http.Client{
+			Timeout:       httpToolClientTimeout,
+			CheckRedirect: stripHeadersOnCrossOriginRedirect,
+		}
 	}
 	return t.client
 }
