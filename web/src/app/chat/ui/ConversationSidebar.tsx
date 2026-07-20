@@ -140,8 +140,8 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
       tip={SEALED_TOOLTIP_TEXT}
       ariaLabel="New sealed chat — sandboxed, vetted model, nothing leaves"
       icon="lock"
-      iconClassName="size-3.5"
-      className="ml-auto inline-flex size-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+      iconClassName="size-4"
+      className="ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
       onClick={onClick}
     />
   );
@@ -943,7 +943,7 @@ function SectionToggle({
       type="button"
       aria-expanded={open}
       onClick={onToggle}
-      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
+      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
     >
       <Icon
         name={icon}
@@ -1708,7 +1708,7 @@ export function ConversationSidebar({
         {railCollapsed ? (
           <button
             type="button"
-            className="hidden w-full items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:flex sm:size-10 sm:justify-center sm:p-0"
+            className="hidden w-full items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:flex sm:size-10 sm:justify-center sm:p-0"
             title="New chat"
             aria-label="New chat"
             data-tip="New chat"
@@ -1868,7 +1868,7 @@ export function ConversationSidebar({
                 type="button"
                 aria-expanded={showArchived}
                 aria-label={`Archived conversations (${archivedConversations.length})`}
-                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
+                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-secondary)]"
                 onClick={() => setShowArchived((v) => !v)}
               >
                 <Icon
@@ -1901,7 +1901,7 @@ export function ConversationSidebar({
                         <button
                           type="button"
                           aria-label={`Unarchive ${conversation.title}`}
-                          title="Unarchive"
+                          data-tip-top="Unarchive"
                           className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
                           onClick={() =>
                             void toggleArchive(conversation, false)
@@ -1926,7 +1926,8 @@ export function ConversationSidebar({
                         <button
                           type="button"
                           aria-label={`Delete ${conversation.title}`}
-                          className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                          data-tip-top="Delete"
+                          className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
                           onClick={() =>
                             setPendingDeleteConversation({
                               id: conversation.id,
@@ -1992,7 +1993,7 @@ export function ConversationSidebar({
                 disabled={selectedIds.size === 0}
                 className={[
                   BULK_BTN_CLASS,
-                  "enabled:hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] enabled:hover:text-[var(--color-danger)]",
+                  "enabled:hover:bg-[var(--color-status-error-bg)] enabled:hover:text-[var(--color-status-error-fg)]",
                 ].join(" ")}
                 onClick={onBulkDelete}
               >

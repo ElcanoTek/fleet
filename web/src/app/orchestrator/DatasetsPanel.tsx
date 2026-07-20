@@ -413,7 +413,7 @@ function DatasetCreateModal({
                   onChange={(e) => setCol(i, { description: e.target.value })}
                   placeholder="description (guides the agent)"
                 />
-                <button type="button" className="btn btn-small" onClick={() => setColumns((prev) => prev.filter((_, j) => j !== i))}>
+                <button type="button" className="btn btn-small btn-danger-hover" aria-label="Remove column" data-tip-top="Remove column" onClick={() => setColumns((prev) => prev.filter((_, j) => j !== i))}>
                   ✕
                 </button>
               </div>
