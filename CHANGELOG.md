@@ -19,6 +19,14 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **`turn.retry` events are now actually emitted (#833)**: journal recovery
+  and the web client both consumed the event (recovery drops the abandoned
+  pre-retry partial text; the client shows an inline "retrying" badge) but no
+  code ever produced it — so a crash after a mid-turn provider retry could
+  project a garbled mix of pre- and post-retry text into the recovered
+  history, and users never saw retries happen. The run loop now emits it
+  (RetryEventPayload shape) from fantasy's inner-retry backoff and from every
+  resilience re-drive (stream blip, fallback swap, compaction rollback).
 - **Chat submit guard reads now fail closed (#832)**: a store error during
   the `input_id` idempotent-replay lookup fell through to start a fresh
   billed turn for an input that may already have been accepted, and on the
