@@ -50,6 +50,9 @@ func specsToServerDefs(specs map[string]MCPServerSpec) []mcp.ServerDef {
 			if agentcore.EnvReferencesWorkspace(env) {
 				env = agentcore.ExpandWorkspaceEnv(env, agentcore.SharedMCPWorkspaceDir())
 			}
+			// Mirror the shared spawn's ${FLEET_TASK_ID} handling (dropped —
+			// no task identity) so the diff compares like with like.
+			env = agentcore.ExpandTaskIDEnv(env, "")
 			defs = append(defs, mcp.ServerDef{Name: name, Command: spec.Command, Args: spec.Args, Env: env, Dir: spec.Dir})
 		}
 	}
