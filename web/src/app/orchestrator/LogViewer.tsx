@@ -1264,6 +1264,8 @@ function SelfImprovePanel({
         <button
           type="button"
           className="btn btn-small"
+          aria-label="Mark run as helpful"
+          data-tip-top="Helpful"
           disabled={busy}
           onClick={() => void feedback("up")}
         >
@@ -1272,6 +1274,8 @@ function SelfImprovePanel({
         <button
           type="button"
           className="btn btn-small"
+          aria-label="Mark run as not helpful"
+          data-tip-top="Not helpful"
           disabled={busy}
           onClick={() => void feedback("down")}
         >

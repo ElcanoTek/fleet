@@ -178,7 +178,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
             type="button"
             data-testid="new-task-btn"
             className={[
-              "flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]",
+              "flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-status-success-border)] hover:bg-[var(--color-status-success-bg)]",
               railCollapse.collapsed ? "sm:size-10 sm:w-10 sm:gap-0 sm:p-0" : "",
             ].join(" ")}
             data-tip={railCollapse.collapsed ? "New task" : undefined}

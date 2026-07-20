@@ -588,6 +588,14 @@
   transition-delay: 350ms;
 }
 
+/* Destructive-action hover for .btn-styled icon buttons: the red mirror of
+   the add buttons' --color-status-success-* treatment. */
+.btn-danger-hover:hover:not(:disabled) {
+  background: var(--color-status-error-bg);
+  border-color: var(--color-status-error-border);
+  color: var(--color-status-error-fg);
+}
+
 /* The rail search stays type="search" (its searchbox role keeps the composer
    as the page's first textbox — a contract the e2e suite drives), but the
    native WebKit clear affordance yields to the design's custom clear button. */
@@ -2645,6 +2653,13 @@ tr.sla-row-fail {
   color: var(--color-text-muted);
   font-size: 1.25rem;
   cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+.modal-close:hover {
+  background: var(--color-overlay-soft);
+  color: var(--color-text-primary);
 }
 .modal-close:focus-visible {
   outline: none;

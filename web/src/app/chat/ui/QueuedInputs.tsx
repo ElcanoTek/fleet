@@ -37,7 +37,7 @@ export function QueuedInputs({
                 type="button"
                 aria-label="Send now"
                 data-tip-top="Send now"
-                className="shrink-0 rounded p-1 hover:bg-[var(--color-surface-3)]"
+                className="shrink-0 rounded p-1 transition hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)]"
                 onClick={() => onSendNow(it.id)}
               >
                 <Icon name="arrow-up" className="size-3" />
@@ -46,7 +46,7 @@ export function QueuedInputs({
                 type="button"
                 aria-label="Remove from queue"
                 data-tip-top="Remove"
-                className="shrink-0 rounded p-1 hover:bg-[var(--color-surface-3)]"
+                className="shrink-0 rounded p-1 transition hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)]"
                 onClick={() => onRemove(it.id)}
               >
                 <Icon name="close" className="size-3" />

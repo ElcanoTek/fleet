@@ -17,6 +17,19 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **Icon-button hover polish across chat + orchestrator**: the sidebar's
+  green "New chat" hover treatment (colored pill background + tooltip +
+  subtle motion-safe scale) is now applied consistently. Add/create actions
+  hover green (sealed-chat lock — now the same size and brighter, collapsed-
+  rail new chat, orchestrator New task, queue send-now); destructive actions
+  hover red on the `--color-status-error-*` tokens (archived trash, bulk
+  delete, queue remove, dataset column remove); section chevron rows and the
+  log-modal close buttons gained missing hover feedback; and previously
+  unlabeled icon buttons (run feedback thumbs, column remove, week nav,
+  jump-to-latest) gained design tooltips.
+
 ### Fixed
 
 - **Env-file writes now survive a read round-trip (#834)**: `SetEnvKey` wrote
