@@ -328,7 +328,7 @@ function ProjectKebab({
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const close = () => setOpen(false);
-  const tip = usePortalTip("Project options");
+  const tip = usePortalTip("Options");
   return (
     <>
       <button
@@ -553,7 +553,7 @@ function ConversationKebab({
     setFlyout((cur) => (cur === which ? null : which));
   };
   const labels = conversation.labels ?? [];
-  const tip = usePortalTip("Conversation options");
+  const tip = usePortalTip("Options");
   const caret = (
     <span
       aria-hidden="true"
