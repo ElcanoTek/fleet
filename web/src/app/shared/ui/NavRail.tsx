@@ -30,6 +30,7 @@
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { NavToChat, NavToOrchestrator } from "./CrossViewNav";
+import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
 import { AccountMenu } from "./AccountMenu";
 
@@ -286,14 +287,11 @@ export function NavRail({
           >
             <Icon name="panel-left" className="size-4" />
           </button>
-          <button
-            aria-label="Close sidebar"
-            className="inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] sm:hidden"
-            type="button"
+          <CloseButton
+            className="sm:hidden"
+            label="Close sidebar"
             onClick={() => setSidebarOpen(false)}
-          >
-            <Icon name="close" className="size-4" />
-          </button>
+          />
         </div>
 
         {/* Primary navigation */}

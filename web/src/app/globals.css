@@ -2640,34 +2640,6 @@ tr.sla-row-fail {
   margin: 0;
   color: var(--color-text-primary);
 }
-.modal-close {
-  /* A sized, centered box (~2rem effective target) — the bare × glyph alone
-     was a <20px target. The negative margins keep the glyph's optical
-     position in the header unchanged. */
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  margin: -0.5rem -0.6rem -0.5rem 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  border: none;
-  color: var(--color-text-muted);
-  font-size: 1.25rem;
-  cursor: pointer;
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
-}
-.modal-close:hover {
-  background: var(--color-overlay-soft);
-  color: var(--color-text-primary);
-}
-.modal-close:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
 .modal-body {
   padding: 1.25rem;
   max-height: 70vh;
@@ -4038,16 +4010,6 @@ select.mcp-server-picker__account-select {
 .task-modal .modal-subtitle {
   margin-top: 0.19rem;
   font-size: 0.78rem;
-}
-.task-modal .modal-close {
-  width: 1.75rem;
-  height: 1.75rem;
-  margin: 0;
-  border-radius: 0.5rem;
-}
-.task-modal .modal-close:hover {
-  background: var(--color-overlay-soft);
-  color: var(--color-text-primary);
 }
 .task-modal .modal-body {
   padding: 1.25rem 1.25rem 1.5rem;
