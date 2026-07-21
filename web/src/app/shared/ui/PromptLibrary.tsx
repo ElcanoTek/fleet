@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
 import {
   orchestratorApi,
@@ -193,14 +194,11 @@ export function PromptLibrary({
                   </h2>
                   {/* The close stays pinned to the title row (top-right) even when
                   the action buttons wrap to a second row on phones. */}
-                  <button
-                    type="button"
-                    className="order-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-transparent text-[var(--color-text-muted)] transition hover:border-[var(--color-border)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
-                    aria-label="Close prompt library"
+                  <CloseButton
+                    className="order-3"
+                    label="Close prompt library"
                     onClick={() => setOpen(false)}
-                  >
-                    <Icon name="close" className="size-4.5" />
-                  </button>
+                  />
                   <div className="order-4 flex w-full items-center gap-2 sm:order-2 sm:w-auto">
                     <button
                       type="button"

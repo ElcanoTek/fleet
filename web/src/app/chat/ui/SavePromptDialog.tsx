@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { Icon } from "@/app/shared/ui/Icon";
 import {
   orchestratorApi,
@@ -137,14 +138,7 @@ export function SavePromptDialog({
               From “{conversationTitle}”
             </p>
           </div>
-          <button
-            type="button"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-transparent text-[var(--color-text-muted)] transition hover:border-[var(--color-border)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
-            aria-label="Close save-prompt dialog"
-            onClick={onClose}
-          >
-            <Icon name="close" className="size-4" />
-          </button>
+          <CloseButton label="Close save-prompt dialog" onClick={onClose} />
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">

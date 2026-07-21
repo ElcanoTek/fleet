@@ -35,6 +35,11 @@ prior versions are listed because none have shipped.
   instead of the browser-native title, and "Open project" uses the standard
   open/external glyph instead of a bare arrow. Tooltips now shrink-wrap to
   their text instead of always being 14rem wide.
+- **One close button everywhere**: every dialog/drawer dismiss "×" (keyboard
+  shortcuts — previously a tiny text glyph —, prompt library, save-prompt,
+  projects, memories, mobile nav drawer, task create/log/dataset modals) now
+  uses one shared CloseButton: same 2rem box, rounding, glyph, and a slight
+  red-tint hover. The orphaned `.modal-close` CSS was removed.
 
 ### Fixed
 

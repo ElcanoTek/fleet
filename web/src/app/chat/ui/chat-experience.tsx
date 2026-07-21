@@ -44,6 +44,7 @@ import {
   type Message,
 } from "./history";
 import { PENDING_CONV_KEY } from "./workspaceHref";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { Icon } from "./Icon";
 import { QueuedInputs } from "./QueuedInputs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
@@ -3730,14 +3731,10 @@ export function ChatExperience({
                     are added to future chats.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  aria-label="Close memories"
-                  className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                <CloseButton
+                  label="Close memories"
                   onClick={() => setMemoryManagerOpen(false)}
-                >
-                  <Icon name="close" className="size-4" />
-                </button>
+                />
               </div>
 
               {/* Knowledge-graph tab (#523): a compact derived view over the
