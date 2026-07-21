@@ -80,6 +80,34 @@ const SEALED_TOOLTIP_TEXT =
 // otherwise clip or capture it (a CSS data-tip's absolutely-positioned
 // ::after also OCCUPIES layout even at opacity 0, which put a horizontal
 // scrollbar on the projects scroller; the portal has no such footprint).
+function usePortalTip(tip: string) {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const show = (e: React.SyntheticEvent<HTMLElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    // Below the button, arrow pointing back up at it (the design's conv-info
+    // tooltip placement: bottom + 7, offset so the arrow lands on the anchor).
+    setPos({
+      top: Math.round(r.bottom + 7),
+      left: Math.round(r.left + r.width / 2 - 17),
+    });
+  };
+  const hide = () => setPos(null);
+  const tipNode =
+    pos && typeof document !== "undefined"
+      ? createPortal(
+          <span
+            role="tooltip"
+            className="conv-tooltip"
+            style={{ top: pos.top, left: pos.left }}
+          >
+            {tip}
+          </span>,
+          document.body,
+        )
+      : null;
+  return { show, hide, tipNode };
+}
+
 function PortalTipIconButton({
   tip,
   ariaLabel,
@@ -95,17 +123,7 @@ function PortalTipIconButton({
   className?: string;
   onClick: () => void;
 }) {
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const show = (e: React.SyntheticEvent<HTMLElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    // Below the button, arrow pointing back up at it (the design's conv-info
-    // tooltip placement: bottom + 7, offset so the arrow lands on the anchor).
-    setPos({
-      top: Math.round(r.bottom + 7),
-      left: Math.round(r.left + r.width / 2 - 17),
-    });
-  };
-  const hide = () => setPos(null);
+  const { show, hide, tipNode } = usePortalTip(tip);
   return (
     <button
       type="button"
@@ -118,18 +136,7 @@ function PortalTipIconButton({
       onBlur={hide}
     >
       <Icon name={icon} className={iconClassName} />
-      {pos && typeof document !== "undefined"
-        ? createPortal(
-            <span
-              role="tooltip"
-              className="conv-tooltip"
-              style={{ top: pos.top, left: pos.left }}
-            >
-              {tip}
-            </span>,
-            document.body,
-          )
-        : null}
+      {tipNode}
     </button>
   );
 }
@@ -141,7 +148,7 @@ function SealedNewChatButton({ onClick }: { onClick: () => void }) {
       ariaLabel="New sealed chat — sandboxed, vetted model, nothing leaves"
       icon="lock"
       iconClassName="size-4"
-      className="ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+      className="ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] transition motion-safe:hover:scale-110 hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
       onClick={onClick}
     />
   );
@@ -321,6 +328,7 @@ function ProjectKebab({
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const close = () => setOpen(false);
+  const tip = usePortalTip("Project options");
   return (
     <>
       <button
@@ -329,7 +337,14 @@ function ProjectKebab({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Project options for ${projectName}`}
-        title="Project options"
+        onMouseEnter={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onMouseLeave={tip.hide}
+        onFocus={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onBlur={tip.hide}
         className={[
           "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open
@@ -338,10 +353,12 @@ function ProjectKebab({
         ].join(" ")}
         onClick={(e) => {
           e.stopPropagation();
+          tip.hide();
           setOpen((o) => !o);
         }}
       >
         <Icon name="dots" className="size-[1.1rem]" />
+        {tip.tipNode}
       </button>
       <Menu
         open={open}
@@ -536,6 +553,7 @@ function ConversationKebab({
     setFlyout((cur) => (cur === which ? null : which));
   };
   const labels = conversation.labels ?? [];
+  const tip = usePortalTip("Conversation options");
   const caret = (
     <span
       aria-hidden="true"
@@ -575,7 +593,14 @@ function ConversationKebab({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Conversation options for ${conversation.title}`}
-        title="Conversation options"
+        onMouseEnter={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onMouseLeave={tip.hide}
+        onFocus={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onBlur={tip.hide}
         className={[
           // Fixed, centered, padded square (~1.8rem) per the handoff .conv-kebab —
           // a rounded hover highlight around the centered icon, not hugging it.
@@ -587,11 +612,13 @@ function ConversationKebab({
         ].join(" ")}
         onClick={(e) => {
           e.stopPropagation();
+          tip.hide();
           setFlyout(null);
           setOpen((o) => !o);
         }}
       >
         <Icon name="dots" className="size-[1.1rem]" />
+        {tip.tipNode}
       </button>
       <Menu
         open={open}
@@ -1476,7 +1503,7 @@ export function ConversationSidebar({
                       <PortalTipIconButton
                         tip="Open project"
                         ariaLabel={`Open project ${project.name}`}
-                        icon="arrow-right"
+                        icon="external-link"
                         iconClassName="size-3.5"
                         className={[
                           "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
