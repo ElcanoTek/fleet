@@ -631,7 +631,10 @@
 .conv-tooltip {
   position: fixed;
   z-index: 400;
-  width: 14rem;
+  /* Shrink-wrap short tips ("New chat"); 14rem is the wrap width for long
+     copy like the sealed-chat explainer. */
+  width: max-content;
+  max-width: 14rem;
   padding: 0.55rem 0.65rem;
   font-size: 0.75rem;
   font-weight: 400;
