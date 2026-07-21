@@ -29,6 +29,11 @@ prior versions are listed because none have shipped.
   log-modal close buttons gained missing hover feedback; and previously
   unlabeled icon buttons (run feedback thumbs, column remove, week nav,
   jump-to-latest) gained design tooltips.
+- **Sidebar polish follow-ups (owner review)**: the sealed-chat lock hovers
+  neutral instead of green (green stays reserved for the plain "+" adds), the
+  conversation and project kebab buttons show a real design tooltip on hover
+  instead of the browser-native title, and "Open project" uses the standard
+  open/external glyph instead of a bare arrow.
 
 ### Fixed
 
