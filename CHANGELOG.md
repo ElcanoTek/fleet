@@ -33,7 +33,8 @@ prior versions are listed because none have shipped.
   neutral instead of green (green stays reserved for the plain "+" adds), the
   conversation and project kebab buttons show a real design tooltip on hover
   instead of the browser-native title, and "Open project" uses the standard
-  open/external glyph instead of a bare arrow.
+  open/external glyph instead of a bare arrow. Tooltips now shrink-wrap to
+  their text instead of always being 14rem wide.
 
 ### Fixed
 
