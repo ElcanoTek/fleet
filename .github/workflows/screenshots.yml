@@ -74,7 +74,7 @@ jobs:
         run: npm run test:e2e:screenshots || echo "::warning::GUI screenshot capture failed; keeping the existing images"
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: '1.26.5'
           check-latest: true
