@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	charm.land/bubbles/v2 v2.1.1
 	charm.land/bubbletea/v2 v2.0.8
-	charm.land/fantasy v0.35.0
+	charm.land/fantasy v0.36.0
 	charm.land/lipgloss/v2 v2.0.5
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
 	github.com/SherClockHolmes/webpush-go v1.4.0
@@ -24,9 +24,9 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
-	golang.org/x/crypto v0.53.0
-	golang.org/x/net v0.56.0
-	golang.org/x/term v0.44.0
+	golang.org/x/crypto v0.54.0
+	golang.org/x/net v0.57.0
+	golang.org/x/term v0.45.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
@@ -39,20 +39,20 @@ require (
 	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
 	github.com/andybalholm/cascadia v1.3.2 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
-	github.com/aws/aws-sdk-go-v2 v1.42.0 // indirect
+	github.com/aws/aws-sdk-go-v2 v1.42.1 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.13 // indirect
-	github.com/aws/aws-sdk-go-v2/config v1.32.25 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.24 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.29 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.29 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.29 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.30 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.12 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.29 // indirect
-	github.com/aws/aws-sdk-go-v2/service/signin v1.2.0 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sso v1.31.3 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.36.6 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.43.3 // indirect
+	github.com/aws/aws-sdk-go-v2/config v1.32.27 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.26 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.30 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.30 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.30 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.31 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.13 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.30 // indirect
+	github.com/aws/aws-sdk-go-v2/service/signin v1.2.2 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sso v1.31.5 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.36.8 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sts v1.43.5 // indirect
 	github.com/aws/smithy-go v1.27.3 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
@@ -74,7 +74,7 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
-	github.com/go-json-experiment/json v0.0.0-20260601182631-00ed12fed2a6 // indirect
+	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
@@ -90,8 +90,8 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/kaptinlin/jsonpointer v0.4.26 // indirect
-	github.com/kaptinlin/jsonschema v0.9.2 // indirect
+	github.com/kaptinlin/jsonpointer v0.4.27 // indirect
+	github.com/kaptinlin/jsonschema v0.9.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.24 // indirect
@@ -114,9 +114,9 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/api v0.286.0 // indirect
 	google.golang.org/genai v1.62.0 // indirect
