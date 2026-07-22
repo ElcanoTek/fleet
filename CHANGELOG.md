@@ -17,6 +17,23 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **`fleet doctor` — box-level diagnose AND repair** (patterned on chat's
+  `chat doctor`; `docs/DOCTOR.md`): a root pass over every box prerequisite —
+  toolchain floors, fleet-critical package currency with broken-dnf-repo
+  quarantine, the service user's rootless-podman prerequisites (subuid/subgid,
+  dir ownership, containers.conf, stale pause namespaces), systemd unit drift
+  vs `deploy/`, env-file shape/permissions, service health + `/healthz` +
+  `/readyz`, and a sandbox smoke run **as the `fleet` user** — fixing what it
+  can in place. `--check` diagnoses only; `--no-restart`; `--dry-run` prints
+  the checklist. `doctor` is no longer a bare alias of `status` (the read-only
+  contract lives on as `doctor --check`). Admins get a read-only version in
+  **Settings → Admin → Doctor** (`GET /admin/doctor`, `internal/boxdoctor`):
+  DB pings, disk headroom, podman prerequisites, sandbox image, unit states —
+  each failing check annotated with the on-box repair command, plus an
+  explicit "Run deep checks" sandbox smoke.
+
 ### Changed
 
 - **Icon-button hover polish across chat + orchestrator**: the sidebar's
