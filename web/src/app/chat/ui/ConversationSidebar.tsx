@@ -142,13 +142,15 @@ function PortalTipIconButton({
 }
 
 function SealedNewChatButton({ onClick }: { onClick: () => void }) {
+  // Deliberately quiet — the same muted treatment as the retention ⚠ it sits
+  // next to in the Temporary heading; the tooltip carries the explanation.
   return (
     <PortalTipIconButton
       tip={SEALED_TOOLTIP_TEXT}
       ariaLabel="New sealed chat — sandboxed, vetted model, nothing leaves"
       icon="lock"
-      iconClassName="size-4"
-      className="ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] transition motion-safe:hover:scale-110 hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+      iconClassName="size-[0.9rem]"
+      className="hit-area inline-flex shrink-0 items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
       onClick={onClick}
     />
   );
@@ -1703,11 +1705,6 @@ export function ConversationSidebar({
             onToggle={() => setChatsSectionOpen((o) => !o)}
           />
         </div>
-        {serverConfig.lockdownAvailable && !serverConfig.lockdownOnly ? (
-          <SealedNewChatButton
-            onClick={() => clearConversation({ lockdown: true })}
-          />
-        ) : null}
         <PortalTipIconButton
           tip="New chat"
           ariaLabel="New chat"
@@ -1880,6 +1877,12 @@ export function ConversationSidebar({
                   />
                   Temporary
                   <RecentInfoButton />
+                  {serverConfig.lockdownAvailable &&
+                  !serverConfig.lockdownOnly ? (
+                    <SealedNewChatButton
+                      onClick={() => clearConversation({ lockdown: true })}
+                    />
+                  ) : null}
                 </div>
                 {recent.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">

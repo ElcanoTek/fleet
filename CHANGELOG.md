@@ -35,6 +35,10 @@ prior versions are listed because none have shipped.
   instead of the browser-native title, and "Open project" uses the standard
   open/external glyph instead of a bare arrow. Tooltips now shrink-wrap to
   their text instead of always being 14rem wide.
+- **Sealed-chat lock moved next to the Temporary retention note**: it now
+  sits in the Temporary heading with the same muted quiet treatment as the
+  ⚠ beside it (sealed chats land in that list), instead of competing with
+  the green "+" in the Chats header.
 - **Pinned and Temporary read as groups, not chats**: both headers are now
   small-caps eyebrow captions with a leading accent icon (pin / clock) — 
   visually distinct from the chat rows beneath them, but one level below
