@@ -1064,6 +1064,21 @@ type MCPServerConfig struct {
 	// through to agent.MCPServerSpec and agentcore.MCPServerBase so both the
 	// scheduled and interactive registration paths apply it.
 	TLS *mcp.TLSOptions
+
+	// Probe is the manifest-declared read-only canary call for
+	// `fleet mcp test --deep` (probe:); nil = none declared. Consumed only by
+	// the probe CLI — the runtime registration paths ignore it.
+	Probe *MCPProbeConfig
+}
+
+// MCPProbeConfig is one declared canary tool call for `fleet mcp test --deep`
+// (the manifest probe: block after load). See clientconfig.ProbeDef for the
+// authoring semantics; assertions stay minimal by design (call succeeds, not
+// isError, optional Contains substring).
+type MCPProbeConfig struct {
+	Tool     string
+	Args     map[string]interface{}
+	Contains string
 }
 
 // HTTPToolConfig is one resolved inline HTTP tool (the manifest http_tools[]
