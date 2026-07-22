@@ -159,6 +159,10 @@ type Server struct {
 	// admin-only Server settings page. It retains only the previous counters
 	// needed to calculate CPU/network rates.
 	hostStats *hoststats.Collector
+	// doctorMu serializes /admin/doctor runs: the deep mode launches a
+	// throwaway sandbox container, and N admins clicking "run checks" at once
+	// must not stampede podman.
+	doctorMu sync.Mutex
 
 	// memoryGraphExtractor mines a memory for knowledge-graph triples (#523).
 	// Injected via WithMemoryGraphExtractor so httpapi depends on the seam, not
@@ -734,6 +738,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
 	mux.Handle("/admin/server-stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleServerStats)))))
+	mux.Handle("/admin/doctor", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleDoctor)))))
 	// Admin Users tab (#237): GET list / POST create on the collection;
 	// PATCH role-team / DELETE / PUT …/password on the item. Admin-gated like
 	// the other /admin/* endpoints; role writes also drive the ops-center seam.
