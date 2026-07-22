@@ -1153,6 +1153,11 @@ export function ConversationSidebar({
   // Chats section (mirrors Projects): one heading over everything from the
   // New-chat row down to the conversation list, collapsible, default open.
   const [chatsSectionOpen, setChatsSectionOpen] = useState(true);
+  // Pinned / Temporary sub-groups: same SectionToggle treatment as Labels so
+  // they read as sections, not stray captions. Session-only state, default
+  // open, like every other section.
+  const [pinnedOpen, setPinnedOpen] = useState(true);
+  const [temporaryOpen, setTemporaryOpen] = useState(true);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     new Set(),
   );
@@ -1861,23 +1866,29 @@ export function ConversationSidebar({
             <>
               {pinned.length > 0 ? (
                 <div className="mb-1">
-                  <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
-                    Pinned
-                    <Icon
-                      name="pin"
-                      className="size-3.5 shrink-0 text-[var(--color-accent)]"
-                    />
-                  </div>
-                  {pinned.map(renderRow)}
+                  <SectionToggle
+                    icon="pin"
+                    label="Pinned"
+                    open={pinnedOpen}
+                    onToggle={() => setPinnedOpen((o) => !o)}
+                  />
+                  {pinnedOpen ? pinned.map(renderRow) : null}
                 </div>
               ) : null}
               {labelsSection}
               <div className="mb-1">
-                <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
-                  Temporary
+                <div className="flex items-center gap-1">
+                  <div className="min-w-0 flex-1">
+                    <SectionToggle
+                      icon="clock"
+                      label="Temporary"
+                      open={temporaryOpen}
+                      onToggle={() => setTemporaryOpen((o) => !o)}
+                    />
+                  </div>
                   <RecentInfoButton />
                 </div>
-                {recent.length === 0 ? (
+                {!temporaryOpen ? null : recent.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
                     No saved chats yet.
                   </p>
