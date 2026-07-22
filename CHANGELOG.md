@@ -35,6 +35,10 @@ prior versions are listed because none have shipped.
   instead of the browser-native title, and "Open project" uses the standard
   open/external glyph instead of a bare arrow. Tooltips now shrink-wrap to
   their text instead of always being 14rem wide.
+- **Pinned and Temporary are real sections now**: both sidebar groups use
+  the same collapsible section header as Projects/Chats/Labels (accent icon,
+  chevron, hover pill) instead of plain text captions; the Temporary
+  retention explainer sits beside the header like the Chats-row buttons.
 - **One close button everywhere**: every dialog/drawer dismiss "×" (keyboard
   shortcuts — previously a tiny text glyph —, prompt library, save-prompt,
   projects, memories, mobile nav drawer, task create/log/dataset modals) now
