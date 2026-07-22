@@ -40,6 +40,45 @@ var taskUsageGroupExpr = map[string]string{
 // user|key|project|model|day|week. Every iteration in range counts, including
 // failed/cancelled ones: their cost was still spent. NULL metering columns
 // (older rows) sum as 0.
+// TaskUsageByUserDay aggregates the same per-iteration metering over
+// [from, to) on BOTH the user and UTC-day dimensions at once — the adoption
+// report needs per-user daily series (active days, sparklines), which the
+// one-dimensional TaskUsage grouping can't express. Same provenance rules:
+// created_by resolves to the username with a UUID fallback for deleted users,
+// every iteration counts (failed/cancelled cost was still spent), and the
+// grouping expressions are fixed strings so no caller input reaches SQL.
+func (db *Database) TaskUsageByUserDay(ctx context.Context, from, to time.Time) ([]models.UserDayUsage, error) {
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT
+			`+taskUsageGroupExpr["user"]+` AS bucket_user,
+			`+taskUsageGroupExpr["day"]+` AS bucket_day,
+			COALESCE(SUM(ti.cost_usd), 0)::float8,
+			COALESCE(SUM(ti.prompt_tokens), 0),
+			COALESCE(SUM(ti.completion_tokens), 0),
+			COUNT(*)
+		FROM task_iterations ti
+		JOIN tasks t ON t.id = ti.task_id
+		LEFT JOIN users u ON u.id = t.created_by
+		WHERE ti.started_at >= $1 AND ti.started_at < $2
+		GROUP BY 1, 2
+		ORDER BY 1, 2`,
+		from.UTC(), to.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []models.UserDayUsage
+	for rows.Next() {
+		var r models.UserDayUsage
+		if err := rows.Scan(&r.User, &r.Day, &r.CostUSD, &r.PromptTokens, &r.CompletionTokens, &r.Units); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (db *Database) TaskUsage(ctx context.Context, from, to time.Time, groupBy string) ([]models.UsageBucket, error) {
 	expr, ok := taskUsageGroupExpr[groupBy]
 	if !ok {

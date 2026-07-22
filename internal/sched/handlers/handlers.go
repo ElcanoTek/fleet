@@ -201,6 +201,14 @@ type Handlers struct {
 	// its sources list says so. See usage.go.
 	chatUsage ChatUsageProvider
 
+	// chatUserDayUsage / chatAccounts feed the adoption report
+	// (GET /admin/usage/adoption) — the chat side's per-user-per-day metering
+	// and the provisioned-account roster, injected by cmd/fleet like chatUsage.
+	// nil → the report covers tasks only / omits the seat denominator, and its
+	// sources list says so. See adoption.go.
+	chatUserDayUsage ChatUserDayUsageProvider
+	chatAccounts     ChatAccountsProvider
+
 	// budgetGate enforces per-principal rolling budgets at task-create (#601
 	// part 2) — injected by cmd/fleet via SetBudgetGate (*budget.Enforcer). nil
 	// → no budget enforcement, today's behavior byte-for-byte. See budgets.go.

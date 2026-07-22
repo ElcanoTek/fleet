@@ -252,3 +252,110 @@ mirroring the `priorityCapError` shared-helper discipline:
   pipeline; new channels belong to that seam.
 - Per-budget alert recipients: alerts go to the deployment-wide
   email/webhook channels (plus Web Push to the user for user-scope budgets).
+
+# Part 3 — the adoption view (exec per-user audit)
+
+## What shipped
+
+`GET /admin/usage/adoption` + the Operations Center **Adoption** tab: the
+executive answer to "who is actually using the agents, how often, and is that
+growing" — a different question from part 1's "where did the spend go", which
+is why it is a separate read model rather than a seventh `group_by`.
+
+### The read model (still no new accounting path, no new tables)
+
+The same two meters as part 1, aggregated on **(user, UTC day)** at once:
+
+- `internal/sched/db/usage.go` — `Database.TaskUsageByUserDay(ctx, from, to)`
+  over `task_iterations ⋈ tasks ⟕ users` (same provenance rules as
+  `TaskUsage`: deleted creators degrade to their UUID, orphan rows land under
+  the empty user, every iteration counts).
+- `internal/store/usage.go` — `Store.UsageByUserDay(ctx, from, to)` over
+  `turn_metrics` alone (user + day live on the metric row, so chat-side
+  attribution here never degrades on conversation deletion).
+- Two new seams mirror `SetChatUsageProvider`:
+  `SetChatUserDayUsageProvider` (per-user-per-day chat metering) and
+  `SetChatAccountsProvider` (the provisioned-account roster from the chat
+  store's `users` table — emails and created-at only, never credentials).
+  Wired in `cmd/fleet/main.go`; when nil the report covers tasks only /
+  omits the seat denominator, and `sources` says so.
+
+The handler (`internal/sched/handlers/adoption.go`) queries **both windows** —
+[from, to) and the equal-length window immediately before — and merges into
+`models.AdoptionReport`:
+
+- `days`: the full UTC day axis, so every per-user `daily_tokens` series and
+  the `daily` trend are index-aligned with no client-side date math.
+- `users`: per-user merged totals (cost split task/chat, tokens, cached,
+  iterations/turns), `active_days`, `last_active`, previous-window
+  comparators, and the per-day token sparkline series. Sorted **token-volume
+  first** (deliberately unlike part 1's cost-first sort): tokens are the
+  coverage-independent meter (#289), so the leaderboard doesn't reshuffle
+  when pricing config changes.
+- `daily`: per-day cost/tokens/actions/active-user counts (the two trend
+  charts).
+- `inactive_users`: provisioned seats with no metered activity in the window
+  — churned **and** never-started, listed explicitly so "who hasn't adopted"
+  is a first-class answer.
+- `totals`: active/prev-active/new-active headcounts, the seat denominator,
+  and current-vs-previous cost/token totals.
+
+The unattributed (empty) user is listed and totaled — spend never disappears
+— but never counts toward the adoption headcounts.
+
+### The endpoint
+
+`GET /admin/usage/adoption?from=&to=&format=` on the orchestrator API,
+documented in `docs/openapi.yaml` (schemas `AdoptionReport`, `AdoptionUser`,
+`AdoptionSeat`, `AdoptionDay`, `AdoptionTotals`, all bound in the `cmd/fleet`
+drift tests). Same parameter contract and admin posture as `/admin/usage`:
+trailing-30-day default, `to` exclusive, 366-day clamp, registered behind
+`AdminOrUserAuthMiddleware` with `PermissionAdmin` enforced in-handler.
+`format=csv` downloads the per-user leaderboard with a TOTAL row.
+
+### The Operations Center panel
+
+`web/src/app/orchestrator/AdoptionPanel.tsx`, an admin-only **Adoption** tab
+beside Usage: KPI tiles with previous-period delta chips (active users with
+the seat denominator + adoption rate, new-this-period, tokens, spend), two
+daily small multiples (tokens per day, active users per day — two measures,
+two charts, never a dual axis), the per-user leaderboard (rank, sparkline,
+tokens + delta, active-day ratio, engagement tier, cost, turns/iterations,
+last active), and the "Not yet active" seat roster. The dashboard tabs now
+honor a `?tab=` deep link (`/orchestrator?tab=adoption`), which the Settings
+admin pages link to.
+
+Engagement tiers are a **client-side presentation bucket** (power ≥ 50% of
+window days active, regular ≥ 20%, light below) — not a server concept, not
+persisted, and trivially retuned.
+
+## Honest scope (part 3)
+
+- **Token volume is an adoption signal, not a performance grade.** The
+  report's `note` says exactly that, verbatim, in the UI. Someone burning
+  tokens is *using* the tools, not necessarily producing more; the view is
+  built for adoption auditing, and the caveat travels with the data.
+- Dollar figures inherit the part-1 pricing caveat (#289); token totals are
+  complete regardless — which is also why the leaderboard sorts on tokens.
+- A user active in the previous window but not the current one appears in
+  `inactive_users` (if provisioned) and in the `prev_*` totals, but has no
+  per-user row — per-user churn detail beyond that is deferred.
+- The seat denominator is the chat store's provisioned users. Sched-only
+  principals (API keys, sched users with no chat account) still appear as
+  active users when they spend, but are not seats — the adoption rate is
+  "active users / provisioned chat accounts".
+- Settings → Admin → Users/Overview remain **all-time, chat-only** account
+  administration numbers fed by `GET /api/admin/stats`; they are now labeled
+  "Chat spend" and cross-link here rather than pretending to be the same
+  report. The three surfaces deliberately answer different questions:
+  account admin (Settings), spend accounting (Usage), adoption audit
+  (Adoption).
+
+## Deferred (deliberately, part 3)
+
+- Per-user drill-down (click a row → that user's conversations/tasks).
+- Team/department roll-ups (needs the chat `team_id` threaded through the
+  roster seam).
+- Scheduled adoption digests (email/webhook) — the notify pipeline is the
+  right seam when wanted.
+- Churn-specific analytics (streaks, days-since-last-active buckets).

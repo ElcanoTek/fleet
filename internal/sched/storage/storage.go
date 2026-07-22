@@ -1262,6 +1262,12 @@ func (s *Storage) TaskUsage(ctx context.Context, from, to time.Time, groupBy str
 	return s.db.TaskUsage(ctx, from, to, groupBy)
 }
 
+// TaskUsageByUserDay aggregates the per-iteration metering over [from, to) by
+// (user, UTC day) for the adoption report. See db.TaskUsageByUserDay.
+func (s *Storage) TaskUsageByUserDay(ctx context.Context, from, to time.Time) ([]models.UserDayUsage, error) {
+	return s.db.TaskUsageByUserDay(ctx, from, to)
+}
+
 // UpsertBudget inserts or replaces a per-principal rolling budget (#601 part 2).
 // See db.UpsertBudget.
 func (s *Storage) UpsertBudget(ctx context.Context, bc models.BudgetCreate) (*models.Budget, error) {

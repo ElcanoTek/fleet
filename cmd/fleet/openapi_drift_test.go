@@ -256,6 +256,13 @@ var schemaModelRegistry = map[string]any{
 	// reusable schemas verbatim via writeJSON.
 	"UsageReport": models.UsageReport{},
 	"UsageBucket": models.UsageBucket{},
+	// Adoption analytics: GET /admin/usage/adoption returns these reusable
+	// schemas verbatim via writeJSON.
+	"AdoptionReport": models.AdoptionReport{},
+	"AdoptionUser":   models.AdoptionUser{},
+	"AdoptionSeat":   models.AdoptionSeat{},
+	"AdoptionDay":    models.AdoptionDay{},
+	"AdoptionTotals": models.AdoptionTotals{},
 	// Per-principal rolling budgets (#601 part 2): the /admin/budgets CRUD
 	// surface accepts/returns these models verbatim via readJSON/writeJSON.
 	"Budget":       models.Budget{},

@@ -1935,6 +1935,111 @@ type UsageReport struct {
 	Note    string        `json:"note"`
 }
 
+// UserDayUsage is one meter's per-user-per-day aggregation row, the raw
+// material of the adoption report (GET /admin/usage/adoption). Both meters
+// return this shape — task-side from task_iterations ⋈ tasks, chat-side
+// through the ChatUserDayUsageProvider seam — and Units means "that meter's
+// work unit" (task iterations or chat turns respectively; the handler knows
+// which source a slice came from). Never serialized: the wire types below
+// carry the merged result.
+type UserDayUsage struct {
+	User             string
+	Day              string // YYYY-MM-DD, UTC
+	CostUSD          float64
+	PromptTokens     int64
+	CompletionTokens int64
+	CachedTokens     int64 // chat only; task iterations persist no cached count
+	Units            int64
+}
+
+// AdoptionUser is one user's row of the adoption report: their merged spend
+// and activity over the window, the previous-window comparators, and a
+// per-day token series aligned to AdoptionReport.Days (the sparkline). The
+// empty User collects unattributed spend (deleted-user task rows) — it is
+// listed so no spend disappears, but never counted as an active user.
+type AdoptionUser struct {
+	User             string  `json:"user"`
+	CostUSD          float64 `json:"cost_usd"`
+	TaskCostUSD      float64 `json:"task_cost_usd"`
+	ChatCostUSD      float64 `json:"chat_cost_usd"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	CachedTokens     int64   `json:"cached_tokens"`
+	TaskIterations   int64   `json:"task_iterations"`
+	ChatTurns        int64   `json:"chat_turns"`
+	// ActiveDays counts the distinct UTC days in the window with any metered
+	// activity; LastActive is the latest such day (YYYY-MM-DD).
+	ActiveDays int64  `json:"active_days"`
+	LastActive string `json:"last_active,omitempty"`
+	// PrevCostUSD/PrevTokens are this user's totals over the equal-length
+	// window immediately before From — the trend comparators.
+	PrevCostUSD float64 `json:"prev_cost_usd"`
+	PrevTokens  int64   `json:"prev_tokens"`
+	// DailyTokens is prompt+completion tokens per day, index-aligned to
+	// AdoptionReport.Days.
+	DailyTokens []int64 `json:"daily_tokens"`
+}
+
+// AdoptionSeat is one provisioned account in the adoption report's roster —
+// the denominator side. Seats come from the chat store's user table via the
+// ChatAccountsProvider seam; seats with no metered activity in the window are
+// listed under InactiveUsers so "who hasn't adopted yet" is a first-class
+// answer, not an inference.
+type AdoptionSeat struct {
+	Email     string    `json:"email"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AdoptionDay is one day of the report-level activity trend: merged cost,
+// prompt+completion tokens, work units (task iterations + chat turns), and
+// how many distinct users were active that day.
+type AdoptionDay struct {
+	Day         string  `json:"day"`
+	CostUSD     float64 `json:"cost_usd"`
+	Tokens      int64   `json:"tokens"`
+	Actions     int64   `json:"actions"`
+	ActiveUsers int64   `json:"active_users"`
+}
+
+// AdoptionTotals is the adoption report's roll-up. RegisteredUsers is 0 when
+// the accounts roster isn't wired — Sources says whether "accounts"
+// contributed, so a 0 is distinguishable from "roster unavailable".
+type AdoptionTotals struct {
+	ActiveUsers     int64   `json:"active_users"`
+	PrevActiveUsers int64   `json:"prev_active_users"`
+	NewActiveUsers  int64   `json:"new_active_users"`
+	RegisteredUsers int64   `json:"registered_users"`
+	CostUSD         float64 `json:"cost_usd"`
+	PrevCostUSD     float64 `json:"prev_cost_usd"`
+	Tokens          int64   `json:"tokens"`
+	PrevTokens      int64   `json:"prev_tokens"`
+	CachedTokens    int64   `json:"cached_tokens"`
+	ChatTurns       int64   `json:"chat_turns"`
+	TaskIterations  int64   `json:"task_iterations"`
+}
+
+// AdoptionReport is the GET /admin/usage/adoption response: the per-user
+// AI-adoption read model for the executive audit view. Like UsageReport it is
+// strictly an aggregation of the already-persisted metering (task_iterations
+// ⋈ tasks plus the chat turn_metrics log) — no new accounting path. Days is
+// the full UTC day axis of [From, To) so per-user DailyTokens series and the
+// Daily trend need no client-side date math; PrevFrom marks the start of the
+// equal-length comparison window feeding the Prev* fields. Sources lists the
+// meters that contributed ("tasks" always; "chat" and "accounts" when their
+// seams are wired). Note carries the honest-scope caveats.
+type AdoptionReport struct {
+	From          time.Time      `json:"from"`
+	To            time.Time      `json:"to"`
+	PrevFrom      time.Time      `json:"prev_from"`
+	Days          []string       `json:"days"`
+	Users         []AdoptionUser `json:"users"`
+	InactiveUsers []AdoptionSeat `json:"inactive_users"`
+	Daily         []AdoptionDay  `json:"daily"`
+	Totals        AdoptionTotals `json:"totals"`
+	Sources       []string       `json:"sources"`
+	Note          string         `json:"note"`
+}
+
 // Budget scopes (#601 part 2): WHO a budget bounds. The closed set doubles as
 // the validation gate — an unknown scope is rejected before it reaches SQL.
 const (

@@ -145,6 +145,69 @@ export type UsageReport = {
   note: string;
 };
 
+// AdoptionReport and friends mirror models.AdoptionReport: the
+// GET /admin/usage/adoption response behind the exec Adoption view. days is
+// the full UTC day axis of [from, to); every user's daily_tokens series is
+// index-aligned to it. prev_* fields compare against the equal-length window
+// starting at prev_from. The empty user collects unattributed spend
+// (deleted-user task rows) and never counts as an active user.
+export type AdoptionUser = {
+  user: string;
+  cost_usd: number;
+  task_cost_usd: number;
+  chat_cost_usd: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  task_iterations: number;
+  chat_turns: number;
+  active_days: number;
+  last_active?: string;
+  prev_cost_usd: number;
+  prev_tokens: number;
+  daily_tokens: number[];
+};
+
+export type AdoptionSeat = {
+  email: string;
+  created_at: string;
+};
+
+export type AdoptionDay = {
+  day: string;
+  cost_usd: number;
+  tokens: number;
+  actions: number;
+  active_users: number;
+};
+
+export type AdoptionTotals = {
+  active_users: number;
+  prev_active_users: number;
+  new_active_users: number;
+  registered_users: number;
+  cost_usd: number;
+  prev_cost_usd: number;
+  tokens: number;
+  prev_tokens: number;
+  cached_tokens: number;
+  chat_turns: number;
+  task_iterations: number;
+};
+
+export type AdoptionReport = {
+  from: string;
+  to: string;
+  prev_from: string;
+  days: string[];
+  users: AdoptionUser[];
+  inactive_users: AdoptionSeat[];
+  daily: AdoptionDay[];
+  totals: AdoptionTotals;
+  sources: string[];
+  note: string;
+};
+
 // BudgetStatus mirrors models.BudgetStatus (#601 part 2): one configured
 // per-principal rolling budget plus its live evaluation — current window
 // [start, end), spend recomputed from the persisted metering, the effective
@@ -574,6 +637,17 @@ export const orchestratorApi = {
     if (params.to) qs.set("to", params.to);
     const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
     return request<UsageReport>(`/admin/usage${suffix}`);
+  },
+
+  // Adoption analytics: admin-only per-user AI-adoption audit — merged
+  // per-user totals with daily series, previous-window trend deltas, and the
+  // inactive-seat roster over [from, to) (default: trailing 30 days).
+  adoption: (params: { from?: string; to?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.from) qs.set("from", params.from);
+    if (params.to) qs.set("to", params.to);
+    const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+    return request<AdoptionReport>(`/admin/usage/adoption${suffix}`);
   },
 
   // Per-principal rolling budgets (#601 part 2): admin-only list with live
