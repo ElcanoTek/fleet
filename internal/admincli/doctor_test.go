@@ -80,6 +80,11 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 		"podman system migrate",
 		"600 root",
 		"Report-only in every mode",
+		// Post-upgrade podman-info deferral: step 2's own stack upgrade must
+		// not fail the box on the transient store lock it created (the step-6
+		// restart clears it; step 7 re-verifies). Learned in production on
+		// chat's doctor.
+		"re-verifying after the service restart",
 		"without sourcing it",
 		"--network=none",
 	} {
