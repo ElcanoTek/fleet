@@ -94,6 +94,7 @@ die()  { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_reset" >&2; exit 1; }
 
 n_ok=0 n_fixed=0 n_warn=0 n_fail=0
 restart_needed=0
+podman_recheck=0
 
 pass()  { printf '  %s✓%s %s\n' "$c_green" "$c_reset" "$*"; n_ok=$((n_ok+1)); }
 fixed() { printf '  %s↻%s %s\n' "$c_cyan" "$c_reset" "$*"; n_fixed=$((n_fixed+1)); }
@@ -111,9 +112,17 @@ env_get() {
 
 # run_as_fleet CMD... — run a command as the service user with the SAME
 # HOME/XDG_RUNTIME_DIR deploy/fleet.service sets, so doctor probes the exact
-# rootless-podman environment the daemon uses (not root's).
+# rootless-podman environment the daemon uses (not root's). It also cd's to
+# the service HOME first: sudo keeps the caller's cwd, doctor is typically
+# invoked from /root — a directory the fleet user cannot enter — and rootless
+# podman re-execs inside its user namespace and chdir()s back to the
+# inherited cwd, dying with "cannot chdir to /root: Permission denied"
+# (learned in production on chat's doctor: info/migrate/pull all failed from
+# /root while the already-cd'd smoke passed). Falls back to / (enterable by
+# every user) when HOME doesn't exist yet — step 3 may be about to create it.
 run_as_fleet() {
-  sudo -u "$SERVICE_USER" HOME="$SERVICE_HOME" XDG_RUNTIME_DIR="/run/${SERVICE_USER}" "$@"
+  ( cd "$SERVICE_HOME" 2>/dev/null || cd /
+    sudo -u "$SERVICE_USER" HOME="$SERVICE_HOME" XDG_RUNTIME_DIR="/run/${SERVICE_USER}" "$@" )
 }
 
 # ── dry-run: print the checklist and exit ────────────────────────────────────
@@ -348,7 +357,19 @@ CONF
   if run_as_fleet podman info >/dev/null 2>&1; then
     pass "rootless podman functional for $SERVICE_USER"
   else
-    fail "rootless 'podman info' fails as $SERVICE_USER — run: sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman info"
+    podman_err="$(run_as_fleet podman info 2>&1 >/dev/null | tail -n1 || true)"
+    if [[ "$restart_needed" == "1" && "$CHECK_ONLY" == "0" && "$NO_RESTART" == "0" ]]; then
+      # Step 2 just upgraded the container stack (podman/crun/passt/...)
+      # while the running fleet service's sandbox containers still hold the
+      # rootless store under the OLD binaries — a transient failure THIS
+      # doctor run created itself. Don't fail the box on it: the step-6
+      # restart releases the store, and step 7 re-verifies (plus the
+      # sandbox smoke re-proves it end to end).
+      advise "rootless 'podman info' fails as $SERVICE_USER right after the stack upgrade (${podman_err:-no error output}) — re-verifying after the service restart"
+      podman_recheck=1
+    else
+      fail "rootless 'podman info' fails as $SERVICE_USER: ${podman_err:-no error output} — run: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman info"
+    fi
   fi
 fi
 
@@ -531,6 +552,17 @@ done
 # ── 7. sandbox smoke ─────────────────────────────────────────────────────────
 step "7/8  Sandbox smoke"
 
+# Deferred from step 3: the post-upgrade `podman info` failure should have
+# cleared once step 6 restarted the services off the old container stack.
+if [[ "${podman_recheck:-0}" == "1" ]]; then
+  if run_as_fleet podman info >/dev/null 2>&1; then
+    fixed "rootless podman functional for $SERVICE_USER (recovered by the post-upgrade service restart)"
+  else
+    podman_err="$(run_as_fleet podman info 2>&1 >/dev/null | tail -n1 || true)"
+    fail "rootless 'podman info' STILL fails as $SERVICE_USER after the restart: ${podman_err:-no error output} — run: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman info"
+  fi
+fi
+
 # Resolve the image ref the daemon would use: env file wins, else the client
 # bundle's sandbox.tag (same precedence as the process — see admincli
 # checkSandbox / clientconfig ResolvedImageRef). The image is built ON-BOX into
@@ -558,7 +590,7 @@ elif run_as_fleet podman image exists "$sandbox_img" 2>/dev/null; then
   if run_as_fleet timeout 120 podman run --rm --network=none "$sandbox_img" true >/dev/null 2>&1; then
     pass "sandbox smoke passed ($sandbox_img runs as $SERVICE_USER)"
   else
-    fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
+    fail "sandbox image $sandbox_img present but NOT runnable as $SERVICE_USER — tool calls will break; rerun verbosely: cd $SERVICE_HOME && sudo -u $SERVICE_USER HOME=$SERVICE_HOME XDG_RUNTIME_DIR=/run/$SERVICE_USER podman run --rm $sandbox_img true"
   fi
 else
   fail "sandbox image $sandbox_img missing from ${SERVICE_USER}'s rootless store — build it: sudo fleet update (or FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh as $SERVICE_USER)"
