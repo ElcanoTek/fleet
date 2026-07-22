@@ -225,6 +225,21 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Adoption view — exec per-user AI-usage audit** (`docs/USAGE-ANALYTICS.md`
+  part 3): a new admin-only **Adoption** tab in the Operations Center backed
+  by `GET /admin/usage/adoption` — per-user token/spend leaderboard with
+  daily sparklines, active-day counts and engagement tiers, previous-period
+  trend deltas, daily tokens/active-users trends, the provisioned-seat
+  roster with a "not yet active" list, and CSV export. Strictly a read model
+  over the existing metering (task_iterations ⋈ tasks + chat turn_metrics
+  via two new seams); leaderboard sorts token volume first because tokens
+  are the pricing-coverage-independent meter (#289), and the report carries
+  the caveat that token volume is an adoption signal, not a performance
+  grade. The Operations Center tabs now accept a `?tab=` deep link, and the
+  Settings → Admin → Users/Overview pages label their numbers as all-time
+  chat-only ("Chat spend") and cross-link to the windowed Usage/Adoption
+  views instead of appearing to duplicate them.
+
 - **Input queue + mid-turn steering** (#785, `docs/INPUT-QUEUE.md`): a
   submission during an active turn now QUEUES durably (stable ids, idempotent
   `input_id` replay, FIFO drain as separate turns) instead of implicitly

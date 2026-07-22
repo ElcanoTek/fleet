@@ -170,7 +170,10 @@ export default function AdminOverviewPage() {
   const usageItems: AdminStat[] = [
     { title: "Users", value: String(stats?.length ?? 0) },
     { title: "Turns total", value: String(totalTurns) },
-    { title: "Spend total", value: formatUSD(totalSpend) },
+    // All-time chat-side spend (GET /api/admin/stats sums turn_metrics only);
+    // labeled as such so it can't be misread as the Operations Center Usage
+    // tab's windowed chat+task total.
+    { title: "Chat spend (all-time)", value: formatUSD(totalSpend) },
     {
       title: "Most recent",
       value: stats && stats.length > 0 ? formatAgo(stats[0].last_activity) : "—",

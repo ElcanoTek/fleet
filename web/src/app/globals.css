@@ -2037,6 +2037,82 @@ tr.sla-row-fail {
   }
 }
 
+/* Adoption panel (exec AI-adoption audit): reuses the usage tokens/marks
+   (--usage-bar, tiles, grids) and adds trend deltas, engagement tiers, the
+   per-user sparkline, and the inactive-seat roster. */
+.adoption-trends {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0 1.25rem;
+  margin-bottom: 1rem;
+}
+.adoption-trend-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.adoption-spark {
+  width: 110px;
+  height: 20px;
+  display: block;
+}
+/* Delta chips pair an arrow glyph with the color, so direction is never
+   color-alone; "new" (no previous-window baseline) wears the accent. */
+.adoption-delta {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.adoption-delta-up {
+  color: var(--color-success-strong);
+}
+.adoption-delta-down {
+  color: var(--color-danger-strong);
+}
+.adoption-delta-new {
+  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.66rem;
+}
+/* Engagement tiers are habit labels, not statuses — text carries the meaning,
+   the fill only weights it (heavier = more engaged). */
+.adoption-tier {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+.adoption-tier-power {
+  background: color-mix(in srgb, var(--usage-bar) 22%, transparent);
+  border-color: color-mix(in srgb, var(--usage-bar) 45%, transparent);
+  color: var(--color-text-primary);
+}
+.adoption-tier-regular {
+  background: color-mix(in srgb, var(--usage-bar) 10%, transparent);
+}
+.adoption-seats {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.75rem;
+  padding: 0;
+}
+.adoption-seat {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  background: var(--color-surface-2);
+}
+
 /* Upcoming runs timeline (Scheduler UX 2.0, #504): a day-grouped list of the
    next scheduled executions. Each row is time · task · schedule-kind. */
 .upcoming-day-group {

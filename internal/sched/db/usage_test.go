@@ -210,6 +210,52 @@ func TestTaskUsageGroupByDimensions(t *testing.T) {
 	})
 }
 
+// TestTaskUsageByUserDay covers the adoption report's two-dimensional
+// aggregation: rows keyed by (user, UTC day), the deleted-user/orphan
+// provenance rules unchanged from TaskUsage, and [from, to) filtering.
+func TestTaskUsageByUserDay(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	seedUsageFixture(t, db)
+
+	rows, err := db.TaskUsageByUserDay(ctx, usageFrom, usageTo)
+	if err != nil {
+		t.Fatalf("TaskUsageByUserDay: %v", err)
+	}
+	// alice on June 1, 2, 8 + the orphan task on June 8 → 4 (user, day) rows.
+	if len(rows) != 4 {
+		t.Fatalf("want 4 user-day rows, got %+v", rows)
+	}
+	byKey := map[string]models.UserDayUsage{}
+	for _, r := range rows {
+		byKey[r.User+"|"+r.Day] = r
+	}
+	a1 := byKey["alice@example.com|2026-06-01"]
+	if !almostEqual(a1.CostUSD, 1.0) || a1.PromptTokens != 100 || a1.CompletionTokens != 10 || a1.Units != 1 {
+		t.Errorf("alice June 1 row wrong: %+v", a1)
+	}
+	a8 := byKey["alice@example.com|2026-06-08"]
+	if !almostEqual(a8.CostUSD, 4.0) || a8.Units != 1 {
+		t.Errorf("alice June 8 row wrong: %+v", a8)
+	}
+	orphan := byKey["|2026-06-08"]
+	if !almostEqual(orphan.CostUSD, 8.0) || orphan.Units != 1 {
+		t.Errorf("orphan June 8 row wrong: %+v", orphan)
+	}
+
+	// [June 2, June 8) keeps only alice's June 2 iteration.
+	rows, err = db.TaskUsageByUserDay(ctx,
+		time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("TaskUsageByUserDay: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Day != "2026-06-02" || !almostEqual(rows[0].CostUSD, 2.0) {
+		t.Errorf("range filter wrong: %+v", rows)
+	}
+}
+
 func TestTaskUsageRangeFiltering(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
