@@ -229,6 +229,16 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **`fleet mcp test --deep` runs manifest-declared canary probes**
+  (`docs/MCP-TESTING.md`): a catalog server may declare `probe:` — ONE
+  read-only tool call (tool/args + optional `contains:` substring) the bundle
+  author vetted for side effects — and `--deep` executes it after the
+  auth-status checks, proving the upstream returns real data rather than just
+  accepting the credentials. Fails the run on a not-advertised tool, a call
+  error, an `isError` result, or a `contains:` mismatch; servers without a
+  probe are noted, never failed. Load-time validation rejects a blank
+  `probe.tool` or one outside the server's `tools:` allowlist. The runner
+  only ever calls declared probes — it never auto-discovers tools to call.
 - **Adoption view — exec per-user AI-usage audit** (`docs/USAGE-ANALYTICS.md`
   part 3): a new admin-only **Adoption** tab in the Operations Center backed
   by `GET /admin/usage/adoption` — per-user token/spend leaderboard with
@@ -243,7 +253,6 @@ prior versions are listed because none have shipped.
   Settings → Admin → Users/Overview pages label their numbers as all-time
   chat-only ("Chat spend") and cross-link to the windowed Usage/Adoption
   views instead of appearing to duplicate them.
-
 - **Input queue + mid-turn steering** (#785, `docs/INPUT-QUEUE.md`): a
   submission during an active turn now QUEUES durably (stable ids, idempotent
   `input_id` replay, FIFO drain as separate turns) instead of implicitly

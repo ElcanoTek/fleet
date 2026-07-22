@@ -53,6 +53,46 @@ auth semantics — a server that reports "not authenticated" as a NON-error
 result will read as deep-✓, so glance at the surfaced text, don't just read
 the glyph.
 
+### `probe:` — a declared read-only canary call
+
+Auth-status proves the upstream accepts the credentials; a **probe** proves
+the round trip returns real data. Each catalog server may declare ONE
+read-only canary call in the manifest, which `--deep` executes after the
+auth-status checks:
+
+```yaml
+mcp_servers:
+  - name: mail
+    # …
+    probe:
+      tool: list_messages        # must be advertised (and inside tools: when set)
+      args: {maxResults: 1}      # literal call arguments — keep them minimal
+      contains: messages         # optional substring assertion on the result text
+```
+
+```
+✓ mail                     stdio   12 tools
+    deep ✓ mail_auth_status — authenticated as ops@example.com
+    probe ✓ list_messages — {"messages": [{"id": "18c…"}], …}
+```
+
+The probe fails (and fails the run) when the tool is not advertised, the
+call errors, the result is flagged `isError`, or the `contains:` substring is
+missing. A server with no `probe:` is never failed for it — with neither an
+auth-status tool nor a probe, the skipped note says so, so the report shows
+which servers are unproven beyond the handshake rather than hiding the gap.
+
+**The safety model is declare-and-vet**: the runner only ever calls the
+exact tool + args a manifest declares — it never auto-discovers tools to
+call — so the bundle author vets each canary ONCE for side effects when
+declaring it. Only declare calls that are genuinely read-only and idempotent
+upstream (beware reads with side effects: marking items seen, audit noise,
+rate-limit burn). Mutating tools (send/create/submit) must never get a probe.
+Keep `contains:` to stable, shape-ish markers — asserting on live content
+makes the canary flaky as real-world state changes; the probe proves the pipe
+works, not that the data looks a particular way. Load-time validation fails
+loud on a blank `probe.tool` or one outside the server's `tools:` allowlist.
+
 Exit codes: `0` all requested servers connected (and, with `--deep`, all
 deep checks passed) · `1` at least one failed (or a requested name is
 unknown/gated off) · `2` usage error.
@@ -73,8 +113,10 @@ unknown/gated off) · `2` usage error.
 
 - The plain probe is **point-in-time liveness + tool discovery**; it does
   not call tools. `--deep` closes most of that gap where servers advertise
-  an auth-status tool, but tool *behavior* (scopes, quotas, correctness)
-  still belongs to an eval (`docs/EVALS.md`) or a manual tool call.
+  an auth-status tool or declare a `probe:` canary, but broader tool
+  *behavior* (scopes, quotas, correctness of every tool) still belongs to an
+  eval (`docs/EVALS.md`) or a manual tool call — a green canary proves one
+  declared call works, not all of them.
 - HTTP catalog servers are probed with the manifest's resolved headers/TLS;
   per-user hosted connectors (Settings → Connections) are NOT covered here —
   they get their own add-time validation handshake
@@ -87,6 +129,7 @@ unknown/gated off) · `2` usage error.
 | Manifest shape | `fleet validate-config` | Bundle/manifest well-formed, env keys named, executables present |
 | Server liveness | `fleet mcp test --all` | Each server spawns, handshakes, lists tools with real credentials |
 | Credential validity | `fleet mcp test --all --deep` | Each server's auth-status tool confirms the upstream accepts the credentials |
+| End-to-end data path | `fleet mcp test --all --deep` + manifest `probe:` | Each server's declared read-only canary call returns real data from the upstream |
 | Runtime state | admin Health panel / `GET /health` | What the *running* deployment actually connected |
 | Hot iteration | `fleet mcp reload` (`docs/MCP-RELOAD.md`) | Bundle edits re-register without a restart |
 | Full stack | live Playwright lane (`npm run test:e2e:live`) | Real server + sandbox + broker wiring, fake LLM |

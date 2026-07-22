@@ -193,6 +193,73 @@ func TestMCPTestVerb_DeepAuthStatus(t *testing.T) {
 	}
 }
 
+// --deep runs the manifest-declared probe (probe:) as a canary call: a
+// passing call (with a matching contains:) reports probe-ok; a contains
+// mismatch, a not-advertised tool, or an isError result fails the check (and
+// via deepFailed, the sweep). A probe-less server keeps the skipped
+// placeholder, whose message now names both conventions. Red/green: probe: is new.
+func TestMCPTestVerb_DeepDeclaredProbe(t *testing.T) {
+	dummy := dummyServerPath(t)
+	bundle := mcpTestBundle(t, `mcp_servers:
+  - name: probe_ok
+    type: stdio
+    command: python3
+    args: ["`+dummy+`"]
+    always: true
+    probe:
+      tool: echo
+      args: {message: ping}
+      contains: "Echo: ping"
+  - name: probe_mismatch
+    type: stdio
+    command: python3
+    args: ["`+dummy+`"]
+    always: true
+    probe:
+      tool: echo
+      args: {message: ping}
+      contains: "no such text"
+  - name: probe_unadvertised
+    type: stdio
+    command: python3
+    args: ["`+dummy+`"]
+    always: true
+    probe:
+      tool: not_a_tool
+`)
+	catalog := loadCatalogForTest(t, bundle)
+
+	ok := probeBundleServer("probe_ok", catalog["probe_ok"], 30*time.Second, true)
+	if !ok.Connected || len(ok.DeepChecks) != 1 {
+		t.Fatalf("probe_ok = %+v, want one deep check", ok)
+	}
+	if c := ok.DeepChecks[0]; !c.OK || c.Kind != "probe" || c.Tool != "echo" || !strings.Contains(c.Detail, "Echo: ping") {
+		t.Errorf("probe_ok check = %+v, want passing probe with result text", c)
+	}
+	if deepFailed(ok) {
+		t.Error("passing probe must not mark the sweep failed")
+	}
+
+	mismatch := probeBundleServer("probe_mismatch", catalog["probe_mismatch"], 30*time.Second, true)
+	if len(mismatch.DeepChecks) != 1 || mismatch.DeepChecks[0].OK {
+		t.Fatalf("probe_mismatch = %+v, want one FAILING probe check", mismatch)
+	}
+	if !strings.Contains(mismatch.DeepChecks[0].Detail, `does not contain "no such text"`) {
+		t.Errorf("detail = %q, want the contains mismatch named", mismatch.DeepChecks[0].Detail)
+	}
+	if !deepFailed(mismatch) {
+		t.Error("contains mismatch must mark the sweep failed")
+	}
+
+	unadv := probeBundleServer("probe_unadvertised", catalog["probe_unadvertised"], 30*time.Second, true)
+	if len(unadv.DeepChecks) != 1 || unadv.DeepChecks[0].OK {
+		t.Fatalf("probe_unadvertised = %+v, want one FAILING probe check", unadv)
+	}
+	if !strings.Contains(unadv.DeepChecks[0].Detail, "not advertised") {
+		t.Errorf("detail = %q, want the not-advertised failure named", unadv.DeepChecks[0].Detail)
+	}
+}
+
 // mustGetwd is Getwd with a test failure instead of an error return.
 func mustGetwd(t *testing.T) string {
 	t.Helper()
