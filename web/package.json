@@ -19,7 +19,7 @@
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.6",
     "geist": "^1.7.2",
-    "next": "16.2.10",
+    "next": "16.2.11",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "react-markdown": "^10.1.0",
