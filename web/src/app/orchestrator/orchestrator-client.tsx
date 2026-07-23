@@ -19,6 +19,7 @@ import { TaskCreateModal } from "./TaskCreateModal";
 import { LogViewer } from "./LogViewer";
 import { SLAReportPanel } from "./SLAReportPanel";
 import { UsagePanel } from "./UsagePanel";
+import { AdoptionPanel } from "./AdoptionPanel";
 import { DatasetsPanel } from "./DatasetsPanel";
 import { UpcomingPanel } from "./UpcomingPanel";
 
@@ -52,6 +53,24 @@ function OrchestratorSlimHeader() {
   );
 }
 
+// Top-level dashboard tabs. "tasks" is the legacy Recent Tasks view; the
+// admin-only entries (sla/usage/adoption) are render-guarded below.
+const DASH_TABS = ["tasks", "upcoming", "sla", "datasets", "usage", "adoption"] as const;
+type DashTab = (typeof DASH_TABS)[number];
+
+// initialDashboardTab honors a ?tab= deep link (e.g. /orchestrator?tab=adoption,
+// linked from the Settings admin pages). Read lazily in the useState
+// initializer, the readCallbackBanner pattern — not an effect, which trips
+// react-hooks/set-state-in-effect. Safe pre-hydration: the tab row only
+// renders after the async session probe, so the seeded value never differs
+// from the server-rendered markup; and safe pre-role-probe: the render guard
+// falls back to Recent Tasks while (or if) the caller isn't an admin.
+function initialDashboardTab(): DashTab {
+  if (typeof window === "undefined") return "tasks";
+  const want = new URLSearchParams(window.location.search).get("tab");
+  return want && (DASH_TABS as readonly string[]).includes(want) ? (want as DashTab) : "tasks";
+}
+
 function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean }) {
   const session = useOrchestratorSession();
   const dashboard = useDashboardData(session.signedIn);
@@ -65,10 +84,9 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Desktop rail collapse + ≤900px auto-collapse/overlay (shared shell).
   const railCollapse = useRailCollapse();
-  // Top-level dashboard tab (#274): "tasks" is the legacy Recent Tasks view;
-  // "sla" swaps in the SLA report panel. Defaults to tasks so the existing
-  // dashboard shape is unchanged on load.
-  const [tab, setTab] = useState<"tasks" | "upcoming" | "sla" | "datasets" | "usage">("tasks");
+  // Top-level dashboard tab (#274): defaults to Recent Tasks (the existing
+  // dashboard shape) unless a ?tab= deep link picks another view.
+  const [tab, setTab] = useState<DashTab>(initialDashboardTab);
   const tabsRef = useRef<HTMLDivElement | null>(null);
   // switchTab pins the tab row to the top of the scroll container when the
   // user had scrolled: the new tab then starts at its beginning instead of
@@ -178,7 +196,7 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
             type="button"
             data-testid="new-task-btn"
             className={[
-              "flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]",
+              "flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] px-3 py-2 text-[0.8125rem] font-semibold text-[var(--color-text-primary)] transition hover:border-[var(--color-status-success-border)] hover:bg-[var(--color-status-success-bg)]",
               railCollapse.collapsed ? "sm:size-10 sm:w-10 sm:gap-0 sm:p-0" : "",
             ].join(" ")}
             data-tip={railCollapse.collapsed ? "New task" : undefined}
@@ -274,6 +292,19 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                     Usage
                   </button>
                 ) : null}
+                {/* The exec adoption audit is admin-only for the same reason
+                    as Usage: it is global across all users' activity. */}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === "adoption"}
+                    className={`tab-btn${tab === "adoption" ? " tab-btn-active" : ""}`}
+                    onClick={() => switchTab("adoption")}
+                  >
+                    Adoption
+                  </button>
+                ) : null}
               </div>
 
               {/* The tab-panel wrapper keeps a floor under the content: when a
@@ -290,6 +321,8 @@ function OrchestratorInner({ elcanoLoginEnabled }: { elcanoLoginEnabled: boolean
                 <SLAReportPanel />
               ) : tab === "usage" && isAdmin ? (
                 <UsagePanel />
+              ) : tab === "adoption" && isAdmin ? (
+                <AdoptionPanel />
               ) : (
                 <TasksTable
                   tasks={dashboard.tasks}

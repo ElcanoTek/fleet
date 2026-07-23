@@ -24,8 +24,8 @@ accepted on argv — override discovery with `$FLEET_SERVER_TOKEN`, `--token-fil
 or `--env-file <path>` when the file lives elsewhere.
 
 ```
-fleet bootstrap   →   fleet update   →   fleet status
-  (provision a box)   (roll a new version)   (health / doctor)
+fleet bootstrap   →   fleet update   →   fleet status / fleet doctor
+  (provision a box)   (roll a new version)   (check health / repair drift)
 ```
 
 > **`bootstrap` and `update` operate on a fleet *source checkout*.** They run
@@ -166,7 +166,7 @@ no Go code and runs no migrations.
 > second instance plus a front proxy that fails over — out of scope for the
 > single-big-box deployment.
 
-## status (doctor) — is the box healthy?
+## status — is the box healthy? (quick, read-only)
 
 ```
 fleet status                # ✓/✗ report; exits non-zero if unhealthy
@@ -190,7 +190,57 @@ DSN passwords are redacted in the output.
 > negative. Verify the sandbox as the service user instead, e.g.
 > `sudo -u fleet env XDG_RUNTIME_DIR=/run/fleet podman run --rm <ref> true`, or
 > just confirm a chat turn executes a `run_python` tool call. Use `--no-sandbox`
-> to skip the check when running `status` as root.
+> to skip the check when running `status` as root. (`fleet doctor` below does
+> not have this false negative — it runs its sandbox smoke *as the service
+> user*.)
+
+## doctor — diagnose AND repair box-level drift
+
+```
+sudo fleet doctor              # diagnose + fix + restart services if needed
+sudo fleet doctor --check      # diagnose only, change nothing; exit 1 if anything is off
+sudo fleet doctor --no-restart # fix but never restart services
+fleet doctor --dry-run         # print the checklist; touch nothing (no root needed)
+```
+
+Where `status` only *reports*, `doctor` (a wrapper over `scripts/doctor.sh`)
+walks every box-level prerequisite fleet depends on and **fixes what it can in
+place** — it exists to kill the version lottery, where boxes provisioned at
+different times drift apart and each drift surfaces later as a confusing
+production-only bug. The pass covers, in order:
+
+1. **Toolchain** — Node ≥ 20 for the web tier, `go`/`git`/`podman`/`psql`/…
+   present (installed via dnf when missing).
+2. **Package currency** — disables dnf repos whose metadata is unreachable
+   (they abort *every* transaction on strict dnf builds), then upgrades the
+   fleet-critical set (`podman crun passt conmon containers-common golang
+   nodejs caddy`) to the box's repo-latest. Rootless-podman behavior differs
+   meaningfully across versions; holding boxes at repo-latest beats debugging
+   per-box combinations.
+3. **Rootless podman for the `fleet` service user** — subuid/subgid ranges,
+   `/var/lib/fleet` + `~/.config/containers` ownership (root-owned leftovers
+   from debugging break every podman call), the cgroupfs `containers.conf`,
+   `/run/fleet`, a `podman system migrate` (clears stale pause namespaces),
+   and a `podman info` probe **as the service user**.
+4. **Installed artifacts** — functional drift of `fleet.service` /
+   `fleet-web.service` vs `deploy/` (reinstall + `daemon-reload`), and the
+   `/usr/local/bin/fleet` symlink (a stale *copy* there shadows every update).
+5. **Configuration** — `/etc/fleet/fleet.env` exists, root-owned `0600`, with
+   `OPENROUTER_API_KEY` + both DB DSNs; `fleet-web.env` permissions.
+6. **Services** — `postgresql` (when a local unit exists), `fleet`,
+   `fleet-web`, `caddy` active; then the `/healthz` + `/readyz` probes.
+7. **Sandbox smoke** — `podman run --rm --network=none <image> true` **as the
+   `fleet` user** (the image lives in *that* user's rootless store).
+8. **Source freshness** — reports commits behind upstream. Report-only:
+   pulling and rebuilding stays `fleet update`'s job; doctor never deploys.
+
+Exit codes: `0` healthy (or everything fixed) · `1` problems remain.
+
+Admins also get a **read-only** version of this report in the web UI —
+**Settings → Admin → Doctor** — run from inside the fleet process (DBs, disk
+headroom, subuid ranges, sandbox image, unit states), with the on-box fix
+command shown next to every failing check and an explicit "Run deep checks"
+button for the sandbox smoke. See [`docs/DOCTOR.md`](DOCTOR.md).
 
 ## diagnose — a redacted support bundle for issue reports
 

@@ -159,6 +159,10 @@ type Server struct {
 	// admin-only Server settings page. It retains only the previous counters
 	// needed to calculate CPU/network rates.
 	hostStats *hoststats.Collector
+	// doctorMu serializes /admin/doctor runs: the deep mode launches a
+	// throwaway sandbox container, and N admins clicking "run checks" at once
+	// must not stampede podman.
+	doctorMu sync.Mutex
 
 	// memoryGraphExtractor mines a memory for knowledge-graph triples (#523).
 	// Injected via WithMemoryGraphExtractor so httpapi depends on the seam, not
@@ -734,6 +738,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
 	mux.Handle("/admin/server-stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleServerStats)))))
+	mux.Handle("/admin/doctor", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleDoctor)))))
 	// Admin Users tab (#237): GET list / POST create on the collection;
 	// PATCH role-team / DELETE / PUT …/password on the item. Admin-gated like
 	// the other /admin/* endpoints; role writes also drive the ops-center seam.
@@ -2273,7 +2278,15 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	// running, or terminal) never runs a duplicate turn — even when the retry
 	// lands after the conversation went idle.
 	if clientID := strings.TrimSpace(req.InputID); clientID != "" {
-		if existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID); lerr == nil && existing != nil {
+		existing, lerr := s.store.LookupInput(r.Context(), conv.ID, clientID)
+		if lerr != nil {
+			// Fail closed: proceeding without the lookup could run (and bill) a
+			// duplicate turn for an input_id that was already accepted. A 500
+			// lets the client retry the same input_id safely.
+			http.Error(w, "input lookup failed: "+lerr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if existing != nil {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -2339,6 +2352,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		}
 		log.Printf("queued turn launch (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		s.terminalizeQueueRow(queueRowID, store.InputStateQueued)
+		// No turn launched, so no completion tail will re-drain: without an
+		// explicit re-kick a 202-acknowledged row stalls until the next
+		// submission on this conversation (possibly forever).
+		s.rekickDrainAfter(conv.ID, 3*time.Second)
 	}
 
 	// Load history before we even allocate a buffer — if this errors, the
@@ -2482,12 +2499,18 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// queue rows against the durable #798 record — the drained row
 		// completes only if its user entry committed (a pre-commit failure
 		// re-queues it; a 202-acknowledged input is never silently lost),
-		// and uncommitted injected steers return to the queue.
+		// and uncommitted injected steers return to the queue unless a tool
+		// dispatched after their injection (#823: the model may have acted on
+		// the steer; re-running it could duplicate side effects, so those
+		// rows cancel instead).
 		sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
-		requeued, serr := s.store.SettleTurnInputs(sctx, turnID, queueRowID)
+		requeued, cancelledSteers, serr := s.store.SettleTurnInputs(sctx, turnID, queueRowID)
 		scancel()
 		if serr != nil {
 			log.Printf("settle turn inputs (turn=%s): %v", turnID, serr)
+		}
+		if cancelledSteers > 0 {
+			log.Printf("input queue: cancelled %d injected steer(s) of failed turn %s — tools dispatched after injection, re-running could duplicate side effects (#823)", cancelledSteers, turnID) //nolint:gosec // G706: int count + server-generated turn UUID — no request-authored text is logged.
 		}
 		s.emitQueueUpdate(context.Background(), user, conv.ID)
 		releaseOnce()

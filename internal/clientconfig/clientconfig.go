@@ -50,6 +50,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/goccy/go-yaml"
@@ -536,6 +537,48 @@ type ServerDef struct {
 	Description      string `yaml:"description"`
 	Beta             bool   `yaml:"beta"`
 	EnabledByDefault bool   `yaml:"enabled_by_default"`
+
+	// Probe declares this server's canary for `fleet mcp test --deep`: ONE
+	// read-only tool call that proves the server works end-to-end (credentials
+	// accepted AND the upstream returns real data), one rung past the
+	// auth-status convention. The bundle author vets the declared call for
+	// side effects ONCE, here — the probe runner executes only what a manifest
+	// declares, never auto-discovers tools to call. Absent = the server is
+	// noted as unproven-beyond-handshake, never failed.
+	Probe *ProbeDef `yaml:"probe"`
+}
+
+// ProbeDef is one declared read-only canary call for `fleet mcp test --deep`.
+// Assertions are deliberately minimal — the call must succeed and not be
+// flagged isError, plus an optional Contains substring — because asserting on
+// live upstream content makes the probe flaky as real-world state changes;
+// the probe proves the pipe works, not that the data looks a particular way.
+type ProbeDef struct {
+	// Tool is the tool to call (required; must be advertised by the server,
+	// and inside the server's tools: allowlist when one is set — the probe
+	// must never exercise a tool the runtime itself would not expose).
+	Tool string `yaml:"tool"`
+	// Args is the literal argument object for the call (after the manifest's
+	// usual env interpolation). Keep it minimal and read-only, e.g.
+	// {maxResults: 1}.
+	Args map[string]interface{} `yaml:"args"`
+	// Contains optionally asserts the result's first text block contains this
+	// substring (case-sensitive). Prefer shape-ish markers ("messages", an id
+	// prefix) over content that changes.
+	Contains string `yaml:"contains"`
+}
+
+// toConfig maps the manifest probe shape to the runtime config.MCPProbeConfig,
+// or nil when absent (mirroring ServerTLSDef.toMCP).
+func (p *ProbeDef) toConfig() *config.MCPProbeConfig {
+	if p == nil {
+		return nil
+	}
+	return &config.MCPProbeConfig{
+		Tool:     strings.TrimSpace(p.Tool),
+		Args:     p.Args,
+		Contains: p.Contains,
+	}
 }
 
 // ServerTLSDef is the manifest shape for per-server TLS hardening of an http
@@ -1068,6 +1111,19 @@ func (b *Bundle) validate() error {
 				return fmt.Errorf("mcp_servers[%q]: identity_env var %q is not a key of the server's env map", s.Name, trimmed)
 			}
 		}
+		// A declared probe must name a callable tool: empty is a broken
+		// declaration, and a tool outside the tools: allowlist would have the
+		// probe exercising a call the runtime itself never exposes — both fail
+		// loud at load rather than silently at test time.
+		if s.Probe != nil {
+			probeTool := strings.TrimSpace(s.Probe.Tool)
+			if probeTool == "" {
+				return fmt.Errorf("mcp_servers[%q]: probe.tool is required", s.Name)
+			}
+			if len(s.Tools) > 0 && !slices.Contains(s.Tools, probeTool) {
+				return fmt.Errorf("mcp_servers[%q]: probe.tool %q is not in the server's tools allowlist", s.Name, probeTool)
+			}
+		}
 	}
 	if err := b.validateHTTPTools(seen); err != nil {
 		return err
@@ -1518,6 +1574,7 @@ func (b *Bundle) MCPServerConfigs() map[string]config.MCPServerConfig {
 			Description:      s.Description,
 			Beta:             s.Beta,
 			EnabledByDefault: s.EnabledByDefault,
+			Probe:            s.Probe.toConfig(),
 		}
 		switch s.Type {
 		case "http":

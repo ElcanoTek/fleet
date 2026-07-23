@@ -475,6 +475,7 @@ func buildRecoveredEntries(journal []TurnJournalRow, events []TurnEvent) ([]agen
 		text.Reset()
 	}
 	seenCall := make(map[string]bool)
+	seenSteer := make(map[string]bool)
 	emitCall := func(callID, name, input string) {
 		flushText()
 		appendJSON("assistant", "tool_call", agent.ToolCallContent{ID: callID, Name: name, Input: input})
@@ -513,6 +514,27 @@ func buildRecoveredEntries(journal []TurnJournalRow, events []TurnEvent) ([]agen
 			}
 		case "turn.retry":
 			text.Reset()
+		case "user.message":
+			// A steered mid-turn user message (#785) normally becomes durable
+			// only with the terminal history commit, so an interrupted turn
+			// must re-project it here — recovery stamps history_committed_at,
+			// which makes RecoverInputQueue complete the steer's queue row as
+			// "durably in history"; without this the instruction silently
+			// vanishes (#826). Only steered events project: the turn-start
+			// user.message (no steered flag) is committed separately at
+			// turn_seq=1 and would duplicate. A resilience rollback re-drive
+			// can re-emit the same steer, so dedupe by input_id.
+			var p struct {
+				Text    string `json:"text"`
+				Steered bool   `json:"steered"`
+				InputID string `json:"input_id"`
+			}
+			if json.Unmarshal(ev.Data, &p) != nil || !p.Steered || p.InputID == "" || seenSteer[p.InputID] {
+				continue
+			}
+			seenSteer[p.InputID] = true
+			flushText()
+			appendJSON("user", "text", agent.TextContent{Text: p.Text})
 		case "reasoning.end":
 			var p struct {
 				Text string `json:"text"`

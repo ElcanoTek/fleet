@@ -22,6 +22,12 @@ package main
 // --deep proves the far end accepts the call. Servers without such a tool are
 // noted and skipped, never failed.
 //
+// --deep also runs the server's manifest-declared probe (probe: tool/args/
+// contains) when one exists: ONE read-only canary call the bundle author
+// vetted for side effects, proving the upstream returns real data — not just
+// that it accepts the credentials. The runner executes only declared probes;
+// it never auto-discovers tools to call.
+//
 // It never prints a credential VALUE. Failures name the server and the error
 // (a missing executable, a dead process, a handshake timeout) — the same
 // classes that otherwise surface as cryptic mid-chat tool errors.
@@ -72,15 +78,20 @@ type mcpTestResult struct {
 	DeepChecks []mcpDeepCheck `json:"deep_checks,omitempty"`
 }
 
-// mcpDeepCheck is one --deep auth-status tool call's outcome. OK means the
+// mcpDeepCheck is one --deep tool call's outcome — an auth-status call
+// (Kind "") or the manifest-declared canary (Kind "probe"). OK means the
 // CALL succeeded and the server did not flag the result as an error
-// (ToolResult.IsError); Detail carries the result's first text block (or the
-// error) so the operator judges the CONTENT — the probe does not interpret
-// auth semantics beyond the MCP error flag, deliberately: result shapes are
-// server-specific and guessing would fake precision.
+// (ToolResult.IsError) — and, for a probe with contains:, that the substring
+// matched; Detail carries the result's first text block (or the error) so
+// the operator judges the CONTENT — beyond that the probe does not interpret
+// result semantics, deliberately: result shapes are server-specific and
+// guessing would fake precision.
 type mcpDeepCheck struct {
-	Tool   string `json:"tool"`
-	OK     bool   `json:"ok"`
+	Tool string `json:"tool"`
+	OK   bool   `json:"ok"`
+	// Kind distinguishes the declared canary ("probe") from the auth-status
+	// convention (empty, the original shape — kept stable for JSON consumers).
+	Kind   string `json:"kind,omitempty"`
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -157,7 +168,7 @@ func parseMCPTestFlags(args []string) (mcpTestOptions, error) {
 	var opts mcpTestOptions
 	fs.StringVar(&opts.bundlePath, "bundle-path", "", "client-config bundle dir (overrides FLEET_CLIENT_CONFIG_DIR; default config/default)")
 	fs.BoolVar(&opts.all, "all", false, "test every enabled server in the catalog")
-	fs.BoolVar(&opts.deep, "deep", false, "also call each server's auth-status tool (auth_status / *_auth_status) to verify credentials against the upstream")
+	fs.BoolVar(&opts.deep, "deep", false, "also call each server's auth-status tool (auth_status / *_auth_status) and its manifest-declared probe (probe:) to verify the upstream end-to-end")
 	fs.BoolVar(&opts.jsonOutput, "json", false, "machine-readable output")
 	fs.DurationVar(&opts.timeout, "timeout", 30*time.Second, "per-server handshake timeout")
 	fs.Usage = func() {
@@ -249,6 +260,9 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 		if agentcore.EnvReferencesWorkspace(env) {
 			env = agentcore.ExpandWorkspaceEnv(env, agentcore.SharedMCPWorkspaceDir())
 		}
+		// Probes have no task identity: drop ${FLEET_TASK_ID}-bearing keys like
+		// the boot-time shared spawn does, so the probe env matches production.
+		env = agentcore.ExpandTaskIDEnv(env, "")
 		addErr = client.AddStdioServer(ctx, name, spec.Command, spec.Args, env, spec.Dir)
 	default:
 		addErr = fmt.Errorf("manifest entry has neither command nor url")
@@ -270,16 +284,17 @@ func probeBundleServer(name string, spec config.MCPServerConfig, timeout time.Du
 	sort.Strings(res.Tools)
 
 	if deep {
-		res.DeepChecks = runDeepChecks(client, name, res.Tools, timeout)
+		res.DeepChecks = runDeepChecks(client, name, res.Tools, spec.Probe, timeout)
 	}
 	return res
 }
 
 // runDeepChecks calls every advertised auth-status tool (the bundle servers'
 // convention: "auth_status" or "*_auth_status") with empty arguments and a
-// fresh per-call timeout. A server with no such tool gets a single skipped
-// (OK) entry so the report says WHY nothing deeper was proven.
-func runDeepChecks(client *mcp.Client, server string, tools []string, timeout time.Duration) []mcpDeepCheck {
+// fresh per-call timeout, then the manifest-declared probe (if any) with its
+// declared args. A server with neither gets a single skipped (OK) entry so
+// the report says WHY nothing deeper was proven.
+func runDeepChecks(client *mcp.Client, server string, tools []string, probe *config.MCPProbeConfig, timeout time.Duration) []mcpDeepCheck {
 	var checks []mcpDeepCheck
 	for _, t := range tools {
 		if t != "auth_status" && !strings.HasSuffix(t, "_auth_status") {
@@ -297,10 +312,69 @@ func runDeepChecks(client *mcp.Client, server string, tools []string, timeout ti
 			checks = append(checks, mcpDeepCheck{Tool: t, OK: true, Detail: firstResultText(result)})
 		}
 	}
+	if probe != nil {
+		checks = append(checks, runProbeCheck(client, server, tools, probe, timeout))
+	}
 	if len(checks) == 0 {
-		checks = append(checks, mcpDeepCheck{Tool: "", OK: true, Detail: "no auth-status tool advertised — deep check skipped"})
+		checks = append(checks, mcpDeepCheck{Tool: "", OK: true, Detail: "no auth-status tool advertised and no probe declared — deep check skipped"})
 	}
 	return checks
+}
+
+// runProbeCheck executes the manifest-declared canary call. It only ever
+// calls the DECLARED tool with the DECLARED args — the manifest author vetted
+// that exact call as read-only. Failure modes, in order: the tool is not
+// advertised (a sync/typo problem the shallow pass can't see), the call
+// errors, the result is flagged isError, or the declared contains: substring
+// is missing from the result text.
+func runProbeCheck(client *mcp.Client, server string, tools []string, probe *config.MCPProbeConfig, timeout time.Duration) mcpDeepCheck {
+	check := mcpDeepCheck{Tool: probe.Tool, Kind: "probe"}
+	advertised := false
+	for _, t := range tools {
+		if t == probe.Tool {
+			advertised = true
+			break
+		}
+	}
+	if !advertised {
+		check.Detail = "probe tool not advertised by the server"
+		return check
+	}
+	args := probe.Args
+	if args == nil {
+		args = map[string]interface{}{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	result, err := client.CallToolOn(ctx, server, probe.Tool, args)
+	cancel()
+	switch {
+	case err != nil:
+		check.Detail = err.Error()
+	case result.IsError:
+		check.Detail = firstResultText(result)
+	default:
+		// Match contains: against the FULL result text (every block, uncapped)
+		// — firstResultText is a display cap, and a marker past 200 runes or in
+		// a later block must not fail a healthy probe.
+		if probe.Contains != "" && !strings.Contains(allResultText(result), probe.Contains) {
+			check.Detail = fmt.Sprintf("result does not contain %q: %s", probe.Contains, firstResultText(result))
+			return check
+		}
+		check.OK = true
+		check.Detail = firstResultText(result)
+	}
+	return check
+}
+
+// allResultText joins every text block for assertion purposes (no cap).
+func allResultText(result *mcp.ToolResult) string {
+	var parts []string
+	for _, block := range result.Content {
+		if block.Text != "" {
+			parts = append(parts, block.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // firstResultText extracts the result's first text block, collapsed to one
@@ -338,13 +412,17 @@ func emitMCPTestReport(w io.Writer, report mcpTestReport, jsonOutput bool) int {
 					fmt.Fprintf(w, "    - %s\n", t)
 				}
 				for _, c := range r.DeepChecks {
+					label := "deep"
+					if c.Kind == "probe" {
+						label = "probe"
+					}
 					switch {
 					case c.Tool == "":
-						fmt.Fprintf(w, "    deep: %s\n", c.Detail)
+						fmt.Fprintf(w, "    %s: %s\n", label, c.Detail)
 					case c.OK:
-						fmt.Fprintf(w, "    deep ✓ %s — %s\n", c.Tool, c.Detail)
+						fmt.Fprintf(w, "    %s ✓ %s — %s\n", label, c.Tool, c.Detail)
 					default:
-						fmt.Fprintf(w, "    deep ✗ %s FAILED — %s\n", c.Tool, c.Detail)
+						fmt.Fprintf(w, "    %s ✗ %s FAILED — %s\n", label, c.Tool, c.Detail)
 					}
 				}
 			} else {

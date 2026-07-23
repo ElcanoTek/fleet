@@ -985,6 +985,9 @@ func NewHTTPTransportWithHeaders(url string, headers map[string]string) *HTTPTra
 		headers: headers,
 		client: &http.Client{
 			Timeout: DefaultMCPHTTPTimeout,
+			// headers may carry a resolved bearer/API key; never forward it to
+			// a host a 30x names (stdlib only strips Authorization/Cookie).
+			CheckRedirect: stripHeadersOnCrossOriginRedirect,
 		},
 	}
 }

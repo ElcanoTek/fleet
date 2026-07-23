@@ -69,6 +69,48 @@ var (
 	chatUsageTo   = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 )
 
+// TestUsageByUserDay covers the adoption report's chat-side two-dimensional
+// aggregation: rows keyed by (user_email, UTC day), cancelled turns counted,
+// and [from, to) filtering on completed_at.
+func TestUsageByUserDay(t *testing.T) {
+	s := newTestStore(t)
+	seedChatUsage(t, s)
+	ctx := context.Background()
+
+	rows, err := s.UsageByUserDay(ctx, chatUsageFrom, chatUsageTo)
+	if err != nil {
+		t.Fatalf("UsageByUserDay: %v", err)
+	}
+	// alice on June 1, 2, 8 + bob on June 8 → 4 (user, day) rows.
+	if len(rows) != 4 {
+		t.Fatalf("want 4 user-day rows, got %+v", rows)
+	}
+	byKey := map[string]UserDayUsage{}
+	for _, r := range rows {
+		byKey[r.User+"|"+r.Day] = r
+	}
+	a1 := byKey["alice@example.com|2026-06-01"]
+	if !usageAlmostEqual(a1.CostUSD, 1.0) || a1.PromptTokens != 100 || a1.CachedTokens != 5 || a1.Turns != 1 {
+		t.Errorf("alice June 1 row wrong: %+v", a1)
+	}
+	// bob's only turn is cancelled — it still counts (the cost was spent).
+	b8 := byKey["bob@example.com|2026-06-08"]
+	if !usageAlmostEqual(b8.CostUSD, 8.0) || b8.PromptTokens != 800 || b8.CachedTokens != 7 || b8.Turns != 1 {
+		t.Errorf("bob June 8 row wrong: %+v", b8)
+	}
+
+	// [June 2, June 8) keeps only alice's June 2 turn.
+	rows, err = s.UsageByUserDay(ctx,
+		time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("UsageByUserDay: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Day != "2026-06-02" || !usageAlmostEqual(rows[0].CostUSD, 2.0) {
+		t.Errorf("range filter wrong: %+v", rows)
+	}
+}
+
 // TestUsageSummaryGroupByPrincipal covers the who/where dimensions: user email
 // and project (id + name label).
 func TestUsageSummaryGroupByPrincipal(t *testing.T) {

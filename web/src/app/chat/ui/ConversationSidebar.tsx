@@ -80,6 +80,34 @@ const SEALED_TOOLTIP_TEXT =
 // otherwise clip or capture it (a CSS data-tip's absolutely-positioned
 // ::after also OCCUPIES layout even at opacity 0, which put a horizontal
 // scrollbar on the projects scroller; the portal has no such footprint).
+function usePortalTip(tip: string) {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const show = (e: React.SyntheticEvent<HTMLElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    // Below the button, arrow pointing back up at it (the design's conv-info
+    // tooltip placement: bottom + 7, offset so the arrow lands on the anchor).
+    setPos({
+      top: Math.round(r.bottom + 7),
+      left: Math.round(r.left + r.width / 2 - 17),
+    });
+  };
+  const hide = () => setPos(null);
+  const tipNode =
+    pos && typeof document !== "undefined"
+      ? createPortal(
+          <span
+            role="tooltip"
+            className="conv-tooltip"
+            style={{ top: pos.top, left: pos.left }}
+          >
+            {tip}
+          </span>,
+          document.body,
+        )
+      : null;
+  return { show, hide, tipNode };
+}
+
 function PortalTipIconButton({
   tip,
   ariaLabel,
@@ -95,17 +123,7 @@ function PortalTipIconButton({
   className?: string;
   onClick: () => void;
 }) {
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const show = (e: React.SyntheticEvent<HTMLElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    // Below the button, arrow pointing back up at it (the design's conv-info
-    // tooltip placement: bottom + 7, offset so the arrow lands on the anchor).
-    setPos({
-      top: Math.round(r.bottom + 7),
-      left: Math.round(r.left + r.width / 2 - 17),
-    });
-  };
-  const hide = () => setPos(null);
+  const { show, hide, tipNode } = usePortalTip(tip);
   return (
     <button
       type="button"
@@ -118,30 +136,21 @@ function PortalTipIconButton({
       onBlur={hide}
     >
       <Icon name={icon} className={iconClassName} />
-      {pos && typeof document !== "undefined"
-        ? createPortal(
-            <span
-              role="tooltip"
-              className="conv-tooltip"
-              style={{ top: pos.top, left: pos.left }}
-            >
-              {tip}
-            </span>,
-            document.body,
-          )
-        : null}
+      {tipNode}
     </button>
   );
 }
 
 function SealedNewChatButton({ onClick }: { onClick: () => void }) {
+  // Deliberately quiet — the same muted treatment as the retention ⚠ it sits
+  // next to in the Temporary heading; the tooltip carries the explanation.
   return (
     <PortalTipIconButton
       tip={SEALED_TOOLTIP_TEXT}
       ariaLabel="New sealed chat — sandboxed, vetted model, nothing leaves"
       icon="lock"
-      iconClassName="size-3.5"
-      className="ml-auto inline-flex size-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+      iconClassName="size-[0.9rem]"
+      className="hit-area inline-flex shrink-0 items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
       onClick={onClick}
     />
   );
@@ -321,6 +330,7 @@ function ProjectKebab({
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const close = () => setOpen(false);
+  const tip = usePortalTip("Options");
   return (
     <>
       <button
@@ -329,7 +339,14 @@ function ProjectKebab({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Project options for ${projectName}`}
-        title="Project options"
+        onMouseEnter={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onMouseLeave={tip.hide}
+        onFocus={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onBlur={tip.hide}
         className={[
           "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
           open
@@ -338,10 +355,12 @@ function ProjectKebab({
         ].join(" ")}
         onClick={(e) => {
           e.stopPropagation();
+          tip.hide();
           setOpen((o) => !o);
         }}
       >
         <Icon name="dots" className="size-[1.1rem]" />
+        {tip.tipNode}
       </button>
       <Menu
         open={open}
@@ -536,6 +555,7 @@ function ConversationKebab({
     setFlyout((cur) => (cur === which ? null : which));
   };
   const labels = conversation.labels ?? [];
+  const tip = usePortalTip("Options");
   const caret = (
     <span
       aria-hidden="true"
@@ -575,7 +595,14 @@ function ConversationKebab({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Conversation options for ${conversation.title}`}
-        title="Conversation options"
+        onMouseEnter={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onMouseLeave={tip.hide}
+        onFocus={(e) => {
+          if (!open) tip.show(e);
+        }}
+        onBlur={tip.hide}
         className={[
           // Fixed, centered, padded square (~1.8rem) per the handoff .conv-kebab —
           // a rounded hover highlight around the centered icon, not hugging it.
@@ -587,11 +614,13 @@ function ConversationKebab({
         ].join(" ")}
         onClick={(e) => {
           e.stopPropagation();
+          tip.hide();
           setFlyout(null);
           setOpen((o) => !o);
         }}
       >
         <Icon name="dots" className="size-[1.1rem]" />
+        {tip.tipNode}
       </button>
       <Menu
         open={open}
@@ -943,7 +972,7 @@ function SectionToggle({
       type="button"
       aria-expanded={open}
       onClick={onToggle}
-      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)] transition hover:text-[var(--color-text-primary)]"
+      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
     >
       <Icon
         name={icon}
@@ -1476,7 +1505,7 @@ export function ConversationSidebar({
                       <PortalTipIconButton
                         tip="Open project"
                         ariaLabel={`Open project ${project.name}`}
-                        icon="arrow-right"
+                        icon="external-link"
                         iconClassName="size-3.5"
                         className={[
                           "hit-area pointer-events-auto inline-flex size-[1.8rem] items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none",
@@ -1676,11 +1705,6 @@ export function ConversationSidebar({
             onToggle={() => setChatsSectionOpen((o) => !o)}
           />
         </div>
-        {serverConfig.lockdownAvailable && !serverConfig.lockdownOnly ? (
-          <SealedNewChatButton
-            onClick={() => clearConversation({ lockdown: true })}
-          />
-        ) : null}
         <PortalTipIconButton
           tip="New chat"
           ariaLabel="New chat"
@@ -1708,7 +1732,7 @@ export function ConversationSidebar({
         {railCollapsed ? (
           <button
             type="button"
-            className="hidden w-full items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:flex sm:size-10 sm:justify-center sm:p-0"
+            className="hidden w-full items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:flex sm:size-10 sm:justify-center sm:p-0"
             title="New chat"
             aria-label="New chat"
             data-tip="New chat"
@@ -1834,21 +1858,31 @@ export function ConversationSidebar({
             <>
               {pinned.length > 0 ? (
                 <div className="mb-1">
-                  <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
-                    Pinned
+                  <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
                     <Icon
                       name="pin"
-                      className="size-3.5 shrink-0 text-[var(--color-accent)]"
+                      className="size-3 shrink-0 text-[var(--color-accent)]"
                     />
+                    Pinned
                   </div>
                   {pinned.map(renderRow)}
                 </div>
               ) : null}
               {labelsSection}
               <div className="mb-1">
-                <div className="flex items-center gap-1.5 px-2 py-1.5 text-[0.8rem] font-semibold text-[var(--color-text-secondary)]">
+                <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                  <Icon
+                    name="clock"
+                    className="size-3 shrink-0 text-[var(--color-accent)]"
+                  />
                   Temporary
                   <RecentInfoButton />
+                  {serverConfig.lockdownAvailable &&
+                  !serverConfig.lockdownOnly ? (
+                    <SealedNewChatButton
+                      onClick={() => clearConversation({ lockdown: true })}
+                    />
+                  ) : null}
                 </div>
                 {recent.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">
@@ -1868,7 +1902,7 @@ export function ConversationSidebar({
                 type="button"
                 aria-expanded={showArchived}
                 aria-label={`Archived conversations (${archivedConversations.length})`}
-                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
+                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-secondary)]"
                 onClick={() => setShowArchived((v) => !v)}
               >
                 <Icon
@@ -1901,7 +1935,7 @@ export function ConversationSidebar({
                         <button
                           type="button"
                           aria-label={`Unarchive ${conversation.title}`}
-                          title="Unarchive"
+                          data-tip-top="Unarchive"
                           className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
                           onClick={() =>
                             void toggleArchive(conversation, false)
@@ -1926,7 +1960,8 @@ export function ConversationSidebar({
                         <button
                           type="button"
                           aria-label={`Delete ${conversation.title}`}
-                          className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] sm:size-7"
+                          data-tip-top="Delete"
+                          className="inline-flex size-10 items-center justify-center rounded-md text-[var(--color-text-muted)] transition motion-safe:hover:scale-110 hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] sm:size-7"
                           onClick={() =>
                             setPendingDeleteConversation({
                               id: conversation.id,
@@ -1992,7 +2027,7 @@ export function ConversationSidebar({
                 disabled={selectedIds.size === 0}
                 className={[
                   BULK_BTN_CLASS,
-                  "enabled:hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] enabled:hover:text-[var(--color-danger)]",
+                  "enabled:hover:bg-[var(--color-status-error-bg)] enabled:hover:text-[var(--color-status-error-fg)]",
                 ].join(" ")}
                 onClick={onBulkDelete}
               >

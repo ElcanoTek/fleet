@@ -12,6 +12,7 @@
 //	fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
 //	fleet update    [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run]
 //	fleet status    [--service <name>] [--no-sandbox]
+//	fleet doctor    [--check] [--no-restart] [--dry-run]
 //	fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
 //	fleet start|restart|stop [--service <name>]
 //	fleet logs      [--service <name>] [-n 50] [-f]   (a.k.a. tail)
@@ -35,11 +36,13 @@
 //	fleet restore  --db=chat|sched <dump-file>
 //	fleet import <bundle.json> [--dry-run] [--live-only]
 //
-// The operator lifecycle is bootstrap → update → status: bootstrap provisions a
-// box, update rolls a new version in place, status (a.k.a. doctor) reports
-// health. bootstrap + update are thin wrappers over scripts/bootstrap.sh +
-// scripts/update.sh; status runs in-process read-only checks. restart/stop/logs
-// are day-2 conveniences over the host systemd unit (systemctl/journalctl).
+// The operator lifecycle is bootstrap → update → status/doctor: bootstrap
+// provisions a box, update rolls a new version in place, status reports health
+// (quick, read-only, in-process), and doctor diagnoses AND repairs box-level
+// drift (wraps scripts/doctor.sh; needs root except --check/--dry-run).
+// bootstrap + update are thin wrappers over scripts/bootstrap.sh +
+// scripts/update.sh. restart/stop/logs are day-2 conveniences over the host
+// systemd unit (systemctl/journalctl).
 //
 // Passwords are NEVER taken on argv — pass `--password -` to read from stdin.
 // Email/username normalization, bcrypt.DefaultCost, and the 0-users
@@ -68,8 +71,13 @@ func Run(argv []string) int {
 		return cmdUpdate(argv[1:])
 	case "cleanup":
 		return cmdCleanup(argv[1:])
-	case "status", "doctor":
+	case "status":
 		return cmdStatus(argv[1:])
+	case "doctor":
+		// Formerly an alias for status; now the box-level diagnose-and-REPAIR
+		// pass (wraps scripts/doctor.sh — see cmdDoctor). `doctor --check`
+		// keeps the old read-only contract, just deeper than status.
+		return cmdDoctor(argv[1:])
 	case "diagnose":
 		return cmdDiagnose(argv[1:])
 	case "start":
@@ -132,13 +140,16 @@ Chat with the agent (TUI, #457):
   fleet chat --message "<text>" [--no-tui]            (one-shot: stream the reply to stdout; scriptable)
   fleet chat [--conversation <id>] [--model <slug>] [--email …] [--server …] [--token-file <path>]
 
-Operator lifecycle (bootstrap → update → status):
+Operator lifecycle (bootstrap → update → status/doctor):
   fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
   fleet update    [--check] [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--adopt-units] [--yes] [--dry-run]
                                                              (--check: read-only "N commits behind upstream", mutates nothing;
                                                               --adopt-units: adopt shipped systemd units that drifted, without the prompt)
   fleet cleanup   [--dry-run] [--deep]                 (reclaim build cruft: dangling podman layers + Go caches)
-  fleet status    [--service <name>] [--no-sandbox]    (a.k.a. doctor; non-zero exit if unhealthy)
+  fleet status    [--service <name>] [--no-sandbox]    (quick read-only health report; non-zero exit if unhealthy)
+  fleet doctor    [--check] [--no-restart] [--dry-run]  (deep box pass: diagnose AND repair drift — packages, rootless
+                                                             podman prereqs, unit drift, env files, services, sandbox smoke.
+                                                             Needs root; --check only diagnoses; --dry-run prints the checklist)
   fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
                                                              (redacted support bundle: status + config names + DB versions + sandbox image → .tar.gz)
   fleet start     [--service <name>]                   (systemctl start; needs root/sudo — distinct from "fleet serve", which runs the daemon in the foreground)

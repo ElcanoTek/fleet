@@ -17,7 +17,144 @@ prior versions are listed because none have shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **`fleet doctor` — box-level diagnose AND repair** (patterned on chat's
+  `chat doctor`; `docs/DOCTOR.md`): a root pass over every box prerequisite —
+  toolchain floors, fleet-critical package currency with broken-dnf-repo
+  quarantine, the service user's rootless-podman prerequisites (subuid/subgid,
+  dir ownership, containers.conf, stale pause namespaces), systemd unit drift
+  vs `deploy/`, env-file shape/permissions, service health + `/healthz` +
+  `/readyz`, and a sandbox smoke run **as the `fleet` user** — fixing what it
+  can in place. `--check` diagnoses only; `--no-restart`; `--dry-run` prints
+  the checklist. `doctor` is no longer a bare alias of `status` (the read-only
+  contract lives on as `doctor --check`). Admins get a read-only version in
+  **Settings → Admin → Doctor** (`GET /admin/doctor`, `internal/boxdoctor`):
+  DB pings, disk headroom, podman prerequisites, sandbox image, unit states —
+  each failing check annotated with the on-box repair command, plus an
+  explicit "Run deep checks" sandbox smoke.
+
+### Changed
+
+- **Icon-button hover polish across chat + orchestrator**: the sidebar's
+  green "New chat" hover treatment (colored pill background + tooltip +
+  subtle motion-safe scale) is now applied consistently. Add/create actions
+  hover green (sealed-chat lock — now the same size and brighter, collapsed-
+  rail new chat, orchestrator New task, queue send-now); destructive actions
+  hover red on the `--color-status-error-*` tokens (archived trash, bulk
+  delete, queue remove, dataset column remove); section chevron rows and the
+  log-modal close buttons gained missing hover feedback; and previously
+  unlabeled icon buttons (run feedback thumbs, column remove, week nav,
+  jump-to-latest) gained design tooltips.
+- **Sidebar polish follow-ups (owner review)**: the sealed-chat lock hovers
+  neutral instead of green (green stays reserved for the plain "+" adds), the
+  conversation and project kebab buttons show a real design tooltip on hover
+  instead of the browser-native title, and "Open project" uses the standard
+  open/external glyph instead of a bare arrow. Tooltips now shrink-wrap to
+  their text instead of always being 14rem wide.
+- **Sealed-chat lock moved next to the Temporary retention note**: it now
+  sits in the Temporary heading with the same muted quiet treatment as the
+  ⚠ beside it (sealed chats land in that list), instead of competing with
+  the green "+" in the Chats header.
+- **Pinned and Temporary read as groups, not chats**: both headers are now
+  small-caps eyebrow captions with a leading accent icon (pin / clock) — 
+  visually distinct from the chat rows beneath them, but one level below
+  the Projects/Chats/Labels section headers, matching their hierarchy.
+- **One close button everywhere**: every dialog/drawer dismiss "×" (keyboard
+  shortcuts — previously a tiny text glyph —, prompt library, save-prompt,
+  projects, memories, mobile nav drawer, task create/log/dataset modals) now
+  uses one shared CloseButton: same 2rem box, rounding, glyph, and a slight
+  red-tint hover. The orphaned `.modal-close` CSS was removed.
+
 ### Fixed
+
+- **Env-file writes now survive a read round-trip (#834)**: `SetEnvKey` wrote
+  values verbatim while both parsers (creds and the server's `loadEnvFile`)
+  strip whitespace, surrounding quotes, and ` #`-style inline comments — so a
+  secret containing any of those authenticated when saved and came back
+  mangled after the next restart. The writer now wraps such values in one
+  layer of quotes (which both parsers strip without touching the interior;
+  plain API keys stay byte-verbatim on disk), and refuses values containing
+  line breaks instead of physically corrupting the file.
+- **`turn.retry` events are now actually emitted (#833)**: journal recovery
+  and the web client both consumed the event (recovery drops the abandoned
+  pre-retry partial text; the client shows an inline "retrying" badge) but no
+  code ever produced it — so a crash after a mid-turn provider retry could
+  project a garbled mix of pre- and post-retry text into the recovered
+  history, and users never saw retries happen. The run loop now emits it
+  (RetryEventPayload shape) from fantasy's inner-retry backoff and from every
+  resilience re-drive (stream blip, fallback swap, compaction rollback).
+- **Chat submit guard reads now fail closed (#832)**: a store error during
+  the `input_id` idempotent-replay lookup fell through to start a fresh
+  billed turn for an input that may already have been accepted, and on the
+  queue path a `CountPendingInputs` error silently waived the
+  unattended-spend depth cap (with a lookup error at the cap masquerading as
+  a 429 "queue full"). All three reads now surface the error as a 500 so the
+  client can retry the same `input_id` safely.
+- **Shared MCP spawns no longer leak the literal `${FLEET_TASK_ID}`
+  placeholder to connectors (#831)**: only the scheduled per-run path called
+  `ExpandTaskIDEnv`, so boot-time shared spawns, hot-reload diffs,
+  `BindMCPSelection`, and `fleet mcp test` probes handed a bundle env value
+  mapping to the reserved token through as the raw string
+  `"${FLEET_TASK_ID}"`. All four paths now drop token-bearing keys (the
+  intended no-task-identity fail-safe); the scheduled path, which
+  pre-substitutes the real task ID, is unaffected.
+- **MCP HTTP clients no longer forward resolved credential headers across
+  cross-origin redirects (#830)**: inline HTTP tools and the HTTP MCP
+  transport (including the TLS-hardened variant) used Go's default redirect
+  policy, which only strips `Authorization`/`Cookie` — a 30x naming a
+  different host received every custom credential header (`X-Api-Key`,
+  vendor auth headers) verbatim. A shared `CheckRedirect` policy now follows
+  redirects but drops all originally-set headers when a hop leaves the
+  original host:port origin, mirroring the guarantee
+  `mcpoauth.SafeHTTPClient` already gave user-supplied remote servers.
+- **Chat web: a stale busy flag no longer turns a `mode:"queue"` submission
+  into an invisible billed turn (#824)**: the composer picks the queue path
+  from client-side streaming state, but the server only honors queueing while
+  a turn is actually running — if the turn finished in the race window, the
+  POST started a direct SSE turn that the client mistook for a queue ack:
+  no user bubble, no stream consumer, nothing in the queue until a page
+  refresh. The queue branch now classifies the response by `Content-Type`;
+  a `text/event-stream` answer cancels the unread body (the turn outlives
+  its originating request by design) and hands off to `reattachToConv`,
+  which attaches to the running turn's buffer and replays from event 0 —
+  the `user.message` echo renders the submission's bubble and tokens stream
+  normally.
+
+- **Crash recovery preserves steered user messages (#826)**: an interrupted
+  turn's recovery rebuilt assistant text, reasoning, and tool calls from the
+  event ledger but never projected steered `user.message` events — the
+  mid-turn instruction vanished from canonical history while recovery's
+  `history_committed_at` stamp made boot queue-recovery mark the steer's row
+  completed ("durably in history"). `buildRecoveredEntries` now projects
+  steered user messages in stream order, exactly once per `input_id` (a
+  resilience re-drive can re-emit the event; the turn-start non-steered
+  `user.message` stays excluded — it is committed separately at turn_seq=1).
+
+- **Injected steers are at-most-once, never re-executed after committed side
+  effects (#823)**: an injected steer whose turn ended without a history
+  commit was blindly re-queued and re-run as the next turn — but the model
+  may already have ACTED on it (its committed tool side effects survive the
+  failed turn per #820), so "send that email" could execute twice.
+  `MarkInputInjected` now stamps the turn journal's max seq as an injection
+  watermark (`injected_seq`, migration 044); turn-end settlement and boot
+  recovery re-queue the row only when no tool intent was journaled after the
+  watermark (the model provably never dispatched with the steer in context)
+  and otherwise cancel it with a logged reason — dropping a resendable
+  message instead of duplicating a side effect. Rows injected before the
+  migration degrade to the coarse gate (any tool intent blocks the requeue).
+
+- **Input-queue hardening (#785 follow-up)**: a per-conversation pending
+  depth cap (20, HTTP 429 above it; idempotent replays still answer 200) so a
+  retrying client can't bank unbounded unattended LLM turns; a transient
+  launch failure of a drained row now schedules a re-kick instead of leaving
+  the 202-acknowledged input stalled until the next submission; the Stop
+  scope=all epoch gate is strictly-before, so a fresh submission accepted in
+  the Stop's own second is no longer silently cancelled; an ambiguous-commit
+  replay (`ErrTurnHistoryCommitted`) now settles the turn's injected steer
+  rows instead of leaving them listed until the next reboot; queue
+  `message_preview` truncates on a rune boundary; stale stop epochs are
+  pruned; and turn-scoped queue lookups gained an index (migration 043).
 
 - **Committed tool side effects survive a mid-round provider failure in
   canonical history**: when ADR-0035 suppresses recovery after a tool ran,
@@ -113,6 +250,30 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **`fleet mcp test --deep` runs manifest-declared canary probes**
+  (`docs/MCP-TESTING.md`): a catalog server may declare `probe:` — ONE
+  read-only tool call (tool/args + optional `contains:` substring) the bundle
+  author vetted for side effects — and `--deep` executes it after the
+  auth-status checks, proving the upstream returns real data rather than just
+  accepting the credentials. Fails the run on a not-advertised tool, a call
+  error, an `isError` result, or a `contains:` mismatch; servers without a
+  probe are noted, never failed. Load-time validation rejects a blank
+  `probe.tool` or one outside the server's `tools:` allowlist. The runner
+  only ever calls declared probes — it never auto-discovers tools to call.
+- **Adoption view — exec per-user AI-usage audit** (`docs/USAGE-ANALYTICS.md`
+  part 3): a new admin-only **Adoption** tab in the Operations Center backed
+  by `GET /admin/usage/adoption` — per-user token/spend leaderboard with
+  daily sparklines, active-day counts and engagement tiers, previous-period
+  trend deltas, daily tokens/active-users trends, the provisioned-seat
+  roster with a "not yet active" list, and CSV export. Strictly a read model
+  over the existing metering (task_iterations ⋈ tasks + chat turn_metrics
+  via two new seams); leaderboard sorts token volume first because tokens
+  are the pricing-coverage-independent meter (#289), and the report carries
+  the caveat that token volume is an adoption signal, not a performance
+  grade. The Operations Center tabs now accept a `?tab=` deep link, and the
+  Settings → Admin → Users/Overview pages label their numbers as all-time
+  chat-only ("Chat spend") and cross-link to the windowed Usage/Adoption
+  views instead of appearing to duplicate them.
 - **Input queue + mid-turn steering** (#785, `docs/INPUT-QUEUE.md`): a
   submission during an active turn now QUEUES durably (stable ids, idempotent
   `input_id` replay, FIFO drain as separate turns) instead of implicitly

@@ -73,6 +73,26 @@ const nowMs = (): number => Date.now();
 const minimumThinkingMs = 250;
 const streamIdleTimeoutMs = 300000;
 
+// Classifies the /api/chat response to a mode:"queue" submission (#824).
+// The server only honors queueing while a turn is actually RUNNING; if our
+// busy flag was stale (the turn finished between our check and the server's),
+// the same POST starts a direct turn and the response is a live SSE stream,
+// not a JSON queue ack. Treating that as an ack leaves a billed turn running
+// with nobody reading it — no user bubble, no stream, nothing in the queue.
+//   "queued" — JSON ack (202 accepted, or 200 idempotent replay)
+//   "stream" — a live turn started on this response; hand off to the
+//              reattach path instead of ignoring the body
+//   "error"  — refused (429 queue full, 5xx, …); give the text back
+export function classifyQueueSubmitResponse(res: {
+  ok: boolean;
+  status: number;
+  headers: { get(name: string): string | null };
+}): "queued" | "stream" | "error" {
+  if (!res.ok && res.status !== 202) return "error";
+  const contentType = res.headers.get("content-type") ?? "";
+  return contentType.toLowerCase().includes("text/event-stream") ? "stream" : "queued";
+}
+
 // Server-trusted attachment metadata returned by POST /api/attachments and
 // forwarded in the /api/chat body. Local to the turn loop.
 type UploadedAttachmentMeta = {
@@ -1130,8 +1150,22 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             mode: "queue",
           }),
         });
-        if (!res.ok && res.status !== 202) {
+        const kind = classifyQueueSubmitResponse(res);
+        if (kind === "error") {
           setPromptForKey(composerKey, value); // give the text back
+          return;
+        }
+        if (kind === "stream") {
+          // Stale busy flag (#824): the turn we thought was running had
+          // already finished server-side, so the server ignored mode:"queue"
+          // and started a direct turn on THIS response. Nobody here is set
+          // up to consume it — hand off to reattachToConv, which attaches
+          // to the turn's buffer and replays from event 0 (the user.message
+          // echo renders this submission's bubble, then tokens stream
+          // normally). Cancelling this body is safe: the turn deliberately
+          // outlives its originating request (server.go startTurn).
+          void res.body?.cancel().catch(() => {});
+          await reattachToConv(convId);
           return;
         }
       } catch {

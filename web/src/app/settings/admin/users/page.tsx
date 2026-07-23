@@ -329,7 +329,18 @@ export default function AdminUsersPage() {
   const menuDirty = menu && menuAccount ? menu.role !== menuAccount.role || menu.team !== menuAccount.team_id : false;
 
   return (
-    <SetSection title="Users" intro="View usage and manage roles of everyone in the workspace.">
+    <SetSection
+      title="Users"
+      intro={
+        <>
+          View usage and manage roles of everyone in the workspace. Numbers here are all-time
+          interactive-chat activity per account; for windowed spend across chat + scheduled tasks
+          and the per-user adoption audit, open the{" "}
+          <a href="/orchestrator?tab=usage">Operations Center → Usage</a> and{" "}
+          <a href="/orchestrator?tab=adoption">Adoption</a> views.
+        </>
+      }
+    >
       {error ? (
         <NoticeBanner tone="danger">{error}</NoticeBanner>
       ) : (
@@ -342,7 +353,12 @@ export default function AdminUsersPage() {
                   <th className={TH_NUM}>Convs</th>
                   <th className={TH_NUM}>Pinned</th>
                   <th className={TH_NUM}>Turns</th>
-                  <th className={TH_NUM}>Spend</th>
+                  <th
+                    className={TH_NUM}
+                    title="All-time interactive chat spend for this account. Scheduled-task spend and windowed reporting live in Operations Center → Usage."
+                  >
+                    Chat spend
+                  </th>
                   <th className={`${TH} w-[2.4rem] text-right`} />
                 </tr>
               </thead>

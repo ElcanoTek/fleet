@@ -449,6 +449,108 @@ components:
         task_iterations: { type: integer }
         chat_turns: { type: integer }
       required: [key, cost_usd, prompt_tokens, completion_tokens, cached_tokens, task_cost_usd, chat_cost_usd, task_iterations, chat_turns]
+    AdoptionReport:
+      type: object
+      description: >-
+        The GET /admin/usage/adoption response: the per-user AI-adoption read
+        model behind the Operations Center's exec Adoption view. Aggregates
+        the same persisted metering as /admin/usage on (user, UTC day) at
+        once: per-user merged totals with a daily token series aligned to
+        `days`, equal-length previous-window comparators (`prev_from` marks
+        that window's start), a daily activity trend, and the
+        provisioned-account roster ("who hasn't adopted yet"). `sources`
+        lists the meters that contributed ("tasks" always; "chat" and
+        "accounts" when their seams are wired). `note` carries the
+        honest-scope caveats (pricing coverage #289; token volume is an
+        adoption signal, not a performance grade).
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        prev_from: { type: string, format: date-time }
+        days:
+          type: array
+          items: { type: string }
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/AdoptionUser" }
+        inactive_users:
+          type: array
+          items: { $ref: "#/components/schemas/AdoptionSeat" }
+        daily:
+          type: array
+          items: { $ref: "#/components/schemas/AdoptionDay" }
+        totals: { $ref: "#/components/schemas/AdoptionTotals" }
+        sources:
+          type: array
+          items: { type: string }
+        note: { type: string }
+      required: [from, to, prev_from, days, users, inactive_users, daily, totals, sources, note]
+    AdoptionUser:
+      type: object
+      description: >-
+        One user's adoption-report row: merged task+chat spend and activity
+        over the window, previous-window comparators, and `daily_tokens`
+        (prompt+completion per day, index-aligned to the report's `days`).
+        The empty `user` collects unattributed spend (deleted-user task rows)
+        — listed so no spend disappears, never counted as an active user.
+      properties:
+        user: { type: string }
+        cost_usd: { type: number }
+        task_cost_usd: { type: number }
+        chat_cost_usd: { type: number }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        cached_tokens: { type: integer }
+        task_iterations: { type: integer }
+        chat_turns: { type: integer }
+        active_days: { type: integer }
+        last_active: { type: string, description: "Latest active UTC day (YYYY-MM-DD); omitted when never active in the window." }
+        prev_cost_usd: { type: number }
+        prev_tokens: { type: integer }
+        daily_tokens:
+          type: array
+          items: { type: integer }
+      required: [user, cost_usd, task_cost_usd, chat_cost_usd, prompt_tokens, completion_tokens, cached_tokens, task_iterations, chat_turns, active_days, prev_cost_usd, prev_tokens, daily_tokens]
+    AdoptionSeat:
+      type: object
+      description: >-
+        One provisioned chat account in the adoption roster. Seats with no
+        metered activity in the window are listed under `inactive_users`.
+      properties:
+        email: { type: string }
+        created_at: { type: string, format: date-time }
+      required: [email, created_at]
+    AdoptionDay:
+      type: object
+      description: >-
+        One day of the adoption trend: merged cost, prompt+completion tokens,
+        work units (task iterations + chat turns), and distinct active users.
+      properties:
+        day: { type: string }
+        cost_usd: { type: number }
+        tokens: { type: integer }
+        actions: { type: integer }
+        active_users: { type: integer }
+      required: [day, cost_usd, tokens, actions, active_users]
+    AdoptionTotals:
+      type: object
+      description: >-
+        The adoption report's roll-up. `registered_users` is 0 when the
+        accounts roster isn't wired — check `sources` for "accounts" to tell
+        that apart from an empty roster.
+      properties:
+        active_users: { type: integer }
+        prev_active_users: { type: integer }
+        new_active_users: { type: integer }
+        registered_users: { type: integer }
+        cost_usd: { type: number }
+        prev_cost_usd: { type: number }
+        tokens: { type: integer }
+        prev_tokens: { type: integer }
+        cached_tokens: { type: integer }
+        chat_turns: { type: integer }
+        task_iterations: { type: integer }
+      required: [active_users, prev_active_users, new_active_users, registered_users, cost_usd, prev_cost_usd, tokens, prev_tokens, cached_tokens, chat_turns, task_iterations]
     BudgetCreate:
       type: object
       description: >-
@@ -1851,6 +1953,48 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/UsageReport" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+
+  /admin/usage/adoption:
+    get:
+      summary: Adoption analytics — per-user AI-adoption audit with daily series and trend deltas.
+      description: >-
+        The read model behind the Operations Center's exec Adoption view. Same
+        persisted metering as /admin/usage, aggregated by (user, UTC day) at
+        once: per-user merged totals with per-day token series (sparklines,
+        active days), an equal-length previous window for trend deltas, a
+        daily activity trend, and the provisioned-account roster so inactive
+        seats are listed explicitly. Admin-only with the /admin/usage posture:
+        registered for proxy reachability, gated in-handler on the admin
+        permission (#458). from/to default to the trailing 30 days (to is
+        exclusive; the window is clamped to 366 days). Dollar figures depend
+        on pricing configuration (#289) — token totals are complete
+        regardless, which is why the leaderboard reads token volume first.
+      security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      parameters:
+        - name: from
+          in: query
+          required: false
+          description: Window start (inclusive), RFC 3339 or YYYY-MM-DD. Default = to − 30 days.
+          schema: { type: string }
+        - name: to
+          in: query
+          required: false
+          description: Window end (exclusive), RFC 3339 or YYYY-MM-DD. Default = now.
+          schema: { type: string }
+        - name: format
+          in: query
+          required: false
+          description: json (default) or csv (the per-user leaderboard as an attachment).
+          schema: { type: string, enum: [json, csv], default: json }
+      responses:
+        "200":
+          description: The adoption report for the window.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdoptionReport" }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "500": { $ref: "#/components/responses/Error" }

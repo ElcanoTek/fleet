@@ -699,6 +699,11 @@ func run() error {
 	h.SetPromptCatalogProvider(bundle.Prompts)
 	// Wire the chat side of the usage report (#601 part 1) — see wireChatUsage.
 	h.SetChatUsageProvider(chatUsage)
+	// Wire the chat side of the adoption report (the exec Adoption view):
+	// per-user-per-day chat metering + the provisioned-account roster, both
+	// read-only aggregations over what the chat store already records.
+	h.SetChatUserDayUsageProvider(chatUserDayUsageProvider(chatStore))
+	h.SetChatAccountsProvider(chatAccountsProvider(chatStore))
 	// Budget gate for POST /tasks + /tasks/batch and the /admin/budgets CRUD
 	// surface (#601 part 2) — the SAME enforcer the chat schedule_task seam
 	// carries, so no create path can drift.
@@ -1277,6 +1282,11 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// so the Next proxy's header-trust/bearer path resolves a principal,
 		// with the admin gate enforced in-handler on PermissionAdmin.
 		r.Get("/admin/usage", h.GetUsageReport)
+		// Adoption analytics: the per-user AI-adoption read model behind the
+		// Operations Center's exec Adoption view (per-user daily series, trend
+		// deltas vs the previous window, and the seat roster). Same placement
+		// rationale and in-handler PermissionAdmin gate as /admin/usage.
+		r.Get("/admin/usage/adoption", h.GetAdoptionReport)
 		// Per-principal rolling budgets (#601 part 2): admin CRUD over the
 		// budget rows the shared create gate enforces. Same placement rationale
 		// as /admin/usage — AdminOrUserAuthMiddleware for proxy reachability,
@@ -2204,6 +2214,51 @@ func chatUsageProvider(chatStore *store.Store) handlers.ChatUsageProvider {
 	}
 }
 
+// chatUserDayUsageProvider adapts the chat store's per-user-per-day
+// turn_metrics roll-up into the sched-side shape for the adoption report —
+// the same one-seam pattern (and rationale) as chatUsageProvider above.
+func chatUserDayUsageProvider(chatStore *store.Store) handlers.ChatUserDayUsageProvider {
+	return func(ctx context.Context, from, to time.Time) ([]schedmodels.UserDayUsage, error) {
+		rows, err := chatStore.UsageByUserDay(ctx, from, to)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]schedmodels.UserDayUsage, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, schedmodels.UserDayUsage{
+				User:             r.User,
+				Day:              r.Day,
+				CostUSD:          r.CostUSD,
+				PromptTokens:     r.PromptTokens,
+				CompletionTokens: r.CompletionTokens,
+				CachedTokens:     r.CachedTokens,
+				Units:            r.Turns,
+			})
+		}
+		return out, nil
+	}
+}
+
+// chatAccountsProvider adapts the chat store's provisioned-user roster into
+// the adoption report's seat list — the denominator for the adoption rate and
+// the "not yet active" roster. Read-only; emails only, never credentials.
+func chatAccountsProvider(chatStore *store.Store) handlers.ChatAccountsProvider {
+	return func(ctx context.Context) ([]schedmodels.AdoptionSeat, error) {
+		users, err := chatStore.ListUsers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]schedmodels.AdoptionSeat, 0, len(users))
+		for _, u := range users {
+			out = append(out, schedmodels.AdoptionSeat{
+				Email:     u.Email,
+				CreatedAt: time.Unix(u.CreatedAt, 0).UTC(),
+			})
+		}
+		return out, nil
+	}
+}
+
 // remoteMCPCatalogProvider adapts the remotemcp Service into the orchestrator's
 // per-user remote-MCP catalog provider (#466): given the caller's email (the
 // orchestrator username for the elcano-auth tier; see ownerEmailResolver), it
@@ -2422,12 +2477,14 @@ func recoverStrandedTurns(chatStore *store.Store) {
 	}
 	// Input-queue recovery (#785) resolves rows claimed/injected by the dead
 	// process against the #798 durable record: durably-persisted ones complete,
-	// the rest return to 'queued' — visible and addressable, deliberately NOT
-	// auto-drained (a restart must not start unattended LLM spend).
-	requeued, completed, qerr := chatStore.RecoverInputQueue(recCtx)
+	// injected steers whose turn dispatched tools after the injection cancel
+	// (#823: re-running could duplicate side effects), the rest return to
+	// 'queued' — visible and addressable, deliberately NOT auto-drained (a
+	// restart must not start unattended LLM spend).
+	requeued, completed, cancelled, qerr := chatStore.RecoverInputQueue(recCtx)
 	if qerr != nil {
 		log.Printf("input-queue recovery: %v", qerr)
-	} else if requeued+completed > 0 {
-		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed", requeued, completed) //nolint:gosec // G706: two int counts — no request input.
+	} else if requeued+completed+cancelled > 0 {
+		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed, %d cancelled (post-injection side effects; not re-run)", requeued, completed, cancelled) //nolint:gosec // G706: three int counts — no request input.
 	}
 }

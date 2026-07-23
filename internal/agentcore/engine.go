@@ -559,7 +559,16 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		ProviderOptions: r.engine.providerOptions(modelSlug),
 		MaxRetries:      &maxRetries,
 		StopWhen:        stepStopConditions(r.engine.maxIterations),
-		OnRetry:         r.engine.onRetry,
+		// Fantasy's inner backoff-and-retry, surfaced two ways: turn.retry to
+		// the Observer (the web client's inline "retrying" badge; journal
+		// recovery resets accumulated text on it) and the engine's session-log
+		// mirror (newRetryLogger).
+		OnRetry: func(providerErr *fantasy.ProviderError, delay time.Duration) {
+			emitTurnRetry(sink, providerErr, delay)
+			if cb := r.engine.onRetry; cb != nil {
+				cb(providerErr, delay)
+			}
+		},
 		OnTextDelta: func(_, text string) error {
 			markFirst()
 			if sink != nil {

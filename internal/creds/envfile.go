@@ -18,16 +18,28 @@ import (
 // SetEnvKey upserts key=value in the env file at path, creating the file (0600)
 // if it does not exist. An existing key's line is replaced in place; a new key
 // is appended. Comments and unrelated lines are preserved.
+//
+// The value is encoded so the shared parser (splitEnvKeyValue here,
+// config.loadEnvFile on the server) reads back the exact bytes given: values
+// the parser would mangle (surrounding quotes, leading/trailing whitespace,
+// an inline ` #` sequence) are wrapped in one layer of quotes, which the
+// parser strips without touching the interior. A value containing a line
+// break is refused — a line-oriented KEY=VALUE file cannot represent it, and
+// writing it raw would corrupt the file (#834).
 func SetEnvKey(path, key, value string) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return fmt.Errorf("empty key")
 	}
+	encoded, err := encodeEnvValue(value)
+	if err != nil {
+		return fmt.Errorf("key %s: %w", key, err)
+	}
 	lines, err := readEnvLines(path)
 	if err != nil {
 		return err
 	}
-	newLine := key + "=" + value
+	newLine := key + "=" + encoded
 	replaced := false
 	for i, ln := range lines {
 		if k, ok := splitEnvLine(ln); ok && k == key {
@@ -220,6 +232,27 @@ func stripEnvInlineComment(value string) string {
 		return strings.TrimSpace(value[:i])
 	}
 	return value
+}
+
+// encodeEnvValue returns the on-disk form of value such that splitEnvKeyValue
+// (and the server's identical parser) yields the original bytes.
+//
+// Most values (API keys: letters/digits/dashes) are written verbatim. A value
+// the parser would mangle — literal surrounding quotes, leading/trailing
+// whitespace, a ` #`/tab-`#` inline-comment sequence — is wrapped in a single
+// layer of single quotes: both parsers strip exactly one surrounding pair
+// without interpreting the interior, so the wrap round-trips ANY value that
+// fits on one line (interior quotes, `#`, spaces included). Line breaks are
+// unrepresentable in a line-oriented file and are refused rather than
+// written as file-corrupting physical breaks.
+func encodeEnvValue(value string) (string, error) {
+	if strings.ContainsAny(value, "\n\r") {
+		return "", fmt.Errorf("value contains a line break, which a KEY=VALUE env file cannot represent")
+	}
+	if _, parsed, ok := splitEnvKeyValue("K=" + value); ok && parsed == value {
+		return value, nil
+	}
+	return "'" + value + "'", nil
 }
 
 // stripEnvQuotes removes a single layer of matching surrounding quotes.

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Icon } from "@/app/shared/ui/Icon";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 
 // Projects / Spaces modal (#509): create/edit shared team workspaces — the
 // binding object for standing instructions, curated connectors, default
@@ -196,9 +196,7 @@ export function ProjectsModal({
               Shared workspaces: standing instructions, shared memory, and defaults every chat in the project inherits.
             </p>
           </div>
-          <button type="button" aria-label="Close projects" className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]" onClick={onClose}>
-            <Icon name="close" className="size-4" />
-          </button>
+          <CloseButton label="Close projects" onClick={onClose} />
         </div>
 
         {error ? (

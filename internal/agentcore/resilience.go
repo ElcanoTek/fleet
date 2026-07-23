@@ -347,7 +347,7 @@ func newRetryLogger(session *LogSession) fantasy.OnRetryCallback {
 		}
 		rounded := delay.Round(10 * time.Millisecond)
 		log.Printf("🔁 LLM retry: status=%d (%s) delay=%s msg=%q",
-			status, title, rounded, summarizeForConsole(err.Message, 200))
+			status, title, rounded, summarizeForConsole(err.Message))
 		if session == nil {
 			return
 		}
@@ -368,7 +368,7 @@ func (e *engine) logStreamBlipRetry(providerErr *fantasy.ProviderError) {
 	body := ""
 	if providerErr != nil {
 		status = providerErr.StatusCode
-		body = summarizeForConsole(providerErr.Message, 200)
+		body = summarizeForConsole(providerErr.Message)
 	}
 	msgType := messageTypeSystemRetry
 	note := fmt.Sprintf("[stream-blip-retry] status=%d delay=%s msg=%q",
@@ -386,7 +386,7 @@ func (e *engine) logFallbackSwap(reason streamErrorClass, providerErr *fantasy.P
 	body := ""
 	if providerErr != nil {
 		status = providerErr.StatusCode
-		body = summarizeForConsole(providerErr.Message, 200)
+		body = summarizeForConsole(providerErr.Message)
 	}
 	log.Printf("⚠️  Primary model failed (%s, status=%d); swapping to fallback %s",
 		reason, status, e.fallbackModel.Model())
@@ -429,6 +429,30 @@ func emitProviderFailover(sink *streamSink, from, to fantasy.LanguageModel, reas
 		"reason":        reason.String(),
 		"status":        providerErrStatus(providerErr),
 	})
+}
+
+// emitTurnRetry streams the non-terminal "retrying" signal (#833). Consumers
+// existed before any producer did: the web client renders an inline badge
+// (RetryEventPayload — status_code/title/message/delay_ms), and journal
+// recovery (store.buildRecoveredEntries) resets accumulated text on it so a
+// rolled-back attempt's discarded partial output is not projected into the
+// recovered history. Emitted from fantasy's inner-retry backoff (engine.go
+// stream OnRetry) and from every rollbackAttempt re-drive.
+func emitTurnRetry(sink *streamSink, providerErr *fantasy.ProviderError, delay time.Duration) {
+	if sink == nil {
+		return
+	}
+	payload := map[string]any{"delay_ms": delay.Milliseconds()}
+	if providerErr != nil {
+		title := providerErr.Title
+		if title == "" {
+			title = fantasy.ErrorTitleForStatusCode(providerErr.StatusCode)
+		}
+		payload["status_code"] = providerErr.StatusCode
+		payload["title"] = title
+		payload["message"] = summarizeForConsole(providerErr.Message)
+	}
+	sink.emit("turn.retry", payload)
 }
 
 func fleetProviderName(model fantasy.LanguageModel) string {
@@ -564,6 +588,10 @@ func (e *engine) streamRoundWithResilience(
 		// assistant message so the regeneration replaces — not duplicates — the
 		// abandoned partial output.
 		rollbackAttempt := func() {
+			// The rollback only unwinds the in-memory sink; deltas already
+			// journaled/streamed can't be unsent, so mark the discard point for
+			// journal recovery and the live client (#833).
+			emitTurnRetry(sink, providerErr, 0)
 			sink.rollbackTo(attemptMark)
 			messages = dropTrailingAssistant(messages)
 		}

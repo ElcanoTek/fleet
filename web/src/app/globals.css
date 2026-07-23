@@ -588,6 +588,14 @@
   transition-delay: 350ms;
 }
 
+/* Destructive-action hover for .btn-styled icon buttons: the red mirror of
+   the add buttons' --color-status-success-* treatment. */
+.btn-danger-hover:hover:not(:disabled) {
+  background: var(--color-status-error-bg);
+  border-color: var(--color-status-error-border);
+  color: var(--color-status-error-fg);
+}
+
 /* The rail search stays type="search" (its searchbox role keeps the composer
    as the page's first textbox — a contract the e2e suite drives), but the
    native WebKit clear affordance yields to the design's custom clear button. */
@@ -623,7 +631,10 @@
 .conv-tooltip {
   position: fixed;
   z-index: 400;
-  width: 14rem;
+  /* Shrink-wrap short tips ("New chat"); 14rem is the wrap width for long
+     copy like the sealed-chat explainer. */
+  width: max-content;
+  max-width: 14rem;
   padding: 0.55rem 0.65rem;
   font-size: 0.75rem;
   font-weight: 400;
@@ -2026,6 +2037,82 @@ tr.sla-row-fail {
   }
 }
 
+/* Adoption panel (exec AI-adoption audit): reuses the usage tokens/marks
+   (--usage-bar, tiles, grids) and adds trend deltas, engagement tiers, the
+   per-user sparkline, and the inactive-seat roster. */
+.adoption-trends {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0 1.25rem;
+  margin-bottom: 1rem;
+}
+.adoption-trend-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.adoption-spark {
+  width: 110px;
+  height: 20px;
+  display: block;
+}
+/* Delta chips pair an arrow glyph with the color, so direction is never
+   color-alone; "new" (no previous-window baseline) wears the accent. */
+.adoption-delta {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.adoption-delta-up {
+  color: var(--color-success-strong);
+}
+.adoption-delta-down {
+  color: var(--color-danger-strong);
+}
+.adoption-delta-new {
+  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.66rem;
+}
+/* Engagement tiers are habit labels, not statuses — text carries the meaning,
+   the fill only weights it (heavier = more engaged). */
+.adoption-tier {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+.adoption-tier-power {
+  background: color-mix(in srgb, var(--usage-bar) 22%, transparent);
+  border-color: color-mix(in srgb, var(--usage-bar) 45%, transparent);
+  color: var(--color-text-primary);
+}
+.adoption-tier-regular {
+  background: color-mix(in srgb, var(--usage-bar) 10%, transparent);
+}
+.adoption-seats {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.75rem;
+  padding: 0;
+}
+.adoption-seat {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  background: var(--color-surface-2);
+}
+
 /* Upcoming runs timeline (Scheduler UX 2.0, #504): a day-grouped list of the
    next scheduled executions. Each row is time · task · schedule-kind. */
 .upcoming-day-group {
@@ -2628,27 +2715,6 @@ tr.sla-row-fail {
 .modal-header h3 {
   margin: 0;
   color: var(--color-text-primary);
-}
-.modal-close {
-  /* A sized, centered box (~2rem effective target) — the bare × glyph alone
-     was a <20px target. The negative margins keep the glyph's optical
-     position in the header unchanged. */
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  margin: -0.5rem -0.6rem -0.5rem 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  border: none;
-  color: var(--color-text-muted);
-  font-size: 1.25rem;
-  cursor: pointer;
-}
-.modal-close:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 .modal-body {
   padding: 1.25rem;
@@ -4020,16 +4086,6 @@ select.mcp-server-picker__account-select {
 .task-modal .modal-subtitle {
   margin-top: 0.19rem;
   font-size: 0.78rem;
-}
-.task-modal .modal-close {
-  width: 1.75rem;
-  height: 1.75rem;
-  margin: 0;
-  border-radius: 0.5rem;
-}
-.task-modal .modal-close:hover {
-  background: var(--color-overlay-soft);
-  color: var(--color-text-primary);
 }
 .task-modal .modal-body {
   padding: 1.25rem 1.25rem 1.5rem;

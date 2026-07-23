@@ -44,6 +44,7 @@ import {
   type Message,
 } from "./history";
 import { PENDING_CONV_KEY } from "./workspaceHref";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { Icon } from "./Icon";
 import { QueuedInputs } from "./QueuedInputs";
 import { ProjectsModal, type Project } from "./ProjectsModal";
@@ -3730,14 +3731,10 @@ export function ChatExperience({
                     are added to future chats.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  aria-label="Close memories"
-                  className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                <CloseButton
+                  label="Close memories"
                   onClick={() => setMemoryManagerOpen(false)}
-                >
-                  <Icon name="close" className="size-4" />
-                </button>
+                />
               </div>
 
               {/* Knowledge-graph tab (#523): a compact derived view over the
@@ -4345,6 +4342,7 @@ export function ChatExperience({
                 <div className="pointer-events-none absolute -top-12 right-3 z-20 flex justify-end sm:-top-14 sm:right-6 lg:right-8">
                   <button
                     aria-label="Jump to latest"
+          data-tip-top="Jump to latest"
                     className="pointer-events-auto inline-flex size-11 items-center justify-center rounded-full border border-[var(--color-border-strong)] bg-[var(--gradient-surface-elevated)] text-[var(--color-text-primary)] shadow-[var(--shadow-md)] backdrop-blur transition hover:border-[var(--color-accent)] hover:text-[var(--color-white)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                     type="button"
                     onClick={jumpToLatest}

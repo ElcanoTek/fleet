@@ -8,6 +8,7 @@ import { validateTaskForm, validateCronExpression, describeEmailError } from "@/
 import { isValidEmail } from "@/app/shared/lib/format";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { ModelPicker } from "@/app/shared/ui/ModelPicker";
@@ -986,25 +987,7 @@ export function TaskCreateModal({
                 : "Define what runs, when it runs, and what it may touch."}
             </p>
           </div>
-          <button
-            type="button"
-            className="icon-action modal-close"
-            aria-label="Close modal"
-            onClick={requestClose}
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
+          <CloseButton label="Close modal" onClick={requestClose} />
         </div>
 
         <div

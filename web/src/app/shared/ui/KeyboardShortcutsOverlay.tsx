@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isMacPlatform } from "@/app/shared/hooks/useKeyboardShortcuts";
+import { CloseButton } from "./CloseButton";
 
 // KeyboardShortcutsOverlay — the discoverable "?" help modal (#306). It lists
 // every keyboard shortcut the shell binds, grouped by area, with platform-aware
@@ -118,15 +119,11 @@ export function KeyboardShortcutsOverlay({
           <h2 className="text-[0.95rem] font-semibold text-[var(--color-text-primary)]">
             Keyboard shortcuts
           </h2>
-          <button
-            type="button"
-            aria-label="Close keyboard shortcuts"
-            data-testid="shortcuts-close"
-            className="hit-area inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          <CloseButton
+            label="Close keyboard shortcuts"
+            testId="shortcuts-close"
             onClick={onClose}
-          >
-            <span aria-hidden="true">×</span>
-          </button>
+          />
         </div>
         <input
           ref={inputRef}

@@ -28,6 +28,56 @@ type UsageRow struct {
 	Turns            int64
 }
 
+// UserDayUsage is one per-user-per-day aggregation row for the adoption
+// report's chat side: the same meters as UsageRow, but on both the user and
+// UTC-day dimensions at once (per-user daily series can't be expressed by the
+// one-dimensional UsageSummary grouping). Turns counts completed turns that
+// day, cancelled included.
+type UserDayUsage struct {
+	User             string
+	Day              string // YYYY-MM-DD, UTC
+	CostUSD          float64
+	PromptTokens     int64
+	CompletionTokens int64
+	CachedTokens     int64
+	Turns            int64
+}
+
+// UsageByUserDay aggregates turn_metrics over [from, to) grouped by
+// (user_email, UTC day of completed_at). No conversation join: every
+// dimension lives on the metric row itself, so spend attribution here
+// survives conversation deletion with nothing degrading to an empty key.
+func (s *Store) UsageByUserDay(ctx context.Context, from, to time.Time) ([]UserDayUsage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			m.user_email,
+			`+chatUsageGroupExpr["day"]+` AS bucket_day,
+			COALESCE(SUM(m.cost_usd), 0),
+			COALESCE(SUM(m.prompt_tokens), 0),
+			COALESCE(SUM(m.completion_tokens), 0),
+			COALESCE(SUM(m.cached_tokens), 0),
+			COUNT(*)
+		FROM turn_metrics m
+		WHERE m.completed_at >= $1 AND m.completed_at < $2
+		GROUP BY 1, 2
+		ORDER BY 1, 2`,
+		from.UTC().Unix(), to.UTC().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []UserDayUsage
+	for rows.Next() {
+		var r UserDayUsage
+		if err := rows.Scan(&r.User, &r.Day, &r.CostUSD, &r.PromptTokens, &r.CompletionTokens, &r.CachedTokens, &r.Turns); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // chatUsageGroupExpr maps a validated group_by value to its SQL grouping
 // expression. Fixed map = injection guard: unknown group_by errors instead of
 // interpolating caller input. conversations/projects are LEFT-joined so a

@@ -7,6 +7,7 @@ import {
   type DatasetColumn,
   type DatasetRow,
 } from "@/app/shared/lib/orchestratorApi";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
 
 // Dataset / table agent (#514): define a typed table + per-row goal, import
@@ -356,9 +357,7 @@ function DatasetCreateModal({
       <div className="modal dataset-modal">
         <div className="modal-header">
           <h3>New dataset</h3>
-          <button type="button" className="btn" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
+          <CloseButton label="Close" onClick={onClose} />
         </div>
         <div className="modal-body" style={{ display: "grid", gap: "0.75rem" }}>
           <label>
@@ -413,7 +412,7 @@ function DatasetCreateModal({
                   onChange={(e) => setCol(i, { description: e.target.value })}
                   placeholder="description (guides the agent)"
                 />
-                <button type="button" className="btn btn-small" onClick={() => setColumns((prev) => prev.filter((_, j) => j !== i))}>
+                <button type="button" className="btn btn-small btn-danger-hover" aria-label="Remove column" data-tip-top="Remove column" onClick={() => setColumns((prev) => prev.filter((_, j) => j !== i))}>
                   ✕
                 </button>
               </div>

@@ -71,6 +71,11 @@ func setupTest(t *testing.T) (*Handlers, *storage.Storage) {
 		}
 		t.Fatalf("Failed to init storage: %v", err)
 	}
+	// Close the pool when the test ends: without this every setupTest caller
+	// leaks a full connection pool for the life of the package binary, and the
+	// package creeps toward the Postgres max_connections ceiling ("sorry, too
+	// many clients already") as tests are added.
+	t.Cleanup(func() { store.Close() })
 
 	// Acquire global test lock to prevent interference from other parallel packages
 	acquireTestLock(t, store)

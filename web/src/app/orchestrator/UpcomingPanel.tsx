@@ -162,6 +162,7 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
           type="button"
           className="btn btn-secondary btn-small"
           aria-label="Previous week"
+          data-tip-top="Previous week"
           data-testid="week-prev"
           disabled={weekOffset === 0}
           onClick={() => setWeekOffset((w) => Math.max(0, w - 1))}
@@ -175,6 +176,7 @@ function UpcomingWeek({ runs }: { runs: UpcomingRun[] }) {
           type="button"
           className="btn btn-secondary btn-small"
           aria-label="Next week"
+          data-tip-top="Next week"
           data-testid="week-next"
           onClick={() => setWeekOffset((w) => w + 1)}
         >

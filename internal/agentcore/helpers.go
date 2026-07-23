@@ -189,17 +189,16 @@ func summarizeForLog(text string, maxLen int) string {
 		text[:headLen], omitted, text[len(text)-tailLen:])
 }
 
-// summarizeForConsole clamps text to a single-line preview for log.Printf.
-func summarizeForConsole(text string, maxLen int) string {
+// summarizeForConsole clamps text to a single-line preview (200 bytes) for
+// log.Printf and event payloads.
+func summarizeForConsole(text string) string {
+	const maxLen = 200
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "<empty>"
 	}
-	if maxLen <= 0 || len(text) <= maxLen {
+	if len(text) <= maxLen {
 		return text
-	}
-	if maxLen < 32 {
-		maxLen = 32
 	}
 	return text[:maxLen-3] + "..."
 }

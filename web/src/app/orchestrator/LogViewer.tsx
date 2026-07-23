@@ -19,6 +19,7 @@ import type {
 } from "@/app/shared/lib/orchestratorApi";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { formatTimeFirst, stripAnsiCodes } from "@/app/shared/lib/format";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { useToast } from "@/app/shared/ui/Toast";
 import { createdByLabel, scheduleLabel, TaskSlaBadge } from "./taskDisplay";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
@@ -645,14 +646,7 @@ function LiveTaskView({
                 {stopping ? "Stopping…" : "Stop run"}
               </button>
             ) : null}
-            <button
-              type="button"
-              className="icon-action modal-close"
-              aria-label="Close modal"
-              onClick={onClose}
-            >
-              ×
-            </button>
+            <CloseButton label="Close modal" onClick={onClose} />
           </div>
         </div>
         <TaskSummary task={task} />
@@ -845,14 +839,7 @@ function LogViewerBody({
             Task: {(task.prompt ?? "").trim().slice(0, 90) || task.id.slice(0, 8)}
             {(task.prompt ?? "").trim().length > 90 ? "…" : ""}
           </h3>
-          <button
-            type="button"
-            className="icon-action modal-close"
-            aria-label="Close modal"
-            onClick={onClose}
-          >
-            ×
-          </button>
+          <CloseButton label="Close modal" onClick={onClose} />
         </div>
         <TaskSummary task={task} />
         {task.expected_duration_minutes ? <SLADetail task={task} /> : null}
@@ -1264,6 +1251,8 @@ function SelfImprovePanel({
         <button
           type="button"
           className="btn btn-small"
+          aria-label="Mark run as helpful"
+          data-tip-top="Helpful"
           disabled={busy}
           onClick={() => void feedback("up")}
         >
@@ -1272,6 +1261,8 @@ function SelfImprovePanel({
         <button
           type="button"
           className="btn btn-small"
+          aria-label="Mark run as not helpful"
+          data-tip-top="Not helpful"
           disabled={busy}
           onClick={() => void feedback("down")}
         >
