@@ -1616,6 +1616,26 @@ servers:
       here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
+  - name: google-docs
+    display_name: Google Docs (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for Docs -- read and edit
+      document content. Requires a Google Cloud project with an
+      OAuth client.
+    url: "https://docsmcp.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    category: productivity
+    tags: [documents, google-workspace, preview, oauth]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable
+      the product's API + MCP service, configure the OAuth consent screen,
+      and create an OAuth client — then paste its client ID and secret
+      here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
   - name: google-drive
     display_name: Google Drive (Workspace MCP)
     description: >-
@@ -1654,6 +1674,46 @@ servers:
       Requires your own Google Cloud project (Developer Preview): enable the
       People API + MCP service, configure the OAuth consent screen, and
       create an OAuth client -- then paste its client ID and secret here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
+  - name: google-sheets
+    display_name: Google Sheets (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for Sheets -- read cell
+      values, update cells and formulas, insert rows and columns. Requires a Google Cloud project with an
+      OAuth client.
+    url: "https://sheetsmcp.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    category: productivity
+    tags: [spreadsheets, google-workspace, preview, oauth]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable
+      the product's API + MCP service, configure the OAuth consent screen,
+      and create an OAuth client — then paste its client ID and secret
+      here.
+    setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    client_registration: manual
+  - name: google-slides
+    display_name: Google Slides (Workspace MCP)
+    description: >-
+      Google's Developer Preview hosted MCP server for Slides -- read and
+      edit presentations. Requires a Google Cloud project with an
+      OAuth client.
+    url: "https://slidesmcp.googleapis.com/mcp/v1"
+    vendor: Google LLC
+    docs_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
+    category: productivity
+    tags: [presentations, google-workspace, preview, oauth]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Requires your own Google Cloud project (Developer Preview): enable
+      the product's API + MCP service, configure the OAuth consent screen,
+      and create an OAuth client — then paste its client ID and secret
+      here.
     setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers"
     client_registration: manual
   - name: google-workspace-self-hosted
@@ -1873,6 +1933,18 @@ servers:
     docs_url: "https://help.ticktick.com/articles/7438129581631995904"
     category: productivity
     tags: [tasks, todo, habits, calendar]
+    provenance: official
+    auth: oauth
+  - name: trello
+    display_name: Trello
+    description: >-
+      Atlassian's official hosted MCP server for Trello -- manage boards,
+      lists, cards, and checklists in the workspace you authorize.
+    url: "https://mcp.trello.com/v1"
+    vendor: Atlassian Pty Ltd
+    docs_url: "https://support.atlassian.com/trello/docs/connect-trello-to-ai-assistants-with-trello-mcp/"
+    category: productivity
+    tags: [kanban, boards, tasks, project-management]
     provenance: official
     auth: oauth
   - name: todoist
@@ -3026,6 +3098,25 @@ servers:
     tags: [trading, brokerage, portfolio, market-data, india]
     provenance: official
     auth: oauth
+  - name: xero
+    display_name: Xero
+    description: >-
+      Official hosted MCP server for Xero accounting -- invoices, contacts,
+      bank transactions, and reports in the organisation you authorize.
+    url: "https://mcp.xero.com/mcp"
+    vendor: Xero Limited
+    docs_url: "https://developer.xero.com/documentation/tools-and-resources/mcp-server"
+    category: finance
+    tags: [accounting, invoices, bookkeeping]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      Xero's OAuth server does not support automatic client registration:
+      create an app at developer.xero.com with the callback URL shown in
+      your Fleet instance's OAuth settings, then paste its client ID and
+      secret here.
+    setup_url: "https://developer.xero.com/documentation/tools-and-resources/mcp-server"
+    client_registration: manual
   - name: zerodha-kite
     display_name: Zerodha Kite
     description: >-
