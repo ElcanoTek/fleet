@@ -450,10 +450,7 @@ function DirectoryCard({
         ) : null}
       </div>
       {remoteEnabled && needsForm && formOpen && !added ? (
-        <div
-          data-testid={`dir-form-${entry.name}`}
-          className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5"
-        >
+        <FormShell entry={entry} modal={manualClient} onClose={() => setFormOpen(false)}>
           {placeholders.map((ph) => (
             <label key={ph} className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
               <span className="font-medium">Your {placeholderLabel(ph)}</span>
@@ -507,7 +504,16 @@ function DirectoryCard({
               </label>
             </>
           ) : null}
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            {manualClient ? (
+              <button
+                type="button"
+                onClick={() => setFormOpen(false)}
+                className={btnClass({ reveal: true })}
+              >
+                Cancel
+              </button>
+            ) : null}
             <button
               type="button"
               data-testid={`dir-form-add-${entry.name}`}
@@ -518,8 +524,71 @@ function DirectoryCard({
               Add
             </button>
           </div>
-        </div>
+        </FormShell>
       ) : null}
+    </div>
+  );
+}
+
+// FormShell hosts a directory card's guided add form either inline (the card
+// grows downward — placeholders, API keys) or, for manual OAuth client
+// registration, as a dialog overlay: those forms carry a setup detour (create
+// an OAuth app elsewhere, come back with ID + secret) and deserve the focus
+// of a modal rather than stretching the card.
+function FormShell({
+  entry,
+  modal,
+  onClose,
+  children,
+}: {
+  entry: CatalogThirdParty;
+  modal: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const body = (
+    <div
+      data-testid={`dir-form-${entry.name}`}
+      className="grid gap-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5"
+    >
+      {children}
+    </div>
+  );
+  if (!modal) return body;
+  const guide = setupLink(entry);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Set up ${entry.display_name}`}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-strong)] px-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="mb-2 text-[0.9375rem] font-semibold">Set up {entry.display_name}</h3>
+        {entry.setup_hint ? (
+          <p className="mb-3 text-[0.8125rem] text-[var(--color-text-secondary)]">
+            {entry.setup_hint}
+            {guide ? (
+              <>
+                {" "}
+                <a
+                  href={guide}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-2"
+                >
+                  Setup guide
+                </a>
+              </>
+            ) : null}
+          </p>
+        ) : null}
+        {body}
+      </div>
     </div>
   );
 }
@@ -719,7 +788,7 @@ function ConnectionsPageInner() {
           authTab.location.href = data.redirect_url;
           awaitingAuthReturn.current = true;
           setBusy(false);
-          setNotice("Sign in from the new tab — this page updates when you return.");
+          setNotice("Finish signing in — this page updates when you return.");
         } else {
           window.location.href = data.redirect_url;
         }
@@ -1526,8 +1595,8 @@ function ConnectionsPageInner() {
               {connectPromptFor.name} added — sign in now?
             </h3>
             <p className="mb-4 text-[0.8125rem] text-[var(--color-text-secondary)]">
-              One step left: sign in so its tools become available to you. The login opens in a
-              new tab; you can also do it later from the Connect button under Your connections.
+              One step left: sign in so its tools become available to you. You can also do it
+              later from the Connect button under Your connections.
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -1547,7 +1616,7 @@ function ConnectionsPageInner() {
                 disabled={busy}
                 className={btnClass({ variant: "primary" })}
               >
-                Sign in (new tab)
+                Sign in
               </button>
             </div>
           </div>
