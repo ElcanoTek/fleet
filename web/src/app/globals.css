@@ -4307,13 +4307,16 @@ select.mcp-server-picker__account-select {
 /* Toasts */
 .toast-container {
   position: fixed;
-  bottom: 1rem;
+  top: 1rem;
   right: 1rem;
   display: grid;
   gap: 0.5rem;
+  justify-items: end;
   z-index: 2000;
 }
 .toast {
+  max-width: min(24rem, calc(100vw - 2rem));
+  overflow-wrap: anywhere;
   padding: 0.6rem 0.9rem;
   border-radius: 0.5rem;
   background: var(--color-surface-2, #2f2741);
