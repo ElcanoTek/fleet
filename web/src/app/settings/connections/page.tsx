@@ -53,6 +53,7 @@ import {
 } from "../ui/panels";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -524,6 +525,14 @@ function DirectoryCard({
 }
 
 export default function ConnectionsPage() {
+  return (
+    <ToastProvider>
+      <ConnectionsPageInner />
+    </ToastProvider>
+  );
+}
+
+function ConnectionsPageInner() {
   const [initialBanner] = useState(readCallbackBanner);
   // Admin visibility only (authorization stays server-side): picks which
   // "remote MCP isn't configured" explanation to show.
@@ -557,6 +566,15 @@ export default function ConnectionsPage() {
   } | null>(null);
   const [error, setError] = useState<string | null>(initialBanner.error);
   const [notice, setNotice] = useState<string | null>(initialBanner.notice);
+  const { showToast } = useToast();
+  // Mirror every banner into a toast so the outcome is visible from anywhere
+  // on this long page — the inline banners stay as the persistent copy.
+  useEffect(() => {
+    if (error) showToast(error, "error", 6000);
+  }, [error, showToast]);
+  useEffect(() => {
+    if (notice) showToast(notice, "success");
+  }, [notice, showToast]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
