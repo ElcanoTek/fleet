@@ -6,6 +6,7 @@ import {
   authHint,
   categoriesOf,
   consentRequired,
+  FEATURED_SLUG,
   effectiveEnabled,
   fillPlaceholders,
   filterCatalog,
@@ -1010,7 +1011,9 @@ function ConnectionsPageInner() {
   // category means the user already knows what they want).
   const dirFeatured = thirdParty.filter((e) => e.featured);
   const activeCategoryLabel =
-    dirCategories.find((c) => c.slug === catalogCategory)?.label ?? catalogCategory;
+    catalogCategory === FEATURED_SLUG
+      ? "Featured"
+      : (dirCategories.find((c) => c.slug === catalogCategory)?.label ?? catalogCategory);
 
   // One card, one prop wiring — shared by the Featured shelf and the category
   // groups. Added-state matches by URL for one-click entries and by
@@ -1503,6 +1506,17 @@ function ConnectionsPageInner() {
                   >
                     All
                   </DirChip>
+                  {dirFeatured.length > 0 ? (
+                    <DirChip
+                      active={catalogCategory === FEATURED_SLUG}
+                      onClick={() => pickCategory(FEATURED_SLUG)}
+                      count={dirFeatured.length}
+                      role="tab"
+                      ariaSelected={catalogCategory === FEATURED_SLUG}
+                    >
+                      ✦ Featured
+                    </DirChip>
+                  ) : null}
                   {dirCategories.map((c) => (
                     <DirChip
                       key={c.slug}
