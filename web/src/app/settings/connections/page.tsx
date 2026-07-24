@@ -52,7 +52,6 @@ import {
   SetSection,
 } from "../ui/panels";
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
-import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
@@ -643,8 +642,9 @@ function ConnectionsPageInner() {
   // Set when an OAuth sign-in was opened in a new tab; on return to this tab
   // the server list refreshes so the new connection shows without a reload.
   const awaitingAuthReturn = useRef(false);
-  // Mirror every banner into a toast so the outcome is visible from anywhere
-  // on this long page — the inline banners stay as the persistent copy.
+  // Every action outcome (including the OAuth callback's one-shot
+  // ?connected / ?error result) surfaces as a toast — visible from anywhere
+  // on this long page; there is no inline banner copy.
   useEffect(() => {
     if (error) showToast(error, "error", 6000);
   }, [error, showToast]);
@@ -1053,17 +1053,6 @@ function ConnectionsPageInner() {
       title="Connections"
       intro="Connect remote (hosted) MCP servers and sign in to each with your own account. Connected servers’ tools become available to you in chat and your scheduled tasks. Credentials are stored encrypted on the server and never shared with other users."
     >
-      {notice ? (
-        <NoticeBanner tone="success" className="mb-4">
-          {notice}
-        </NoticeBanner>
-      ) : null}
-      {error ? (
-        <NoticeBanner tone="danger" className="mb-4">
-          {error}
-        </NoticeBanner>
-      ) : null}
-
       {/* ── Group 1 — Your connections ── */}
       <ConnGroup>
         <ConnGroupHead title="Your connections">
