@@ -467,9 +467,22 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 	var nextRun time.Time
 	if task.Recurrence != "" {
 		computed, err := s.storage.ComputeNextRun(task)
-		if err != nil {
+		switch {
+		case err != nil:
 			log.Printf("Error computing next run for skipped task %s: %v", task.ID, err)
-		} else {
+		case task.RecurrenceUntil != nil && computed.After(*task.RecurrenceUntil):
+			// The recurrence's end date falls before the next cron tick: there is
+			// no future occurrence to advance to, so cancel the row instead of
+			// leaving it due (it would otherwise re-skip on every tick forever).
+			if _, cerr := s.storage.UpdateTasksStatusBatch([]uuid.UUID{task.ID},
+				models.TaskStatusScheduled, models.TaskStatusCancelled); cerr != nil {
+				log.Printf("Error ending recurrence for skipped task %s: %v", task.ID, cerr)
+			} else {
+				log.Printf("Recurrence for task %s ended at skip: next tick %s is past recurrence_until %s",
+					task.ID, computed.Format(time.RFC3339), task.RecurrenceUntil.Format(time.RFC3339))
+			}
+			return
+		default:
 			nextRun = computed
 		}
 	}

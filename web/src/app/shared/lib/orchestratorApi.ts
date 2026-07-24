@@ -55,6 +55,10 @@ export type Task = {
   completed_at?: string;
   scheduled_for?: string;
   recurrence?: string;
+  // Recurrence end conditions: repeat until an instant and/or for a total
+  // remaining-run count. Absent = repeat forever.
+  recurrence_until?: string | null;
+  recurrence_remaining?: number | null;
   files?: string[];
   run_if?: RunIf | null;
   skip_count?: number;
@@ -86,6 +90,8 @@ export type TaskCreate = {
   persona?: string;
   scheduled_for?: string;
   recurrence?: string;
+  recurrence_until?: string;
+  recurrence_remaining?: number;
   files?: string[];
   tags?: string[];
   retry_policy?: RetryPolicy;
@@ -564,7 +570,10 @@ export const orchestratorApi = {
       method: "POST",
       body: JSON.stringify(overrides ? { overrides } : {}),
     }),
-  upcomingRuns: (limit = 50) => request<{ upcoming: UpcomingRun[] }>(`/tasks/upcoming?limit=${limit}`),
+  upcomingRuns: (limit = 50, until?: string) =>
+    request<{ upcoming: UpcomingRun[] }>(
+      `/tasks/upcoming?limit=${limit}${until ? `&until=${encodeURIComponent(until)}` : ""}`,
+    ),
   // #516 self-improving memory: feedback + versioned learned instructions.
   submitFeedback: (taskId: string, rating: "up" | "down", critique?: string) =>
     request<unknown>(`/tasks/${encodeURIComponent(taskId)}/feedback`, {
