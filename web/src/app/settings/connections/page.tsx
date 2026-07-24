@@ -567,6 +567,13 @@ function ConnectionsPageInner() {
   const [error, setError] = useState<string | null>(initialBanner.error);
   const [notice, setNotice] = useState<string | null>(initialBanner.notice);
   const { showToast } = useToast();
+  // Post-add "sign in now?" prompt for OAuth servers (id + display name).
+  const [connectPromptFor, setConnectPromptFor] = useState<{ id: string; name: string } | null>(
+    null,
+  );
+  // Set when an OAuth sign-in was opened in a new tab; on return to this tab
+  // the server list refreshes so the new connection shows without a reload.
+  const awaitingAuthReturn = useRef(false);
   // Mirror every banner into a toast so the outcome is visible from anywhere
   // on this long page — the inline banners stay as the persistent copy.
   useEffect(() => {
@@ -651,6 +658,17 @@ function ConnectionsPageInner() {
     };
   }, []);
 
+  // Refresh the list when the user comes back from an OAuth sign-in tab.
+  useEffect(() => {
+    const onFocus = () => {
+      if (!awaitingAuthReturn.current) return;
+      awaitingAuthReturn.current = false;
+      refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  });
+
   const addServer = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -665,10 +683,12 @@ function ConnectionsPageInner() {
         if (!res.ok) {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
+        const data = (await res.json()) as { id?: string; name?: string };
         setName("");
         setUrl("");
         setAddServerOpen(false);
         setNotice("Server added. Click Connect to log in.");
+        if (data.id) setConnectPromptFor({ id: data.id, name: data.name || "the server" });
         refresh();
       })
       .catch((err: unknown) => setError(errMessage(err)))
@@ -678,6 +698,11 @@ function ConnectionsPageInner() {
   const connect = (id: string) => {
     setError(null);
     setBusy(true);
+    // Open the tab NOW, inside the click's user gesture, so popup blockers
+    // allow it; it is pointed at the authorization server once the URL
+    // arrives. The old behavior (same-tab navigation) remains the fallback
+    // when the browser refuses the new tab.
+    const authTab = window.open("about:blank", "_blank");
     fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}/authorize`, {
       method: "POST",
     })
@@ -687,11 +712,20 @@ function ConnectionsPageInner() {
         }
         const data = (await res.json()) as { redirect_url?: string };
         if (!data.redirect_url) throw new Error("No authorization URL returned.");
-        // Full-page navigation to the authorization server. It redirects back to
-        // /api/oauth/mcp/callback, which returns here with ?connected / ?error.
-        window.location.href = data.redirect_url;
+        // The authorization server redirects back to /api/oauth/mcp/callback,
+        // which lands on this page with ?connected / ?error — in the new tab.
+        // This tab refreshes its list when it regains focus.
+        if (authTab) {
+          authTab.location.href = data.redirect_url;
+          awaitingAuthReturn.current = true;
+          setBusy(false);
+          setNotice("Sign in from the new tab — this page updates when you return.");
+        } else {
+          window.location.href = data.redirect_url;
+        }
       })
       .catch((err: unknown) => {
+        authTab?.close();
         setError(errMessage(err));
         setBusy(false);
       });
@@ -773,12 +807,15 @@ function ConnectionsPageInner() {
         if (!res.ok) {
           throw new Error((await res.text()) || `Add failed: ${res.status}`);
         }
-        const data = (await res.json()) as { tool_count?: number };
-        setNotice(
-          entry.auth === "open" || entry.auth === "api_key"
-            ? `${entry.display_name} connected${toolCountSuffix(data.tool_count)}.`
-            : `${entry.display_name} added. Click Connect to sign in.`,
-        );
+        const data = (await res.json()) as { id?: string; tool_count?: number };
+        if (entry.auth === "open" || entry.auth === "api_key") {
+          setNotice(`${entry.display_name} connected${toolCountSuffix(data.tool_count)}.`);
+        } else {
+          setNotice(`${entry.display_name} added. Click Connect to sign in.`);
+          // OAuth adds land in login_required — offer the sign-in right here
+          // instead of making the user find the row in "Your connections".
+          if (data.id) setConnectPromptFor({ id: data.id, name: entry.display_name });
+        }
         refresh();
         return true;
       })
@@ -1470,6 +1507,52 @@ function ConnectionsPageInner() {
           derived tool traffic to (and often parks a delegated access token
           with) the named operator, so the add is gated on an explicit,
           operator-named confirmation. */}
+      {/* Post-add sign-in prompt: an OAuth server was just added and needs a
+          login to finish connecting. Offer it here so the user doesn't have
+          to scroll up to the "Your connections" row to click Connect. */}
+      {connectPromptFor ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Sign in to ${connectPromptFor.name}?`}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-strong)] px-4"
+          onClick={() => setConnectPromptFor(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-5 shadow-[var(--shadow-lg)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-2 text-[0.9375rem] font-semibold">
+              {connectPromptFor.name} added — sign in now?
+            </h3>
+            <p className="mb-4 text-[0.8125rem] text-[var(--color-text-secondary)]">
+              One step left: sign in so its tools become available to you. The login opens in a
+              new tab; you can also do it later from the Connect button under Your connections.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConnectPromptFor(null)}
+                className={btnClass({ reveal: true })}
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = connectPromptFor.id;
+                  setConnectPromptFor(null);
+                  connect(id);
+                }}
+                disabled={busy}
+                className={btnClass({ variant: "primary" })}
+              >
+                Sign in (new tab)
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {consentFor ? (
         <div
           role="dialog"
