@@ -596,6 +596,12 @@ servers:
     tags: [hosting, deploy, datastores, paas]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Render dashboard with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: replit
     display_name: Replit
     description: >-
@@ -760,6 +766,12 @@ servers:
     tags: [postgres, sql, gcp, managed]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Google Cloud console with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: chroma-package-search
     display_name: Chroma Package Search
     description: >-
@@ -1419,6 +1431,12 @@ servers:
     provenance: official
     auth: oauth
     featured: true
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Asana developer console with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: atlassian
     display_name: Atlassian (Rovo)
     description: >-
@@ -1446,6 +1464,12 @@ servers:
     tags: [files, storage, documents, enterprise]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Box developer console with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: cal-com
     display_name: Cal.com
     description: >-
@@ -1526,6 +1550,12 @@ servers:
     tags: [esignature, agreements, contracts, workflows]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Docusign developer account with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: dropbox
     display_name: Dropbox
     description: >-
@@ -1870,6 +1900,12 @@ servers:
     tags: [project-management, tasks, enterprise, oauth]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Wrike app console with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: zenhub
     display_name: Zenhub
     description: >-
@@ -2111,6 +2147,12 @@ servers:
     auth: oauth
 
   # ── crm-sales ───────────────────────────────────────────────────
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Zoom app marketplace with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: apollo-io
     display_name: Apollo.io
     description: >-
@@ -2316,6 +2358,12 @@ servers:
     tags: [shared-inbox, conversations, contacts, tagging, oauth]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Front developer settings with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: gorgias
     display_name: Gorgias
     description: >-
@@ -3761,6 +3809,12 @@ servers:
     tags: [gemini, vertex-ai, inference, google-cloud, model-platform]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the Google Cloud console with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: heygen
     display_name: HeyGen
     description: >-
@@ -4080,6 +4134,7 @@ servers:
       the North America endpoint; use advertising-ai-eu.amazon.com for
       Europe or the Far East regional endpoint as applicable.
     setup_url: "https://advertising.amazon.com/API/docs/en-us/mcp/mcp-overview"
+    client_registration: manual
   - name: brevo
     display_name: Brevo
     description: >-
@@ -4487,6 +4542,12 @@ servers:
     tags: [food-delivery, restaurants, ordering, local]
     provenance: official
     auth: oauth
+    setup_hint: >-
+      This service's OAuth server does not support automatic client
+      registration: create an OAuth app in the DoorDash developer portal with the
+      callback URL shown in your Fleet instance's OAuth settings, then
+      paste its client ID and secret here.
+    client_registration: manual
   - name: google-maps
     display_name: Google Maps Grounding Lite
     description: >-
