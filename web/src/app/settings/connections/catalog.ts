@@ -81,6 +81,9 @@ export type CatalogResponse = {
   bundled: CatalogBundled[];
   third_party: CatalogThirdParty[];
   remote_mcp_enabled: boolean;
+  // The OAuth callback URL manual client registrations must use; shown in the
+  // guided add form so "the callback URL shown in your Fleet instance" exists.
+  oauth_redirect_uri?: string;
 };
 
 // Display names for the curated category slugs the built-in directory uses.

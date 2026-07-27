@@ -92,6 +92,11 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Manual OAuth client forms now show the callback URL**: connector setup
+  hints (GitHub, Google Workspace, …) told users to register their OAuth app
+  with "the callback URL shown in your Fleet instance's OAuth settings", but
+  nothing in the UI displayed it. `/mcp-catalog` now returns
+  `oauth_redirect_uri` and the guided add form renders it with a copy button.
 - **A selection-less scheduled run no longer replays another task's create
   markers**: `bindTaskMCP` returned the **shared per-deployment** MCP workspace
   dir as the #717 reconciliation workdir for any task without an

@@ -330,12 +330,14 @@ function DirectoryCard({
   added,
   busy,
   remoteEnabled,
+  redirectUri,
   onAdd,
 }: {
   entry: CatalogThirdParty;
   added: boolean;
   busy: boolean;
   remoteEnabled: boolean;
+  redirectUri?: string;
   // Resolves true when the server was actually added (validated + stored);
   // false keeps the guided form — and whatever the user typed — open so a
   // rejected key or mistyped tenant value can be corrected in place.
@@ -482,6 +484,25 @@ function DirectoryCard({
           ) : null}
           {manualClient ? (
             <>
+              {redirectUri ? (
+                <div className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+                  <span className="font-medium">
+                    Authorization callback URL for your app registration
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <code className="min-w-0 flex-1 truncate rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1.5 font-[family-name:var(--font-code)] text-[0.72rem] text-[var(--color-text-primary)]">
+                      {redirectUri}
+                    </code>
+                    <button
+                      type="button"
+                      className={btnClass({ reveal: true })}
+                      onClick={() => navigator.clipboard?.writeText(redirectUri)}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <label className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
                 <span className="font-medium">OAuth client ID</span>
                 <input
@@ -1026,6 +1047,7 @@ function ConnectionsPageInner() {
       added={(servers ?? []).some((s) => s.url === tp.url || s.name === tp.name)}
       busy={busy}
       remoteEnabled={catalog?.remote_mcp_enabled ?? false}
+      redirectUri={catalog?.oauth_redirect_uri}
       onAdd={(overrides) => requestAddFromCatalog(tp, overrides)}
     />
   );
