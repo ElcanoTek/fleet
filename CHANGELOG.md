@@ -92,6 +92,11 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **OAuth connect no longer strands the browser on localhost**: after a
+  successful remote-MCP authorization behind a reverse proxy, the callback
+  route redirected to the internal origin (`localhost:3000`) because it built
+  the URL from `request.url`; it now uses the forwarded host like every auth
+  route (`getRedirectUrl`).
 - **Manual OAuth client forms now show the callback URL**: connector setup
   hints (GitHub, Google Workspace, …) told users to register their OAuth app
   with "the callback URL shown in your Fleet instance's OAuth settings", but
