@@ -68,6 +68,27 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A selection-less scheduled run no longer replays another task's create
+  markers**: `bindTaskMCP` returned the **shared per-deployment** MCP workspace
+  dir as the #717 reconciliation workdir for any task without an
+  `mcp_selection`. That directory's `creates.jsonl` accumulates the markers of
+  every task *and* every chat conversation on the box, keyed only by
+  `(ssp, deal_name)` with no run attribution — so an unrelated task's
+  half-finished create was injected into this task's prompt as "the prior
+  process stopped after submitting these creates", and since an abandoned
+  `submitted` marker is only ever cleared by a matching resolution in the same
+  file, it was replayed into every future run forever. The selection-less path
+  now returns no reconciliation workdir (an unattributable ledger is not a
+  resume signal); a task that wants real per-run resume semantics declares an
+  `mcp_selection` and gets the dedicated client, whose workdir and
+  `${FLEET_TASK_ID}` identify exactly one run. When the catalog references
+  `${FLEET_TASK_ID}` the run now logs that its per-task ledgers are inert, so a
+  missing selection is visible instead of silent. New
+  `agentcore.EnvReferencesTaskID`. Same root confusion — a shared directory
+  treated as a run identity — as the SendGrid send-once bug fixed in
+  elcano-config PR #48, where it made scheduled tasks report emails as sent
+  that were never delivered; `docs/MCP-BUNDLE-ENV.md` now states the rule for
+  both sides.
 - **A sent email now reads as an outcome, not a JSON dump**: `ToolResultView`
   had purpose-built renderers only for `bash` and `task_tracker`, so a
   `send_email` result (built-in or any bundle's `mcp_*_send_email`) fell through
