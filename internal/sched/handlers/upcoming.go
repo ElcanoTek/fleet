@@ -28,13 +28,23 @@ type UpcomingRun struct {
 
 const (
 	upcomingDefaultLimit    = 50
-	upcomingPerTaskMax      = 5   // occurrences projected per recurring task
+	upcomingLimitMax        = 1000
+	upcomingPerTaskMax      = 5   // occurrences projected per recurring task (no ?until)
+	upcomingWindowPerTask   = 366 // per-task safety cap when projecting to a ?until horizon
 	upcomingHorizonMaxTasks = 500 // safety bound on tasks scanned
 )
 
 // GetUpcomingRuns handles GET /tasks/upcoming — the calendar/timeline feed.
 // For each scheduled (recurring or one-shot) task it projects future runs and
-// returns them sorted by time, capped at ?limit (default 50).
+// returns them sorted by time, capped at ?limit (default 50, max 1000).
+//
+// Without ?until, each recurring task contributes its next upcomingPerTaskMax
+// occurrences (the original count-based view). With ?until=RFC3339 the
+// projection is horizon-based: every occurrence up to that instant is emitted
+// (per-task safety cap upcomingWindowPerTask), so a calendar view that passes
+// its visible range shows the truth for any week it navigates to instead of
+// going dark after the fifth occurrence. Both modes honor a task's recurrence
+// end conditions (recurrence_until / recurrence_remaining).
 func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 	p := h.principalFromRequest(r)
 	if !p.hasPermission(models.PermissionViewTasks) {
@@ -44,6 +54,18 @@ func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
 		limit = upcomingDefaultLimit
+	}
+	if limit > upcomingLimitMax {
+		limit = upcomingLimitMax
+	}
+	var horizon time.Time // zero = count-based projection (legacy)
+	if raw := r.URL.Query().Get("until"); raw != "" {
+		parsed, perr := time.Parse(time.RFC3339, raw)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "until must be an RFC3339 timestamp")
+			return
+		}
+		horizon = parsed
 	}
 
 	// The claimable-but-not-yet-run tasks: scheduled + pending. (A running task
@@ -69,7 +91,7 @@ func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 		if scopes := p.scopes(); len(scopes) > 0 && !taskVisibleToScopes(t, scopes, p.ownerID()) {
 			continue
 		}
-		runs = append(runs, projectRuns(t, now)...)
+		runs = append(runs, projectRuns(t, now, horizon)...)
 	}
 	sort.Slice(runs, func(a, b int) bool { return runs[a].NextRun.Before(runs[b].NextRun) })
 	if len(runs) > limit {
@@ -78,22 +100,38 @@ func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"upcoming": runs})
 }
 
-// projectRuns computes a task's upcoming executions: up to upcomingPerTaskMax
-// cron occurrences for a recurring task (in its timezone), or its single
-// scheduled_for for a one-shot.
-func projectRuns(t *models.Task, now time.Time) []UpcomingRun {
+// projectRuns computes a task's upcoming executions: cron occurrences for a
+// recurring task (in its timezone) — count-based without a horizon,
+// horizon-based with one — or its single scheduled_for for a one-shot. The
+// task's own end conditions always apply: nothing past recurrence_until is
+// projected, and a recurrence_remaining budget caps the number of occurrences
+// (the scheduled row itself is the first of the remaining runs).
+func projectRuns(t *models.Task, now time.Time, horizon time.Time) []UpcomingRun {
 	base := UpcomingRun{TaskID: t.ID.String(), Name: t.Name, Prompt: t.Prompt, Recurrence: t.Recurrence}
 	if t.Recurrence != "" {
 		schedule, err := cron.ParseStandard(t.Recurrence)
 		if err != nil {
 			return nil
 		}
+		maxOcc := upcomingPerTaskMax
+		if !horizon.IsZero() {
+			maxOcc = upcomingWindowPerTask
+		}
+		if t.RecurrenceRemaining != nil && *t.RecurrenceRemaining < maxOcc {
+			maxOcc = *t.RecurrenceRemaining
+		}
 		loc := taskLocation(t.Timezone)
 		next := now.In(loc)
-		out := make([]UpcomingRun, 0, upcomingPerTaskMax)
-		for i := 0; i < upcomingPerTaskMax; i++ {
+		out := make([]UpcomingRun, 0, min(maxOcc, upcomingPerTaskMax))
+		for i := 0; i < maxOcc; i++ {
 			next = schedule.Next(next)
 			if next.IsZero() {
+				break
+			}
+			if !horizon.IsZero() && next.After(horizon) {
+				break
+			}
+			if t.RecurrenceUntil != nil && next.After(*t.RecurrenceUntil) {
 				break
 			}
 			r := base

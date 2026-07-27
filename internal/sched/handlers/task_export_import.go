@@ -313,6 +313,8 @@ func (h *Handlers) replaceTaskByName(r *http.Request, rec models.TaskExportRecor
 	existing.Description = tc.Description
 	existing.ScheduledFor = tc.ScheduledFor
 	existing.Recurrence = tc.Recurrence
+	existing.RecurrenceUntil = tc.RecurrenceUntil
+	existing.RecurrenceRemaining = tc.RecurrenceRemaining
 	existing.Timezone = tc.Timezone
 	existing.Files = tc.Files
 	existing.FileNames = tc.FileNames

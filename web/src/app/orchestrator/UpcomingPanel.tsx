@@ -49,7 +49,18 @@ export function UpcomingPanel() {
     loading,
     error,
   } = useCancellableFetch(
-    useCallback(() => orchestratorApi.upcomingRuns(50), []),
+    // Horizon-based projection: ask for everything in the next two weeks so
+    // the week board is truthful for the whole visible range (the server used
+    // to cap recurring tasks at their next 5 occurrences, which made a weekly
+    // task look like it "ended" after five weeks).
+    useCallback(
+      () =>
+        orchestratorApi.upcomingRuns(
+          500,
+          new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+        ),
+      [],
+    ),
     [],
   );
   // View toggle: the chronological list (default) or a week board. Designed

@@ -374,7 +374,7 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -426,8 +426,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			run_if, skip_count, last_skip_at, last_skip_reason,
 			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier,
 			sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens,
-			file_names, serialization_key
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62)
+			file_names, serialization_key, recurrence_until, recurrence_remaining
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			prompt = EXCLUDED.prompt,
@@ -488,7 +488,9 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 			allow_event_triggers = EXCLUDED.allow_event_triggers,
 			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens,
 			file_names = EXCLUDED.file_names,
-			serialization_key = EXCLUDED.serialization_key`,
+			serialization_key = EXCLUDED.serialization_key,
+			recurrence_until = EXCLUDED.recurrence_until,
+			recurrence_remaining = EXCLUDED.recurrence_remaining`,
 		// effective_priority is deliberately OMITTED from the upsert: it is set
 		// once on INSERT and thereafter mutated ONLY by the anti-starvation sweep
 		// (#230). UpdateTask delegates here, so including it would let a status
@@ -558,6 +560,8 @@ func (db *Database) AddTask(ctx context.Context, task *models.Task) error {
 		thinkingBudgetValue(task.ThinkingBudgetTokens),
 		marshalJSON(task.FileNames),
 		serializationKeyValue(task.SerializationKey),
+		task.RecurrenceUntil,
+		recurrenceRemainingValue(task.RecurrenceRemaining),
 	)
 	return err
 }
@@ -576,6 +580,15 @@ func serializationKeyValue(p *string) any {
 		return nil
 	}
 	return trimmed
+}
+
+// recurrenceRemainingValue maps the optional remaining-runs counter to a
+// nullable column value: nil → SQL NULL (unbounded), set → the int.
+func recurrenceRemainingValue(p *int) any {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // thinkingBudgetValue maps the optional per-task thinking budget (#220) to a
@@ -693,7 +706,9 @@ const taskInsertOnConflict = ` ON CONFLICT (id) DO UPDATE SET
 			allow_event_triggers = EXCLUDED.allow_event_triggers,
 			thinking_budget_tokens = EXCLUDED.thinking_budget_tokens,
 			file_names = EXCLUDED.file_names,
-			serialization_key = EXCLUDED.serialization_key`
+			serialization_key = EXCLUDED.serialization_key,
+			recurrence_until = EXCLUDED.recurrence_until,
+			recurrence_remaining = EXCLUDED.recurrence_remaining`
 
 // taskInsertColumns is the ordered column list for the tasks INSERT, kept in
 // sync with AddTask / AddTaskBatch / AddTaskTx. Extracted as a constant so the
@@ -707,7 +722,7 @@ const taskInsertColumns = `id, name, prompt, model, fallback_model, max_iteratio
 			allow_task_creation, allow_recurring_task_creation, created_by_task_id,
 			dead_lettered_at, dead_letter_reason, dead_letter_attempts,
 			run_if, skip_count, last_skip_at, last_skip_reason,
-			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key`
+			expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining`
 
 // taskInsertArgs returns the positional INSERT values for a task, in the
 // exact column order of taskInsertColumns. Shared by AddTask and AddTaskBatch so
@@ -779,6 +794,8 @@ func taskInsertArgs(t *models.Task) []any {
 		thinkingBudgetValue(t.ThinkingBudgetTokens),
 		marshalJSON(t.FileNames),
 		serializationKeyValue(t.SerializationKey),
+		t.RecurrenceUntil,
+		recurrenceRemainingValue(t.RecurrenceRemaining),
 	}
 }
 
@@ -787,9 +804,10 @@ func taskInsertArgs(t *models.Task) []any {
 // a future schema migration that adds a column forces a single touch point.
 // (#710 added file_names without bumping this, breaking every multi-row
 // AddTaskBatch INSERT — caught only once the dev lane gained a Postgres
-// service, #723. 62 = those 61 columns plus serialization_key (#709).
+// service, #723. 64 = 61 + serialization_key (#709) + recurrence_until +
+// recurrence_remaining (recurrence end conditions).
 // TestTaskInsertColumnsCount pins the count DB-free.)
-const taskInsertColumnsCount = 62
+const taskInsertColumnsCount = 64
 
 // AddTaskBatch inserts a slice of tasks in a single parameterised INSERT (#227),
 // replacing N sequential ExecContext round-trips. It does NOT run inside an
@@ -1174,6 +1192,8 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		artifacts              sql.NullString
 		fileNames              sql.NullString
 		serializationKey       sql.NullString
+		recurrenceUntil        sql.NullTime
+		recurrenceRemaining    sql.NullInt64
 	)
 
 	err := scanner.Scan(
@@ -1188,7 +1208,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&runIf, &skipCount, &lastSkipAt, &lastSkipReason,
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
 		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis, &artifacts,
-		&pendingQuestion, &pendingAnswer, &carryContext, &allowEventTriggers, &thinkingBudget, &fileNames, &serializationKey,
+		&pendingQuestion, &pendingAnswer, &carryContext, &allowEventTriggers, &thinkingBudget, &fileNames, &serializationKey, &recurrenceUntil, &recurrenceRemaining,
 	)
 	if err != nil {
 		return nil, err
@@ -1295,6 +1315,14 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	// a real key.
 	if serializationKey.Valid {
 		task.SerializationKey = &serializationKey.String
+	}
+	if recurrenceUntil.Valid {
+		t := recurrenceUntil.Time
+		task.RecurrenceUntil = &t
+	}
+	if recurrenceRemaining.Valid {
+		v := int(recurrenceRemaining.Int64)
+		task.RecurrenceRemaining = &v
 	}
 	// tags is NOT NULL DEFAULT '[]', so it's always present; assign independently
 	// of files (unmarshalStringSlice maps ""/"null" → empty slice safely).
@@ -2591,7 +2619,9 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 			file_names = $56,
 			pending_question = $57,
 			pending_answer = $58,
-			carry_context = $59
+			carry_context = $59,
+			recurrence_until = $60,
+			recurrence_remaining = $61
 		WHERE id = $1`,
 		task.ID,
 		task.Prompt,
@@ -2652,6 +2682,8 @@ func (db *Database) UpdateTaskTx(ctx context.Context, tx *sql.Tx, task *models.T
 		nullableString(task.PendingQuestion),
 		nullableString(task.PendingAnswer),
 		task.CarryContext,
+		task.RecurrenceUntil,
+		recurrenceRemainingValue(task.RecurrenceRemaining),
 	)
 	return err
 }

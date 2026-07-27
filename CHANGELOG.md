@@ -19,6 +19,13 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Recurrence end conditions + horizon-based Upcoming**
+  (`docs/RECURRENCE-END.md`): recurring tasks can end on a date
+  (`recurrence_until`) or after a total number of runs
+  (`recurrence_remaining`), exposed in the task modal as "End repeat"; and
+  `GET /tasks/upcoming?until=` projects every occurrence inside the window
+  instead of capping recurring tasks at their next 5, so the week board no
+  longer implies a schedule "ends" five occurrences out.
 - **`fleet doctor` — box-level diagnose AND repair** (patterned on chat's
   `chat doctor`; `docs/DOCTOR.md`): a root pass over every box prerequisite —
   toolchain floors, fleet-critical package currency with broken-dnf-repo

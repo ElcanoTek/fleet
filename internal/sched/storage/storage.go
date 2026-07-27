@@ -744,9 +744,14 @@ type TaskEdit struct {
 	// Timezone is the IANA timezone the cron Recurrence is evaluated in. The edit
 	// handler pre-fills it from the existing task when the caller omits it, so it
 	// is always a valid name here.
-	Timezone  string
-	Files     []string
-	FileNames []string
+	Timezone string
+	// RecurrenceUntil / RecurrenceRemaining are the recurrence end conditions,
+	// assigned unconditionally from the full edit payload like
+	// ThinkingBudgetTokens (nil = clear → repeat forever).
+	RecurrenceUntil     *time.Time
+	RecurrenceRemaining *int
+	Files               []string
+	FileNames           []string
 	// SetFiles distinguishes "leave files unchanged" from "replace with Files".
 	SetFiles bool
 	// Tags + SetTags mirror Files/SetFiles: the flag distinguishes "leave tags
@@ -830,6 +835,8 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.Persona = edit.Persona
 	task.ScheduledFor = edit.ScheduledFor
 	task.Recurrence = edit.Recurrence
+	task.RecurrenceUntil = edit.RecurrenceUntil
+	task.RecurrenceRemaining = edit.RecurrenceRemaining
 	if edit.Timezone != "" {
 		task.Timezone = edit.Timezone
 	}
@@ -1374,6 +1381,20 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	now := time.Now().In(loc)
 	nextTime := schedule.Next(now).UTC()
 
+	// Recurrence end conditions: an end date means no occurrence may fire past
+	// it, and a remaining-runs counter of 1 means the completing occurrence was
+	// the last allowed run. Either way the chain simply stops — the completing
+	// task keeps its own terminal status.
+	if task.RecurrenceUntil != nil && nextTime.After(*task.RecurrenceUntil) {
+		log.Printf("Recurrence for task %s ended: next occurrence %s is past recurrence_until %s",
+			task.ID, nextTime.Format(time.RFC3339), task.RecurrenceUntil.Format(time.RFC3339))
+		return
+	}
+	if task.RecurrenceRemaining != nil && *task.RecurrenceRemaining <= 1 {
+		log.Printf("Recurrence for task %s ended: run budget exhausted", task.ID)
+		return
+	}
+
 	// Build the next occurrence from the FULL definition of the completing task
 	// via TaskToCreate — the single canonical Task→TaskCreate clone (also used by
 	// re-run/clone #270). A hand-maintained TaskCreate literal here was the
@@ -1385,6 +1406,12 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 	// clone recipe, and TestTaskToCreateCarriesEveryDefinitionField guards against
 	// a field being added to TaskCreate without joining that recipe.
 	tc := models.TaskToCreate(task)
+	// Count down the run budget: the clone gets one fewer allowed run than the
+	// occurrence that just completed (TaskToCreate carried the old value).
+	if task.RecurrenceRemaining != nil {
+		remaining := *task.RecurrenceRemaining - 1
+		tc.RecurrenceRemaining = &remaining
+	}
 	// Recurring occurrences are unnamed: Name is the import/export identity key
 	// with a partial unique index on non-empty names, so carrying the completing
 	// occurrence's name would collide with the row still in the table and abort

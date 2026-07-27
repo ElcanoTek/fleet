@@ -897,6 +897,23 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:go
 		}
 	}
 
+	// Recurrence end conditions are only meaningful on a recurring task, and a
+	// run budget of zero would be a task that never runs — reject both shapes
+	// at the boundary. A recurrence_until already in the past is allowed (the
+	// first occurrence still runs; the chain just doesn't continue) so exported
+	// definitions stay importable.
+	if tc.RecurrenceUntil != nil && tc.Recurrence == "" {
+		return fmt.Errorf("recurrence_until requires a recurrence")
+	}
+	if tc.RecurrenceRemaining != nil {
+		if tc.Recurrence == "" {
+			return fmt.Errorf("recurrence_remaining requires a recurrence")
+		}
+		if *tc.RecurrenceRemaining < 1 || *tc.RecurrenceRemaining > 10000 {
+			return fmt.Errorf("recurrence_remaining must be between 1 and 10000")
+		}
+	}
+
 	if tc.ScheduledFor != nil {
 		scheduled := tc.ScheduledFor.UTC()
 		now := time.Now().UTC()
@@ -1718,6 +1735,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		Persona:                tc.Persona,
 		ScheduledFor:           tc.ScheduledFor,
 		Recurrence:             tc.Recurrence,
+		RecurrenceUntil:        tc.RecurrenceUntil,
+		RecurrenceRemaining:    tc.RecurrenceRemaining,
 		Timezone:               tc.Timezone,
 		Files:                  tc.Files,
 		FileNames:              tc.FileNames,
