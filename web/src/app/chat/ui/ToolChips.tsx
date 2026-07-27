@@ -583,6 +583,12 @@ function TaskList({ tasks }: { tasks: unknown[] }) {
 // task_tracker returns a summary + task list; render the list the same
 // way we render its input.
 //
+// send_email (built-in and the MCP variants) returns a provider payload —
+// status_code / message_id / validation_warnings, or an `error` key on
+// failure. Dumping that raw put a wall of JSON and HTML-lint prose at the
+// end of the transcript, right where the user had just clicked Send; render
+// the outcome as one line instead and keep the payload behind a disclosure.
+//
 // Everything else falls back to the raw result text in a monospace block.
 
 function ToolResultView({
@@ -620,6 +626,26 @@ function ToolResultView({
     const parsed = parseJSON(resultText);
     if (parsed && typeof parsed === "object") {
       return <TaskTrackerResult result={parsed as Record<string, unknown>} />;
+    }
+  }
+
+  if (isEmailSendTool(name)) {
+    // The approval gate resolves this call twice: first with a plain-text
+    // APPROVAL_REQUIRED placeholder (is_err), then — after the user clicks
+    // Send — with the provider's JSON. Both reach the transcript, so both
+    // get a human-readable form.
+    if (resultText.startsWith(APPROVAL_REQUIRED_PREFIX)) {
+      return <EmailSendPending />;
+    }
+    const parsed = parseJSON(resultText);
+    if (parsed && typeof parsed === "object") {
+      return (
+        <EmailSendResult
+          result={parsed as Record<string, unknown>}
+          isErr={isErr}
+          raw={resultText}
+        />
+      );
     }
   }
 
@@ -703,6 +729,174 @@ function BashResult({
           </p>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+// ── send_email result ────────────────────────────────────────────────────
+//
+// Matches the built-in `send_email` and every MCP variant a bundle exposes
+// (`mcp_sendgrid_send_email`, `mcp_mailbux_send_email`, …) — a suffix match,
+// so `preview_email` and other email-adjacent tools keep the raw view.
+
+const APPROVAL_REQUIRED_PREFIX = "APPROVAL_REQUIRED";
+
+export function isEmailSendTool(name: string): boolean {
+  return name === "send_email" || name.endsWith("_send_email");
+}
+
+/** One validation warning from the provider's HTML pre-flight. */
+type EmailWarning = { rule: string; severity: string; message: string; hint: string };
+
+function readWarnings(value: unknown): EmailWarning[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const w = entry as Record<string, unknown>;
+    const message = typeof w.message === "string" ? w.message : "";
+    if (!message) return [];
+    return [
+      {
+        rule: typeof w.rule === "string" ? w.rule : "",
+        severity: typeof w.severity === "string" ? w.severity : "warning",
+        message,
+        hint: typeof w.hint === "string" ? w.hint : "",
+      },
+    ];
+  });
+}
+
+function EmailSendPending() {
+  return (
+    <p className="text-[0.72rem] text-[var(--color-text-muted)]">
+      Waiting for your approval — the email is staged and nothing has been sent
+      yet.
+    </p>
+  );
+}
+
+function EmailSendResult({
+  result,
+  isErr,
+  raw,
+}: {
+  result: Record<string, unknown>;
+  isErr: boolean;
+  raw: string;
+}) {
+  const error = typeof result.error === "string" ? result.error.trim() : "";
+  const statusCode =
+    typeof result.status_code === "number" ? result.status_code : null;
+  const messageId =
+    typeof result.message_id === "string" ? result.message_id.trim() : "";
+  const note = typeof result.note === "string" ? result.note.trim() : "";
+  const duplicate = result.duplicate_suppressed === true;
+  const warnings = readWarnings(result.validation_warnings);
+
+  // The server reports a rejected send as a payload with an `error` key and a
+  // 2xx-less status — NOT as a tool-level error — so the status must be read
+  // off the payload. Trusting is_err alone is what would print "queued" over
+  // a failed send.
+  const httpFailed = statusCode !== null && (statusCode < 200 || statusCode >= 300);
+  const failed = isErr || error !== "" || httpFailed;
+
+  const headline = failed
+    ? "Not sent"
+    : duplicate
+      ? "Already sent"
+      : "Queued for delivery";
+  const detail = failed
+    ? error ||
+      (statusCode !== null
+        ? `the email provider returned status ${statusCode}`
+        : "the email provider rejected the send")
+    : duplicate
+      ? note ||
+        "an identical email was already sent by an earlier run of this task"
+      : "";
+
+  return (
+    <div className="rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-strong)] min-w-0 max-w-full">
+      <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[0.72rem]">
+        <span
+          className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.62rem] font-medium uppercase tracking-wider"
+          style={{
+            borderColor: failed
+              ? "var(--color-danger-border)"
+              : "var(--color-success-border)",
+            color: failed ? "var(--color-danger)" : "var(--color-success)",
+          }}
+        >
+          {headline}
+        </span>
+        {detail ? (
+          <span
+            data-testid="email-send-detail"
+            className="min-w-0 flex-1"
+            style={{
+              color: failed
+                ? "var(--color-danger)"
+                : "var(--color-text-secondary)",
+            }}
+          >
+            {detail}
+          </span>
+        ) : null}
+        {!failed && warnings.length ? (
+          <span
+            className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.62rem]"
+            style={{
+              borderColor: "var(--color-warning-border)",
+              color: "var(--color-warning)",
+            }}
+          >
+            {warnings.length === 1
+              ? "1 formatting note"
+              : `${warnings.length} formatting notes`}
+          </span>
+        ) : null}
+      </div>
+      <details className="border-t border-[var(--color-border)]">
+        <summary className="cursor-pointer px-2 py-1 text-[0.68rem] text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]">
+          Delivery details
+        </summary>
+        <div className="grid gap-1.5 px-2 pb-2 text-[0.7rem] leading-[1.45]">
+          {messageId ? (
+            <p className="text-[var(--color-text-secondary)]">
+              Message ID:{" "}
+              <span style={{ fontFamily: "var(--font-code)" }}>{messageId}</span>
+            </p>
+          ) : null}
+          {warnings.length ? (
+            <ul className="grid gap-1">
+              {warnings.map((w, i) => (
+                <li
+                  key={`${w.rule}-${i}`}
+                  className="text-[var(--color-text-secondary)]"
+                >
+                  <span style={{ color: "var(--color-warning)" }}>
+                    {w.severity}
+                    {w.rule ? ` ${w.rule}` : ""}
+                  </span>{" "}
+                  — {w.message}
+                  {w.hint ? (
+                    <span className="text-[var(--color-text-muted)]">
+                      {" "}
+                      {w.hint}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <pre
+            className="max-h-[16rem] overflow-auto rounded-[0.6rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1.5 text-[0.68rem] leading-[1.4] text-[var(--color-text-muted)]"
+            style={{ fontFamily: "var(--font-code)" }}
+          >
+            {raw}
+          </pre>
+        </div>
+      </details>
     </div>
   );
 }

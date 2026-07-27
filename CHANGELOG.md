@@ -68,6 +68,20 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A sent email now reads as an outcome, not a JSON dump**: `ToolResultView`
+  had purpose-built renderers only for `bash` and `task_tracker`, so a
+  `send_email` result (built-in or any bundle's `mcp_*_send_email`) fell through
+  to the raw `<pre>`. Because the approval gate resolves the call *after* the
+  model's turn has ended, the last thing a user saw after clicking **Send** was
+  the provider payload — status code, message id, and a paragraph of HTML-lint
+  prose about Outlook table borders. It now renders one outcome line (`Queued
+  for delivery` / `Already sent` / `Not sent`) with the message id, any
+  formatting notes, and the full payload behind a collapsed "Delivery details"
+  disclosure. A rejected send is read off the payload's `error`/non-2xx
+  `status_code` rather than the tool-level error flag — the server returns a
+  failure as a normal result, so trusting `is_err` alone printed "queued" over
+  a send that never happened. The pre-approval `APPROVAL_REQUIRED` placeholder
+  now says it is waiting for approval instead of showing the raw sentinel.
 - **Env-file writes now survive a read round-trip (#834)**: `SetEnvKey` wrote
   values verbatim while both parsers (creds and the server's `loadEnvFile`)
   strip whitespace, surrounding quotes, and ` #`-style inline comments — so a
