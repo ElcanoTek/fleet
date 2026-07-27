@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // SweepAttachments deletes regular files under dir whose mtime is older
@@ -152,4 +154,96 @@ func looksLikeConversationID(name string) bool {
 		}
 	}
 	return true
+}
+
+// ── admin storage management ─────────────────────────────────────────────
+
+// StorageConversationStats is the conversation-side picture the admin
+// Storage panel renders next to the on-disk numbers: how many chats exist,
+// how many are protected from cleanup (pinned/archived/shared/project),
+// and how many an admin cleanup at the given idle cutoff would reclaim.
+type StorageConversationStats struct {
+	Total     int
+	Pinned    int
+	Protected int // pinned OR archived OR shared OR project-bound (cleanup-exempt)
+	// ReclaimableAtCutoff counts live, unprotected conversations idle
+	// since before the cutoff — exactly the set DeleteUnpinnedOlderThan
+	// would remove.
+	ReclaimableAtCutoff int
+}
+
+// StorageConversationStats returns the counts above. cutoff is an absolute
+// time; conversations with updated_at older than it count as reclaimable.
+func (s *Store) StorageConversationStats(ctx context.Context, cutoff time.Time) (StorageConversationStats, error) {
+	var out StorageConversationStats
+	err := s.db.QueryRowContext(ctx,
+		`SELECT
+		   COUNT(*) FILTER (WHERE deleted_at IS NULL),
+		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND pinned),
+		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND (pinned OR archived_at IS NOT NULL OR share_token IS NOT NULL OR project_id IS NOT NULL)),
+		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND NOT pinned AND archived_at IS NULL AND share_token IS NULL AND project_id IS NULL AND updated_at < $1)
+		 FROM conversations`,
+		cutoff.Unix(),
+	).Scan(&out.Total, &out.Pinned, &out.Protected, &out.ReclaimableAtCutoff)
+	if err != nil {
+		return StorageConversationStats{}, fmt.Errorf("storage conversation stats: %w", err)
+	}
+	return out, nil
+}
+
+// DeleteUnpinnedOlderThan hard-deletes live conversations idle since before
+// the cutoff, with the same protections as SweepExpired's TTL pass: pinned,
+// archived, shared, and project-bound conversations are never touched. This
+// is the admin "reclaim disk now" action — unlike the TTL sweep it always
+// hard-deletes (the operator asked for space back), and the caller is
+// expected to follow up with SweepOrphanWorkspaces to free the deleted
+// conversations' workspace directories.
+func (s *Store) DeleteUnpinnedOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM conversations
+		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND updated_at < $1`,
+		cutoff.Unix(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete unpinned older than: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// ConversationStorageMeta is the per-conversation context the admin Storage
+// panel shows next to a large workspace directory: whose chat it is, what
+// it's called, and whether cleanup would spare it.
+type ConversationStorageMeta struct {
+	Title     string
+	UserEmail string
+	Pinned    bool
+	UpdatedAt int64 // unix seconds
+}
+
+// ConversationStorageMetaByIDs fetches title/owner/pinned for the given
+// conversation ids (workspace dir names). Missing ids are simply absent
+// from the map — the caller labels those workspaces as orphaned.
+func (s *Store) ConversationStorageMetaByIDs(ctx context.Context, ids []string) (map[string]ConversationStorageMeta, error) {
+	out := make(map[string]ConversationStorageMeta, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, title, user_email, pinned, updated_at FROM conversations WHERE deleted_at IS NULL AND id = ANY($1)`,
+		pq.Array(ids),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("conversation storage meta: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var m ConversationStorageMeta
+		if err := rows.Scan(&id, &m.Title, &m.UserEmail, &m.Pinned, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out[id] = m
+	}
+	return out, rows.Err()
 }

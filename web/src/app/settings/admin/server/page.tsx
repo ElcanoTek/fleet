@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminStats, ConnGroup, SetSection, type AdminStat } from "../../ui/panels";
+import { StoragePanel } from "./StoragePanel";
 import { ConnBadge } from "../../ui/atoms";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { Icon } from "@/app/shared/ui/Icon";
@@ -223,6 +224,7 @@ export default function AdminServerPage() {
           </div>
         )}
       </ConnGroup>
+      <StoragePanel />
     </SetSection>
   );
 }

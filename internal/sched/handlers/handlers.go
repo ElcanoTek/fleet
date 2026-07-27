@@ -45,6 +45,10 @@ type Config struct {
 	Version         string
 	DataDir         string
 	Timezone        string
+	// UploadMaxBytes caps a single POST /upload task-input file. Mirrors
+	// the chat plane's cfg.UploadMaxBytes (FLEET_UPLOAD_MAX_BYTES, default
+	// 1 GiB) so both upload surfaces enforce the same limit.
+	UploadMaxBytes int64
 	// DefaultTaskTimezone (FLEET_DEFAULT_TIMEZONE) is the IANA timezone applied
 	// to a new task whose create request omits one. Distinct from Timezone
 	// (FLEET_TIMEZONE, the server clock); empty defaults to "UTC".

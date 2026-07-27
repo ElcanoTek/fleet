@@ -166,6 +166,9 @@ export type ComposerProps = {
   pendingAttachments: PendingAttachment[];
   attachmentError: string | null;
   removePendingAttachment: (clientId: string) => void;
+  // Informational "large upload — this may take a while" banner copy,
+  // null when the queued total is small enough not to matter.
+  uploadSizeWarning: string | null;
 
   // Spreadsheet nudge
   spreadsheetNudge: NudgeDecision;
@@ -243,6 +246,7 @@ export function Composer({
   addAttachmentFiles,
   pendingAttachments,
   attachmentError,
+  uploadSizeWarning,
   removePendingAttachment,
   spreadsheetNudge,
   setSpreadsheetNudgeDismissed,
@@ -476,7 +480,11 @@ export function Composer({
                 id="promptInput"
                 ref={promptRef}
                 className="min-h-[68px] w-full resize-none overflow-y-auto bg-transparent px-[1.05rem] pt-[0.85rem] pb-[0.35rem] text-[16px] leading-[1.5] text-[var(--color-text-primary)] outline-none transition-[height] duration-fast placeholder:text-[var(--color-text-muted)] sm:text-[0.9rem]"
-                placeholder={promptPlaceholder}
+                placeholder={
+                  pendingAttachments.length > 0
+                    ? "Add a message to send your attachments…"
+                    : promptPlaceholder
+                }
                 rows={1}
                 suppressHydrationWarning
                 value={prompt}
@@ -612,10 +620,22 @@ export function Composer({
                     />
                   ))}
                   {attachmentError ? (
-                    <span className="text-[0.7rem] text-[var(--color-danger)]">
+                    <span
+                      role="alert"
+                      className="basis-full rounded-[0.6rem] border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-2.5 py-1.5 text-[0.75rem] text-[var(--color-danger)]"
+                    >
                       {attachmentError}
                     </span>
                   ) : null}
+                </div>
+              ) : null}
+
+              {uploadSizeWarning ? (
+                <div
+                  role="status"
+                  className="mx-[1.05rem] mb-2 rounded-[0.6rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.72rem] text-[var(--color-text-secondary)]"
+                >
+                  {uploadSizeWarning}
                 </div>
               ) : null}
 
@@ -1109,9 +1129,11 @@ export function Composer({
                     title={
                       isUploadingAttachments
                         ? "Uploading attachments…"
-                        : isStreaming
-                          ? "Queue message (runs after the current turn)"
-                          : "Send message"
+                        : !prompt.trim() && pendingAttachments.length > 0
+                          ? "Type a message to send your attachments"
+                          : isStreaming
+                            ? "Queue message (runs after the current turn)"
+                            : "Send message"
                     }
                   >
                     {isUploadingAttachments ? (

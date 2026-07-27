@@ -3,6 +3,7 @@
 // (React escapes by default, so the moc `sanitizeHtml` shim is dropped).
 
 import { isValidEmail } from "./format";
+import { DEFAULT_UPLOAD_MAX_BYTES } from "@/app/lib/uploadLimits";
 
 export type ValidationResult = { valid: boolean; message: string };
 
@@ -189,7 +190,7 @@ export type FileOptions = {
 
 export function validateFile(file: FileLike | null | undefined, options: FileOptions = {}): ValidationResult {
   const opts = {
-    maxSize: 250 * 1024 * 1024,
+    maxSize: DEFAULT_UPLOAD_MAX_BYTES,
     allowedTypes: null as string[] | null,
     allowedExtensions: null as string[] | null,
     ...options,
@@ -228,7 +229,7 @@ export function validateFiles(
   options: FileOptions & { maxFiles?: number } = {},
 ): FilesResult {
   const opts = {
-    maxSize: 250 * 1024 * 1024,
+    maxSize: DEFAULT_UPLOAD_MAX_BYTES,
     maxFiles: 10,
     allowedTypes: null as string[] | null,
     allowedExtensions: null as string[] | null,

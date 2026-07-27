@@ -219,6 +219,10 @@ type chatStore interface {
 	SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap int) (expired int, evicted int, err error)
 	AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int, error)
 	SweepOrphanWorkspaces(ctx context.Context, root string) (int, error)
+	// Admin storage panel (disk visibility + reclaim).
+	StorageConversationStats(ctx context.Context, cutoff time.Time) (store.StorageConversationStats, error)
+	DeleteUnpinnedOlderThan(ctx context.Context, cutoff time.Time) (int, error)
+	ConversationStorageMetaByIDs(ctx context.Context, ids []string) (map[string]store.ConversationStorageMeta, error)
 }
 
 // Compile-time proof that the concrete Postgres store satisfies the interface —

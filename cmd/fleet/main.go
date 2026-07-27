@@ -88,6 +88,12 @@ import (
 // approval card's expectation that a stale request closes within a minute.
 const approvalExpirySweepInterval = 30 * time.Second
 
+// diskSweepInterval is how often the background disk sweep reclaims expired
+// chat attachment uploads and orchestrator temp_uploads files. Hourly is
+// plenty: the TTLs are measured in days, the sweep exists so an idle server
+// (no chat turns, which used to be the only trigger) still frees disk.
+const diskSweepInterval = time.Hour
+
 func main() {
 	// `fleet` is the ONE unified binary (#461). It dispatches three families:
 	//
@@ -634,6 +640,7 @@ func run() error {
 		DataDir:             cfg.DataDir,
 		Timezone:            timezone(),
 		DefaultTaskTimezone: defaultTaskTimezone(),
+		UploadMaxBytes:      cfg.UploadMaxBytes,
 		// Sliding-window rate limits for POST /tasks + /upload (0 disables a window).
 		SchedRateLimitPerMinute:       envIntDefault("FLEET_SCHED_RATE_LIMIT_PER_MINUTE", 60),
 		SchedRateLimitPerDay:          envIntDefault("FLEET_SCHED_RATE_LIMIT_PER_DAY", 500),
@@ -958,6 +965,7 @@ func run() error {
 			}
 		}
 	}()
+	startDiskSweep(ctx, cfg, h)
 
 	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
 	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
@@ -2178,6 +2186,34 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) (*remotemcp.Serv
 // into the orchestrator handlers when the feature is on. A nil service (feature
 // disabled) is a no-op, so the bundle catalog is served unchanged. Kept separate
 // from run() so the nil-guard branch stays out of run()'s cyclomatic budget.
+// startDiskSweep reclaims expired chat attachment uploads and orchestrator
+// temp_uploads files on a timer. SweepAttachments otherwise only runs when
+// a chat turn completes, and CleanupTempFiles previously had no caller at
+// all — an idle server never freed upload disk. Bound to ctx so it stops
+// on shutdown; a panic is contained so the sweep can't crash the process.
+func startDiskSweep(ctx context.Context, cfg *config.Config, h *handlers.Handlers) {
+	go func() {
+		defer safe.Recover("cmd.disk-sweep", nil)
+		ticker := time.NewTicker(diskSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ttl := time.Duration(cfg.ConversationTTL) * 24 * time.Hour
+				if n, err := store.SweepAttachments(cfg.EmailAttachmentDir, ttl); err != nil {
+					log.Printf("disk sweep: attachments: %v", err)
+				} else if n > 0 {
+					//nolint:gosec // G706: only an integer count is formatted (%d).
+					log.Printf("disk sweep: removed %d expired attachment file(s)", n)
+				}
+				h.CleanupTempFiles(ttl)
+			}
+		}
+	}()
+}
+
 func wireRemoteMCPCatalog(h *handlers.Handlers, svc *remotemcp.Service) {
 	if svc == nil {
 		return

@@ -19,6 +19,23 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Bigger uploads with honest failures, plus admin storage visibility and
+  cleanup** (`docs/UPLOADS-AND-STORAGE.md`): the per-file upload cap is now
+  configurable (`FLEET_UPLOAD_MAX_BYTES`) and defaults to 1 GiB (was a
+  hardcoded 256 MiB on chat attachments / 250 MB on task uploads); the chat
+  composer learns the limit from `/server-config` and refuses oversize files
+  at pick time with a visible explanation instead of a silent post-upload
+  413, warns when a queued upload is large, and explains the disabled Send
+  button; oversize errors from the server are human-readable 413s in every
+  case (including the previous opaque `400 unexpected EOF`). Settings →
+  Admin → Server gains a Storage panel — bytes for attachment uploads, task
+  uploads, and workspaces, the largest conversation workspaces with owner/
+  pinned context, and a "clean up now" action that deletes old unpinned
+  chats (pinned/archived/shared/project chats are never touched) and sweeps
+  aged files. The orchestrator's `temp_uploads` cleanup (previously dead
+  code) and the attachment TTL sweep now also run on an hourly timer, so an
+  idle server reclaims disk without waiting for a chat turn.
+
 - **Recurrence end conditions + horizon-based Upcoming**
   (`docs/RECURRENCE-END.md`): recurring tasks can end on a date
   (`recurrence_until`) or after a total number of runs
