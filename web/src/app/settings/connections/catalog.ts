@@ -142,7 +142,12 @@ export function categoriesOf(
   );
 }
 
-// filterCatalog narrows by a category slug ("" = all) and a free-text query
+// FEATURED_SLUG is the reserved pseudo-category slug for the ✦ Featured
+// chip: it selects entries flagged `featured` across all real categories.
+export const FEATURED_SLUG = "featured";
+
+// filterCatalog narrows by a category slug ("" = all, FEATURED_SLUG =
+// featured entries across categories) and a free-text query
 // matched case-insensitively against name, display name, description, vendor,
 // category, and tags.
 export function filterCatalog(
@@ -152,7 +157,9 @@ export function filterCatalog(
 ): CatalogThirdParty[] {
   const q = query.trim().toLowerCase();
   return entries.filter((e) => {
-    if (category && (e.category || "other") !== category) return false;
+    if (category === FEATURED_SLUG) {
+      if (!e.featured) return false;
+    } else if (category && (e.category || "other") !== category) return false;
     if (!q) return true;
     return (
       e.display_name.toLowerCase().includes(q) ||

@@ -5,6 +5,7 @@ import {
   categoriesOf,
   categoryLabel,
   consentRequired,
+  FEATURED_SLUG,
   fillPlaceholders,
   filterCatalog,
   groupByCategory,
@@ -89,6 +90,22 @@ describe("categoriesOf", () => {
 describe("filterCatalog", () => {
   it("returns everything for an empty query and no category", () => {
     expect(filterCatalog(CATALOG, "", "")).toHaveLength(4);
+  });
+
+  it("narrows to featured entries across categories via the reserved slug", () => {
+    const withFeatured = [
+      ...CATALOG,
+      entry({ name: "linear", display_name: "Linear", category: "productivity", featured: true }),
+      entry({ name: "notion", display_name: "Notion", category: "productivity", featured: true }),
+    ];
+    expect(filterCatalog(withFeatured, "", FEATURED_SLUG).map((e) => e.name)).toEqual([
+      "linear",
+      "notion",
+    ]);
+    // The free-text query still composes with the featured filter.
+    expect(filterCatalog(withFeatured, "notion", FEATURED_SLUG).map((e) => e.name)).toEqual([
+      "notion",
+    ]);
   });
 
   it("narrows by category slug", () => {
