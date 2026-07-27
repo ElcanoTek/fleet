@@ -91,6 +91,7 @@ var allowedEnvVars = map[string]bool{
 	"CONVERSATION_TTL_DAYS":         true,
 	"CONVERSATION_UNPINNED_CAP":     true,
 	"FLEET_AUTO_ARCHIVE_AFTER_DAYS": true,
+	"FLEET_UPLOAD_MAX_BYTES":        true,
 
 	// ── fleet transport / data (canonical) ──
 	"FLEET_SERVER_ADDR":  true,
@@ -568,6 +569,13 @@ type Config struct {
 	DataDir         string
 	ConversationTTL int // days
 	UnpinnedCap     int // per-user
+	// UploadMaxBytes is the per-file cap for chat /attachments uploads
+	// (FLEET_UPLOAD_MAX_BYTES, default 1 GiB). Surfaced to the browser via
+	// /server-config so the composer can refuse oversize files before the
+	// upload round-trip. Deployments raising it past ~1 GiB must also raise
+	// experimental.proxyClientMaxBodySize in web/next.config.ts, which caps
+	// the whole proxied request at 2 GB.
+	UploadMaxBytes int64
 	// AutoArchiveAfterDays soft-archives unpinned conversations untouched for
 	// this many days (#282). 0 (the default) disables it — a conversation is
 	// then only ever archived by an explicit user action. FLEET_AUTO_ARCHIVE_AFTER_DAYS.
@@ -1157,6 +1165,7 @@ func Load(envFile string) (*Config, error) {
 		DataDir:                getenvFleetDefault("DATA_DIR", "./data"),
 		ConversationTTL:        getenvInt("CONVERSATION_TTL_DAYS", 14),
 		UnpinnedCap:            getenvInt("CONVERSATION_UNPINNED_CAP", 50),
+		UploadMaxBytes:         getenvFleetInt64("UPLOAD_MAX_BYTES", 1<<30),
 		AutoArchiveAfterDays:   getenvFleetInt("AUTO_ARCHIVE_AFTER_DAYS", 0),
 		SearchEnabled:          getenvBool("FLEET_SEARCH_ENABLED", true),
 		ConversationSoftDelete: getenvBool("FLEET_CONVERSATION_SOFT_DELETE", false),
@@ -1444,6 +1453,9 @@ func (c *Config) Validate() error {
 	}
 	if c.UnpinnedCap <= 0 {
 		return fmt.Errorf("CONVERSATION_UNPINNED_CAP must be positive")
+	}
+	if c.UploadMaxBytes <= 0 {
+		return fmt.Errorf("FLEET_UPLOAD_MAX_BYTES must be positive")
 	}
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL (or DB_HOST/DB_USER/DB_NAME parts) is required")
@@ -1861,6 +1873,15 @@ func normalizePythonREPLMode(raw string) string {
 func getenvFleetInt(suffix string, def int) int {
 	if v, ok := lookupFleet(suffix); ok {
 		if i, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return i
+		}
+	}
+	return def
+}
+
+func getenvFleetInt64(suffix string, def int64) int64 {
+	if v, ok := lookupFleet(suffix); ok {
+		if i, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
 			return i
 		}
 	}

@@ -257,6 +257,7 @@ func TestCheckEnvVarsMockMode(t *testing.T) {
 		SharedToken:     "tok",
 		ConversationTTL: 14,
 		UnpinnedCap:     50,
+		UploadMaxBytes:  1 << 30,
 		DatabaseURL:     "postgres://u:p@localhost:5432/fleet_chat?sslmode=disable",
 		TLSMode:         "off",
 	}

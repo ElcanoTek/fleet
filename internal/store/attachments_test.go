@@ -161,3 +161,121 @@ func TestSweepOrphanWorkspacesMissingRoot(t *testing.T) {
 		t.Errorf("n=%d, want 0", n)
 	}
 }
+
+// ── admin storage management ─────────────────────────────────────────────
+
+// backdateConversation shifts a conversation's updated_at to `when` (unix
+// seconds) so cutoff-based queries can be exercised without sleeping.
+func backdateConversation(t *testing.T, s *Store, id string, when int64) {
+	t.Helper()
+	if _, err := s.db.ExecContext(context.Background(),
+		`UPDATE conversations SET updated_at = $1 WHERE id = $2`, when, id); err != nil {
+		t.Fatalf("backdate %s: %v", id, err)
+	}
+}
+
+func TestDeleteUnpinnedOlderThan_SparesProtectedRows(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	old := time.Now().Add(-90 * 24 * time.Hour).Unix()
+
+	stale, err := s.CreateConversation(ctx, "u@x.com", "stale", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	backdateConversation(t, s, stale.ID, old)
+
+	pinned, err := s.CreateConversation(ctx, "u@x.com", "pinned", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := s.SetPinned(ctx, "u@x.com", pinned.ID, true); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	backdateConversation(t, s, pinned.ID, old)
+
+	fresh, err := s.CreateConversation(ctx, "u@x.com", "fresh", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	n, err := s.DeleteUnpinnedOlderThan(ctx, time.Now().Add(-30*24*time.Hour))
+	if err != nil {
+		t.Fatalf("DeleteUnpinnedOlderThan: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("deleted = %d, want 1 (only the stale unpinned conv)", n)
+	}
+	if c, _ := s.Get(ctx, "u@x.com", stale.ID); c != nil {
+		t.Error("stale unpinned conversation must be gone")
+	}
+	if c, _ := s.Get(ctx, "u@x.com", pinned.ID); c == nil {
+		t.Error("pinned conversation must survive")
+	}
+	if c, _ := s.Get(ctx, "u@x.com", fresh.ID); c == nil {
+		t.Error("fresh conversation must survive")
+	}
+}
+
+func TestStorageConversationStats_CountsReclaimable(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	old := time.Now().Add(-90 * 24 * time.Hour).Unix()
+
+	stale, err := s.CreateConversation(ctx, "u@x.com", "stale", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	backdateConversation(t, s, stale.ID, old)
+
+	pinned, err := s.CreateConversation(ctx, "u@x.com", "pinned-old", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := s.SetPinned(ctx, "u@x.com", pinned.ID, true); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	backdateConversation(t, s, pinned.ID, old)
+
+	if _, err := s.CreateConversation(ctx, "u@x.com", "fresh", "victoria", "", false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	stats, err := s.StorageConversationStats(ctx, time.Now().Add(-30*24*time.Hour))
+	if err != nil {
+		t.Fatalf("StorageConversationStats: %v", err)
+	}
+	if stats.Total != 3 {
+		t.Errorf("Total = %d, want 3", stats.Total)
+	}
+	if stats.Pinned != 1 {
+		t.Errorf("Pinned = %d, want 1", stats.Pinned)
+	}
+	if stats.Protected != 1 {
+		t.Errorf("Protected = %d, want 1", stats.Protected)
+	}
+	if stats.ReclaimableAtCutoff != 1 {
+		t.Errorf("ReclaimableAtCutoff = %d, want 1 (only the stale unpinned conv)", stats.ReclaimableAtCutoff)
+	}
+}
+
+func TestConversationStorageMetaByIDs(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	c, err := s.CreateConversation(ctx, "u@x.com", "big analysis", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	meta, err := s.ConversationStorageMetaByIDs(ctx, []string{c.ID, "00000000-0000-0000-0000-000000000000"})
+	if err != nil {
+		t.Fatalf("ConversationStorageMetaByIDs: %v", err)
+	}
+	if len(meta) != 1 {
+		t.Fatalf("len(meta) = %d, want 1 (unknown id absent)", len(meta))
+	}
+	m := meta[c.ID]
+	if m.Title != "big analysis" || m.UserEmail != "u@x.com" || m.Pinned {
+		t.Errorf("meta mismatch: %+v", m)
+	}
+}

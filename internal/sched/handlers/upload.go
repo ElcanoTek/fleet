@@ -23,7 +23,10 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-const maxUploadSize = 250 * 1024 * 1024 // 250MB
+// Fallback per-file cap, used only if the config carries no value. The
+// real limit is Config.UploadMaxBytes (FLEET_UPLOAD_MAX_BYTES, default
+// 1 GiB), shared with the chat plane's /attachments endpoint.
+const maxUploadSize = 1 << 30 // 1 GiB
 
 // HandleUpload handles file uploads.
 func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
@@ -104,9 +107,22 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
-	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
-		writeError(w, http.StatusBadRequest, "File too large")
+	maxBytes := h.config.UploadMaxBytes
+	if maxBytes <= 0 {
+		maxBytes = maxUploadSize
+	}
+	// Allow 1 MiB of multipart framing overhead so a file exactly at the
+	// limit still fits in the request. The in-memory threshold stays small
+	// (32 MiB) — bigger parts spill to temp files instead of buffering the
+	// whole upload in RAM (the old code passed the full cap here).
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+(1<<20))
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("File is over this server's %d MB upload limit", maxBytes/(1024*1024)))
+			return
+		}
+		writeError(w, http.StatusBadRequest, "Invalid upload")
 		return
 	}
 
@@ -116,6 +132,10 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	if header.Size > maxBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("%q is over this server's %d MB upload limit", header.Filename, maxBytes/(1024*1024)))
+		return
+	}
 
 	// Create temp directory if not exists
 	tempDir := filepath.Join(h.config.DataDir, "temp_uploads")

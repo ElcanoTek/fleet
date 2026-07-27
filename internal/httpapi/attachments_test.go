@@ -1,6 +1,12 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,5 +216,164 @@ func TestAppendWorkspaceInventory_CapsLongListings(t *testing.T) {
 	got := appendWorkspaceInventoryBlock("hi", dir)
 	if !strings.Contains(got, "and 5 more") {
 		t.Errorf("expected overflow marker for 5 truncated entries, got:\n%s", got)
+	}
+}
+
+// ── postAttachments HTTP-level tests ─────────────────────────────────────
+//
+// The handler only reads s.cfg, so a bare Server with a temp attachment
+// dir exercises the full multipart → size-check → save path without
+// Postgres.
+
+func attachmentServerFixture(t *testing.T, maxBytes int64) *Server {
+	t.Helper()
+	return &Server{
+		cfg: &config.Config{
+			EmailAttachmentDir: t.TempDir(),
+			UploadMaxBytes:     maxBytes,
+		},
+	}
+}
+
+func multipartBody(t *testing.T, files map[string][]byte) (*bytes.Buffer, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for name, content := range files {
+		part, err := mw.CreateFormFile("files", name)
+		if err != nil {
+			t.Fatalf("create form file: %v", err)
+		}
+		if _, err := part.Write(content); err != nil {
+			t.Fatalf("write part: %v", err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+	return &buf, mw.FormDataContentType()
+}
+
+func countUploadedFiles(t *testing.T, s *Server) int {
+	t.Helper()
+	return duTree(filepath.Join(s.cfg.EmailAttachmentDir, "uploads")).Files
+}
+
+func TestPostAttachments_SavesFilesUnderLimit(t *testing.T) {
+	s := attachmentServerFixture(t, 1024)
+	body, ct := multipartBody(t, map[string][]byte{
+		"report.csv": []byte("a,b\n1,2\n"),
+		"notes.txt":  []byte("hello"),
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/attachments", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+
+	s.postAttachments(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Attachments []uploadedAttachment `json:"attachments"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Attachments) != 2 {
+		t.Fatalf("attachments = %d, want 2", len(resp.Attachments))
+	}
+	for _, a := range resp.Attachments {
+		if _, err := os.Stat(filepath.FromSlash(a.Path)); err != nil {
+			t.Errorf("saved file missing: %s: %v", a.Path, err)
+		}
+	}
+}
+
+func TestPostAttachments_OversizeIs413WithReadableMessage(t *testing.T) {
+	// Cap 1 KiB → request cap 2 KiB. A 1.5 KiB file clears the request
+	// cap (with multipart overhead) but trips the per-file check.
+	s := attachmentServerFixture(t, 1024)
+	body, ct := multipartBody(t, map[string][]byte{
+		"big.bin": bytes.Repeat([]byte("x"), 1500),
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/attachments", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+
+	s.postAttachments(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body: %s", rec.Code, rec.Body.String())
+	}
+	msg := rec.Body.String()
+	if !strings.Contains(msg, `"big.bin"`) || !strings.Contains(msg, "upload limit") {
+		t.Errorf("413 body should name the file and the limit, got: %s", msg)
+	}
+}
+
+func TestPostAttachments_OversizeBatchSavesNothing(t *testing.T) {
+	// An oversize file anywhere in the batch must reject the whole
+	// request BEFORE any file is written, so no orphans wait on the
+	// TTL sweep.
+	s := attachmentServerFixture(t, 1024)
+	body, ct := multipartBody(t, map[string][]byte{
+		"ok.txt":  []byte("tiny"),
+		"big.bin": bytes.Repeat([]byte("x"), 1500),
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/attachments", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+
+	s.postAttachments(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := countUploadedFiles(t, s); got != 0 {
+		t.Errorf("files on disk after rejected batch = %d, want 0", got)
+	}
+}
+
+func TestPostAttachments_RequestCapIs413NotOpaque400(t *testing.T) {
+	// A batch whose combined size trips http.MaxBytesReader used to
+	// surface as `400 parse multipart: ... request body too large`.
+	// It must come back as a 413 with actionable copy.
+	s := attachmentServerFixture(t, 1024)
+	body, ct := multipartBody(t, map[string][]byte{
+		"a.bin": bytes.Repeat([]byte("x"), 1000),
+		"b.bin": bytes.Repeat([]byte("x"), 1000),
+		"c.bin": bytes.Repeat([]byte("x"), 1000),
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/attachments", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+
+	s.postAttachments(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "combined request limit") {
+		t.Errorf("413 body should explain the combined limit, got: %s", rec.Body.String())
+	}
+	if got := countUploadedFiles(t, s); got != 0 {
+		t.Errorf("files on disk after rejected batch = %d, want 0", got)
+	}
+}
+
+func TestPostAttachments_ZeroConfigFallsBackToDefault(t *testing.T) {
+	// A zero-value config (old deployments, tests) must fall back to
+	// defaultMaxUploadBytes rather than rejecting everything.
+	s := attachmentServerFixture(t, 0)
+	body, ct := multipartBody(t, map[string][]byte{"a.txt": []byte("hi")})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/attachments", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+
+	s.postAttachments(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 }

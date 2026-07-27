@@ -738,6 +738,12 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/admin/provider-health", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleProviderHealth)))))
 	mux.Handle("/admin/health-summary", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleHealthSummary)))))
 	mux.Handle("/admin/server-stats", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleServerStats)))))
+	// Storage visibility + reclaim (uploads / temp files / workspaces /
+	// old unpinned chats). Read is a walk of the data trees; the cleanup
+	// POST is destructive but only for cleanup-eligible rows (pinned /
+	// archived / shared / project chats are never touched).
+	mux.Handle("/admin/storage", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStorage)))))
+	mux.Handle("/admin/storage/cleanup", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleAdminStorageCleanup)))))
 	mux.Handle("/admin/doctor", auth(member(s.adminMiddleware(http.HandlerFunc(s.handleDoctor)))))
 	// Admin Users tab (#237): GET list / POST create on the collection;
 	// PATCH role-team / DELETE / PUT …/password on the item. Admin-gated like
@@ -1003,6 +1009,10 @@ type serverConfigResponse struct {
 	LockdownAvailable     bool     `json:"lockdown_available"`
 	LockdownOnly          bool     `json:"lockdown_only"`
 	LockdownAllowedModels []string `json:"lockdown_allowed_models"`
+	// UploadMaxBytes: per-file /attachments cap. The composer uses it to
+	// reject oversize files client-side instead of discovering the limit
+	// after a full upload round-trip ends in a 413.
+	UploadMaxBytes int64 `json:"upload_max_bytes"`
 }
 
 func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
@@ -1013,6 +1023,7 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 	resp := serverConfigResponse{
 		LockdownAvailable: s.cfg.LockdownAvailable(),
 		LockdownOnly:      s.cfg.LockdownOnly,
+		UploadMaxBytes:    s.cfg.UploadMaxBytes,
 	}
 	if resp.LockdownAvailable {
 		resp.LockdownAllowedModels = append(resp.LockdownAllowedModels, s.cfg.LockdownAllowedModels...)

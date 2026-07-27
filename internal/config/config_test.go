@@ -423,6 +423,7 @@ func TestValidate(t *testing.T) {
 			c.SharedToken = "t"
 			c.ConversationTTL = 1
 			c.UnpinnedCap = 1
+			c.UploadMaxBytes = 1
 			c.DatabaseURL = "postgres://x@localhost/x"
 		}, false},
 		{"missing openrouter", func(c *Config) {
@@ -449,11 +450,19 @@ func TestValidate(t *testing.T) {
 			c.ConversationTTL = 1
 			c.DatabaseURL = "postgres://x@localhost/x"
 		}, true},
+		{"bad upload max", func(c *Config) {
+			c.OpenRouterAPIKey = "k"
+			c.SharedToken = "t"
+			c.ConversationTTL = 1
+			c.UnpinnedCap = 1
+			c.DatabaseURL = "postgres://x@localhost/x"
+		}, true},
 		{"missing database url", func(c *Config) {
 			c.OpenRouterAPIKey = "k"
 			c.SharedToken = "t"
 			c.ConversationTTL = 1
 			c.UnpinnedCap = 1
+			c.UploadMaxBytes = 1
 		}, true},
 	}
 	for _, tc := range cases {
