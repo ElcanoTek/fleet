@@ -65,6 +65,25 @@ func TestEnvReferencesWorkspace(t *testing.T) {
 	}
 }
 
+// TestEnvReferencesTaskID pins the per-task-identity-requested predicate: a
+// bundle that references ${FLEET_TASK_ID} is asking for an identity only the
+// dedicated per-run client can supply, and the scheduler warns when a run
+// cannot offer one.
+func TestEnvReferencesTaskID(t *testing.T) {
+	if EnvReferencesTaskID(map[string]string{"A": "x"}) {
+		t.Error("token-free env must not report a task-id reference")
+	}
+	if EnvReferencesTaskID(map[string]string{"A": WorkspaceEnvToken}) {
+		t.Error("the workspace token is a different token and must not match")
+	}
+	if !EnvReferencesTaskID(map[string]string{"CUTLASS_MOC_TASK_ID": TaskIDEnvToken}) {
+		t.Error("task-id token must be detected")
+	}
+	if !EnvReferencesTaskID(map[string]string{"A": "pre" + TaskIDEnvToken + "post"}) {
+		t.Error("embedded token must be detected")
+	}
+}
+
 // TestWorkspaceDirs pins the directory layout the substitution offers: both
 // the shared per-deployment dir and minted per-run dirs live under the
 // (FLEET_WORKSPACE_ROOT-configurable) workspace root, and per-run dirs are

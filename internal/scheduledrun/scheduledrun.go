@@ -946,20 +946,26 @@ func (r *Runner) buildTaskRemoteOverlay(ctx context.Context, task *models.Task, 
 func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task) (*mcp.Client, func(), string, error) {
 	noop := func() {}
 	if len(task.MCPSelection) == 0 {
-		// The shared client's workspace-armed servers were spawned against the
-		// stable per-deployment dir at boot (see mcp_workspace.go), so that is
-		// where their ledgers live. Resolve it only when a configured server
-		// actually opted into the token — SharedMCPWorkspaceDir creates the
-		// directory, and a catalog that never uses the token should create
-		// nothing on disk.
-		workdir := ""
-		for _, base := range r.mcpBases() {
-			if agentcore.EnvReferencesWorkspace(base.BaseEnv) {
-				workdir = agentcore.SharedMCPWorkspaceDir()
-				break
-			}
+		// NO reconciliation workdir on this path, deliberately. The shared
+		// client's workspace-armed servers were spawned at boot against the
+		// stable PER-DEPLOYMENT dir (mcp_workspace.go), so its ledger holds the
+		// markers of every task AND every chat conversation on the box, keyed
+		// only by (ssp, deal_name) — nothing attributes a record to a run.
+		// Replaying it would inject another task's half-finished creates into
+		// this task's prompt as "the prior process stopped after submitting
+		// these creates", and an abandoned marker is only ever cleared by a
+		// matching resolution in the same file, so it would be replayed into
+		// every future run forever. An unattributable ledger is not a resume
+		// signal. A task that wants real per-run resume semantics declares an
+		// mcp_selection and gets the dedicated client below, whose workdir and
+		// ${FLEET_TASK_ID} identify exactly one run.
+		if r.taskIdentityRequested() {
+			log.Printf("scheduled task %s: no mcp_selection, so its MCP servers run on the shared "+
+				"per-deployment client — the bundle's per-task ledgers (create idempotency, email "+
+				"send-once) are inert for this run. Declare an mcp_selection for per-run identity.",
+				task.ID)
 		}
-		return r.mgr.MCPClient(), noop, workdir, nil
+		return r.mgr.MCPClient(), noop, "", nil
 	}
 
 	selection := make(agentcore.MCPSelection, 0, len(task.MCPSelection))
@@ -1062,6 +1068,20 @@ func (r *Runner) stageTaskInputs(task *models.Task, inputDir string) error {
 // binder needs. Account overlays are applied by agentcore.BindMCPSelection via
 // creds.ApplyClientSuffix; this only supplies the default-seat env. Mirrors the
 // interactive agent's mcpBases so both paths resolve identical specs.
+// taskIdentityRequested reports whether the active catalog asks for a per-task
+// identity — i.e. some server's manifest env references ${FLEET_TASK_ID}. Only
+// the dedicated per-run client can supply one, so this is the signal that a
+// selection-less run is losing a guarantee the bundle asked for (its ledgers go
+// inert) rather than one it never wanted.
+func (r *Runner) taskIdentityRequested() bool {
+	for _, base := range r.mcpBases() {
+		if agentcore.EnvReferencesTaskID(base.BaseEnv) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runner) mcpBases() map[string]agentcore.MCPServerBase {
 	bases := map[string]agentcore.MCPServerBase{}
 	if r.cfg == nil {

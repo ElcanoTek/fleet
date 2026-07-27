@@ -122,6 +122,33 @@ needed.
 - **Per-run workdirs for scheduled runs that use the shared client** (no
   `mcp_selection`): they get the shared per-deployment dir. Managed-run
   detection is still armed; only ledger granularity differs.
+
+  **A shared dir is not a run identity — do not treat it as one.** Its ledgers
+  accumulate the markers of every task *and* every chat conversation on the box,
+  and the bundle's ledger records carry no run attribution. Two consequences,
+  both now handled:
+
+  - **fleet side.** `bindTaskMCP` returns **no** reconciliation workdir on the
+    selection-less path, so the #717 start-of-run create-reconciliation sweep is
+    never seeded from the shared ledger. Replaying it injected another task's
+    half-finished creates into this task's prompt, and because an abandoned
+    `submitted` marker is only cleared by a matching resolution in the same
+    file, it was replayed into every subsequent run forever. When the catalog
+    references `${FLEET_TASK_ID}` the run logs that its per-task ledgers are
+    inert, so the operator knows what a missing selection costs.
+  - **Bundle side.** A bundle ledger MUST key a per-task invariant to
+    `${FLEET_TASK_ID}` (fleet's task UUID) and stay **inert** without it — never
+    to the workdir path. elcano-config PR #48 fixes exactly this in the SendGrid
+    send-once guard: keying on the shared path collapsed every task onto one
+    key, so the first send on the box made every later send return
+    `202 duplicate_suppressed` with no email delivered.
+
+  A task that needs real per-run ledger semantics (cross-run send-once, create
+  idempotency across a retry) declares an `mcp_selection` and gets the dedicated
+  per-run client, whose workdir and `${FLEET_TASK_ID}` identify exactly one run.
+  Making that the default for *every* scheduled run would mean a per-run spawn
+  of the whole catalog and would have to reproduce the shared client's
+  optional-server gating; it stays deferred.
 - **Re-ordering bundle-load vs `.env` load**: `${VAR:-default}` manifest forms
   resolve BEFORE the `.env` file is loaded, so an env-file-only override of a
   defaulted key does not win. Pre-existing behavior, documented here, tracked

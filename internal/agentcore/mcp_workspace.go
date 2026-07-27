@@ -67,6 +67,18 @@ func EnvReferencesWorkspace(env map[string]string) bool {
 	return false
 }
 
+// EnvReferencesTaskID reports whether any value still carries the reserved
+// ${FLEET_TASK_ID} token — i.e. the bundle asked for a per-task identity, which
+// only a dedicated per-run client can supply.
+func EnvReferencesTaskID(env map[string]string) bool {
+	for _, v := range env {
+		if strings.Contains(v, TaskIDEnvToken) {
+			return true
+		}
+	}
+	return false
+}
+
 // ExpandTaskIDEnv resolves the reserved scheduled-task identity token. Shared
 // or interactive spawns pass an empty taskID and therefore drop token-bearing
 // keys instead of leaking a literal placeholder to a connector.
