@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { Icon } from "@/app/shared/ui/Icon";
 import {
   authHint,
   categoriesOf,
+  categoryIcon,
   consentRequired,
   FEATURED_SLUG,
   effectiveEnabled,
@@ -386,6 +388,10 @@ function DirectoryCard({
       className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[0.95rem] py-[0.85rem]"
     >
       <div className="flex flex-wrap items-center gap-[0.55rem]">
+        <Icon
+          name={categoryIcon(entry.category ?? "")}
+          className="size-4 shrink-0 text-[var(--color-text-muted)]"
+        />
         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
           {entry.display_name}
         </span>
@@ -1569,6 +1575,12 @@ function ConnectionsPageInner() {
                       count={c.count}
                       role="tab"
                       ariaSelected={catalogCategory === c.slug}
+                      leading={
+                        <Icon
+                          name={categoryIcon(c.slug)}
+                          className="mr-[0.32rem] size-3 shrink-0 self-center"
+                        />
+                      }
                     >
                       {c.label}
                     </DirChip>
@@ -1598,7 +1610,12 @@ function ConnectionsPageInner() {
                 ) : (
                   groupByCategory(dirHits).map((group) => (
                     <div key={group.slug}>
-                      <DirCatHead>{group.label}</DirCatHead>
+                      <DirCatHead>
+                        <span className="inline-flex items-center gap-[0.35rem]">
+                          <Icon name={categoryIcon(group.slug)} className="size-3 shrink-0" />
+                          {group.label}
+                        </span>
+                      </DirCatHead>
                       <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
                         {group.entries.map(renderDirCard)}
                       </div>

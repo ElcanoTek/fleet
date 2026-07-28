@@ -112,6 +112,36 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: "Other",
 };
 
+// Icon (core-icons sprite symbol id) for each curated category slug, shown
+// on the directory's category chips and entry cards. An unknown slug (a
+// bundle can invent its own) falls back to the generic connector plug.
+const CATEGORY_ICONS: Record<string, string> = {
+  development: "wrench",
+  "cloud-infrastructure": "cloud",
+  databases: "database",
+  "data-analytics": "bar-chart",
+  "web-search": "search",
+  productivity: "check-square",
+  communication: "message",
+  "crm-sales": "briefcase",
+  "customer-support": "headphones",
+  "commerce-payments": "shopping-cart",
+  finance: "dollar-sign",
+  "design-media": "image",
+  observability: "activity",
+  security: "shield",
+  "ai-ml": "sparkles",
+  automation: "zap",
+  "marketing-social": "megaphone",
+  "knowledge-docs": "book",
+  "travel-local": "map-pin",
+  other: "plug",
+};
+
+export function categoryIcon(slug: string): string {
+  return CATEGORY_ICONS[slug || "other"] ?? "plug";
+}
+
 // Directory section order — curated slugs in a deliberate reading order,
 // unknown categories appended alphabetically, "other" always last.
 const CATEGORY_ORDER = Object.keys(CATEGORY_LABELS);
