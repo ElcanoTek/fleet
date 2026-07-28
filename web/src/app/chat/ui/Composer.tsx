@@ -1091,7 +1091,7 @@ export function Composer({
                         abortControllersRef.current[convKey]?.abort();
                       }}
                     >
-                      <Icon name="stop" className="size-3.5" />
+                      <Icon name="stop" className="size-[1.125rem]" />
                       <span className="sr-only">Stop</span>
                     </button>
                   ) : null}
