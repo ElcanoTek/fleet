@@ -51,14 +51,25 @@ type Discovered struct {
 // metadata, and verify it supports PKCE S256. httpClient MUST be the SSRF-safe
 // client in production; tests inject a plain client against httptest.
 func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL string) (*Discovered, error) {
-	prmURL, err := locateResourceMetadata(ctx, httpClient, canonicalServerURL)
+	prmURLs, err := locateResourceMetadata(ctx, httpClient, canonicalServerURL)
 	if err != nil {
 		return nil, err
 	}
 
 	var prm ProtectedResourceMetadata
-	if err := fetchJSON(ctx, httpClient, prmURL, &prm); err != nil {
-		return nil, fmt.Errorf("fetch protected-resource metadata: %w", err)
+	var prmURL string
+	var fetchErr error
+	for _, candidate := range prmURLs {
+		var got ProtectedResourceMetadata
+		if err := fetchJSON(ctx, httpClient, candidate, &got); err != nil {
+			fetchErr = err
+			continue
+		}
+		prm, prmURL = got, candidate
+		break
+	}
+	if prmURL == "" {
+		return nil, fmt.Errorf("fetch protected-resource metadata: %w", fetchErr)
 	}
 	if len(prm.AuthorizationServers) == 0 {
 		return nil, fmt.Errorf("protected-resource metadata at %s lists no authorization_servers", prmURL)
@@ -91,14 +102,18 @@ func Discover(ctx context.Context, httpClient *http.Client, canonicalServerURL s
 	return &Discovered{Resource: resource, PRM: prm, AS: *as}, nil
 }
 
-// locateResourceMetadata determines the Protected Resource Metadata URL. It
-// first probes the server, hoping for a 401 whose WWW-Authenticate header points
-// at the metadata (RFC 9728 §5.1); failing that it falls back to the
-// well-known location at the server's origin.
-func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canonicalServerURL string) (string, error) {
+// locateResourceMetadata determines the Protected Resource Metadata URL
+// candidates, in priority order. It first probes the server, hoping for a 401
+// whose WWW-Authenticate header points at the metadata (RFC 9728 §5.1); failing
+// that it falls back to the well-known locations: RFC 9728 §3.1's path-aware
+// form first (/.well-known/oauth-protected-resource/<path> — what Google's
+// Workspace MCP servers serve, and the MCP auth spec's prescribed location for
+// a resource with a path component), then the origin-root form (what GitHub
+// serves).
+func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canonicalServerURL string) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, canonicalServerURL, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	resp, err := httpClient.Do(req)
@@ -107,16 +122,20 @@ func locateResourceMetadata(ctx context.Context, httpClient *http.Client, canoni
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxMetadataBytes))
 		if resp.StatusCode == http.StatusUnauthorized {
 			if u := parseResourceMetadataURL(resp.Header.Get("WWW-Authenticate")); u != "" {
-				return u, nil
+				return []string{u}, nil
 			}
 		}
 	}
-	// Fallback: the conventional well-known location at the origin.
+	// Fallback: the conventional well-known locations.
 	origin, oerr := originOf(canonicalServerURL)
 	if oerr != nil {
-		return "", oerr
+		return nil, oerr
 	}
-	return origin + "/.well-known/oauth-protected-resource", nil
+	root := origin + "/.well-known/oauth-protected-resource"
+	if path := strings.TrimSuffix(strings.TrimPrefix(canonicalServerURL, origin), "/"); path != "" {
+		return []string{root + path, root}, nil
+	}
+	return []string{root}, nil
 }
 
 // parseResourceMetadataURL pulls the resource_metadata="..." parameter out of a
