@@ -105,6 +105,14 @@ prior versions are listed because none have shipped.
   uses one shared CloseButton: same 2rem box, rounding, glyph, and a slight
   red-tint hover. The orphaned `.modal-close` CSS was removed.
 
+### Added
+
+- **"Sign out" on OAuth connectors**: Settings → Connections now separates
+  ending an authorization from deleting the connection. Sign out revokes
+  (best effort) and drops the stored tokens but keeps the registration —
+  including a manually-registered OAuth client's ID/secret — so Connect
+  signs back in without re-entering anything. Remove stays the full delete.
+
 ### Fixed
 
 - **Remote-MCP OAuth discovery finds path-aware metadata (Google Workspace

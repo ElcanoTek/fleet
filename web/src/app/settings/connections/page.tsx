@@ -1002,6 +1002,23 @@ function ConnectionsPageInner() {
       .finally(() => setBusy(false));
   };
 
+  const signOut = (id: string) => {
+    setError(null);
+    setBusy(true);
+    fetch(`/api/remote-mcp-servers/${encodeURIComponent(id)}/signout`, {
+      method: "POST",
+    })
+      .then(async (res) => {
+        if (!res.ok && res.status !== 204) {
+          throw new Error((await res.text()) || `Sign out failed: ${res.status}`);
+        }
+        setNotice("Signed out. The connection is kept — Connect signs back in.");
+        refresh();
+      })
+      .catch((err: unknown) => setError(errMessage(err)))
+      .finally(() => setBusy(false));
+  };
+
   // Remove is confirmed inline on the button itself (InlineConfirmButton) —
   // no window.confirm.
   const disconnect = (id: string) => {
@@ -1265,6 +1282,19 @@ function ConnectionsPageInner() {
                             {s.status === "connected" ? "Reconnect" : "Connect"}
                           </button>
                         )}
+                        {s.auth_kind !== "api_key" &&
+                        s.auth_kind !== "open" &&
+                        s.status === "connected" ? (
+                          <button
+                            type="button"
+                            onClick={() => signOut(s.id)}
+                            disabled={busy}
+                            title="Ends the authorization but keeps the connection and its OAuth client — Connect signs back in without re-entering credentials."
+                            className={btnClass({ sm: true, reveal: true })}
+                          >
+                            Sign out
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           aria-expanded={shareOpenFor === s.id}

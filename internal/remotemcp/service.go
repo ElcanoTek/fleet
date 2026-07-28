@@ -51,6 +51,7 @@ type tokenStore interface {
 	GetRemoteMCPAPIKey(ctx context.Context, server *store.RemoteMCPServer) (string, error)
 	SetRemoteMCPAPIKey(ctx context.Context, userEmail, id, apiKey string) error
 	GetOAuthTokens(ctx context.Context, server *store.RemoteMCPServer) (*store.RemoteMCPTokens, error)
+	ClearOAuthTokens(ctx context.Context, userEmail, id string) error
 	StoreOAuthTokens(ctx context.Context, server *store.RemoteMCPServer, tokens store.RemoteMCPTokens) error
 	EnsureFreshToken(ctx context.Context, server *store.RemoteMCPServer, marginSeconds int64, refreshFn store.RefreshFunc) (string, error)
 	BeginOAuthFlow(ctx context.Context, state, serverID, userEmail, codeVerifier string, ttl time.Duration) error
@@ -450,6 +451,27 @@ func (s *Service) Disconnect(ctx context.Context, email, serverID string) error 
 		s.tryRevoke(ctx, server)
 	}
 	return s.store.DeleteRemoteMCPServer(ctx, email, serverID)
+}
+
+// SignOut ends the caller's authorization for an OAuth server without deleting
+// the registration: best-effort token revocation at the AS, then the stored
+// tokens are dropped and the server is marked needs_reauth so the UI offers
+// Reconnect (client ID/secret survive). Disconnect remains the full delete.
+func (s *Service) SignOut(ctx context.Context, email, serverID string) error {
+	if !s.Enabled() {
+		return ErrDisabled
+	}
+	server, err := s.store.GetRemoteMCPServer(ctx, email, serverID)
+	if err != nil {
+		return err
+	}
+	if server.AuthKind != "" && server.AuthKind != "oauth" {
+		return fmt.Errorf("sign out applies to OAuth connections only (this one is %s)", server.AuthKind)
+	}
+	if server.RevocationEndpoint != "" {
+		s.tryRevoke(ctx, server)
+	}
+	return s.store.ClearOAuthTokens(ctx, email, serverID)
 }
 
 // AcquireToken returns a valid bearer for server, refreshing under the store's

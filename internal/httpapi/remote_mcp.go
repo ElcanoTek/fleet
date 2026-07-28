@@ -174,6 +174,12 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "tool_count": toolCount})
+	case sub == "signout" && r.Method == http.MethodPost:
+		if err := s.remoteMCP.SignOut(r.Context(), user, id); err != nil {
+			s.remoteMCPError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case sub == "authorize" && r.Method == http.MethodPost:
 		authURL, err := s.remoteMCP.Authorize(r.Context(), user, id)
 		if err != nil {
