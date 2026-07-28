@@ -125,6 +125,17 @@ func (f *fakeStore) GetOAuthTokens(_ context.Context, srv *store.RemoteMCPServer
 	return &cp, nil
 }
 
+func (f *fakeStore) ClearOAuthTokens(_ context.Context, email, id string) error {
+	srv, ok := f.servers[id]
+	if !ok || srv.UserEmail != email {
+		return store.ErrRemoteMCPNotFound
+	}
+	delete(f.tokens, id)
+	srv.Status = store.RemoteMCPStatusNeedsReauth
+	srv.StatusDetail = "signed out — reconnect to use"
+	return nil
+}
+
 func (f *fakeStore) StoreOAuthTokens(_ context.Context, srv *store.RemoteMCPServer, t store.RemoteMCPTokens) error {
 	f.tokens[srv.ID] = t
 	if s := f.servers[srv.ID]; s != nil {
@@ -669,5 +680,51 @@ func TestResolverIncludesSharedServers(t *testing.T) {
 	conns, _ = svc.ConnectedServersForUser(ctx, "mate@x.com")
 	if len(conns) != 1 || conns[0].ID != mates.ID || conns[0].Owner != "" {
 		t.Fatalf("own server must win the name collision, got %+v", conns)
+	}
+}
+
+// SignOut ends the authorization but keeps the registration: tokens gone,
+// status needs_reauth, server row (and its client credentials) intact. Only
+// OAuth connections can sign out — an api_key connection's key IS its
+// registration, so the action is rejected.
+func TestSignOutKeepsRegistration(t *testing.T) {
+	fs := newFakeStore()
+	as := oauthTestServer(t, "")
+	svc := newTestService(t, fs, as)
+	ctx := context.Background()
+	const email = "user@elcano.com"
+
+	srv, err := fs.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+		UserEmail: email, Name: "acme", URL: as.URL + "/mcp", AuthKind: "oauth",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := fs.StoreOAuthTokens(ctx, srv, store.RemoteMCPTokens{AccessToken: "at", RefreshToken: "rt"}); err != nil {
+		t.Fatalf("tokens: %v", err)
+	}
+
+	if err := svc.SignOut(ctx, email, srv.ID); err != nil {
+		t.Fatalf("SignOut: %v", err)
+	}
+	got, err := fs.GetRemoteMCPServer(ctx, email, srv.ID)
+	if err != nil {
+		t.Fatalf("server deleted by sign out: %v", err)
+	}
+	if got.Status != store.RemoteMCPStatusNeedsReauth {
+		t.Errorf("status = %q, want needs_reauth", got.Status)
+	}
+	if _, terr := fs.GetOAuthTokens(ctx, got); terr == nil {
+		t.Error("tokens survived sign out")
+	}
+
+	key, err := fs.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+		UserEmail: email, Name: "keyed", URL: as.URL + "/mcp", AuthKind: "api_key",
+	})
+	if err != nil {
+		t.Fatalf("create api_key: %v", err)
+	}
+	if err := svc.SignOut(ctx, email, key.ID); err == nil {
+		t.Error("SignOut on api_key connection must be rejected")
 	}
 }

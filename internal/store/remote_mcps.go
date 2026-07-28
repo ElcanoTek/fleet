@@ -369,6 +369,37 @@ func (s *Store) StoreOAuthTokens(ctx context.Context, server *RemoteMCPServer, t
 	return tx.Commit()
 }
 
+// ClearOAuthTokens deletes a server's stored tokens and marks it
+// needs_reauth — "sign out": the registration (URL, sealed client secret,
+// shares) survives, so Reconnect works without re-entering credentials.
+// The Remove path (DeleteRemoteMCPServer) is the one that erases everything.
+func (s *Store) ClearOAuthTokens(ctx context.Context, userEmail, id string) error {
+	email := normalizeEmail(userEmail)
+	now := time.Now().Unix()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx,
+		`UPDATE remote_mcp_servers SET status = $3, status_detail = $4, updated_at = $5
+		 WHERE id = $1 AND user_email = $2`,
+		id, email, RemoteMCPStatusNeedsReauth, "signed out — reconnect to use", now)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrRemoteMCPNotFound
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM remote_mcp_oauth WHERE server_id = $1`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // GetOAuthTokens decrypts and returns a server's current tokens WITHOUT
 // refreshing. Used for best-effort revocation on disconnect. Returns
 // ErrRemoteMCPNeedsReauth when the server was never authorized.

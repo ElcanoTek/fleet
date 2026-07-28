@@ -250,3 +250,50 @@ func TestRemoteMCPNoCipherFailsClosed(t *testing.T) {
 		t.Fatalf("create without cipher err = %v, want ErrNoCipher", err)
 	}
 }
+
+// Sign out (#owner request): ClearOAuthTokens drops the token row and marks
+// needs_reauth, but the registration — including the sealed client secret a
+// manual OAuth app registration depends on — must survive so Reconnect works
+// without re-entering credentials.
+func TestClearOAuthTokensKeepsRegistration(t *testing.T) {
+	s := newTestStoreWithCipher(t)
+	ctx := context.Background()
+	const email = "user@elcano.com"
+
+	srv, err := s.CreateRemoteMCPServer(ctx, sampleServerInput(email))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := s.StoreOAuthTokens(ctx, srv, RemoteMCPTokens{
+		AccessToken:  "at-1",
+		RefreshToken: "rt-1",
+		ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+	}); err != nil {
+		t.Fatalf("store tokens: %v", err)
+	}
+
+	if err := s.ClearOAuthTokens(ctx, email, srv.ID); err != nil {
+		t.Fatalf("ClearOAuthTokens: %v", err)
+	}
+
+	got, err := s.GetRemoteMCPServer(ctx, email, srv.ID)
+	if err != nil {
+		t.Fatalf("get after sign out: %v", err)
+	}
+	if got.Status != RemoteMCPStatusNeedsReauth {
+		t.Errorf("status = %q, want %q", got.Status, RemoteMCPStatusNeedsReauth)
+	}
+	if _, terr := s.GetOAuthTokens(ctx, got); !errors.Is(terr, ErrRemoteMCPNeedsReauth) {
+		t.Errorf("tokens after sign out: err = %v, want ErrRemoteMCPNeedsReauth", terr)
+	}
+	// The sealed client secret survives — Reconnect must not re-prompt for it.
+	secret, _, serr := s.LoadServerSecrets(ctx, got)
+	if serr != nil || secret != "shh-secret" {
+		t.Errorf("client secret after sign out = %q, %v; want preserved", secret, serr)
+	}
+
+	// Unknown id / wrong owner both report not-found.
+	if err := s.ClearOAuthTokens(ctx, "other@elcano.com", srv.ID); !errors.Is(err, ErrRemoteMCPNotFound) {
+		t.Errorf("wrong owner: err = %v, want ErrRemoteMCPNotFound", err)
+	}
+}
