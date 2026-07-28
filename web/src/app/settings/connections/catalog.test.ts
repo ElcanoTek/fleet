@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   authHint,
   categoriesOf,
+  categoryIcon,
   categoryLabel,
   consentRequired,
   FEATURED_SLUG,
@@ -59,6 +60,16 @@ const CATALOG: CatalogThirdParty[] = [
     provenance: "community",
   }),
 ];
+
+describe("categoryIcon", () => {
+  it("maps every curated slug to a sprite symbol and falls back to plug", () => {
+    expect(categoryIcon("development")).toBe("wrench");
+    expect(categoryIcon("databases")).toBe("database");
+    expect(categoryIcon("finance")).toBe("dollar-sign");
+    expect(categoryIcon("ad-tech")).toBe("plug");
+    expect(categoryIcon("")).toBe("plug");
+  });
+});
 
 describe("categoryLabel", () => {
   it("maps curated slugs and falls back to title case", () => {
