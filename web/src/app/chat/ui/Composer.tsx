@@ -1067,7 +1067,9 @@ export function Composer({
                 <div className="flex items-center gap-[0.35rem]">
                   {isStreaming ? (
                     <button
-                      className="inline-flex min-w-[3rem] items-center justify-center rounded-full border border-[var(--color-border)] px-3 py-2 text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                      aria-label="Stop generating"
+                      data-tip-top="Stop generating"
+                      className="inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                       type="button"
                       onClick={() => {
                         // Tell the server to actually stop the turn.
@@ -1089,7 +1091,8 @@ export function Composer({
                         abortControllersRef.current[convKey]?.abort();
                       }}
                     >
-                      Stop
+                      <Icon name="stop" className="size-3.5" />
+                      <span className="sr-only">Stop</span>
                     </button>
                   ) : null}
                   {/* Send-key preference toggle (issue #315), restyled as the
