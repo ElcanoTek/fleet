@@ -485,11 +485,14 @@ function DirectoryCard({
           {manualClient ? (
             <>
               {redirectUri ? (
-                <div className="grid gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
+                // min-w-0 (here and on the row) keeps the nowrap URL's intrinsic
+                // width from inflating the form grid's column — without it every
+                // field in the dialog stretches past the container.
+                <div className="grid min-w-0 gap-1 text-[0.72rem] text-[var(--color-text-secondary)]">
                   <span className="font-medium">
                     Authorization callback URL for your app registration
                   </span>
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <code className="min-w-0 flex-1 truncate rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-1.5 font-[family-name:var(--font-code)] text-[0.72rem] text-[var(--color-text-primary)]">
                       {redirectUri}
                     </code>
