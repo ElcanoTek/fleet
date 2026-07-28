@@ -1067,7 +1067,7 @@ export function Composer({
                 <div className="flex items-center gap-[0.35rem]">
                   {isStreaming ? (
                     <button
-                      className="text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:text-[var(--color-text-secondary)]"
+                      className="inline-flex min-w-[3rem] items-center justify-center rounded-full border border-[var(--color-border)] px-3 py-2 text-[0.6875rem] font-medium text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
                       type="button"
                       onClick={() => {
                         // Tell the server to actually stop the turn.
