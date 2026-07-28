@@ -92,6 +92,12 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **Remote-MCP OAuth discovery finds path-aware metadata (Google Workspace
+  MCP)**: connectors whose resource URL has a path (e.g.
+  `gmailmcp.googleapis.com/mcp/v1`) publish RFC 9728 §3.1 metadata at
+  `/.well-known/oauth-protected-resource/<path>` and 404 the origin-root
+  form fleet probed, so every Google Workspace connect failed at discovery.
+  Discovery now tries the path-inserted location first, then the root.
 - **OAuth connect no longer strands the browser on localhost**: after a
   successful remote-MCP authorization behind a reverse proxy, the callback
   route redirected to the internal origin (`localhost:3000`) because it built
