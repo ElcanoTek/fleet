@@ -19,6 +19,21 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Catalog refresh: `gamma`** (`design-media`, provenance `official`, `auth:
+  oauth`) — Gamma's hosted MCP at `https://mcp.gamma.app/mcp`: generate decks /
+  docs / webpages from a prompt, template, or multi-page input, browse, read and
+  export existing gammas (PPTX/PDF), read comments, and pull per-deck engagement
+  analytics. Verified before shipping: `initialize` + `tools/list` answer 15
+  tools, and the full OAuth chain resolves — RFC 9728 protected-resource
+  metadata names `https://auth.gamma.app`, whose RFC 8414 metadata advertises an
+  RFC 7591 `registration_endpoint` and PKCE `S256`, so dynamic client
+  registration needs no operator-supplied client (no `client_registration:
+  manual`). Gamma serves that metadata at the **origin root** only — the
+  path-aware location (`/.well-known/oauth-protected-resource/mcp`) 404s — so
+  this entry depends on the origin-root fallback added in #878. Scopes are
+  `generate` and `gamma:read`; the MCP server is available on all Gamma plans
+  and generations charge credits.
+
 - **Bigger uploads with honest failures, plus admin storage visibility and
   cleanup** (`docs/UPLOADS-AND-STORAGE.md`): the per-file upload cap is now
   configurable (`FLEET_UPLOAD_MAX_BYTES`) and defaults to 1 GiB (was a

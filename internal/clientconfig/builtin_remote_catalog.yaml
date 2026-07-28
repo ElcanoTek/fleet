@@ -3201,6 +3201,21 @@ servers:
     provenance: official
     auth: oauth
     featured: true
+  - name: gamma
+    display_name: Gamma
+    description: >-
+      Generate decks, docs, and webpages from a prompt, a template, or
+      multi-page input; browse, read, and export existing gammas (PPTX/PDF);
+      read comments; and pull per-deck engagement analytics. Reading and
+      exporting need view access to the gamma in the connected workspace.
+      Available on all Gamma plans; generations charge credits.
+    url: "https://mcp.gamma.app/mcp"
+    vendor: Gamma
+    docs_url: "https://developers.gamma.app/mcp/gamma-mcp-server"
+    category: design-media
+    tags: [presentations, decks, generation, analytics]
+    provenance: official
+    auth: oauth
   - name: miro
     display_name: Miro
     description: >-
