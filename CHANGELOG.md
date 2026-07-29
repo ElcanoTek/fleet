@@ -69,6 +69,30 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **A themed deployment still rendered fleet's colors on its most visible
+  surfaces.** `branding.colors` themed the flat tokens, but the gradients did not
+  read them: `--gradient-bg` (painted on `<body>`), `--sidebar-surface` (the rail),
+  the surface/panel/card/composer gradients, and `--gradient-action-primary` were
+  hardcoded fleet-purple, as were light-mode agent-link colors and the light
+  usage-bar hue. A bundle could set all 18 tokens and the app still read as
+  fleet-purple with a client-colored trim. All of them now derive from the palette
+  via `color-mix()`; the percentages were fitted against the previous literals for
+  fleet's own palette, so the stock appearance is unchanged (every stop within
+  ΔRGB ≤ 6). See `docs/BRANDING.md`.
+- **A bundle with a light primary had unreadable buttons.** Every rule painting
+  `--color-primary` or `--gradient-action-primary` hardcoded white text, so a
+  yellow-primary bundle rendered white-on-yellow at 1.33:1 — including the send
+  button and the empty-state CTA. New themable `on_primary` token carries the
+  foreground for those surfaces (14.87:1 with near-black on yellow), and light
+  mode's action gradient now deepens via `--color-primary-hover` rather than
+  mixing the brand color toward black.
+- **The tab icon and the installed-app splash color ignored the bundle.**
+  `icon.svg`/`apple-icon.png` are build-time file-convention assets a bundle cannot
+  reach, so every deployment wore fleet's mark in the tab beside its own name; the
+  PWA manifest hardcoded a splash color. The favicon now resolves to
+  `branding.logo` via `/api/brand/logo` (which redirects to fleet's own mark when a
+  bundle declares none, so the link is never dead), and the manifest reads the
+  bundle's dark `--color-bg`.
 - **An SVG bundle logo rendered as a broken image on every page.** `next/image`
   skips Next's optimizer only when the `src` path literally ends in `.svg`; a
   bundle mark arrives as `/api/brand/logo`, which has no extension, so it was

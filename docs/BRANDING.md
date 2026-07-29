@@ -37,9 +37,18 @@ reach the browser through the member-gated `/client-config`.
 The **browser tab title** and the **PWA name** are a separate knob:
 `NEXT_PUBLIC_APP_NAME` in the web env file, read at build time by
 `layout.tsx` / `manifest.ts`. They are not bundle-driven, because Next resolves
-static metadata and the file-convention icons (`icon.svg`, `favicon.ico`,
-`apple-icon.png`) when the app is built, not per request. Set the env var
-alongside the bundle so the tab matches the shell.
+static metadata when the app is built and the root layout must not fetch the
+member-gated `/client-config`. Set the env var alongside the bundle so the tab
+matches the shell.
+
+The **tab icon** is bundle-driven: `layout.tsx` declares `metadata.icons`
+pointing at `/api/brand/logo`, which deliberately overrides App Router's
+file-convention icons (`icon.svg`, `apple-icon.png`). No build-time knowledge of
+the bundle is needed because the browser resolves that path per request. The
+**installed-app splash color** is bundle-driven too: `manifest.ts` reads the
+bundle's dark `--color-bg` by fetching the token-gated `/theme.css` server-side
+(`/client-config` is member-gated and unreachable there), falling back to the
+built-in default on any failure.
 
 ### `logo`
 
@@ -77,6 +86,39 @@ the right trade on its own terms. `web/src/app/shared/ui/NavRail.test.tsx` pins
 the behavior by asserting the rendered `src` is the raw path and that no `srcset`
 is generated.
 
+### What a palette now reaches
+
+Two things used to sit outside `colors` and could not be themed, so a bundle that
+set every token still rendered fleet's own colors on its most visible surfaces.
+Both are fixed:
+
+- **Gradients.** `--gradient-bg` (painted on `<body>`), `--sidebar-surface` (the
+  rail), the surface/panel/card/composer gradients, and `--gradient-action-primary`
+  were literal fleet-purple. They are now derived from `--color-bg`,
+  `--color-surface-1/-2`, `--color-primary`, and `--color-secondary` via
+  `color-mix()`. The percentages were fitted against the previous literals for
+  fleet's own palette, so the stock look is unchanged (every stop within ΔRGB ≤ 6).
+  **Do not reintroduce a literal color in a gradient** — a bundle cannot override
+  it and no test will catch it.
+- **Light-mode agent links** and the light **usage-bar** hue were literal too
+  (`#5f5f97` / `#3f3f7a` / `#6363b8`); they now derive from `--color-accent` and
+  `--color-primary`.
+
+### `on_primary`
+
+The readable foreground **on** a primary fill — buttons, active segments, the
+switch knob, the user avatar, and the `--gradient-action-primary` surface.
+
+It has to be declared rather than derived, and a bundle with a **light** primary
+must set it. Every one of those rules previously hardcoded white, so a
+yellow-primary bundle rendered white-on-yellow at **1.33:1**. Declaring
+near-black instead takes the same surface to 14.87:1.
+
+Light mode additionally takes `--color-primary-hover` as the deep end of the
+action gradient, on the reasoning that "the deeper primary" is what that token
+already means there — so a light-primary bundle supplies a deeper *shade of its
+own hue* instead of having fleet mix its brand color toward black.
+
 ### `colors`
 
 Per-mode overrides of the CSS custom properties `globals.css` defines, rendered
@@ -86,7 +128,7 @@ palette with no flash.
 
 | Group | Tokens |
 |---|---|
-| Core | `primary`, `primary_hover`, `secondary`, `accent` |
+| Core | `primary`, `primary_hover`, `on_primary`, `secondary`, `accent` |
 | Surfaces | `background`, `surface_1`, `surface_2` |
 | Text | `text_primary`, `text_secondary`, `text_muted`, `text_disabled` |
 | Structure | `border`, `border_strong`, `border_subtle` |

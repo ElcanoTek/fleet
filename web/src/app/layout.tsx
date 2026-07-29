@@ -30,8 +30,21 @@ export const metadata: Metadata = {
   applicationName: APP_NAME,
   authors: [{ name: APP_NAME }],
   manifest: "/manifest.webmanifest",
-  // App Router discovers icon.svg, favicon.ico, and apple-icon.png from this
-  // directory. Declaring them again here would emit duplicate, stale links.
+  // The tab icon comes from the client-config bundle's branding.logo, served at
+  // /api/brand/logo. Declaring it here deliberately overrides App Router's
+  // file-convention icons (icon.svg / apple-icon.png in this directory), which
+  // are build-time assets a bundle cannot reach — so without this every
+  // deployment wore fleet's mark in the tab beside its own name.
+  //
+  // No build-time knowledge of the bundle is needed (this file must not fetch
+  // member-gated config): the browser resolves the path at request time, and
+  // that route redirects to fleet's own mark when the bundle declares no logo,
+  // so the link is never dead.
+  icons: {
+    icon: "/api/brand/logo",
+    shortcut: "/api/brand/logo",
+    apple: "/api/brand/logo",
+  },
   appleWebApp: {
     capable: true,
     title: APP_NAME,

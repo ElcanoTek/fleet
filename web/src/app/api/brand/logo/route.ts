@@ -22,21 +22,28 @@ const ALLOWED_TYPES = new Set([
 // brand assets, and a logo is non-secret and deployment-wide rather than
 // user-scoped.
 //
-// 404 (not an error page) when the bundle declares no logo, so the caller falls
-// back to fleet's own mark. The web only points an <img> here when
-// /client-config advertised logo_url, so the 404 path is the unusual one.
-export async function GET() {
+// When the bundle declares no logo (or the upstream is unreachable), this
+// REDIRECTS to fleet's own mark rather than 404ing, so the URL is always a valid
+// image. That matters because layout.tsx points the favicon here: a 404 favicon
+// shows the browser's blank-page glyph, which is worse than fleet's mark. The
+// rail is unaffected either way — it only requests this route when
+// /client-config advertised logo_url, i.e. when the upstream will answer 200.
+function fleetMark(request: Request): NextResponse {
+  return NextResponse.redirect(new URL("/logos/fleet-mark.svg", request.url), 307);
+}
+
+export async function GET(request: Request) {
   try {
     const upstream = await fetch(`${getChatServerBase()}/brand/logo`, {
       headers: { "X-Chat-Server-Token": getSharedToken() },
       cache: "no-store",
     });
     if (!upstream.ok) {
-      return new NextResponse(null, { status: 404 });
+      return fleetMark(request);
     }
     const type = (upstream.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
     if (!ALLOWED_TYPES.has(type)) {
-      return new NextResponse(null, { status: 404 });
+      return fleetMark(request);
     }
     return new NextResponse(await upstream.arrayBuffer(), {
       status: 200,
@@ -50,6 +57,6 @@ export async function GET() {
       },
     });
   } catch {
-    return new NextResponse(null, { status: 404 });
+    return fleetMark(request);
   }
 }
