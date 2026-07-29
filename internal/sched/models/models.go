@@ -1733,6 +1733,14 @@ type LogSession struct {
 	OutputJSON string `json:"output_json,omitempty"`
 }
 
+// RunLogMeta identifies one superseded transcript in a task's per-attempt run
+// log history: the history entry id plus when the newer transcript replaced
+// it. The payload itself is fetched per-entry, never listed.
+type RunLogMeta struct {
+	ID           int64     `json:"id"`
+	SupersededAt time.Time `json:"superseded_at"`
+}
+
 // MarshalJSON implements custom JSON marshaling for LogSession.
 func (ls LogSession) MarshalJSON() ([]byte, error) {
 	type Alias LogSession

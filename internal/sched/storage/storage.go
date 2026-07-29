@@ -537,6 +537,18 @@ func (s *Storage) GetLog(taskID uuid.UUID) (*models.LogSession, error) {
 	return s.db.GetLog(context.Background(), taskID)
 }
 
+// ListRunLogHistory lists a task's superseded transcripts (per-attempt run
+// log history), newest first. See db.ListRunLogHistory.
+func (s *Storage) ListRunLogHistory(ctx context.Context, taskID uuid.UUID) ([]models.RunLogMeta, error) {
+	return s.db.ListRunLogHistory(ctx, taskID)
+}
+
+// GetRunLogEntry fetches one superseded transcript from a task's run log
+// history. See db.GetRunLogEntry.
+func (s *Storage) GetRunLogEntry(ctx context.Context, taskID uuid.UUID, entryID int64) (*models.LogSession, error) {
+	return s.db.GetRunLogEntry(ctx, taskID, entryID)
+}
+
 // GetAllLogs gets all stored log sessions.
 func (s *Storage) GetAllLogs() (map[uuid.UUID]*models.LogSession, error) {
 	return s.db.GetAllLogs(context.Background())

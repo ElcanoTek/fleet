@@ -435,6 +435,13 @@ export type LogSession = {
   messages?: LogMessage[];
 };
 
+// One superseded transcript in a task's per-attempt run log history
+// (GET /logs/{task_id}/history): the entry id + when a newer transcript
+// replaced it. The payload is fetched per-entry.
+export type RunLogMeta = {
+  id: number;
+  superseded_at: string;
+};
 
 // #508 live task activity stream frames (GET /tasks/{id}/stream).
 export type TaskStreamFrame = {
@@ -554,6 +561,12 @@ export const orchestratorApi = {
   estimateTask: (body: TaskCreate) =>
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  // Per-attempt run log history: transcripts superseded by a retry or an
+  // ask-pause/wake resume of the SAME task id. Metadata list + one entry.
+  taskLogHistory: (taskId: string) =>
+    request<{ entries: RunLogMeta[] }>(`/logs/${encodeURIComponent(taskId)}/history`),
+  taskLogHistoryEntry: (taskId: string, entryId: number) =>
+    request<LogSession>(`/logs/${encodeURIComponent(taskId)}/history/${entryId}`),
   // Edit (PUT /tasks/{id}): rewrites a pending/scheduled task's definition —
   // for a recurring task that means every future run. The server re-checks
   // editability transactionally (409 when the task started meanwhile).

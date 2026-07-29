@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -30,6 +31,7 @@ func setupTestDB(t testing.TB) *Database {
 
 	ctx := context.Background()
 	queries := []string{
+		"DELETE FROM run_logs",
 		"DELETE FROM logs",
 		"DELETE FROM tasks",
 		"DELETE FROM users",
@@ -461,6 +463,120 @@ func TestLogOperations(t *testing.T) {
 	}
 	if len(logs) != 1 {
 		t.Errorf("Expected 1 log entry, got %d", len(logs))
+	}
+}
+
+// TestRunLogHistory covers the copy-on-overwrite per-attempt history: the
+// first write archives nothing, every re-write archives the transcript it
+// supersedes, the per-task cap trims oldest-first, and entries are scoped to
+// their task id.
+func TestRunLogHistory(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	taskID := uuid.New()
+	write := func(id string) {
+		t.Helper()
+		if err := db.AddLog(ctx, taskID, &models.LogSession{ID: id}); err != nil {
+			t.Fatalf("AddLog(%s): %v", id, err)
+		}
+	}
+
+	write("attempt-1")
+	entries, err := db.ListRunLogHistory(ctx, taskID)
+	if err != nil {
+		t.Fatalf("ListRunLogHistory: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("first write must archive nothing, got %d entries", len(entries))
+	}
+
+	write("attempt-2")
+	write("attempt-3")
+	entries, err = db.ListRunLogHistory(ctx, taskID)
+	if err != nil {
+		t.Fatalf("ListRunLogHistory: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 superseded transcripts, got %d", len(entries))
+	}
+	// Newest-first: entries[0] is the transcript attempt-3 superseded.
+	got, err := db.GetRunLogEntry(ctx, taskID, entries[0].ID)
+	if err != nil {
+		t.Fatalf("GetRunLogEntry: %v", err)
+	}
+	if got.ID != "attempt-2" {
+		t.Errorf("newest history entry: want attempt-2, got %s", got.ID)
+	}
+	got, err = db.GetRunLogEntry(ctx, taskID, entries[1].ID)
+	if err != nil {
+		t.Fatalf("GetRunLogEntry: %v", err)
+	}
+	if got.ID != "attempt-1" {
+		t.Errorf("oldest history entry: want attempt-1, got %s", got.ID)
+	}
+
+	// Task scoping: another task cannot read this task's entry by id.
+	if _, err := db.GetRunLogEntry(ctx, uuid.New(), entries[0].ID); err == nil {
+		t.Error("GetRunLogEntry must not return an entry for a different task id")
+	}
+	// The latest transcript stays in logs, untouched.
+	latest, err := db.GetLog(ctx, taskID)
+	if err != nil || latest.ID != "attempt-3" {
+		t.Errorf("GetLog: want attempt-3, got %v (err %v)", latest, err)
+	}
+
+	// Cap: drive well past runLogHistoryKeep and confirm the trim held, oldest
+	// dropped first.
+	for i := 0; i < runLogHistoryKeep+5; i++ {
+		write(fmt.Sprintf("attempt-%d", i+4))
+	}
+	entries, err = db.ListRunLogHistory(ctx, taskID)
+	if err != nil {
+		t.Fatalf("ListRunLogHistory: %v", err)
+	}
+	if len(entries) != runLogHistoryKeep {
+		t.Fatalf("expected history capped at %d, got %d", runLogHistoryKeep, len(entries))
+	}
+	got, err = db.GetRunLogEntry(ctx, taskID, entries[len(entries)-1].ID)
+	if err != nil {
+		t.Fatalf("GetRunLogEntry(oldest kept): %v", err)
+	}
+	if got.ID == "attempt-1" || got.ID == "attempt-2" {
+		t.Errorf("trim must drop oldest first; oldest kept is %s", got.ID)
+	}
+}
+
+// TestRunLogHistoryPrunedWithTask confirms both retention paths delete a
+// task's run_logs alongside its logs row.
+func TestRunLogHistoryPrunedWithTask(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	old := time.Now().UTC().AddDate(0, 0, -60)
+	task := &models.Task{ID: uuid.New(), Prompt: "history prune", Status: models.TaskStatusSuccess,
+		CreatedAt: old, CompletedAt: timePtr(old)}
+	if err := db.AddTask(ctx, task); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	if err := db.AddLog(ctx, task.ID, &models.LogSession{ID: "a1"}); err != nil {
+		t.Fatalf("AddLog: %v", err)
+	}
+	if err := db.AddLog(ctx, task.ID, &models.LogSession{ID: "a2"}); err != nil {
+		t.Fatalf("AddLog: %v", err)
+	}
+
+	if _, err := db.DeleteOldHistory(ctx, 30); err != nil {
+		t.Fatalf("DeleteOldHistory: %v", err)
+	}
+	entries, err := db.ListRunLogHistory(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRunLogHistory: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("DeleteOldHistory left %d run_logs rows behind", len(entries))
 	}
 }
 

@@ -19,6 +19,15 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Per-attempt run log history** (`docs/RUN-LOG-HISTORY.md`): re-running the
+  same task id — a retry, an ask-pause resume, a self-wake cycle — no longer
+  destroys the prior attempt's transcript. The row the `logs` upsert would
+  clobber is copied into `run_logs` in the same transaction (archived payloads
+  travel verbatim), capped at 20 per task, pruned with the task by both
+  retention paths. New `GET /logs/{task_id}/history[/{entry_id}]` behind the
+  exact `GET /logs/{task_id}` gate, and an attempt picker in the task log
+  modal that renders only when history exists.
+
 - **A bundle can now brand the shell, not just tint it** (`docs/BRANDING.md`):
   new `branding.logo` — a bundle-relative image path served from the bundle by
   `/brand/logo` (proxied as `/api/brand/logo`), so the navigation rail's mark is

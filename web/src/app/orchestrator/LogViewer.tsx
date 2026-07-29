@@ -750,14 +750,31 @@ function LogViewerBody({
   // The shared hook owns the cancelled-ref guard and the lone setState after
   // the await, so this component no longer needs its own one-shot load-flag
   // setState-in-effect disable.
+  // Per-attempt history: attemptId null = the latest transcript (logs row);
+  // a number = one superseded transcript (run_logs row). Switching refetches
+  // through the same cancellable hook, so loading/error handling is shared.
+  const [attemptId, setAttemptId] = useState<number | null>(null);
   const {
     data: session,
     loading,
     error,
   } = useCancellableFetch(
-    useCallback(() => orchestratorApi.taskLogs(task.id), [task.id]),
+    useCallback(
+      () =>
+        attemptId === null
+          ? orchestratorApi.taskLogs(task.id)
+          : orchestratorApi.taskLogHistoryEntry(task.id, attemptId),
+      [task.id, attemptId],
+    ),
+    [task.id, attemptId],
+  );
+  // The superseded-attempts list is metadata-only and cheap; most tasks have
+  // none, in which case the picker never renders.
+  const { data: attemptHistory } = useCancellableFetch(
+    useCallback(() => orchestratorApi.taskLogHistory(task.id), [task.id]),
     [task.id],
   );
+  const attempts = attemptHistory?.entries ?? [];
   const { showToast } = useToast();
   const [resubmitting, setResubmitting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -852,6 +869,26 @@ function LogViewerBody({
               </span>
             </span>
             <span className="task-detail-actions">
+              {attempts.length > 0 ? (
+                <select
+                  className="btn btn-secondary"
+                  data-testid="attempt-picker"
+                  aria-label="Transcript attempt"
+                  value={attemptId ?? "latest"}
+                  onChange={(e) =>
+                    setAttemptId(
+                      e.target.value === "latest" ? null : Number(e.target.value),
+                    )
+                  }
+                >
+                  <option value="latest">Latest transcript</option>
+                  {attempts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      Superseded {formatTimeFirst(a.superseded_at)}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
               {onEdit && ["pending", "scheduled", ...RESUBMITTABLE].includes(task.status ?? "") ? (
                 <button
                   type="button"

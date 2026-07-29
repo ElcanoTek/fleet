@@ -1349,6 +1349,10 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		r.Get("/tasks/paused", h.ListPausedTasks)
 		r.Post("/tasks/{task_id}/resume", h.ResumeTask)
 		r.Get("/logs/{task_id}", h.GetLogs)
+		// Per-attempt run log history: transcripts a retry / ask-resume /
+		// wake cycle superseded. Same auth/ownership gate as /logs/{task_id}.
+		r.Get("/logs/{task_id}/history", h.GetLogHistory)
+		r.Get("/logs/{task_id}/history/{entry_id}", h.GetLogHistoryEntry)
 		// Live SSE run-log stream for an in-progress task, falling back to a one-shot
 		// replay of the persisted log once finished (#200). Same auth/ownership gate
 		// as /logs/{task_id}.
