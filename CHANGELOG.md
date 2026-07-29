@@ -69,6 +69,16 @@ prior versions are listed because none have shipped.
 
 ### Fixed
 
+- **An SVG bundle logo rendered as a broken image on every page.** `next/image`
+  skips Next's optimizer only when the `src` path literally ends in `.svg`; a
+  bundle mark arrives as `/api/brand/logo`, which has no extension, so it was
+  rewritten to `/_next/image?url=…` — and that endpoint rejects `image/svg+xml`
+  unless `images.dangerouslyAllowSVG` is set, which `next.config.ts` deliberately
+  does not set. Every bundle whose `branding.logo` was an SVG therefore wore a
+  broken mark in the rail, including the format `docs/BRANDING.md` uses in its own
+  example. The rail's `<Image>` is now `unoptimized` (a 28px mark gains nothing
+  from the optimizer anyway), and `NavRail.test.tsx` pins it by asserting the
+  rendered `src` is the raw path with no generated `srcset`.
 - **Bundle branding never actually reached the login page.** The root layout
   links `/api/theme` as a render-blocking stylesheet on every page, and both
   `theme.go` and the proxy route documented it as public — but the path was
