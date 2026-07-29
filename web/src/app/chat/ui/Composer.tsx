@@ -1124,7 +1124,7 @@ export function Composer({
                     aria-label="Send message"
                     className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
                       prompt.trim() && !isStreaming && !isUploadingAttachments
-                        ? "bg-[image:var(--gradient-action-primary)] text-white hover:-translate-y-px"
+                        ? "bg-[image:var(--gradient-action-primary)] text-[var(--color-on-primary)] hover:-translate-y-px"
                         : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
                     }`}
                     type="submit"

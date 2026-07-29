@@ -27,6 +27,11 @@ import (
 var themeTokenOrder = []struct{ key, cssVar string }{
 	{"primary", "--color-primary"},
 	{"primary_hover", "--color-primary-hover"},
+	// on_primary is the readable foreground ON a primary fill. It cannot be
+	// derived from the palette — a dark primary needs light text and a light
+	// primary (yellow, lime, cyan) needs dark text — so a bundle whose primary
+	// is light MUST set it or its buttons render white-on-light.
+	{"on_primary", "--color-on-primary"},
 	{"secondary", "--color-secondary"},
 	{"accent", "--color-accent"},
 	{"background", "--color-bg"},

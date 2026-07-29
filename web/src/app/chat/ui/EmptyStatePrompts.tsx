@@ -183,7 +183,7 @@ export function ProtocolPillForm({
             type="button"
             disabled={!ready}
             onClick={() => ready && onRun(generatedPrompt)}
-            className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] bg-[image:var(--gradient-action-primary)] px-3.5 py-2 text-[0.85rem] font-semibold text-white transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:bg-none disabled:bg-[var(--color-surface-2)] disabled:text-[var(--color-text-muted)]"
+            className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] bg-[image:var(--gradient-action-primary)] px-3.5 py-2 text-[0.85rem] font-semibold text-[var(--color-on-primary)] transition hover:opacity-90 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:bg-none disabled:bg-[var(--color-surface-2)] disabled:text-[var(--color-text-muted)]"
           >
             {pill.cta}
             <PillIcon name="arrow-right" className="size-4" />
