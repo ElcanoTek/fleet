@@ -1348,7 +1348,14 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// /tasks/{task_id} static-vs-param, but chi routes them distinctly.
 		r.Get("/tasks/paused", h.ListPausedTasks)
 		r.Post("/tasks/{task_id}/resume", h.ResumeTask)
+		// self-wake (docs/SELF-WAKE.md): fire a named event at a task parked
+		// by wake_on_event; the key must match what the task waits for.
+		r.Post("/tasks/{task_id}/wake", h.WakeTask)
 		r.Get("/logs/{task_id}", h.GetLogs)
+		// Per-attempt run log history: transcripts a retry / ask-resume /
+		// wake cycle superseded. Same auth/ownership gate as /logs/{task_id}.
+		r.Get("/logs/{task_id}/history", h.GetLogHistory)
+		r.Get("/logs/{task_id}/history/{entry_id}", h.GetLogHistoryEntry)
 		// Live SSE run-log stream for an in-progress task, falling back to a one-shot
 		// replay of the persisted log once finished (#200). Same auth/ownership gate
 		// as /logs/{task_id}.

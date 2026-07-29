@@ -374,7 +374,7 @@ func (db *Database) rowToUser(row *sql.Row) (*models.User, error) {
 
 // Task operations
 
-const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining"
+const taskColumns = "id, name, prompt, model, fallback_model, max_iterations, mcp_selection, priority, instruction_self_improve, status, agent_session_id, created_at, started_at, completed_at, result, error_message, scheduled_for, recurrence, created_by, files, lease_owner, lease_expires_at, attempt_count, max_retries, allow_network, timezone, created_by_key_id, trigger_type, credential_allowlist, loop_config, worktree_config, description, tags, retry_policy, source_task_id, persona, workspace_path, allow_task_creation, allow_recurring_task_creation, created_by_task_id, dead_lettered_at, dead_letter_reason, dead_letter_attempts, run_if, skip_count, last_skip_at, last_skip_reason, expected_duration_minutes, sla_warn_multiplier, sla_fail_multiplier, sla_breached, actual_duration_seconds, effective_priority, sandbox_limits, allow_delegation, output_schema, output_json, error_analysis, artifacts, pending_question, pending_answer, carry_context, allow_event_triggers, thinking_budget_tokens, file_names, serialization_key, recurrence_until, recurrence_remaining, wake_at, wake_event_key, wake_note, wake_reason, wake_cycles"
 
 // sourceTaskIDValue maps the optional source-task lineage pointer (#270) to a
 // nullable column value: nil → SQL NULL, set → the UUID string.
@@ -1194,6 +1194,11 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		serializationKey       sql.NullString
 		recurrenceUntil        sql.NullTime
 		recurrenceRemaining    sql.NullInt64
+		wakeAt                 sql.NullTime
+		wakeEventKey           sql.NullString
+		wakeNote               sql.NullString
+		wakeReason             sql.NullString
+		wakeCycles             int
 	)
 
 	err := scanner.Scan(
@@ -1209,6 +1214,7 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 		&expectedDur, &slaWarnMul, &slaFailMul, &slaBreached, &actualDurSecs,
 		&effectivePriority, &sandboxLimits, &allowDelegation, &outputSchema, &outputJSON, &errorAnalysis, &artifacts,
 		&pendingQuestion, &pendingAnswer, &carryContext, &allowEventTriggers, &thinkingBudget, &fileNames, &serializationKey, &recurrenceUntil, &recurrenceRemaining,
+		&wakeAt, &wakeEventKey, &wakeNote, &wakeReason, &wakeCycles,
 	)
 	if err != nil {
 		return nil, err
@@ -1261,6 +1267,14 @@ func (db *Database) scanTask(scanner interface{ Scan(...interface{}) error }) (*
 	if pendingAnswer.Valid {
 		task.PendingAnswer = pendingAnswer.String
 	}
+	if wakeAt.Valid {
+		t := wakeAt.Time
+		task.WakeAt = &t
+	}
+	task.WakeEventKey = wakeEventKey.String
+	task.WakeNote = wakeNote.String
+	task.WakeReason = wakeReason.String
+	task.WakeCycles = wakeCycles
 	task.CarryContext = carryContext
 	task.AllowEventTriggers = allowEventTriggers
 	task.Artifacts = unmarshalRawJSON(artifacts)
@@ -1996,6 +2010,83 @@ func (db *Database) ResumeTask(ctx context.Context, taskID uuid.UUID, answer str
 	return n > 0, nil
 }
 
+// PauseTaskForWake parks a RUNNING task in paused_awaiting_wake (self-wake,
+// docs/SELF-WAKE.md), clearing the lease so the parked task holds no
+// sandbox/container — the exact shape of PauseTaskForQuestion, keyed on a
+// deadline/event instead of a human. wake_at is ALWAYS set (a timer sleep's
+// fire time, or an event wait's timeout deadline), so the wake sweep is the
+// only expiry mechanism needed. wake_reason is nulled: like pending_answer,
+// it belongs to the wake that has not happened yet. wake_cycles increments
+// here, under the same guarded write, so the runner's cycle cap can't be
+// raced past. Guarded on the caller's lease; returns whether it applied.
+func (db *Database) PauseTaskForWake(ctx context.Context, taskID, leaseOwner uuid.UUID, wakeAt time.Time, eventKey, note string) (bool, error) {
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET status = 'paused_awaiting_wake',
+			wake_at = $1, wake_event_key = NULLIF($2, ''), wake_note = $3, wake_reason = NULL,
+			wake_cycles = wake_cycles + 1,
+			lease_owner = NULL, lease_expires_at = NULL
+		WHERE id = $4 AND lease_owner = $5 AND status = 'running'`,
+		wakeAt.UTC(), eventKey, note, taskID, leaseOwner)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// WakeDueTasks re-queues every parked task whose wake deadline has passed:
+// status → pending, scheduled_for = now so it is immediately claimable, and
+// wake_reason records WHY it woke — a timer sleep's deadline fired, or an
+// event wait timed out (the reason names the event so the resumed agent
+// knows the event never arrived). Returns how many tasks it woke.
+func (db *Database) WakeDueTasks(ctx context.Context) (int, error) {
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET status = 'pending', scheduled_for = now(),
+			wake_reason = CASE
+				WHEN wake_event_key IS NOT NULL AND wake_event_key <> ''
+					THEN 'timed out waiting for event "' || wake_event_key || '"'
+				ELSE 'the sleep timer fired'
+			END
+		WHERE status = 'paused_awaiting_wake' AND wake_at IS NOT NULL AND wake_at <= now()`)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// WakeTaskByEvent wakes ONE parked task early because its named event
+// arrived (POST /tasks/{id}/wake). Guarded on the paused status AND the
+// exact event key, so a wake with the wrong key (or against a timer-only
+// sleep) is a no-op reported to the caller. note, when non-empty, is carried
+// into the wake reason so the resumed agent sees the event payload's gist.
+func (db *Database) WakeTaskByEvent(ctx context.Context, taskID uuid.UUID, eventKey, note string) (bool, error) {
+	reason := `event "` + eventKey + `" fired`
+	if note != "" {
+		reason += ": " + note
+	}
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET status = 'pending', scheduled_for = now(), wake_reason = $1
+		WHERE id = $2 AND status = 'paused_awaiting_wake' AND wake_event_key = $3`,
+		reason, taskID, eventKey)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ClearWakeState clears a woken task's wake columns once the resumed run has
+// consumed them, under the run's lease — the wake counterpart of
+// ClearPendingQA (wake_cycles deliberately survives: it is the lifetime
+// park counter the cycle cap checks). Best-effort.
+func (db *Database) ClearWakeState(ctx context.Context, taskID, leaseOwner uuid.UUID) error {
+	_, err := db.conn.ExecContext(ctx, `
+		UPDATE tasks SET wake_at = NULL, wake_event_key = NULL, wake_note = NULL, wake_reason = NULL
+		WHERE id = $1 AND lease_owner = $2`, taskID, leaseOwner)
+	return err
+}
+
 // ClearPendingQA clears a resumed task's question+answer once the run has
 // consumed them, under the run's lease so a stale writer can't wipe a fresh
 // pause. Best-effort (the run proceeds regardless).
@@ -2227,40 +2318,77 @@ func (db *Database) GetDashboardStatsForUser(ctx context.Context, userID *uuid.U
 
 // Log operations
 
-// AddLog stores a log session for a task. The payload is always written live
-// (plaintext JSON in session_data); the archival columns are reset so a re-write
-// of a previously archived row returns it to the live, uncompressed state.
-func (db *Database) AddLog(ctx context.Context, taskID uuid.UUID, session *models.LogSession) error {
-	sessionJSON, err := json.Marshal(session)
+// runLogHistoryKeep bounds how many superseded transcripts run_logs retains
+// per task (#history): the trim runs inside the same transaction as the
+// copy-on-overwrite, so the cap can never be exceeded between sweeps.
+const runLogHistoryKeep = 20
+
+// archiveSupersededLog copies the task's CURRENT logs row (if any) into
+// run_logs, then trims that task's history past runLogHistoryKeep. Called
+// inside the AddLog/AddLogRaw transaction immediately before the upsert that
+// would otherwise destroy the row — so history costs nothing for a task that
+// only ever writes one transcript (retry-free, never resumed). The columns
+// travel verbatim: an archived (gz+codec) payload stays archived.
+func archiveSupersededLog(ctx context.Context, tx *sql.Tx, taskID uuid.UUID) error {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO run_logs (task_id, session_data, session_data_gz, session_compression)
+		SELECT task_id, session_data, session_data_gz, session_compression
+		FROM logs WHERE task_id = $1`, taskID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+		DELETE FROM run_logs WHERE task_id = $1 AND id NOT IN (
+			SELECT id FROM run_logs WHERE task_id = $1
+			ORDER BY superseded_at DESC, id DESC LIMIT $2
+		)`, taskID, runLogHistoryKeep)
+	return err
+}
+
+// upsertLog is the shared write path of AddLog/AddLogRaw: archive the row the
+// upsert would clobber (per-attempt history), then write the new payload live
+// (plaintext JSON in session_data); the archival columns are reset so a
+// re-write of a previously archived row returns it to the live, uncompressed
+// state.
+func (db *Database) upsertLog(ctx context.Context, taskID uuid.UUID, sessionJSON []byte) error {
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	_, err = db.conn.ExecContext(ctx, `
+	defer func() { _ = tx.Rollback() }()
+
+	if err := archiveSupersededLog(ctx, tx, taskID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO logs (task_id, session_data, session_data_gz, session_compression)
 		VALUES ($1, $2, NULL, NULL)
 		ON CONFLICT (task_id) DO UPDATE SET
 			session_data = EXCLUDED.session_data,
 			session_data_gz = NULL,
 			session_compression = NULL`,
-		taskID, string(sessionJSON))
-	return err
+		taskID, string(sessionJSON)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// AddLog stores a log session for a task, archiving any transcript it
+// supersedes into run_logs first (per-attempt history).
+func (db *Database) AddLog(ctx context.Context, taskID uuid.UUID, session *models.LogSession) error {
+	sessionJSON, err := json.Marshal(session)
+	if err != nil {
+		return err
+	}
+	return db.upsertLog(ctx, taskID, sessionJSON)
 }
 
 // AddLogRaw stores a pre-serialized log session verbatim (legacy import,
 // docs/LEGACY-IMPORT.md). The payload travels byte-for-byte from the source
 // system's logs.session_data — no unmarshal/remarshal round-trip that could
 // drop fields a newer/older LogSession shape doesn't know about. Same
-// upsert-and-reset-archival semantics as AddLog.
+// archive-then-upsert semantics as AddLog.
 func (db *Database) AddLogRaw(ctx context.Context, taskID uuid.UUID, sessionJSON []byte) error {
-	_, err := db.conn.ExecContext(ctx, `
-		INSERT INTO logs (task_id, session_data, session_data_gz, session_compression)
-		VALUES ($1, $2, NULL, NULL)
-		ON CONFLICT (task_id) DO UPDATE SET
-			session_data = EXCLUDED.session_data,
-			session_data_gz = NULL,
-			session_compression = NULL`,
-		taskID, string(sessionJSON))
-	return err
+	return db.upsertLog(ctx, taskID, sessionJSON)
 }
 
 // LogExists reports whether a run-log row exists for the task. Used by the
@@ -2296,6 +2424,56 @@ func (db *Database) GetLog(ctx context.Context, taskID uuid.UUID) (*models.LogSe
 	err := db.conn.QueryRowContext(ctx,
 		"SELECT session_data, session_data_gz, session_compression FROM logs WHERE task_id = $1",
 		taskID).Scan(&sessionData, &gz, &codec)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := db.decodeLogRow(sessionData, gz, codec.String)
+	if err != nil {
+		return nil, err
+	}
+	var session models.LogSession
+	if err := json.Unmarshal(raw, &session); err != nil {
+		return nil, err
+	}
+	return &session, nil
+}
+
+// ListRunLogHistory lists a task's superseded transcripts (per-attempt
+// history), newest first: id + when each was superseded. The payloads are
+// fetched one at a time via GetRunLogEntry — a history listing must never
+// drag every archived transcript across the wire.
+func (db *Database) ListRunLogHistory(ctx context.Context, taskID uuid.UUID) ([]models.RunLogMeta, error) {
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT id, superseded_at FROM run_logs
+		WHERE task_id = $1 ORDER BY superseded_at DESC, id DESC`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	metas := []models.RunLogMeta{}
+	for rows.Next() {
+		var m models.RunLogMeta
+		if err := rows.Scan(&m.ID, &m.SupersededAt); err != nil {
+			return nil, err
+		}
+		metas = append(metas, m)
+	}
+	return metas, rows.Err()
+}
+
+// GetRunLogEntry fetches one superseded transcript by history id, scoped to
+// the task so a caller authorized for one task can never read another task's
+// history by guessing ids. Transparently inflates archived payloads, exactly
+// like GetLog.
+func (db *Database) GetRunLogEntry(ctx context.Context, taskID uuid.UUID, entryID int64) (*models.LogSession, error) {
+	var sessionData *string
+	var gz []byte
+	var codec sql.NullString
+	err := db.conn.QueryRowContext(ctx, `
+		SELECT session_data, session_data_gz, session_compression
+		FROM run_logs WHERE task_id = $1 AND id = $2`,
+		taskID, entryID).Scan(&sessionData, &gz, &codec)
 	if err != nil {
 		return nil, err
 	}
@@ -2381,6 +2559,11 @@ func (db *Database) CleanupOldRuns(ctx context.Context, retentionDays, keepPerTa
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM run_logs WHERE task_id IN (`+cleanupEligibleSubquery+`)`,
+		keepPerTask, cutoff); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM logs WHERE task_id IN (`+cleanupEligibleSubquery+`)`,
 		keepPerTask, cutoff); err != nil {
 		return 0, err
@@ -2415,6 +2598,18 @@ func (db *Database) DeleteOldHistory(ctx context.Context, days int) (int, error)
 	// intentionally ignored.
 	defer func() { _ = tx.Rollback() }()
 
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM run_logs WHERE task_id IN (
+			SELECT id FROM tasks
+			WHERE status IN ($1, $2, $3) AND completed_at < $4
+		)`,
+		string(models.TaskStatusSuccess),
+		string(models.TaskStatusError),
+		string(models.TaskStatusCancelled),
+		cutoff,
+	); err != nil {
+		return 0, err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM logs WHERE task_id IN (
 			SELECT id FROM tasks

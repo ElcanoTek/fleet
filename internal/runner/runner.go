@@ -59,6 +59,14 @@ const (
 	// defaultPollInterval is how often an idle pool checks for pending work.
 	defaultPollInterval = 30 * time.Second
 
+	// wakeMaxCycles caps how many times ONE task may park itself for a wake
+	// (self-wake, docs/SELF-WAKE.md) over its lifetime — the backstop against
+	// an agent sleep-looping a task forever. Generous on purpose: a daily
+	// standing watch re-armed per run never accumulates cycles (each
+	// recurrence occurrence is a new task row); only a single long-lived
+	// watch task approaches it.
+	wakeMaxCycles = 100
+
 	// defaultLeaseRenewInterval renews active leases well inside the 5-minute
 	// lease window (storage.LeaseDuration) since heartbeats are gone.
 	defaultLeaseRenewInterval = 90 * time.Second
@@ -210,6 +218,12 @@ type Pool struct {
 	// task in paused_awaiting_input (releasing the sandbox/lease) instead of a
 	// terminal write. mu guards it alongside active/stopRequested.
 	pauseRequested map[uuid.UUID]string
+	// wakeRequested records the wake spec a running task's agent set via
+	// `sleep` / `wake_on_event` (self-wake, docs/SELF-WAKE.md), set from the
+	// run context's wake handler; executeTask parks the task in
+	// paused_awaiting_wake (releasing the sandbox/lease) instead of a
+	// terminal write. mu guards it alongside pauseRequested.
+	wakeRequested map[uuid.UUID]tools.WakeSpec
 	// stopRequested records WHO asked a task to stop (task ID → operator
 	// label) between StopTask firing the cancel and executeTask classifying
 	// the outcome — the marker that routes the run to the "stopped" terminal
@@ -298,6 +312,7 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 		active:             make(map[uuid.UUID]activeRun),
 		stopRequested:      make(map[uuid.UUID]string),
 		pauseRequested:     make(map[uuid.UUID]string),
+		wakeRequested:      make(map[uuid.UUID]tools.WakeSpec),
 		streams:            newTaskStreamRegistry(),
 		notifier:           cfg.Notifier,
 		publicURLBase:      strings.TrimRight(cfg.PublicURLBase, "/"),
@@ -546,6 +561,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 					delete(p.active, task.ID)
 					delete(p.stopRequested, task.ID)
 					delete(p.pauseRequested, task.ID)
+					delete(p.wakeRequested, task.ID)
 				}
 				p.mu.Unlock()
 				release() // release AFTER cleanup
@@ -675,6 +691,10 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	runCtx = tools.WithNotifyHandler(runCtx, func(message string) {
 		p.notifyProgress(task, message)
 	})
+	// self-wake (docs/SELF-WAKE.md): the wake handler mirrors ask — record the
+	// spec + cancel THIS run so it ends and releases the sandbox/lease;
+	// executeTask then parks the task in paused_awaiting_wake.
+	runCtx = tools.WithWakeHandler(runCtx, p.wakeHandlerFor(task))
 	// Recurring context carry (#504): for a carry_context recurring task, install
 	// a bounded handoff from the prior run so scheduledrun injects a
 	// "## Previous Run" section (extracted to keep executeTask under gocyclo).
@@ -692,14 +712,19 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	delete(p.stopRequested, task.ID)
 	pauseQuestion, wasPaused := p.pauseRequested[task.ID]
 	delete(p.pauseRequested, task.ID)
+	wakeSpec, wasWakeParked := p.wakeRequested[task.ID]
+	delete(p.wakeRequested, task.ID)
 	p.mu.Unlock()
+	// A wake park shares the ask pause's outcome shape for classification:
+	// not a terminal success (no structured commit), not a failure to report.
+	parked := wasPaused || wasWakeParked
 
 	var outputJSON json.RawMessage
-	if runEligibleForStructuredCommit(runErr, wasPaused, wasStopped, taskCtx.Err()) {
+	if runEligibleForStructuredCommit(runErr, parked, wasStopped, taskCtx.Err()) {
 		outputJSON, runErr = validateStructuredRunOutput(task, session)
 	}
 
-	if reportableRunFailure(runErr, wasPaused, wasStopped) {
+	if reportableRunFailure(runErr, parked, wasStopped) {
 		observability.CaptureException(taskCtx, runErr, func(s *sentry.Scope) {
 			s.SetTag("task_id", task.ID.String())
 			s.SetTag("model", model)
@@ -717,6 +742,8 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// while deferred cleanup seals the stream.
 	termStatus := "failed"
 	switch {
+	case wasWakeParked:
+		termStatus = "sleeping"
 	case wasPaused:
 		termStatus = "paused"
 	case wasStopped:
@@ -738,6 +765,11 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// registered after the stream-release defer, so it remains the always-last
 	// frame and is delivered immediately before EOF.
 	defer func() { buf.Emit("status", terminalFrame) }()
+
+	if wasWakeParked {
+		p.parkForWake(task, session, wakeSpec, token, start)
+		return
+	}
 
 	if wasPaused {
 		// ask (#510): park the task awaiting a human answer. The partial
@@ -1107,6 +1139,49 @@ func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, r
 	return true
 }
 
+// wakeHandlerFor builds the run-context wake handler for one task: record the
+// spec + fire the per-task cancel. The cycle cap is enforced HERE (the tool
+// surfaces the error to the model and the run continues) so a confused agent
+// can't sleep-loop a task forever; task.WakeCycles is the lifetime park
+// counter incremented under the lease-guarded pause write.
+func (p *Pool) wakeHandlerFor(task *models.Task) tools.WakeHandler {
+	return func(spec tools.WakeSpec) error {
+		if task.WakeCycles >= wakeMaxCycles {
+			return fmt.Errorf("this task has already parked for a wake %d times (cap %d)", task.WakeCycles, wakeMaxCycles)
+		}
+		p.mu.Lock()
+		p.wakeRequested[task.ID] = spec
+		cancel := p.activeCancel(task.ID)
+		p.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return nil
+	}
+}
+
+// parkForWake parks a run that called sleep / wake_on_event (self-wake,
+// docs/SELF-WAKE.md) until its deadline or event. Same ordering discipline as
+// the ask pause: transcript FIRST (submitLog is lease-free), THEN the
+// lease-guarded park clears the lease — a UI opening a just-parked task never
+// sees an empty transcript. NOT a failure — no retry/dead-letter/
+// error-analysis — and no out-of-band notification: sleeping is normal
+// operation, not a request for human attention (the agent can `notify`
+// beforehand if a human should know).
+func (p *Pool) parkForWake(task *models.Task, session *models.LogSession, spec tools.WakeSpec, token uuid.UUID, start time.Time) {
+	what := "until " + spec.WakeAt.UTC().Format(time.RFC3339)
+	if spec.EventKey != "" {
+		what = "for event " + strconv.Quote(spec.EventKey) + " (timeout " + spec.WakeAt.UTC().Format(time.RFC3339) + ")"
+	}
+	p.submitLog(task, session, "Sleeping "+what)
+	if ok, err := p.store.PauseTaskForWake(context.Background(), task.ID, token, spec.WakeAt, spec.EventKey, spec.Note); err != nil {
+		log.Printf("runner: task %s wake park write failed: %v", task.ID, err)
+	} else if !ok {
+		log.Printf("runner: task %s wake park did not apply (lease lost or not running)", task.ID)
+	}
+	log.Printf("runner: task %s sleeping %s after %v", task.ID, logSafeRunner(what), time.Since(start).Round(time.Second))
+}
+
 // clearPendingQA nulls a resumed task's pending question/answer columns (#510)
 // under our lease. It is called immediately BEFORE each terminal transition —
 // never at run start — so a retryable failure re-queues the task with the
@@ -1114,11 +1189,19 @@ func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, r
 // injects it (#582). No-op when the task carried no pending Q&A; best-effort
 // otherwise (a failure is logged and never affects the terminal write).
 func (p *Pool) clearPendingQA(task *models.Task, leaseOwner uuid.UUID) {
-	if task.PendingQuestion == "" && task.PendingAnswer == "" {
-		return
+	if task.PendingQuestion != "" || task.PendingAnswer != "" {
+		if err := p.store.ClearPendingQA(context.Background(), task.ID, leaseOwner); err != nil {
+			log.Printf("runner: failed to clear pending Q&A for task %s: %v", task.ID, err)
+		}
 	}
-	if err := p.store.ClearPendingQA(context.Background(), task.ID, leaseOwner); err != nil {
-		log.Printf("runner: failed to clear pending Q&A for task %s: %v", task.ID, err)
+	// Wake state follows the same terminal-only clearing contract
+	// (docs/SELF-WAKE.md): a retryable failure of a woken run re-queues with
+	// the wake reason + note intact, so every retried attempt still injects
+	// them. wake_cycles survives by design (lifetime cap counter).
+	if task.WakeReason != "" || task.WakeNote != "" || task.WakeAt != nil {
+		if err := p.store.ClearWakeState(context.Background(), task.ID, leaseOwner); err != nil {
+			log.Printf("runner: failed to clear wake state for task %s: %v", task.ID, err)
+		}
 	}
 }
 

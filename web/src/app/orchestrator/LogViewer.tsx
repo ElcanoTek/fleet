@@ -750,14 +750,31 @@ function LogViewerBody({
   // The shared hook owns the cancelled-ref guard and the lone setState after
   // the await, so this component no longer needs its own one-shot load-flag
   // setState-in-effect disable.
+  // Per-attempt history: attemptId null = the latest transcript (logs row);
+  // a number = one superseded transcript (run_logs row). Switching refetches
+  // through the same cancellable hook, so loading/error handling is shared.
+  const [attemptId, setAttemptId] = useState<number | null>(null);
   const {
     data: session,
     loading,
     error,
   } = useCancellableFetch(
-    useCallback(() => orchestratorApi.taskLogs(task.id), [task.id]),
+    useCallback(
+      () =>
+        attemptId === null
+          ? orchestratorApi.taskLogs(task.id)
+          : orchestratorApi.taskLogHistoryEntry(task.id, attemptId),
+      [task.id, attemptId],
+    ),
+    [task.id, attemptId],
+  );
+  // The superseded-attempts list is metadata-only and cheap; most tasks have
+  // none, in which case the picker never renders.
+  const { data: attemptHistory } = useCancellableFetch(
+    useCallback(() => orchestratorApi.taskLogHistory(task.id), [task.id]),
     [task.id],
   );
+  const attempts = attemptHistory?.entries ?? [];
   const { showToast } = useToast();
   const [resubmitting, setResubmitting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -826,6 +843,35 @@ function LogViewerBody({
   const canResubmit = RESUBMITTABLE.has(task.status ?? "");
   const [historyOpen, setHistoryOpen] = useState(false);
 
+  // "Discuss this run" (docs/DISCUSS-RUN.md): the BFF fetches this run's
+  // transcript, creates a chat conversation seeded with a digest, and we
+  // navigate there. Full page navigation (not router.push) because /chat is
+  // a separate app shell.
+  const [discussing, setDiscussing] = useState(false);
+  const discuss = async () => {
+    if (discussing) return;
+    setDiscussing(true);
+    try {
+      const res = await fetch(
+        `/api/orchestrator/tasks/${encodeURIComponent(task.id)}/discuss`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? `HTTP ${res.status}`);
+      }
+      const { conversation_id } = (await res.json()) as { conversation_id: string | null };
+      if (!conversation_id) throw new Error("no conversation id returned");
+      window.location.href = `/chat?c=${encodeURIComponent(conversation_id)}`;
+    } catch (err) {
+      showToast(
+        `Discuss failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        "error",
+      );
+      setDiscussing(false);
+    }
+  };
+
   return (
     <div
       className="modal-overlay is-open"
@@ -852,6 +898,26 @@ function LogViewerBody({
               </span>
             </span>
             <span className="task-detail-actions">
+              {attempts.length > 0 ? (
+                <select
+                  className="btn btn-secondary"
+                  data-testid="attempt-picker"
+                  aria-label="Transcript attempt"
+                  value={attemptId ?? "latest"}
+                  onChange={(e) =>
+                    setAttemptId(
+                      e.target.value === "latest" ? null : Number(e.target.value),
+                    )
+                  }
+                >
+                  <option value="latest">Latest transcript</option>
+                  {attempts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      Superseded {formatTimeFirst(a.superseded_at)}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
               {onEdit && ["pending", "scheduled", ...RESUBMITTABLE].includes(task.status ?? "") ? (
                 <button
                   type="button"
@@ -882,6 +948,17 @@ function LogViewerBody({
               >
                 History
               </button>
+              {session && session.messages && session.messages.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  data-testid="discuss-run-button"
+                  disabled={discussing}
+                  onClick={() => void discuss()}
+                >
+                  {discussing ? "Opening chat…" : "Discuss in chat"}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="btn btn-secondary"

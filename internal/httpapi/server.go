@@ -1256,6 +1256,28 @@ type createConversationRequest struct {
 	// is validated and the project's default persona/model + curated
 	// connector selection are inherited (explicit request values win).
 	ProjectID string `json:"project_id,omitempty"`
+	// Seed, when non-empty, is appended as the conversation's first user
+	// message WITHOUT running a turn — pre-loaded context the user's first
+	// real message will build on. The orchestrator's "Discuss this run"
+	// bridge uses it to open a chat seeded with a scheduled run's
+	// transcript digest (docs/DISCUSS-RUN.md). Clamped server-side to
+	// seedMaxChars; the tail is kept (the end of a transcript — the
+	// result — matters more than the beginning).
+	Seed string `json:"seed,omitempty"`
+}
+
+// seedMaxChars bounds a seeded first message so a pathological caller can't
+// preload a conversation past any sane context budget. The proactive context
+// compaction in agentcore handles the rest.
+const seedMaxChars = 48_000
+
+// clampSeed enforces seedMaxChars, keeping the TAIL: transcripts end with the
+// outcome, and the outcome is what a discussion seed is for.
+func clampSeed(seed string) string {
+	if len(seed) <= seedMaxChars {
+		return seed
+	}
+	return "[…seed truncated…]\n" + seed[len(seed)-seedMaxChars:]
 }
 
 func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Request) {
@@ -1404,6 +1426,23 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 		conv, ok := s.createConversationForRequest(w, r, user, req.ProjectID, title, persona, model, lockdown)
 		if !ok {
 			return
+		}
+		// Optional seed (docs/DISCUSS-RUN.md): persist one user text message
+		// without running a turn, so the next real turn sees it as history.
+		// Best-effort ordering is NOT acceptable here — a discussion opened
+		// on a missing seed is an empty chat with a misleading title — so a
+		// failed append fails the request (the empty conversation row is
+		// harmless and reachable from the sidebar).
+		if seed := strings.TrimSpace(req.Seed); seed != "" {
+			content, err := json.Marshal(map[string]any{"text": clampSeed(seed)})
+			if err == nil {
+				_, err = s.store.AppendHistory(r.Context(), conv.ID,
+					[]agent.HistoryEntry{{Role: "user", Type: "text", Content: content}})
+			}
+			if err != nil {
+				http.Error(w, "failed to seed conversation: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		writeJSON(w, conv)
 	default:

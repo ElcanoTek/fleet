@@ -2101,6 +2101,69 @@ func (h *Handlers) GetLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, session)
 }
 
+// logHistoryTaskForRequest parses the path task id and enforces exactly the
+// GetLogs gate (PermissionViewLogs + scoped-principal task visibility), so the
+// per-attempt history endpoints can never leak more than the latest-log one.
+func (h *Handlers) logHistoryTaskForRequest(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	p := h.principalFromRequest(r)
+	if !p.hasPermission(models.PermissionViewLogs) {
+		writeError(w, http.StatusForbidden, "Insufficient permissions")
+		return uuid.Nil, false
+	}
+	taskID, err := uuid.Parse(chi.URLParam(r, "task_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid task ID")
+		return uuid.Nil, false
+	}
+	if scopes := p.scopes(); len(scopes) > 0 {
+		task, err := h.storage.GetTask(taskID)
+		if err != nil || task == nil {
+			writeError(w, http.StatusNotFound, "Logs not found for this task")
+			return uuid.Nil, false
+		}
+		if !taskVisibleToScopes(task, scopes, p.ownerID()) {
+			writeError(w, http.StatusForbidden, "Task not within allowed scopes")
+			return uuid.Nil, false
+		}
+	}
+	return taskID, true
+}
+
+// GetLogHistory handles GET /logs/{task_id}/history — the task's superseded
+// transcripts (per-attempt run log history), newest first, metadata only.
+func (h *Handlers) GetLogHistory(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := h.logHistoryTaskForRequest(w, r)
+	if !ok {
+		return
+	}
+	entries, err := h.storage.ListRunLogHistory(r.Context(), taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to list log history")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+// GetLogHistoryEntry handles GET /logs/{task_id}/history/{entry_id} — one
+// superseded transcript, in the same LogSession shape GetLogs returns.
+func (h *Handlers) GetLogHistoryEntry(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := h.logHistoryTaskForRequest(w, r)
+	if !ok {
+		return
+	}
+	entryID, err := strconv.ParseInt(chi.URLParam(r, "entry_id"), 10, 64)
+	if err != nil || entryID <= 0 {
+		writeError(w, http.StatusBadRequest, "Invalid history entry ID")
+		return
+	}
+	session, err := h.storage.GetRunLogEntry(r.Context(), taskID, entryID)
+	if err != nil || session == nil {
+		writeError(w, http.StatusNotFound, "Log history entry not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, session)
+}
+
 // API Key Management Endpoints
 
 // CreateAPIKey handles POST /keys

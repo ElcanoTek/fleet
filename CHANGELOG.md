@@ -19,6 +19,33 @@ prior versions are listed because none have shipped.
 
 ### Added
 
+- **Self-wake** (`docs/SELF-WAKE.md`): a scheduled run can suspend itself
+  and schedule its own resumption — new `sleep` (park until a deadline) and
+  `wake_on_event` (park until `POST /tasks/{id}/wake` fires the matching
+  key, or a timeout) tools with the exact ask-pause lifecycle: the run ends,
+  sandbox/lease released, task parks in new status `paused_awaiting_wake`,
+  and the scheduler's tick re-queues it as a fresh run carrying the agent's
+  required note-to-self plus the wake reason. Every wake has a deadline
+  (event waits default to 7 days), parks are capped at 100 per task, and
+  cost accumulates on the task across cycles.
+
+- **Discuss this run** (`docs/DISCUSS-RUN.md`): a finished scheduled run's
+  log modal gains "Discuss in chat" — a one-way BFF bridge (inverse of
+  promote-to-task) that reads the transcript through the caller's
+  orchestrator credential, creates a chat conversation seeded with a clamped
+  digest (new optional `seed` on `POST /conversations` — one user message,
+  no turn), and deep-links to it via the new `/chat?c=<id>` boot param. The
+  chat server never reads the sched store; ADR-0005's database split stands.
+
+- **Per-attempt run log history** (`docs/RUN-LOG-HISTORY.md`): re-running the
+  same task id — a retry, an ask-pause resume, a self-wake cycle — no longer
+  destroys the prior attempt's transcript. The row the `logs` upsert would
+  clobber is copied into `run_logs` in the same transaction (archived payloads
+  travel verbatim), capped at 20 per task, pruned with the task by both
+  retention paths. New `GET /logs/{task_id}/history[/{entry_id}]` behind the
+  exact `GET /logs/{task_id}` gate, and an attempt picker in the task log
+  modal that renders only when history exists.
+
 - **A bundle can now brand the shell, not just tint it** (`docs/BRANDING.md`):
   new `branding.logo` — a bundle-relative image path served from the bundle by
   `/brand/logo` (proxied as `/api/brand/logo`), so the navigation rail's mark is
