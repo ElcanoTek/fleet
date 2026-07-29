@@ -63,6 +63,20 @@ plus `Content-Security-Policy: default-src 'none'; sandbox`, so an SVG carrying
 `/client-config` advertises `logo_url` **only** when a file actually backed the
 field at load, so the web never points an `<img>` at a route that 404s.
 
+The rail renders the mark with `next/image` marked **`unoptimized`**, and that is
+load-bearing rather than a perf opt-out — don't "tidy" it away. `next/image`
+skips Next's image optimizer only when the `src` path literally ends in `.svg`
+(the "special case to make svg serve as-is" in `get-img-props.js`). A bundle mark
+arrives as `/api/brand/logo`, which has no extension, so without `unoptimized`
+it was rewritten to `/_next/image?url=…` — and that endpoint **rejects**
+`image/svg+xml` unless `images.dangerouslyAllowSVG` is set, which fleet's
+`next.config.ts` deliberately does not set. The result was a broken mark on every
+page for any bundle whose `logo` was an SVG (which is the format this doc's own
+example uses). Optimizing a 28px mark buys nothing, so serving it as-is is also
+the right trade on its own terms. `web/src/app/shared/ui/NavRail.test.tsx` pins
+the behavior by asserting the rendered `src` is the raw path and that no `srcset`
+is generated.
+
 ### `colors`
 
 Per-mode overrides of the CSS custom properties `globals.css` defines, rendered

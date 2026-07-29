@@ -267,7 +267,16 @@ export function NavRail({
           ].join(" ")}
         >
           <div className={["flex min-w-0 items-center gap-2.5", collapsed ? "sm:flex-col" : ""].join(" ")}>
-            <Image src={brandLogoSrc} alt={brandName} width={28} height={28} priority />
+            {/* unoptimized is load-bearing, not a perf opt-out. next/image skips
+                its optimizer only when the src path literally ends in ".svg"
+                (get-img-props.js: "Special case to make svg serve as-is"). A
+                bundle mark arrives as "/api/brand/logo" — no extension — so an
+                SVG bundle logo went through the optimizer, which rejects
+                image/svg+xml unless images.dangerouslyAllowSVG is set. It is
+                not, so the rail rendered a broken image on every page for any
+                bundle whose branding.logo was an SVG. Optimizing a 28px mark
+                buys nothing anyway. */}
+            <Image src={brandLogoSrc} alt={brandName} width={28} height={28} priority unoptimized />
             <span className={["flex min-w-0 flex-col leading-[1.05]", collapsed ? "sm:hidden" : ""].join(" ")}>
               <span className="text-[0.6rem] uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
                 {eyebrow}
